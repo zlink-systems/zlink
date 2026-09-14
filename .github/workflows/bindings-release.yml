@@ -434,9 +434,10 @@ jobs:
             --arg prefix "${core_prefix}" \
             --arg provenanceSha256 "${manifest_sha}" \
             --arg runtimeSha256 "${runtime_sha}" \
+            --arg soname "libzlink.so.${ZLINK_CORE_RELEASE_VERSION%%.*}" \
             '{version: $version, prefix: $prefix,
               provenanceSha256: $provenanceSha256,
-              runtime: {sha256: $runtimeSha256, soname: "libzlink.so.0"}}')
+              runtime: {sha256: $runtimeSha256, soname: $soname}}')
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
           echo "summary=${summary}" >> "${GITHUB_OUTPUT}"
 
