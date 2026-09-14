@@ -13,12 +13,17 @@ NORMALIZE_TIMESTAMPS_SH="$REPO_ROOT/core/tools/normalize_build_timestamps.sh"
 export TMPDIR=/tmp
 MAKE_BIN="$(command -v gmake || command -v make)"
 
-# Read the only release-version source.
+# Read the sole release-version and ABI-soversion source.
 [ -f "$REPO_ROOT/VERSION" ] || {
     echo "Repository VERSION file not found: $REPO_ROOT/VERSION" >&2
     exit 2
 }
-LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' "$REPO_ROOT/VERSION" | cut -d'=' -f2)
+LIBZLINK_VERSION=$(sed -n 's/^LIBZLINK_VERSION=//p' "$REPO_ROOT/VERSION")
+LIBZLINK_ABI_SOVERSION=$(sed -n 's/^LIBZLINK_ABI_SOVERSION=//p' "$REPO_ROOT/VERSION")
+if ! [[ "$LIBZLINK_ABI_SOVERSION" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "Invalid or missing LIBZLINK_ABI_SOVERSION in $REPO_ROOT/VERSION" >&2
+    exit 2
+fi
 
 # Parse arguments: ARCH RUN_TESTS
 ARCH="${1:-$(uname -m)}"
@@ -47,6 +52,7 @@ echo "Linux Build Configuration"
 echo "==================================="
 echo "Architecture:      ${ARCH}"
 echo "libzlink version:    ${LIBZLINK_VERSION}"
+echo "ABI soversion:       ${LIBZLINK_ABI_SOVERSION}"
 echo "RUN_TESTS:         ${RUN_TESTS}"
 echo "Build type:        ${BUILD_TYPE}"
 echo "Output directory:  ${OUTPUT_DIR}"
@@ -122,22 +128,19 @@ echo ""
 echo "Step 4: Installing to output directory..."
 make install
 
-# Copy .so to output (version-agnostic: matches any major, e.g. libzlink.so.6.0.1)
-SO_FILE=$(find install/lib* -name "libzlink.so.[0-9]*" 2>/dev/null | head -n 1)
+# Copy the exact versioned .so to output.
+SO_FILE=$(find install/lib* -name "libzlink.so.${LIBZLINK_VERSION}" 2>/dev/null | head -n 1)
 if [ -z "$SO_FILE" ]; then
-    SO_FILE=$(find lib -name "libzlink.so.[0-9]*" 2>/dev/null | head -n 1)
+    SO_FILE=$(find lib -name "libzlink.so.${LIBZLINK_VERSION}" 2>/dev/null | head -n 1)
 fi
 
 if [ -n "$SO_FILE" ]; then
     TARGET_SO="$REPO_ROOT/$OUTPUT_DIR/libzlink.so"
+    find "$REPO_ROOT/$OUTPUT_DIR" -maxdepth 1 \( -type f -o -type l \) -name 'libzlink.so*' -delete
     cp "$SO_FILE" "$TARGET_SO"
     echo "Copied: $SO_FILE -> $TARGET_SO"
-    # Derive SOVERSION (major) from the built file name, e.g. libzlink.so.6.0.1 -> 6
-    SO_VERSION="$(basename "$SO_FILE")"
-    SO_VERSION="${SO_VERSION#libzlink.so.}"
-    SO_MAJOR="${SO_VERSION%%.*}"
-    ln -sfn "libzlink.so" "$REPO_ROOT/$OUTPUT_DIR/libzlink.so.${SO_MAJOR}"
-    echo "Linked: $REPO_ROOT/$OUTPUT_DIR/libzlink.so.${SO_MAJOR} -> libzlink.so"
+    ln -sfn "libzlink.so" "$REPO_ROOT/$OUTPUT_DIR/libzlink.so.${LIBZLINK_ABI_SOVERSION}"
+    echo "Linked: $REPO_ROOT/$OUTPUT_DIR/libzlink.so.${LIBZLINK_ABI_SOVERSION} -> libzlink.so"
 else
     echo "Error: libzlink.so not found!"
     exit 1

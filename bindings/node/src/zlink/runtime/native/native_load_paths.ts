@@ -5,23 +5,28 @@ import * as path from 'node:path';
 
 import type { NativeBinding } from './binding';
 
-function linuxSoname(coreMajor: string): string {
-  return `libzlink.so.${coreMajor}`;
+function linuxSoname(abiSoversion: string): string {
+  return `libzlink.so.${abiSoversion}`;
 }
 
-function coreMajorFromVersion(coreVersion: string): string {
-  const match = /^(0|[1-9]\d*)\.\d+\.\d+$/.exec(coreVersion);
-  if (!match) throw new Error(`Invalid Core version: ${coreVersion}`);
-  return match[1];
+function abiSoversionFromProvenance(abiMajor: unknown): string {
+  if (typeof abiMajor !== 'number'
+      || !Number.isSafeInteger(abiMajor)
+      || abiMajor < 0) {
+    throw new Error(`Invalid Core ABI major: ${String(abiMajor)}`);
+  }
+  return String(abiMajor);
 }
 
-function sourceTreeCoreMajor(packageRoot: string): string {
+function sourceTreeAbiSoversion(packageRoot: string): string {
   const version = fs.readFileSync(
     path.join(packageRoot, '..', '..', 'VERSION'),
     'utf8'
   );
-  const match = /^LIBZLINK_VERSION_MAJOR=(0|[1-9]\d*)$/m.exec(version);
-  if (!match) throw new Error('Root VERSION has no valid LIBZLINK_VERSION_MAJOR');
+  const match = /^LIBZLINK_ABI_SOVERSION=(0|[1-9]\d*)$/m.exec(version);
+  if (!match) {
+    throw new Error('Root VERSION has no valid LIBZLINK_ABI_SOVERSION');
+  }
   return match[1];
 }
 
@@ -76,7 +81,7 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
   const runtimeDirs = [localDir, releaseDir, coreDir, coreAltDir].filter(
     (entry): entry is string => entry !== undefined
   );
-  const soname = linuxSoname(sourceTreeCoreMajor(packageRoot));
+  const soname = linuxSoname(sourceTreeAbiSoversion(packageRoot));
   refreshAddonRuntimeLink(
     path.join(addonDir, soname),
     runtimeDirs.map((entry) => path.join(entry, soname))
@@ -93,11 +98,11 @@ export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
           path.join(packageRoot, 'provenance', 'core-package-provenance.json'),
           'utf8'
         )
-      ) as { version?: string };
+      ) as { version?: string; abiMajor?: unknown };
       if (provenance.version !== undefined) {
         const soname = path.join(
           prebuiltDir,
-          linuxSoname(coreMajorFromVersion(provenance.version))
+          linuxSoname(abiSoversionFromProvenance(provenance.abiMajor))
         );
         const versionedLibrary = path.join(prebuiltDir, `libzlink.so.${provenance.version}`);
         if (!fs.existsSync(soname) && fs.existsSync(versionedLibrary)) {
