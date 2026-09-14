@@ -12,6 +12,7 @@
     "boost-beast",
     "lz4",
     "nlohmann-json",
+    "opentelemetry-cpp",
     "openssl",
     "protobuf",
     {
