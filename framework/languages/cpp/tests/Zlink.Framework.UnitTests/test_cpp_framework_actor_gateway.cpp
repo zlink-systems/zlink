@@ -5091,6 +5091,11 @@ int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--stream-registry-lifecycle") {
+            if (const int rebound = rebound_session_keeps_prior_ingress_exact_fence (); rebound != 0)
+                return rebound;
+            return old_stream_disconnect_does_not_retire_reconnected_binding ();
+        }
         if (test == "--canonical-message") {
             if (const int negative = canonical_session_relay_failures (); negative != 0) return negative;
             if (const int request = relay_request_survives_pending_dispatcher_completion (); request != 0)
