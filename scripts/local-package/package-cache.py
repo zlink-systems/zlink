@@ -150,6 +150,14 @@ def verify(entry, versions, languages):
     return actual
 
 
+def completion_marker(entry):
+    """Newest immutable package completion marker in a cache-key namespace."""
+    markers = [entry / '.complete', *(entry / language / '.complete'
+                                      for language in LANGUAGES)]
+    existing = [marker for marker in markers if marker.is_file()]
+    return max(existing, key=lambda marker: marker.stat().st_mtime_ns) if existing else None
+
+
 @contextmanager
 def lock(path, blocking=True):
     with path.open('a') as handle:
@@ -301,38 +309,46 @@ def prepare(root, output, cache, languages):
         with lock(cache / f'{key}.lock'):
             if dirty(root) or cache_key(root, tools) != key:
                 raise ValueError('Package inputs changed while waiting for the cache lock')
-            if not entry.exists():
-                staging = cache / f'{key}.staging-{os.getpid()}'
-                staging.mkdir()
-                try:
-                    print(f'-- cache miss: {staging}', flush=True)
-                    build_tree = output / 'build'
-                    local_directory(build_tree)
-                    (staging / 'build').symlink_to(build_tree, target_is_directory=True)
-                    source = source_copy(root, build_tree / 'package-source')
-                    build(root, staging, LANGUAGES, source)
-                    files = package_files(staging, versions, LANGUAGES)
-                    # Preserve package files only: Core and build outputs are local.
-                    (staging / 'build').unlink()
-                    allowed = set(files)
-                    for path in sorted(staging.rglob('*'), reverse=True):
-                        if path.is_dir() and not path.is_symlink():
-                            if not any(path.iterdir()):
-                                path.rmdir()
-                        elif path.relative_to(staging).as_posix() not in allowed:
-                            path.unlink()
-                    (staging / '.complete').write_text(json.dumps({'binding_versions': versions, 'files': files}, indent=2) + '\n')
-                    verify(staging, versions, LANGUAGES)
-                    if dirty(root) or cache_key(root, tools) != key:
-                        raise ValueError('Package inputs changed during build; refusing publication')
-                    # Never replace an existing published key, even if corrupt.
-                    staging.rename(entry)
-                finally:
-                    if staging.exists():
-                        shutil.rmtree(staging)
-            else:
-                print(f'-- cache hit: {entry}', flush=True)
-            link_packages(entry, output, verify(entry, versions, LANGUAGES))
+            for language in languages:
+                package_entry = entry / language
+                if not package_entry.exists():
+                    staging = cache / f'{key}.{language}.staging-{os.getpid()}'
+                    staging.mkdir()
+                    try:
+                        print(f'-- {language} cache miss: {staging}', flush=True)
+                        build_tree = output / 'build'
+                        local_directory(build_tree)
+                        (staging / 'build').symlink_to(build_tree, target_is_directory=True)
+                        source = source_copy(root, build_tree / 'package-source')
+                        build(root, staging, (language,), source)
+                        files = package_files(staging, versions, (language,))
+                        # Preserve package files only: Core and build outputs are local.
+                        (staging / 'build').unlink()
+                        allowed = set(files)
+                        for path in sorted(staging.rglob('*'), reverse=True):
+                            if path.is_dir() and not path.is_symlink():
+                                if not any(path.iterdir()):
+                                    path.rmdir()
+                            elif path.relative_to(staging).as_posix() not in allowed:
+                                path.unlink()
+                        selected = {language: versions[language]}
+                        (staging / '.complete').write_text(json.dumps(
+                            {'binding_versions': selected, 'files': files}, indent=2) + '\n')
+                        verify(staging, versions, (language,))
+                        if dirty(root) or cache_key(root, tools) != key:
+                            raise ValueError('Package inputs changed during build; refusing publication')
+                        entry.mkdir(exist_ok=True)
+                        # Never replace an existing published language, even if corrupt.
+                        staging.rename(package_entry)
+                    finally:
+                        if staging.exists():
+                            shutil.rmtree(staging)
+                        if entry.is_dir() and not any(entry.iterdir()):
+                            entry.rmdir()
+                else:
+                    print(f'-- {language} cache hit: {package_entry}', flush=True)
+                link_packages(package_entry, output,
+                              verify(package_entry, versions, (language,)))
             print(f'-- package cache key: {key}', flush=True)
 
 
@@ -365,10 +381,13 @@ def prune(root, cache, baseline, keep, dry_run):
     if not cache.exists():
         print(f'-- no package cache: {cache}')
         return
-    entries = sorted((p for p in cache.iterdir() if re.fullmatch(r'[0-9a-f]{16}', p.name)
-                      and p.is_dir() and not p.is_symlink() and (p / '.complete').is_file()),
-                     key=lambda p: ((p / '.complete').stat().st_mtime_ns, p.name), reverse=True)
-    for entry in entries[keep:]:
+    entries = [(p, completion_marker(p)) for p in cache.iterdir()
+               if re.fullmatch(r'[0-9a-f]{16}', p.name)
+               and p.is_dir() and not p.is_symlink()]
+    entries = sorted((item for item in entries if item[1] is not None),
+                     key=lambda item: (item[1].stat().st_mtime_ns, item[0].name),
+                     reverse=True)
+    for entry, _marker in entries[keep:]:
         if dry_run:
             # Read-only, including lock files: actual pruning rechecks under lock.
             action = 'protect' if entry.name in linked_keys(root, cache, baseline) else 'remove'

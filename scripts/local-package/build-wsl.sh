@@ -26,11 +26,12 @@ Options:
   --verify-versions            Verify managed Core/binding/Framework values and exit
   --cache-key                  Print working-tree cache key and tool version id
 
-Clean inputs use an immutable cache of all eight binding packages. Dirty inputs
-build only requested bindings in .artifacts/wsl-private. Custom configurations or
-compiler flags also stay private. Binding files are linked
-into the worktree-local output directory. ZLINK_PACKAGE_BUILD_CMD may name an
-executable test builder (receives languages and ZLINK_LOCAL_PACKAGE_ROOT).
+Clean inputs use one immutable cache entry per requested binding under a key that
+covers all eight bindings. Dirty inputs build only requested bindings in
+.artifacts/wsl-private. Custom configurations or compiler flags also stay private.
+Binding files are linked into the worktree-local output directory.
+ZLINK_PACKAGE_BUILD_CMD may name an executable test builder (receives languages
+and ZLINK_LOCAL_PACKAGE_ROOT).
 EOF
 }
 

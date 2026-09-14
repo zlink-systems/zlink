@@ -45,9 +45,11 @@ root `VERSION`, then packages the C, C++, .NET, Go, Java, Node.js, Python, and R
 turn — C at the Core version, the rest at their own `bindings/<language>/VERSION`.
 
 When `bindings/` and `scripts/local-package/` are clean, the shared binding packages matching the
-input hash are reused. On a cache miss all eight bindings are built. `.artifacts/wsl/` is a
-per-worktree directory; only the binding package files are linked into the shared cache. Framework
-packages and build directories stay per-worktree.
+input hash are reused. The cache key still covers the inputs of all eight bindings, while immutable
+package entries beneath it are published per language. On a cache miss, only the requested bindings
+are built, so a failure in one language cannot block packages for unrequested languages.
+`.artifacts/wsl/` is a per-worktree directory; only the binding package files are linked into the
+shared cache. Framework packages and build directories stay per-worktree.
 
 If the input paths above carry staged, unstaged, or untracked changes, or if the build settings or
 compiler flags differ from the default Release, the build happens in `.artifacts/wsl-private/`. To
