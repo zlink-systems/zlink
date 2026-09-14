@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
@@ -28,6 +29,115 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task CurrentSpot_Channel_Request_Awaits_Busy_Host_Admission_And_Releases_Request_Count()
+    {
+        using var time = new BlockingAdmissionTimeProvider();
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode(), locationTimeProvider: time);
+        var endpoint = new ZLinkSpotOutboundEndpoint(new ChannelScopeSpotActivation(), null!, runtime);
+        Task<ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease>? holder = null;
+        ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? holdingLease = null;
+        using var body = Message.From("unknown-channel-request");
+        try
+        {
+            time.BlockNextTimestamp();
+            using (ExecutionContext.SuppressFlow())
+                holder = Task.Run(() => runtime.EnterOperation());
+            await time.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+            var invocation = Task.Run(() => endpoint.RequestToChannelAsync(
+                "unknown-channel", [body], TimeSpan.FromSeconds(1), CancellationToken.None));
+            var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            Assert.False(IsDisposed(body));
+            time.Release();
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await pending);
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, failure.Kind);
+            Assert.True(IsDisposed(body));
+            holdingLease = await holder.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, runtime.GetDrainRemainderCounts().Requests);
+            Assert.Equal(1, runtime.SnapshotOperationAdmissions().ActiveCount);
+            await holdingLease.DisposeAsync();
+            await runtime.WaitForAcceptedOperationsForDrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, runtime.SnapshotOperationAdmissions().ActiveCount);
+        }
+        finally
+        {
+            time.Release();
+            if (holder is not null)
+                (holdingLease ?? await holder.WaitAsync(TimeSpan.FromSeconds(5))).Dispose();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Async_Channel_Submission_Awaits_Busy_Component_Registration_And_Preserves_Unknown_Channel(bool request)
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode(), includeEntryChannelMembership: true);
+        var state = (ZLinkFrameworkComponentState)typeof(ZLinkFrameworkRuntime)
+            .GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime)!;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => state.RunStateAsync(() =>
+        {
+            entered.TrySetResult();
+            release.Wait();
+        }));
+        using var body = Message.From("unknown-channel");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task pending;
+            if (request)
+            {
+                var invocation = Task.Run(() => runtime.RequestToChannelAsync(
+                    "unknown-channel", [body], TimeSpan.FromSeconds(1), CancellationToken.None));
+                var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(result.IsCompleted);
+                pending = result.AsTask();
+            }
+            else
+            {
+                var invocation = Task.Run(() => runtime.SendToChannelAsync(
+                    "unknown-channel", [body], CancellationToken.None));
+                var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(result.IsCompleted);
+                pending = result.AsTask();
+            }
+            Assert.False(IsDisposed(body));
+            release.Set();
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => pending);
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, failure.Kind);
+            Assert.True(IsDisposed(body));
+            var syncFailure = Assert.Throws<ZLinkFrameworkException>(() =>
+                runtime.ResolveRouteMeshNodeForChannel("unknown-channel"));
+            Assert.Equal(failure.Kind, syncFailure.Kind);
+            Assert.Same(await runtime.ResolveRouteMeshNodeForChannelAsync("entry"),
+                runtime.ResolveRouteMeshNodeForChannel("entry"));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class ChannelScopeSpotActivation : IZLinkCurrentSpotActivation
+    {
+        public void EnsureOperationAllowed() { }
+        public string ChannelName => "entry";
+        public string SpotId => "entry";
+        public ZLinkUserSpotExecutionMode ExecutionMode => default;
+        public TimeSpan DefaultRequestTimeout => TimeSpan.FromSeconds(1);
+        public ZLinkCodecRegistryBuilder Codecs { get; } = new();
+        public ZLinkMessageFlowTracer Flow => null!;
+        public IZLinkRuntimeFailureReporter ErrorSink => null!;
+        public IZLinkSpotOutbound Outbound => null!;
+        public ZLinkSpotOutboundEndpoint OutboundEndpoint => null!;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

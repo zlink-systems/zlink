@@ -269,8 +269,16 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     internal ZLinkSpotNodeRuntime ResolveRouteMeshNodeForChannel(string channelName)
     {
+        // State ownership §5: synchronous routing callers must complete their
+        // process-local registration capture before returning. Async callers
+        // await the same owner body instead of blocking its completion.
+        return AwaitStateLane(ResolveRouteMeshNodeForChannelAsync(channelName));
+    }
+
+    internal ValueTask<ZLinkSpotNodeRuntime> ResolveRouteMeshNodeForChannelAsync(string channelName)
+    {
         var state = GetOrStartState();
-        return AwaitStateLane(state.RunStateAsync(() =>
+        return state.RunStateAsync(() =>
         {
             if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
                 return nodeRuntime;
@@ -278,7 +286,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'.");
-        }));
+        });
     }
 
     internal ZLinkSpotNodeRuntime GetActorClientSpotNodeRuntime()
