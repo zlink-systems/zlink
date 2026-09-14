@@ -192,8 +192,8 @@ handler snapshot을 인수하면 unread 기록에는 남기지 않는다. handle
 기록을 함께 제한한다. inbound observer는 이 선택과 별도의 관찰 경로이므로 두 경우 모두 frame
 snapshot을 받는다.
 
-**큐가 가득 차면 새 message를 버리고 `ReceivedMessageDropped`로 보고한다**
-([공통 스펙 §10.1](../../32-stream-connector.ko.md)). connector는 backpressure를 하지 않는다.
+**큐가 가득 차면 socket에서 더 읽지 않는다. 메시지를 버리지 않는다**
+([공통 스펙 §10.1](../../32-stream-connector.ko.md)).
 
 ### 8.1 테스트 대기 표면
 

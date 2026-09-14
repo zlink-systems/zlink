@@ -553,7 +553,6 @@ request callback.
 | `TlsValidationFailed` | TLS validation failure |
 | `UserCallbackFailed` | A user callback failed |
 | `ObserverFailed` / `ObserverDropped` | Inbound observer callback failure / queue overflow |
-| `ReceivedMessageDropped` | The receive message queue was full and a new message was dropped (§10.1) |
 | `RemoteError` | The server responded with an Error payload satisfying §5.3. If `request_seq` matches a pending request, that request fails; if absent or mismatched, it's delivered as an error event |
 
 The effect an error has on the current operation and connection is
@@ -609,19 +608,9 @@ until it moves to a handler (`on` family) or a wait surface (`waitFor`
 family). The default bound is **1024 messages**, adjusted with an
 option.
 
-- **When the queue is full the newly arrived message is dropped and reported as
-  `ReceivedMessageDropped`.** What is already queued is kept, and the connector never
-  stops reading from the socket.
-- **The connector applies no backpressure.** It does not implement a socket of its own; it
-  uses what the runtime provides (§2, §3.2). Browser and WASM builds run on the platform's
-  native WebSocket API, which offers no surface for withholding reads. Even where a native
-  runtime could stop reading, doing so would also stop the response and heartbeat control
-  frames arriving on the same socket, and §6.1's heartbeat timeout would close the
-  connection - "no message is discarded" would become "the connection is discarded".
-- Flow control belongs to **the server side**. The byte limit and admission wait of the
-  server's STREAM socket are defined by
-  [Core socket spec §8](../../../../../core/doc/spec/core/socket/08-stream.en.md) and are
-  outside this document. This section only fixes how the client holds what it received.
+- **When the queue is full the connector stops reading from the socket.** No message is
+  discarded. What is left unread stays in the Core queue, and Core's byte limit holds the
+  server's send right there. Reading resumes once the application drains the queue.
 - **A response, error response, and heartbeat control frame aren't
   counted against this bound.** Because they're needed for request
   completion and connection keep-alive.

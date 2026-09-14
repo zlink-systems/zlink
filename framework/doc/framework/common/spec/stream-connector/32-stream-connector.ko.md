@@ -486,7 +486,6 @@ request callback만 실행한다.
 | `TlsValidationFailed` | TLS 검증 실패 |
 | `UserCallbackFailed` | 사용자 callback이 실패 |
 | `ObserverFailed` / `ObserverDropped` | inbound observer callback 실패 / 큐 overflow |
-| `ReceivedMessageDropped` | 수신 메시지 큐가 가득 차 새 message를 버렸다(§10.1) |
 | `RemoteError` | 서버가 §5.3을 충족하는 Error payload로 응답함. `request_seq`가 pending request와 맞으면 그 request를 실패시키고, 없거나 맞지 않으면 error 이벤트로 전달함 |
 
 오류가 현재 operation과 연결에 미치는 영향은 다음과 같다. 언어별 문서는 오류 이름의 표현만 소유하며
@@ -532,16 +531,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 서버가 보낸 `Send` packet은 handler(`on` 계열)나 대기 표면(`waitFor` 계열)으로 넘어가기 전까지
 **수신 메시지 큐**에 머문다. 기본 한도는 **message 1024개**이며 option으로 조절한다.
 
-- **큐가 가득 차면 새로 도착한 message를 버리고 `ReceivedMessageDropped`로 보고한다.**
-  이미 큐에 있는 것은 유지한다. socket 읽기는 멈추지 않는다.
-- **connector는 backpressure를 하지 않는다.** connector는 socket을 직접 구현하지 않고 실행
-  환경이 주는 것을 쓴다(§2·§3.2). 브라우저·WASM은 네이티브 WebSocket API 위에서 동작하는데
-  거기에는 읽기를 보류할 표면이 없다. 읽기를 멈출 수 있는 네이티브 환경이라도 멈추면 같은
-  socket으로 오는 response·heartbeat control frame까지 멈춰 §6.1의 heartbeat timeout으로
-  연결이 끊어진다 — "메시지를 버리지 않는다"가 "연결을 버린다"가 된다.
-- 흐름 제어는 **서버 쪽이 소유한다.** 서버 STREAM socket의 byte 상한과 admission 대기는
-  [Core socket 스펙 §8](../../../../../core/doc/spec/core/socket/08-stream.ko.md)이 정의하며,
-  이 문서의 범위가 아니다. 이 절은 client가 받은 것을 어떻게 보관하는지만 정한다.
+- **큐가 가득 차면 socket에서 더 읽지 않는다.** 메시지를 버리지 않는다. 읽지 않은 것은 Core
+  queue에 남고, Core의 byte 상한이 서버의 send를 그 자리에서 멈춘다. 앱이 큐를 비우면 다시
+  읽는다.
 - **response·error response·heartbeat control frame은 이 한도에 넣지 않는다.** request 완료와
   연결 유지에 필요하기 때문이다.
 - 이 큐는 inbound observer notification 큐와 **별도**다(§10).
