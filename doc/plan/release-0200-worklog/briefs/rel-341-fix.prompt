@@ -1,0 +1,73 @@
+# rel-341-fix — relocated spot reply 테스트의 순서 가정을 없앤다 (Issue #341, 2단계)
+
+저장소 worktree `/home/hep7/project/zlink-341-dotnet`, branch `fix/341-relocated-reply`.
+한국어로 보고. 감독자(Claude)가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md`, `framework/languages/dotnet/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+**생산 코드 수정**(이 job은 테스트만 고친다); timeout·retry 증가; assertion 완화.
+임시 산출물은 `/tmp/zlink-rel-341-fix/`. **디스크를 확인하며 쓴다**(`/tmp`는 8 GB tmpfs다).
+
+## 1단계 진단은 끝났고 감독이 분류 B로 승인했다
+
+`framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/StatefulServiceRuntimeTests.cs`의
+두 테스트가 **비동기 제출 순서를 계약으로 가정한다.**
+
+### User 테스트 (`:2257`·`:2275`)
+
+request 두 개(`operation`, `second`)를 낸 뒤 먼저 도착한 record를 첫 번째라고 단정한다.
+
+```csharp
+inbound = received[0];
+...
+Assert.Equal(operation, inbound.OperationId);   // ← 두 번째가 먼저 오면 실패
+```
+
+실제 request는 호출마다 별도 task로 제출된다(`ZLinkManagedMeshNode.RunInboundOperation`,
+`ExecutionContext.SuppressFlow()`). 순서는 보장되지 않는다.
+
+### Instance 테스트 (`:3968`·`:4613`)
+
+callback 하나가 시작되면 완료되는 `Started`를 기다린 직후 `Count == 2`를 단정한다.
+
+## 할 일
+
+- **User 테스트**: 두 request가 target mailbox에 도착할 때까지 기다린 뒤, records에서
+  `OperationId == operation`인 항목을 **골라서** 쓴다. 첫 record의 순서를 계약으로 만들지 않는다.
+- **Instance 테스트**: `Started` 대신 **기존** bounded `WaitUntilAsync`로
+  `activationTarget.Count == 2`가 될 때까지 기다린다.
+- relay 첫 완료, duplicate `AlreadyTerminal`, completion 1회 assertion은 **그대로 유지한다.**
+  이 테스트가 검증하려는 것(원래 remote caller가 정확히 한 번 완료된다)은 바뀌지 않는다.
+
+교차언어 기준: Java `ZLinkSpotRelocationReplyRoutesTest.java:57`과
+C++ `test_cpp_framework_m6b_runtime.cpp:6196`이 특정 operation을 지목해 기다린다. 그 형태에 맞춘다.
+
+## 빌드 환경
+
+`.artifacts`는 워크트리별이다. 이전 job이 이 worktree에 이미 준비했을 수 있으니 **먼저 확인**하고
+없을 때만 만든다. Core는 **1.1.0**:
+`bash scripts/local-package/core/fetch-release.sh --version 1.1.0 --platform linux-x64`
+
+CI와 같은 구성은 **Release / net10.0**이다. .NET 10 SDK가 있으면 그것으로 검증한다.
+
+## 검증
+
+| 항목 | 조건 |
+| --- | --- |
+| 두 테스트 단독 | Release/net10.0에서 **20회** 통과 |
+| 전체 suite 안에서 | 최소 3회 통과(1회 약 3분이므로 시간을 보고 정한다) |
+| `git diff --stat` | **테스트 파일만** 변경. 생산 코드가 나오면 잘못한 것 |
+
+전체 suite에서 범위 밖 `RelocationTreeParallelIoTests`가 흔들릴 수 있다. 그것은 **고치지 말고**
+관측 횟수만 보고한다.
+
+## 보고 (표준출력)
+
+- 변경 내용과 순서 가정을 어떻게 없앴는지
+- 반복 횟수 대비 실패 횟수
+- `RelocationTreeParallelIoTests` 관측 결과
+- BLOCKERS
+
+1.5시간 상한.

@@ -1,0 +1,62 @@
+# rel-355 — C++ 테스트 5건 실패 원인을 가른다 (Issue #355)
+
+저장소 worktree `/home/hep7/project/zlink-343-cpp`, branch `framework-cpp/343-install-config`
+(패키지 수정 `d5d5f8b3ac`가 커밋돼 있다). 한국어로 보고. 감독자가 검토·커밋한다.
+**git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` (§3, §4.1 간헐 실패 디버깅).
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+실패 테스트 제외·skip·timeout 증가·기대값 완화.
+임시 산출물은 `/tmp/zlink-rel-355/`. **`/tmp`는 8 GB tmpfs다. 쓰기 전에 `df -h /tmp`로 확인하고
+큰 산출물은 만들지 않는다.**
+
+## 증상
+
+`ctest -E sample_smoke`에서 `#343` 패키지 3건과 별개로 5건이 실패한다. 단독 재실행에도 재현된다.
+
+| 테스트 | 증상 |
+| --- | --- |
+| `test_cpp_framework_owner_rejection_observability` | `reply_token` assertion 실패 |
+| `test_cpp_framework_m6b_runtime` 및 channel 관련 | **`Exec format error (errno=16)`** |
+
+## 순서 — `Exec format error`부터
+
+`Exec format error`는 assertion 실패가 아니라 **실행 파일을 못 띄우는 것**이다. 원인이 다르므로
+먼저 가른다.
+
+1. 실패하는 실행 파일을 특정하고 `file`, `readelf -h`로 아키텍처를, `ldd`로 링크된 라이브러리를
+   확인한다. Core 1.1.0 전환 중 섞인 산출물이 있는지 본다.
+2. **깨끗한 빌드 디렉터리**에서 재현되는지 확인한다. 재현되지 않으면 stale 빌드 트리 문제이고,
+   그 사실과 어떤 파일이 낡았는지를 보고한다. 이 worktree의 `framework/languages/cpp/build/*`는
+   이전 job들이 쓴 것이다.
+3. `owner_rejection_observability`가 같은 원인인지 다른 원인인지 가른다.
+
+## 빌드 환경
+
+`.artifacts`는 워크트리별이다. 이 worktree에 이전 job이 준비한 것이 있으면 재사용하고, 없으면
+Core **1.1.0**을 받는다:
+`bash scripts/local-package/core/fetch-release.sh --version 1.1.0 --platform linux-x64`
+
+`VCPKG_ROOT`와 `ZLINK_LOCAL_PACKAGE_ROOT`가 둘 다 필요하다.
+
+## 검증
+
+| 항목 | 조건 |
+| --- | --- |
+| `ctest -E sample_smoke` | 통과 |
+| `#343`의 package test 3건 | 계속 통과(회귀 없음) |
+| 부하로 흔들리는 timeout | 단독 재실행으로 판정. 허용치를 넓히지 않는다 |
+
+## 보고 (AGENTS §4 필수 4줄 포함)
+
+표준출력으로 보고한다.
+
+1. **판정** — 빌드 환경 문제인가 제품 결함인가. 두 증상이 같은 원인인가
+2. **원인** `file:line` 또는 어떤 산출물이 왜 잘못됐는지
+3. 제품 결함이면 **소유 계층**·spec 조항·**교차언어 대조**·**분류** A/B/C/D
+4. 환경 문제면 **재발 방지 방법**(빌드 스크립트·preset·gate 중 어디를 고쳐야 하는지)
+5. 수정 전/후 규칙 수 한 줄, 검증 표, BLOCKERS
+
+1.5시간 상한.

@@ -1,0 +1,64 @@
+# rel-354 — Node channel-client 계약 테스트의 정지 원인을 가른다 (Issue #354)
+
+저장소 worktree `/home/hep7/project/zlink-340-node`, branch `framework-node/340-send-admission`
+(`#340` 수정 `8e9511b553`가 커밋돼 있다). 한국어로 보고. 감독자가 검토·커밋한다.
+**git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` (§3, **§4.1 간헐 실패 디버깅**), `framework/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+timeout·retry 증가; 테스트 skip·제외; 기대값 완화; 두 번째 poller.
+임시 산출물은 `/tmp/zlink-rel-354/`. **`/tmp`는 8 GB tmpfs다. 쓰기 전에 `df -h /tmp` 확인.**
+
+## 이 job은 1단계(진단)다
+
+원인을 특정해 보고한다. 테스트 결함이 명백하면 고쳐도 되지만, **런타임 수정은 감독 승인 뒤**다
+(AGENTS §3 "진단 먼저, 구현은 승인 뒤").
+
+## 증상
+
+`framework/languages/node`에서 `npm run verify:p0`:
+
+```
+Framework runtime tests failed in 1 file(s): test/contract/channel-client.test.js
+-- runtime test integrity: announced=1658 completed=1658
+```
+
+`node --test test/contract/channel-client.test.js` 단독 실행은 **120초를 넘겨 끊긴다.**
+`rel-15` 진단 job도 같은 파일을 "순서 의존 정지"로 보고했다.
+
+`#340` fixture를 실제 socket을 쓰도록 고친 뒤 드러났다. 그 전에는 send-admission이 먼저 실패해
+게이트가 여기까지 도달하지 않았다.
+
+## 조사 순서
+
+1. **단독 실행과 suite 실행을 가른다.** 단독에서 통과하고 suite에서만 멈추면 앞 테스트가 남긴
+   상태에 의존하는 것이다. 반대면 이 파일 자체의 문제다.
+2. **정지 지점을 찾는다.** AGENTS §4.1대로 **이미 있는 message tracking과 file log를 먼저 켜서
+   읽는다.** 임시 로깅부터 추가하고 재현을 다시 돌리지 않는다. dispatch diagnostics를 `Normal`
+   (필요 시 `Detailed`)로 올리고 flow listener를 파일에 배선한다. 보조: `ZLINK_JAVA_STREAM_TRACE`가
+   아니라 Node 쪽 해당 스위치를 찾아 쓴다. **첫 재현부터 로그를 보존한다.**
+3. binding 1.1.0 전환과 관련 있는지 확인한다. pin이 `0.18.0` → `1.1.0`으로 바뀌었다
+   (`framework/languages/node/package.json`, `packages/framework/package.json`).
+   `0.18.0`으로 되돌려 같은 테스트가 통과하는지 보면 갈린다(되돌린 상태는 확인 후 복구한다).
+
+## 검증
+
+| 항목 | 조건 |
+| --- | --- |
+| `node --test test/contract/channel-client.test.js` 단독 | 통과 여부와 소요 시간 기록 |
+| `npm run verify:p0` | 이 파일 실패 0건 |
+| 반복 | 판정에 쓴 횟수와 실패 횟수를 적는다 |
+
+## 보고 (AGENTS §4 필수 4줄 포함)
+
+표준출력으로 보고한다.
+
+1. **판정** — 테스트 결함인가 런타임 결함인가. 단독/suite 차이와 반복 수치를 근거로
+2. **원인** `file:line`. 어느 지점에서 멈추는지
+3. **소유 계층**·spec 조항·**교차언어 대조**(.NET·Java·C++의 같은 계약은 어떻게 하는지)
+4. **분류** A/B/C/D
+5. 수정 제안(런타임 수정이면 고치지 말고 제안만), 규칙 수 한 줄, BLOCKERS
+
+1.5시간 상한.

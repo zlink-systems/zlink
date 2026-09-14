@@ -1,0 +1,74 @@
+# rel-341 — relocated spot reply 2건이 PR #347 때문인지 가른다 (Issue #341)
+
+저장소 worktree `/home/hep7/project/zlink-341-dotnet`, branch `fix/341-relocated-reply`.
+한국어로 보고. 감독자(Claude)가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` (§3, 특히 "진단 먼저, 구현은 승인 뒤"), `framework/languages/dotnet/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+테스트 기대값 완화; timeout·retry 증가로 덮기. 임시 산출물은 `/tmp/zlink-rel-341/`.
+
+## 이 job은 1단계(원인 판정)다
+
+**먼저 인과를 가른다. 구현은 감독 승인 뒤다.**
+
+## 사실관계
+
+두 테스트가 실패한다.
+
+```
+Zlink.Framework.UnitTests.StatefulServiceRuntimeTests
+  .RelocatedInstanceSpotReplyCompletesTheOriginalRemoteCallerExactlyOnce
+  .RelocatedUserSpotReplyCompletesTheOriginalRemoteCallerExactlyOnce
+```
+
+관측된 것:
+
+| 어디 | 구성 | 결과 |
+| --- | --- | --- |
+| main (2026-09-13, run 34733392497) | linux-x64 Release net10.0 | **통과** |
+| main (2026-09-13) | osx-arm64 Debug net8.0 | 실패 (이슈 #341) |
+| 감독 로컬 (오늘 main) | linux Debug net8.0 | 2,177건 전부 통과 |
+| **PR #347** (run 34825345208) | **linux-x64 Release net10.0** | **실패** |
+| PR #347 | linux-arm64 | 통과 |
+
+CI에는 재시도 래퍼가 있고(`retrying failed tests once`) 재시도 후에도 실패했다.
+
+## 가설
+
+**H1 — PR #347의 회귀.** PR은 `78f00a025a framework-dotnet: release borrowed outbound native
+payloads`를 담는다. `ZLinkSpotNodeRuntime.cs`(+20)와 `ZLinkSpotOutboundTransport.cs`(+44/-14)가
+outbound native payload 소유권을 바꾼다. 실패 테스트는 relocated spot의 reply가 원래 remote
+caller를 **정확히 한 번** 완료시키는지 본다. 소유권 변경이 reply 완료 경로에 닿으면 직접 원인이다.
+
+**H2 — 기존 flake가 타이밍에 밀린 것.** 같은 2건이 osx-arm64에서 이미 실패했다(#341). PR은 새
+테스트 284줄(`MeshOutboundPayloadOwnershipTests`)을 추가하므로 실행 순서·시간이 바뀐다.
+
+## 판별 방법
+
+`78f00a025a`만 되돌린 상태와 그대로인 상태를 같은 구성으로 비교한다.
+
+1. 이 worktree에 로컬 패키지를 준비한다(`.artifacts`는 워크트리별이다).
+   Core는 **1.1.0** 릴리스를 쓴다: `bash scripts/local-package/core/fetch-release.sh --version 1.1.0 --platform linux-x64`
+2. PR 브랜치 `bench/346-salvage-from-338`의 내용을 이 worktree에 가져와 재현한다.
+   구성은 **Release, net10.0** 이어야 CI와 같다. .NET 10 SDK가 없으면 설치하거나,
+   없으면 Release net8.0으로 재현되는지 먼저 보고 그 사실을 보고한다.
+3. 두 테스트를 **단독으로** 20회 반복한다. 그다음 전체 suite 안에서 20회 반복한다.
+   단독에서만 통과하고 suite에서 실패하면 순서·타이밍 의존이다.
+4. `78f00a025a`의 두 src 파일만 main 상태로 되돌린 뒤 같은 반복을 한다.
+
+## 보고 (AGENTS §4 필수 4줄 포함)
+
+표준출력으로 보고한다.
+
+1. **판정** — H1인가 H2인가. 근거 수치(반복 횟수 대비 실패 횟수)를 붙인다.
+2. **원인** `file:line`. H1이면 소유권 변경의 어느 지점이 reply 완료에 닿는지.
+3. **소유 계층**과 spec 조항, **교차언어 대조**(Java·C++가 같은 지점을 어떻게 하는지)
+4. **분류** A/B/C/D
+5. 수정 제안(고치지 말고 어디를 어떻게 고칠지만), BLOCKERS
+
+H2로 판정되면 그 테스트가 무엇에 의존해 흔들리는지 `file:line`으로 지목한다.
+"부하 때문"으로 끝내지 않는다.
+
+1.5시간 상한.

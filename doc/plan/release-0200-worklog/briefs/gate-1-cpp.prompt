@@ -1,0 +1,79 @@
+# gate-1-cpp — WSL 게이트 단계 1: C++ framework unit test (Issue #352)
+
+## 이 job의 범위
+
+**C++의 framework unit test만** 돌린다. cross-language e2e와 7샘플은 **범위 밖**이며 단계 2·3에서
+다른 job이 한다. 다른 언어도 건드리지 않는다.
+
+## 실행
+
+`framework/languages/cpp`에서 기존 빌드 디렉터리 `build/linux-ninja-release`를 재사용해 빌드한 뒤 `ctest -E sample_smoke`를 돌린다. Release 구성이다.
+
+저장소 `/home/hep7/project/zlink`, branch `main`. 한국어로 보고.
+**이 job은 검증만 한다. 저장소 파일을 하나도 고치지 않는다.**
+
+먼저 읽는다: root `AGENTS.md`, `CONTRIBUTING.ko.md` §5·§6.
+
+금지: `git commit`/`push`/**모든 저장소 파일 수정**; `rm -rf`/`git clean`/`git stash`/
+`git checkout --`/`git restore`; 앵커 없는 `pkill -f`; timeout·retry 증가; 테스트 skip·제외;
+실패를 고치기. **실패는 고치지 말고 원문을 기록해 보고한다.**
+
+**`/tmp`는 8 GB tmpfs다. 쓰기 전에 `df -h /tmp`로 확인하고 85%를 넘으면 중단하고 보고한다.**
+**시작 전 `uptime`으로 load average가 10 미만인지 확인한다. 넘으면 기다린다**(`CONTRIBUTING.ko.md` §6).
+
+## 전제
+
+- Core는 공개 **1.1.0** 릴리스다. prefix `~/.cache/zlink/core/1.1.0/linux-x64`
+- 로컬 패키지는 `.artifacts/wsl`에 1.1.0으로 준비돼 있다. **없으면 멈추고 보고한다. 직접 만들지 않는다.**
+- **로컬 패키지는 심볼릭 링크일 수 있다.** `.artifacts/wsl`의 항목은 패키지 캐시
+  (`~/.cache/zlink/packages/<key>/<언어>/...`)를 가리키는 링크로 발행된다. 존재 확인에
+  `find -type f`를 쓰면 **링크가 빠져서 "없음"으로 오판한다.** `test -e`나 `ls -L`,
+  `find -L ... -type f`를 쓴다.
+- binding 4언어 모두 1.1.0
+
+## 실패가 나왔을 때의 해석 기준 (중요)
+
+이 게이트는 **예전에 전부 통과했던 것**을 Core·bindings 최적화 뒤에 다시 도는 것이다. 따라서
+실패가 나오면 깊은 제품 결함보다 **framework가 바뀐 binding 사용법을 아직 안 따라간 것**일
+가능성이 높다. 특히 **bindings의 req/rep 사용법이 바뀌었고 그것이 framework에 반영되었어야 한다.**
+
+- **binding 사용법의 기준은 `bindings/<언어>/perf`다.** 이론을 세우지 말고 그 구현을 열어
+  프레임워크 쪽 사용과 대조한다. req/rep는 `perf/multi`의 socket req/rep 구현이 기준이다
+  (예: `bindings/go/perf/multi/perf_multi_socket_reqrep.go`,
+  `bindings/node/tests/perf_multi_socket_reqrep_contract.test.ts`,
+  `bindings/python/perf/multi/perf_multi_dealer_router_reqrep_client.py`).
+- 실패를 보고할 때 **그 기준 구현과 무엇이 다른지**를 한 줄로 덧붙인다. 확인하지 못했으면
+  "미확인"이라고 쓴다. 추측으로 채우지 않는다.
+- **이 job은 고치지 않는다.** 위 대조는 감독이 원인을 빨리 좁히도록 근거를 남기는 것이다.
+
+## 스펙 취급 (필수)
+
+**sub-agent는 스펙을 수정하지 않는다.** 스펙 수정은 감독자만 한다.
+(`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/**/spec/**`)
+
+실패가 스펙과 관련되면 다음 셋 중 무엇인지 판별해 보고한다. **고치거나 우회하지 않는다.**
+
+1. **구현이 스펙을 안 지킴** — 스펙 조항을 `file:line`으로 인용하고, 구현이 어디서 어긋나는지
+   적는다. 이 경우 고칠 것은 구현이다.
+2. **스펙이 침묵해서 구현이 갈라짐** — 언어별로 어떻게 다른지 대조해 적는다. 이 경우 감독이
+   스펙을 구체화한 뒤 구현을 맞춘다.
+3. **스펙과 무관** — 그렇게 적는다.
+
+셋 중 어느 것인지 확신이 없으면 "미판별"이라고 쓰고 근거만 남긴다. 추측으로 분류하지 않는다.
+
+## 판정 규칙
+
+- 부하로 깨진 것으로 의심되면 **단독 재실행 1회**로 판정한다. 허용치를 넓히지 않는다.
+- 알려진 load flake: `test_single_lane_flow_snapshot_accounting`, C++ 바인딩 테스트 exit 86/134
+  (재링크 직후 → 1회 재실행). `CONTRIBUTING.ko.md` §5
+
+## 보고 (표준출력)
+
+- 통과/전체, 소요 시간
+- 실패마다 **테스트 이름과 첫 실패 메시지 원문**
+- 단독 재실행으로 판정한 것은 그 사실과 결과
+- 실제로 쓴 Core·binding 버전(로그에서 확인한 근거)
+- `git status --short` 결과를 붙여 **저장소를 수정하지 않았음을 보인다**
+- BLOCKERS
+
+1.5시간 상한.

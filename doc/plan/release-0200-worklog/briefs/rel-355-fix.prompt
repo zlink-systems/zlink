@@ -1,0 +1,65 @@
+# rel-355-fix — C++ 테스트 4개 원인을 고친다 (Issue #355, 2단계)
+
+worktree `/home/hep7/project/zlink-343-cpp`, branch `framework-cpp/343-install-config`.
+한국어로 보고. 감독자가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` §3.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+timeout·retry 증가; 테스트 skip·제외; 기대값 완화.
+임시 산출물은 `/tmp/zlink-rel-355-fix/`. **`/tmp`는 8 GB다. 쓰기 전에 `df -h /tmp` 확인하고
+clean build를 여러 벌 남기지 않는다.**
+
+## 1단계 진단은 끝났고 감독이 A·B로 승인했다
+
+`Exec format error` 가설은 기각됐다 — ELF·readelf·ldd 전부 정상이고 Core 1.1.0에 제대로 연결된다.
+원인은 넷이다.
+
+| # | 원인 | 위치 | 분류 |
+| --- | --- | --- | --- |
+| 1 | direct async fixture가 `PollCompletion` owner를 두지 않는다 | C++ binding 테스트 fixture | **A** |
+| 2 | owner rejection 테스트의 phase 동기화 | C++ 테스트 | **B** |
+| 3 | stream fluent-call의 중복 실행 거부 계약 | Framework fluent-call 테스트 | **A** |
+| 4 | typed result와 native errno를 분리하지 않는 오류 문자열 투영 | C++ binding error projection | **B** |
+
+### 각 근거
+
+1. `bindings/doc/spec/async-execution-model.ko.md:67`. .NET `TestCompletionPollerDriver`와
+   Node `ownCompletions`는 **명시적으로 `PollCompletion` owner를 둔다.** C++ direct-binding 테스트에는
+   그 공통 helper가 없다. → **공통 completion-poller helper를 만들어 재사용한다.**
+2. `core/doc/spec/core/socket/07-router.ko.md:34`. 같은 stress는 C++에만 있고 wire 계약 차이는 없다.
+   → **정확한 수신 개수 기반 barrier**로 바꾼다. sleep이나 timeout으로 맞추지 않는다.
+3. `00-foundation/04-interaction-model.ko.md:225`, `07-framework-error-model.ko.md:37`.
+   .NET builder도 중복 실행을 `InvalidOperationException`으로 거부한다.
+   → C++도 같은 계약으로 정렬한다.
+4. .NET·Java는 typed result와 native errno를 **분리해 보존한다.** C++ binding이 합쳐 버린다.
+   → 분리해서 투영한다. **`bindings/cpp/**` 수정이 필요하면 하되, Core는 건드리지 않는다.**
+
+부하성 flake 1건(stream connector)은 단독 재실행과 직접 실행 3회가 통과했다. **고치지 말고**
+관측만 보고한다. timeout을 바꾸지 않는다.
+
+## 순서
+
+원인마다 따로 고치고, 고칠 때마다 해당 테스트만 돌려 확인한다. 넷을 한꺼번에 고치고 전체를
+돌리지 않는다.
+
+## 검증
+
+| 항목 | 조건 |
+| --- | --- |
+| 원인별 대상 테스트 | 각각 통과 |
+| `ctest -E sample_smoke` | 전체 통과(부하성 flake는 단독 재실행으로 판정) |
+| `#343` package test 3건 | 계속 통과(회귀 없음) |
+| `git diff --stat` | 변경 범위가 위 넷에 대응하는지 확인 |
+
+빌드는 이 worktree의 기존 구성을 재사용한다. Core는 **1.1.0**이다.
+
+## 보고 (표준출력)
+
+- 원인별 변경 파일 `file:line`과 무엇을 바꿨는지
+- 3번은 C++ 동작을 바꾼 것인지 테스트를 계약에 맞춘 것인지 명시
+- 4번이 `bindings/cpp/**`를 건드렸으면 그 범위
+- 수정 전/후 규칙 수 한 줄, 검증 표, BLOCKERS
+
+1.5시간 상한.
