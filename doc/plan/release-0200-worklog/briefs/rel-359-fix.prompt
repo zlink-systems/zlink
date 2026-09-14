@@ -1,0 +1,105 @@
+# rel-359-fix — timer turn을 끝낸 뒤에 Spot turn을 놓는다 (Issue #359, 2단계)
+
+worktree `/home/hep7/project/zlink-358-cpp`, branch `framework-cpp/358-spot-internal-packets`.
+**시작 전 `git fetch origin && git merge origin/main`** — 감독이 방금 스펙을 커밋했다.
+한국어로 보고. 감독자가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` §3, `framework/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+**앵커 없는 `pkill -f`/`pgrep -f`**; `doc/**`·`core/doc/**`·`framework/doc/**`·
+`scripts/local-package/**` 수정; **샘플 수정**(`on_closing`의 cancel을 빼는 안은 감독이 기각했다);
+**종료 timeout 늘리기·교착을 기다렸다 죽이는 우회**; Core·binding 수정;
+`.NET`/`Node`/`Java` 런타임 수정. 임시 산출물은 `/tmp/zlink-rel-359-fix/`.
+**`/tmp` 8 GB, 쓰기 전 `df -h /tmp`.**
+
+**빌드 트리는 하나만 둔다.** 여러 개를 남기면 `test_cpp_framework_layout_contract`가 자기 것 외의
+빌드 산출물을 읽어 timeout한다. 기존 `build/rel-358`을 재사용한다.
+
+## 감독 결정 — 스펙은 확정됐다
+
+1단계 진단의 BLOCKER(자기 cancel의 규범 동작)를 감독이 스펙에 확정했다. 커밋
+`3fc2c35daa`, 문서 `framework/doc/framework/common/spec/server/03-spot-actor/10-spot-timer.ko.md` §1.
+**그 문서를 먼저 읽는다. 스펙은 수정 금지 — 구현을 스펙에 맞춘다.**
+
+확정된 두 문장:
+
+> **Callback 종료는 timer generation이 먼저 확정하고, 그 뒤에 Spot의 turn을 놓는다.**
+> Callback이 반환하면 runtime은 그 generation의 실행 표시를 내리고 대기 중인 `cancel`의
+> terminal을 확정한 뒤에야 Spot turn을 반납한다.
+
+> **Callback 본문 안에서는 자기 generation의 `cancel` 완료를 기다리지 않는다.**
+
+즉 `on_closing`에서 부르는 cancel은 **자기 cancel이 아니다.** Callback은 이미 반환했고,
+스펙대로라면 그 시점에 terminal이 확정돼 있어 즉시 완료돼야 한다. 샘플은 옳다.
+
+## 결함 — 판별 1 (구현이 스펙을 안 지킴)
+
+`framework/languages/cpp/framework/src/runtime/timers/timer_runtime.cpp`의 `reset_running`
+(`dispatch_fire_count_async` 안, 대략 486-501행):
+
+```cpp
+auto reset_running = [context, state] {
+    ...
+    context->leave_callback ();            // (1) Spot turn 반납 — 여기서 close가 inline 실행된다
+    { lock; state->running = false; ... }  // (2) generation 실행 표시 해제
+    complete_cancel_if_ready (state);      // (3) cancel terminal 확정
+    if (post_pending) post_fire_count(...);
+};
+```
+
+순서가 스펙과 반대다. (1)이 `spot_runtime.cpp:2180 leave_callback` → `callback_depth`가 0이 되고
+`close_requested`면 같은 스레드에서 `close_application_then_release_location`을 inline 호출 →
+`bingo_room_spot_t::on_closing()` → `_draw_timer.cancel().result()`. 이때 `state->running`은 아직
+true이므로 `complete_cancel_if_ready`(`timer_runtime.cpp:39`)의 `!state->running` 조건이 거짓이고
+terminal이 확정되지 않는다. 그 확정 코드는 (3)에 있는데 (1)에서 막혀 도달하지 못한다.
+main thread는 `drain_spot_node_executors()`에서 대기 → 교착.
+
+## 수정 방향 (감독 승인)
+
+**timer turn을 완전히 끝낸 뒤에 Spot turn을 놓는다.** `reset_running`에서
+`state->running = false` + pending 스냅샷 + `complete_cancel_if_ready(state)`를 먼저 수행하고,
+그 다음에 `context->leave_callback ()`을 호출한다. pending fire 재게시는 그 뒤에 둔다
+(close됐으면 `try_post_serial`이 정상적으로 거절한다).
+
+- 수정 전 규칙 수: **2** — `callback_depth`와 `timer.running`이 서로 다른 완료 경계를 갖는다.
+- 수정 후 규칙 수: **1** — callback 반환이 두 경계를 같은 순간에, timer 쪽을 먼저 닫는다.
+
+`reset_running`은 `dispatch_fire_count_async`의 성공 경로와 두 catch 경로에서 모두 불린다.
+**세 경로 모두 새 순서를 타야 한다.** 함수 초반의 early-return 경로들(handler 미설정, context
+미설정, 미admit)은 `enter_timer_callback` 전이거나 admit 실패라 `leave_callback`을 부르지 않는다 —
+그대로 두되, `running=false` 뒤 `complete_cancel_if_ready`를 부르는 기존 순서가 맞는지 확인한다.
+
+이 순서 변경이 재진입을 여는지 확인한다: `running=false` 직후 platform timer가 fire해도 serial
+queue의 현재 work item이 아직 complete되지 않았으므로 새 callback은 시작하지 못해야 한다.
+그렇지 않다면 그 사실을 보고하고 멈춘다.
+
+## 회귀 검증 (새로 추가)
+
+C++ framework 테스트에 contract test 2개를 추가한다. 스펙 §8 "Generation과 cancel"에
+감독이 추가한 두 항목에 1:1로 대응한다.
+
+1. Timer callback이 끝난 뒤 같은 turn에서 이어지는 lifecycle callback(Spot close 알림)에서 그
+   timer를 `cancel`하면 기다림 없이 완료된다.
+2. Timer callback 안에서 결과를 기다리지 않고 자기 generation의 `cancel`을 호출하면 그 callback은
+   정상으로 끝나고, cancel 결과는 callback 종료 뒤 확정된다.
+
+두 테스트 모두 **교착하면 실패**하도록 유한 대기로 작성한다. 수정 전 체크아웃에서 1번이
+재현(교착/timeout)되는지 먼저 확인하고 보고에 적는다.
+
+## 실행 순서
+
+1. main merge → 스펙 문서 읽기 → 위 결함 지점 확인.
+2. contract test 2개 추가, 수정 전 실패 확인.
+3. `reset_running` 순서 수정.
+4. contract test 2개 통과 확인.
+5. 기존 timer 테스트 전체 회귀: `zlink_cpp_framework` 테스트 중 timer/spot 관련 타깃.
+6. Bingo 샘플 1회 실행해 종료까지 통과 확인.
+
+## 보고 형식
+
+- 소유 계층 / 스펙 조항(파일:행) / 교차언어 대조 / 분류
+- 수정 전·후 규칙 수
+- 추가한 테스트 이름과 수정 전 실패·수정 후 통과 로그 경로
+- 변경 파일 목록 (`git status --short`)
+- 남은 BLOCKER
