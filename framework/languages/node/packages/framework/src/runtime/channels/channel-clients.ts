@@ -172,11 +172,16 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
 }
 
 export class DefaultZLinkRouteClient implements ZLinkRouteClient {
+  private readonly channelClient: DefaultZLinkChannelClient;
+
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly transport?: ZLinkRouteClientTransport,
-    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName
-  ) {}
+    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName,
+    channelTransport?: ZLinkChannelClientTransportSource
+  ) {
+    this.channelClient = new DefaultZLinkChannelClient(registration, channelTransport);
+  }
 
   sendToNode(meshName: string, targetNodeRid: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
@@ -211,6 +216,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   }
 
   sendToChannel(channelName: string, message: unknown): ZLinkSendCall {
+    if (this.registration.channels.has(channelName)) {
+      return this.channelClient.sendToChannel(channelName, message);
+    }
     return new DefaultZLinkSendCall(
       () => { this.resolveMeshChannel(channelName); },
       async (packetName, metadata, signal) => {
@@ -228,6 +236,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   }
 
   requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall {
+    if (this.registration.channels.has(channelName)) {
+      return this.channelClient.requestToChannel(channelName, request);
+    }
     return new DefaultZLinkRequestCall(
       () => { this.resolveMeshChannel(channelName); },
       (packetName, timeoutMs, metadata, signal) => {

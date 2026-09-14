@@ -3,7 +3,7 @@ import type {
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import {
-  DefaultZLinkChannelClient,
+  DefaultZLinkRouteClient,
   DefaultZLinkFanoutClient,
   DefaultZLinkSpotPublisherClient,
   type ZLinkChannelClientTransportSource,
@@ -55,7 +55,12 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       primaryMeshName: this.options.meshRouters.primaryMeshName(),
       backendAdapterFactory: this.options.backendAdapterFactory,
       context: this.options.context,
-      channelClient: new DefaultZLinkChannelClient(this.options.registration, this.options.channelTransport),
+      channelClient: new DefaultZLinkRouteClient(
+        this.options.registration,
+        this.options.routeTransport,
+        this.options.meshRouters.spotRouterChannelIdByMesh(),
+        this.options.channelTransport
+      ),
       fanoutClient: new DefaultZLinkFanoutClient(this.options.registration, this.options.channelTransport),
       spotPublisherClient: new DefaultZLinkSpotPublisherClient(
         this.options.registration,

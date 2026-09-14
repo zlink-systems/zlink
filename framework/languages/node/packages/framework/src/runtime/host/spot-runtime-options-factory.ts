@@ -9,7 +9,7 @@ import {
   type ZLinkActorHandoffCoordinator
 } from '../actors';
 import {
-  DefaultZLinkChannelClient,
+  DefaultZLinkRouteClient,
   DefaultZLinkFanoutClient,
   DefaultZLinkSpotPublisherClient,
   type ZLinkChannelClientTransportSource,
@@ -124,7 +124,12 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog);
       },
-      channelClient: new DefaultZLinkChannelClient(this.options.registration, this.options.channelTransport),
+      channelClient: new DefaultZLinkRouteClient(
+        this.options.registration,
+        this.options.routeTransport,
+        this.options.meshRouters.spotRouterChannelIdByMesh(),
+        this.options.channelTransport
+      ),
       fanoutClient: new DefaultZLinkFanoutClient(this.options.registration, this.options.channelTransport),
       spotPublisherClient: new DefaultZLinkSpotPublisherClient(
         this.options.registration,
