@@ -31,8 +31,6 @@ import { wrapMonitorSocket } from './node-monitor-backend-adapter';
 import { nodeEventLoopPollerOf, wrapSocket } from './node-socket-backend-adapter';
 import { ZLinkNodeMeshBackendAdapter } from './node-mesh-backend-adapter';
 
-export { isDisconnectRouteNotFoundError } from './node-socket-backend-adapter';
-
 export class ZLinkNodeBackendAdapterFactory implements ZLinkBackendAdapterFactory {
   createReceived(): ZLinkBackendReceived {
     return new zlink.Received();
