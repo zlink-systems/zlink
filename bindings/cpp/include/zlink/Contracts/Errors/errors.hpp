@@ -30,11 +30,24 @@ class binding_error_t : public std::runtime_error
     const char *what () const noexcept override { return _message.c_str (); }
 
   protected:
+    struct typed_result_code_t
+    {
+    };
+    inline static constexpr typed_result_code_t typed_result_code{};
+
     binding_error_t (int code_, int internal_errno_) :
-        std::runtime_error (build_message (code_, internal_errno_)),
+        std::runtime_error (build_native_message (code_, internal_errno_)),
         _code (code_),
         _internal_errno (internal_errno_),
-        _message (build_message (code_, internal_errno_))
+        _message (build_native_message (code_, internal_errno_))
+    {
+    }
+
+    binding_error_t (int code_, int internal_errno_, typed_result_code_t) :
+        std::runtime_error (build_typed_message (code_, internal_errno_)),
+        _code (code_),
+        _internal_errno (internal_errno_),
+        _message (build_typed_message (code_, internal_errno_))
     {
     }
 
@@ -42,12 +55,26 @@ class binding_error_t : public std::runtime_error
     binding_error_t &operator= (const binding_error_t &) = default;
 
   private:
-    static std::string build_message (int code_, int internal_errno_)
+    static std::string build_native_message (int code_, int internal_errno_)
     {
         std::ostringstream stream;
         stream << error_text (code_);
         if (internal_errno_ != 0)
             stream << " (errno=" << internal_errno_ << ")";
+        return stream.str ();
+    }
+
+    static std::string build_typed_message (int code_, int internal_errno_)
+    {
+        std::ostringstream stream;
+        stream << "zlink result code " << code_;
+        if (internal_errno_ != 0) {
+            stream << " (native errno=" << internal_errno_;
+            const char *const native_message = error_text (internal_errno_);
+            if (native_message && *native_message)
+                stream << ": " << native_message;
+            stream << ")";
+        }
         return stream.str ();
     }
 
@@ -75,7 +102,8 @@ class submit_error_t : public binding_error_t
     }
 
     submit_error_t (submit_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -95,7 +123,8 @@ class request_error_t : public binding_error_t
     }
 
     request_error_t (request_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -114,7 +143,8 @@ class recv_error_t : public binding_error_t
     }
 
     recv_error_t (recv_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -134,7 +164,8 @@ class handler_error_t : public binding_error_t
     }
 
     handler_error_t (handler_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -154,7 +185,8 @@ class close_error_t : public binding_error_t
     }
 
     close_error_t (close_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -173,7 +205,8 @@ class bind_error_t : public binding_error_t
     }
 
     bind_error_t (bind_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -193,7 +226,8 @@ class connect_error_t : public binding_error_t
     }
 
     connect_error_t (connect_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
@@ -213,7 +247,8 @@ class config_error_t : public binding_error_t
     }
 
     config_error_t (config_result_t result_, int internal_errno_) :
-        binding_error_t (static_cast<int> (result_), internal_errno_), _result (result_)
+        binding_error_t (static_cast<int> (result_), internal_errno_, typed_result_code),
+        _result (result_)
     {
     }
 
