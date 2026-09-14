@@ -607,7 +607,7 @@ codec 및 처리 단계를 먼저 대조하고 같은 조건의 최소 경로부
 | 언어 | 정렬 상태 | 기존 결과 사용 범위 |
 | --- | --- | --- |
 | .NET | Codec·Envelope·Wire·Mailbox·permit 실측 보존, worker 대기 원인 분리 중 | 위 각 누적 단계의 조건에 한정 |
-| C++ | Core-like·Codec부터 test-only 단계 진단 준비 | 기존 unified benchmark는 4 KB 요청/4 KB 응답이므로 64 B 요청 기준으로 재사용 불가 |
+| C++ | Core-like·Codec 세 패턴 실측 완료, Codec 비용 검토 중 | 아래 정렬된 진단에 한정; 기존 unified benchmark는 4 KB 요청/4 KB 응답 |
 | Java | Core-like·Codec 진단 범위 확정 중 | 기존 echo는 요청과 응답 크기가 같아 정렬 기준으로 재사용 불가 |
 | Kotlin | 별도 Kotlin 진단 source와 공유 JVM codec target 준비 범위 확정 중 | 기존 보조 셀은 request-window 전용이며 source의 1024/runner의 4096 조건이 불일치하여 세 패턴 기준으로 재사용 불가 |
 
@@ -620,6 +620,43 @@ Kotlin public facade는 Java RouteClient와 codec runtime을 사용한다. 따�
 최적화의 소유자는 공유 Java module이다. Kotlin 진단 source의 실측과 Java source 실측은 따로
 남기되, 이를 Kotlin 전용 codec runtime의 비용으로 설명하지 않는다. 기존 Kotlin 보조 실행기는
 Java target을 사용하며 1024/4096 설정도 혼재하므로 새 단계별 실측과 구분한다.
+
+#### C++ Core-like·Codec 정렬 측정
+
+두 단계 모두 실제 `BenchPayload` protobuf를 메시지마다 직렬화·역직렬화한다.
+Codec 단계만 기존 Framework serializer registry와 protobuf extension을 사용한다.
+요청은 64 B, 응답과 send는 4,096 B다. Compile-time 단계별 실행 파일로
+warmup 2초·active 5초·runs=1을 독점 실행했으며 실제 public Framework 전체 경로는 아니다.
+
+| 단계 | request-serial | request-backpressure | send-saturation |
+| --- | ---: | ---: | ---: |
+| Core-like | 8,925.8 | 371,608.8 | 541,708.4 |
+| + Codec | 8,631.8 (3.3%) | 343,616.4 (7.5%) | 511,722.6 (5.5%) |
+
+단위는 message/s이며 괄호는 직전 단계 대비 감소율이다. 처리량은 active 종료 시 target이
+받은 메시지 수 / 5초다. 이후 drain에서 active·warmup 수신 수와 제출·완료 수를 따로 맞춘다.
+여섯 항목 모두 오류 0, 누락 0, drain bound 미도달이다. 이를 Codec의 고정 비용이나
+다른 언어 대비 우열로 일반화하지 않는다.
+
+| 단계 / 패턴 | Bandwidth MB/s | Source / Target CPU % | Source / Target RSS MiB |
+| --- | ---: | ---: | ---: |
+| Core-like / request-serial | 36.56 | 1.73 / 1.62 | 10.63 / 14.22 |
+| Codec / request-serial | 35.36 | 1.71 / 1.62 | 10.63 / 14.33 |
+| Core-like / request-backpressure | 1,522.11 | 9.57 / 8.44 | 11.68 / 28.41 |
+| Codec / request-backpressure | 1,407.45 | 9.47 / 8.25 | 10.95 / 27.41 |
+| Core-like / send-saturation | 2,218.84 | 8.03 / 6.95 | 11.41 / 39.70 |
+| Codec / send-saturation | 2,096.02 | 8.04 / 6.77 | 11.41 / 40.23 |
+
+CPU %는 논리 core 20개 전체 용량을 기준으로 정규화하며 RSS는 기존 helper의 MiB 단위다.
+Bandwidth는 앞서 정의한 4 KB application payload 기준이다. 비교 fixture는 blocking receive,
+기존 completion 대기 정책, 실제 socket을 유지한 drain과 정상 종료를 사용한다. 기존
+settle 함수와 completion timeout을 공통 benchmark helper로 옮겨 두 단계와 기존 client가
+같은 규칙을 사용한다. 30초 drain bound·200 ms settle·50 ms completion 대기 상한은 유지한다.
+관련 세 target 빌드와 finite warmup·active·drain·close 검사 6/6이 통과했다.
+원자료는 `.artifacts/cpp-diag-stage-core-codec-w2-a5-r1-20260914/` 아래
+`{core,codec}/{패턴}/results.json`·`summary.json`·`target-stats.json`이다.
+사전 검증은 `.artifacts/cpp-diag-lifecycle-selfcheck-aligned-20260914/`와
+`.artifacts/cpp-diag-lifecycle-build.log`에 보관한다.
 
 ### 이전 production Framework / ZLink Core 측정
 
