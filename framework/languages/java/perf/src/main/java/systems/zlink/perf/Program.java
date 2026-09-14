@@ -47,7 +47,9 @@ public class Program {
             else if(!config.publish()&&!(config.cs()&&!config.objects())&&!config.listener().isEmpty()&&!config.text("meshName").isEmpty()){
                 var mesh=context.getBean(ZLinkRouteMeshRuntime.class).snapshot(config.text("meshName"));
                 ready&=mesh.isReady();
-                if(config.source()&&!config.cs()){
+                if(config.cs()&&config.text("role").equals("session")&&config.objects()&&!config.objectServer())
+                    ready&=mesh.readyPeerCount()>0;
+                else if(config.source()&&!config.cs()){
                     if(config.objects()&&!config.objectServer()&&!config.spotDriver())ready&=mesh.readyPeerCount()>0;
                     else if(!config.objects()||config.spotDriver())ready&=mesh.channels().stream().anyMatch(channel->
                         channel.channelName().equals(config.text("channelName"))&&channel.isReady()&&channel.readyTargetCount()>0);

@@ -15,6 +15,48 @@ test('the public scenario dispatcher accepts every shared default cell', () => {
   assert.equal(matrix.cells.length, 21);
   for (const cell of matrix.cells) assert.ok(scenario(cell));
 });
+test('JSON driver echo is constructed as the declared outbound DTO in measured and setup cohorts', async () => {
+  const { createHandlers } = require('../Server/handlers');
+  const { PerfEchoRequest, PerfDriveRequest } = require('../Shared/contracts');
+  const decorators = {
+    ZLinkPacket: () => () => {}, ZLinkSpotRequest: () => () => {},
+    ZLinkSpotActorRequest: () => () => {}, ZLinkSpotActorSend: () => () => {}
+  };
+  for (const scenario of ['s2s-spot-to-channel-request-echo', 's2s-spot-to-channel-send']) {
+    for (const cohort of ['measured', 'setup', 'notStarted']) {
+      const m = measure(scenario); m.resetSeq = cohort === 'setup' ? '0' : '1';
+      m.phase = cohort === 'setup' ? 'setup' : 'measured';
+      if (cohort !== 'measured') m.end = m.start;
+      const request = m.request(1, 9n); request.phase = cohort === 'setup' ? 'warmup' : 'measured';
+      request.scheduledTicks = String(m.start); request.payload = pattern(m.requestBytes);
+      const drive = JSON.parse(JSON.stringify(new PerfDriveRequest(request)));
+      assert.equal(Object.getPrototypeOf(drive.echo), Object.prototype);
+      const original = { ...drive.echo };
+      const handlers = createHandlers(decorators, {}, m, {});
+      const spot = new handlers.PerfSpot(); let driverType;
+      spot.context = { spotId: 'source-spot', handlers: { addPacket: type => { if (type.name === 'SpotDriveHandler') driverType = type; } } };
+      spot.configure(); assert.ok(driverType);
+      const observed = [];
+      const outbound = payload => {
+        observed.push(payload);
+        assert.ok(payload instanceof PerfEchoRequest);
+        for (const [key, value] of Object.entries(original)) assert.equal(payload[key], value, key);
+        return { timeout() { return this; }, async submit() { return m.reply(payload); } };
+      };
+      spot.context.outbound = {
+        requestToChannel: (_channel, payload) => outbound(payload),
+        sendToChannel: (_channel, payload) => outbound(payload)
+      };
+      const result = await new driverType().handle(spot, drive);
+      assert.equal(result.started, cohort !== 'notStarted');
+      assert.equal(observed.length, cohort === 'notStarted' ? 0 : 1);
+      assert.deepEqual(drive.echo, original);
+      assert.equal(m.activeHandlers, 0);
+      assert.equal(m.counts['driver.notStarted'] ?? 0n, cohort === 'notStarted' ? 1n : 0n);
+      assert.equal(m.counts.sent ?? 0n, 0n, 'handler must not invent a source operation');
+    }
+  }
+});
 test('canonical logical patterns distinguish 64-byte request and 4096-byte response', () => {
   validatePattern(pattern(64), 64, pattern(64)); validatePattern(pattern(4096), 4096, pattern(4096));
   assert.throws(() => validatePattern(pattern(64), 4096, pattern(4096)), { harnessKind: 'PayloadMismatch' });
@@ -151,8 +193,9 @@ test('canonical role preparation completes CS server Actors before source probes
   const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
   const applicationPath = path.join(__dirname, '../Server/application.js');
   const originalRequire = require('node:module').createRequire(applicationPath);
-  for (const role of ['none', 'actor', 'source']) {
+  for (const role of ['none', 'actor', 'source', 'remoteSession', 'localSession', 'baselineSession']) {
     const calls = [];
+    let readyPeerCount = 0;
     let release;
     const gate = new Promise(resolve => { release = resolve; });
     const manager = { getOrCreate(id, type) {
@@ -163,8 +206,8 @@ test('canonical role preparation completes CS server Actors before source probes
       return call;
     } };
     class UnknownElementException extends Error {}
-    const nestjs = { ZLINK_FRAMEWORK_RUNTIME: 'host', ZLINK_ACTOR_MANAGER: 'actors', ZLinkModule: { forRootFactory: () => ({}) } };
-    const app = { get(token) { if (token === 'host') return { status: { isReady: true } }; if (token === 'actors') return manager; throw new UnknownElementException(); }, async close() {} };
+    const nestjs = { ZLINK_FRAMEWORK_RUNTIME: 'host', ZLINK_ACTOR_MANAGER: 'actors', ZLINK_ROUTE_MESH_RUNTIME: 'mesh', ZLinkModule: { forRootFactory: () => ({}) } };
+    const app = { get(token) { if (token === 'host') return { status: { isReady: true } }; if (token === 'actors') return manager; if (token === 'mesh') return { snapshot: () => ({ isReady: true, readyPeerCount, channels: [] }) }; throw new UnknownElementException(); }, async close() {} };
     const mocks = {
       'node:http': { createServer: () => ({ once() {}, listen(_port, _host, done) { done(); }, close(done) { done(); } }) },
       '@nestjs/common': { Module: () => () => {} }, '@nestjs/core': { NestFactory: { createApplicationContext: async () => app } },
@@ -177,12 +220,16 @@ test('canonical role preparation completes CS server Actors before source probes
     const loaded = { exports: {} };
     vm.runInNewContext(fs.readFileSync(applicationPath, 'utf8'), { module: loaded, exports: loaded.exports, require: name => mocks[name] ?? originalRequire(name), URL, console }, { filename: applicationPath });
     const config = { runId: 'r', cellId: 'c', configHash: 'h', role: 'server', roleInstance: 0,
-      source: role === 'source', scenario: role === 'source' ? 'pubsub-fanout-echo' : 'cs-remote-session-actor-echo', terminal: 'ordinary',
-      objectRole: role === 'actor' ? 'serverActors' : 'None', meshName: 'mesh', actorIds: ['actor-0', 'actor-1'],
+      source: role === 'source', scenario: role === 'source' ? 'pubsub-fanout-echo' : role === 'localSession' ? 'cs-local-session-actor-echo' : role === 'baselineSession' ? 'session-echo-only' : 'cs-remote-session-actor-echo', terminal: 'ordinary',
+      objectRole: role === 'actor' ? 'serverActors' : role === 'remoteSession' ? 'Client' : 'None', meshName: 'mesh', actorIds: ['actor-0', 'actor-1'],
+      listenerEndpoint: role.endsWith('Session') ? 'tcp://127.0.0.1:10003' : undefined,
       metricsUrl: 'http://127.0.0.1:10001', applicationTriggerUrl: 'http://127.0.0.1:10002', workload: { ...matrix.defaults, logicalStreams: 2 } };
     const runtime = await loaded.exports.createApplication(config);
     try {
       assert.deepEqual(calls, [], 'startup leaves preparation to the canonical coordinator');
+      assert.equal(runtime.ready().infrastructureReady, role !== 'remoteSession');
+      readyPeerCount = 1;
+      assert.equal(runtime.ready().infrastructureReady, true);
       assert.equal(runtime.ready().objectsReady, role !== 'actor');
       const preparing = runtime.prepareRole();
       if (role === 'actor') { assert.equal(runtime.ready().objectsReady, false); assert.deepEqual(calls, ['actor-0']); }

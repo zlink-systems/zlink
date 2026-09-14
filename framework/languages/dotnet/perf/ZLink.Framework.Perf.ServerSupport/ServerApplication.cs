@@ -156,7 +156,7 @@ public static class ServerApplication
         var config = services.GetRequiredService<RoleConfig>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
         if (config.mode == "publish" && !config.source) return new { host, fanout = services.GetRequiredService<IZLinkFanoutRuntime>().GetStatus(config.channelName!) };
-        if (config.topology == "routemesh" && config.mode != "publish") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
+        if (config.topology == "routemesh" && config.mode != "publish" || config.scenario == "cs-remote-session-actor-echo" && config.objectRole == "Client") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
         if (config.topology == "clientserver") return new { host, clientServer = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!) };
         return new { host };
     }
@@ -166,14 +166,15 @@ public static class ServerApplication
         var measurement = services.GetRequiredService<Measurement>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
         var infrastructure = host.IsReady;
-        if (config.topology == "routemesh" && config.mode != "publish")
+        if (config.topology == "routemesh" && config.mode != "publish" || config.scenario == "cs-remote-session-actor-echo" && config.objectRole == "Client")
         {
             var mesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!);
             // IsReady also permits local traffic with no peers (topology monitoring §4).
             // This caller's object target is on the separate server role, so §16.1
             // infrastructure readiness requires a ready remote connection before its probe.
-            var remoteObjectTarget = config.source && config.objectRole == "Client"
-                && !config.scenario.StartsWith("cs-", StringComparison.Ordinal);
+            var remoteObjectTarget = config.objectRole == "Client" &&
+                (config.source && !config.scenario.StartsWith("cs-", StringComparison.Ordinal)
+                    || config.scenario == "cs-remote-session-actor-echo");
             infrastructure &= !remoteObjectTarget || mesh.ReadyPeerCount > 0;
             // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
             // Only the source needs a selectable remote target; the receiver proves dispatch by echo.

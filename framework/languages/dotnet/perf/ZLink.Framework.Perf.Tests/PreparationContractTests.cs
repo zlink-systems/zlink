@@ -11,6 +11,30 @@ namespace ZLink.Framework.Perf.Tests;
 
 public sealed class PreparationContractTests
 {
+    [Theory]
+    [InlineData("cs-remote-session-actor-echo", "Client", 0, false)]
+    [InlineData("cs-remote-session-actor-echo", "Client", 1, true)]
+    [InlineData("cs-local-session-actor-echo", "Server", 0, true)]
+    [InlineData("session-echo-only", "None", 0, true)]
+    public void SessionInfrastructureRequiresPeersOnlyForRemoteObjectClient(string scenario, string objectRole, int peers, bool ready)
+    {
+        var config = Config(objectRole, scenario) with { role = "session" };
+        using var measurement = new Measurement(config, false);
+        using var services = new ServiceCollection().AddSingleton(config).AddSingleton(measurement)
+            .AddSingleton<IZLinkFrameworkRuntime>(new ReadyHost())
+            .AddSingleton<IZLinkRouteMeshRuntime>(new ReadyMesh(peers)).BuildServiceProvider();
+        Assert.Equal(ready, ServerApplication.Ready(services).infrastructureReady);
+        using var status = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(ServerApplication.PublicStatus(services)));
+        Assert.Equal(objectRole == "Client", status.RootElement.TryGetProperty("routeMesh", out _));
+    }
+
+    private sealed class ReadyMesh(int peers) : IZLinkRouteMeshRuntime
+    {
+        public ZLinkRouteMeshStatus GetStatus(string meshName) => new(meshName, ZLinkTopologyState.Ready, true, peers,
+            [], [], new(true, 0, 0, null), 0, DateTimeOffset.UtcNow);
+        public IAsyncEnumerable<ZLinkObservedStatus<ZLinkRouteMeshStatus>> ObserveAsync(string meshName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
     private static RoleConfig Config(string role = "Server", string scenario = "cs-remote-session-actor-echo") => new(
         "test", "test-cell", new string('a', 64), "actor", 0, scenario, null, null, "mesh",
         null, null, "", "", false, role, null, [], ["a", "b", "c"], "Immediate",

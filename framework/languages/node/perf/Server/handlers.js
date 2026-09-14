@@ -1,5 +1,5 @@
 'use strict';
-const { PerfEchoReply, PerfDriveReply, PerfBindRequest, PerfBindReply, validation, validatePattern } = require('../Shared/contracts');
+const { PerfEchoRequest, PerfEchoReply, PerfDriveReply, PerfBindRequest, PerfBindReply, validation, validatePattern } = require('../Shared/contracts');
 const { now, domain } = require('../Shared/measurement');
 
 // The public CPU worker serializes its callback. Embed only validated bootstrap constants;
@@ -68,7 +68,7 @@ function createHandlers(framework, nestjs, measure, clients) {
   }
   class SpotDriveHandler {
     async handle(spot, drive) {
-      const request = drive.echo;
+      const request = new PerfEchoRequest(drive.echo);
       const probe = measure.phase === 'setup' && request.phase === 'warmup';
       if (!probe && !measure.canIssue) { measure.inc(measure.counts, 'driver.notStarted'); return new PerfDriveReply(false); }
       const at = now(); enter(request); measure.inc(measure.counts, 'spot.applicationHandlerEntries');

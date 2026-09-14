@@ -103,7 +103,7 @@ async function createApplication(config) {
     if (status.routeMesh && !status.routeMesh.isReady) return false;
     if (status.clientServer && !status.clientServer.isReady) return false;
     if (status.fanout && !config.source && !status.fanout.isReady) return false;
-    if (config.source && !kind.local && !kind.cs && !kind.publish && status.routeMesh) {
+    if ((config.source && !kind.local && !kind.cs && !kind.publish || kind.cs && objectClient) && status.routeMesh) {
       if ((kind.spot || kind.actor) && status.routeMesh.readyPeerCount <= 0) return false;
       if (kind.driver || kind.channel && !kind.spot && !kind.actor) {
         return status.routeMesh.channels.some(channel => channel.channelName === config.channelName && channel.isReady && channel.readyTargetCount > 0);
