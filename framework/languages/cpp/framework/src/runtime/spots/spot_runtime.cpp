@@ -12280,7 +12280,6 @@ void spot_node_runtime_t::release_native_handles () noexcept
             _state->spot_names_by_id.clear ();
             _state->native_actors.clear ();
             _state->native_spots_by_id.clear ();
-            _state->routed_control_spot.reset ();
         }).get ();
         for (auto &context : contexts) {
             try {
@@ -12377,10 +12376,8 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
     {
         std::vector<std::shared_ptr<spot_context_state_t>> contexts;
         std::chrono::milliseconds idle_timeout{0};
-        bool create_control_spot = false;
         bool create_idle_timer = false;
     };
-    const auto native = node;
     _state->actor_transfer_coordinator.set_activity_handler (
       [weak = std::weak_ptr<service::mesh_node_t> (node)] {
           if (const auto host = weak.lock ())
@@ -12391,7 +12388,6 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
         _state->stopping.store (false, std::memory_order_release);
         _state->worker_cancellation = std::stop_source{};
         _state->native_node = node;
-        result.create_control_spot = _state->spot_contexts_by_id.empty ();
         result.contexts.reserve (_state->spot_contexts_by_id.size ());
         for (const auto &[_, context] : _state->spot_contexts_by_id) {
             if (context._state)
@@ -12403,13 +12399,6 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
           && !_state->instance_spot_idle_timer;
         return result;
     }).get ();
-    if (plan.create_control_spot && native) {
-        auto control = std::make_shared<service::spot_t> (native->entry_spot ());
-        _state->lane.run ([&] {
-            if (_state->spot_contexts_by_id.empty () && !_state->routed_control_spot)
-                _state->routed_control_spot = std::move (control);
-        }).get ();
-    }
     for (const auto &context : plan.contexts)
         attach_native_spot (context);
     if (plan.create_idle_timer) {
@@ -12443,7 +12432,6 @@ void spot_node_runtime_t::detach_native_node ()
         }
         _state->native_node.reset ();
         _state->native_spots_by_id.clear ();
-        _state->routed_control_spot.reset ();
         for (auto &[_, context] : _state->spot_contexts_by_id) {
             context._state->native_spot.reset ();
         }
