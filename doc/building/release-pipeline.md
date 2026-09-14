@@ -11,7 +11,7 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 
 | Component | Artifact | Channel | Workflow | Trigger | Auth |
 | --- | --- | --- | --- | --- | --- |
-| Core (`core/`) | 5 native archives, source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | create the `core/vX.Y.Z` tag, then `workflow_dispatch` on that ref | `GITHUB_TOKEN` |
+| Core (`core/`) | native archives for the four supported platforms (`.tar.gz` and `.zip` each), source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | create the `core/vX.Y.Z` tag, then `workflow_dispatch` on that ref | `GITHUB_TOKEN` |
 | Core (Conan) | recipe | ConanCenter | none (PR) | PR to `conan-io/conan-center-index` `recipes/zlink/` | GitHub account |
 | Core (vcpkg) | port | microsoft/vcpkg | none (PR) | PR to `microsoft/vcpkg` `ports/zlink/` + `versions/` | GitHub account |
 | Binding C++ | source archive (all of `bindings/cpp` plus the root LICENSE; the vcpkg port and the Conan recipe build it against the installed Core package) | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` tag or dispatch | `GITHUB_TOKEN` |
@@ -42,7 +42,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Integrated gates | `scripts/gate/{rebuild-dev,framework-gate,bindings-gate,cross-language-e2e}.sh <tag>` ([README](../../scripts/gate/README.md)) | the CI workflows cover the same scope as a platform matrix | `zlink-work/gates/<tag>/` |
 | Performance | `scripts/perf/perf-ticket.sh submit …` (ticket queue, `perf-queue-runner.sh`) | never in CI | `.artifacts/perf-queue/`, `doc/perf/perf/` |
 | CI helpers | `.github/actions/msvc-env` (Windows MSVC environment), `scripts/ci/dotnet-test-retry.sh` | called by the workflows | — |
-| Workflows | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-node.yml`, `framework-dotnet.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
+| Workflows | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-cpp.yml`, `framework-node.yml`, `framework-dotnet.yml`, `pr-verify.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
 
 ## 3. Order
 
@@ -124,21 +124,32 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 8. CI (verification) workflows
 
-Separate from releases, these run on `main` pushes and PRs. Framework CI uses only the published
-binding packages and Core release archives, and includes only the `cross-language` e2e (per-language
-scenario e2e is opt-in through each `run_e2e.sh`). The seven samples (Bingo, DeliveryDispatch, GameQuest,
-ShoppingMall, SupportChat, TicTacToe, ZoneWorld) are likewise outside the framework build, CI and
-releases; they are verified only by the local gate (`scripts/gate/framework-gate.sh`), each language's
-`samples/run_samples.sh`, and Node `npm run test:samples`.
+Verification runs separately from releases. **All of them are `workflow_dispatch` only; none starts
+from a push or a pull request.** Start one with `gh workflow run <file> --ref <branch>`. Framework CI
+uses only the published binding packages and Core release archives, and includes only the
+`cross-language` e2e (per-language scenario e2e is opt-in through each `run_e2e.sh`). The seven
+samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) are
+likewise outside the framework build, CI and releases; they are verified only by the local gate
+(`scripts/gate/framework-gate.sh`), each language's `samples/run_samples.sh`, and Node
+`npm run test:samples`.
 
 | Workflow | Scope | Matrix |
 | --- | --- | --- |
-| `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 5 platforms × Node 20/22 |
-| `framework-dotnet.yml` | .NET framework unit, contract, and stream connector tests | 5 RIDs × net8.0 Debug / net10.0 Release |
-| `build.yml` | Core build and verification (also the release workflow) | 5 platforms |
+| `framework-cpp.yml` | C++ framework unit and contract tests | ubuntu-24.04 |
+| `framework-dotnet.yml` | .NET framework unit, contract, and stream connector tests | 4 RIDs (win-x64, linux-x64, linux-arm64, osx-arm64) × net8.0 Debug / net10.0 Release |
+| `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 platforms (win-x64, linux-x64, linux-arm64, darwin-arm64) × Node 20/22 |
+| `pr-verify.yml` | Core ctest and binding smoke, Java framework unit and contract tests, Windows x64 static contracts | ubuntu-24.04; only the Windows static contract job runs on windows-2022 |
+| `build.yml` | Core build and verification (also the release workflow) | 4 platforms |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 
-The CI workflows use a per-ref `concurrency` group, so a newer push to the same branch cancels the
+`framework-dotnet.yml` and `framework-node.yml` are the only two that build and test on Windows.
+`framework-cpp.yml` is ubuntu-only, and the Java framework tests run only in the ubuntu job of
+`pr-verify.yml`. The windows-2022 job in `pr-verify.yml` runs just the static contract check in
+`bindings/tools/verify-windows-x64-contract.ps1` (PowerShell AST parse, version pins, x64 payload
+paths, sample runner inventory); it builds and tests nothing. Closing that gap is
+[#367](https://github.com/zlink-systems/zlink/issues/367).
+
+The CI workflows use a per-ref `concurrency` group, so a newer run on the same branch cancels the
 run in progress (no matrix pile-up, no runner starvation for releases). Release workflows are never
 cancelled.
 Windows jobs set up MSVC through `.github/actions/msvc-env` (composite, no Node runtime). .NET unit
