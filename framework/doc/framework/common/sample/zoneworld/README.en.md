@@ -753,6 +753,21 @@ abrupt. Only the initial cold start claims zones.
 Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
 runs out, which is exactly the state the cpp implementation was in.
 
+**Before judging a restarted node, the judging connection first observes the previous incarnation
+leave.** A status snapshot is not evidence of readiness: it can still describe the previous
+incarnation, and status payloads carry no incarnation marker. The judging connection **starts
+watching before the restart, observes the `leave → rejoin` order, and only then judges.** Only the
+new incarnation can produce that order.
+
+Do not poll a diagnostics or query call while waiting for readiness. Polling can read the previous
+incarnation's answer as the new one's, and it leaves the verdict to elapsed time instead of an
+observation.
+
+This applies to every scenario that stops and restarts a node (ZW-E5, ZW-G3, ZW-G4). Leaving it
+unstated let three implementations use three different readiness judgments - an ordered
+observation, a snapshot short-circuit, and a diagnostics poll - and the latter two can pass while
+looking at the previous incarnation.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

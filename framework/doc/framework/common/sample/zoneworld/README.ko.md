@@ -722,6 +722,18 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
 실제로 cpp 구현이 그 상태였다.
 
+**재기동된 node를 판정하기 전에, 판정하는 연결이 이전 incarnation의 이탈을 먼저 관측한다.**
+status 스냅샷은 준비 증거가 아니다. 스냅샷은 이전 incarnation을 가리킬 수 있고, status payload에는
+incarnation을 구분할 표시가 없다. 판정하는 연결은 **재기동 전에 관찰을 시작해 `이탈 → 재등장`
+순서를 관측하고 그 뒤에 판정한다.** 새 incarnation만 그 순서를 만들 수 있다.
+
+준비되기를 기다리며 진단이나 조회를 반복하지 않는다. 반복은 이전 incarnation의 응답을 새
+incarnation의 것으로 오인할 수 있고, 관측 대신 시간에 판정을 맡긴다.
+
+이 규칙은 node를 멈췄다 다시 띄우는 시나리오 전부에 적용된다(ZW-E5·ZW-G3·ZW-G4).
+이 값을 비워 두어 세 구현이 서로 다른 준비 판정을 썼다 — 하나는 순서 관측, 하나는 스냅샷
+short-circuit, 하나는 진단 반복이었고, 뒤의 둘은 이전 incarnation을 보고 통과할 수 있다.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
