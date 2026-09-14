@@ -1728,7 +1728,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   try {
                       created.emplace (spots.get_or_create_spot (
                         stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
-                        object.object_generation, object.mesh_name));
+                        object.object_generation, object.mesh_name, object.authority_owner_generation));
                   }
                   catch (...) {
                       std::lock_guard<std::recursive_mutex> lock (registration->spot_state->mutex);

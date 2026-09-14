@@ -1571,25 +1571,27 @@ void verify_default_store_identity_and_manual_identity (
             }
             if (object_client_source) {
                 auto &manager = server_services.get ()->get_required<zlink::framework::spot_manager_t> ();
-                const auto created = manager.get_or_create (
-                  zlink::framework::spot_id_t ("public-source-authority-target"), "source-authority-spot")
-                  .in_mesh ("default-identity-mesh").timeout (1s).async ().result ();
-                assert (created);
-                const auto response = routes.request_to_spot (
-                  zlink::framework::spot_id_t ("public-source-authority-target"),
-                  std::string ("object-client-weight-zero"))
-                  .timeout (1s).async<std::string> ().result ();
-                assert (response && response.value () == "object-client-weight-zero");
-                const auto before = automatic_identity_send_t::deliveries.load ();
-                const auto sent = routes.send_to_spot (
-                  zlink::framework::spot_id_t ("public-source-authority-target"),
-                  42).async ().result ();
-                assert (sent);
-                const auto deadline = std::chrono::steady_clock::now () + 1s;
-                while (automatic_identity_send_t::deliveries.load () == before
-                       && std::chrono::steady_clock::now () < deadline)
-                    std::this_thread::sleep_for (1ms);
-                assert (automatic_identity_send_t::deliveries.load () == before + 1);
+                for (const auto *target_id : {"public-source-authority-target", "public-source-authority-target-2"}) {
+                    const auto created = manager.get_or_create (
+                      zlink::framework::spot_id_t (target_id), "source-authority-spot")
+                      .in_mesh ("default-identity-mesh").timeout (1s).async ().result ();
+                    assert (created);
+                    const auto response = routes.request_to_spot (
+                      zlink::framework::spot_id_t (target_id),
+                      std::string ("object-client-weight-zero"))
+                      .timeout (1s).async<std::string> ().result ();
+                    assert (response && response.value () == "object-client-weight-zero");
+                    const auto before = automatic_identity_send_t::deliveries.load ();
+                    const auto sent = routes.send_to_spot (
+                      zlink::framework::spot_id_t (target_id),
+                      42).async ().result ();
+                    assert (sent);
+                    const auto deadline = std::chrono::steady_clock::now () + 1s;
+                    while (automatic_identity_send_t::deliveries.load () == before
+                           && std::chrono::steady_clock::now () < deadline)
+                        std::this_thread::sleep_for (1ms);
+                    assert (automatic_identity_send_t::deliveries.load () == before + 1);
+                }
             }
             assert (server_state->routing_id != client_state->routing_id);
         }
