@@ -2,6 +2,7 @@
 
 package systems.zlink.bench.withgrpc.grpcserver;
 
+import com.google.protobuf.ByteString;
 import com.google.protobuf.Empty;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -9,6 +10,7 @@ import io.grpc.stub.StreamObserver;
 import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import systems.zlink.bench.withgrpc.proto.BenchServiceGrpc;
 import systems.zlink.bench.withgrpc.shared.Args;
+import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
 
@@ -49,12 +51,14 @@ public final class GrpcBenchServer {
             this.metrics = metrics;
         }
 
-        // spec section 2: Echo returns the payload, so the client can validate the
-        // 29-byte header that came back (G2).
+        // Request rows return a 4096-byte body carrying the original flow header.
         @Override
         public void echo(BenchPayload request, StreamObserver<BenchPayload> observer) {
             metrics.record(request.getBody().asReadOnlyByteBuffer());
-            observer.onNext(request);
+            observer.onNext(BenchPayload.newBuilder()
+                .setBody(ByteString.copyFrom(BenchMetricHeader.createResponsePayload(
+                    request.getBody().asReadOnlyByteBuffer())))
+                .build());
             observer.onCompleted();
         }
 

@@ -102,5 +102,20 @@ int main ()
             std::printf ("cpp raw wire 29B: %s\n", hex.c_str ());
         }
     }
+    std::string request (k_request_payload_size, '\xab');
+    stamp_payload (request.data (), request.size (), run_id, phase_active, sequence);
+    decoded_header_t request_header {};
+    if (!decode_payload (request.data (), request.size (), &request_header))
+        throw std::runtime_error ("request header decode failed");
+    std::string response;
+    if (!create_response_payload (request.data (), request.size (), &response))
+        throw std::runtime_error ("response payload creation failed");
+    decoded_header_t response_header {};
+    if (request.size () != 64 || response.size () != 4096
+        || !decode_payload (response.data (), response.size (), &response_header)
+        || response_header.payload_size != 4096 || response_header.run_id != run_id
+        || response_header.phase != phase_active || response_header.seq != sequence
+        || response_header.sent_ns != request_header.sent_ns)
+        throw std::runtime_error ("64-byte request / 4096-byte response mismatch");
     std::puts ("cpp raw wire identity: 29, 127, 128, 1024 bytes PASS");
 }

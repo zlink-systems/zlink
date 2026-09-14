@@ -48,6 +48,18 @@ public final class RawWireTest {
         }
         require(RawWire.decodeBenchPayloadBody(ByteBuffer.wrap(new byte[] {0x0a, 0x1d, 1}))
             == null, "truncated protobuf must fail");
+        byte[] request = BenchMetricHeader.createRequestPayload(RUN_ID, (byte) 1, SEQUENCE);
+        long requestTimestamp = BenchMetricHeader.decode(request).sentTimestampNs();
+        byte[] response = BenchMetricHeader.createResponsePayload(ByteBuffer.wrap(request));
+        BenchMetricHeader.Decoded responseHeader = BenchMetricHeader.decode(response);
+        require(request.length == BenchMetricHeader.REQUEST_PAYLOAD_SIZE,
+            "request payload size mismatch");
+        require(response.length == BenchMetricHeader.RESPONSE_PAYLOAD_SIZE,
+            "response payload size mismatch");
+        require(BenchMetricHeader.isExpected(responseHeader, RUN_ID, (byte) 1,
+            BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, SEQUENCE), "response header mismatch");
+        require(responseHeader.sentTimestampNs() == requestTimestamp,
+            "response timestamp must match request");
         byte[] unknownThenBody = HexFormat.of().parseHex("1007" + GOLDEN);
         require(toBytes(RawWire.decodeBenchPayloadBody(ByteBuffer.wrap(unknownThenBody))).length == 29,
             "protobuf unknown fields must be accepted");

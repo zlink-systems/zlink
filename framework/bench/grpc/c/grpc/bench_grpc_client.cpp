@@ -53,7 +53,8 @@ zlink_c_bench::result_t run_request_serial (
     while (std::chrono::steady_clock::now () < deadline) {
         zlink::framework::bench::withgrpc::BenchPayload request;
         zlink::framework::bench::withgrpc::BenchPayload reply;
-        fill_payload (request.mutable_body (), size, run_id, completed + errors);
+        fill_payload (request.mutable_body (), zlink_c_bench::k_request_payload_size,
+                      run_id, completed + errors);
         grpc::ClientContext context;
         const uint64_t submit_start = zlink_c_bench::now_ns ();
         const grpc::Status status = stub->Echo (&context, request, &reply);
@@ -66,9 +67,14 @@ zlink_c_bench::result_t run_request_serial (
             continue;
         }
         zlink_c_bench::decoded_header_t header {};
-        if (zlink_c_bench::decode_payload (reply.body ().data (), reply.body ().size (), &header)) {
+        if (zlink_c_bench::decode_payload (reply.body ().data (), reply.body ().size (), &header)
+            && header.payload_size == zlink_c_bench::k_response_payload_size
+            && reply.body ().size () == zlink_c_bench::k_response_payload_size) {
             const uint64_t now = zlink_c_bench::now_ns ();
             latency.add_us (now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) / 1000.0 : 0.0);
+        } else {
+            ++errors;
+            continue;
         }
         ++completed;
     }
@@ -116,7 +122,9 @@ zlink_c_bench::result_t run_request_async (
             if (ok && call->status.ok ()) {
                 zlink_c_bench::decoded_header_t header {};
                 if (zlink_c_bench::decode_payload (call->reply.body ().data (),
-                                                   call->reply.body ().size (), &header)) {
+                                                   call->reply.body ().size (), &header)
+                    && header.payload_size == zlink_c_bench::k_response_payload_size
+                    && call->reply.body ().size () == zlink_c_bench::k_response_payload_size) {
                     const uint64_t now = zlink_c_bench::now_ns ();
                     const double us =
                       now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) / 1000.0 : 0.0;
@@ -142,7 +150,8 @@ zlink_c_bench::result_t run_request_async (
             continue;
         }
         auto *call = new request_call_t ();
-        fill_payload (call->request.mutable_body (), size, run_id, submitted++);
+        fill_payload (call->request.mutable_body (), zlink_c_bench::k_request_payload_size,
+                      run_id, submitted++);
         const int now_outstanding = outstanding.fetch_add (1, std::memory_order_relaxed) + 1;
         max_outstanding_seen = std::max<uint64_t> (max_outstanding_seen,
                                                    static_cast<uint64_t> (now_outstanding));

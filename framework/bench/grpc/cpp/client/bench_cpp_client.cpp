@@ -234,11 +234,18 @@ class grpc_driver_t : public driver_t
             grpc::ClientContext context;
             context.set_deadline (std::chrono::system_clock::now () + std::chrono::seconds (2));
             zlink::framework::bench::withgrpc::BenchPayload request;
-            request.mutable_body ()->assign (1024, '\xab');
-            stamp_payload (request.mutable_body ()->data (), 1024, 0, phase_warmup, 0);
+            request.mutable_body ()->assign (k_request_payload_size, '\xab');
+            stamp_payload (request.mutable_body ()->data (), request.body ().size (),
+                           0, phase_warmup, 0);
             zlink::framework::bench::withgrpc::BenchPayload reply;
-            if (_stub->Echo (&context, request, &reply).ok ())
-                return true;
+            if (_stub->Echo (&context, request, &reply).ok ()) {
+                decoded_header_t header {};
+                if (decode_payload (reply.body ().data (), reply.body ().size (), &header)
+                    && header.run_id == 0 && header.phase == phase_warmup
+                    && header.payload_size == k_response_payload_size
+                    && reply.body ().size () == k_response_payload_size && header.seq == 0)
+                    return true;
+            }
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
         }
         return false;
@@ -281,12 +288,14 @@ class grpc_driver_t : public driver_t
 
         auto submit_one = [&] {
             zlink::framework::bench::withgrpc::BenchPayload request;
-            request.mutable_body ()->assign (payload_size, '\xab');
-            stamp_payload (request.mutable_body ()->data (), payload_size, _run_id, phase, seq++);
+            const size_t outbound_size =
+              _command_path ? payload_size : k_request_payload_size;
+            request.mutable_body ()->assign (outbound_size, '\xab');
+            stamp_payload (request.mutable_body ()->data (), outbound_size, _run_id, phase, seq++);
 
             auto *call = new grpc_call_t<TReply> ();
             call->seq = seq - 1;
-            call->payload_size = payload_size;
+            call->payload_size = _command_path ? payload_size : k_response_payload_size;
             call->context.set_deadline (std::chrono::system_clock::now ()
               + std::chrono::milliseconds (_options.request_timeout_ms));
             if (_command_path) {
@@ -487,7 +496,8 @@ class zlink_raw_driver_t : public driver_t
             counters_t probe;
             const auto attempt_deadline =
               std::min (deadline, clock_t_::now () + std::chrono::milliseconds (500));
-            run_slots (attempt_deadline, 1024, phase_warmup, probe, nullptr, 1);
+            run_slots (attempt_deadline, k_response_payload_size, phase_warmup,
+                       probe, nullptr, 1);
             if (probe.completed.load () > 0)
                 return true;
         }
@@ -625,7 +635,9 @@ class zlink_raw_driver_t : public driver_t
         const char *envelope = request_envelope ();
         zlink::message_t header = zlink::message_t::from (
           std::as_bytes (std::span<const char> (envelope, std::strlen (envelope))));
-        const size_t body_size = std::max (payload_size, k_header_size);
+        const size_t body_size = _command_path
+                                   ? std::max (payload_size, k_header_size)
+                                   : k_request_payload_size;
         zlink::framework::bench::withgrpc::BenchPayload payload;
         payload.mutable_body ()->assign (body_size, '\xab');
         stamp_payload (payload.mutable_body ()->data (), body_size, _run_id, phase, seq);
@@ -783,7 +795,8 @@ class zlink_raw_driver_t : public driver_t
         if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ()))
             || !decode_payload (payload.body ().data (), payload.body ().size (), &header)
             || header.run_id != _run_id || header.phase != _phase
-            || header.payload_size != _payload_size || payload.body ().size () != _payload_size || header.seq != seq) {
+            || header.payload_size != k_response_payload_size
+            || payload.body ().size () != k_response_payload_size || header.seq != seq) {
             _counters->header_failures.fetch_add (1, std::memory_order_relaxed);
             _counters->record_error ("ValidationError", "raw reply header mismatch");
             return;
@@ -840,13 +853,23 @@ class framework_driver_t final : public driver_t
         if (!_host.start ()) return false;
         const auto deadline = clock_t_::now () + std::chrono::milliseconds (timeout_ms);
         while (clock_t_::now () < deadline) {
-            auto payload = make_payload (1024, phase_warmup);
+            auto payload = make_payload (k_request_payload_size, phase_warmup);
             auto task = _client->request_to_node ("bench", _target_node, std::move (payload))
                           .timeout (std::chrono::milliseconds (500))
                           .async<payload_t> ();
-            if (task.result ())
-                return true;
-            if (!_readiness_error_reported) {
+            if (task.result ()) {
+                const auto &reply = task.result ().value ();
+                decoded_header_t header {};
+                if (decode_payload (reply.body ().data (), reply.body ().size (), &header)
+                    && header.payload_size == k_response_payload_size
+                    && reply.body ().size () == k_response_payload_size)
+                    return true;
+                if (!_readiness_error_reported) {
+                    std::fprintf (stderr, "framework route readiness: invalid response payload\n");
+                    _readiness_error_reported = true;
+                }
+            }
+            else if (!_readiness_error_reported) {
                 std::fprintf (stderr, "framework route readiness: %s\n", task.result ().error ()->what ());
                 _readiness_error_reported = true;
             }
@@ -928,7 +951,8 @@ class framework_driver_t final : public driver_t
             while (clock_t_::now () < deadline
                    && (_window <= 0 || in_flight < static_cast<size_t> (_window))) {
                 const auto sent = now_ns ();
-                auto payload = make_payload (size, phase);
+                auto payload = make_payload (
+                  _command ? size : k_request_payload_size, phase);
                 counters.enter ();
                 ++counters.submitted;
                 size_t slot = 0;
@@ -959,7 +983,9 @@ class framework_driver_t final : public driver_t
                         decoded_header_t header;
                         valid = decode_payload (reply.body ().data (), reply.body ().size (), &header)
                           && header.run_id == _run_id && header.phase == phase
-                          && header.payload_size == size && reply.body ().size () == size && header.seq == item.seq;
+                          && header.payload_size == k_response_payload_size
+                          && reply.body ().size () == k_response_payload_size
+                          && header.seq == item.seq;
                         if (!valid) ++counters.header_failures;
                     }
                 }

@@ -59,7 +59,7 @@ public final class FrameworkStack implements AutoCloseable {
 
     public BenchOperation request() {
         return (payloadSize, phase, sequence) -> {
-            BenchPayload message = payload(payloadSize, phase, sequence);
+            BenchPayload message = requestPayload(phase, sequence);
             return route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
                 .timeout(timeout)
                 .submit(BenchPayload.class)
@@ -68,7 +68,8 @@ public final class FrameworkStack implements AutoCloseable {
                     BenchMetricHeader.Decoded decoded = reply == null ? null
                         : BenchMetricHeader.decode(reply.getBody().asReadOnlyByteBuffer());
                     if (!BenchMetricHeader.isExpected(
-                        decoded, runId, phase, payloadSize, sequence)) {
+                        decoded, runId, phase, BenchMetricHeader.RESPONSE_PAYLOAD_SIZE,
+                        sequence)) {
                         throw new IllegalStateException("framework reply header mismatch");
                     }
                 });
@@ -89,6 +90,13 @@ public final class FrameworkStack implements AutoCloseable {
         return BenchPayload.newBuilder()
             .setBody(UnsafeByteOperations.unsafeWrap(
                 BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)))
+            .build();
+    }
+
+    private BenchPayload requestPayload(byte phase, long sequence) {
+        return BenchPayload.newBuilder()
+            .setBody(UnsafeByteOperations.unsafeWrap(
+                BenchMetricHeader.createRequestPayload(runId, phase, sequence)))
             .build();
     }
 

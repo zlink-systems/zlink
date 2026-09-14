@@ -12,16 +12,18 @@ import systems.zlink.bench.withgrpc.client.BenchOperation
 import systems.zlink.bench.withgrpc.client.BenchOptions
 import systems.zlink.bench.withgrpc.client.BenchResultWriter
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication
+import systems.zlink.bench.withgrpc.shared.BenchMetricHeader
 
-/** One Kotlin source-A process for one request-window@1024 auxiliary cell. */
+/** One Kotlin source-A process for one request-window@4096 auxiliary cell. */
 fun main(args: Array<String>) {
     val options = BenchOptions(args)
     require(options.implementation == "grpc-kotlin" ||
         options.implementation == "zlink-framework-kotlin") {
         "Kotlin auxiliary implementation must be grpc-kotlin or zlink-framework-kotlin"
     }
-    require(options.scenario == "request-window" && options.payloadSizes.single() == 1024) {
-        "Kotlin auxiliary cells are fixed to request-window@1024"
+    require(options.scenario == "request-window" &&
+        options.payloadSizes.single() == BenchMetricHeader.RESPONSE_PAYLOAD_SIZE) {
+        "Kotlin auxiliary cells are fixed to request-window@4096"
     }
 
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -73,7 +75,9 @@ fun main(args: Array<String>) {
             resource[0] = stack
             operation[0] = stack.request()
         }
-        drivers.waitForRouteReady(checkNotNull(operation[0]), 1024)
+        drivers.waitForRouteReady(
+            checkNotNull(operation[0]), BenchMetricHeader.RESPONSE_PAYLOAD_SIZE,
+        )
         ready.set(true)
     } catch (error: Throwable) {
         http.close()

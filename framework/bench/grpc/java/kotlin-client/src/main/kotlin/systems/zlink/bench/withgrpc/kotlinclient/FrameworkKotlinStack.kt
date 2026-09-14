@@ -70,12 +70,14 @@ class FrameworkKotlinStack private constructor(
     fun request(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
         scope.benchFuture {
             val reply: BenchPayload = route
-                .requestToChannel(BenchContract.CHANNEL_NAME, payload(payloadSize, phase, sequence))
+                .requestToChannel(BenchContract.CHANNEL_NAME, requestPayload(phase, sequence))
                 .timeout(timeout)
                 .awaitReply(BenchPayload::class.java)
             val decoded = BenchMetricHeader.decode(reply.body.asReadOnlyByteBuffer())
             check(
-                BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence),
+                BenchMetricHeader.isExpected(
+                    decoded, runId, phase, BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, sequence,
+                ),
             ) { "framework reply header mismatch" }
         }
     }
@@ -94,6 +96,15 @@ class FrameworkKotlinStack private constructor(
             .setBody(
                 UnsafeByteOperations.unsafeWrap(
                     BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence),
+                ),
+            )
+            .build()
+
+    private fun requestPayload(phase: Byte, sequence: Long): BenchPayload =
+        BenchPayload.newBuilder()
+            .setBody(
+                UnsafeByteOperations.unsafeWrap(
+                    BenchMetricHeader.createRequestPayload(runId, phase, sequence),
                 ),
             )
             .build()

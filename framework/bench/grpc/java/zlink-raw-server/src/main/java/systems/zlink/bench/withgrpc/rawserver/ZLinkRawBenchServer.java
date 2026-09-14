@@ -99,7 +99,7 @@ public final class ZLinkRawBenchServer {
                     // unsuccessful one leaves them caller-owned, and leaking a wrapper
                     // per reply is what starves the reply path at depth.
                     try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-                         Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
+                         Message replyBody = RawWire.encodeResponseBenchPayloadMessage(body)) {
                         boolean hasToken = received.replyToken().isPresent();
                         if (replyProbe && probeCount.getAndIncrement() < 5) {
                             System.err.println("[probe] reply branch hasToken=" + hasToken

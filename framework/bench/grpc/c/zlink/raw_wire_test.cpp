@@ -39,6 +39,7 @@ void check_wire (size_t size)
                                           sizeof golden), "protobuf differs from frozen dump");
 
     zlink_msg_t encoded;
+    std::string expected_protobuf = protobuf;
 #ifdef RAW_WIRE_SERVER_TEST
     zlink_msg_t request;
     require (zlink_msg_init_size (&request, protobuf.size ()) == ZLINK_CONFIG_OK,
@@ -46,6 +47,10 @@ void check_wire (size_t size)
     std::memcpy (zlink_msg_data (&request), protobuf.data (), protobuf.size ());
     require (make_response_body (&request, &encoded), "raw response failed");
     zlink_msg_close (&request);
+    require (zlink_c_bench::create_response_payload (
+               body.data (), body.size (), &body), "expected response failed");
+    typed.set_body (body);
+    expected_protobuf = typed.SerializeAsString ();
 #else
     require (make_payload_body_msg (size, 0x01020304, zlink_c_bench::phase_active,
                0x0102030405060708ULL, &encoded), "raw request failed");
@@ -55,7 +60,7 @@ void check_wire (size_t size)
                                0x1112131415161718ULL);
 #endif
     require (std::string (static_cast<const char *> (zlink_msg_data (&encoded)),
-                         zlink_msg_size (&encoded)) == protobuf,
+                         zlink_msg_size (&encoded)) == expected_protobuf,
              "raw wire differs from protobuf");
     zlink::framework::bench::withgrpc::BenchPayload decoded;
     require (decoded.ParseFromArray (zlink_msg_data (&encoded),
@@ -69,5 +74,24 @@ int main ()
 {
     for (const size_t size : {29, 127, 128, 1024, 4096})
         check_wire (size);
+    std::string request (zlink_c_bench::k_request_payload_size, '\xab');
+    require (zlink_c_bench::stamp_payload (
+               request.data (), request.size (), 7, zlink_c_bench::phase_active, 11),
+             "request stamp failed");
+    zlink_c_bench::decoded_header_t request_header {};
+    require (zlink_c_bench::decode_payload (
+               request.data (), request.size (), &request_header), "request decode failed");
+    std::string response;
+    require (zlink_c_bench::create_response_payload (
+               request.data (), request.size (), &response), "response creation failed");
+    zlink_c_bench::decoded_header_t response_header {};
+    require (request.size () == 64 && response.size () == 4096
+               && zlink_c_bench::decode_payload (
+                 response.data (), response.size (), &response_header)
+               && response_header.payload_size == 4096 && response_header.run_id == 7
+               && response_header.phase == zlink_c_bench::phase_active
+               && response_header.seq == 11
+               && response_header.sent_ns == request_header.sent_ns,
+             "64-byte request / 4096-byte response mismatch");
     std::puts ("raw wire: 29-byte frozen dump and 127/128/1024/4096-byte protobuf parity passed");
 }

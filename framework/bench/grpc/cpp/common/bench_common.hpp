@@ -89,6 +89,8 @@ inline uint64_t read_u64_le (const unsigned char *src)
 
 static const uint32_t k_magic = 0x5a4c4e4bU;
 static const size_t k_header_size = 29;
+static const size_t k_request_payload_size = 64;
+static const size_t k_response_payload_size = 4096;
 
 enum phase_t : uint8_t
 {
@@ -96,8 +98,12 @@ enum phase_t : uint8_t
     phase_active = 1
 };
 
-inline bool stamp_payload (
-  void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
+inline bool stamp_payload_at (void *payload,
+                              size_t payload_size,
+                              uint32_t run_id,
+                              phase_t phase,
+                              uint64_t seq,
+                              uint64_t sent_ns)
 {
     if (!payload || payload_size < k_header_size)
         return false;
@@ -107,8 +113,14 @@ inline bool stamp_payload (
     p[8] = static_cast<uint8_t> (phase);
     write_u32_le (p + 9, static_cast<uint32_t> (payload_size));
     write_u64_le (p + 13, seq);
-    write_u64_le (p + 21, now_ns ());
+    write_u64_le (p + 21, sent_ns);
     return true;
+}
+
+inline bool stamp_payload (
+  void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
+{
+    return stamp_payload_at (payload, payload_size, run_id, phase, seq, now_ns ());
 }
 
 struct decoded_header_t
@@ -133,6 +145,19 @@ inline bool decode_payload (const void *payload, size_t payload_size, decoded_he
     out->seq = read_u64_le (p + 13);
     out->sent_ns = read_u64_le (p + 21);
     return out->magic == k_magic;
+}
+
+inline bool create_response_payload (const void *request,
+                                     size_t request_size,
+                                     std::string *response)
+{
+    decoded_header_t header {};
+    if (!response || !decode_payload (request, request_size, &header))
+        return false;
+    response->assign (k_response_payload_size, '\xab');
+    return stamp_payload_at (response->data (), response->size (), header.run_id,
+                             static_cast<phase_t> (header.phase), header.seq,
+                             header.sent_ns);
 }
 
 // The raw transport serializes the same typed payload as gRPC and Framework.

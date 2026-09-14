@@ -89,7 +89,9 @@ void on_reply (zlink_request_result_t result,
         if (payload.ParseFromArray (zlink_msg_data (const_cast<zlink_msg_t *> (body_part)),
                                     static_cast<int> (zlink_msg_size (body_part)))
             && zlink_c_bench::decode_payload (payload.body ().data (), payload.body ().size (),
-                                              &header)) {
+                                              &header)
+            && header.payload_size == zlink_c_bench::k_response_payload_size
+            && payload.body ().size () == zlink_c_bench::k_response_payload_size) {
             const uint64_t now = zlink_c_bench::now_ns ();
             const double us = now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) / 1000.0 : 0.0;
             state->latency->add_us (us);
@@ -155,7 +157,6 @@ bool poll_once (void *poller, void *dealer, callback_state_t *state, long timeou
 
 bool submit_request_once (void *dealer,
                           const zlink_routing_id_t *target_rid,
-                          size_t size,
                           uint32_t run_id,
                           uint64_t seq,
                           zlink_send_flags_t flags,
@@ -163,7 +164,8 @@ bool submit_request_once (void *dealer,
                           request_metrics_t *metrics)
 {
     zlink_msg_t parts[2];
-    if (!make_request_parts (size, run_id, zlink_c_bench::phase_active, seq, parts)) {
+    if (!make_request_parts (zlink_c_bench::k_request_payload_size, run_id,
+                             zlink_c_bench::phase_active, seq, parts)) {
         ++metrics->submit_errors;
         return false;
     }
@@ -248,7 +250,7 @@ zlink_c_bench::result_t run_request_serial (void *dealer,
     const auto deadline = start + std::chrono::seconds (duration_s);
     uint64_t seq = 0;
     while (std::chrono::steady_clock::now () < deadline) {
-        if (submit_request_once (dealer, target_rid, size, run_id, seq++, ZLINK_SEND_FLAGS_NONE,
+        if (submit_request_once (dealer, target_rid, run_id, seq++, ZLINK_SEND_FLAGS_NONE,
                                  &cb, &metrics)) {
             while (cb.outstanding.load (std::memory_order_acquire) > 0)
                 (void) poll_once (poller, dealer, &cb, 50);
@@ -283,7 +285,7 @@ bool await_request_ready (void *dealer,
         callback_state_t cb;
         cb.latency = &latency;
         request_metrics_t metrics;
-        if (submit_request_once (dealer, target_rid, 1024, 0, seq++,
+        if (submit_request_once (dealer, target_rid, 0, seq++,
                                  ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics)) {
             const auto attempt_deadline =
               std::min (deadline,
@@ -321,7 +323,7 @@ zlink_c_bench::result_t run_request_window (void *dealer,
         bool submitted_any = false;
         while (std::chrono::steady_clock::now () < deadline
                && cb.outstanding.load (std::memory_order_acquire) < window) {
-            if (!submit_request_once (dealer, target_rid, size, run_id, seq++,
+            if (!submit_request_once (dealer, target_rid, run_id, seq++,
                                       ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics))
                 break;
             submitted_any = true;

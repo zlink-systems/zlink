@@ -242,14 +242,23 @@ async function createTransport(options) {
     : options.implementation === 'zlink-framework-node'
       ? await createFrameworkTransport(options)
       : createRawTransport(options);
-  const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
+  const probeBody = header.createPayloadBytes(
+    options.scenario === 'send-saturation'
+      ? header.RESPONSE_PAYLOAD_SIZE
+      : header.REQUEST_PAYLOAD_SIZE,
+    1,
+    header.PHASE_WARMUP,
+    0
+  );
   await core.waitForRouteReady(async () => {
     if (options.scenario === 'send-saturation') {
       await transport.send(0, probeBody);
       return;
     }
     const reply = await transport.request(0, probeBody);
-    if (!header.isExpected(header.decode(reply), 1, header.PHASE_WARMUP, 1024, 0)) {
+    if (!header.isExpected(
+      header.decode(reply), 1, header.PHASE_WARMUP, header.RESPONSE_PAYLOAD_SIZE, 0
+    )) {
       throw new Error('target probe returned an invalid payload');
     }
   }, options.routeReadyMs);

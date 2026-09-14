@@ -40,7 +40,10 @@ class bench_service_t final : public zlink::framework::bench::withgrpc::BenchSer
                        zlink::framework::bench::withgrpc::BenchPayload *response) override
     {
         _metrics.record (request->body ().data (), request->body ().size ());
-        response->set_body (request->body ());
+        if (!zlink_cpp_bench::create_response_payload (
+              request->body ().data (), request->body ().size (), response->mutable_body ()))
+            return grpc::Status (grpc::StatusCode::INVALID_ARGUMENT,
+                                 "invalid bench request payload");
         return grpc::Status::OK;
     }
 

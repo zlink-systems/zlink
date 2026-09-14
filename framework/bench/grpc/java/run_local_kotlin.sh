@@ -105,10 +105,10 @@ for impl in "${bench_implementations[@]}"; do
   a_pid=$!
   wait_for_stats "${source_stats_url}" 1
 
-  trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" 1024 \
+  trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" 4096 \
     warmup "$((WARMUP_SECONDS * 1000))"
   wait_for_idle "${source_stats_url}"
-  trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" 1024 \
+  trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" 4096 \
     active "$((DURATION_SECONDS * 1000))"
   wait_for_idle "${source_stats_url}"
 

@@ -35,11 +35,13 @@ class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) 
 
     fun echo(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
         scope.benchFuture {
-            val reply = stub.echo(payload(payloadSize, phase, sequence))
+            val reply = stub.echo(requestPayload(phase, sequence))
             // G2: the reply's 29-byte header is validated, not assumed.
             val decoded = BenchMetricHeader.decode(reply.body.asReadOnlyByteBuffer())
             check(
-                BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence),
+                BenchMetricHeader.isExpected(
+                    decoded, runId, phase, BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, sequence,
+                ),
             ) { "grpc-kotlin echo reply header mismatch" }
         }
     }
@@ -59,6 +61,13 @@ class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) 
                 ByteString.copyFrom(
                     BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence),
                 ),
+            )
+            .build()
+
+    private fun requestPayload(phase: Byte, sequence: Long): BenchPayload =
+        BenchPayload.newBuilder()
+            .setBody(
+                ByteString.copyFrom(BenchMetricHeader.createRequestPayload(runId, phase, sequence)),
             )
             .build()
 

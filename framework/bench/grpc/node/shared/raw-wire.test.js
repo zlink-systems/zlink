@@ -61,3 +61,16 @@ for (const size of [127, 128, 1024, 4096]) {
     }
   });
 }
+
+test('request responses expand 64-byte requests to 4096 bytes', () => {
+  const request = header.createPayloadBytes(
+    header.REQUEST_PAYLOAD_SIZE, 7, header.PHASE_ACTIVE, 11
+  );
+  const response = header.createResponsePayloadBytes(request);
+  assert.equal(request.length, header.REQUEST_PAYLOAD_SIZE);
+  assert.equal(response.length, header.RESPONSE_PAYLOAD_SIZE);
+  assert.ok(header.isExpected(
+    header.decode(response), 7, header.PHASE_ACTIVE, header.RESPONSE_PAYLOAD_SIZE, 11
+  ));
+  assert.equal(header.decode(response).sentTimestampNs, header.decode(request).sentTimestampNs);
+});

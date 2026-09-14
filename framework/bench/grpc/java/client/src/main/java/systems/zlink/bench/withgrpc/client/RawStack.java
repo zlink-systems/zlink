@@ -53,7 +53,7 @@ public final class RawStack implements AutoCloseable {
                 var operation = router.request(peer);
                 try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
                      Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
+                         BenchMetricHeader.REQUEST_PAYLOAD_SIZE, runId, phase, sequence)) {
                     var submission = operation
                         .message(header)
                         .message(body)
@@ -66,8 +66,8 @@ public final class RawStack implements AutoCloseable {
                     return new RawSubmission(submission.result(),
                         admitted,
                         submission.reply().toCompletableFuture().thenAccept(
-                            parts -> validate(parts, runId, phase, payloadSize,
-                                sequence)));
+                            parts -> validate(parts, runId, phase,
+                                BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, sequence)));
                 }
             }
         };

@@ -51,9 +51,10 @@ public final class RawProgressTest {
                     "raw-progress-client", peer, endpoint)) {
                 BenchDrivers drivers = new BenchDrivers(options);
                 RawStack.RawOperation request = stack.request();
-                drivers.waitForRouteReady(request, 1024);
+                drivers.waitForRouteReady(request, BenchMetricHeader.RESPONSE_PAYLOAD_SIZE);
                 BenchHttpApplication.Trigger trigger = new BenchHttpApplication.Trigger(
-                    options.runIdText, options.cellId, options.scenario, 1024,
+                    options.runIdText, options.cellId, options.scenario,
+                    BenchMetricHeader.RESPONSE_PAYLOAD_SIZE,
                     "warmup", 200, options.requestWindow, options.sendConcurrency);
                 drivers.runWarmup(trigger, request);
                 BenchHttpApplication.Counters first = drivers.counters();
@@ -63,7 +64,8 @@ public final class RawProgressTest {
 
                 // Closing the phase poller must return completion ownership to
                 // the runtime, so the ordinary serial invocation also completes.
-                request.invoke(1024, BenchMetricHeader.PHASE_WARMUP, 100_000)
+                request.invoke(BenchMetricHeader.RESPONSE_PAYLOAD_SIZE,
+                    BenchMetricHeader.PHASE_WARMUP, 100_000)
                     .get(2, TimeUnit.SECONDS);
                 drivers.runWarmup(trigger, request);
                 checkDrained(drivers.counters());
@@ -106,7 +108,8 @@ public final class RawProgressTest {
 
     private static void reply(Received received) {
         try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-             Message body = received.parts().getLast().copy()) {
+             Message body = RawWire.encodeResponseBenchPayloadMessage(
+                 RawWire.decodeBenchPayloadBody(received.parts().getLast().dataBuffer()))) {
             received.reply().message(header).message(body).submit();
         }
     }

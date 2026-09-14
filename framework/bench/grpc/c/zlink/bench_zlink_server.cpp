@@ -33,7 +33,9 @@ bool make_response_body (const zlink_msg_t *request_body, zlink_msg_t *reply_bod
                                  static_cast<int> (zlink_msg_size (request_body))))
         return false;
     zlink::framework::bench::withgrpc::BenchPayload reply;
-    reply.set_body (request.body ());
+    if (!zlink_c_bench::create_response_payload (
+          request.body ().data (), request.body ().size (), reply.mutable_body ()))
+        return false;
     return serialize_bench_payload (reply, reply_body);
 }
 

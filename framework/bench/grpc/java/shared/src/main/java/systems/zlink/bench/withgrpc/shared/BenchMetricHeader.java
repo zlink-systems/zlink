@@ -21,6 +21,8 @@ import java.nio.ByteOrder;
  */
 public final class BenchMetricHeader {
     public static final int HEADER_SIZE = 29;
+    public static final int REQUEST_PAYLOAD_SIZE = 64;
+    public static final int RESPONSE_PAYLOAD_SIZE = 4096;
     public static final int MAGIC = 0x5a4c4e4b;
     public static final byte PHASE_WARMUP = 0;
     public static final byte PHASE_ACTIVE = 1;
@@ -48,14 +50,36 @@ public final class BenchMetricHeader {
         return bytes;
     }
 
+    public static byte[] createRequestPayload(int runId, byte phase, long sequence) {
+        return createPayload(REQUEST_PAYLOAD_SIZE, runId, phase, sequence);
+    }
+
+    public static byte[] createResponsePayload(ByteBuffer request) {
+        Decoded requestHeader = decode(request);
+        if (requestHeader == null) {
+            throw new IllegalArgumentException("bench request has no valid measurement header");
+        }
+        byte[] bytes = new byte[RESPONSE_PAYLOAD_SIZE];
+        java.util.Arrays.fill(bytes, (byte) 0xab);
+        stamp(bytes, requestHeader.runId, requestHeader.phase, RESPONSE_PAYLOAD_SIZE,
+            requestHeader.sequence, requestHeader.sentTimestampNs);
+        return bytes;
+    }
+
     public static void stamp(byte[] bytes, int runId, byte phase, int payloadSize, long sequence) {
+        stamp(bytes, runId, phase, payloadSize, sequence, nowNs());
+    }
+
+    private static void stamp(
+        byte[] bytes, int runId, byte phase, int payloadSize, long sequence,
+        long sentTimestampNs) {
         ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         buffer.putInt(0, MAGIC);
         buffer.putInt(4, runId);
         buffer.put(8, phase);
         buffer.putInt(9, payloadSize);
         buffer.putLong(13, sequence);
-        buffer.putLong(21, nowNs());
+        buffer.putLong(21, sentTimestampNs);
     }
 
     /** Decoded header, or {@code null} when the bytes are not a bench header. */

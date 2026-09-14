@@ -78,7 +78,9 @@ class RawKotlinStack private constructor(
             // divides zlink-<lang> by zlink-c, so a different wire shape would divide
             // two different experiments.
             val pending = Message.from(RawWire.REQUEST_ENVELOPE).use { header ->
-                RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence).use { body ->
+                RawWire.encodeBenchPayloadMessage(
+                    BenchMetricHeader.REQUEST_PAYLOAD_SIZE, runId, phase, sequence,
+                ).use { body ->
                     call.message(header).message(body).timeout(timeout).submit().reply().toCompletableFuture()
                 }
             }
@@ -89,7 +91,7 @@ class RawKotlinStack private constructor(
                 val decoded = BenchMetricHeader.decode(body)
                 check(
                     BenchMetricHeader.isExpected(
-                        decoded, runId, phase, payloadSize, sequence,
+                        decoded, runId, phase, BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, sequence,
                     ),
                 ) { "raw reply header mismatch" }
             } finally {

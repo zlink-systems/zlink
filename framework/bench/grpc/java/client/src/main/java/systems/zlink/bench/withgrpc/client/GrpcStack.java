@@ -30,7 +30,7 @@ public final class GrpcStack implements AutoCloseable {
 
     public BenchOperation echo() {
         return (payloadSize, phase, sequence) -> {
-            byte[] body = BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence);
+            byte[] body = BenchMetricHeader.createRequestPayload(runId, phase, sequence);
             BenchPayload request = BenchPayload.newBuilder()
                 .setBody(ByteString.copyFrom(body))
                 .build();
@@ -39,7 +39,8 @@ public final class GrpcStack implements AutoCloseable {
                 // G2: the reply's 29-byte header is validated, not assumed.
                 BenchMetricHeader.Decoded decoded =
                     BenchMetricHeader.decode(reply.getBody().asReadOnlyByteBuffer());
-                if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                if (!BenchMetricHeader.isExpected(decoded, runId, phase,
+                    BenchMetricHeader.RESPONSE_PAYLOAD_SIZE, sequence)) {
                     throw new IllegalStateException("grpc echo reply header mismatch");
                 }
             });

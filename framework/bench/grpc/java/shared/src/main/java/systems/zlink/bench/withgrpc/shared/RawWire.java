@@ -53,6 +53,12 @@ public final class RawWire {
         return Message.from(payload.toByteArray());
     }
 
+    /** Creates the fixed 4096-byte request response while preserving its flow header. */
+    public static Message encodeResponseBenchPayloadMessage(ByteBuffer requestBody) {
+        return encodeBenchPayloadMessage(ByteBuffer.wrap(
+            BenchMetricHeader.createResponsePayload(requestBody)));
+    }
+
     /** Parses BenchPayload with the same protobuf runtime used by the typed stacks. */
     public static ByteBuffer decodeBenchPayloadBody(ByteBuffer encoded) {
         if (encoded == null) {

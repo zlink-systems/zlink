@@ -59,7 +59,9 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
             zlink::message_t header = zlink::message_t::from (std::as_bytes (
               std::span<const char> (envelope, std::strlen (envelope))));
             zlink::framework::bench::withgrpc::BenchPayload reply;
-            reply.set_body (payload.body ());
+            if (!zlink_cpp_bench::create_response_payload (
+                  payload.body ().data (), payload.body ().size (), reply.mutable_body ()))
+                throw std::runtime_error ("invalid raw measurement header");
             const std::string encoded = zlink_cpp_bench::encode_bench_payload (reply);
             zlink::message_t echo = zlink::message_t::from (
               std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));

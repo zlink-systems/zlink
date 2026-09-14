@@ -169,7 +169,7 @@ main () {
       env LOAD_GATE="${LOAD_GATE}" WARMUP_SECONDS=5 \
           "${CPP_DIR}/run_local.sh" --implementation "${cpp_implementation}" \
           --duration-seconds 5 \
-          --output "${GRPC_DIR}/log/cpp/verify-${STAMP}/cpp-router-1" || rc=1
+          --output "${GRPC_DIR}/log/cpp/verify-${STAMP}/${cpp_implementation}-router-1" || rc=1
   done
 
   # The C baseline is not a sixth language. It is the shared denominator of

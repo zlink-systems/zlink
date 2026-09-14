@@ -20,7 +20,11 @@ struct echo_handler_t
     payload_t handle (const payload_t &request)
     {
         metrics.record (request.body ().data (), request.body ().size ());
-        return request;
+        payload_t response;
+        if (!create_response_payload (request.body ().data (), request.body ().size (),
+                                      response.mutable_body ()))
+            throw std::invalid_argument ("invalid bench request payload");
+        return response;
     }
     server_metrics_t &metrics;
 };
