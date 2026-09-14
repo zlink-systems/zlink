@@ -107,9 +107,12 @@ internal sealed class ZLinkAutoConnectReconciler
     /// application Node-direct target.
     /// </summary>
     internal ZLinkRouteMeshTargetClassification ClassifyTarget(
+        RoutingId nodeRid) => ClassifyTargetAsync(nodeRid).GetAwaiter().GetResult();
+
+    internal ValueTask<ZLinkRouteMeshTargetClassification> ClassifyTargetAsync(
         RoutingId nodeRid)
     {
-        return RunState(() =>
+        return _lane.RunAsync(() =>
         {
             if (_meshTargets is not { } targets)
                 return ZLinkRouteMeshTargetClassification.Unknown;
@@ -119,8 +122,13 @@ internal sealed class ZLinkAutoConnectReconciler
         });
     }
 
+    // State ownership §5: synchronous topology observations retain their
+    // completed capture before return; async dispatch uses the same turns.
     internal IReadOnlyList<ZLinkRouteMeshPeerIdentity>? CompleteMeshPeers() =>
-        RunState(() => _storeFailed ? null : _meshPeers);
+        CompleteMeshPeersAsync().GetAwaiter().GetResult();
+
+    internal ValueTask<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?> CompleteMeshPeersAsync() =>
+        _lane.RunAsync<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?>(() => _storeFailed ? null : _meshPeers);
 
     internal bool HasRetainedPeer(RoutingId nodeRid) =>
         RunState(() =>

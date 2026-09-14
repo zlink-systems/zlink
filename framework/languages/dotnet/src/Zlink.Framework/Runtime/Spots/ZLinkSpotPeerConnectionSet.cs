@@ -82,10 +82,12 @@ internal sealed class ZLinkSpotPeerConnectionSet
     }
 
     public bool HasRetainedManualPeer(RoutingId peerRid)
-    {
-        return AwaitStateLane(_lane.RunAsync(() =>
-            _retainedManualPeerRids.Values.Contains(peerRid)));
-    }
+        // State ownership §5: synchronous admission retains a completed
+        // capture; async manual classification awaits the same owner turn.
+        => AwaitStateLane(HasRetainedManualPeerAsync(peerRid));
+
+    internal ValueTask<bool> HasRetainedManualPeerAsync(RoutingId peerRid) =>
+        _lane.RunAsync(() => _retainedManualPeerRids.Values.Contains(peerRid));
 
     private bool Acquire(HashSet<string> source, string endpoint)
     {

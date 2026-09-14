@@ -1,9 +1,46 @@
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Execution;
+using System.Reflection;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class EndpointConnectionsTests
 {
+    [Fact]
+    public async Task Async_List_Awaits_Actual_Owner_And_Returns_An_Independent_Copy()
+    {
+        var connections = new ZLinkEndpointConnections();
+        connections.Connect("inproc://snapshot-original");
+        var lane = (ZLinkStateLane)typeof(ZLinkEndpointConnections)
+            .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(connections)!;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => lane.RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var invocation = Task.Run(connections.ListConnectionsAsync);
+            var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            release.Set();
+            var snapshot = await pending;
+            Assert.Equal(["inproc://snapshot-original"], snapshot);
+            connections.Connect("inproc://snapshot-next");
+            Assert.Equal(["inproc://snapshot-original"], snapshot);
+            Assert.Equal(["inproc://snapshot-original", "inproc://snapshot-next"], connections.ListConnections());
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
+
     [Fact]
     public void Configured_Endpoints_Are_Replayed_And_Runtime_Changes_Are_Applied()
     {

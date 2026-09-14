@@ -3717,8 +3717,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     (ZlinkSubmitException.ErrorCode)(int)result);
             return;
         }
-        var peer = RequireDirectSpotPeer(targetRid, spotId, spotGeneration, out var authority);
-        var operationId = NextStandaloneOperationId();
+        var (peer, authority) = await RequireDirectSpotPeerAsync(targetRid, spotId, spotGeneration).ConfigureAwait(false);
+        var operationId = await NextStandaloneOperationIdAsync().ConfigureAwait(false);
         var head = ZLinkServiceWireCodec.EncodeSpot(
             ServiceWireConstants.Command.SpotSend,
             0,
@@ -3803,8 +3803,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return new ZLinkBackendRouteReceived(
                 completion.Parts, null, null, null, null);
         }
-        var peer = RequireDirectSpotPeer(targetRid, spotId, spotGeneration, out var authority);
-        var operationId = NextStandaloneOperationId();
+        var (peer, authority) = await RequireDirectSpotPeerAsync(targetRid, spotId, spotGeneration).ConfigureAwait(false);
+        var operationId = await NextStandaloneOperationIdAsync().ConfigureAwait(false);
         var head = ZLinkServiceWireCodec.EncodeSpot(
             ServiceWireConstants.Command.SpotRequest,
             operationId.Low,
@@ -3829,21 +3829,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
-    private Peer RequireDirectSpotPeer(
+    private async ValueTask<(Peer Peer, ObservedAuthority Authority)> RequireDirectSpotPeerAsync(
         RoutingId targetRid,
         string spotId,
-        ulong spotGeneration,
-        out ObservedAuthority authority)
+        ulong spotGeneration)
     {
-        var peer = RequireDirectPeer(targetRid);
+        var peer = await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
         if (spotGeneration == 0
             || !_observedSpotAuthorities.TryGetValue(
                 new ObservedSpotAuthorityKey(targetRid, spotId),
-                out authority))
+                out var authority))
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
         if (peer.LifecycleGeneration != authority.TargetNodeGeneration)
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
-        return peer;
+        return (peer, authority);
     }
 
     private static IReadOnlyList<ReadOnlyMemory<byte>> CreateStatefulWire(
@@ -4063,14 +4062,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendFlags flags,
         CancellationToken cancellationToken)
     {
-        var peer = RequireDirectPeer(actorRef.NodeRid);
+        var peer = await RequireDirectPeerAsync(actorRef.NodeRid).ConfigureAwait(false);
         if (!_observedActorAuthorities.TryGetValue(
                 new ObservedActorAuthorityKey(
                     actorRef.NodeRid, actorRef.ActorId),
                 out var authority)
             || peer.LifecycleGeneration != authority.TargetNodeGeneration)
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
-        var operationId = NextStandaloneOperationId();
+        var operationId = await NextStandaloneOperationIdAsync().ConfigureAwait(false);
         var head = ZLinkServiceWireCodec.EncodeActor(
             ServiceWireConstants.Command.ActorSend,
             0,
@@ -8906,7 +8905,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken)
     {
-        var peer = RequireDirectPeer(targetRid);
+        var peer = await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
         await SendDirectWireAsync(
                 peer.PhysicalRoutingId,
                 CreateApplicationWire(
@@ -8928,8 +8927,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var peer = RequireDirectPeer(targetRid);
-        var operationId = NextStandaloneOperationId();
+        var peer = await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
+        var operationId = await NextStandaloneOperationIdAsync().ConfigureAwait(false);
         var reply = await RequestDirectWireAsync(
                 peer.PhysicalRoutingId,
                 CreateApplicationWire(
@@ -8953,7 +8952,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken)
     {
-        var selection = TrySelectChannelTarget(channelName);
+        var selection = await TrySelectChannelTargetAsync(channelName).ConfigureAwait(false);
         if (!selection.Selected)
             //  Spec 07-channel-topology:414-415 — when no admitted remote
             //  Server has positive weight the call "ends with no target", and
@@ -8962,7 +8961,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  (draining -> Terminated, known-but-not-ready -> NotConnected,
             //  no target/member -> NotFound) instead of collapsing every
             //  selection failure to NotConnected/Unavailable.
-            throw new ZlinkSubmitException(ChannelSelectionFailureResult(channelName) switch
+            throw new ZlinkSubmitException((await ChannelSelectionFailureResultAsync(channelName).ConfigureAwait(false)) switch
             {
                 SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
                 SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
@@ -8998,7 +8997,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 timeout,
                 cancellationToken)
             .ConfigureAwait(false);
-        var operationId = NextStandaloneOperationId();
+        var operationId = await NextStandaloneOperationIdAsync().ConfigureAwait(false);
         var reply = await RequestDirectWireAsync(
                 target.PhysicalRid,
                 CreateApplicationWire(
@@ -9017,13 +9016,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
-    private Peer RequireDirectPeer(RoutingId targetRid)
+    // State ownership §5: synchronous first-admission paths capture before
+    // returning. Async transport paths await this same mesh-owned decision.
+    private Peer RequireDirectPeer(RoutingId targetRid) =>
+        AwaitStateLane(RequireDirectPeerAsync(targetRid));
+
+    private ValueTask<Peer> RequireDirectPeerAsync(RoutingId targetRid)
     {
-        Func<Peer?> resolve = () => _peersByRid.GetValueOrDefault(targetRid);
-        var peer = _lane.IsOnLane ? resolve() : RunState(resolve);
-        if (peer is null || !peer.Admitted)
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
-        return peer;
+        return _lane.IsOnLane
+            ? ValueTask.FromResult(ResolveOnLane())
+            : _lane.RunAsync(ResolveOnLane);
+
+        Peer ResolveOnLane()
+        {
+            var peer = _peersByRid.GetValueOrDefault(targetRid);
+            if (peer is null || !peer.Admitted)
+                throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+            return peer;
+        }
     }
 
     private static IReadOnlyList<Message> CreateApplicationWire(
@@ -10519,7 +10529,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private (bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
         SubmitResult Failure, string FailureReason, bool Wait, Task Changed)
-        TrySelectChannelTarget(string channelName) => RunState(() =>
+        TrySelectChannelTarget(string channelName) =>
+        AwaitStateLane(TrySelectChannelTargetAsync(channelName));
+
+    private ValueTask<(bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
+        SubmitResult Failure, string FailureReason, bool Wait, Task Changed)>
+        TrySelectChannelTargetAsync(string channelName) => _lane.RunAsync(() =>
         {
             if (_channelSelection.TrySelect(channelName, out var targetRid))
                 return (Selected: true, TargetRid: targetRid,
@@ -10537,24 +10552,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Changed: wait ? _channelSelectionChanged.Task : Task.CompletedTask);
         });
 
-    private ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForChannelTargetAsync(
+    private async ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForChannelTargetAsync(
         string channelName,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        try
-        {
-            var selection = TrySelectChannelTarget(channelName);
-            if (selection.Selected)
-                return ValueTask.FromResult((selection.TargetRid, selection.PhysicalRid));
-            return WaitForSelectionAsync(this, channelName, selection, startedAt,
-                timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30), cancellationToken);
-        }
-        catch (Exception exception)
-        {
-            return ValueTask.FromException<(RoutingId, RoutingId)>(exception);
-        }
+        var selection = await TrySelectChannelTargetAsync(channelName).ConfigureAwait(false);
+        if (selection.Selected)
+            return (selection.TargetRid, selection.PhysicalRid);
+        return await WaitForSelectionAsync(this, channelName, selection, startedAt,
+            timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
 
         static async ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForSelectionAsync(
             ZLinkManagedMeshNode node,
@@ -10602,7 +10610,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             ZLinkFrameworkErrorKind.DeadlineExceeded,
                             $"Channel '{channelName}' did not become selectable before its deadline.");
                     }
-                    selection = node.TrySelectChannelTarget(channelName);
+                    selection = await node.TrySelectChannelTargetAsync(channelName).ConfigureAwait(false);
                     if (selection.Selected)
                         return (selection.TargetRid, selection.PhysicalRid);
                 }
@@ -10619,9 +10627,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     //  is not a transport connection failure. The declaration check is kept
     //  separately for monitoring and failure metrics.
     private SubmitResult ChannelSelectionFailureResult(string channelName)
+        => AwaitStateLane(ChannelSelectionFailureResultAsync(channelName));
+
+    private async ValueTask<SubmitResult> ChannelSelectionFailureResultAsync(string channelName)
     {
-        var reason = RunState(
-            () => ChannelSelectionFailureReasonUnderLock(channelName));
+        var reason = await _lane.RunAsync(
+            () => ChannelSelectionFailureReasonUnderLock(channelName)).ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordChannelSelectionFailure(
             _meshName,
             channelName,
@@ -11455,9 +11466,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return generation;
     }
 
-    private MeshOperationId NextStandaloneOperationId()
-    {
-        return RunOperation(() =>
+    // State ownership §5: AllocateOperationId and synchronous submission must
+    // finish nonce capture before return. Async callers await the same owner
+    // turn, then construct the wire; no transport completion runs on the lane.
+    private MeshOperationId NextStandaloneOperationId() =>
+        AwaitStateLane(NextStandaloneOperationIdAsync());
+
+    private ValueTask<MeshOperationId> NextStandaloneOperationIdAsync() =>
+        _operationLane.RunAsync(() =>
         {
             var low = ++_nextOperation;
             if (low == 0)
@@ -11465,7 +11481,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     "The operation id space was exhausted.");
             return new MeshOperationId(_lifecycleGeneration, low);
         });
-    }
 
     private static void ValidateObservedAuthority(
         RoutingId targetNodeRid,
