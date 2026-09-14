@@ -1268,10 +1268,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     zlink::framework
     Threads::Threads)
+  zlink_framework_cpp_add_boost_headers(
+    zlink_cpp_framework_mesh_node_vertical_test)
   zlink_framework_cpp_add_test(
     NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
@@ -1308,7 +1311,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_libraries(${target_name} PRIVATE zlink::framework)
     target_link_zlink_test_harness(${target_name})
     target_include_directories(${target_name} PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
     zlink_framework_cpp_add_test(
       NAME ${target_name}
       COMMAND ${target_name}

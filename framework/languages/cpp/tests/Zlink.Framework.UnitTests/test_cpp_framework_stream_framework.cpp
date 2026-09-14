@@ -8,6 +8,8 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include "loopback_tcp_endpoint.hpp"
+
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -39,6 +41,7 @@
 
 namespace
 {
+using zlink::framework::tests::reserve_loopback_tcp_port;
 
 class sample_session_t final : public zlink::framework::packet_stream_session_t
 {
@@ -706,14 +709,6 @@ class rejected_connected_session_t final : public zlink::framework::packet_strea
     std::optional<zlink::framework::stream_t> _stream;
     bool _manager_was_attached = false;
 };
-
-std::uint16_t reserve_loopback_port ()
-{
-    boost::asio::io_context io;
-    boost::asio::ip::tcp::acceptor reservation (
-      io, {boost::asio::ip::address_v4::loopback (), 0});
-    return reservation.local_endpoint ().port ();
-}
 
 struct native_tcp_client_t
 {
@@ -1671,7 +1666,7 @@ int main ()
     }
 
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
-    const auto mutual_tls_port = reserve_loopback_port ();
+    const auto mutual_tls_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t mutual_tls_services;
     zlink::framework::handler_registry_t mutual_tls_handlers;
     zlink::framework::serializer_registry_t mutual_tls_serializers;
@@ -1822,7 +1817,7 @@ int main ()
         return 28;
     }
 
-    const auto transport_port = reserve_loopback_port ();
+    const auto transport_port = reserve_loopback_tcp_port ();
     const auto transport_endpoint =
       "tcp://127.0.0.1:" + std::to_string (transport_port);
     zlink::framework::service_collection_t transport_services;
@@ -1991,7 +1986,7 @@ int main ()
 
     transport_host.stop ();
 
-    const auto limited_port = reserve_loopback_port ();
+    const auto limited_port = reserve_loopback_tcp_port ();
     const auto limited_endpoint =
       "tcp://127.0.0.1:" + std::to_string (limited_port);
     zlink::framework::zlink_builder_t limited_zlink;
@@ -2037,7 +2032,7 @@ int main ()
         return 48;
     }
 
-    const auto rejected_port = reserve_loopback_port ();
+    const auto rejected_port = reserve_loopback_tcp_port ();
     const auto rejected_endpoint =
       "tcp://127.0.0.1:" + std::to_string (rejected_port);
     zlink::framework::zlink_builder_t rejected_zlink;
@@ -2069,8 +2064,8 @@ int main ()
      * lifecycle thread. Closing the Core socket is not itself a portable
      * cross-thread poller wake-up, so stop must still join the listener within
      * the bounded poll interval. */
-    const auto core_mesh_port = reserve_loopback_port ();
-    const auto core_stream_port = reserve_loopback_port ();
+    const auto core_mesh_port = reserve_loopback_tcp_port ();
+    const auto core_stream_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t core_services;
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
@@ -2224,8 +2219,8 @@ int main ()
      * protocol close ends the stream, and (c) keep the session close
      * idempotent when the deferred error_reply_failed close and the
      * protocol_error close target the same peer. */
-    const auto error_close_mesh_port = reserve_loopback_port ();
-    const auto error_close_stream_port = reserve_loopback_port ();
+    const auto error_close_mesh_port = reserve_loopback_tcp_port ();
+    const auto error_close_stream_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t error_close_services;
     zlink::framework::handler_registry_t error_close_handlers;
     zlink::framework::serializer_registry_t error_close_serializers;
