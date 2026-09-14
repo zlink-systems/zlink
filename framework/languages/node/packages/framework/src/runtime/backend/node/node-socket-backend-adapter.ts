@@ -26,9 +26,6 @@ export function wrapSocket<T extends { close(): void }>(
   nativeInstance: T,
   pollCompletion?: boolean
 ): T & ZLinkBackendObject {
-  const boundEndpoints = new Set<string>();
-  const connectedEndpoints = new Set<string>();
-  const peerRoutingIds = new Set<unknown>();
   const socket = nativeInstance as T & {
     options?: {
       probe?: boolean;
@@ -56,8 +53,6 @@ export function wrapSocket<T extends { close(): void }>(
     async dispose(): Promise<void> {
       eventLoopPoller?.dispose();
       disableSocketLinger(nativeInstance);
-      closeSocketRoutes(nativeInstance, peerRoutingIds);
-      closeSocketEndpoints(nativeInstance, boundEndpoints, connectedEndpoints);
       await closeWithBusyRetry(nativeInstance);
     },
     close(): void {
@@ -66,19 +61,15 @@ export function wrapSocket<T extends { close(): void }>(
     },
     bind(endpoint: string): void {
       (nativeInstance as T & { bind(endpoint: string): void }).bind(endpoint);
-      boundEndpoints.add(endpoint);
     },
     unbind(endpoint: string): void {
       (nativeInstance as T & { unbind(endpoint: string): void }).unbind(endpoint);
-      boundEndpoints.delete(endpoint);
     },
     connect(endpoint: string): void {
       (nativeInstance as T & { connect(endpoint: string): void }).connect(endpoint);
-      connectedEndpoints.add(endpoint);
     },
     disconnect(endpoint: string): void {
       (nativeInstance as T & { disconnect(endpoint: string): void }).disconnect(endpoint);
-      connectedEndpoints.delete(endpoint);
     },
     setChannelName(channelName: string): void {
       const setChannelName = (nativeInstance as T & { setChannelName?: (value: string) => void }).setChannelName;
@@ -146,7 +137,6 @@ export function wrapSocket<T extends { close(): void }>(
     send(...args: unknown[]): unknown {
       if (hasStream) {
         const [routingId, payload] = args as [unknown, unknown];
-        peerRoutingIds.add(routingId);
         const operation = (nativeInstance as T & {
           send(routingId: unknown): ZLinkBindingAsyncSendOperation;
         }).send(toNativeRoutingId(routingId));
@@ -155,7 +145,6 @@ export function wrapSocket<T extends { close(): void }>(
       }
       if (hasRoutedPeer) {
         const [routingId, payload] = args as [unknown, unknown];
-        peerRoutingIds.add(routingId);
         return submitBindingAsyncSend(
           (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation })
             .send(toNativeRoutingId(routingId)),
@@ -180,7 +169,6 @@ export function wrapSocket<T extends { close(): void }>(
     },
     submit(routingId: unknown, payload: unknown, _timeoutMs?: number): Promise<void> {
       if (!hasStream) throw new TypeError('Async stream send requires a STREAM socket.');
-      peerRoutingIds.add(routingId);
       return submitBindingAsyncSend(
         (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation })
           .send(toNativeRoutingId(routingId)),
@@ -190,7 +178,6 @@ export function wrapSocket<T extends { close(): void }>(
     request(...args: unknown[]): unknown {
       if (hasRoutedPeer) {
         const [routingId, payload, timeoutMs] = args as [unknown, unknown, number | undefined];
-        peerRoutingIds.add(routingId);
         return submitBindingRequest(
           (nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation })
             .request(toNativeRoutingId(routingId)),
@@ -210,7 +197,6 @@ export function wrapSocket<T extends { close(): void }>(
     },
     reply(...args: unknown[]): unknown {
       const [routingId, replyToken, payload] = args as [unknown, unknown, unknown];
-      peerRoutingIds.add(routingId);
       const operation = (nativeInstance as T & {
         reply(routingId: unknown, replyToken: unknown): ZLinkBindingReplyOperation;
       }).reply(toNativeRoutingId(routingId), replyToken);
@@ -330,60 +316,6 @@ function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions })
     throw new TypeError('Binding socket does not expose options.');
   }
   return socket.options;
-}
-
-function closeSocketRoutes(target: unknown, peerRoutingIds: Set<unknown>): void {
-  if (peerRoutingIds.size === 0 || !hasDisconnectRid(target)) {
-    return;
-  }
-  for (const routingId of peerRoutingIds) {
-    try {
-      target.disconnectRid(toNativeRoutingId(routingId));
-    } catch (error) {
-      if (!isDisconnectRouteNotFoundError(error)) {
-        throw error;
-      }
-    }
-    peerRoutingIds.delete(routingId);
-  }
-}
-
-export function isDisconnectRouteNotFoundError(error: unknown): boolean {
-  return isBindingNotFound(error) || isContextTerminatedError(error) || (
-    error instanceof Error && 'code' in error &&
-    ((error as { code: unknown }).code === zlink.ConnectResult.NotFound ||
-      (error as { code: unknown }).code === zlink.ConnectResult.Busy ||
-      ((error as { code: unknown }).code === zlink.ConnectResult.InternalError &&
-        /current state/i.test(error.message)))
-  );
-}
-
-function hasDisconnectRid(target: unknown): target is { disconnectRid(routingId: unknown): void } {
-  return target !== null && typeof target === 'object' && 'disconnectRid' in target &&
-    typeof (target as { disconnectRid: unknown }).disconnectRid === 'function';
-}
-
-function closeSocketEndpoints(target: unknown, boundEndpoints: Set<string>, connectedEndpoints: Set<string>): void {
-  for (const endpoint of connectedEndpoints) {
-    try {
-      (target as { disconnect(endpoint: string): void }).disconnect(endpoint);
-    } catch (error) {
-      if (!isEndpointCloseIgnorableError(error)) {
-        throw error;
-      }
-    }
-    connectedEndpoints.delete(endpoint);
-  }
-  for (const endpoint of boundEndpoints) {
-    try {
-      (target as { unbind(endpoint: string): void }).unbind(endpoint);
-    } catch (error) {
-      if (!isEndpointCloseIgnorableError(error)) {
-        throw error;
-      }
-    }
-    boundEndpoints.delete(endpoint);
-  }
 }
 
 export function isEndpointCloseIgnorableError(error: unknown): boolean {

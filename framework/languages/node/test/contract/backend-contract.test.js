@@ -17,7 +17,10 @@ const {
   submitBindingRequest,
   submitBindingSyncSend,
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
-const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+const {
+  nodeEventLoopPollerOf,
+  wrapSocket
+} = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 
 const {
   ZLinkMeshCompletionTable,
@@ -1962,6 +1965,62 @@ test('backend adapter creates context and core socket wrappers through public bi
   }
 });
 
+test('backend bound router dispose releases its poller and endpoint through socket close', async () => {
+  const factory = new backend.ZLinkNodeBackendAdapterFactory();
+  const channel = factory.createChannelAdapter();
+  const context = channel.createContext();
+  const endpoint = await reserveTcpEndpoint();
+  const dealer = channel.createDealerSocket(context);
+  const router = channel.createRouterSocket(context);
+  let reboundRouter;
+  let routerDisposed = false;
+  let handlerError;
+
+  nodeEventLoopPollerOf(router).setReadableHandler(() => {
+    try {
+      for (;;) {
+        const received = router.recv(zlink.RecvFlags.DontWait);
+        if (received === undefined) return;
+        try {
+          assert.equal(received.parts.length, 1);
+          assert.equal(received.parts[0].data().toString(), 'request');
+          assert.notEqual(received.routingId, null);
+          assert.notEqual(received.replyToken, null);
+          router.reply(received.routingId, received.replyToken, Buffer.from('reply'));
+        } finally {
+          received.close();
+        }
+      }
+    } catch (error) {
+      handlerError = error;
+    }
+  });
+
+  try {
+    router.bind(endpoint);
+    dealer.connect(endpoint);
+    const reply = await dealer.request(Buffer.from('request'), 1000);
+    try {
+      assert.equal(handlerError, undefined);
+      assert.equal(reply.length, 1);
+      assert.equal(reply[0].data().toString(), 'reply');
+    } finally {
+      for (const part of reply) part.close();
+    }
+
+    await router.dispose();
+    routerDisposed = true;
+
+    reboundRouter = channel.createRouterSocket(context);
+    reboundRouter.bind(endpoint);
+  } finally {
+    await reboundRouter?.dispose();
+    await dealer.dispose();
+    if (!routerDisposed) await router.dispose();
+    await context.dispose();
+  }
+});
+
 test('PUB backend uses only the synchronous 0.13 publish operation', () => {
   const calls = [];
   const native = {
@@ -2344,12 +2403,6 @@ test('backend router recv normalizes transient route recv invalid handle to no m
   } finally {
     await context.dispose();
   }
-});
-
-test('backend socket wrapper treats missing route disconnect as idempotent cleanup', () => {
-  const error = new zlink.ConfigError(zlink.ConfigResult.NotFound, 2);
-
-  assert.equal(backend.isDisconnectRouteNotFoundError(error), true);
 });
 
 test('subscriber receive loop never blocks the Node event loop while polling', async () => {
