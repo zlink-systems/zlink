@@ -593,7 +593,7 @@ public sealed class RouteMeshRuntimeServiceTests
             .GetAsyncEnumerator(timeout.Token);
 
         Assert.True(await observer.MoveNextAsync());
-        fixture.ReportLocationFailure();
+        await fixture.ReportLocationFailureAsync();
         var degraded = await MoveUntilAsync(
             observer,
             status => status.Status.State == ZLinkTopologyState.Degraded);
@@ -603,7 +603,7 @@ public sealed class RouteMeshRuntimeServiceTests
             ZLinkTopologyReason.LocationUnavailable,
             degraded.Status.Placement.UnavailableReason);
 
-        fixture.ReportLocationSuccess();
+        await fixture.ReportLocationSuccessAsync();
         var recovered = await MoveUntilAsync(
             observer,
             status => status.Status.State == ZLinkTopologyState.Ready);
@@ -852,13 +852,13 @@ public sealed class RouteMeshRuntimeServiceTests
             Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
         }
 
-        internal void ReportLocationFailure() =>
-            _locationHealth.ReportFailure(
+        internal ValueTask ReportLocationFailureAsync() =>
+            _locationHealth.ReportFailureAsync(
                 "route-mesh-runtime-test",
                 new InvalidOperationException("location unavailable"));
 
-        internal void ReportLocationSuccess() =>
-            _locationHealth.ReportSuccess("route-mesh-runtime-test");
+        internal ValueTask ReportLocationSuccessAsync() =>
+            _locationHealth.ReportSuccessAsync("route-mesh-runtime-test");
 
         internal void SetHostState(ZLinkFrameworkRuntimeState state) =>
             _hostLifecycle.TransitionTo(state);

@@ -31,30 +31,38 @@ internal sealed class ZLinkLocationStoreHealth
         _time = time;
     }
 
-    internal void ReportSuccess(string source)
+    internal async ValueTask ReportSuccessAsync(string source)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
+        await _lane.RunAsync(() =>
         {
             if (_failures.Remove(source))
                 _recoveryGeneration++;
             _lastSuccessAt = _time.GetUtcNow();
-        }));
+        }).ConfigureAwait(false);
         Changed?.Invoke();
     }
 
-    internal void ReportFailure(string source, Exception error)
+    internal async ValueTask ReportFailureAsync(string source, Exception error)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
+        await _lane.RunAsync(() =>
         {
             _failures[source] = error.Message;
             _lastFailureAt = _time.GetUtcNow();
-        }));
+        }).ConfigureAwait(false);
         Changed?.Invoke();
     }
 
     internal Snapshot GetSnapshot()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
+        // Public topology GetStatus signatures are synchronous. Their snapshot
+        // capture must finish before returning; async runtime callers use the
+        // same owner's async capture below (state ownership spec, §5).
+        return AwaitStateLane(GetSnapshotAsync());
+    }
+
+    internal ValueTask<Snapshot> GetSnapshotAsync()
+    {
+        return _lane.RunAsync(() =>
         {
             return new Snapshot(
                 _failures.Count == 0,
@@ -64,11 +72,14 @@ internal sealed class ZLinkLocationStoreHealth
                     ? null
                     : string.Join("; ", _failures.OrderBy(static pair => pair.Key)
                         .Select(static pair => $"{pair.Key}: {pair.Value}")));
-        }));
+        });
     }
 
     internal long RecoveryGeneration
     {
+        // The resolver compares this generation inside its cache-state turn,
+        // and captures it before constructing a cached route. Keep that capture
+        // complete before returning rather than reading ahead of the turn (§5).
         get => AwaitStateLane(_lane.RunAsync(() => _recoveryGeneration));
     }
 
@@ -78,10 +89,9 @@ internal sealed class ZLinkLocationStoreHealth
         DateTimeOffset? LastFailureAt,
         string? LastError);
 
+    // These capture-only turns never acquire a caller's gate or invoke Changed;
+    // queued completion uses StateLane's asynchronous continuations (§5).
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();
 }
 
@@ -104,7 +114,8 @@ internal static class ZLinkLocationStoreRead
             // boundary must degrade within its timeout either way.
             var result = await read(timeout.Token).AsTask().WaitAsync(timeout.Token)
                 .ConfigureAwait(false);
-            health?.ReportSuccess(source);
+            if (health is not null)
+                await health.ReportSuccessAsync(source).ConfigureAwait(false);
             return result;
         }
         catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
@@ -116,13 +127,15 @@ internal static class ZLinkLocationStoreRead
             var failure = new TimeoutException(
                 $"Location store read '{source}' exceeded {Timeout}.",
                 error);
-            health?.ReportFailure(source, failure);
+            if (health is not null)
+                await health.ReportFailureAsync(source, failure).ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordLocationStoreError("read");
             throw failure;
         }
         catch (Exception error)
         {
-            health?.ReportFailure(source, error);
+            if (health is not null)
+                await health.ReportFailureAsync(source, error).ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordLocationStoreError("read");
             throw;
         }
