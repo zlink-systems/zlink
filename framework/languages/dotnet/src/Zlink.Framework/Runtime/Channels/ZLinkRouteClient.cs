@@ -307,10 +307,10 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         var handedOff = false;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(
+            await runtime.EnsureKnownRouteMeshPeerAsync(
                 meshName,
                 targetNodeRid,
-                $"packet '{_messageName}'");
+                $"packet '{_messageName}'").ConfigureAwait(false);
             handedOff = true;
             var result = await nodeRuntime
                 .SendToNodeAsync(targetNodeRid, parts, cancellationToken, _metadata.Encode())
@@ -405,7 +405,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             : null;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{packetName}'");
+            await runtime.EnsureKnownRouteMeshPeerAsync(meshName, targetNodeRid, $"packet '{packetName}'").ConfigureAwait(false);
             var header = ZLinkClientCallCodec.CreateEnvelope(
                 ZLinkMessageKind.Request,
                 meshName,

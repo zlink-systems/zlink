@@ -41,6 +41,87 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Async_Spot_Submission_Awaits_Busy_Mesh_Peer_Capture_Without_Blocking_Caller(bool request)
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var mesh = new ZLinkManagedMeshNode(context, "busy-peer-capture",
+            decorateSocketMonitor: monitor =>
+            {
+                // Start already owns the actual mesh lane at this existing
+                // dependency boundary. Hold that turn, without changing global
+                // ThreadPool settings or adding a runtime test hook.
+                entered.TrySetResult(true);
+                release.Wait();
+                return monitor;
+            });
+        mesh.SetRoutingId(RoutingId.From("busy-peer-source"));
+        var node = new CapturingSpotNode
+        {
+            MeshPeersCaptureAsync = async () => await mesh.PeersAsync()
+        };
+        var (runtime, _) = await CreateStartedRuntimeAsync(node,
+            topology: new TestRouteMeshTopology(
+                ZLinkRouteMeshTargetClassification.RequiredNotConnected, []));
+        var starting = Task.Run(mesh.Start);
+        Task<ValueTask<ZLinkOneWaySubmitResult>>? sendInvocation = null;
+        Task<ValueTask<ZLinkBackendRouteReceived>>? requestInvocation = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var target = RoutingId.From("busy-peer-target");
+            if (request)
+            {
+                requestInvocation = Task.Run(() => runtime.RequestToSpotViaRouterChannelAsync(
+                    "entry", target, "spot", 1, 1, 1, 1, [],
+                    TimeSpan.FromSeconds(1), CancellationToken.None));
+                // Invocation is deliberately unwrapped. A pending ValueTask
+                // proves the async call returned while its snapshot was queued.
+                var pending = await requestInvocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(pending.IsCompleted);
+                Assert.Empty(node.SpotRequests);
+                release.Set();
+                var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+                    async () => await pending);
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            }
+            else
+            {
+                sendInvocation = Task.Run(() => runtime.SendToSpotViaRouterChannelAsync(
+                    "entry", target, "spot", 1, 1, 1, 1, [], CancellationToken.None));
+                var pending = await sendInvocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(pending.IsCompleted);
+                Assert.Empty(node.SpotSends);
+                release.Set();
+                var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+                    async () => await pending);
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            }
+            // The completed, empty canonical snapshot is classified before
+            // dispatch; the async change neither skips admission nor sends early.
+            Assert.Empty(await mesh.PeersAsync());
+            Assert.Empty(mesh.Peers());
+            Assert.Empty(node.SpotRequests);
+            Assert.Empty(node.SpotSends);
+        }
+        finally
+        {
+            release.Set();
+            await starting.WaitAsync(TimeSpan.FromSeconds(5));
+            if (requestInvocation is not null)
+                try { await (await requestInvocation).AsTask(); }
+                catch (ZLinkFrameworkException failure) when (failure.Kind == ZLinkFrameworkErrorKind.Unavailable) { }
+            if (sendInvocation is not null)
+                try { await (await sendInvocation).AsTask(); }
+                catch (ZLinkFrameworkException failure) when (failure.Kind == ZLinkFrameworkErrorKind.Unavailable) { }
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task BoundSessionAsyncSend_UsesCommittedRelocationRouteBeforeAck()
     {
@@ -10800,6 +10881,10 @@ public sealed partial class EntrySpotActorDispatchTests
             0);
 
         public IReadOnlyList<MeshNodePeer> MeshPeers() => AdmittedMeshPeers;
+        public Func<ValueTask<IReadOnlyList<MeshNodePeer>>>? MeshPeersCaptureAsync { get; set; }
+        public ValueTask<IReadOnlyList<MeshNodePeer>> MeshPeersAsync() =>
+            MeshPeersCaptureAsync?.Invoke()
+            ?? ValueTask.FromResult<IReadOnlyList<MeshNodePeer>>(AdmittedMeshPeers);
 
         public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
             RoutingId peerRid,

@@ -892,6 +892,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return _node.Peers();
     }
 
+    public async ValueTask<IReadOnlyList<MeshNodePeer>> MeshPeersAsync() =>
+        await _node.PeersAsync().ConfigureAwait(false);
+
     public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration)

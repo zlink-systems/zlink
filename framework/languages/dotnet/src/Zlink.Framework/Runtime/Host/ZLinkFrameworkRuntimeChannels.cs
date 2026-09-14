@@ -207,7 +207,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             $"ClientServer channel '{channelName}' has no local Client role.");
     }
 
-    private ZLinkRouteMeshTargetClassification ClassifyAutomaticRouteMeshTarget(
+    private async ValueTask<ZLinkRouteMeshTargetClassification> ClassifyAutomaticRouteMeshTargetAsync(
         ZLinkSpotNodeRuntime nodeRuntime,
         string meshName,
         RoutingId targetNodeRid)
@@ -231,14 +231,24 @@ internal sealed partial class ZLinkFrameworkRuntime
             != ZLinkRouteMeshTargetClassification.RequiredNotConnected)
             return classification;
 
-        return nodeRuntime.Node.MeshPeers().Any(peer =>
+        return (await nodeRuntime.Node.MeshPeersAsync().ConfigureAwait(false)).Any(peer =>
             peer.RoutingId == targetNodeRid
             && peer.State == MeshPeerState.Admitted)
                 ? ZLinkRouteMeshTargetClassification.ReadyEligible
                 : classification;
     }
 
+    // State ownership §5: the synchronous first-admission surface must finish
+    // target classification before returning. Reuse the async canonical body;
+    // async Send/Request callers await it directly.
     internal void EnsureKnownRouteMeshPeer(
+        string routerChannelId,
+        RoutingId targetNodeRid,
+        string targetDescription) =>
+        EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, targetDescription)
+            .GetAwaiter().GetResult();
+
+    internal async ValueTask EnsureKnownRouteMeshPeerAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetDescription)
@@ -278,10 +288,10 @@ internal sealed partial class ZLinkFrameworkRuntime
             }
         }
 
-        switch (ClassifyAutomaticRouteMeshTarget(
+        switch (await ClassifyAutomaticRouteMeshTargetAsync(
                     nodeRuntime,
                     routerChannelId,
-                    targetNodeRid))
+                    targetNodeRid).ConfigureAwait(false))
         {
             case ZLinkRouteMeshTargetClassification.ReadyEligible:
                 return;
@@ -318,7 +328,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         var handedOff = false;
         try
         {
-            EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+            await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
             var accepted = _spotRouteRouter.SendAsync(
                 routerChannelId,
@@ -393,7 +403,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             var outcome = "completed";
             try
             {
-                EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+                await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
                 return await _spotRouteRouter.RequestAsync(
                         routerChannelId,
