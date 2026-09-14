@@ -8,7 +8,6 @@ const nodeDocRoot = path.join(repoRoot, 'framework', 'doc', 'framework', 'node')
 
 const requiredPlatforms = [
   'win-x64',
-  'win-arm64',
   'linux-x64',
   'linux-arm64',
   'darwin-arm64'

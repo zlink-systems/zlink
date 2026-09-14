@@ -143,7 +143,10 @@ Windows 작업에서도 binding은 Core source를 먼저 build하지 않고 rele
 사용한다. 다음 명령은 Windows x64 Core release를 다운로드하고 검증한다.
 
 ```powershell
-$prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1
+# fetch-release.ps1은 진행 상황을 host stream으로, prefix 경로만 stdout으로 낸다.
+# 같은 세션에서 `&`로 호출해야 $prefix에 경로만 들어온다. 자식 powershell.exe로
+# 부르면 진행 메시지까지 stdout에 섞여 들어온다.
+$prefix = & .\scripts\local-package\coreetch-release.ps1
 
 # C++/.NET/Java/Node binding 전체 또는 언어별 package
 scripts/local-package/build-windows.ps1 -SyncVersions
@@ -176,15 +179,19 @@ variant를 공통 CI runtime이나 다른 binding의 staged runtime과 섞지 �
 
 Windows package 입력과 결과는 다음 경로를 사용한다.
 
-- .NET: `ZLinkWindowsX64NativeRoot=<release-prefix>/bin`, 결과는
- `.artifacts/windows/dotnet/package/`
-- C++: `<release-prefix>/`를 `ZLINK_CPP_CORE_PACKAGE_PREFIX`로 지정하고 CMake install 결과
- `.artifacts/windows/cpp/package/`
-- Go: release prefix의 `bin/` runtime을 `bindings/go/native/windows-x86_64/`에 배치하고, 결과는 `.artifacts/windows/go/package/`
-- Java: release prefix의 `bin/zlink.dll`을 사용하는 version-only consumer
-- Node.js: release prefix의 `bin/zlink.dll`을 `bindings/node/prebuilds/win32-x64/`에 배치하고, 결과는 `.artifacts/windows/node/package/`
-- Python: wheel의 `native/windows-x86_64/zlink.dll`에 release prefix runtime을 배치하고, 결과는 `.artifacts/windows/python/wheel/`
-- Rust: crate의 `native/windows-x86_64/`에 release prefix runtime을 배치하고, 결과는 `.artifacts/windows/rust/`
+- 입력은 모두 release prefix 하나다. `-CorePrefix <prefix>`로 준다.
+- 결과는 언어별 package manager 형식으로 `.artifacts/windows/` 아래에 나온다.
+
+| 언어 | 결과 |
+| --- | --- |
+| .NET | `.artifacts/windows/nuget/Zlink.<binding-version>.nupkg` (+ `.snupkg`) |
+| C++ | `.artifacts/windows/install/zlink-cpp/<binding-version>/` |
+| Java | `.artifacts/windows/maven/systems/zlink/zlink/<binding-version>/zlink-<binding-version>.jar` |
+| Node.js | `.artifacts/windows/npm/zlink-systems-zlink-<binding-version>.tgz` |
+
+`.artifacts/windows/`의 `build/`, `staging/`, `logs/`는 중간 산출물이며 package 내용이 아니다.
+`build-windows.ps1 -Language`는 `cpp`, `dotnet`, `java`, `node` 넷만 받는다. Go·Python·Rust
+package는 Windows local-package 경로가 만들지 않는다.
 
 Windows native package 생성 절차를 통합할 때는 이 경로와 언어별 version pinning을 함께
 갱신한다. 현재 Windows 성능 실행 결과의 상태와 실패 원인은
