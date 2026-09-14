@@ -319,7 +319,7 @@ public sealed class LocationRuntimeQueryTests
             runtime,
             new ZLinkObservedLocationGenerations(),
             storeHealth: health);
-        health.ReportFailure("mesh-node-query-read", new InvalidOperationException("read unavailable"));
+        await health.ReportFailureAsync("mesh-node-query-read", new InvalidOperationException("read unavailable"));
 
         var status = await query.GetStatusAsync();
 
@@ -358,7 +358,7 @@ public sealed class LocationRuntimeQueryTests
             runtime,
             new ZLinkObservedLocationGenerations(),
             storeHealth: health);
-        health.ReportSuccess("mesh-node-query-read");
+        await health.ReportSuccessAsync("mesh-node-query-read");
         var readSuccessAt = health.GetSnapshot().LastSuccessAt;
         time.Advance(TimeSpan.FromDays(30));
         var renewed = await runtime.RenewOwnerLeaseOnceAsync();
@@ -396,6 +396,88 @@ public sealed class LocationRuntimeQueryTests
 
         Assert.True(callerHealth.GetSnapshot().Healthy);
         Assert.False(internalHealth.GetSnapshot().Healthy);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Store_Read_Awaits_Busy_Health_Without_Blocking_Its_Caller(bool fails)
+    {
+        using var time = new BlockingHealthTimeProvider();
+        var health = new ZLinkLocationStoreHealth(time);
+        var changed = 0;
+        health.Changed += () => Interlocked.Increment(ref changed);
+        var occupyingTurn = Task.Run(async () => await health.ReportSuccessAsync("occupying"));
+        Task<ValueTask<int>>? invocation = null;
+        Task<int>? readCompletion = null;
+        var failure = new InvalidOperationException("read unavailable");
+        try
+        {
+            await time.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // Keep the ValueTask unwrapped: completion of invocation proves that
+            // calling ExecuteAsync returned while its health turn was queued.
+            invocation = Task.Run(() => ZLinkLocationStoreRead.ExecuteAsync<int>(
+                health,
+                "queued-read",
+                CancellationToken.None,
+                _ => fails
+                    ? ValueTask.FromException<int>(failure)
+                    : ValueTask.FromResult(42)));
+            var read = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(read.IsCompleted);
+            readCompletion = read.AsTask();
+            var snapshotCapture = health.GetSnapshotAsync();
+            Assert.False(snapshotCapture.IsCompleted);
+            Assert.Equal(0, Volatile.Read(ref changed));
+
+            time.Release();
+            await occupyingTurn.WaitAsync(TimeSpan.FromSeconds(5));
+            if (fails)
+                Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(
+                    async () => await readCompletion));
+            else
+                Assert.Equal(42, await readCompletion);
+
+            // Read completion includes the health update and Changed callback,
+            // rather than publishing an eventual fire-and-forget update.
+            Assert.Equal(2, Volatile.Read(ref changed));
+            var snapshot = await snapshotCapture;
+            Assert.Equal(!fails, snapshot.Healthy);
+            if (fails) Assert.Contains(failure.Message, snapshot.LastError);
+            else Assert.NotNull(snapshot.LastSuccessAt);
+        }
+        finally
+        {
+            time.Release();
+            await occupyingTurn.WaitAsync(TimeSpan.FromSeconds(5));
+            if (invocation is not null)
+            {
+                readCompletion ??= (await invocation.WaitAsync(TimeSpan.FromSeconds(5))).AsTask();
+                try { await readCompletion; }
+                catch (InvalidOperationException error) when (ReferenceEquals(error, failure)) { }
+            }
+        }
+    }
+
+    private sealed class BlockingHealthTimeProvider : TimeProvider, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private int _reads;
+        internal TaskCompletionSource<bool> Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                Entered.TrySetResult(true);
+                _release.Wait();
+            }
+            return DateTimeOffset.UnixEpoch;
+        }
+
+        internal void Release() => _release.Set();
+        public void Dispose() => _release.Dispose();
     }
 
     private sealed class ScriptedMeshNodeListStore(params ZLinkMeshNodeDescriptor[][] pages)

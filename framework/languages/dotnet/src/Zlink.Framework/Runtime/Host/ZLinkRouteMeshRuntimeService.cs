@@ -905,7 +905,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         private async ValueTask PublishDescriptorChangesAsync(
             CancellationToken cancellationToken)
         {
-            PublishLocationHealthChange();
+            await PublishLocationHealthChangeAsync().ConfigureAwait(false);
             if (_owner._locationQuery is null
                 || !await _lane.RunAsync(() =>
                 {
@@ -1085,12 +1085,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             && left.Spots == right.Spots
             && left.SpotTypes.SequenceEqual(right.SpotTypes);
 
-        private void PublishLocationHealthChange()
+        private async ValueTask PublishLocationHealthChangeAsync()
         {
             if (_owner._storeHealth is null)
                 return;
-            var state = _owner._storeHealth.GetSnapshot().Healthy ? "ready" : "degraded";
-            var changed = AwaitStateLane(_lane.RunAsync(() =>
+            var health = await _owner._storeHealth.GetSnapshotAsync().ConfigureAwait(false);
+            var state = health.Healthy ? "ready" : "degraded";
+            var changed = await _lane.RunAsync(() =>
             {
                 if (_lastLocationState is null)
                 {
@@ -1101,7 +1102,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                     return false;
                 _lastLocationState = state;
                 return true;
-            }));
+            }).ConfigureAwait(false);
             if (!changed)
                 return;
             var sourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
