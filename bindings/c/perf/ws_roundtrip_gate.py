@@ -14,7 +14,7 @@ from typing import Dict, List, Mapping, Sequence, Tuple
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 REGRESSION_GATE_PATH = SCRIPT_DIR / "perf_regression_gate.py"
 
-PATTERNS = ("MULTI_DEALER_DEALER", "MULTI_DEALER_ROUTER_SENDSEND")
+PATTERNS = ("DEALER_DEALER", "DEALER_ROUTER_SENDSEND")
 COMPARISON_TRANSPORTS = ("ws", "wss")
 TRANSPORTS = ("tcp",) + COMPARISON_TRANSPORTS
 SIZES = (1024, 65536)

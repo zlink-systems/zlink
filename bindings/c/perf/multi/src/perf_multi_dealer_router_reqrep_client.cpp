@@ -6,7 +6,7 @@ namespace
 perf_multi_socket_reqrep::endpoint_config_t make_config ()
 {
     perf_multi_socket_reqrep::endpoint_config_t config;
-    config.pattern_name = "MULTI_DEALER_ROUTER_REQREP";
+    config.pattern_name = "DEALER_ROUTER_REQREP";
     config.token = "dealer_router_reqrep";
     config.client_socket_type = ZLINK_SOCKET_DEALER;
     config.server_socket_type = ZLINK_SOCKET_ROUTER;

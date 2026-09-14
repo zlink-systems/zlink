@@ -24,7 +24,7 @@ namespace
 {
 
 static const char *k_pattern_env = "DEALER_DEALER";
-static const char *k_pattern_result = "MULTI_DEALER_DEALER";
+static const char *k_pattern_result = "DEALER_DEALER";
 static std::atomic<bool> g_stop_requested (false);
 
 void on_signal (int)

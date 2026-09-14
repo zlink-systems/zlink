@@ -64,12 +64,10 @@ func LoadMultiConfig(pattern, transport string, msgSize, duration int, clients i
 func canonicalMultiPattern(pattern string) string {
 	resolved := strings.ToUpper(strings.TrimSpace(pattern))
 	switch resolved {
-	case "DEALER_ROUTER", "DEALER_ROUTER_SENDSEND",
-		"MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_SENDSEND":
-		return "MULTI_DEALER_ROUTER_SENDSEND"
-	case "ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND",
-		"MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_SENDSEND":
-		return "MULTI_ROUTER_ROUTER_SENDSEND"
+	case "DEALER_ROUTER", "DEALER_ROUTER_SENDSEND":
+		return "DEALER_ROUTER_SENDSEND"
+	case "ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND":
+		return "ROUTER_ROUTER_SENDSEND"
 	default:
 		return resolved
 	}

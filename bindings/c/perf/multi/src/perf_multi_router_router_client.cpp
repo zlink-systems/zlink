@@ -11,7 +11,7 @@
 namespace
 {
 
-static const char *k_pattern = "MULTI_ROUTER_ROUTER_SENDSEND";
+static const char *k_pattern = "ROUTER_ROUTER_SENDSEND";
 static const zlink_socket_type_t k_client_socket_type = ZLINK_SOCKET_ROUTER;
 static const bool k_client_router_send = true;
 static const char *k_server_routing_id = "SERVER";

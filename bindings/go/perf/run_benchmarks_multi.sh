@@ -64,8 +64,8 @@ if [[ "${ZLINK_CORE_SOURCE}" == "release" ]]; then
   GO_NATIVE_DIR_OVERRIDE="${ZLINK_CORE_PACKAGE_PREFIX}/lib"
 fi
 
-PERF_REPORT_PY="${REPO_DIR}/bindings/python/perf/perf_report.py"
-# MULTI_STREAM uses the shared C reference client binary (the measured
+PERF_REPORT_PY="${SCRIPT_DIR}/perf_report.py"
+# STREAM uses the shared C reference client binary (the measured
 # surface is the Go STREAM server); the Go binding has no STREAM client.
 STREAM_CLIENT_DIR="${REPO_DIR}/bindings/c/perf/common/streamclient"
 STREAM_CLIENT="${REPO_DIR}/bindings/c/build/perf/perf_stream_client"
@@ -370,9 +370,9 @@ Options:
 
 Notes:
   - Supported multi patterns:
-    MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,
-    MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM
-  - MULTI_DEALER_ROUTER and MULTI_ROUTER_ROUTER remain accepted input aliases.
+    DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,
+    ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
+  - DEALER_ROUTER and ROUTER_ROUTER remain accepted input aliases for SENDSEND.
   - If GOMAXPROCS is unset, PERF_GO_GOMAXPROCS is an explicit positive-integer override.
     Otherwise --io-threads/PERF_IO_THREADS derives Go scheduler parallelism
     with a minimum of 4.
@@ -690,25 +690,24 @@ trap cleanup EXIT
 normalize_multi_pattern() {
   local raw="$1"
   raw="${raw^^}"
-  if [[ "${raw}" == MULTI_* ]]; then
-    raw="${raw#MULTI_}"
-  fi
   case "${raw}" in
     DEALER_ROUTER|DEALER_ROUTER_SENDSEND)
-      raw="DEALER_ROUTER_SENDSEND"
+      echo "DEALER_ROUTER_SENDSEND"
       ;;
     ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
-      raw="ROUTER_ROUTER_SENDSEND"
+      echo "ROUTER_ROUTER_SENDSEND"
+      ;;
+    STREAMS)
+      echo "STREAM"
+      ;;
+    DEALER_DEALER|DEALER_ROUTER_REQREP|ROUTER_ROUTER_REQREP|PUBSUB|STREAM)
+      echo "${raw}"
+      ;;
+    *)
+      echo "Error: unsupported multi pattern: ${raw}" >&2
+      return 1
       ;;
   esac
-  if [[ "${raw}" == "STREAMS" ]]; then
-    raw="STREAM"
-  fi
-  if [[ "${raw}" == MULTI_* ]]; then
-    echo "${raw}"
-  else
-    echo "MULTI_${raw}"
-  fi
 }
 
 pattern_msg_sizes() {
@@ -717,7 +716,7 @@ pattern_msg_sizes() {
     echo "${MSG_SIZES}"
     return
   fi
-  if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" == "STREAM" ]]; then
     if [[ -n "${PERF_MULTI_STREAM_MSG_SIZES:-}" ]]; then
       echo "${PERF_MULTI_STREAM_MSG_SIZES}"
     elif [[ -n "${PERF_STREAM_MSG_SIZES:-}" ]]; then
@@ -737,7 +736,7 @@ pattern_msg_sizes() {
 }
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-	PATTERNS=("MULTI_DEALER_DEALER" "MULTI_DEALER_ROUTER_SENDSEND" "MULTI_DEALER_ROUTER_REQREP" "MULTI_ROUTER_ROUTER_SENDSEND" "MULTI_ROUTER_ROUTER_REQREP" "MULTI_PUBSUB" "MULTI_STREAM")
+	PATTERNS=("DEALER_DEALER" "DEALER_ROUTER_SENDSEND" "DEALER_ROUTER_REQREP" "ROUTER_ROUTER_SENDSEND" "ROUTER_ROUTER_REQREP" "PUBSUB" "STREAM")
 else
   IFS=',' read -r -a RAW_PATTERNS <<< "${PATTERN}"
   PATTERNS=()
@@ -763,7 +762,7 @@ is_control_plane_pattern() {
 pattern_transports() {
   local pattern="$1"
   local base=(tcp tls ws wss)
-  if [[ "${pattern}" != "MULTI_STREAM" ]] && ! is_control_plane_pattern "${pattern}" \
+  if [[ "${pattern}" != "STREAM" ]] && ! is_control_plane_pattern "${pattern}" \
       && [[ "${PLATFORM}" != "windows" ]]; then
     base+=(ipc)
   fi
@@ -870,7 +869,7 @@ else
   _all_stream=1
   for _p in "${PATTERNS[@]}"; do
     case "${_p}" in
-      MULTI_STREAM|STREAM) ;;
+      STREAM) ;;
       *) _all_stream=0 ;;
     esac
   done
@@ -950,7 +949,7 @@ emit_meta_lines() {
 # policy, so the C runner is the reference [정책 미규정 -> C 구현 준용].
 effective_routed_echo_per_socket_payload() {
   case ",${EFFECTIVE_PATTERNS_CSV}," in
-    *,MULTI_DEALER_ROUTER_SENDSEND,*|*,MULTI_ROUTER_ROUTER_SENDSEND,*)
+    *,DEALER_ROUTER_SENDSEND,*|*,ROUTER_ROUTER_SENDSEND,*)
       case ",${EFFECTIVE_TRANSPORTS_CSV}," in
         *,tcp,*) echo "tcp"; return ;;
       esac
@@ -1166,13 +1165,13 @@ resolve_client_timeout_seconds() {
     echo "${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS}}"
     return
   fi
-  if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" == "STREAM" ]]; then
     local stream_timeout=$((duration * 3 + 20))
     (( stream_timeout < 45 )) && stream_timeout=45
     echo "${stream_timeout}"
     return
   fi
-  if { [[ "${pattern}" == "MULTI_PUBSUB" ]] && (( size >= 262144 )); } \
+  if { [[ "${pattern}" == "PUBSUB" ]] && (( size >= 262144 )); } \
     || { [[ "${transport}" == "tls" || "${transport}" == "wss" ]] && (( size >= 131072 )); }; then
 	local large_case_timeout=$((duration * 6 + 30))
 	(( large_case_timeout < 90 )) && large_case_timeout=90
@@ -1190,35 +1189,35 @@ resolve_case_gomaxprocs() {
   local size="$3"
 
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_DEALER_DEALER" \
+    && "${pattern}" == "DEALER_DEALER" \
     && "${transport}" == "tcp" \
     && "${size}" == "262144" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
+    && "${pattern}" == "ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tcp" \
     && "${size}" == "64" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
+    && "${pattern}" == "ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "64" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
+    && "${pattern}" == "ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "256" ]]; then
     echo "8"
     return
   fi
   if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" \
-    && "${pattern}" == "MULTI_ROUTER_ROUTER_SENDSEND" \
+    && "${pattern}" == "ROUTER_ROUTER_SENDSEND" \
     && "${transport}" == "tls" \
     && "${size}" == "1024" ]]; then
     echo "8"
@@ -1278,7 +1277,7 @@ run_multi_process_case() {
   client_timeout="$(resolve_client_timeout_seconds "${pattern}" "${transport}" "${size}" "${duration}")"
   case_status=0
 
-  if [[ "${pattern}" == "MULTI_DEALER_DEALER" || "${pattern}" == "MULTI_PUBSUB" ]]; then
+  if [[ "${pattern}" == "DEALER_DEALER" || "${pattern}" == "PUBSUB" ]]; then
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
     GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/multi \
@@ -1311,7 +1310,7 @@ run_multi_process_case() {
       fi
     fi
     exec {client_control_fd}>&- || true
-  elif [[ "${pattern}" == "MULTI_DEALER_ROUTER_REQREP" || "${pattern}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+  elif [[ "${pattern}" == "DEALER_ROUTER_REQREP" || "${pattern}" == "ROUTER_ROUTER_REQREP" ]]; then
     reqrep_client=1
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
@@ -1331,7 +1330,7 @@ run_multi_process_case() {
     if [[ "${client_ready_line}" != "CLIENT_DONE,${size}" ]]; then
       case_status=1; LAST_CASE_FAIL_REASON=client_done_timeout
     fi
-  elif [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  elif [[ "${pattern}" == "STREAM" ]]; then
     # Shared C reference client; the Go binding has no STREAM client
     # (measured surface is the Go STREAM server).
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
@@ -1407,11 +1406,7 @@ run_multi_process_case() {
   {
     cat "${srv_out}"
     if [[ -s "${client_out}" ]]; then
-      if [[ "${pattern}" == "MULTI_STREAM" ]]; then
-        sed 's/^RESULT,current,STREAM,/RESULT,current,MULTI_STREAM,/' "${client_out}"
-      else
-        cat "${client_out}"
-      fi
+      cat "${client_out}"
     fi
     if [[ -s "${client_err}" ]]; then
       cat "${client_err}"
@@ -1459,7 +1454,7 @@ for pattern_index in "${!PATTERNS[@]}"; do
     resolved_clients="${PERF_CLIENTS:-}"
   fi
   if [[ -z "${resolved_clients}" ]]; then
-    if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+    if [[ "${pattern}" == "STREAM" ]]; then
       resolved_clients="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
     else
       resolved_clients="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
@@ -1485,7 +1480,7 @@ for pattern_index in "${!PATTERNS[@]}"; do
     transport_seen=$((transport_seen + 1))
     echo "    Testing ${transport} | ${size_list}:"
     case_clients="${resolved_clients}"
-    if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" ]]; then
+    if [[ "${pattern}" == "STREAM" && "${transport}" != "tcp" ]]; then
       non_tcp_max="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
       if [[ "${case_clients}" =~ ^[0-9]+$ && "${non_tcp_max}" =~ ^[0-9]+$ \
             && "${case_clients}" -gt "${non_tcp_max}" ]]; then
@@ -1525,7 +1520,6 @@ for pattern_index in "${!PATTERNS[@]}"; do
           progress_case_row "${pattern}" "${size}" "${case_log}"
           continue
         fi
-        export PERF_MULTI_MSG_UNIT_BYTES="${size}"
         case_ok=0
         if run_multi_process_case \
           "${pattern}" \

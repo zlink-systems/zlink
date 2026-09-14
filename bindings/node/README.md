@@ -187,11 +187,10 @@ cd bindings/node && npm run perf:multi -- --recv recv --pattern STREAM --warmup 
 - single perf is implemented for `PAIR`, `PUBSUB`, `DEALER_DEALER`,
   `DEALER_ROUTER`, `ROUTER_ROUTER`, `SPOT`
 - single perf pull-mode migration is tracked with the Phase 7 benchmark work
-- multi perf is implemented for `MULTI_DEALER_DEALER`, `MULTI_PUBSUB`,
-  `STREAM`
+- multi perf is implemented for `DEALER_DEALER`, `PUBSUB`, `STREAM`
 - multi perf supports:
-  - `MULTI_DEALER_DEALER`: `--recv recv`
-  - `MULTI_PUBSUB`: `--recv recv`
+  - `DEALER_DEALER`: `--recv recv`
+  - `PUBSUB`: `--recv recv`
   - `STREAM`: `--recv recv`
 - perf structure and review criteria are defined by
   [`bindings/README.md`](/home/hep7/project/kairos/zlink/doc/spec/bindings/README.md)

@@ -176,7 +176,7 @@ inline bool is_stream_pattern (const char *pattern)
 {
     if (!pattern || !*pattern)
         return false;
-    return std::strcmp (pattern, "STREAM") == 0 || std::strcmp (pattern, "MULTI_STREAM") == 0;
+    return std::strcmp (pattern, "STREAM") == 0;
 }
 
 inline bool validate_multi_perf_pattern (const char *pattern)

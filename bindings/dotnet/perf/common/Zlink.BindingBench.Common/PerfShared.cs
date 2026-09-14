@@ -352,18 +352,9 @@ public static class PerfShared
         }
     }
 
-    public static string NormalizePattern(string pattern,
-        bool trimMultiPrefix = false)
+    public static string NormalizePattern(string pattern)
     {
-        string normalized = (pattern ?? string.Empty).Trim().ToUpperInvariant();
-        const string multiPrefix = "MULTI_";
-        if (trimMultiPrefix
-            && normalized.StartsWith(multiPrefix, StringComparison.Ordinal))
-        {
-            return normalized.Substring(multiPrefix.Length);
-        }
-
-        return normalized;
+        return (pattern ?? string.Empty).Trim().ToUpperInvariant();
     }
 
     private static void TryDeleteFile(string path)

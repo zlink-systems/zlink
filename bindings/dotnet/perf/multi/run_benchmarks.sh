@@ -196,7 +196,11 @@ Run .NET multi-socket benchmark patterns.
 
 Options:
   -h, --help            Show this help.
-  --pattern NAME        Pattern list (comma-separated) or ALL.
+  --pattern NAME        Pattern list (comma-separated) or ALL. Accepted names:
+                        DEALER_DEALER, DEALER_ROUTER, DEALER_ROUTER_SENDSEND,
+                        DEALER_ROUTER_REQREP, ROUTER_ROUTER,
+                        ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP, PUBSUB,
+                        STREAM.
   --duration N          Active duration seconds (default: 5).
   --part-count N        Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST      Message size list.
@@ -264,7 +268,7 @@ validate_reuse_outputs() {
     exit 1
   fi
 
-  if [[ ",${PATTERN}," == *,MULTI_STREAM,* && ! -x "${STREAM_CLIENT}" ]]; then
+  if [[ ",${PATTERN}," == *,STREAM,* && ! -x "${STREAM_CLIENT}" ]]; then
     echo "Error: --reuse-build requested but the shared STREAM client is missing or not executable: ${STREAM_CLIENT}" >&2
     echo "Run without --reuse-build to build the shared STREAM client." >&2
     exit 1
@@ -441,9 +445,8 @@ allowed = {
 
 if raw == "ALL":
     print(
-        "MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_SENDSEND,"
-        "MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_REQREP,"
-        "MULTI_PUBSUB,MULTI_STREAM"
+        "DEALER_DEALER,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,"
+        "DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
     )
     raise SystemExit(0)
 
@@ -452,13 +455,11 @@ for token in raw.split(","):
     value = token.strip()
     if not value:
         continue
-    if value.startswith("MULTI_"):
-        value = value[len("MULTI_") :]
     if value == "STREAMS":
         value = "STREAM"
     if value not in allowed:
         raise SystemExit(f"unsupported multi pattern: {value}")
-    items.append(f"MULTI_{value}")
+    items.append(value)
 
 if not items:
     raise SystemExit("no valid multi pattern specified")
@@ -482,7 +483,7 @@ patterns = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
 stream_sizes = [int(item.strip()) for item in sys.argv[2].split(",") if item.strip()]
 sizes = set()
 for pattern in patterns:
-    if pattern == "MULTI_STREAM":
+    if pattern == "STREAM":
         sizes.update(stream_sizes)
     else:
         sizes.update([64, 256, 1024, 4096, 65536, 131072])
@@ -504,9 +505,9 @@ import sys
 patterns = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
 default_clients = sys.argv[2]
 default_stream_clients = sys.argv[3]
-if patterns and all(item == "MULTI_STREAM" for item in patterns):
+if patterns and all(item == "STREAM" for item in patterns):
     print(default_stream_clients)
-elif any(item == "MULTI_STREAM" for item in patterns):
+elif any(item == "STREAM" for item in patterns):
     print(f"{default_clients} (stream={default_stream_clients})")
 else:
     print(default_clients)
@@ -515,7 +516,7 @@ PY
 
 default_msg_sizes_for_pattern() {
   local pattern="${1:-}"
-  if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" == "STREAM" ]]; then
     printf '%s' "${STREAM_MSG_SIZES:-${DEFAULT_MULTI_STREAM_MSG_SIZES}}"
   else
     printf '%s' "64,256,1024,4096,65536,131072"
@@ -529,7 +530,7 @@ msg_sizes_for_pattern() {
     default_msg_sizes_for_pattern "${pattern}"
     return
   fi
-  if [[ "${pattern}" != "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" != "STREAM" ]]; then
     printf '%s' "${configured_sizes}"
     return
   fi
@@ -551,7 +552,7 @@ PY
 
 default_clients_for_pattern() {
   local pattern="${1:-}"
-  if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" == "STREAM" ]]; then
     printf '%s' "${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
   else
     printf '%s' "${EFFECTIVE_DEFAULT_CLIENTS}"
@@ -562,7 +563,7 @@ effective_clients_for_transport() {
   local pattern="${1:-}"
   local transport="${2:-}"
   local requested="${3:-}"
-  if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" \
+  if [[ "${pattern}" == "STREAM" && "${transport}" != "tcp" \
         && "${requested}" =~ ^[0-9]+$ \
         && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
         && "${requested}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
@@ -583,7 +584,7 @@ pattern_uses_control_pipe() {
     # (relay) server is the same C relay server that shuts down from its stdin
     # watcher (perf_multi_relay_server.hpp:667-677), so it needs the pipe too;
     # without it the .NET relay server was killed by SIGTERM.
-    MULTI_DEALER_DEALER|MULTI_PUBSUB|MULTI_STREAM|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER_REQREP|MULTI_DEALER_ROUTER|MULTI_DEALER_ROUTER_SENDSEND|MULTI_ROUTER_ROUTER|MULTI_ROUTER_ROUTER_SENDSEND)
+    DEALER_DEALER|PUBSUB|STREAM|DEALER_ROUTER_REQREP|ROUTER_ROUTER_REQREP|DEALER_ROUTER|DEALER_ROUTER_SENDSEND|ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
       return 0
       ;;
     *)
@@ -817,7 +818,6 @@ secondary = Path(sys.argv[2])
 expected = sys.argv[3]
 transport = sys.argv[4]
 size = sys.argv[5]
-base = expected[len("MULTI_") :] if expected.startswith("MULTI_") else expected
 required = ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99"]
 merged = {}
 
@@ -829,7 +829,7 @@ for path in (primary, secondary):
         for row in reader:
             if len(row) != 7 or row[0] != "RESULT" or row[1] not in {"dotnet", "current"}:
                 continue
-            if row[2] not in {expected, base} or row[3] != transport or row[4] != size:
+            if row[2] != expected or row[3] != transport or row[4] != size:
                 continue
             metric = row[5]
             if metric in required:
@@ -874,13 +874,13 @@ import sys
 
 pattern = sys.argv[2].upper()
 echo_patterns = {
-    "MULTI_DEALER_ROUTER",
-    "MULTI_DEALER_ROUTER_SENDSEND",
-    "MULTI_DEALER_ROUTER_REQREP",
-    "MULTI_ROUTER_ROUTER",
-    "MULTI_ROUTER_ROUTER_SENDSEND",
-    "MULTI_ROUTER_ROUTER_REQREP",
-    "MULTI_STREAM",
+    "DEALER_ROUTER",
+    "DEALER_ROUTER_SENDSEND",
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER",
+    "ROUTER_ROUTER_SENDSEND",
+    "ROUTER_ROUTER_REQREP",
+    "STREAM",
 }
 metrics = {}
 size = ""
@@ -922,10 +922,8 @@ import sys
 
 expected = sys.argv[1]
 transport = sys.argv[2]
-base = expected[len("MULTI_"):] if expected.startswith("MULTI_") else expected
 needles = {
     f"UNSUPPORTED,dotnet,{expected},{transport}",
-    f"UNSUPPORTED,dotnet,{base},{transport}",
 }
 canonical = f"UNSUPPORTED,dotnet,{expected},{transport}"
 
@@ -963,10 +961,7 @@ import pathlib
 import sys
 
 def normalize_pattern(name):
-    value = (name or "").strip().upper()
-    if value.startswith("MULTI_"):
-        value = value[6:]
-    return value
+    return (name or "").strip().upper()
 
 
 def parse_int(value, default=0):
@@ -1021,57 +1016,17 @@ def emit_markdown_table(indent, columns, rows):
         print(f"{indent}|" + "|".join(cells) + "|")
 
 
-def expected_hwm(row):
-    unit_budget = parse_int(row.get("unit_budget_bytes", ""), 0)
-    msg_unit = parse_int(row.get("effective_message_bytes", ""), 0)
-    size_cap = parse_int(row.get("size_cap", ""), 0)
-    if unit_budget <= 0 or msg_unit <= 0:
-        return None
-    hwm = (unit_budget + msg_unit - 1) // msg_unit
-    hwm = max(1, hwm)
-    if size_cap > 0:
-        hwm = min(hwm, size_cap)
-    return hwm
-
-
-def expected_match_score(row):
-    expected = expected_hwm(row)
-    if expected is None:
-        return 2
-    sndhwm = parse_int(row.get("sndhwm", ""), -1)
-    rcvhwm = parse_int(row.get("rcvhwm", ""), -1)
-    visible = 0
-    matches = 0
-    if sndhwm >= 0:
-        visible += 1
-        if sndhwm == expected:
-            matches += 1
-    if rcvhwm >= 0:
-        visible += 1
-        if rcvhwm == expected:
-            matches += 1
-    if visible == 0:
-        return 2
-    return 0 if matches == visible else 1 if matches > 0 else 2
-
-
 def select_rows(rows):
     selected = {}
-    for index, row in enumerate(rows):
+    for row in rows:
         key = (
             row.get("msg_size", ""),
             row.get("component", ""),
             row.get("socket_type", ""),
             row.get("unit_budget_bytes", ""),
-            row.get("effective_message_bytes", ""),
         )
-        score = expected_match_score(row)
-        previous = selected.get(key)
-        if previous is None or score < previous[0] or (
-            score == previous[0] and index > previous[1]
-        ):
-            selected[key] = (score, index, row)
-    return [item[2] for item in selected.values()]
+        selected[key] = row
+    return list(selected.values())
 
 
 pattern = normalize_pattern(sys.argv[1])
@@ -1096,7 +1051,6 @@ for raw_path in sys.argv[2:]:
             fields.get("scope", ""),
             fields.get("sndhwm", ""),
             fields.get("rcvhwm", ""),
-            fields.get("effective_message_bytes", ""),
             fields.get("effective_sndbuf", ""),
             fields.get("effective_rcvbuf", ""),
             fields.get("socket_message_slots", ""),
@@ -1140,7 +1094,6 @@ for fields in select_rows(rows):
             "component",
             "type",
             "unit_budget_kb",
-            "effective_message_bytes",
             "sndhwm",
             "rcvhwm",
             "effective_sndbuf_kb",
@@ -1161,7 +1114,6 @@ emit_markdown_table(
         ("Component", "component"),
         ("Type", "type"),
         ("UnitBudget(KB)", "unit_budget_kb"),
-        ("MsgUnit(B)", "effective_message_bytes"),
         ("SNDHWM", "sndhwm"),
         ("RCVHWM", "rcvhwm"),
         ("SNDBUF(KB)", "effective_sndbuf_kb"),
@@ -1534,10 +1486,9 @@ run_multi_process() {
     role_io_threads="${CLIENT_IO_THREADS}"
   fi
   local effective_ready_timeout="${READY_TIMEOUT_MS}"
-  local normalized_pattern="${pattern#MULTI_}"
   local env_prefix=(
-    "PERF_PATTERN=${normalized_pattern}"
-    "PERF_MULTI_PATTERN=${normalized_pattern}"
+    "PERF_PATTERN=${pattern}"
+    "PERF_MULTI_PATTERN=${pattern}"
     "PERF_MULTI_TRANSPORT=${transport}"
     "PERF_MULTI_COMPONENT=${role}"
     "PERF_DOTNET_SERVER_STATS=${PERF_DOTNET_SERVER_STATS:-0}"
@@ -1635,8 +1586,8 @@ run_external_stream_client() {
     cmd=(taskset -c 1 "${cmd[@]}")
   fi
   env \
-    "PERF_PATTERN=${pattern#MULTI_}" \
-    "PERF_MULTI_PATTERN=${pattern#MULTI_}" \
+    "PERF_PATTERN=${pattern}" \
+    "PERF_MULTI_PATTERN=${pattern}" \
     "PERF_MULTI_TRANSPORT=${transport}" \
     "PERF_MULTI_COMPONENT=client" \
     "${cmd[@]}" < "${control_fifo}" > "${client_log}" 2>&1 &
@@ -1664,7 +1615,7 @@ else
   _all_stream=1
   for _p in "${PATTERN//,/ }"; do
     case "${_p}" in
-      MULTI_STREAM|STREAM) ;;
+      STREAM) ;;
       *) _all_stream=0 ;;
     esac
   done
@@ -1681,7 +1632,7 @@ print_meta_block "${META_CLIENTS}"
 # borrow a per-socket payload, and only over tcp. REQREP is NOT one of them.
 ROUTED_ECHO_PER_SOCKET_PAYLOAD="none"
 case ",${PATTERN}," in
-  *,MULTI_DEALER_ROUTER,*|*,MULTI_DEALER_ROUTER_SENDSEND,*|*,MULTI_ROUTER_ROUTER,*|*,MULTI_ROUTER_ROUTER_SENDSEND,*)
+  *,DEALER_ROUTER,*|*,DEALER_ROUTER_SENDSEND,*|*,ROUTER_ROUTER,*|*,ROUTER_ROUTER_SENDSEND,*)
     case ",${TRANSPORTS}," in
       *,tcp,*) ROUTED_ECHO_PER_SOCKET_PAYLOAD="tcp" ;;
     esac
@@ -1767,7 +1718,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
     IFS=',' read -r -a msg_sizes <<< "${pattern_msg_sizes}"
     pattern_kind="one-way"
     case "${pattern}" in
-      MULTI_DEALER_ROUTER|MULTI_DEALER_ROUTER_SENDSEND|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER|MULTI_ROUTER_ROUTER_SENDSEND|MULTI_ROUTER_ROUTER_REQREP|MULTI_STREAM)
+      DEALER_ROUTER|DEALER_ROUTER_SENDSEND|DEALER_ROUTER_REQREP|ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND|ROUTER_ROUTER_REQREP|STREAM)
         pattern_kind="echo"
         ;;
     esac
@@ -1833,9 +1784,9 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
         native_control_file="${RESULTS_ROOT}/multi/tmp/${pattern,,}_${transport}_${size}_run${run_index}.control"
         unset PERF_MULTI_CONTROL_FILE
         if [[ "$(normalize_platform)" == "windows" \
-              && ("${pattern}" == "MULTI_DEALER_DEALER" \
-                  || "${pattern}" == "MULTI_PUBSUB" \
-                  || "${pattern}" == "MULTI_STREAM") ]]; then
+              && ("${pattern}" == "DEALER_DEALER" \
+                  || "${pattern}" == "PUBSUB" \
+                  || "${pattern}" == "STREAM") ]]; then
           native_control_mode=1
           : > "${native_control_file}"
           export PERF_MULTI_CONTROL_FILE="${native_control_file}"
@@ -1886,7 +1837,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           continue
         fi
 
-        if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+        if [[ "${pattern}" == "STREAM" ]]; then
           mkfifo "${client_control_fifo}"
           run_external_stream_client "${server_endpoint}" "${client_control_fifo}"
           client_pid="${STREAM_CLIENT_PID}"
@@ -1968,8 +1919,8 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             continue
           fi
           exec {server_control_fd}>&-
-        elif [[ "${pattern}" == "MULTI_DEALER_ROUTER_REQREP" \
-             || "${pattern}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+        elif [[ "${pattern}" == "DEALER_ROUTER_REQREP" \
+             || "${pattern}" == "ROUTER_ROUTER_REQREP" ]]; then
           # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486:
           # CLIENT_DONE ends measurement, the runner stops the server and
           # confirms its exit, and only then sends STOP to the client so the
@@ -2034,7 +1985,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             status=1
             continue
           fi
-        elif [[ "${pattern}" == "MULTI_DEALER_DEALER" || "${pattern}" == "MULTI_PUBSUB" ]]; then
+        elif [[ "${pattern}" == "DEALER_DEALER" || "${pattern}" == "PUBSUB" ]]; then
           if [[ "${native_control_mode}" -eq 1 ]]; then
             run_multi_process "client" "${client_log}" "${server_endpoint}" "" 1
           else

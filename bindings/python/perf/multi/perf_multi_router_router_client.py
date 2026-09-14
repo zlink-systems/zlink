@@ -170,7 +170,7 @@ async def main(argv=None):
                         sockets[0], "endpoint", args.transport, args.msg_size, "router"
                     )
                 print_result_lines(
-                    "MULTI_ROUTER_ROUTER_SENDSEND",
+                    "ROUTER_ROUTER_SENDSEND",
                     args.transport,
                     args.msg_size,
                     metrics,

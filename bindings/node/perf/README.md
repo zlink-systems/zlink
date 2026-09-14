@@ -24,23 +24,25 @@ Current implemented scope:
   - `DEALER_ROUTER`
   - `ROUTER_ROUTER`
 - multi patterns:
-  - `MULTI_DEALER_DEALER`
-  - `MULTI_DEALER_ROUTER`
-  - `MULTI_ROUTER_ROUTER`
-  - `MULTI_PUBSUB`
-  - `MULTI_STREAM`
+  - `DEALER_DEALER`
+  - `DEALER_ROUTER_SENDSEND`
+  - `DEALER_ROUTER_REQREP`
+  - `ROUTER_ROUTER_SENDSEND`
+  - `ROUTER_ROUTER_REQREP`
+  - `PUBSUB`
+  - `STREAM`
 
 Current alignment notes:
 
 - both runners are recv-only and follow the policy metric header / RESULT
   contract
-- `MULTI_STREAM` uses the Node public API server with the shared core
+- `STREAM` uses the Node public API server with the shared core
   `perf_stream_client` client required by the multi-suite policy. The Node
   runner passes `--completion-wait-ms` to that client from
   `PERF_MULTI_STREAM_COMPLETION_WAIT_MS`, then `PERF_STREAM_COMPLETION_WAIT_MS`,
   and otherwise uses `2000` ms so in-flight replies after the active window are
   counted without the instability seen with longer waits.
-- For `MULTI_STREAM` over `ws` and `wss`, the Node runner caps the shared
+- For `STREAM` over `ws` and `wss`, the Node runner caps the shared
   stream client fanout at `1000` by default. Override it with
   `PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX` or `PERF_STREAM_NON_TCP_CLIENTS_MAX`
   when a run intentionally needs higher non-TCP concurrency.

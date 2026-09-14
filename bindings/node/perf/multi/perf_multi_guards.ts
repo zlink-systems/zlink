@@ -126,7 +126,7 @@ function resolvePatternClients(patternName, options, clientSource) {
 }
 
 function resolveTransportClients(patternName, transport, clients) {
-  if (patternName !== 'MULTI_STREAM' || transport === 'tcp') {
+  if (patternName !== 'STREAM' || transport === 'tcp') {
     return clients;
   }
   const nonTcpMax = positiveIntegerEnv('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX') ?? 10000;

@@ -91,7 +91,7 @@ class EchoReplyDrain {
 }
 
 function resolveRoutedPattern(pattern, family) {
-  const base = `MULTI_${family}`;
+  const base = family;
   const normalized = String(pattern || `${base}_REQREP`).trim().toUpperCase();
   if (normalized === base || normalized === `${base}_SENDSEND`) {
     return `${base}_SENDSEND`;
@@ -386,7 +386,8 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
       options.duration,
       'current',
       result.accepted,
-      result.latencyMeanNs
+      result.latencyMeanNs,
+      'multi'
     )) {
       console.log(metricLine);
     }

@@ -194,9 +194,6 @@ function Expand-AndAddPatternAlias {
     )
     $p = $RawPattern.Trim().ToUpperInvariant()
     if (-not $p) { return }
-    if ($p.StartsWith("MULTI_")) {
-        $p = $p.Substring(6)
-    }
     switch ($p) {
         "DEALER_ROUTER" {
             Add-UniquePattern -List $List -PatternName "DEALER_ROUTER_SENDSEND"
@@ -215,8 +212,11 @@ function Expand-AndAddPatternAlias {
             break
         }
         default {
-            Add-UniquePattern -List $List -PatternName $p
-            break
+            if ($DefaultPatterns -contains $p) {
+                Add-UniquePattern -List $List -PatternName $p
+                break
+            }
+            throw "Unsupported multi pattern: $p"
         }
     }
 }

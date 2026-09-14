@@ -16,9 +16,12 @@ from perf_metrics import (
     active_message_latency_ns,
     LatencySampler,
     new_payload,
+    pattern_direction_label,
     result_metrics,
     stamp_payload,
+    throughput_unit,
 )
+from perf_report import multi_auto_hwm_lines, single_auto_hwm_detail_lines
 from perf_multi_common import (
     PERF_MULTI_AUX_POLL_WAIT_MS,
     PYTHON_MULTI_DEFAULT_IO_THREADS,
@@ -170,7 +173,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
     def test_runner_does_not_treat_partial_results_from_failed_case_as_success(self):
         partial = (
-            "RESULT,current,MULTI_PUBSUB,tcp,1024,throughput,1.000\n"
+            "RESULT,current,PUBSUB,tcp,1024,throughput,1.000\n"
             "server shutdown timed out"
         )
         with mock.patch("run_benchmarks._run_pattern", side_effect=SystemExit(partial)):
@@ -849,17 +852,67 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
     def test_canonical_routed_echo_names(self):
         self.assertEqual(
-            _normalize_pattern("MULTI_DEALER_ROUTER_SENDSEND"), "DEALER_ROUTER"
+            _normalize_pattern("DEALER_ROUTER_SENDSEND"), "DEALER_ROUTER"
         )
         self.assertEqual(
-            _normalize_pattern("MULTI_ROUTER_ROUTER_SENDSEND"), "ROUTER_ROUTER"
+            _normalize_pattern("ROUTER_ROUTER_SENDSEND"), "ROUTER_ROUTER"
         )
         self.assertEqual(
-            _result_pattern("DEALER_ROUTER"), "MULTI_DEALER_ROUTER_SENDSEND"
+            _result_pattern("DEALER_ROUTER"), "DEALER_ROUTER_SENDSEND"
         )
         self.assertEqual(
-            _result_pattern("ROUTER_ROUTER"), "MULTI_ROUTER_ROUTER_SENDSEND"
+            _result_pattern("ROUTER_ROUTER"), "ROUTER_ROUTER_SENDSEND"
         )
+
+    def test_old_multi_prefixed_pattern_is_rejected(self):
+        with self.assertRaisesRegex(
+            SystemExit, "unsupported pattern: MULTI_ROUTER_ROUTER"
+        ):
+            _parse_patterns("MULTI_ROUTER_ROUTER")
+
+    def test_shared_direction_uses_suite_context(self):
+        self.assertEqual(
+            pattern_direction_label("ROUTER_ROUTER", suite="single"), "one-way"
+        )
+        self.assertEqual(
+            pattern_direction_label("ROUTER_ROUTER", suite="multi"), "echo"
+        )
+        self.assertEqual(
+            throughput_unit("ROUTER_ROUTER", suite="single"), "Kmsg/s"
+        )
+        self.assertEqual(
+            throughput_unit("ROUTER_ROUTER", suite="multi"), "Kops/s"
+        )
+
+    def test_auto_hwm_tables_omit_msg_unit_column(self):
+        row = {
+            "pattern": "ROUTER_ROUTER_SENDSEND",
+            "msg_size": "64",
+            "component": "client",
+            "owner": "binding",
+            "socket": "endpoint",
+            "socket_type": "router",
+            "role": "routed",
+            "sndhwm": "1024",
+            "rcvhwm": "2048",
+            "effective_sndbuf": "4096",
+            "effective_rcvbuf": "8192",
+            "effective_message_bytes": "777",
+            "socket_message_slots": "32",
+        }
+        single_text = "\n".join(
+            single_auto_hwm_detail_lines(
+                ["ROUTER_ROUTER"], [64], [dict(row, pattern="ROUTER_ROUTER")]
+            )
+        )
+        multi_text = "\n".join(
+            multi_auto_hwm_lines("ROUTER_ROUTER_SENDSEND", [64], [row])
+        )
+        self.assertNotIn("MsgUnit", single_text)
+        self.assertNotIn("MsgUnit", multi_text)
+        self.assertNotIn("777", single_text)
+        self.assertNotIn("777", multi_text)
+        self.assertIn("Slots", single_text)
 
     def test_all_registers_the_same_seven_canonical_multi_patterns(self):
         self.assertEqual(
@@ -877,14 +930,14 @@ class PerfMultiRunnerTests(unittest.TestCase):
         self.assertEqual(_parse_patterns("ALL"), list(DEFAULT_PATTERNS))
         self.assertEqual(
             _result_pattern("DEALER_ROUTER_REQREP"),
-            "MULTI_DEALER_ROUTER_REQREP",
+            "DEALER_ROUTER_REQREP",
         )
         self.assertEqual(
             _result_pattern("ROUTER_ROUTER_REQREP"),
-            "MULTI_ROUTER_ROUTER_REQREP",
+            "ROUTER_ROUTER_REQREP",
         )
         self.assertEqual(
-            pattern_direction("MULTI_DEALER_ROUTER_REQREP"), "request-reply"
+            pattern_direction("DEALER_ROUTER_REQREP"), "request-reply"
         )
         self.assertIn("ipc", POLICY_TRANSPORTS["ROUTER_ROUTER_REQREP"])
 

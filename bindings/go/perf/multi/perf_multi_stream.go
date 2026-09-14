@@ -13,7 +13,7 @@ import (
 )
 
 // PERF_MULTI_TEST_POLICY / perf_multi_stream_server.cpp: the measured
-// surface for MULTI_STREAM is the Go STREAM *server* / packet pull loop.
+// surface for STREAM is the Go STREAM *server* / packet pull loop.
 // The client role is the shared C reference binary
 // bindings/c/perf/common/streamclient/perf_stream_client, spawned by
 // run_benchmarks_multi.sh (mirroring the dotnet runner). There is no

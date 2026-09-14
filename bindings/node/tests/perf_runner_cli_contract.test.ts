@@ -8,7 +8,11 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const { parseCommonArgs } = require('../perf/common/perf_args');
+const {
+  parseCommonArgs,
+  resolveMultiPatternNames
+} = require('../perf/common/perf_args');
+const { isEchoPattern } = require('../perf/common/perf_pattern');
 
 const packageRoot = path.resolve(__dirname, '../..');
 const multiRunner = path.join(packageRoot, 'perf/multi/run_benchmarks.sh');
@@ -23,6 +27,14 @@ const singleSource = fs.readFileSync(
 );
 const singleShell = fs.readFileSync(
   path.join(packageRoot, 'perf/single/run_benchmarks.sh'),
+  'utf8'
+);
+const perfReadme = fs.readFileSync(
+  path.join(packageRoot, 'perf/README.md'),
+  'utf8'
+);
+const packageReadme = fs.readFileSync(
+  path.join(packageRoot, 'README.md'),
   'utf8'
 );
 const packageJson = JSON.parse(
@@ -50,6 +62,42 @@ test('multi runner help documents the supported I/O-thread contract', () => {
   assert.equal(options.ioThreads, 3);
   assert.equal(options.serverIoThreads, 5);
   assert.equal(options.clientIoThreads, 7);
+});
+
+test('multi runner uses unprefixed pattern names and rejects legacy names', () => {
+  assert.deepEqual(resolveMultiPatternNames('ALL'), [
+    'DEALER_DEALER',
+    'DEALER_ROUTER_SENDSEND',
+    'DEALER_ROUTER_REQREP',
+    'ROUTER_ROUTER_SENDSEND',
+    'ROUTER_ROUTER_REQREP',
+    'PUBSUB',
+    'STREAM'
+  ]);
+  assert.deepEqual(resolveMultiPatternNames('dealer_router,router_router'), [
+    'DEALER_ROUTER_SENDSEND',
+    'ROUTER_ROUTER_SENDSEND'
+  ]);
+  assert.throws(
+    () => resolveMultiPatternNames('MULTI_ROUTER_ROUTER'),
+    /unsupported multi pattern: MULTI_ROUTER_ROUTER/
+  );
+  assert.match(
+    multiSource,
+    /const supportedPatterns = MULTI_PATTERN_NAMES\.join\(', '\)/
+  );
+  for (const patternName of resolveMultiPatternNames('ALL')) {
+    assert.ok(perfReadme.includes(`  - \`${patternName}\``));
+  }
+  assert.doesNotMatch(perfReadme, /  - `MULTI_[A-Z_]+`/);
+  assert.doesNotMatch(packageReadme, /  - `MULTI_[A-Z_]+`/);
+});
+
+test('shared pattern classification requires explicit multi context', () => {
+  assert.equal(isEchoPattern('ROUTER_ROUTER', 'single'), false);
+  assert.equal(isEchoPattern('ROUTER_ROUTER', 'multi'), true);
+  assert.equal(isEchoPattern('STREAM', 'single'), false);
+  assert.equal(isEchoPattern('STREAM', 'multi'), true);
 });
 
 test('Node perf rejects build-dir instead of consuming and ignoring it', () => {

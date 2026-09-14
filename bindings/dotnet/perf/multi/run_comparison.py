@@ -6,7 +6,8 @@ import sys
 
 def main() -> int:
     script = os.path.join(os.path.dirname(__file__), "..", "run_comparison.py")
-    return subprocess.call([sys.executable, script] + sys.argv[1:])
+    return subprocess.call(
+        [sys.executable, script] + sys.argv[1:] + ["--suite", "multi"])
 
 
 if __name__ == "__main__":

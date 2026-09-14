@@ -238,7 +238,9 @@ Policy contract:
 
 Options:
   --pattern NAME         Benchmark pattern (default: all patterns above).
-                         Alias: streams => STREAM
+                         Aliases: DEALER_ROUTER => DEALER_ROUTER_SENDSEND,
+                         ROUTER_ROUTER => ROUTER_ROUTER_SENDSEND,
+                         streams => STREAM
   --help                 Show this help.
   --reuse-build          Reuse existing configuration and benchmark binaries as-is.
                          Skip both configure and build; fail if an artifact is missing.
@@ -257,7 +259,7 @@ Options:
   --msg-sizes LIST       Comma-separated message sizes
                          (default: 64,256,1024,4096,65536,131072).
   --part-count N         Application frame count per measured message (1 or 2; default: 2).
-                         MULTI_STREAM uses 64,256,1024,65536 by default;
+                         STREAM uses 64,256,1024,65536 by default;
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --transports LIST      Comma-separated transports.
   --duration N           Optional override for multi duration seconds (default 5).
@@ -324,7 +326,6 @@ required_multi_reuse_artifacts() {
   local pattern=""
   for pattern in "${selected_patterns[@]}"; do
     pattern="$(printf '%s' "${pattern}" | tr '[:lower:]' '[:upper:]')"
-    pattern="${pattern#MULTI_}"
     case "${pattern}" in
       DEALER_DEALER)
         printf '%s|%s\n' \
@@ -450,11 +451,7 @@ public_multi_pattern() {
     printf '%s' ""
     return
   fi
-  if [[ "${pattern}" == MULTI_* ]]; then
-    printf '%s' "${pattern}"
-    return
-  fi
-  printf 'MULTI_%s' "${pattern}"
+  printf '%s' "${pattern}"
 }
 
 expand_and_add_explicit_pattern() {
@@ -464,10 +461,6 @@ expand_and_add_explicit_pattern() {
   raw="$(printf '%s' "${raw}" | tr '[:lower:]' '[:upper:]')"
   if [[ -z "${raw}" ]]; then
     return
-  fi
-
-  if [[ "${raw}" == MULTI_* ]]; then
-    raw="${raw#MULTI_}"
   fi
 
   case "${raw}" in
@@ -1124,7 +1117,7 @@ fi
 
 RUN_ENV=()
 prepare_core_runtime_metadata
-RUN_ENV+=(PERF_ALLOW_MULTI="1")
+RUN_ENV+=(PERF_MODE="multi")
 RUN_ENV+=(PERF_POLICY="1")
 RUN_ENV+=(PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}")
 RUN_ENV+=(PERF_CORE_VERSION="${ZLINK_CORE_VERSION}")

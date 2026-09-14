@@ -37,6 +37,26 @@ Policy references:
 
 ## Quick Start
 
+Single patterns:
+
+- `PAIR`
+- `PUBSUB`
+- `DEALER_DEALER`
+- `DEALER_ROUTER`
+- `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER`
+- `ROUTER_ROUTER_REQREP`
+
+Multi patterns:
+
+- `DEALER_DEALER`
+- `DEALER_ROUTER_SENDSEND` (`DEALER_ROUTER` alias)
+- `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER_SENDSEND` (`ROUTER_ROUTER` alias)
+- `ROUTER_ROUTER_REQREP`
+- `PUBSUB`
+- `STREAM`
+
 ```bash
 # single smoke
 bindings/cpp/perf/run_benchmarks.sh \

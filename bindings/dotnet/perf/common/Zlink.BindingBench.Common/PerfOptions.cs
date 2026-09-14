@@ -54,7 +54,7 @@ public sealed record PerfOptions(
         if (args.Length >= 4 && string.Equals(args[0], "--multi-server",
                 StringComparison.OrdinalIgnoreCase))
         {
-            string pattern = PerfShared.NormalizePattern(args[1], true);
+            string pattern = PerfShared.NormalizePattern(args[1]);
             string transport = args[2];
             if (!int.TryParse(args[3], out int size))
                 return false;
@@ -68,7 +68,7 @@ public sealed record PerfOptions(
         if (args.Length >= 6 && string.Equals(args[0], "--multi-client",
                 StringComparison.OrdinalIgnoreCase))
         {
-            string pattern = PerfShared.NormalizePattern(args[1], true);
+            string pattern = PerfShared.NormalizePattern(args[1]);
             string transport = args[2];
             if (!int.TryParse(args[3], out int size))
                 return false;

@@ -170,7 +170,7 @@ async def main(argv=None):
                         sockets[0], "endpoint", args.transport, args.msg_size, "dealer"
                     )
                 print_result_lines(
-                    "MULTI_DEALER_ROUTER_SENDSEND",
+                    "DEALER_ROUTER_SENDSEND",
                     args.transport,
                     args.msg_size,
                     metrics,

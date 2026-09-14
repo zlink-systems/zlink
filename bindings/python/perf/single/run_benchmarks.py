@@ -9,6 +9,7 @@ from pathlib import Path
 from perf_common import (
     build_report_path,
     parse_result_lines,
+    pattern_direction_label,
     pin_current_process_cpu0,
     render_effective_options,
     resolve_single_timeout_seconds,
@@ -215,7 +216,10 @@ def _status_kind(output):
 
 
 def _metric_row(pattern, msg_size, metrics, *, indent="      "):
-    throughput = f"{float(metrics.get('throughput', 0.0)) / 1000.0:7.2f} {throughput_unit(pattern)}"
+    throughput = (
+        f"{float(metrics.get('throughput', 0.0)) / 1000.0:7.2f} "
+        f"{throughput_unit(pattern, suite='single')}"
+    )
     return (
         f"{indent}| {str(msg_size) + 'B':<8} | "
         f"{throughput:>16} | "
@@ -227,7 +231,7 @@ def _metric_row(pattern, msg_size, metrics, *, indent="      "):
 
 
 def pattern_direction(pattern):
-    return "request-reply" if pattern.endswith("_REQREP") else "one-way"
+    return pattern_direction_label(pattern, suite="single")
 
 
 def _status_row(msg_size, status, *, indent="      "):

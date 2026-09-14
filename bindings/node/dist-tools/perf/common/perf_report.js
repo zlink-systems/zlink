@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = require('node:fs');
 const path = require('node:path');
+const { isEchoPattern } = require('./perf_pattern');
 function buildEffectiveOptions(options, extraLines = []) {
     const patterns = options.patterns || options.pattern || '-';
     const lines = [
@@ -31,18 +32,8 @@ function buildEffectiveOptions(options, extraLines = []) {
     }
     return lines;
 }
-function throughputUnit(pattern) {
-    return pattern === 'DEALER_ROUTER_REQREP'
-        || pattern === 'ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_DEALER_ROUTER'
-        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-        || pattern === 'MULTI_ROUTER_ROUTER'
-        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_STREAM'
-        ? 'Kops/s'
-        : 'Kmsg/s';
+function throughputUnit(pattern, suite = 'single') {
+    return isEchoPattern(pattern, suite) ? 'Kops/s' : 'Kmsg/s';
 }
 function formatTableHeader() {
     return [
@@ -51,7 +42,7 @@ function formatTableHeader() {
     ];
 }
 function formatTableRow(row) {
-    const throughput = `${(row.metrics.throughput / 1000).toFixed(3).padStart(8)} ${throughputUnit(row.pattern)}`;
+    const throughput = `${(row.metrics.throughput / 1000).toFixed(3).padStart(8)} ${throughputUnit(row.pattern, row.suite)}`;
     const bandwidth = `${row.metrics.bandwidth.toFixed(3).padStart(10)} MB/s`;
     return `| ${`${row.msgSize}B`.padEnd(8)} | ${throughput.padStart(16)} | ${bandwidth.padStart(12)} | ${`${row.metrics.latency.toFixed(3).padStart(9)} ms`.padStart(12)} | ${`${row.metrics.latency_p95.toFixed(3).padStart(9)} ms`.padStart(12)} | ${`${row.metrics.latency_p99.toFixed(3).padStart(9)} ms`.padStart(12)} |`;
 }
@@ -65,8 +56,8 @@ function formatTableRows(rows) {
         ...rows.map((row) => formatTableRow(row))
     ];
 }
-function patternDirection(pattern) {
-    return throughputUnit(pattern) === 'Kops/s' ? 'echo' : 'one-way';
+function patternDirection(pattern, suite = 'single') {
+    return throughputUnit(pattern, suite) === 'Kops/s' ? 'echo' : 'one-way';
 }
 function completionLines(status, expected, actual) {
     return [

@@ -21,7 +21,7 @@
 namespace
 {
 
-static const char *k_pattern = "MULTI_PUBSUB";
+static const char *k_pattern = "PUBSUB";
 static const char *k_token = "pubsub";
 static const zlink_socket_type_t k_server_socket_type = ZLINK_SOCKET_PUB;
 static const bool k_server_has_routing_id = false;

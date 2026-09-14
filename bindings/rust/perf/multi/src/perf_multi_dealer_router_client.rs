@@ -160,7 +160,7 @@ fn main() {
     }
 
     common::print_result(
-        "MULTI_DEALER_ROUTER_SENDSEND",
+        "DEALER_ROUTER_SENDSEND",
         &args.transport,
         args.msg_size,
         settings.duration_seconds,

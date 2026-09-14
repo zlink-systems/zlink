@@ -34,6 +34,7 @@ from perf_metrics import (
     is_active_message,
     payload_phase,
     parse_result_lines,
+    pattern_direction_label,
     pin_current_process_cpu0,
     print_result_lines,
     resolve_multi_connect_ready_timeout_ms,

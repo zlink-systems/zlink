@@ -111,17 +111,14 @@ final class PerfMeasurement {
             return "DEALER_ROUTER_REQREP".equals(pattern)
                 || "ROUTER_ROUTER_REQREP".equals(pattern);
         }
-        return "DEALER_ROUTER".equals(pattern)
+        return "multi".equals(suite)
+            && ("DEALER_ROUTER".equals(pattern)
             || "DEALER_ROUTER_SENDSEND".equals(pattern)
             || "DEALER_ROUTER_REQREP".equals(pattern)
             || "ROUTER_ROUTER".equals(pattern)
             || "ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "ROUTER_ROUTER_REQREP".equals(pattern)
-            || "STREAM".equals(pattern)
-            || "MULTI_DEALER_ROUTER_SENDSEND".equals(pattern)
-            || "MULTI_DEALER_ROUTER_REQREP".equals(pattern)
-            || "MULTI_ROUTER_ROUTER_SENDSEND".equals(pattern)
-            || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern);
+            || "STREAM".equals(pattern));
     }
 
     // PERF_POLICY.md 1.1: elapsed time, active deadlines, timeouts, drain

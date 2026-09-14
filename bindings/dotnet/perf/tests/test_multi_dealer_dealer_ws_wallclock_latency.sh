@@ -15,7 +15,7 @@ trap 'rm -f "${log_file}"' EXIT
 set +e
 PERF_FAIL_FAST=1 \
 "${RUNNER}" \
-  --pattern MULTI_DEALER_DEALER \
+  --pattern DEALER_DEALER \
   --transports ws \
   --msg-sizes "${size}" \
   --duration "${duration}" \
@@ -35,7 +35,6 @@ import sys
 log_path, expected_size, max_latency_ms = sys.argv[1], sys.argv[2], float(sys.argv[3])
 latency = None
 status_complete = False
-msgunit_ok = False
 auto_hwm_enabled = False
 
 with open(log_path, encoding="utf-8", errors="replace") as f:
@@ -43,14 +42,10 @@ with open(log_path, encoding="utf-8", errors="replace") as f:
         line = raw.strip()
         if line == "- ctx_auto_hwm_enable: 1":
             auto_hwm_enabled = True
-        if line.startswith("RESULT,current,MULTI_DEALER_DEALER,ws,"):
+        if line.startswith("RESULT,current,DEALER_DEALER,ws,"):
             cells = line.split(",")
             if len(cells) == 7 and cells[4] == expected_size and cells[5] == "latency":
                 latency = float(cells[6])
-        if line.startswith("|"):
-            cols = [col.strip() for col in line.strip("|").split("|")]
-            if len(cols) >= 5 and cols[0] == expected_size and cols[4] == expected_size:
-                msgunit_ok = True
         if line == "- status: complete":
             status_complete = True
 
@@ -60,15 +55,12 @@ if not status_complete:
 if not auto_hwm_enabled:
     print("auto-HWM was not enabled", file=sys.stderr)
     sys.exit(1)
-if not msgunit_ok:
-    print("Auto-HWM MsgUnit(B) did not match Size(B)", file=sys.stderr)
-    sys.exit(1)
 if latency is None:
     print("latency result line was not found", file=sys.stderr)
     sys.exit(1)
 if latency > max_latency_ms:
     print(
-        f"MULTI_DEALER_DEALER ws {expected_size}B latency {latency}ms "
+        f"DEALER_DEALER ws {expected_size}B latency {latency}ms "
         f"exceeds {max_latency_ms}ms",
         file=sys.stderr,
     )

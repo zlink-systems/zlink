@@ -599,7 +599,7 @@ Options:
                          (default: non-stream=4, stream=4).
   --msg-sizes LIST       Comma-separated message sizes
                          (default: 64,256,1024,4096,65536,131072).
-                         MULTI_STREAM uses 64,256,1024,65536 by default;
+                         STREAM uses 64,256,1024,65536 by default;
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --part-count N         Application frame count per measured message (1 or 2; default: 2).
   --transports LIST      Comma-separated transports.
@@ -688,15 +688,7 @@ add_explicit_pattern_unique() {
 public_multi_pattern() {
   local pattern="${1:-}"
   pattern="$(printf '%s' "${pattern}" | tr '[:lower:]' '[:upper:]')"
-  if [[ -z "${pattern}" ]]; then
-    printf '%s' ""
-    return
-  fi
-  if [[ "${pattern}" == MULTI_* ]]; then
-    printf '%s' "${pattern}"
-    return
-  fi
-  printf 'MULTI_%s' "${pattern}"
+  printf '%s' "${pattern}"
 }
 
 resolve_multi_build_targets() {
@@ -751,10 +743,6 @@ expand_and_add_explicit_pattern() {
     return
   fi
 
-  if [[ "${raw}" == MULTI_* ]]; then
-    raw="${raw#MULTI_}"
-  fi
-
   case "${raw}" in
     DEALER_ROUTER)
       add_explicit_pattern_unique "DEALER_ROUTER_SENDSEND"
@@ -768,8 +756,12 @@ expand_and_add_explicit_pattern() {
     STREAMS)
       add_explicit_pattern_unique "STREAM"
       ;;
-    *)
+    DEALER_DEALER|DEALER_ROUTER_SENDSEND|ROUTER_ROUTER_SENDSEND|DEALER_ROUTER_REQREP|ROUTER_ROUTER_REQREP|PUBSUB)
       add_explicit_pattern_unique "${raw}"
+      ;;
+    *)
+      echo "Error: unsupported multi pattern: ${raw}" >&2
+      exit 1
       ;;
   esac
 }

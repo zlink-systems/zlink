@@ -202,7 +202,6 @@ def emit_auto_hwm_detail_table(
                 "rcvhwm",
                 "sndbuf_kb",
                 "rcvbuf_kb",
-                "effective_message_bytes",
                 "socket_message_slots",
             )
         )
@@ -233,7 +232,6 @@ def emit_auto_hwm_detail_table(
         ("RCVHWM", "rcvhwm"),
         ("SNDBUF(KB)", "sndbuf_kb"),
         ("RCVBUF(KB)", "rcvbuf_kb"),
-        ("MsgUnit(B)", "effective_message_bytes"),
         ("Slots", "socket_message_slots"),
     )
     widths = auto_hwm_detail_cell_widths(display_rows, columns)

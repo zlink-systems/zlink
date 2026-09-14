@@ -100,8 +100,6 @@ inline std::string normalize_multi_pattern_name (const char *pattern)
 
     std::string normalized (pattern);
     std::transform (normalized.begin (), normalized.end (), normalized.begin (), ::toupper);
-    if (normalized.compare (0, 6, "MULTI_") == 0)
-        normalized.erase (0, 6);
     return normalized;
 }
 

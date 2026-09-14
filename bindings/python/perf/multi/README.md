@@ -23,18 +23,22 @@ server and client processes without introducing a second benchmark contract.
 Canonical multi patterns are:
 
 - `DEALER_DEALER`
-- `DEALER_ROUTER_SENDSEND` (`DEALER_ROUTER` compatibility alias)
-- `ROUTER_ROUTER_SENDSEND` (`ROUTER_ROUTER` compatibility alias)
+- `DEALER_ROUTER_SENDSEND` (`DEALER_ROUTER` input alias)
+- `ROUTER_ROUTER_SENDSEND` (`ROUTER_ROUTER` input alias)
+- `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER_REQREP`
 - `PUBSUB`
 - `STREAM`
 
 Result line names emitted by the suite are:
 
-- `MULTI_DEALER_DEALER`
-- `MULTI_DEALER_ROUTER_SENDSEND`
-- `MULTI_ROUTER_ROUTER_SENDSEND`
-- `MULTI_PUBSUB`
-- `MULTI_STREAM`
+- `DEALER_DEALER`
+- `DEALER_ROUTER_SENDSEND`
+- `ROUTER_ROUTER_SENDSEND`
+- `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER_REQREP`
+- `PUBSUB`
+- `STREAM`
 
 Each pattern keeps its own server entrypoint. Client entrypoints stay explicit
 except for `STREAM`, which uses the shared core `perf_stream_client` contract
@@ -52,7 +56,7 @@ default to `1` for Python multi perf to avoid native callback threads
 contending on the GIL. Set `--io-threads 4` or `PERF_IO_THREADS=4` for an
 explicit C-baseline resource comparison.
 
-`MULTI_STREAM` uses the shared core `perf_stream_client`. Python passes a
+`STREAM` uses the shared core `perf_stream_client`. Python passes a
 stream completion wait to that client so the slower public Python stream server
 can finish in-flight replies after the active window. Override the default
 `10000` ms with `PERF_MULTI_STREAM_COMPLETION_WAIT_MS` or

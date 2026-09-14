@@ -62,7 +62,7 @@ final class PerfMultiStream {
 
     static PerfUtil.Result runClient(PerfUtil.Config config) {
         throw new UnsupportedOperationException(
-            "MULTI_STREAM uses the external raw stream client");
+            "STREAM uses the external raw stream client");
     }
 
     private static void runPullEcho(StreamSocket server,

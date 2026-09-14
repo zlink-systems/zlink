@@ -15,7 +15,7 @@
 namespace
 {
 
-static const char *k_pattern = "MULTI_PUBSUB";
+static const char *k_pattern = "PUBSUB";
 static const zlink_socket_type_t k_client_socket_type = ZLINK_SOCKET_SUB;
 static const char *k_pubsub_topic = "bench";
 

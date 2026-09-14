@@ -16,7 +16,7 @@ sys.modules[SPEC.name] = GATE
 SPEC.loader.exec_module (GATE)
 
 
-PATTERNS = ("MULTI_DEALER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_SENDSEND")
+PATTERNS = ("DEALER_ROUTER_SENDSEND", "ROUTER_ROUTER_SENDSEND")
 TRANSPORTS = ("tcp", "ws", "wss", "tls")
 
 
@@ -36,7 +36,7 @@ def measured_report (cells=None, *, metadata=None, duplicate=False):
         ])
     if duplicate:
         lines.append (
-          "RESULT,current,MULTI_DEALER_ROUTER_SENDSEND,tcp,65536,latency,1.0")
+          "RESULT,current,DEALER_ROUTER_SENDSEND,tcp,65536,latency,1.0")
     result_lines = len (lines)
     completion = {
       "success": len (values), "unsupported": 0, "skip": 0, "fail": 0,
@@ -85,27 +85,27 @@ class LatencyRssGateTests (unittest.TestCase):
     def test_complete_sendsend_and_reqrep_pass (self):
         code, output = self.run_gate (measured_report (), rss_sidecar ())
         self.assertEqual (code, 0)
-        self.assertIn ("MULTI_DEALER_ROUTER_SENDSEND | tls | 2.000000 | 2.000000", output)
-        self.assertIn ("MULTI_ROUTER_ROUTER_SENDSEND | ws | 2.000000 | 2.000000", output)
+        self.assertIn ("DEALER_ROUTER_SENDSEND | tls | 2.000000 | 2.000000", output)
+        self.assertIn ("ROUTER_ROUTER_SENDSEND | ws | 2.000000 | 2.000000", output)
         self.assertIn ("Final: PASS", output)
 
     def test_reqrep_is_optional_only_when_entire_pattern_is_absent (self):
-        pattern = "MULTI_DEALER_ROUTER_SENDSEND"
+        pattern = "DEALER_ROUTER_SENDSEND"
         report = measured_report ({(pattern, transport): 1.0 for transport in TRANSPORTS})
         sidecar = rss_sidecar ({(pattern, transport): 100.0 for transport in TRANSPORTS})
         code, output = self.run_gate (report, sidecar)
         self.assertEqual (code, 0)
-        self.assertNotIn ("MULTI_ROUTER_ROUTER_SENDSEND", output)
+        self.assertNotIn ("ROUTER_ROUTER_SENDSEND", output)
 
     def test_rejects_latency_or_rss_ratio_over_limit (self):
         latency_cells = {(pattern, transport): 1.0 for pattern in PATTERNS for transport in TRANSPORTS}
-        latency_cells[("MULTI_DEALER_ROUTER_SENDSEND", "wss")] = 3.01
+        latency_cells[("DEALER_ROUTER_SENDSEND", "wss")] = 3.01
         code, output = self.run_gate (measured_report (latency_cells), rss_sidecar ())
         self.assertEqual (code, 1)
         self.assertIn ("wss | 3.010000 | 2.000000", output)
 
         rss_cells = {(pattern, transport): 100.0 for pattern in PATTERNS for transport in TRANSPORTS}
-        rss_cells[("MULTI_DEALER_ROUTER_SENDSEND", "tls")] = 301.0
+        rss_cells[("DEALER_ROUTER_SENDSEND", "tls")] = 301.0
         code, output = self.run_gate (measured_report (), rss_sidecar (rss_cells))
         self.assertEqual (code, 1)
         self.assertIn ("tls | 2.000000 | 3.010000", output)
@@ -124,8 +124,8 @@ class LatencyRssGateTests (unittest.TestCase):
         self.assertIn ("duplicate RSS cell", output)
 
     def test_rejects_partial_optional_pattern_and_invalid_report (self):
-        values = {("MULTI_DEALER_ROUTER_SENDSEND", transport): 1.0 for transport in TRANSPORTS}
-        values[("MULTI_ROUTER_ROUTER_SENDSEND", "tcp")] = 1.0
+        values = {("DEALER_ROUTER_SENDSEND", transport): 1.0 for transport in TRANSPORTS}
+        values[("ROUTER_ROUTER_SENDSEND", "tcp")] = 1.0
         code, output = self.run_gate (measured_report (values), rss_sidecar ())
         self.assertEqual (code, 1)
         self.assertIn ("missing required latency cell", output)

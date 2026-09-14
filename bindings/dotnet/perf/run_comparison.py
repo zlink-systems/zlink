@@ -12,7 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Iterable, List, Set
+from typing import List, Set
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -21,18 +21,6 @@ DEFAULT_RESULTS_DIR = SCRIPT_DIR / "results"
 
 def _split_patterns(raw: str) -> List[str]:
     return [p.strip().upper() for p in raw.split(",") if p.strip()]
-
-
-def _detect_suite(patterns: Iterable[str]) -> str:
-    pats = list(patterns)
-    if not pats:
-        return "single"
-    is_multi = [p.startswith("MULTI_") for p in pats]
-    if all(is_multi):
-        return "multi"
-    if any(is_multi):
-        raise ValueError("cannot mix single and MULTI_* patterns")
-    return "single"
 
 
 def _snapshot_files(path: Path) -> Set[str]:
@@ -54,6 +42,7 @@ def _pick_latest_new(path: Path, before: Set[str]) -> Path | None:
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="dotnet perf compatibility runner")
     ap.add_argument("pattern")
+    ap.add_argument("--suite", choices=("single", "multi"), default="single")
     ap.add_argument("--build-dir", default="")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--pin-cpu", action="store_true")
@@ -68,11 +57,7 @@ def main(argv: List[str]) -> int:
         print("Error: pattern is required", file=sys.stderr)
         return 1
 
-    try:
-        suite = _detect_suite(patterns)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    suite = args.suite
 
     results_dir = Path(args.results_dir) if args.results_dir else DEFAULT_RESULTS_DIR
     report_dir = results_dir / suite / "report"

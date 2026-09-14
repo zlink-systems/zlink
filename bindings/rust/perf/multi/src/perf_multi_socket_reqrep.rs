@@ -27,7 +27,7 @@ pub struct ReqRepConfig {
 impl ReqRepConfig {
     pub const fn dealer_router() -> Self {
         Self {
-            pattern: "MULTI_DEALER_ROUTER_REQREP",
+            pattern: "DEALER_ROUTER_REQREP",
             router_clients: false,
             server_has_routing_id: false,
         }
@@ -35,7 +35,7 @@ impl ReqRepConfig {
 
     pub const fn router_router() -> Self {
         Self {
-            pattern: "MULTI_ROUTER_ROUTER_REQREP",
+            pattern: "ROUTER_ROUTER_REQREP",
             router_clients: true,
             server_has_routing_id: true,
         }
@@ -459,12 +459,12 @@ mod tests {
     #[test]
     fn official_configs_keep_distinct_request_roles() {
         let dealer_router = ReqRepConfig::dealer_router();
-        assert_eq!(dealer_router.pattern, "MULTI_DEALER_ROUTER_REQREP");
+        assert_eq!(dealer_router.pattern, "DEALER_ROUTER_REQREP");
         assert!(!dealer_router.router_clients);
         assert!(!dealer_router.server_has_routing_id);
 
         let router_router = ReqRepConfig::router_router();
-        assert_eq!(router_router.pattern, "MULTI_ROUTER_ROUTER_REQREP");
+        assert_eq!(router_router.pattern, "ROUTER_ROUTER_REQREP");
         assert!(router_router.router_clients);
         assert!(router_router.server_has_routing_id);
     }

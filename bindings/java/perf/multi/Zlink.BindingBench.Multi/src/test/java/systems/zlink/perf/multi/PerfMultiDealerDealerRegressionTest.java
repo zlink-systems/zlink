@@ -38,7 +38,7 @@ class PerfMultiDealerDealerRegressionTest {
         String endpoint = "tcp://127.0.0.1:" + freePort();
 
         Process server = startPerfProcess(List.of(
-            "--multi-server", "MULTI_DEALER_DEALER", "tcp", "64",
+            "--multi-server", "DEALER_DEALER", "tcp", "64",
             "--endpoint", endpoint,
             "--clients", Integer.toString(clients),
             "--duration", "1"
@@ -47,7 +47,7 @@ class PerfMultiDealerDealerRegressionTest {
         waitForOutput(server, serverOutput, "READY,", Duration.ofSeconds(10), "server ready");
 
         Process client = startPerfProcess(List.of(
-            "--multi-client", "MULTI_DEALER_DEALER", "tcp", "64",
+            "--multi-client", "DEALER_DEALER", "tcp", "64",
             "--endpoint", endpoint,
             "--clients", Integer.toString(clients),
             "--duration", "1"

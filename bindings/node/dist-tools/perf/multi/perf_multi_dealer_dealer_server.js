@@ -12,7 +12,7 @@ const { isStopToken } = require('../perf_stop_token');
 // this process, and this is on the per-message recv path. A per-message
 // `process.env` lookup puts harness instrumentation inside the measured path.
 const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
-// MULTI_DEALER_DEALER server == RECEIVER / MEASURER.
+// DEALER_DEALER server == RECEIVER / MEASURER.
 //
 // C parity: bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp
 // is the DEALER(bind,1) RECEIVER that runs the deadline-bounded receive
@@ -32,7 +32,7 @@ const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'server', 'MULTI_DEALER_DEALER');
+    applyContextPolicy(ctx, 'server', 'DEALER_DEALER');
     const server = zlink.createDealerSocket(ctx);
     const poller = zlink.createPoller();
     const payloadSize = Math.max(options.msgSize, HEADER_SIZE);
@@ -143,7 +143,7 @@ async function main() {
                 }
             }
             const result = await collector.finish();
-            for (const resultLine of summarizeMetrics('MULTI_DEALER_DEALER', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
+            for (const resultLine of summarizeMetrics('DEALER_DEALER', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs, 'multi')) {
                 console.log(resultLine);
             }
             console.log(`CLIENT_DONE,${options.msgSize}`);

@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const METRIC_MAGIC = 0x5a4c4e4b;
 const HEADER_SIZE = 29;
 const PRIMARY_METRICS = ['throughput', 'bandwidth', 'latency', 'latency_p95', 'latency_p99'];
+const { isEchoPattern } = require('./perf_pattern');
 function warnResultLine(message) {
     console.error(`warning: ${message}`);
 }
@@ -148,23 +149,12 @@ function medianMetrics(metricsList) {
         latency_p99: median(metricsList.map((item) => item.latency_p99))
     };
 }
-function isEchoPattern(pattern) {
-    return pattern === 'DEALER_ROUTER_REQREP'
-        || pattern === 'ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_DEALER_ROUTER'
-        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-        || pattern === 'MULTI_ROUTER_ROUTER'
-        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_STREAM';
-}
-function summarizeMetrics(pattern, transport, msgSize, latenciesNs, durationSeconds, libName = 'current', throughputCount = latenciesNs.length, exactLatencyMeanNs = null) {
+function summarizeMetrics(pattern, transport, msgSize, latenciesNs, durationSeconds, libName = 'current', throughputCount = latenciesNs.length, exactLatencyMeanNs = null, suite = 'single') {
     if (!Number.isFinite(throughputCount) || throughputCount <= 0
         || (latenciesNs.length === 0 && !Number.isFinite(exactLatencyMeanNs))) {
         throw new Error(`no measured messages for ${pattern} ${transport} ${msgSize}B`);
     }
-    const metrics = computeMetrics(latenciesNs, durationSeconds, msgSize, isEchoPattern(pattern) ? 2 : 1, throughputCount);
+    const metrics = computeMetrics(latenciesNs, durationSeconds, msgSize, isEchoPattern(pattern, suite) ? 2 : 1, throughputCount);
     if (Number.isFinite(exactLatencyMeanNs)) {
         metrics.latency = exactLatencyMeanNs / 1_000_000;
         if (latenciesNs.length === 0) {

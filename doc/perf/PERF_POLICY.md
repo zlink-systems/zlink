@@ -202,12 +202,12 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   한다. C 기준 perf 바이너리나 다른 언어의 perf 바이너리를 wrapper로 호출해서
   결과만 중계하는 방식은 정책 위반이며, 그 결과는 비교 대상으로 인정하지
   않는다.
-  - 예외: `MULTI_STREAM` client는 zlink binding client API를 측정하는 대상이
+  - 예외: `STREAM` client는 zlink binding client API를 측정하는 대상이
     아니라, STREAM server에 붙는 외부 raw transport peer를 재현하는 검증
     인프라다. 따라서 모든 binding perf runner는
     `bindings/c/perf/common/streamclient/perf_stream_client.cpp`에서 만든
     `perf_stream_client` 공용 바이너리를 그대로 사용할 수 있다. 이 예외는
-    `MULTI_STREAM` client에만 적용하며, `MULTI_STREAM` server는 각 binding의
+    `STREAM` client에만 적용하며, `STREAM` server는 각 binding의
     public STREAM server/packet handler surface를 통해 측정해야 한다.
 - managed runtime 바인딩(Java, .NET 등)은 size마다 프로세스를 재시작하므로,
   런타임 옵션으로 시작 비용을 최소화해야 한다.
@@ -249,7 +249,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       (호출자 소유 유지). runner가 그 소켓을 pending으로 표시했다가 poller
       `POLLOUT` readiness에서 **같은 메시지를 재제출**한다. 즉 backpressure를
       runner가 수동으로 관리한다.
-      C `MULTI_STREAM` server는 이 경로의 예외다. packet handler가 전달한 echo마다
+      C `STREAM` server는 이 경로의 예외다. packet handler가 전달한 echo마다
       public `zlink_send_async()`를 한 번 호출한다. `DONTWAIT` 선행 제출과
       `POLLOUT` pending 재제출은 사용하지 않는다. Core가 packet callback의 현재
       pipe에서 FIFO-safe한 즉시 admission을 선택하거나, pending operation으로
@@ -270,7 +270,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
     않는다. 비동기 대기는 `BACKPRESSURED`일 때만 하고 turn당 1건 pacing·완료 poll 대기는
     없앤다. app 고정 window를 두지 않으며, HWM은 send admission queue를 제한하고 reply를
     기다리는 request 수는 실제 admission과 completion 속도로 정해진다.
-    `MULTI_STREAM` 외부 raw client는 이 연속 제출 규칙의 STREAM 전용 예외다.
+    `STREAM` 외부 raw client는 이 연속 제출 규칙의 STREAM 전용 예외다.
     raw peer의 송신은 Core HWM admission을 통과하지 않으므로 연결별 unresolved
     echo를 최대 1개로 고정한다. 이 제한은 측정 대상 zlink server가 아니라 transport
     간 raw peer 조건을 동일하게 만드는 검증 인프라 계약이다.
@@ -323,7 +323,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   thread, timer, pipe/eventfd wake, `setInterval`, 양수 sleep fallback은 금지한다.
   그 밖의 busy polling도 hot path에 두면 C perf와 같은 측정 의미가 아니므로 금지한다.
 - `STREAM`은 raw callback을 제외하지만 packet handler를 정식 수신 경로로 본다.
-- `MULTI_STREAM` server는 packet handler callback마다 public async terminal을 한 번
+- `STREAM` server는 packet handler callback마다 public async terminal을 한 번
   호출한다. C는 `zlink_send_async()`를 사용한다. Core가 immediate admission 또는
   pending backpressure를 선택하므로 server는 `DONTWAIT`, `POLLOUT`, pending deque,
   timer 재제출을 구현하지 않는다. operation id `0`은 callback 없이 즉시 끝나며,
@@ -454,8 +454,8 @@ total: 29 bytes (고정)
 |-------|------|------|
 | `READY,<endpoint>` | server stdout → runner | server data endpoint bind 완료 |
 | `CLIENT_READY,<msg_size>` | client stdout → runner | client가 해당 size 실행 준비 완료 |
-| `START,<msg_size>` | runner → server/client stdin | 일반 runner barrier에서는 해당 size active 실행 시작. `MULTI_STREAM`에서는 server 준비 검증 요청과 client active 시작에 각각 사용 |
-| `SERVER_START_READY,<msg_size>` | server stdout → runner | `MULTI_STREAM` server가 target `CONNECTION_READY` 확인, context auto-HWM 재계산, connected snapshot 수집을 완료 |
+| `START,<msg_size>` | runner → server/client stdin | 일반 runner barrier에서는 해당 size active 실행 시작. `STREAM`에서는 server 준비 검증 요청과 client active 시작에 각각 사용 |
+| `SERVER_START_READY,<msg_size>` | server stdout → runner | `STREAM` server가 target `CONNECTION_READY` 확인, context auto-HWM 재계산, connected snapshot 수집을 완료 |
 | `PHASE_ACTIVE,<msg_size>` | runner stdin → client | C runner 호환용 one-way 보조 token. active gate가 아니며 benchmark process가 필수 조건으로 요구하면 안 됨 |
 | `CLIENT_DONE,<msg_size>` | client stdout → runner | client가 해당 size RESULT 출력까지 완료 |
 | `STOP` | runner stdin → server/client | 실패, timeout, 정리 요청 |
@@ -473,10 +473,10 @@ total: 29 bytes (고정)
   `START,<msg_size>`를 보낸다. 이 규칙은 suite별 패턴 표에서
   `CLIENT_READY` / `START`를 명시한 패턴에만 적용한다.
 - C 기준에서 runner `START`를 쓰지 않는 패턴에 언어별 runner가
-  `CLIENT_READY` / `START` barrier를 새로 추가하면 안 된다. `MULTI_STREAM`은
+  `CLIENT_READY` / `START` barrier를 새로 추가하면 안 된다. `STREAM`은
   아래의 공식 two-stage barrier를 사용한다.
 - 일반 runner barrier에서 `START,<msg_size>`는 active 시작 token이다.
-  `MULTI_STREAM`에서 runner가 server에 보내는 `START`는 server 준비 검증
+  `STREAM`에서 runner가 server에 보내는 `START`는 server 준비 검증
   요청이며, runner가 `SERVER_START_READY`를 확인한 뒤 client에 보내는
   `START`가 active 시작 token이다.
   C runner는 일부 one-way 경로에서 하위 호환을 위해 `PHASE_ACTIVE,<msg_size>`도
@@ -486,7 +486,7 @@ total: 29 bytes (고정)
   금지한다.
 - `STOP`은 runner orchestration 정리 명령이다. data-plane phase 종료 신호가
   필요한 패턴은 suite 정책에 정의된 wire-level stop token을 사용한다.
-- `MULTI_DEALER_ROUTER_REQREP`와 `MULTI_ROUTER_ROUTER_REQREP` client는
+- `DEALER_ROUTER_REQREP`와 `ROUTER_ROUTER_REQREP` client는
   `RESULT`와 `CLIENT_DONE`을 출력한 뒤 request completion 대상 socket을 유지한다.
   runner는 server에 `STOP`을 보내 종료를 확인한 뒤 client에 `STOP`을 보낸다.
   client는 이 `STOP`을 받은 뒤 socket을 닫고 종료한다.
@@ -521,7 +521,7 @@ total: 29 bytes (고정)
   - monitor snapshot polling
   - ad-hoc retry loop
 
-`MULTI_STREAM`은 다음 순서가 끝나기 전 active payload를 시작하지 않는다.
+`STREAM`은 다음 순서가 끝나기 전 active payload를 시작하지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -620,7 +620,7 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   `SNDHWM`, `RCVHWM` byte 값을 계산한다. 연결 수가 계획에 포함되는 multi
   패턴은 target 연결 준비가 끝난 뒤 context auto-HWM을 다시 계산하고 active를
   시작해야 한다.
-- `MULTI_STREAM` server는 target `CONNECTION_READY` 수를 확인한 뒤 context
+- `STREAM` server는 target `CONNECTION_READY` 수를 확인한 뒤 context
   auto-HWM을 다시 계산하고, 실제 connected socket snapshot을 수집해야 한다.
   C perf runner는 결과 행 뒤에 runtime snapshot에서 수집한 적용 HWM과 socket
   buffer를 `Auto-HWM detail` 표로 보여야 한다.
@@ -671,32 +671,32 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
 - `PUBSUB`
   - publisher/server는 one-way send다.
   - subscriber/client는 one-way recv다.
-- `MULTI_DEALER_ROUTER`
+- `DEALER_ROUTER`
   - 기존 send/send echo 패턴의 호환 이름이다.
-  - 새 문서와 새 구현에서는 같은 의미를 `MULTI_DEALER_ROUTER_SENDSEND` 로
+  - 새 문서와 새 구현에서는 같은 의미를 `DEALER_ROUTER_SENDSEND` 로
     부른다.
-- `MULTI_ROUTER_ROUTER`
+- `ROUTER_ROUTER`
   - 기존 send/send echo 패턴의 호환 이름이다.
-  - 새 문서와 새 구현에서는 같은 의미를 `MULTI_ROUTER_ROUTER_SENDSEND` 로
+  - 새 문서와 새 구현에서는 같은 의미를 `ROUTER_ROUTER_SENDSEND` 로
     부른다.
-- `MULTI_DEALER_ROUTER_REQREP`
+- `DEALER_ROUTER_REQREP`
   - multi suite 의 raw socket request/reply 패턴이다.
   - client(dealer requester) 는 public request API로 request를 제출하고,
     server(router replier) 는 request를 읽은 뒤 public reply API로 응답한다.
   - C client completion은 public poller `POLLCOMPLETION` 경로로 진행한다.
     다른 binding은 public async request completion을 여러 개 동시에 진행하며,
     event-loop binding은 허용된 completion-context alignment를 함께 사용할 수 있다.
-- `MULTI_ROUTER_ROUTER_REQREP`
+- `ROUTER_ROUTER_REQREP`
   - multi suite 의 route-aware raw socket request/reply 패턴이다.
   - 양쪽 모두 routing identity가 있는 socket을 사용하되, 왕복 의미는
-    `MULTI_DEALER_ROUTER_REQREP` 와 같다.
+    `DEALER_ROUTER_REQREP` 와 같다.
 - binding single의 공식 `--pattern ALL`은 `PAIR`, `PUBSUB`, `DEALER_DEALER`,
   `DEALER_ROUTER`, `ROUTER_ROUTER`, `DEALER_ROUTER_REQREP`,
   `ROUTER_ROUTER_REQREP`의 7개 패턴이다.
-- binding multi의 공식 `--pattern ALL`은 `MULTI_DEALER_DEALER`,
-  `MULTI_DEALER_ROUTER_SENDSEND`, `MULTI_ROUTER_ROUTER_SENDSEND`,
-  `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB`,
-  `MULTI_STREAM`의 7개 패턴이다.
+- binding multi의 공식 `--pattern ALL`은 `DEALER_DEALER`,
+  `DEALER_ROUTER_SENDSEND`, `ROUTER_ROUTER_SENDSEND`,
+  `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`, `PUBSUB`,
+  `STREAM`의 7개 패턴이다.
 
 ---
 
@@ -786,7 +786,7 @@ perf/                                       # bindings/<lang>/perf/
 ### 2.0.3 STREAM 소켓 테스트 모델 (공통 필수)
 
 - **STREAM 계열은 multi suite에서만 테스트한다.** single suite에서는 STREAM 소켓 테스트를 수행하지 않는다.
-- STREAM 계열(`MULTI_STREAM`)은 반드시 **zlink STREAM server(bind only)** +
+- STREAM 계열(`STREAM`)은 반드시 **zlink STREAM server(bind only)** +
   **raw transport client(connect)** 모델로 측정한다.
 - zlink STREAM 소켓의 client `connect()` 경로를 벤치마크 클라이언트로 사용하지 않는다.
 - STREAM 테스트에서 server를 DEALER/ROUTER/PUBSUB 등 non-STREAM 소켓으로 대체하면 정책 위반이며 결과는 무효다.
@@ -803,7 +803,7 @@ perf/                                       # bindings/<lang>/perf/
   수 있다. 따라서 연결당 unresolved echo는 항상 0개 또는 1개다.
 - 이 고정 규칙은 raw peer 송신이 Core HWM admission을 통과하지 않아 연속 제출 시
   TCP/TLS/WS/WSS의 OS·TLS·WebSocket buffering 차이가 서로 다른 unresolved 깊이로
-  나타나는 것을 막는 `MULTI_STREAM` 전용 예외다. 측정 대상 zlink server의 HWM과
+  나타나는 것을 막는 `STREAM` 전용 예외다. 측정 대상 zlink server의 HWM과
   backpressure 동작은 바꾸지 않는다.
 - unresolved 깊이 1은 고정값이며 CLI 옵션이나 환경 변수로 조절하지 않는다.
   active 종료 시 raw client는 새 packet 제출 경로가 닫혔음을 확인한 뒤 연결마다
@@ -815,7 +815,7 @@ perf/                                       # bindings/<lang>/perf/
   않는다.
 - 이 예외는 일반 zlink send/send echo와 request/reply에 적용하지 않는다. 해당
   패턴은 Core HWM admission backpressure까지 연속 제출하는 기존 정책을 유지한다.
-- `MULTI_STREAM`은 **packet semantics**를 측정한다. server는 `zlink_stream_packet_handler()`
+- `STREAM`은 **packet semantics**를 측정한다. server는 `zlink_stream_packet_handler()`
   를 사용해 packet 단위로 수신해야 하며, raw recv chunk 경계를 결과 의미로
   노출하면 안 된다.
 - 다만 packet semantics를 보존하는 범위의 fast path는 허용한다. 예를 들어 idle connection에서 단일 transport chunk가 이미 정확히 1개의 완전한 packet framing을 포함하면, 내부 조립 단계를 모두 반복할 필요는 없다.
@@ -875,7 +875,7 @@ packet handler delivery:
   않는다.
 - 이 프로토콜은 multi suite에 적용된다. single suite에서는 STREAM 테스트를 수행하지 않는다.
 - legacy callback-named / len32be-named STREAM 패턴은 삭제 대상이다. public
-  policy surface에서는 `STREAM` / `MULTI_STREAM`만 사용한다.
+  policy surface에서는 `STREAM` / `STREAM`만 사용한다.
 
 ### 2.1 결과 저장 규칙
 
@@ -930,11 +930,11 @@ packet handler delivery:
 bindings/c/perf/run_benchmarks.sh --pattern PAIR
 
 # C 기준 multi만 실행
-bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM
+bindings/c/perf/run_benchmarks_multi.sh --pattern STREAM
 
 # bindings 실행 (예: cpp)
 bindings/cpp/perf/run_benchmarks.sh --pattern PAIR
-bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM
+bindings/cpp/perf/run_benchmarks_multi.sh --pattern STREAM
 ```
 
 각 스크립트의 상세 옵션은
@@ -1157,7 +1157,7 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 
 ===============================================================================
 
-## PATTERN: MULTI_DEALER_DEALER (one-way)
+## PATTERN: DEALER_DEALER (one-way)
 
 ### Transport: tcp
 | Size     |       Throughput |  Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) |
@@ -1213,7 +1213,7 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 
 **Multi (runs=3):**
 ```text
-  > Benchmarking current for MULTI_DEALER_DEALER...
+  > Benchmarking current for DEALER_DEALER...
     Testing tcp | 64B,256B:
       run 1/3:
         | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) |
@@ -1252,11 +1252,11 @@ Completion 뒤에는 필요한 경우 `## Skips`, `## Failures` 순서로 요약
 - actual_result_lines: 5
 
 ## Skips
-- MULTI_STREAM: memory_guard_clients=10000
+- STREAM: memory_guard_clients=10000
 
 ## Failures
 - PAIR current ipc 64B: timeout
-- MULTI_STREAM current wss 65536B: no_data
+- STREAM current wss 65536B: no_data
 
 Saved result file: ... (status=partial)
 ```
@@ -1292,7 +1292,7 @@ Saved result file: ... (status=partial)
 |------|------|
 | CLI 옵션 | `--inflight`, `--outstanding`, `--max-in-flight` 등 inflight 깊이를 조절하는 옵션을 제공하지 않는다 |
 | 환경 변수 | `PERF_INFLIGHT`, `PERF_MULTI_INFLIGHT`, `PERF_OUTSTANDING` 등 inflight 관련 환경 변수는 **삭제 대상**이다. 구현에 존재하면 제거해야 한다 |
-| 하드코딩 flow control | 일반 zlink 경로는 `outstanding_limit`, `window_exhausted` 등 인위적 제한 없이 auto-HWM send admission backpressure를 사용한다. `MULTI_STREAM` 외부 raw client만 연결당 unresolved echo를 1개로 고정한다 |
+| 하드코딩 flow control | 일반 zlink 경로는 `outstanding_limit`, `window_exhausted` 등 인위적 제한 없이 auto-HWM send admission backpressure를 사용한다. `STREAM` 외부 raw client만 연결당 unresolved echo를 1개로 고정한다 |
 
 - **이유**: inflight 제한은 벤치마크 결과를 인위적으로 왜곡한다. 라이브러리의 실제 처리 능력을 측정해야 하며, 벤치마크 인프라가 추가 병목을 도입하면 안 된다.
 - one-way 패턴에서는 응답이 없으므로 outstanding 개념 자체가 성립하지 않는다.
@@ -1300,7 +1300,7 @@ Saved result file: ... (status=partial)
   reply를 받아야 다음 작업을 보내는 1:1 직렬화 없이 admission backpressure까지
   연속 제출한다. HWM은 send admission queue를 제한하며, reply를 기다리는 request
   수는 실제 admission과 completion 속도로 정해진다.
-- `MULTI_STREAM` 외부 raw client는 Core HWM admission이 없으므로 연결당
+- `STREAM` 외부 raw client는 Core HWM admission이 없으므로 연결당
   `outstanding`을 0 또는 1로 고정한다. 이 깊이는 CLI나 환경 변수로 노출하지
   않는다. phase 종료 timeout은 § 2.0.3의 고정 drain 절차와
   `--completion-wait-ms` 계약을 따른다. 이 예외를 STREAM server, 일반 zlink

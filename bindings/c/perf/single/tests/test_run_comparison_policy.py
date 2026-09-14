@@ -182,16 +182,14 @@ class RunComparisonPolicyTests(unittest.TestCase):
             "AUTO_HWM_DETAIL,pattern=PUBSUB,transport=tcp,component=publisher,"
             "msg_size=65536,owner=node,socket=mesh-pub,socket_type=pub,"
             "role=fanout,sndhwm=16,rcvhwm=0,effective_sndbuf=-1,"
-            "effective_rcvbuf=0,effective_message_bytes=4096,"
-            "socket_message_slots=16"
+            "effective_rcvbuf=0,socket_message_slots=16"
         )
         tls_line = pubsub_tcp_line.replace("transport=tcp", "transport=tls")
         pair_line = (
             "AUTO_HWM_DETAIL,pattern=PAIR,transport=tcp,component=sender,"
             "msg_size=65536,owner=socket,socket=sender,socket_type=pair,"
             "role=fanout,sndhwm=16,rcvhwm=0,effective_sndbuf=-1,"
-            "effective_rcvbuf=0,effective_message_bytes=4096,"
-            "socket_message_slots=16"
+            "effective_rcvbuf=0,socket_message_slots=16"
         )
         row = RC.parse_auto_hwm_detail_line(pubsub_tcp_line)
         tls_row = RC.parse_auto_hwm_detail_line(tls_line)

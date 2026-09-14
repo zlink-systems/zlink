@@ -33,6 +33,7 @@ from perf_metrics import (
     latency_ns_from_message,
     new_payload,
     parse_result_lines,
+    pattern_direction_label,
     print_result_lines,
     is_active_message,
     payload_phase,

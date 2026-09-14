@@ -20,7 +20,7 @@ namespace
 {
 
 static const char *k_pattern_env = "PUBSUB";
-static const char *k_pattern_result = "MULTI_PUBSUB";
+static const char *k_pattern_result = "PUBSUB";
 static const char *k_topic = "bench";
 static const uint32_t k_run_id = 1U;
 struct phase_config_t

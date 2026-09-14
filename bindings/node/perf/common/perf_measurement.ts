@@ -5,6 +5,7 @@
 const METRIC_MAGIC = 0x5a4c4e4b;
 const HEADER_SIZE = 29;
 const PRIMARY_METRICS = ['throughput', 'bandwidth', 'latency', 'latency_p95', 'latency_p99'];
+const { isEchoPattern } = require('./perf_pattern');
 
 function warnResultLine(message) {
   console.error(`warning: ${message}`);
@@ -172,18 +173,6 @@ function medianMetrics(metricsList) {
   };
 }
 
-function isEchoPattern(pattern) {
-  return pattern === 'DEALER_ROUTER_REQREP'
-    || pattern === 'ROUTER_ROUTER_REQREP'
-    || pattern === 'MULTI_DEALER_ROUTER'
-    || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-    || pattern === 'MULTI_ROUTER_ROUTER'
-    || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-    || pattern === 'MULTI_STREAM';
-}
-
 function summarizeMetrics(
   pattern,
   transport,
@@ -192,7 +181,8 @@ function summarizeMetrics(
   durationSeconds,
   libName = 'current',
   throughputCount = latenciesNs.length,
-  exactLatencyMeanNs = null
+  exactLatencyMeanNs = null,
+  suite = 'single'
 ) {
   if (!Number.isFinite(throughputCount) || throughputCount <= 0
       || (latenciesNs.length === 0 && !Number.isFinite(exactLatencyMeanNs))) {
@@ -202,7 +192,7 @@ function summarizeMetrics(
     latenciesNs,
     durationSeconds,
     msgSize,
-    isEchoPattern(pattern) ? 2 : 1,
+    isEchoPattern(pattern, suite) ? 2 : 1,
     throughputCount
   );
   if (Number.isFinite(exactLatencyMeanNs)) {

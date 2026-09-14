@@ -22,7 +22,7 @@ const {
 } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
-// MULTI_DEALER_DEALER client == SENDER (one DEALER socket per client).
+// DEALER_DEALER client == SENDER (one DEALER socket per client).
 //
 // C parity: bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp
 // is the SENDER. It creates one DEALER socket per client (connect),
@@ -117,7 +117,7 @@ async function runDealerDealerSendRounds({
 async function main() {
   const options = parseMultiArgs(process.argv.slice(2));
   const ctx = zlink.createContext();
-  applyContextPolicy(ctx, 'client', 'MULTI_DEALER_DEALER');
+  applyContextPolicy(ctx, 'client', 'DEALER_DEALER');
   const dealers = [];
   let rl = null;
 

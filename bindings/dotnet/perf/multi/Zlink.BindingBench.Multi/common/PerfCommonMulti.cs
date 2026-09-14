@@ -21,7 +21,7 @@ internal static partial class PerfRunner
 
     internal static string NormalizePerfPattern(string pattern)
     {
-        return PerfShared.NormalizePattern(pattern, trimMultiPrefix: true);
+        return PerfShared.NormalizePattern(pattern);
     }
 
     internal static int ResolveMultiClients(PerfOptions options)

@@ -6,7 +6,7 @@ namespace
 perf_multi_socket_reqrep::endpoint_config_t make_config ()
 {
     perf_multi_socket_reqrep::endpoint_config_t config;
-    config.pattern_name = "MULTI_ROUTER_ROUTER_REQREP";
+    config.pattern_name = "ROUTER_ROUTER_REQREP";
     config.token = "router_router_reqrep";
     config.client_socket_type = ZLINK_SOCKET_ROUTER;
     config.server_socket_type = ZLINK_SOCKET_ROUTER;

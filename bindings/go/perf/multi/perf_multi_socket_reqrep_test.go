@@ -67,7 +67,7 @@ func TestReqRepSocketsSubmitConcurrentlyAndExcludeLateReplies(t *testing.T) {
 	for i := range clients {
 		clients[i].request = func() zlink.RequestOp { return &barrierRequest{arrived: arrived, release: release} }
 	}
-	cfg := multiConfig{pattern: "MULTI_DEALER_ROUTER_REQREP", transport: "tcp", clients: count, msgSize: 64, duration: 100 * time.Millisecond}
+	cfg := multiConfig{pattern: "DEALER_ROUTER_REQREP", transport: "tcp", clients: count, msgSize: 64, duration: 100 * time.Millisecond}
 	window := activeDeadline(cfg.duration)
 	done := make(chan perfcommon.Result, 1)
 	go func() { done <- runMultiReqRepWindow(cfg, clients, window, time.Second) }()

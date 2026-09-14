@@ -107,7 +107,7 @@ public sealed class test_perf_multi_runner_contract
         Assert.True(streamClientEnd > streamClientStart);
         string streamClient = source[streamClientStart..streamClientEnd];
 
-        Assert.Contains("${pattern}\" == \"MULTI_STREAM", resolver,
+        Assert.Contains("${pattern}\" == \"STREAM", resolver,
             StringComparison.Ordinal);
         Assert.Contains("${transport}\" != \"tcp", resolver,
             StringComparison.Ordinal);
@@ -135,6 +135,52 @@ public sealed class test_perf_multi_runner_contract
             server, StringComparison.Ordinal);
         Assert.Contains("WaitConnectReadyCount(monitor, clientCount",
             server, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void multi_pattern_names_are_unprefixed_and_legacy_prefix_is_rejected()
+    {
+        string runner = RunnerPath();
+        string source = File.ReadAllText(runner);
+
+        Assert.Contains("DEALER_DEALER,DEALER_ROUTER_SENDSEND", source,
+            StringComparison.Ordinal);
+        Assert.Contains("ROUTER_ROUTER_REQREP,PUBSUB,STREAM", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("items.append(f\"MULTI_", source,
+            StringComparison.Ordinal);
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        ProcessResult result = RunRunner(
+            runner, "--pattern", "MULTI_ROUTER_ROUTER", "--duration", "2");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("unsupported multi pattern: MULTI_ROUTER_ROUTER",
+            result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet build", result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void compatibility_runner_uses_explicit_suite_context()
+    {
+        string adapter = File.ReadAllText(CompatibilityRunnerPath());
+        string singleAdapter = File.ReadAllText(SuiteCompatibilityRunnerPath(
+            "single"));
+        string multiAdapter = File.ReadAllText(SuiteCompatibilityRunnerPath(
+            "multi"));
+
+        Assert.Contains("ap.add_argument(\"--suite\"", adapter,
+            StringComparison.Ordinal);
+        Assert.Contains("suite = args.suite", adapter,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("startswith(\"MULTI_\")", adapter,
+            StringComparison.Ordinal);
+        Assert.Contains("\"--suite\", \"single\"", singleAdapter,
+            StringComparison.Ordinal);
+        Assert.Contains("\"--suite\", \"multi\"", multiAdapter,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -220,6 +266,19 @@ public sealed class test_perf_multi_runner_contract
         Path.GetFullPath(Path.Combine(
             Path.GetDirectoryName(file)!, "..", "..", "perf", "multi",
             "Zlink.BindingBench.Multi", "src", "PerfMultiSocketReqRep.cs"));
+
+    private static string CompatibilityRunnerPath(
+        [CallerFilePath] string file = "") =>
+        Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(file)!, "..", "..", "perf",
+            "run_comparison.py"));
+
+    private static string SuiteCompatibilityRunnerPath(
+        string suite,
+        [CallerFilePath] string file = "") =>
+        Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(file)!, "..", "..", "perf", suite,
+            "run_comparison.py"));
 
     private static string StreamServerSourcePath(
         [CallerFilePath] string file = "") =>

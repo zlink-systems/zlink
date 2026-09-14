@@ -790,13 +790,13 @@ pub struct PhaseResult {
 
 fn bandwidth_multiplier(pattern: &str) -> f64 {
     match pattern {
-        "MULTI_DEALER_ROUTER"
-        | "MULTI_DEALER_ROUTER_SENDSEND"
-        | "MULTI_DEALER_ROUTER_REQREP"
-        | "MULTI_ROUTER_ROUTER"
-        | "MULTI_ROUTER_ROUTER_SENDSEND"
-        | "MULTI_ROUTER_ROUTER_REQREP"
-        | "MULTI_STREAM" => 2.0,
+        "DEALER_ROUTER"
+        | "DEALER_ROUTER_SENDSEND"
+        | "DEALER_ROUTER_REQREP"
+        | "ROUTER_ROUTER"
+        | "ROUTER_ROUTER_SENDSEND"
+        | "ROUTER_ROUTER_REQREP"
+        | "STREAM" => 2.0,
         _ => 1.0,
     }
 }
@@ -1783,10 +1783,7 @@ mod tests {
             p95_ns: 1.0,
             p99_ns: 1.0,
         };
-        for pattern in [
-            "MULTI_DEALER_ROUTER_SENDSEND",
-            "MULTI_ROUTER_ROUTER_SENDSEND",
-        ] {
+        for pattern in ["DEALER_ROUTER_SENDSEND", "ROUTER_ROUTER_SENDSEND"] {
             let result = build_phase_result(pattern, 100, 2, &stats);
             assert_eq!(result.throughput, 5.0);
             assert_eq!(result.bandwidth, 0.001);

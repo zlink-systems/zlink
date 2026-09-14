@@ -14,7 +14,7 @@ trap 'rm -f "${log_file}"' EXIT
 set +e
 PERF_FAIL_FAST=1 \
 "${RUNNER}" \
-  --pattern MULTI_PUBSUB \
+  --pattern PUBSUB \
   --transports tcp \
   --msg-sizes "${size}" \
   --duration "${duration}" \

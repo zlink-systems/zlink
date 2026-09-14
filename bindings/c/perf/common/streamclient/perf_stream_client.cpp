@@ -30,7 +30,7 @@ static int perf_stream_client_run (int argc, char **argv)
 
 int main (int argc, char **argv)
 {
-    if (!multi_perf_validate_recv_mode_for_pattern ("MULTI_STREAM"))
+    if (!multi_perf_validate_recv_mode_for_pattern ("STREAM"))
         return 1;
     return perf_stream_client_run (argc, argv);
 }

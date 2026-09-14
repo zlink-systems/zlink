@@ -6,7 +6,7 @@
 set -euo pipefail
 prefix="${1:?prefix}"; tag="${2:-sec174}"
 export ZLINK_CORE_SOURCE=release ZLINK_CORE_PACKAGE_PREFIX="${prefix}"
-pats=MULTI_DEALER_DEALER,MULTI_PUBSUB,MULTI_DEALER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_REQREP
+pats=DEALER_DEALER,PUBSUB,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP
 common="--pattern ${pats} --transports tls,ws,wss --msg-sizes 64,256,1024,4096,65536 --duration 5 --runs 1 --reuse-build --results-tag ${tag}"
 runner() { case "$1" in dotnet|java|node|python) echo "bindings/$1/perf/multi/run_benchmarks.sh";; *) echo "bindings/$1/perf/run_benchmarks_multi.sh";; esac; }
 for lang in c cpp dotnet java node go rust python; do

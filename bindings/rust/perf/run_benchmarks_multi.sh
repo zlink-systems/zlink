@@ -151,7 +151,11 @@ Usage: bindings/rust/perf/run_benchmarks_multi.sh [options]
 
 Options:
   -h, --help
-  --pattern NAME
+  --pattern NAME        Pattern list (comma-separated) or ALL. Accepted names:
+                        DEALER_DEALER, DEALER_ROUTER, DEALER_ROUTER_SENDSEND,
+                        DEALER_ROUTER_REQREP, ROUTER_ROUTER,
+                        ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP, PUBSUB,
+                        STREAM.
   --duration N
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
@@ -193,7 +197,7 @@ Options:
   --core-version VERSION  Download and use the specified released Core version.
 
 Notes:
-  - MULTI_STREAM uses the shared perf_stream_client required by policy.
+  - STREAM uses the shared perf_stream_client required by policy.
   - by default the current workspace Core (core/build) is used; pass --core-version
     to fetch and use a released Core runtime instead.
 EOF
@@ -459,7 +463,7 @@ normalize_patterns() {
     local raw="${1:-ALL}"
     raw="${raw^^}"
     if [[ "${raw}" == "ALL" ]]; then
-        printf '%s\n' "MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM"
+        printf '%s\n' "DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
         return
     fi
 
@@ -469,25 +473,24 @@ normalize_patterns() {
     for token in "${raw_items[@]}"; do
         value="${token//[[:space:]]/}"
         [[ -n "${value}" ]] || continue
-        value="${value#MULTI_}"
         if [[ "${value}" == "STREAMS" ]]; then
             value="STREAM"
         fi
         case "${value}" in
             DEALER_ROUTER|DEALER_ROUTER_SENDSEND)
-                items+=("MULTI_DEALER_ROUTER_SENDSEND")
+                items+=("DEALER_ROUTER_SENDSEND")
                 ;;
             DEALER_ROUTER_REQREP)
-                items+=("MULTI_DEALER_ROUTER_REQREP")
+                items+=("DEALER_ROUTER_REQREP")
                 ;;
             ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
-                items+=("MULTI_ROUTER_ROUTER_SENDSEND")
+                items+=("ROUTER_ROUTER_SENDSEND")
                 ;;
             ROUTER_ROUTER_REQREP)
-                items+=("MULTI_ROUTER_ROUTER_REQREP")
+                items+=("ROUTER_ROUTER_REQREP")
                 ;;
             DEALER_DEALER|PUBSUB|STREAM)
-                items+=("MULTI_${value}")
+                items+=("${value}")
                 ;;
             *)
                 echo "unsupported multi pattern: ${value}" >&2
@@ -510,7 +513,7 @@ default_msg_sizes_for_pattern() {
         return
     fi
     case "${pattern}" in
-        MULTI_STREAM)
+        STREAM)
             printf '%s' "${PERF_MULTI_STREAM_MSG_SIZES:-${PERF_STREAM_MSG_SIZES:-64,256,1024,65536}}"
             ;;
         *)
@@ -616,7 +619,7 @@ fi
 
 PATTERN="$(normalize_patterns "${PATTERN}")"
 IFS=',' read -ra PATTERNS <<< "${PATTERN}"
-if printf '%s\n' "${PATTERNS[@]}" | grep -qx 'MULTI_STREAM'; then
+if printf '%s\n' "${PATTERNS[@]}" | grep -qx 'STREAM'; then
     ensure_shared_stream_client
 fi
 
@@ -749,7 +752,7 @@ resolve_client_timeout_seconds() {
         return
     fi
 
-    if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+    if [[ "${pattern}" == "STREAM" ]]; then
         timeout_seconds=$(( duration * 3 + 20 ))
         if (( timeout_seconds < 45 )); then
             timeout_seconds=45
@@ -758,7 +761,7 @@ resolve_client_timeout_seconds() {
         return
     fi
 
-    if { [[ "${pattern}" == "MULTI_PUBSUB" ]] && (( size >= 65536 )); } \
+    if { [[ "${pattern}" == "PUBSUB" ]] && (( size >= 65536 )); } \
         || { [[ "${transport}" == "tls" || "${transport}" == "wss" ]] && (( size >= 131072 )); }; then
         timeout_seconds=$(( duration * 6 + 30 ))
         if (( timeout_seconds < 90 )); then
@@ -789,7 +792,7 @@ for run in $(seq 1 "${RUNS}"); do
         IFS=',' read -ra SIZE_LIST <<< "$(default_msg_sizes_for_pattern "${pat}")"
         PATTERN_CLIENTS="${CLIENTS}"
         if [[ "${EXPLICIT_CLIENTS}" != "1" ]]; then
-            if [[ "${pat}" == "MULTI_STREAM" ]]; then
+            if [[ "${pat}" == "STREAM" ]]; then
                 PATTERN_CLIENTS="${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
             else
                 PATTERN_CLIENTS="${EFFECTIVE_DEFAULT_CLIENTS}"
@@ -799,25 +802,25 @@ for run in $(seq 1 "${RUNS}"); do
         SERVER_BIN=""
         CLIENT_BIN=""
         case "${pat}" in
-            MULTI_DEALER_DEALER)
+            DEALER_DEALER)
                 SERVER_BIN="${BIN_DIR}/perf_multi_dealer_dealer_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_dealer_client" ;;
-            MULTI_DEALER_ROUTER_SENDSEND)
+            DEALER_ROUTER_SENDSEND)
                 SERVER_BIN="${BIN_DIR}/perf_multi_dealer_router_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_router_client" ;;
-            MULTI_DEALER_ROUTER_REQREP)
+            DEALER_ROUTER_REQREP)
                 SERVER_BIN="${BIN_DIR}/perf_multi_dealer_router_reqrep_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_dealer_router_reqrep_client" ;;
-            MULTI_PUBSUB)
+            PUBSUB)
                 SERVER_BIN="${BIN_DIR}/perf_multi_pubsub_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_pubsub_client" ;;
-            MULTI_ROUTER_ROUTER_SENDSEND)
+            ROUTER_ROUTER_SENDSEND)
                 SERVER_BIN="${BIN_DIR}/perf_multi_router_router_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_router_router_client" ;;
-            MULTI_ROUTER_ROUTER_REQREP)
+            ROUTER_ROUTER_REQREP)
                 SERVER_BIN="${BIN_DIR}/perf_multi_router_router_reqrep_server"
                 CLIENT_BIN="${BIN_DIR}/perf_multi_router_router_reqrep_client" ;;
-            MULTI_STREAM)
+            STREAM)
                 SERVER_BIN="${BIN_DIR}/perf_multi_stream_server"
                 CLIENT_BIN="" ;;
             *)
@@ -839,7 +842,7 @@ for run in $(seq 1 "${RUNS}"); do
             case "${transport}" in
                 tcp|tls|ws|wss) ;;
                 ipc)
-                    if [[ "${pat}" == "MULTI_STREAM" ]] || is_control_plane_pattern "${pat}" \
+                    if [[ "${pat}" == "STREAM" ]] || is_control_plane_pattern "${pat}" \
                         || [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
                         continue
                     fi
@@ -852,7 +855,7 @@ for run in $(seq 1 "${RUNS}"); do
                     break
                 fi
                 CASE_CLIENTS="${PATTERN_CLIENTS}"
-                if [[ "${pat}" == "MULTI_STREAM" && "${transport}" != "tcp" ]]; then
+                if [[ "${pat}" == "STREAM" && "${transport}" != "tcp" ]]; then
                     STREAM_NON_TCP_CLIENTS_MAX="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
                     if [[ "${CASE_CLIENTS}" =~ ^[0-9]+$ && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
                           && "${CASE_CLIENTS}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
@@ -873,7 +876,7 @@ for run in $(seq 1 "${RUNS}"); do
                 CLIENT_TIMEOUT_SECONDS="$(resolve_client_timeout_seconds "${pat}" "${transport}" "${size}" "${DURATION}")"
                 export PERF_MULTI_CLIENTS="${CASE_CLIENTS}"
                 pattern_default_io_threads="$(default_io_threads_for_pattern "${pat}")"
-                if [[ "${pat}" == "MULTI_STREAM" ]]; then
+                if [[ "${pat}" == "STREAM" ]]; then
                     pattern_server_io_threads="${ENV_MULTI_STREAM_SERVER_IO_THREADS:-${ENV_MULTI_SERVER_IO_THREADS:-${pattern_default_io_threads}}}"
                     pattern_client_io_threads="${ENV_MULTI_STREAM_CLIENT_IO_THREADS:-${ENV_MULTI_CLIENT_IO_THREADS:-${pattern_default_io_threads}}}"
                 else
@@ -882,7 +885,6 @@ for run in $(seq 1 "${RUNS}"); do
                 fi
                 export PERF_MULTI_SERVER_IO_THREADS="${SERVER_IO_THREADS:-${COMMON_IO_THREADS:-${ENV_PERF_IO_THREADS:-${pattern_server_io_threads}}}}"
                 export PERF_MULTI_CLIENT_IO_THREADS="${CLIENT_IO_THREADS:-${COMMON_IO_THREADS:-${ENV_PERF_IO_THREADS:-${pattern_client_io_threads}}}}"
-                export PERF_MULTI_MSG_UNIT_BYTES="${size}"
                 unset PERF_MULTI_HWM PERF_MULTI_SNDHWM PERF_MULTI_RCVHWM
                 if [[ -n "${HWM}" || -n "${ENV_MULTI_HWM}" ]]; then
                     export PERF_MULTI_HWM="${HWM:-${ENV_MULTI_HWM}}"
@@ -893,7 +895,7 @@ for run in $(seq 1 "${RUNS}"); do
                 if [[ -n "${RECV_HWM}" || -n "${ENV_MULTI_RCVHWM}" ]]; then
                     export PERF_MULTI_RCVHWM="${RECV_HWM:-${ENV_MULTI_RCVHWM}}"
                 fi
-                if [[ "${pat}" == "MULTI_STREAM" ]]; then
+                if [[ "${pat}" == "STREAM" ]]; then
                     export PERF_RECV_MODE="recv"
                     export PERF_DURATION_SECONDS="${DURATION}"
                 fi
@@ -939,7 +941,7 @@ for run in $(seq 1 "${RUNS}"); do
 
                 CONTROL_ENDPOINT=""
 
-                if [[ "${pat}" == "MULTI_DEALER_DEALER" || "${pat}" == "MULTI_PUBSUB" ]]; then
+                if [[ "${pat}" == "DEALER_DEALER" || "${pat}" == "PUBSUB" ]]; then
                     CLIENT_OUT="$(mktemp)"
                     CLIENT_ERR="$(mktemp)"
                     CLIENT_FIFO="$(mktemp -u)"
@@ -988,7 +990,7 @@ for run in $(seq 1 "${RUNS}"); do
                         CLIENT_OUTPUT+="$(cat "${CLIENT_ERR}")"
                     fi
                     rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
-                elif [[ "${pat}" == "MULTI_STREAM" ]]; then
+                elif [[ "${pat}" == "STREAM" ]]; then
                     CLIENT_OUT="$(mktemp)"
                     CLIENT_ERR="$(mktemp)"
                     CLIENT_FIFO="$(mktemp -u)"
@@ -1054,8 +1056,8 @@ for run in $(seq 1 "${RUNS}"); do
                         CLIENT_OUTPUT+="$(cat "${CLIENT_ERR}")"
                     fi
                     rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
-                elif [[ "${pat}" == "MULTI_DEALER_ROUTER_REQREP" \
-                     || "${pat}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+                elif [[ "${pat}" == "DEALER_ROUTER_REQREP" \
+                     || "${pat}" == "ROUTER_ROUTER_REQREP" ]]; then
                     # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486:
                     # CLIENT_DONE ends measurement, the runner stops the server
                     # and confirms its exit, and only then sends STOP to the
@@ -1197,7 +1199,7 @@ if [[ "${EXPLICIT_CLIENTS}" != "1" ]]; then
     has_stream=0
     all_stream=1
     for pat in "${PATTERNS[@]}"; do
-        if [[ "${pat}" == "MULTI_STREAM" ]]; then
+        if [[ "${pat}" == "STREAM" ]]; then
             has_stream=1
         else
             all_stream=0
@@ -1216,14 +1218,14 @@ if [[ "${EXPLICIT_MSG_SIZES}" != "1" ]]; then
     has_stream=0
     all_stream=1
     for pat in "${PATTERNS[@]}"; do
-        if [[ "${pat}" == "MULTI_STREAM" ]]; then
+        if [[ "${pat}" == "STREAM" ]]; then
             has_stream=1
         else
             all_stream=0
         fi
     done
     if [[ "${all_stream}" == "1" && "${has_stream}" == "1" ]]; then
-        REPORT_MSG_SIZES="$(default_msg_sizes_for_pattern "MULTI_STREAM")"
+        REPORT_MSG_SIZES="$(default_msg_sizes_for_pattern "STREAM")"
     fi
 fi
 python3 "${PERF_REPORT_PY}" render-multi \

@@ -9,13 +9,16 @@ const strict_1 = __importDefault(require("node:assert/strict"));
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
-const { parseCommonArgs } = require('../perf/common/perf_args');
+const { parseCommonArgs, resolveMultiPatternNames } = require('../perf/common/perf_args');
+const { isEchoPattern } = require('../perf/common/perf_pattern');
 const packageRoot = node_path_1.default.resolve(__dirname, '../..');
 const multiRunner = node_path_1.default.join(packageRoot, 'perf/multi/run_benchmarks.sh');
 const multiSource = node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'perf/multi/run_benchmarks.ts'), 'utf8');
 const multiShell = node_fs_1.default.readFileSync(multiRunner, 'utf8');
 const singleSource = node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'perf/single/run_benchmarks.ts'), 'utf8');
 const singleShell = node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'perf/single/run_benchmarks.sh'), 'utf8');
+const perfReadme = node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'perf/README.md'), 'utf8');
+const packageReadme = node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'README.md'), 'utf8');
 const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.join(packageRoot, 'package.json'), 'utf8'));
 const defaults = {
     pattern: 'ALL',
@@ -37,6 +40,34 @@ const defaults = {
     strict_1.default.equal(options.ioThreads, 3);
     strict_1.default.equal(options.serverIoThreads, 5);
     strict_1.default.equal(options.clientIoThreads, 7);
+});
+(0, node_test_1.default)('multi runner uses unprefixed pattern names and rejects legacy names', () => {
+    strict_1.default.deepEqual(resolveMultiPatternNames('ALL'), [
+        'DEALER_DEALER',
+        'DEALER_ROUTER_SENDSEND',
+        'DEALER_ROUTER_REQREP',
+        'ROUTER_ROUTER_SENDSEND',
+        'ROUTER_ROUTER_REQREP',
+        'PUBSUB',
+        'STREAM'
+    ]);
+    strict_1.default.deepEqual(resolveMultiPatternNames('dealer_router,router_router'), [
+        'DEALER_ROUTER_SENDSEND',
+        'ROUTER_ROUTER_SENDSEND'
+    ]);
+    strict_1.default.throws(() => resolveMultiPatternNames('MULTI_ROUTER_ROUTER'), /unsupported multi pattern: MULTI_ROUTER_ROUTER/);
+    strict_1.default.match(multiSource, /const supportedPatterns = MULTI_PATTERN_NAMES\.join\(', '\)/);
+    for (const patternName of resolveMultiPatternNames('ALL')) {
+        strict_1.default.ok(perfReadme.includes(`  - \`${patternName}\``));
+    }
+    strict_1.default.doesNotMatch(perfReadme, /  - `MULTI_[A-Z_]+`/);
+    strict_1.default.doesNotMatch(packageReadme, /  - `MULTI_[A-Z_]+`/);
+});
+(0, node_test_1.default)('shared pattern classification requires explicit multi context', () => {
+    strict_1.default.equal(isEchoPattern('ROUTER_ROUTER', 'single'), false);
+    strict_1.default.equal(isEchoPattern('ROUTER_ROUTER', 'multi'), true);
+    strict_1.default.equal(isEchoPattern('STREAM', 'single'), false);
+    strict_1.default.equal(isEchoPattern('STREAM', 'multi'), true);
 });
 (0, node_test_1.default)('Node perf rejects build-dir instead of consuming and ignoring it', () => {
     const expected = /--build-dir is not supported by the Node perf runner/;

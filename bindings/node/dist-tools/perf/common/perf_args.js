@@ -7,6 +7,16 @@ const STREAM_MSG_SIZES = [64, 256, 1024, 65536];
 const MULTI_MSG_SIZES = [64, 256, 1024, 4096, 65536, 131072];
 const DEFAULT_SINGLE_TRANSPORTS = ['tcp', 'tls', 'ws', 'wss', 'inproc', 'ipc'];
 const DEFAULT_MULTI_TRANSPORTS = ['tcp', 'tls', 'ws', 'wss'];
+const MULTI_PATTERN_NAMES = [
+    'DEALER_DEALER',
+    'DEALER_ROUTER_SENDSEND',
+    'DEALER_ROUTER_REQREP',
+    'ROUTER_ROUTER_SENDSEND',
+    'ROUTER_ROUTER_REQREP',
+    'PUBSUB',
+    'STREAM'
+];
+const MULTI_PATTERN_NAME_SET = new Set(MULTI_PATTERN_NAMES);
 function integerEnv(name, fallback) {
     const raw = process.env[name];
     if (raw === undefined || raw === '') {
@@ -228,30 +238,25 @@ function resolveSinglePatternNames(pattern) {
 }
 function normalizeMultiPatternName(pattern) {
     const upper = pattern.trim().toUpperCase();
-    const normalized = upper.startsWith('MULTI_')
-        ? upper
-        : (upper === 'STREAM' ? 'MULTI_STREAM' : `MULTI_${upper}`);
-    if (normalized === 'MULTI_DEALER_ROUTER') {
-        return 'MULTI_DEALER_ROUTER_SENDSEND';
+    if (upper === 'DEALER_ROUTER') {
+        return 'DEALER_ROUTER_SENDSEND';
     }
-    if (normalized === 'MULTI_ROUTER_ROUTER') {
-        return 'MULTI_ROUTER_ROUTER_SENDSEND';
+    if (upper === 'ROUTER_ROUTER') {
+        return 'ROUTER_ROUTER_SENDSEND';
     }
-    return normalized;
+    return upper;
 }
 function resolveMultiPatternNames(pattern) {
     const normalized = String(pattern || 'ALL').trim().toUpperCase();
-    return normalized === 'ALL'
-        ? [
-            'MULTI_DEALER_DEALER',
-            'MULTI_DEALER_ROUTER_SENDSEND',
-            'MULTI_DEALER_ROUTER_REQREP',
-            'MULTI_ROUTER_ROUTER_SENDSEND',
-            'MULTI_ROUTER_ROUTER_REQREP',
-            'MULTI_PUBSUB',
-            'MULTI_STREAM'
-        ]
+    const patterns = normalized === 'ALL'
+        ? MULTI_PATTERN_NAMES.slice()
         : normalized.split(',').map(normalizeMultiPatternName).filter(Boolean);
+    for (const patternName of patterns) {
+        if (!MULTI_PATTERN_NAME_SET.has(patternName)) {
+            throw new Error(`unsupported multi pattern: ${patternName}`);
+        }
+    }
+    return patterns;
 }
 function defaultSingleMsgSizes() {
     return parseSizeList(process.env.PERF_MSG_SIZES, STANDARD_MSG_SIZES.slice());
@@ -263,7 +268,7 @@ function defaultMultiMsgSizes(patternNames, explicitMsgSizes) {
     const envSizes = process.env.PERF_MSG_SIZES;
     const envStreamSizes = process.env.PERF_MULTI_STREAM_MSG_SIZES || process.env.PERF_STREAM_MSG_SIZES;
     const onlyStream = patternNames.length > 0
-        && patternNames.every((name) => name === 'MULTI_STREAM');
+        && patternNames.every((name) => name === 'STREAM');
     if (onlyStream && envStreamSizes) {
         return parseSizeList(envStreamSizes, STREAM_MSG_SIZES.slice());
     }
@@ -286,6 +291,7 @@ module.exports = {
     DEFAULT_SINGLE_TRANSPORTS,
     MIN_MSG_SIZE,
     MULTI_MSG_SIZES,
+    MULTI_PATTERN_NAMES,
     STANDARD_MSG_SIZES,
     STREAM_MSG_SIZES,
     defaultMultiMsgSizes,
