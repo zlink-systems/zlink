@@ -28,6 +28,10 @@ Core-like 단계도 매번 typed `BenchPayload`를 protobuf로 직렬화·역직
 Codec 단계에서 추가하는 것은 Framework serializer 선택·호출 경계이며 protobuf 자체가 아니다.
 다른 언어의 기준을 bare payload 전송으로 바꾸면 비교 대상의 작업이 달라지므로 사용하지 않는다.
 
+사용자 요청에 따라 다음 새 측정부터 warmup 2초·active 5초·runs 1회로 실행한다.
+이미 완료된 3초/10초 결과는 보존한다. Runner는 새 실행의 실제 설정을 검증하고,
+비교 대상의 측정 시간도 함께 기록한다. 서로 다른 측정 시간의 결과를 동일 조건으로 표기하지 않는다.
+
 유효성 조건은 client/server errors 0, abandoned 0, drain bound 미도달,
 최종 서버 수신 수와 제출 수 일치다. Request는 완료 수도 제출 수와 같아야 한다.
 실패한 실행은 처리량 비교에서 제외한다. 단일 실행의 수 퍼센트 차이는
@@ -499,6 +503,7 @@ Level 0은 이전 mailbox 단계, 1은 독립 Received/reply context, 2는 host 
 | + Host permit | 6,892.3 (−8.9%) | 154,395.3 (7.5%) | 386,510.0 (0.4%) |
 | Permit static callback 최적화 | 6,752.2 (2.0%) | 164,184.7 (−6.3%) | 417,300.3 (−8.0%) |
 | + Worker 전달 — 원인 조사 중 | 5,898.4 (12.6%) | 16,299.4 (90.1%) | 314,568.9 (24.6%) |
+| 전용 수신 작업 분리 — 진단, 채택 보류 | 5,717.6 (3.1%) | 17,444.2 (−7.0%) | 266,625.7 (15.2%) |
 
 수신/reply 소유권 단계는 수신마다 `Received.Create()`를 사용한다. Request reply callback은
 기존 `MeshReceiveRecord`에 보관하고, reply parts는 그 callback을 통해 기존 binding operation으로
@@ -530,6 +535,32 @@ Worker 단계는 이미 준비된 record만 기존 mailbox에서 꺼내며 수�
 실제 Framework 전체 dispatch 비용이나 네 언어의 공통 worker 비용으로 일반화하지 않는다.
 이 진단 코드를 production worker 구현으로 이식하지 않는다. 종료 시 producer·worker를 모두
 정리한 뒤 mailbox와 host queue를 해제해야 하며, permit은 body 해석 후 handler 시작 전에 반환한다.
+
+전용 수신 작업 분리는 worker 기능·native/binding/Framework/codec DLL을 그대로 유지하고,
+producer 실행과 permit 완료 대기만 compile-time으로 변경한 원인 분리다. Pending permit을
+비동기로 기다린 뒤 ThreadPool로 이동하지 않도록 전용 작업 안에서 완료까지 기다린다.
+관련 unit 테스트 81개와 실제 socket의 idle 취소·malformed wire·worker decode 오류 검증 3개가
+통과했다. 오류 검증은 정확한 예외 종류를 확인하고 모든 worker/producer 종료와 permit·pending byte
+반환을 검사한다. 세 live 패턴도 오류·누락·drain 검사를 통과했다.
+
+이 마지막 비교는 설정 변경 요청 당시 이미 실행 중이어서 warmup 3초·active 10초로 완료했다.
+Backpressure 평균 지연은 약 834 ms, p99는 약 1,064 ms다. 전용 producer만으로 큰 손실이
+회복되지 않았으므로 이 변경을 성능 해결책으로 채택하지 않는다. Worker의 동기 lane
+대기와 scheduler 의존성을 다음 조사 대상으로 남긴다. 원자료는
+`worker-dedicated-ingress/summary.json`, `fixed-worker-dedicated-ingress/*/results.json` 및
+`build.log`, `shared-build.log`, `tests.log`, `lifecycle.log`다. 실제 production ingress의 I0 계약을
+모두 구현한 변경으로 해석하지 않는다.
+
+| 마지막 진단 패턴 | Bandwidth MB/s | Source CPU % | Target CPU % | Source memory MB | Target memory MB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| request-serial | 23.42 | 3.28 | 4.06 | 122.96 | 474.38 |
+| request-backpressure | 71.45 | 5.31 | 2.02 | 190.29 | 542.58 |
+| send-saturation | 1,092.10 | 20.89 | 14.63 | 132.36 | 599.32 |
+
+값은 해당 `results.json`의 CPU·memory·bandwidth 필드다. Bandwidth는 처리량 × 4,096 / 1,000,000인
+application payload 기준이며, request에서는 응답 4 KB, send에서는 전송 4 KB만 센다.
+64 B 요청과 wire header·transport overhead를 포함한 실제 NIC 전송량이 아니다.
+CPU %는 전체 논리 CPU 용량 기준이며 memory는 report의 프로세스 측정값이지 메시지당 할당량이 아니다.
 
 ### 네 언어 단계 정렬
 
