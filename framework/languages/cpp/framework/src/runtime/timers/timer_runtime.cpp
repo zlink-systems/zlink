@@ -487,7 +487,6 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
     auto reset_running = [context, state] {
         bool post_pending = false;
         std::uint64_t pending_fire_count = 0;
-        context->leave_callback ();
         {
             std::lock_guard lock (state->mutex);
             state->running = false;
@@ -497,6 +496,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
             state->pending_fire_count = 0;
         }
         complete_cancel_if_ready (state);
+        context->leave_callback ();
         if (post_pending) {
             timer_runtime_t::post_fire_count (context, state, state->serial_queue,
                                               pending_fire_count);
