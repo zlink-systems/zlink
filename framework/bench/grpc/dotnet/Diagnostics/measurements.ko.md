@@ -585,6 +585,46 @@ Java/Kotlin의 executor와 C++의 coroutine completion driver에는 같은 Threa
 값은 기존 runner의 server CPU % × 논리 core 수 × 10,000 / 처리량으로 계산한다.
 Backpressure 처리량 증가와 CPU 비용 증가가 함께 관측됐으므로 CPU 비용 감소로 설명하지 않는다.
 
+#### Mailbox 전달 경로 분리 — Channel 진단
+
+기존 global queue driver와 동일한 Framework·native·codec DLL을 사용하고,
+Mailbox의 enqueue·claim·drain·ready signal만 test-only BCL Channel로 교체했다.
+Codec·Envelope·Wire·독립 Received/reply context·host permit·전용 수신 작업과
+다른 thread에서 처리하는 worker는 유지한다. Production Mailbox 대체 구현은 아니다.
+두 실행 모두 warmup 2초·active 5초·runs=1이다.
+
+| 패턴 | Global queue 기준 | Channel 처리량(직전 대비 감소율) | Server CPU µs/message: 기준 → Channel |
+| --- | ---: | ---: | ---: |
+| request-serial | 5,640.2 | 5,782.2 (−2.5%) | 136.52 → 123.14 |
+| request-backpressure | 18,525.0 | 19,217.2 (−3.7%) | 27.75 → 25.91 |
+| send-saturation | 269,106.0 | 187,388.4 (30.4%) | 10.52 → 12.23 |
+
+단위는 message/s다. Backpressure의 관측된 개선과 worker 추가 전 164,184.7 수준의
+미회복을 구분한다. Mailbox/StateLane 전달 경로만 제거해 큰 손실이 회복된다는 가설은
+이 결과로 지지되지 않지만, 유지한 host permit·cross-thread reply 등의 어느 하나가
+주원인이라고 확정할 수도 없다. Send 손실이 커서 Runtime 대체안으로 채택하지 않는다.
+
+| Channel 패턴 | Bandwidth MB/s | Source / Target CPU % | Source / Target RSS MiB |
+| --- | ---: | ---: | ---: |
+| request-serial | 23.68 | 3.51 / 3.56 | 121.60 / 400.99 |
+| request-backpressure | 78.71 | 5.54 / 2.49 | 174.57 / 551.55 |
+| send-saturation | 767.54 | 14.28 / 11.46 | 130.13 / 991.45 |
+
+Count snapshot으로 이미 queued인 FIFO prefix 최대 64개만 기존 batch로 이동하며,
+추가 수신을 기다리지 않는다. 기존 host permit만 capacity를 소유한다. Publication 전에
+queued byte credit을 늘리고 dequeue·거부·종료 정리에서 한 번 반환한다. 최초 terminal에서
+수신 작업과 worker를 취소·join한 뒤 남은 owner와 permit을 정리한다.
+관련 테스트 83개와 실제 socket lifecycle 검사 3개가 통과했고, semantic fidelity가 일치한다.
+세 live 패턴의 오류·누락·abandoned는 0이고 drain bound에 도달하지 않았다.
+Request 제출·완료·수신 수는 serial 28,911, backpressure 96,086으로 각각 일치한다.
+Send 제출·최종 수신은 943,989이며 active 완료는 936,942다. 기존 send runner의 active
+처리량과 종료 후 전체 drain 수신 수를 구분한다. Drain은 request 약 276 ms, send 약 377 ms다.
+소유 계층은 Framework payload handoff, 계약 기준은 payload ownership §4·host permit §1·§3·
+messaging hot path §4.3이며 변경 분류는 B 가설의 bench-only 원인 분리다.
+원자료는 `worker-channel-handoff/summary.json`과
+`worker-channel-handoff/fixed-worker-channel-handoff/zlink-dotnet-{패턴}-4096/results.json`,
+검증은 `worker-channel-handoff-{build,tests,lifecycle,info,fidelity,overlay}.log`에 보관한다.
+
 | 전용 수신 진단 패턴 | Bandwidth MB/s | Source CPU % | Target CPU % | Source memory MB | Target memory MB |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | request-serial | 23.42 | 3.28 | 4.06 | 122.96 | 474.38 |
