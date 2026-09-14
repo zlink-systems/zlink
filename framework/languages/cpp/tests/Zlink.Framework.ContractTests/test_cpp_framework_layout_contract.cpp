@@ -17,23 +17,12 @@
 #error "ZLINK_FRAMEWORK_CPP_SOURCE_DIR must be defined"
 #endif
 
-#ifndef ZLINK_FRAMEWORK_CPP_BUILD_DIR
-#error "ZLINK_FRAMEWORK_CPP_BUILD_DIR must be defined"
-#endif
-
 namespace
 {
 
-const std::filesystem::path &framework_cpp_build_dir ()
+bool is_cmake_build_dir (const std::filesystem::path &path)
 {
-    static const std::filesystem::path path{ZLINK_FRAMEWORK_CPP_BUILD_DIR};
-    return path;
-}
-
-bool is_in_framework_cpp_build_dir (const std::filesystem::path &path)
-{
-    const auto relative = path.lexically_relative (framework_cpp_build_dir ());
-    return !relative.empty () && *relative.begin () != "..";
+    return std::filesystem::is_regular_file (path / "CMakeCache.txt");
 }
 
 struct layout_file_contents_t
@@ -116,7 +105,7 @@ class layout_snapshot_t
              iterator != std::filesystem::recursive_directory_iterator{}; ++iterator) {
             entries_.emplace_back (*iterator);
             auto &entry = entries_.back ();
-            if (entry.is_directory () && is_in_framework_cpp_build_dir (entry.path ())) {
+            if (entry.is_directory () && is_cmake_build_dir (entry.path ())) {
                 iterator.disable_recursion_pending ();
             }
             if (!entry.is_regular_file ()) {
