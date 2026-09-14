@@ -40,7 +40,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     internal bool IsClientServerClientChannel(string channelName) =>
         runtime.IsClientServerClientChannel(channelName);
 
-    public async ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
@@ -48,42 +48,44 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         ReadOnlyMemory<byte> metadata = default)
     {
         activation.EnsureOperationAllowed();
-        using var operation = runtime.EnterOperation(countAsRequest: true);
-        var requestTimeout = timeout ?? activation.DefaultRequestTimeout;
-        var metric = ZLinkRuntimeMetrics.StartRequest(activation.ChannelName, "channel");
-        var outcome = "completed";
-        try
+        return runtime.ExecuteOperationAsync(async () =>
         {
-            // A Spot may target a channel registered on any process-local
-            // RouteMesh. Resolve that channel through the framework runtime;
-            // the current Spot native socket only owns its own mesh.
-            return await runtime.RequestToChannelAsync(
-                    channelName,
-                    parts,
-                    requestTimeout,
-                    cancellationToken,
-                    metadata)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            outcome = "timed_out";
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            outcome = "cancelled";
-            throw;
-        }
-        catch
-        {
-            outcome = "failed";
-            throw;
-        }
-        finally
-        {
-            metric.Complete(outcome);
-        }
+            var requestTimeout = timeout ?? activation.DefaultRequestTimeout;
+            var metric = ZLinkRuntimeMetrics.StartRequest(activation.ChannelName, "channel");
+            var outcome = "completed";
+            try
+            {
+                // A Spot may target a channel registered on any process-local
+                // RouteMesh. Resolve that channel through the framework runtime;
+                // the current Spot native socket only owns its own mesh.
+                return await runtime.RequestToChannelAsync(
+                        channelName,
+                        parts,
+                        requestTimeout,
+                        cancellationToken,
+                        metadata)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                outcome = "timed_out";
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                outcome = "cancelled";
+                throw;
+            }
+            catch
+            {
+                outcome = "failed";
+                throw;
+            }
+            finally
+            {
+                metric.Complete(outcome);
+            }
+        }, countAsRequest: true);
     }
 
     public async ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(

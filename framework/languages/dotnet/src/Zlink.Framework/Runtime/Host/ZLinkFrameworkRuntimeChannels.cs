@@ -60,7 +60,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName).ConfigureAwait(false);
         }
         catch
         {
@@ -149,7 +149,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName).ConfigureAwait(false);
         }
         catch
         {
