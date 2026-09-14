@@ -13,30 +13,23 @@ const MAX_UNFINISHED_DEPTH = 1;
 
 test('raw binding port keeps consecutive OK send depth bounded', async t => {
   const neverAdmitted = new Promise(() => {});
-  const createSocket = () => {
-    const operation = {
-      message() {
-        return operation;
-      },
-      submit() {
-        return { result: zlink.SubmitResult.Ok, admitted: neverAdmitted };
-      }
-    };
-    return {
-      options: {},
-      send() {
-        return operation;
-      },
-      close() {}
-    };
-  };
-  t.mock.method(zlink, 'createRouterSocket', createSocket);
-  t.mock.method(zlink, 'createDealerSocket', createSocket);
+  const context = zlink.createContext();
+  const createRouterSocket = zlink.createRouterSocket;
+  const createDealerSocket = zlink.createDealerSocket;
+  t.mock.method(zlink, 'createRouterSocket', value =>
+    withControlledSend(t, createRouterSocket(value), neverAdmitted)
+  );
+  t.mock.method(zlink, 'createDealerSocket', value =>
+    withControlledSend(t, createDealerSocket(value), neverAdmitted)
+  );
 
-  const host = new ZLinkNodeRawBindingPort({}).createHost();
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
   const router = host.createRouter();
   const dealer = host.createDealer();
-  t.after(() => host.close());
+  t.after(() => {
+    host.close();
+    context.close();
+  });
 
   await assertOkBurstDepthBounded(
     () => router.send('target', [Buffer.from('routed')]),
@@ -47,6 +40,21 @@ test('raw binding port keeps consecutive OK send depth bounded', async t => {
     'dealer send'
   );
 });
+
+function withControlledSend(t, socket, neverAdmitted) {
+  t.mock.method(socket, 'send', () => {
+    const operation = {
+      message() {
+        return operation;
+      },
+      submit() {
+        return { result: zlink.SubmitResult.Ok, admitted: neverAdmitted };
+      }
+    };
+    return operation;
+  });
+  return socket;
+}
 
 async function assertOkBurstDepthBounded(send, label) {
   let unfinished = 0;
