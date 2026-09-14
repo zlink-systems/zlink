@@ -1,0 +1,95 @@
+# rel-364 — .NET outbound payload 소유권 수정을 검증한다 (Issue #364)
+
+worktree `/home/hep7/project/zlink-364-dotnet`, branch `framework-dotnet/364-payload-ownership`.
+HEAD `17eea31cca` = 현재 main + `c577ea40c8` cherry-pick(충돌 없이 적용됨). 한국어로 보고.
+감독자가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` §3(**진단 먼저, 구현은 승인 뒤**), `framework/AGENTS.md`,
+그리고 **`gh issue view 364`**.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+**앵커 없는 `pkill -f`/`pgrep -f`**; `doc/**`·`core/doc/**`·`framework/doc/**`·
+`scripts/local-package/**` 수정; **timeout·retry 증가**; **검증 항목 삭제·약화**;
+Core·binding 수정; C++·Java·Node 수정; **cherry-pick된 커밋을 revert하거나 해제 호출을 빼서
+문제를 덮는 것**. 임시 산출물은 `/tmp/zlink-rel-364/`. **`/tmp` 8 GB, 쓰기 전 `df -h /tmp`.**
+
+## 이것은 진단 job이다 — 구현 승인은 아직 없다
+
+cherry-pick만 되어 있다. **이 커밋이 안전한지 판정하는 것이 일이다.** 문제가 나오면 그 자리에서
+고치지 말고 진단해 보고한다.
+
+## 배경 — 왜 그냥 믿으면 안 되나
+
+이 커밋은 **284줄의 자기 테스트를 들고 온다**(`MeshOutboundPayloadOwnershipTests.cs` 244줄,
+`SpotOutboundTransportTests.cs` +40줄). 작성자는 "91 focused tests passed"라고 적었다.
+**그런데도 나중에 double-dispose가 있다고 판단해 이 커밋을 뺀 브랜치(`bench/346-salvage-v2`)가
+따로 만들어졌다.** 그 판단의 근거는 PR·이슈 코멘트·plan 문서 어디에도 기록이 없고, 재수정본도
+존재하지 않는다.
+
+즉 **동반 테스트 통과는 안전 근거가 되지 않는다.** native payload 이중 해제는 부하에서만
+간헐적으로 드러난다.
+
+## 작업 1 — .NET 테스트 전체
+
+`framework/languages/dotnet`에서 unit test 전체를 돌린다. 게이트가 쓰는 방식을 따른다 —
+`scripts/gate/framework-gate.sh`의 `dotnet-unit-main`·`dotnet-unit-join`·`dotnet-sampleregression`
+줄과 `common.sh`의 `dotnet_env()`를 읽고 같은 환경으로 실행한다. `--blame-hang` 옵션을 유지한다.
+
+동반된 새 테스트 2개가 실제로 실행됐는지 이름으로 확인해 보고한다.
+
+## 작업 2 — 부하에서 메모리 실측
+
+커밋 메시지의 주장을 재현한다: **5초 send-saturation에서 source 메모리 약 2952 MB → 151 MB,
+처리량 약 102 Kmsg/s 유지.**
+
+- 수정 **전**(`git stash` 금지 — 대신 `HEAD~1`을 별도 빌드로 쓰거나, 같은 워크트리에서
+  순서를 정해 두 번 측정한다. 방법은 스스로 정하되 무엇을 했는지 보고에 적어라)
+- 수정 **후**
+- 두 값과 처리량을 나란히 보고한다
+
+**측정 도구는 `framework/bench/grpc`다** — 원래 이 수치를 낸 도구이고 사용자가 확인해 줬다.
+다른 것을 찾거나 새로 만들지 마라. 그 디렉터리의 runner 사용법을 읽고 그대로 쓴다.
+source 쪽 메모리와 처리량은 그 runner가 내는 리포트에서 읽는다(`bench: include source and
+target resource usage in reports` 이전 버전이라 리포트에 자원 항목이 없으면, 그 사실을 적고
+외부에서 프로세스 RSS를 관측해 측정한다).
+
+## 작업 3 — 이중 해제를 일부러 찾는다 (가장 중요)
+
+해제 경로가 겹칠 수 있는 지점을 부하로 돌린다. 최소한 아래 네 가지 종료 경로를 각각 포함한다.
+
+- 정상 완료
+- **취소**(cancellation token)
+- **거절**(backpressure / capacity 거절)
+- **shutdown 중 제출**
+- **local dispatch** — 커밋이 "preserving local dispatch ownership"이라고 적은 경로
+
+`ObjectDisposedException`, native double-free, 프로세스 crash, `SIGABRT` 중 하나라도 나오면
+**즉시 멈추고** 재현 절차와 스택을 보고한다.
+
+단발 실행으로는 못 잡는다. **반복 실행**한다 — 같은 시나리오를 여러 번 돌려 간헐성을 노린다.
+횟수와 총 실행 시간을 보고에 적어라.
+
+## 실행 환경 — 감독이 준비해 뒀다
+
+로컬 패키지는 **이미 이 worktree에 복사돼 있다.** 다시 만들지 마라.
+
+```
+/home/hep7/project/zlink-364-dotnet/.artifacts/wsl/     (508M, nuget/Zlink.1.1.0.nupkg 포함)
+```
+
+게이트와 같은 환경은 `scripts/gate/common.sh`의 `dotnet_env()`를 그대로 따른다 —
+`ZLINK_LOCAL_PACKAGE_ROOT`는 **이 worktree의** `.artifacts/wsl`을 가리켜야 한다.
+Core 런타임은 `/home/hep7/project/zlink/core/build-dev/lib`(`libzlink.so.0`)를 공유한다.
+
+- `uptime`의 load가 10을 넘으면 기다린다. 게이트는 load에 민감하다.
+- 빌드 트리는 하나만 둔다.
+
+## 보고 형식
+
+- 작업 1: 통과/실패 테스트 수, 새 테스트 2개의 실행 여부와 결과, 로그 경로
+- 작업 2: 수정 전·후 메모리와 처리량, 측정 방법, 쓴 도구
+- 작업 3: 돌린 시나리오 목록, 반복 횟수, 총 시간, 관측된 예외·크래시 **전부**(없으면 "없음")
+- **판정: 이 커밋이 현재 main에서 안전한가 — 예 / 아니오 / 판정 불가**, 그 근거
+- 아니오면 분류(A·B·C·D)와 결함 지점(파일:행)
+- 변경 파일 목록 (`git status --short`) — cherry-pick 외에 아무것도 없어야 한다
+- 남은 BLOCKER
