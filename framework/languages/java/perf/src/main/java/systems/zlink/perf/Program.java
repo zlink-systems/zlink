@@ -65,7 +65,7 @@ public class Program {
         }
         if(config.publish()){
             var fanout=options.addFanoutChannel(config.text("channelName"));
-            if(config.source())fanout.enablePublisher(config.text("fanoutEndpoint"));
+            if(config.source())fanout.enablePublisher(config.text("fanoutEndpoint")).setRoutingIdPrefix(config.text("channelName"));
             else {fanout.enableSubscriber();fanout.addPublishHandler(Handlers.Fanout.class,Contracts.PerfPublishEvent.class);}
             return;
         }
