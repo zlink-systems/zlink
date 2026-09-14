@@ -5,7 +5,30 @@ import * as path from 'node:path';
 
 import type { NativeBinding } from './binding';
 
-const LINUX_SONAME = 'libzlink.so.0';
+function linuxSoname(abiSoversion: string): string {
+  return `libzlink.so.${abiSoversion}`;
+}
+
+function abiSoversionFromProvenance(abiMajor: unknown): string {
+  if (typeof abiMajor !== 'number'
+      || !Number.isSafeInteger(abiMajor)
+      || abiMajor < 0) {
+    throw new Error(`Invalid Core ABI major: ${String(abiMajor)}`);
+  }
+  return String(abiMajor);
+}
+
+function sourceTreeAbiSoversion(packageRoot: string): string {
+  const version = fs.readFileSync(
+    path.join(packageRoot, '..', '..', 'VERSION'),
+    'utf8'
+  );
+  const match = /^LIBZLINK_ABI_SOVERSION=(0|[1-9]\d*)$/m.exec(version);
+  if (!match) {
+    throw new Error('Root VERSION has no valid LIBZLINK_ABI_SOVERSION');
+  }
+  return match[1];
+}
 
 export interface NativeLoadFailure {
   target: string;
@@ -58,38 +81,37 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
   const runtimeDirs = [localDir, releaseDir, coreDir, coreAltDir].filter(
     (entry): entry is string => entry !== undefined
   );
+  const soname = linuxSoname(sourceTreeAbiSoversion(packageRoot));
   refreshAddonRuntimeLink(
-    path.join(addonDir, LINUX_SONAME),
-    runtimeDirs.map((entry) => path.join(entry, LINUX_SONAME))
+    path.join(addonDir, soname),
+    runtimeDirs.map((entry) => path.join(entry, soname))
   );
   prependLibraryPath([...runtimeDirs, addonDir]);
 }
 
 export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
   if (process.platform === 'linux') {
-    const soname = path.join(prebuiltDir, LINUX_SONAME);
-    if (!fs.existsSync(soname)) {
-      const packageRoot = path.dirname(path.dirname(prebuiltDir));
-      let versionedLibrary: string | undefined;
-      try {
-        const provenance = JSON.parse(
-          fs.readFileSync(
-            path.join(packageRoot, 'provenance', 'core-package-provenance.json'),
-            'utf8'
-          )
-        ) as { version?: string };
-        if (provenance.version !== undefined) {
-          const candidate = path.join(
-            prebuiltDir,
-            `libzlink.so.${provenance.version}`
-          );
-          if (fs.existsSync(candidate)) versionedLibrary = candidate;
+    const packageRoot = path.dirname(path.dirname(prebuiltDir));
+    try {
+      const provenance = JSON.parse(
+        fs.readFileSync(
+          path.join(packageRoot, 'provenance', 'core-package-provenance.json'),
+          'utf8'
+        )
+      ) as { version?: string; abiMajor?: unknown };
+      if (provenance.version !== undefined) {
+        const soname = path.join(
+          prebuiltDir,
+          linuxSoname(abiSoversionFromProvenance(provenance.abiMajor))
+        );
+        const versionedLibrary = path.join(prebuiltDir, `libzlink.so.${provenance.version}`);
+        if (!fs.existsSync(soname) && fs.existsSync(versionedLibrary)) {
+          fs.symlinkSync(versionedLibrary, soname);
         }
-      } catch {
-        // The normal package path has Core provenance. If it is unavailable,
-        // leave native loading to the development fallback below.
       }
-      if (versionedLibrary !== undefined) fs.symlinkSync(versionedLibrary, soname);
+    } catch {
+      // The normal package path has Core provenance. If it is unavailable,
+      // leave native loading to the development fallback below.
     }
     prependLibraryPath([prebuiltDir]);
     return;

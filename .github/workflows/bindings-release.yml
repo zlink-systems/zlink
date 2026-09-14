@@ -57,6 +57,7 @@ jobs:
       create_release: ${{ steps.resolve.outputs.create_release }}
       publish_registry: ${{ steps.resolve.outputs.publish_registry }}
       core_version: ${{ steps.resolve.outputs.core_version }}
+      core_abi_soversion: ${{ steps.resolve.outputs.core_abi_soversion }}
       core_tag: ${{ steps.resolve.outputs.core_tag }}
     steps:
       - uses: actions/checkout@v5
@@ -120,6 +121,11 @@ jobs:
             echo "Invalid or missing LIBZLINK_VERSION in VERSION: ${REPOSITORY_CORE_VERSION}" >&2
             exit 1
           fi
+          CORE_ABI_SOVERSION=$(sed -n 's/^LIBZLINK_ABI_SOVERSION=//p' VERSION)
+          if ! [[ "${CORE_ABI_SOVERSION}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid or missing LIBZLINK_ABI_SOVERSION in VERSION: ${CORE_ABI_SOVERSION}" >&2
+            exit 1
+          fi
           CORE_VERSION="${{ github.event.inputs.core_version }}"
           if [ -z "${CORE_VERSION}" ]; then
             CORE_VERSION="${REPOSITORY_CORE_VERSION}"
@@ -133,6 +139,7 @@ jobs:
           echo "create_release=${CREATE_RELEASE}" >> "$GITHUB_OUTPUT"
           echo "publish_registry=${PUBLISH_REGISTRY}" >> "$GITHUB_OUTPUT"
           echo "core_version=${CORE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "core_abi_soversion=${CORE_ABI_SOVERSION}" >> "$GITHUB_OUTPUT"
           echo "core_tag=${CORE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Validate exact Core release
@@ -197,10 +204,9 @@ jobs:
           install -m755 \
             "${core_prefix}/lib/libzlink.so.${ZLINK_CORE_RELEASE_VERSION}" \
             bindings/node/prebuilds/linux-x64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          major="${{ needs.resolve.outputs.core_version }}"
-          major="${major%%.*}"
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/node/prebuilds/linux-x64/libzlink.so.${major}"
-          ln -sfn "libzlink.so.${major}" bindings/node/prebuilds/linux-x64/libzlink.so
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
+          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/node/prebuilds/linux-x64/libzlink.so.${abi_soversion}"
+          ln -sfn "libzlink.so.${abi_soversion}" bindings/node/prebuilds/linux-x64/libzlink.so
           cp "${core_prefix}/share/zlink/core-package-provenance.json" \
             bindings/node/provenance/core-package-provenance.json
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
@@ -222,9 +228,8 @@ jobs:
           cd bindings/node
           npm ci
           cp prebuilds/linux-x64/libzlink.so build/Release/libzlink.so
-          major="${{ needs.resolve.outputs.core_version }}"
-          major="${major%%.*}"
-          cp "prebuilds/linux-x64/libzlink.so.${major}" "build/Release/libzlink.so.${major}"
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
+          cp "prebuilds/linux-x64/libzlink.so.${abi_soversion}" "build/Release/libzlink.so.${abi_soversion}"
           npm test
           cp build/Release/zlink.node prebuilds/linux-x64/zlink.node
           npm run verify:prebuilds
@@ -281,10 +286,9 @@ jobs:
           install -m755 \
             core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
             bindings/go/native/linux-x86_64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          major="${{ needs.resolve.outputs.core_version }}"
-          major="${major%%.*}"
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/go/native/linux-x86_64/libzlink.so.${major}"
-          ln -sfn "libzlink.so.${major}" bindings/go/native/linux-x86_64/libzlink.so
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
+          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/go/native/linux-x86_64/libzlink.so.${abi_soversion}"
+          ln -sfn "libzlink.so.${abi_soversion}" bindings/go/native/linux-x86_64/libzlink.so
 
       - uses: actions/setup-go@v6
         with:
@@ -434,9 +438,10 @@ jobs:
             --arg prefix "${core_prefix}" \
             --arg provenanceSha256 "${manifest_sha}" \
             --arg runtimeSha256 "${runtime_sha}" \
+            --arg soname "libzlink.so.${{ needs.resolve.outputs.core_abi_soversion }}" \
             '{version: $version, prefix: $prefix,
               provenanceSha256: $provenanceSha256,
-              runtime: {sha256: $runtimeSha256, soname: "libzlink.so.0"}}')
+              runtime: {sha256: $runtimeSha256, soname: $soname}}')
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
           echo "summary=${summary}" >> "${GITHUB_OUTPUT}"
 
@@ -529,10 +534,9 @@ jobs:
           install -m755 \
             core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
             bindings/cpp/native/linux-x86_64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          major="${{ needs.resolve.outputs.core_version }}"
-          major="${major%%.*}"
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/cpp/native/linux-x86_64/libzlink.so.${major}"
-          ln -sfn "libzlink.so.${major}" bindings/cpp/native/linux-x86_64/libzlink.so
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
+          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/cpp/native/linux-x86_64/libzlink.so.${abi_soversion}"
+          ln -sfn "libzlink.so.${abi_soversion}" bindings/cpp/native/linux-x86_64/libzlink.so
 
       - name: Build and test
         run: |
@@ -597,10 +601,9 @@ jobs:
           install -m755 \
             core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
             bindings/rust/native/linux-x86_64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          major="${{ needs.resolve.outputs.core_version }}"
-          major="${major%%.*}"
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/rust/native/linux-x86_64/libzlink.so.${major}"
-          ln -sfn "libzlink.so.${major}" bindings/rust/native/linux-x86_64/libzlink.so
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
+          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/rust/native/linux-x86_64/libzlink.so.${abi_soversion}"
+          ln -sfn "libzlink.so.${abi_soversion}" bindings/rust/native/linux-x86_64/libzlink.so
 
       - uses: dtolnay/rust-toolchain@stable
 
