@@ -212,10 +212,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         string meshName,
         RoutingId targetNodeRid)
     {
-        var classification = _topologyQuery?.ClassifyRouteMeshTarget(
-                meshName,
-                targetNodeRid)
-            ?? ZLinkRouteMeshTargetClassification.Unknown;
+        var classification = _topologyQuery is null
+            ? ZLinkRouteMeshTargetClassification.Unknown
+            : await _topologyQuery.ClassifyRouteMeshTargetAsync(
+                meshName, targetNodeRid).ConfigureAwait(false);
 
         // A location row can become visible before the local reconciler has
         // completed its first full descriptor snapshot. The target is then
@@ -224,7 +224,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         // absent from a completed snapshot.
         if (classification == ZLinkRouteMeshTargetClassification.Unknown
             && _topologyQuery is not null
-            && _topologyQuery.GetCompleteRouteMeshPeers(meshName) is null)
+            && await _topologyQuery.GetCompleteRouteMeshPeersAsync(meshName)
+                .ConfigureAwait(false) is null)
             classification = ZLinkRouteMeshTargetClassification.RequiredNotConnected;
 
         if (classification
@@ -253,7 +254,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         RoutingId targetNodeRid,
         string targetDescription)
     {
-        var nodeRuntime = GetMeshNodeRuntime(routerChannelId);
+        var nodeRuntime = await GetMeshNodeRuntimeAsync(routerChannelId).ConfigureAwait(false);
         if (nodeRuntime.Node.RoutingId == targetNodeRid)
         {
             if (nodeRuntime.Registration.ObjectRole
@@ -267,7 +268,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         if (nodeRuntime.UsesManualRouterAcquisition)
         {
-            switch (nodeRuntime.ClassifyManualRouterTarget(targetNodeRid))
+            switch (await nodeRuntime.ClassifyManualRouterTargetAsync(targetNodeRid).ConfigureAwait(false))
             {
                 case ZLinkRouteMeshTargetClassification.ReadyEligible:
                     return;

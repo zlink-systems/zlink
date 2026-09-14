@@ -1,10 +1,120 @@
 using System.Reflection;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshChannelSelectionHotPathTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectSpotAsyncSubmissionAwaitsBusyActualPeerOwnerBeforeValidation(bool request)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "busy-direct-peer");
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => Field<ZLinkStateLane>(node, "_lane").RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var target = RoutingId.From("unknown-direct-target");
+            Task pending;
+            if (request)
+            {
+                var invocation = Task.Run(() => node.RequestToSpotDirectAsync("source", target,
+                    "target", 1, [], SendFlags.None, default, TimeSpan.FromSeconds(1), default));
+                var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(result.IsCompleted);
+                pending = result.AsTask();
+            }
+            else
+            {
+                var invocation = Task.Run(() => node.SendToSpotDirectAsync("source", target,
+                    "target", 1, [], SendFlags.None, default, default));
+                var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(result.IsCompleted);
+                pending = result.AsTask();
+            }
+            Assert.Equal(0UL, Field<ulong>(node, "_nextOperation"));
+            release.Set();
+            var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => pending);
+            Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, failure.Result);
+            Assert.Equal(0UL, Field<ulong>(node, "_nextOperation"));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectRequestAwaitsBusyActualNonceOwnerAndPreservesInputParts(bool spot)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "busy-direct-nonce");
+        var peer = AddReadyPeer(node);
+        peer.LifecycleGeneration = 1;
+        node.ObserveSpotAuthority(peer.RoutingId, "target", 1, peer.LifecycleGeneration, 1, 1);
+        using var payload = Message.From("owned-input");
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => Field<ZLinkStateLane>(node, "_operationLane").RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var invocation = Task.Run(() => spot
+                ? node.RequestToSpotDirectAsync("source", peer.RoutingId, "target", 1,
+                    [payload], SendFlags.None, default, TimeSpan.FromSeconds(1), default)
+                : node.RequestToNodeDirectAsync(peer.RoutingId, [payload], SendFlags.None,
+                    default, TimeSpan.FromSeconds(1), default));
+            var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0UL, Field<ulong>(node, "_nextOperation"));
+            release.Set();
+            // No socket is started. Reaching this existing transport rejection
+            // proves nonce admission finished before wire submission.
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => pending.AsTask());
+            Assert.Equal(1UL, Field<ulong>(node, "_nextOperation"));
+            Assert.Equal(2UL, node.AllocateOperationId().Low);
+            Assert.Equal("owned-input", System.Text.Encoding.UTF8.GetString(payload.AsReadOnlySpan()));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    [Fact]
+    public async Task DirectSpotGenerationRejectionDoesNotAllocateNonceOrConsumeParts()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "direct-generation");
+        var peer = AddReadyPeer(node);
+        peer.LifecycleGeneration = 1;
+        node.ObserveSpotAuthority(peer.RoutingId, "target", 1, peer.LifecycleGeneration + 1, 1, 1);
+        using var payload = Message.From("owned-input");
+        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            node.RequestToSpotDirectAsync("source", peer.RoutingId, "target", 1,
+                [payload], SendFlags.None, default, TimeSpan.FromSeconds(1), default).AsTask());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, failure.Result);
+        Assert.Equal(0UL, Field<ulong>(node, "_nextOperation"));
+        Assert.Equal("owned-input", System.Text.Encoding.UTF8.GetString(payload.AsReadOnlySpan()));
+    }
+
     private delegate (bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
         SubmitResult Failure, string FailureReason, bool Wait, Task Changed)
         SelectTarget(string channel);

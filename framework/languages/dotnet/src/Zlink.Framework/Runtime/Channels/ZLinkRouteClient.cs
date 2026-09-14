@@ -302,7 +302,7 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     {
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
-        var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
+        var nodeRuntime = await runtime.GetMeshNodeRuntimeAsync(meshName).ConfigureAwait(false);
         var parts = Encode();
         var handedOff = false;
         try
@@ -391,7 +391,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
-        var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
+        var nodeRuntime = await runtime.GetMeshNodeRuntimeAsync(meshName).ConfigureAwait(false);
         var timeout = _timeout ?? nodeRuntime.Registration.DefaultRequestTimeout
             ?? runtime.Registration.DefaultRequestTimeout;
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);

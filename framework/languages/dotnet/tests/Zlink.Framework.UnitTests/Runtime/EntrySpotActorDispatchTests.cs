@@ -224,6 +224,145 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
     }
 
+    [Fact]
+    public async Task Manual_Classification_Awaits_Busy_Endpoint_List_And_Preserves_Result()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var node = runtime.GetMeshNodeRuntime("entry");
+        var router = node.Registration.Router!;
+        router.AcquisitionMode = ZLinkPeerAcquisitionMode.Manual;
+        var target = RoutingId.From("configured-manual-target");
+        const string endpoint = "inproc://configured-manual-target";
+        router.PeerRoutingIds[endpoint] = target;
+        router.ManualConnections.Connect(endpoint);
+        var lane = (ZLinkStateLane)typeof(ZLinkEndpointConnections)
+            .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(router.ManualConnections)!;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => lane.RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var invocation = Task.Run(() => node.ClassifyManualRouterTargetAsync(target));
+            var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            release.Set();
+            Assert.Equal(ZLinkRouteMeshTargetClassification.RequiredNotConnected, await pending);
+            router.ManualConnections.Disconnect(endpoint);
+            Assert.Equal(ZLinkRouteMeshTargetClassification.Unknown, await node.ClassifyManualRouterTargetAsync(target));
+            Assert.Equal(ZLinkRouteMeshTargetClassification.Unknown, node.ClassifyManualRouterTarget(target));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Manual_Classification_Awaits_Busy_Retained_Peer_Owner_And_Preserves_Result()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var node = runtime.GetMeshNodeRuntime("entry");
+        node.Registration.Router!.AcquisitionMode = ZLinkPeerAcquisitionMode.Manual;
+        var target = RoutingId.From("retained-manual-target");
+        var connections = (ZLinkSpotPeerConnectionSet)typeof(ZLinkSpotNodeRuntime)
+            .GetField("_peerConnections", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(node)!;
+        connections.RetainManualPeerRid("inproc://retained-manual-target", target);
+        var lane = (ZLinkStateLane)typeof(ZLinkSpotPeerConnectionSet)
+            .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(connections)!;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => lane.RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var invocation = Task.Run(() => node.ClassifyManualRouterTargetAsync(target));
+            var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            release.Set();
+            Assert.Equal(ZLinkRouteMeshTargetClassification.RequiredNotConnected, await pending);
+            Assert.Equal(ZLinkRouteMeshTargetClassification.RequiredNotConnected,
+                node.ClassifyManualRouterTarget(target));
+            Assert.Equal(ZLinkRouteMeshTargetClassification.Unknown,
+                await node.ClassifyManualRouterTargetAsync(RoutingId.From("never-known-manual-target")));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Async_Spot_Submission_Awaits_Busy_Component_Lookup_Without_Blocking_Caller(bool request)
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var node = new CapturingSpotNode { SpotRequestHandler = _ => [] };
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        // Existing SDK fixture inspection only: hold the actual component
+        // owner, not a substitute lane or a binding-private object.
+        var state = (ZLinkFrameworkComponentState)typeof(ZLinkFrameworkRuntime)
+            .GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(runtime)!;
+        var holding = Task.Run(() => state.RunStateAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var target = RoutingId.From("component-target");
+            if (request)
+            {
+                var invocation = Task.Run(() => runtime.RequestToSpotViaRouterChannelAsync(
+                    "entry", target, "spot", 1, 1, 1, 1, [],
+                    TimeSpan.FromSeconds(1), CancellationToken.None));
+                var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(pending.IsCompleted);
+                Assert.Empty(node.SpotRequests);
+                release.Set();
+                await pending;
+                Assert.Single(node.SpotRequests);
+            }
+            else
+            {
+                var invocation = Task.Run(() => runtime.SendToSpotViaRouterChannelAsync(
+                    "entry", target, "spot", 1, 1, 1, 1, [], CancellationToken.None));
+                var pending = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(pending.IsCompleted);
+                Assert.Empty(node.SpotSends);
+                release.Set();
+                await pending;
+                Assert.Single(node.SpotSends);
+            }
+            Assert.Same(await runtime.GetMeshNodeRuntimeAsync("entry"), runtime.GetMeshNodeRuntime("entry"));
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -8852,6 +8991,13 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public static KnownRouteMeshTopology Instance { get; } = new();
 
+        public ValueTask<ZLinkRouteMeshTargetClassification> ClassifyRouteMeshTargetAsync(
+            string meshName, RoutingId nodeRid) =>
+            ValueTask.FromResult(ClassifyRouteMeshTarget(meshName, nodeRid));
+
+        public ValueTask<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?> GetCompleteRouteMeshPeersAsync(
+            string meshName) => ValueTask.FromResult<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?>(null);
+
         public ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
             string meshName,
             RoutingId nodeRid)
@@ -8868,6 +9014,12 @@ public sealed partial class EntrySpotActorDispatchTests
         IReadOnlyList<ZLinkRouteMeshPeerIdentity>? CompleteSnapshot)
         : IZLinkAutoConnectTopologyQuery
     {
+        public ValueTask<ZLinkRouteMeshTargetClassification> ClassifyRouteMeshTargetAsync(
+            string meshName, RoutingId nodeRid) =>
+            ValueTask.FromResult(ClassifyRouteMeshTarget(meshName, nodeRid));
+
+        public ValueTask<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?> GetCompleteRouteMeshPeersAsync(
+            string meshName) => ValueTask.FromResult(GetCompleteRouteMeshPeers(meshName));
         public ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
             string meshName,
             RoutingId nodeRid)
