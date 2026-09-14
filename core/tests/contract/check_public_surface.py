@@ -111,15 +111,43 @@ def c_blocks(path):
     return "\n".join(re.findall(rf"^{fence}c\s*\n(.*?)^{fence}\s*$", text, re.M | re.S))
 
 
+def package_version_and_soname(root, failures):
+    version_file = root / "VERSION"
+    if not version_file.exists():
+        failures.append("package version metadata missing: VERSION")
+        return None
+
+    patterns = {
+        "LIBZLINK_VERSION": re.compile(
+            r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+        ),
+        "LIBZLINK_ABI_SOVERSION": re.compile(r"0|[1-9][0-9]*"),
+    }
+    values = {}
+    for line in version_file.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key not in patterns:
+            continue
+        if key in values:
+            failures.append(f"VERSION contains duplicate {key}")
+            continue
+        if not patterns[key].fullmatch(value):
+            failures.append(f"VERSION has invalid {key}: {value!r}")
+            continue
+        values[key] = value
+
+    missing = sorted(key for key in patterns if key not in values)
+    if missing:
+        failures.append(f"VERSION missing required fields: {', '.join(missing)}")
+        return None
+    return values["LIBZLINK_VERSION"], values["LIBZLINK_ABI_SOVERSION"]
+
+
 def check_packaging_metadata(root, failures):
-    cmake = (root / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
-    version_match = re.search(r"project\s*\(\s*zlink\s+VERSION\s+([0-9.]+)", cmake)
-    soname_match = re.search(r'\bSOVERSION\s+"([0-9]+)"', cmake)
-    if not version_match or not soname_match:
-        failures.append("cannot derive package version or SOVERSION from core/CMakeLists.txt")
+    package_version = package_version_and_soname(root, failures)
+    if package_version is None:
         return
-    version = version_match.group(1)
-    soname = soname_match.group(1)
+    version, soname = package_version
     version_path = version.replace(".", "_")
 
     expected_text = {
