@@ -1004,7 +1004,7 @@ class spot_context_t
               auto shared_work = std::make_shared<TWork> (std::move (work));
               auto completed = std::make_shared<std::atomic_bool> (false);
               const auto scheduled =
-                scheduler->try_schedule ([scheduler, shared_work, completion, completed,
+                scheduler->try_schedule ([shared_work, completion, completed,
                                           cancellation] (std::stop_token) mutable {
                     auto result = detail::run_worker_body<result_type> (*shared_work, cancellation);
                     if (cancellation.stop_requested ()) {
@@ -1012,20 +1012,13 @@ class spot_context_t
                         return;
                     }
                     if (!completed->exchange (true)) {
-                        auto complete_result = [completion,
-                                                result = std::move (result)] () mutable {
-                            completion.complete (std::move (result));
-                        };
-                        scheduler->post_owner (std::move (complete_result));
+                        completion.complete (std::move (result));
                     }
                 });
               if (!scheduled) {
                   completed->store (true);
-                  auto complete_full = [completion] () mutable {
-                      completion.complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  };
-                  scheduler->post_owner (std::move (complete_full));
+                  completion.complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return task;
           },
@@ -1099,10 +1092,8 @@ class spot_context_t
                 });
               if (!scheduled) {
                   completed->store (true);
-                  scheduler->post_owner ([completion] {
-                      completion->complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  });
+                  completion->complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return result;
           },

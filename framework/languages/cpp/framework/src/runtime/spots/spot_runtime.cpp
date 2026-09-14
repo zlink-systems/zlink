@@ -950,13 +950,6 @@ class spot_worker_scheduler_t final : public detail::worker_scheduler_t
         return _workers && _workers->try_submit_cancellable (std::move (work));
     }
 
-    void post_owner (std::function<void ()> work) override
-    {
-        if (auto owner = _owner.lock ()) {
-            (void) owner->try_post_serial ("worker-completion", std::move (work));
-        }
-    }
-
     std::stop_token stop_token () const noexcept override
     {
         if (auto owner = _owner.lock (); owner && owner->node) {

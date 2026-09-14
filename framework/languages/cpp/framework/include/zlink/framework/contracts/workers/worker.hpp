@@ -163,7 +163,6 @@ class worker_scheduler_t
     virtual ~worker_scheduler_t () = default;
 
     virtual bool try_schedule (std::function<void (std::stop_token)> work) = 0;
-    virtual void post_owner (std::function<void ()> work) = 0;
     virtual std::stop_token stop_token () const noexcept { return {}; }
 };
 
