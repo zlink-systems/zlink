@@ -122,6 +122,7 @@ struct mesh_channel_registration_t
 struct mesh_node_builder_state_t
 {
     explicit mesh_node_builder_state_t (std::string name);
+    void assign_automatic_routing_id (std::string prefix);
 
     runtime::offload_executor_t lane_executor;
     runtime::state_lane_t lane;

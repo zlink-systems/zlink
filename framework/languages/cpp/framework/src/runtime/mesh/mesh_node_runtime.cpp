@@ -472,6 +472,20 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
       "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (bind_host) + ":0");
 }
 
+void mesh_node_builder_state_t::assign_automatic_routing_id (std::string prefix)
+{
+    if (!valid_routing_id_prefix (prefix))
+        throw configuration_error ("MeshNode automatic routing id prefix must contain "
+                                   "1..64 ASCII letters, digits, '.', '_' or '-'");
+    if (routing_id)
+        throw configuration_error ("MeshNode cannot configure both a fixed routing "
+                                   "id and an automatic routing id prefix");
+    automatic_routing_id_prefix = std::move (prefix);
+    routing_id = zlink::routing_id_t::from (
+      *automatic_routing_id_prefix + "-" + detail::new_uuid_v4 ());
+    spot_state->lane.run ([&] { spot_state->snapshot.routing_id = *routing_id; }).get ();
+}
+
 void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
                                  service_collection_t &services)
 {
@@ -732,7 +746,11 @@ void mesh_node_runtime_t::start ()
                 throw configuration_error ("MeshNode listen endpoint is required");
             }
             if (!_state->routing_id) {
-                throw configuration_error ("MeshNode routing id is required");
+                const auto framework_options = _state->framework_options.lock ();
+                if (framework_options && framework_options->has_location_store_instance)
+                    _state->assign_automatic_routing_id (_state->mesh_name);
+                else
+                    throw configuration_error ("MeshNode routing id is required");
             }
             if (!_state->core_context) {
                 throw configuration_error ("MeshNode shared Core Context is required");
@@ -4692,19 +4710,9 @@ mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t ro
 
 mesh_node_builder_t &mesh_node_builder_t::set_automatic_routing_id_prefix (std::string prefix)
 {
-    if (!detail::valid_routing_id_prefix (prefix))
-        throw detail::configuration_error ("MeshNode automatic routing id prefix must contain "
-                                           "1..64 ASCII letters, digits, '.', '_' or '-'");
     _state->lane
       .run ([&] {
-          if (_state->routing_id)
-              throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
-                                                 "id and an automatic routing id prefix");
-          _state->automatic_routing_id_prefix = prefix;
-          _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
-          _state->spot_state->lane
-            .run ([&] { _state->spot_state->snapshot.routing_id = *_state->routing_id; })
-            .get ();
+          _state->assign_automatic_routing_id (std::move (prefix));
       })
       .get ();
     return *this;
