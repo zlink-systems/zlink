@@ -24,8 +24,7 @@ Downloads a tagged Core release, verifies its release provenance and platform
 checksums, and materializes a standard Core install prefix. The final prefix
 is printed to stdout.
 
-Supported platforms: linux-x64, linux-arm64, macos-x64, macos-arm64,
-windows-x64, windows-arm64.
+Supported platforms: linux-x64, linux-arm64, macos-arm64, windows-x64.
 EOF
 }
 
@@ -69,7 +68,6 @@ if [[ -z "$platform" ]]; then
     MINGW*|MSYS*|CYGWIN*)
       case "$(uname -m)" in
         x86_64|amd64) platform="windows-x64" ;;
-        aarch64|arm64) platform="windows-arm64" ;;
         *) echo "Unsupported Windows architecture: $(uname -m)" >&2; exit 2 ;;
       esac
       ;;
@@ -78,7 +76,7 @@ if [[ -z "$platform" ]]; then
 fi
 
 case "$platform" in
-  linux-x64|linux-arm64|macos-x64|macos-arm64|windows-x64|windows-arm64) ;;
+  linux-x64|linux-arm64|macos-arm64|windows-x64) ;;
   *) echo "Unsupported Core release platform: $platform" >&2; exit 2 ;;
 esac
 

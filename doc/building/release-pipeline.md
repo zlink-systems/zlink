@@ -116,7 +116,7 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | linux-arm64 | ✅ | source build | Core archive | |
 | macos-arm64 | ✅ | source build | Core archive | |
 | windows-x64 | ✅ | source build | Core archive | archive bundles the OpenSSL DLLs |
-| windows-arm64 | ✅ | source build | Core archive | |
+| windows-arm64 | ❌ | ❌ | ❌ | Unsupported (decided 2026-09-14) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
 
 "Source build" means the addon is compiled at install time against the Core release archive named by

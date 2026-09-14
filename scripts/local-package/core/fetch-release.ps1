@@ -20,7 +20,7 @@ if ($Version -ne $repoVersion) {
   throw "Core release version $Version must match repository VERSION $repoVersion"
 }
 
-$supportedPlatforms = @("windows-x64", "windows-arm64", "linux-x64", "linux-arm64", "macos-x64", "macos-arm64")
+$supportedPlatforms = @("windows-x64", "linux-x64", "linux-arm64", "macos-arm64")
 if ($supportedPlatforms -notcontains $Platform) {
   throw "Unsupported Core release platform: $Platform"
 }

@@ -4,14 +4,40 @@ All notable changes to the Core library (`core/`, tags `core/vX.Y.Z`) are
 recorded here, one section per version, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries before
 0.17.0 are in [`CHANGELOG-history.md`](./CHANGELOG-history.md). The public C ABI
-(`core/include/**`, `core/src/libzlink.vers`) is unchanged across the 0.17
-line unless a section says otherwise.
+(`core/include/**`, `core/src/libzlink.vers`) is stable from 1.0.0 on; before
+that it was unchanged across the 0.17 line unless a section says otherwise.
 
 Release notes: the GitHub Release created by the `Build libzlink Core
 Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-09-14
+
+First stable release. The public C API (`core/include/**`,
+`core/src/libzlink.vers`) is **unchanged from 0.18.0**: no symbol was added,
+removed or altered, so 0.18.0 sources compile and link against 1.0.0 without
+edits. The SONAME moves from `libzlink.so.0` to `libzlink.so.1`, so consumers
+relink against the new library. From this release on, the C ABI is stable and a
+breaking change requires a new major version.
+
+### Fixed
+
+- Provisional byte accounting moves only the bytes a record owns, which fixes
+  the high-water-mark underflow that let a socket report negative pending
+  bytes (#309).
+- Windows reconnect and poller lifecycle are stable: the poller no longer
+  observes a half-closed socket after a reconnect (#210).
+- A failing Windows `ctest` now fails the build instead of being reported as a
+  successful run (#204).
+
+### Changed
+
+- The Conan recipe and the vcpkg port track the released Core version.
+- Stream multiclient gating counts frame bytes rather than message counts in
+  tests, which makes the gate independent of how a record is split.
+- Five broken documentation anchors are corrected (#234).
 
 ## [0.18.0] - 2026-09-10
 
