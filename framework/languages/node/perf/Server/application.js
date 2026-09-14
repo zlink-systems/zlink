@@ -89,7 +89,7 @@ async function createApplication(config) {
   clients.actors = optional(nestjs.ZLINK_ACTOR_MANAGER); clients.spots = optional(nestjs.ZLINK_SPOT_MANAGER);
   clients.fanout = optional(nestjs.ZLINK_FANOUT_CLIENT);
   const routeMesh = optional(nestjs.ZLINK_ROUTE_MESH_RUNTIME), clientServer = optional(nestjs.ZLINK_CLIENT_SERVER_RUNTIME), fanout = optional(nestjs.ZLINK_FANOUT_RUNTIME);
-  let objectsReady = kind.cs || !objectServer || !kind.spot && !kind.actor, prepareTask = null;
+  let objectsReady = !objectServer || !kind.spot && !kind.actor, prepareTask = null;
   function publicStatus() {
     const status = { host: host.status };
     if (kind.publish && fanout) status.fanout = fanout.snapshot(config.channelName);
@@ -128,7 +128,7 @@ async function createApplication(config) {
           measurement.setupEvidence.push({ kind: 'userSpotReady', source: 'public Spot manager result', observedValue: created.spot });
         }
       }
-      if (objectServer && kind.actor && !kind.cs) {
+      if (objectServer && kind.actor) {
         for (const id of config.actorIds) {
           const created = await clients.actors.getOrCreate(id, 'perf-actor').inMesh(config.meshName).timeout(config.workload.setupTimeoutMs).submit();
           if (created.status === 'rejected') throw validation('IdentityMismatch', 'Actor preparation rejected.');
@@ -141,12 +141,6 @@ async function createApplication(config) {
     })().catch(error => { measurement.error(error); throw error; });
     return prepareTask;
   }
-  // Receivers prepare their owned objects before a source's single probe. The runner
-  // calls prepare on the source only after all roles report infrastructure readiness.
-  if (!config.source && !kind.cs && objectServer) {
-    await prepareRole();
-  } else if (!objectServer) objectsReady = true;
-
   const servers = [];
   for (const baseUrl of [config.metricsUrl, config.applicationTriggerUrl]) {
     const url = new URL(baseUrl), admin = baseUrl === config.metricsUrl;

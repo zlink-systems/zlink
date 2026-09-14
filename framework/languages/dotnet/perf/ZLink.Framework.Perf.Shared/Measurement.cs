@@ -39,7 +39,32 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public object[] ErrorEvidence { get { lock (gate) return errors.ToArray(); } }
     public ulong Connected { get; set; }
     public ulong ConnectionFailures { get; set; }
-    public object[] SetupEvidence { get; set; } = [];
+    private object[] setupEvidence = [];
+    public object[] SetupEvidence
+    {
+        get { lock (gate) return setupEvidence; }
+        set
+        {
+            // Object preparation and the latest typed receipt prove different
+            // setup boundaries. Keep the completed preparation when a handler
+            // replaces its bounded, latest probe/bind observation.
+            lock (gate)
+            {
+                var prepared = ObjectPreparationEvidence;
+                setupEvidence = value;
+                if (prepared is not null && ObjectPreparationEvidence is null)
+                    setupEvidence = [prepared, .. value];
+            }
+        }
+    }
+    public object? ObjectPreparationEvidence
+    {
+        get
+        {
+            lock (gate) return setupEvidence.OfType<IReadOnlyDictionary<string, object?>>()
+                .FirstOrDefault(item => item.TryGetValue("kind", out var kind) && kind is "publicObjectsPrepared");
+        }
+    }
     public Func<object>? SamplePublicState { get; set; }
 
     public PerfEchoRequest Request(int stream, ulong sequence, bool probe = false) => new()

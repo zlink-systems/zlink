@@ -6,6 +6,7 @@ import java.util.Arrays;
 /** Pure application contract checks; these do not replace real Framework scenario runs. */
 public final class ContractCheck {
     public static void main(String[] args)throws Exception{
+        checkPreparationRoles();
         new Config(Config.JSON.readTree("{\"workload\":{\"connections\":1000,\"logicalStreams\":1000,\"inflight\":2}}"));
         new Config(Config.JSON.readTree("{\"workload\":{\"logicalStreams\":8}}"));
         for(String key:new String[]{"connections","logicalStreams"}) {
@@ -55,4 +56,54 @@ public final class ContractCheck {
         }
         System.out.println("Java perf DTO/payload/histogram/receipt/catalog/time-series checks passed");
     }
+
+    private static <T> org.springframework.beans.factory.ObjectProvider<T> provider(T value){
+        return new org.springframework.beans.factory.ObjectProvider<>(){
+            @Override public T getObject(){return value;}
+        };
+    }
+    private static void checkPreparationRoles() throws Exception {
+        var actors=new java.util.ArrayList<String>();
+        var publications=new java.util.concurrent.atomic.AtomicInteger();
+        var manager=(systems.zlink.framework.actors.ZLinkActorManager)java.lang.reflect.Proxy.newProxyInstance(
+            ContractCheck.class.getClassLoader(),new Class<?>[]{systems.zlink.framework.actors.ZLinkActorManager.class},
+            (proxy,method,args)->{
+                if(!method.getName().equals("getOrCreate"))throw new AssertionError("Unexpected actor manager call: "+method);
+                String id=(String)args[0];
+                if(!args[1].equals(Handlers.ACTOR_TYPE))throw new AssertionError("Actor factory type changed");
+                return java.lang.reflect.Proxy.newProxyInstance(ContractCheck.class.getClassLoader(),
+                    new Class<?>[]{systems.zlink.framework.actors.ZLinkActorGetOrCreateCall.class},(call,operation,values)->{
+                        if(operation.getName().equals("request"))return call;
+                        if(!operation.getName().equals("submit"))throw new AssertionError("Unexpected creation call: "+operation);
+                        actors.add(id);
+                        return java.util.concurrent.CompletableFuture.completedFuture(
+                            new systems.zlink.framework.actors.ZLinkActorCreateResult.Existing(
+                                new systems.zlink.framework.actors.ActorRef(id,1,"mesh",systems.zlink.contracts.core.RoutingId.from("target"))));
+                    });
+            });
+        systems.zlink.framework.channels.ZLinkFanoutClient fanout=new systems.zlink.framework.channels.ZLinkFanoutClient(){
+            public systems.zlink.framework.channels.ZLinkFanoutPublishCall publish(String channel,Object message){throw new AssertionError("Missing topic");}
+            public systems.zlink.framework.channels.ZLinkFanoutPublishCall publish(String channel,String topic,Object message){
+                return ()->{publications.incrementAndGet();return java.util.concurrent.CompletableFuture.completedFuture(null);};
+            }
+        };
+        for(String role:new String[]{"none","actor","source"}){
+            boolean source=role.equals("source"),objectServer=role.equals("actor");
+            var root=Config.JSON.createObjectNode();root.put("runId","prepare");root.put("cellId","cell");root.put("configHash","hash");
+            root.put("source",source);root.put("objectRole",objectServer?"server":"None");
+            root.put("scenario",source?"pubsub-fanout-echo":"cs-remote-session-actor-echo");root.put("channelName","events");
+            root.putArray("actorIds").add("actor-0").add("actor-1");
+            root.putObject("workload").put("logicalStreams",2);
+            var config=new Config(root);
+            try(var measurement=new Measurement(config);var engine=new Engine(config,measurement,null,null,provider(manager),null,provider(fanout))){
+                measurement.objectsReady=!objectServer;
+                if(!engine.prepare().get("ok").equals(true)||!measurement.objectsReady)throw new AssertionError("Preparation failed");
+                if(measurement.consumersReady!=source)throw new AssertionError("Target consumer evidence fabricated");
+                engine.prepare();
+            }
+            if(actors.size()!=(role.equals("none")?0:2))throw new AssertionError("Role prepared unowned actors or duplicated preparation");
+            if(publications.get()!=(source?2:0))throw new AssertionError("Probe executed on a target or duplicated");
+        }
+    }
+
 }

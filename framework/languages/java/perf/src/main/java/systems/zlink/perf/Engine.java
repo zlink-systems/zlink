@@ -30,19 +30,23 @@ public final class Engine implements AutoCloseable {
     }
     public synchronized Map<String,Object> prepare() throws Exception {
         if(prepared)return Measurement.map("ok",true,"state","alreadyPrepared");
-        if(!config.source())throw new IllegalStateException("Only the source role runs prepare");
-        for(String id:config.list("spotIds")){
-            var result=await(spots.getObject().getOrCreate(id,Handlers.SPOT_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit());
-            if(result.spot()==null)throw new Validation("SetupIncomplete","Spot creation rejected");
-            metrics.evidence(Measurement.map("kind","publicSpotGetOrCreate","spotId",result.spot().spotId()));
-        }
-        for(String id:config.list("actorIds")){
-            var actor=Handlers.actorRef(await(actorManagers.getObject().getOrCreate(id,Handlers.ACTOR_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit()));
-            metrics.evidence(Measurement.map("kind","publicActorGetOrCreate","actorId",actor.actorId()));
+        if(config.objectServer()){
+            for(String id:config.list("spotIds")){
+                var result=await(spots.getObject().getOrCreate(id,Handlers.SPOT_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit());
+                if(result.spot()==null)throw new Validation("SetupIncomplete","Spot creation rejected");
+                metrics.evidence(Measurement.map("kind","publicSpotGetOrCreate","spotId",result.spot().spotId()));
+            }
+            for(String id:config.list("actorIds")){
+                var actor=Handlers.actorRef(await(actorManagers.getObject().getOrCreate(id,Handlers.ACTOR_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit()));
+                metrics.evidence(Measurement.map("kind","publicActorGetOrCreate","actorId",actor.actorId()));
+            }
         }
         metrics.objectsReady=true;
-        for(int stream=0;stream<config.streams();stream++)execute(metrics.request(stream,sequences[stream].getAndIncrement(),true),true);
-        metrics.consumersReady=true;metrics.evidence(Measurement.map("kind","typedProbe","streams",config.streams()));prepared=true;
+        if(config.source()){
+            for(int stream=0;stream<config.streams();stream++)execute(metrics.request(stream,sequences[stream].getAndIncrement(),true),true);
+            metrics.consumersReady=true;metrics.evidence(Measurement.map("kind","typedProbe","streams",config.streams()));
+        }
+        prepared=true;
         return Measurement.map("ok",true,"state","prepared");
     }
     public void run(){

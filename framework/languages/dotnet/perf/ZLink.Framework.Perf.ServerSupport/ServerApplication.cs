@@ -186,7 +186,10 @@ public static class ServerApplication
             infrastructure &= channel.IsReady && channel.ReadyTargetCount > 0;
         }
         if (config.mode == "publish" && !config.source) infrastructure &= services.GetRequiredService<IZLinkFanoutRuntime>().GetStatus(config.channelName!).IsReady;
-        var probe = measurement.SetupEvidence.Length > 0;
+        var preparedObjects = measurement.ObjectPreparationEvidence;
+        var needsPreparedObjects = config.objectRole != "None" && (config.source || config.objectRole == "Server");
+        var objects = !needsPreparedObjects || preparedObjects is not null;
+        var probe = measurement.SetupEvidence.Any(item => !ReferenceEquals(item, preparedObjects));
         List<object> evidence = [new { kind = "publicStatus", source = "public Framework runtime status", observedValue = PublicStatus(services) }];
         if (config.listenerEndpoint is not null) evidence.Add(new { kind = "verifiedListenerReservation",
             source = "role config; coordinator OS bind reservation and public host startup", observedValue = config.listenerEndpoint });
@@ -194,10 +197,11 @@ public static class ServerApplication
         evidence.AddRange(measurement.ErrorEvidence);
         List<string> reasons = [];
         if (!infrastructure) reasons.Add("Public host/channel/listener infrastructure is not ready.");
+        if (!objects) reasons.Add("Public object preparation has not completed.");
         if (!probe) reasons.Add("No successful typed probe echo has been observed.");
         if (measurement.HasErrors) reasons.Add("Application preparation or phase failed.");
         return new(config.runId, config.cellId, config.role, config.roleInstance, infrastructure,
-            true, probe, infrastructure && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
+            objects, probe, infrastructure && objects && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
     }
 }
 

@@ -10,5 +10,5 @@ var builder = ServerApplication.Builder(config, options =>
 });
 builder.Services.AddSingleton<PerfScenario>();
 var app = builder.Build();
-ServerApplication.Map(app);
+ServerApplication.Map(app, prepare: app.Services.GetRequiredService<PerfScenario>().PrepareAsync);
 await app.RunAsync();

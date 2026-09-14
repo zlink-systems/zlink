@@ -145,6 +145,63 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(launch_command(manifest,'java','client')[0].endswith('/zlink-framework-perf'))
         self.assertTrue(launch_command(manifest,'cpp','client')[0].endswith('/zlink_framework_perf'))
 
+    def test_server_prepare_completes_targets_before_sources_under_one_deadline(self):
+        from unittest.mock import patch
+        from runner import prepare_server_roles
+        roles=[{'_source':True,'applicationTriggerUrl':'http://source/app/perf/start'},
+               {'_source':False,'applicationTriggerUrl':'http://target-1/app/perf/start'},
+               {'_source':False,'applicationTriggerUrl':'http://target-2/app/perf/start'}]
+        request={'runId':'fixture','cellId':'fixture','phase':'setup','resetSeq':'0'}
+        completed=set();timeouts=[]
+        def prepare(url,body,timeout):
+            self.assertEqual(body,request)
+            if url.startswith('http://source/'):
+                self.assertEqual(completed,{'http://target-1/app/perf/prepare','http://target-2/app/perf/prepare'})
+            completed.add(url);timeouts.append(timeout)
+            return {'ok':True,'url':url}
+        with tempfile.TemporaryDirectory() as folder:
+            cell=Path(folder);(cell/'tmp').mkdir()
+            with patch('runner.http_json',side_effect=prepare),patch('runner.time.monotonic',side_effect=[10,14,22]):
+                prepare_server_roles(roles,request,40,cell)
+            self.assertEqual(sorted(timeouts),[18,26,30])
+            saved=json.loads((cell/'tmp/setup-prepare.json').read_text())
+            self.assertEqual(len(saved),3)
+            self.assertEqual(saved[-1]['url'],'http://source/app/perf/prepare')
+
+    def test_target_prepare_failure_preserves_original_exception_and_never_starts_sources(self):
+        from unittest.mock import patch
+        from runner import prepare_server_roles
+        roles=[{'_source':False,'applicationTriggerUrl':'http://target/app/perf/start'},
+               {'_source':True,'applicationTriggerUrl':'http://source/app/perf/start'}]
+        error=RuntimeError('original public target preparation failure')
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder)/'tmp').mkdir()
+            with patch('runner.http_json',side_effect=error) as request,patch('runner.time.monotonic',return_value=10):
+                with self.assertRaises(RuntimeError) as raised:
+                    prepare_server_roles(roles,{},40,Path(folder))
+            self.assertIs(raised.exception,error)
+            self.assertEqual(request.call_count,1)
+            self.assertEqual(request.call_args.args[0],'http://target/app/perf/prepare')
+            self.assertEqual(json.loads((Path(folder)/'tmp/setup-prepare.json').read_text()),[])
+
+    def test_source_prepare_failure_saves_target_ack_without_replacing_original_error(self):
+        from unittest.mock import patch
+        from runner import prepare_server_roles
+        roles=[{'_source':False,'applicationTriggerUrl':'http://target/app/perf/start'},
+               {'_source':True,'applicationTriggerUrl':'http://source/app/perf/start'}]
+        target_ack={'ok':True,'target':'actual target preparation'}
+        error=RuntimeError('original public source preparation failure')
+        for storage_fails in (False,True):
+            with self.subTest(storage_fails=storage_fails),tempfile.TemporaryDirectory() as folder:
+                cell=Path(folder);(cell/'tmp').mkdir()
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch('runner.http_json',side_effect=[target_ack,error]))
+                    stack.enter_context(patch('runner.time.monotonic',return_value=10))
+                    if storage_fails:stack.enter_context(patch('runner.write_json',side_effect=OSError('artifact storage failure')))
+                    with self.assertRaises(RuntimeError) as raised:prepare_server_roles(roles,{},40,cell)
+                self.assertIs(raised.exception,error)
+                if not storage_fails:self.assertEqual(json.loads((cell/'tmp/setup-prepare.json').read_text()),[target_ack])
+
     def test_http_failure_preserves_response_body_without_another_request(self):
         import urllib.error
         from unittest.mock import patch

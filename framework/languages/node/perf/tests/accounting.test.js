@@ -146,3 +146,52 @@ test('independent client config entrypoint rejects CCU above 1000 before setup',
     assert.equal(result.status, 1); assert.match(result.stderr, /between 1 and 1000/);
   } finally { fs.rmSync(folder, { recursive: true }); }
 });
+
+test('canonical role preparation completes CS server Actors before source probes', async () => {
+  const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
+  const applicationPath = path.join(__dirname, '../Server/application.js');
+  const originalRequire = require('node:module').createRequire(applicationPath);
+  for (const role of ['none', 'actor', 'source']) {
+    const calls = [];
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const manager = { getOrCreate(id, type) {
+      assert.equal(type, 'perf-actor'); calls.push(id);
+      const call = { inMesh(mesh) { assert.equal(mesh, 'mesh'); return call; },
+        timeout(ms) { assert.equal(ms, matrix.defaults.setupTimeoutMs); return call; },
+        async submit() { await gate; return { status: 'created', actor: { actorId: id } }; } };
+      return call;
+    } };
+    class UnknownElementException extends Error {}
+    const nestjs = { ZLINK_FRAMEWORK_RUNTIME: 'host', ZLINK_ACTOR_MANAGER: 'actors', ZLinkModule: { forRootFactory: () => ({}) } };
+    const app = { get(token) { if (token === 'host') return { status: { isReady: true } }; if (token === 'actors') return manager; throw new UnknownElementException(); }, async close() {} };
+    const mocks = {
+      'node:http': { createServer: () => ({ once() {}, listen(_port, _host, done) { done(); }, close(done) { done(); } }) },
+      '@nestjs/common': { Module: () => () => {} }, '@nestjs/core': { NestFactory: { createApplicationContext: async () => app } },
+      '@zlink-systems/framework': { ZLinkFrameworkErrorKind: {} }, '@zlink-systems/nestjs': nestjs,
+      '../Shared/contracts': { ...originalRequire('../Shared/contracts'), registerPackets() {} },
+      './handlers': { createHandlers: () => ({ providers: [] }) },
+      './Scenarios/workload': { workload() {}, async prepare() { calls.push('probe'); } },
+      '../Shared/public-metrics': { publicMetrics: () => ({ async close() {} }) }, '../Shared/flow': { flowCapture: () => null }
+    };
+    const loaded = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(applicationPath, 'utf8'), { module: loaded, exports: loaded.exports, require: name => mocks[name] ?? originalRequire(name), URL, console }, { filename: applicationPath });
+    const config = { runId: 'r', cellId: 'c', configHash: 'h', role: 'server', roleInstance: 0,
+      source: role === 'source', scenario: role === 'source' ? 'pubsub-fanout-echo' : 'cs-remote-session-actor-echo', terminal: 'ordinary',
+      objectRole: role === 'actor' ? 'serverActors' : 'None', meshName: 'mesh', actorIds: ['actor-0', 'actor-1'],
+      metricsUrl: 'http://127.0.0.1:10001', applicationTriggerUrl: 'http://127.0.0.1:10002', workload: { ...matrix.defaults, logicalStreams: 2 } };
+    const runtime = await loaded.exports.createApplication(config);
+    try {
+      assert.deepEqual(calls, [], 'startup leaves preparation to the canonical coordinator');
+      assert.equal(runtime.ready().objectsReady, role !== 'actor');
+      const preparing = runtime.prepareRole();
+      if (role === 'actor') { assert.equal(runtime.ready().objectsReady, false); assert.deepEqual(calls, ['actor-0']); }
+      release(); await preparing;
+      assert.equal(runtime.ready().objectsReady, true);
+      await runtime.prepareRole();
+      assert.deepEqual(calls, role === 'actor' ? ['actor-0', 'actor-1'] : role === 'source' ? ['probe'] : []);
+      assert.equal(runtime.measurement.setupEvidence.length, role === 'actor' ? 2 : 0);
+      assert.equal(runtime.ready().consumersReady, role === 'actor');
+    } finally { release(); await runtime.close(); }
+  }
+});

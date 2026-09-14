@@ -597,6 +597,20 @@ def loaded_artifacts(owned,cell,language,filename="loaded-artifacts.json",allow_
     return observations
 
 
+def prepare_server_roles(roles,request,setup_deadline,cell):
+    acknowledgements=[]
+    try:
+        for source in (False,True):
+            acknowledgements.extend(parallel([role for role in roles if role['_source']==source],
+                lambda role:http_json(role['applicationTriggerUrl'].rsplit('/',1)[0]+'/prepare',request,
+                    max(.001,setup_deadline-time.monotonic()))))
+    finally:
+        original_error=sys.exc_info()[1]
+        try:write_json(cell/'tmp/setup-prepare.json',acknowledgements)
+        except (OSError,ValueError,TypeError):
+            if original_error is None:raise
+
+
 def cell_run(args,language,spec,environment,manifest,redis,exact,repetition=0):
     comparison_key=hashlib.sha256(exact).hexdigest()
     scenario=spec['scenario']
@@ -647,9 +661,7 @@ def cell_run(args,language,spec,environment,manifest,redis,exact,repetition=0):
         loaded_artifacts(owned,cell,language,filename='tmp/infrastructure-loaded-artifacts.json')
         setup_deadline=time.monotonic()+config['workload']['setupTimeoutMs']/1000
         prepare={'runId':args.run_id,'cellId':cell_id,'resetSeq':'0','phase':'setup'}
-        prepare_acks=parallel([r for r in roles if r['_source']],lambda role:http_json(role['applicationTriggerUrl'].rsplit('/',1)[0]+'/prepare',prepare,
-            max(.001,setup_deadline-time.monotonic())))
-        write_json(cell/'tmp/setup-prepare.json',prepare_acks)
+        prepare_server_roles(roles,prepare,setup_deadline,cell)
         for index in range(len(client_files)):
             p=owned.start('client-'+str(index),launch_command(manifest,language,'client')+['--endpoint-config',str(cell/'endpoints.json'),'--client-index',str(index)],client=True)
             c=ClientControl(p,cell/'logs'/('client-'+str(index)+'-control.log'),cell/'tmp'/('client-'+str(index)+'-setup.json'));clients.append(c);owned.controls.append(c)

@@ -64,6 +64,10 @@ public sealed class PerfScenario(IServiceProvider services, Measurement measurem
         timeout.CancelAfter(config.workload.setupTimeoutMs);
         try
         {
+            // The runner owns one target-before-source preparation barrier.
+            // Receivers without owned objects have no setup operation here;
+            // only sources issue the typed probe after all target preparation.
+            if (!config.source && config.objectRole != "Server") return;
             sequences = new long[config.workload.logicalStreams ?? 1];
             if (config.objectRole != "None")
             {
@@ -86,10 +90,23 @@ public sealed class PerfScenario(IServiceProvider services, Measurement measurem
                 else
                 {
                     var manager = services.GetRequiredService<IZLinkSpotManager>();
-                    foreach (var id in config.spotIds) await manager.GetOrCreate(id, "perf-spot").InMesh(config.meshName!)
-                        .Timeout(TimeSpan.FromMilliseconds(config.workload.setupTimeoutMs)).Async(timeout.Token);
+                    foreach (var id in config.spotIds)
+                    {
+                        var result = await manager.GetOrCreate(id, "perf-spot").InMesh(config.meshName!)
+                            .Timeout(TimeSpan.FromMilliseconds(config.workload.setupTimeoutMs)).Async(timeout.Token);
+                        if (result.State == ZLinkSpotCreateState.Rejected)
+                            throw new PerfValidationException("PreparationRejected", "Spot creation rejected.");
+                    }
                 }
+                measurement.SetupEvidence = [new Dictionary<string, object?>
+                {
+                    ["kind"] = "publicObjectsPrepared",
+                    ["source"] = "IZLinkActorManager.GetOrCreate / IZLinkSpotManager.GetOrCreate.Async",
+                    ["observedValue"] = new { actorCount = config.actorIds.Length, spotCount = config.spotIds.Length,
+                        actorSetupConcurrency = config.workload.connectConcurrency ?? 256 }
+                }];
             }
+            if (!config.source) return;
             var request = measurement.Request(0, checked((ulong)Interlocked.Increment(ref sequences[0])), true);
             if (config.mode == "publish") request = measurement.Request(0, checked((ulong)Interlocked.Increment(ref publishSequence)), true);
             if (config.mode == "publish")
@@ -122,10 +139,6 @@ public sealed class PerfScenario(IServiceProvider services, Measurement measurem
                 ValidateReply(request, reply);
                 measurement.SetupEvidence = [new { kind = "typedProbeEcho", source = "public request + full typed payload validation", observedValue = request.correlationId }];
             }
-            if (config.objectRole != "None") measurement.SetupEvidence = measurement.SetupEvidence.Prepend((object)new
-            { kind = "publicObjectsPrepared", source = "IZLinkActorManager.GetOrCreate / IZLinkSpotManager.GetOrCreate.Async",
-                observedValue = new { actorCount = config.actorIds.Length, spotCount = config.spotIds.Length,
-                    actorSetupConcurrency = config.workload.connectConcurrency ?? 256 } }).ToArray();
         }
         catch (Exception error) { measurement.RecordDiagnostic(error); }
     }

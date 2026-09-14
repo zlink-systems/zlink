@@ -31,7 +31,7 @@ var baseline = config.scenario == "channel-echo-only";
 var scenario = app.Services.GetRequiredService<PerfScenario>();
 var channel = baseline ? app.Services.GetRequiredService<ChannelEchoOnlyScenario>() : null;
 ServerApplication.Map(app, config.source ? (baseline ? channel!.RunAsync : scenario.RunAsync) : null,
-    config.source ? (baseline ? channel!.PrepareAsync : scenario.PrepareAsync) : null);
+    baseline ? (config.source ? channel!.PrepareAsync : null) : scenario.PrepareAsync);
 await app.StartAsync();
 
 await app.WaitForShutdownAsync();
