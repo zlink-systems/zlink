@@ -4,6 +4,7 @@ using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Service;
+using Xunit.Abstractions;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -84,7 +85,7 @@ public sealed class ApplicationJobQueueContractTests
     }
 }
 
-public sealed class ApplicationJobQueueTests
+public sealed class ApplicationJobQueueTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task BatchTransitions_PreserveFifoCancellationAndExactlyOncePermitReturn()
@@ -92,7 +93,10 @@ public sealed class ApplicationJobQueueTests
         using var queue = new ZLinkApplicationJobQueue(new(
             ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4));
         var leases = new ZLinkApplicationJobQueueLease?[4];
-        Assert.Equal(4, queue.TryAcquireBatch(leases, 0, 4));
+        using var budget = Assert.IsType<ZLinkApplicationJobQueueLease>(queue.TryAcquireBatch(4));
+        Assert.Equal(4, budget.ReservedPermitCount);
+        for (var index = 0; index < leases.Length; index++)
+            leases[index] = budget.TakeReserved();
         queue.MarkQueuedBatch(leases, 3);
         Assert.Equal(3UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, queue.GetStatus().ReservedSupplyPermits);
@@ -124,23 +128,105 @@ public sealed class ApplicationJobQueueTests
     {
         using var queue = new ZLinkApplicationJobQueue(new(
             ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3));
-        var leases = new ZLinkApplicationJobQueueLease?[64];
-        Assert.Equal(3, queue.TryAcquireBatch(leases, 0, leases.Length));
+        using var budget = Assert.IsType<ZLinkApplicationJobQueueLease>(queue.TryAcquireBatch(64));
+        Assert.Equal(3, budget.ReservedPermitCount);
         Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
-        Assert.Equal(0, queue.TryAcquireBatch(new ZLinkApplicationJobQueueLease?[64], 0, 64));
+        Assert.Null(queue.TryAcquireBatch(64));
         var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
         Assert.False(waiting.IsCompleted);
-        leases[0]!.Dispose();
-        leases[0] = null;
+        using var first = budget.TakeReserved();
+        first.Dispose();
         using var oldest = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(0, queue.TryAcquireBatch(leases, 0, 1));
-        leases[1]!.Dispose();
-        leases[1] = null;
-        Assert.Equal(1, queue.TryAcquireBatch(leases, 0, 1));
-        foreach (var lease in leases)
-            lease?.Dispose();
+        Assert.Null(queue.TryAcquireBatch(1));
+        using var second = budget.TakeReserved();
+        second.Dispose();
+        using var replacement = Assert.IsType<ZLinkApplicationJobQueueLease>(queue.TryAcquireBatch(1));
+        Assert.Equal(1, replacement.ReservedPermitCount);
+        budget.Dispose();
+        replacement.Dispose();
         oldest.Dispose();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public void Unused_budget_allocation_does_not_grow_with_reserved_slot_count()
+    {
+        using var queue = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 256, 1, 256));
+        const int iterations = 128;
+        static long Measure(ZLinkApplicationJobQueue queue, int maximum)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < iterations; index++)
+            {
+                using var budget = queue.TryAcquireBatch(maximum)
+                    ?? throw new InvalidOperationException("The idle queue must reserve the budget.");
+            }
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        _ = Measure(queue, 1);
+        _ = Measure(queue, 64);
+        var one = Measure(queue, 1);
+        var sixtyFour = Measure(queue, 64);
+        output.WriteLine($"unused reservation bytes per turn: one-slot={one / iterations}; 64-slot={sixtyFour / iterations}");
+        Assert.True(sixtyFour <= one + 16L * iterations,
+            $"one-slot bytes={one}; 64-slot bytes={sixtyFour}");
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public async Task Returning_unused_budget_admits_multiple_fifo_waiters_once()
+    {
+        using var queue = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4));
+        using var budget = Assert.IsType<ZLinkApplicationJobQueueLease>(queue.TryAcquireBatch(4));
+        using var cancellation = new CancellationTokenSource();
+        var first = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var cancelled = queue.AcquireAsync(cancellation.Token).AsTask();
+        var last = queue.AcquireAsync(CancellationToken.None).AsTask();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        budget.Dispose();
+        using var firstLease = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        using var lastLease = await last.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        Assert.Equal(2UL, queue.GetStatus().ReservedSupplyPermits);
+        budget.Dispose();
+        Assert.Equal(2UL, queue.GetStatus().PermitsInUse);
+        firstLease.Dispose();
+        lastLease.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public void Budget_transfer_preserves_single_ownership_under_concurrent_split_and_release()
+    {
+        for (var repetition = 0; repetition < 32; repetition++)
+        {
+            using var queue = new ZLinkApplicationJobQueue(new(
+                ZLinkApplicationJobQueueProfile.Balanced, 64, 1, 64));
+            using var budget = Assert.IsType<ZLinkApplicationJobQueueLease>(queue.TryAcquireBatch(64));
+            var leases = new System.Collections.Concurrent.ConcurrentBag<ZLinkApplicationJobQueueLease>();
+            Parallel.Invoke(
+                () =>
+                {
+                    for (var index = 0; index < 64; index++)
+                    {
+                        try { leases.Add(budget.TakeReserved()); }
+                        catch (InvalidOperationException) when (budget.ReservedPermitCount == 0) { break; }
+                    }
+                },
+                budget.Dispose);
+            Assert.Equal((ulong)leases.Count, queue.GetStatus().ReservedSupplyPermits);
+            foreach (var lease in leases)
+            {
+                lease.MarkQueued();
+                lease.ReleaseForHandlerStart();
+                lease.Dispose();
+            }
+            budget.Dispose();
+            Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        }
     }
 
     [Fact]

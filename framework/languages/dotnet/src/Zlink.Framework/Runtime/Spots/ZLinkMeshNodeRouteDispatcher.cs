@@ -429,36 +429,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 if (received.ChannelName is { } channelName)
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)
                         .ConfigureAwait(false);
-                else if (header.Kind == ZLinkMessageKind.Command
-                         && received.ApplicationPayloadView is { } commandView)
+                else
                     await DispatchNodeRouteAsync(
                             received,
                             header,
                             received.Parts,
                             cancellationToken,
-                            commandView)
+                            received.ApplicationPayloadView)
                         .ConfigureAwait(false);
-                else
-                {
-                    Message[]? materialized = null;
-                    try
-                    {
-                        var parts = received.ApplicationPayloadView is { } view
-                            ? materialized = view.RetainMessages().ToArray()
-                            : received.Parts;
-                        await DispatchNodeRouteAsync(
-                                received,
-                                header,
-                                parts,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        if (materialized is not null)
-                            ZLinkMessageParts.DisposeAll(materialized);
-                    }
-                }
             }
         }
     }
@@ -554,33 +532,42 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             return;
         }
 
-        ZLinkRouteHandlerReply reply;
+        Message? ownedRequest = null;
         try
         {
-            reply = await _routeInvoker.InvokeRequestAsync(
-                    descriptor,
-                    _meshName.Value,
-                    sourceRid,
-                    header,
-                    parts,
-                    cancellationToken,
-                    received.Metadata)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await ReplyErrorAsync(
-                    received, header, ex, cancellationToken)
-                .ConfigureAwait(false);
-            scope.HandlerException(
-                _dispatchErrors,
-                ZLinkDispatchErrorAction.ReplyError,
-                ex);
-            return;
-        }
+            ZLinkRouteHandlerReply reply;
+            try
+            {
+                var request = payloadView is { } view
+                    ? ZLinkEnvelopeCodec.DecodeBody(
+                        view, descriptor.MessageType, header.ContentType, _codecs)
+                    : ZLinkEnvelopeCodec.DecodeBody(
+                        parts, descriptor.MessageType, header.ContentType, _codecs);
+                // Only a native Message decoded from a view creates a new owner.
+                // Keep it through reply encoding in case the handler returns it.
+                ownedRequest = payloadView is not null ? request as Message : null;
+                reply = await _routeInvoker.InvokeRequestAsync(
+                        descriptor,
+                        _meshName.Value,
+                        sourceRid,
+                        header,
+                        request,
+                        cancellationToken,
+                        received.Metadata)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await ReplyErrorAsync(
+                        received, header, ex, cancellationToken)
+                    .ConfigureAwait(false);
+                scope.HandlerException(
+                    _dispatchErrors,
+                    ZLinkDispatchErrorAction.ReplyError,
+                    ex);
+                return;
+            }
 
-        try
-        {
             await ReplyResponseAsync(
                     received,
                     header,
@@ -588,12 +575,12 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     reply.MessageType,
                     cancellationToken)
                 .ConfigureAwait(false);
-            }
-        catch (Exception)
-        {
-            throw;
+            scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Replied);
         }
-        scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Replied);
+        finally
+        {
+            ownedRequest?.Dispose();
+        }
     }
 
     private async ValueTask DispatchChannelAsync(

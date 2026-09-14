@@ -3,6 +3,24 @@
 이 문서는 새 세션의 감독 에이전트가 현재 worktree에서 미완료 최적화를 이어가기 위한 기록이다.
 공개 계약이나 전체 완료 보고가 아니다. 사용자의 새 세션 전환 요청으로 신규 작업을 중지했다.
 
+## 0. 중단 (2026-09-14)
+
+사용자 결정으로 이 캠페인은 중단한다. 아래 §1~§8의 남은 계획은 실행하지 않는다.
+중단 시점 기준 남은 작업은 약 45~55 단위(언어 × 기능 단계)로, 집중 작업 2~3주 규모였다.
+§6-7의 "Core 대비 10–15%" 목표는 달성하지 못했고 달성 시도도 하지 않는다.
+
+이 커밋은 중단 시점의 worktree 스냅샷이다. 검증된 변경과 진단용 잔재가 섞여 있으며
+파일별 채택·폐기 판정을 하지 않았다. 이 브랜치를 main에 머지하려면 그 판정을 먼저 해야 한다.
+머지 계획이 없다면 판정도 필요 없다.
+
+진단 worker 단계에서 관측한 backpressure 90% 하락은 제품 결함이 아니다.
+`MessagingFixedRuntimeLevel`·`MessagingNoHostPermit`은 `tests/Zlink.Framework.UnitTests`에만
+존재하고 production `src`에는 없다. 실제 Framework dispatch 경로에는 그 worker 전달이 없으므로
+재현 대상이 아니며 후속 이슈로 남기지 않는다.
+
+이미 main에 반영된 이 캠페인의 성과는 그대로 유효하다:
+Core HWM 언더플로 수정, Java peer 분류 stream 제거, C++ codec owner move, .NET completion owner.
+
 ## 1. 작업 위치와 시작 절차
 
 - 저장소: `/home/hep7/project/zlink`

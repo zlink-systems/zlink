@@ -13,6 +13,10 @@ builder.WebHost.UseUrls(metricsUrl);
 builder.Services.AddSingleton<BenchServerMetrics>();
 builder.Services.AddZLinkFramework(framework =>
 {
+    if (Environment.GetEnvironmentVariable("BENCH_DIAGNOSTIC_FULL_FLOW") == "1")
+        framework.ConfigureDispatch().Diagnostics
+            .SetLevel(Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel.Normal)
+            .SetSampleRate(0.001);
     framework.Codecs.Use(ZLinkProtobufCodec.Default);
     var mesh = framework.AddRouteMesh("bench")
         .Listen(endpoint)
@@ -36,7 +40,8 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
 {
     builder.Logging.ClearProviders();
     builder.Logging.AddConsole();
-    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    builder.Logging.SetMinimumLevel(Environment.GetEnvironmentVariable("BENCH_DIAGNOSTIC_FULL_FLOW") == "1"
+        ? LogLevel.Information : LogLevel.Warning);
 }
 
 static string? ArgValue(string[] args, string name)

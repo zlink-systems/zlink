@@ -61,6 +61,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkMeshConnectionCandidates _connectionCandidates = new();
     private readonly ZLinkMeshPeerAdmission _peerAdmission = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
+    private readonly ConcurrentQueue<KeyValuePair<MailboxKey, OwnedMailbox>>
+        _readyInfrastructureOwners = new();
+    private readonly ConcurrentQueue<KeyValuePair<MailboxKey, OwnedMailbox>>
+        _readyApplicationOwners = new();
     private readonly ConcurrentDictionary<ulong, PendingOperation> _operations = new();
     private readonly Dictionary<RelocationReplyTerminalKey, RelocationReplyTerminal>
         _relocationReplyTerminals = [];
@@ -1893,6 +1897,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 .ToArray());
     }
 
+    public ZLinkRouteMeshTargetClassification ClassifyPeerTarget(RoutingId peerRid)
+    {
+        return RunState(() =>
+        {
+            // The RID index holds the current admitted descriptor. Missing
+            // admissions still use configured intents, including their expected
+            // RID, so closed/Object Client targets keep their classification.
+            var peer = _peersByRid.GetValueOrDefault(peerRid)
+                ?? _peersByIntent.Values.FirstOrDefault(candidate =>
+                    (candidate.RoutingId.IsEmpty
+                        ? candidate.ExpectedRid ?? default
+                        : candidate.RoutingId) == peerRid);
+            if (peer?.Admission is { } admission
+                && (ZLinkMeshNodeObjectRole)admission.ObjectRole == ZLinkMeshNodeObjectRole.Client)
+                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
+            return peer?.State == MeshPeerState.Admitted
+                ? ZLinkRouteMeshTargetClassification.ReadyEligible
+                : ZLinkRouteMeshTargetClassification.Unknown;
+        });
+    }
+
     public MeshPeerChannel[] PeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration)
@@ -1952,40 +1977,58 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return RunState(() =>
         {
             Volatile.Write(ref _readyPosted, 0);
-            foreach (var entry in _ownedMailboxes
-                         .Where(entry => (entry.Key.Domain & domains) != 0)
-                         .OrderBy(static entry =>
-                             entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1)
-                         .ThenBy(static entry => entry.Key.OwnerKind)
-                         .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal))
-            {
-                var mailbox = entry.Value;
-                var canClaim = batch.Count < batch.MaximumRecords;
-                if (!mailbox.TryClaim(
-                        batch.RequireReservedApplicationAdmission
-                            && entry.Key.Domain == MeshReadyDomains.Application,
-                        canClaim, out var availableRecords, out var admissionReserved))
-                    continue;
-                if (!canClaim)
-                    return true;
-                batch.Add(
-                    new MeshReadyRecord(
-                        entry.Key.OwnerKind,
-                        entry.Key.Domain,
-                        entry.Key.SpotId,
-                        entry.Key.Actor,
-                        Math.Min(availableRecords, ReceiveBatchSize),
-                        entry.Key.Domain == MeshReadyDomains.Application
-                        && admissionReserved),
-                    new MeshClaim
-                    {
-                        Receiver = (receiveBatch, receiveFlags) =>
-                            DrainOwnedQueue(mailbox, receiveBatch, receiveFlags),
-                        Releaser = () => ReleaseOwnedMailbox(mailbox)
-                    });
-            }
-            return false;
+            return ((domains & MeshReadyDomains.Infrastructure) != 0
+                    && DrainReadyOwners(_readyInfrastructureOwners, batch))
+                || ((domains & MeshReadyDomains.Application) != 0
+                    && DrainReadyOwners(_readyApplicationOwners, batch));
         });
+    }
+
+    private bool DrainReadyOwners(
+        ConcurrentQueue<KeyValuePair<MailboxKey, OwnedMailbox>> owners,
+        MeshReadyBatch batch)
+    {
+        // Bound this pass to the owners already posted. A worker that requires
+        // reserved admission must leave raw-service owners available to other
+        // consumers without spinning on the same ineligible owner.
+        var remaining = owners.Count;
+        while (remaining-- > 0)
+        {
+            var canClaim = batch.Count < batch.MaximumRecords;
+            KeyValuePair<MailboxKey, OwnedMailbox> entry;
+            if (!(canClaim ? owners.TryDequeue(out entry) : owners.TryPeek(out entry)))
+                break;
+            var mailbox = entry.Value;
+            if (!mailbox.TryClaim(
+                    batch.RequireReservedApplicationAdmission
+                        && entry.Key.Domain == MeshReadyDomains.Application,
+                    canClaim, out var availableRecords, out var admissionReserved))
+            {
+                if (!canClaim)
+                    owners.TryDequeue(out _);
+                if (availableRecords != 0)
+                    owners.Enqueue(entry);
+                continue;
+            }
+            if (!canClaim)
+                return true;
+            batch.Add(
+                new MeshReadyRecord(
+                    entry.Key.OwnerKind,
+                    entry.Key.Domain,
+                    entry.Key.SpotId,
+                    entry.Key.Actor,
+                    Math.Min(availableRecords, ReceiveBatchSize),
+                    entry.Key.Domain == MeshReadyDomains.Application
+                    && admissionReserved),
+                new MeshClaim
+                {
+                    Receiver = (receiveBatch, receiveFlags) =>
+                        DrainOwnedQueue(mailbox, receiveBatch, receiveFlags),
+                    Releaser = () => ReleaseOwnedMailbox(mailbox)
+                });
+        }
+        return false;
     }
 
     public ISpot CreateSpot()
@@ -2935,6 +2978,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         foreach (var mailbox in _ownedMailboxes.Values)
             mailbox.Dispose();
         _ownedMailboxes.Clear();
+        _readyInfrastructureOwners.Clear();
+        _readyApplicationOwners.Clear();
         Interlocked.Exchange(
             ref _reservedRawApplicationAdmission,
             null)?.Dispose();
@@ -4935,7 +4980,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async Task ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[1];
-        var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -4947,8 +4991,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // identity, so correctness does not depend on monitor timing.
                 DrainSocketMonitorEvents();
                 DrainTransportDisconnects(now);
-                if (count > 0)
-                    DrainRawSocket(cancellationToken, admissions);
+                // Completion progress does not make application DATA readable.
+                // Reserve application permits only for a receive-ready event.
+                if (count > 0 && (events[0].Revents
+                    & (PollEventFlags.PollIn | PollEventFlags.PollErr)) != 0)
+                    DrainRawSocket(cancellationToken);
                 ProcessInfrastructure(now);
             }
             catch (OperationCanceledException)
@@ -4973,42 +5020,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket(
-        CancellationToken cancellationToken,
-        ZLinkApplicationJobQueueLease?[] admissions)
+    private void DrainRawSocket(CancellationToken cancellationToken)
     {
         var count = ReceiveBatchSize;
         var queue = _applicationJobQueue;
-        if (queue is not null)
-        {
-            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            if (reserved is not null)
-                Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
-            count = reserved is null ? 0 : 1;
-            admissions[0] = reserved;
-            count += queue.TryAcquireBatch(admissions, count, ReceiveBatchSize - count);
-            if (count == 0)
-            {
-                if (Interlocked.CompareExchange(ref _rawApplicationAdmissionWaitActive, 1, 0) == 0)
-                {
-                    using (ExecutionContext.SuppressFlow())
-                        _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
-                }
-                return;
-            }
-        }
-
-        var startedAt = Stopwatch.GetTimestamp();
-        long bytes = 0;
+        ZLinkApplicationJobQueueLease? reserved = null;
+        ZLinkApplicationJobQueueLease? budget = null;
         try
         {
+            if (queue is not null)
+            {
+                reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
+                if (reserved is not null)
+                    Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
+                count = reserved is null ? 0 : 1;
+                budget = queue.TryAcquireBatch(ReceiveBatchSize - count);
+                count += budget?.ReservedPermitCount ?? 0;
+                if (count == 0)
+                {
+                    if (Interlocked.CompareExchange(ref _rawApplicationAdmissionWaitActive, 1, 0) == 0)
+                    {
+                        using (ExecutionContext.SuppressFlow())
+                            _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
+                    }
+                    return;
+                }
+            }
+
+            var startedAt = Stopwatch.GetTimestamp();
+            long bytes = 0;
             for (var index = 0; index < count; index++)
             {
                 if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
                     return;
                 Received? received = Received.Create();
-                var admission = admissions[index];
-                admissions[index] = null;
+                ZLinkApplicationJobQueueLease? admission = null;
                 try
                 {
                     bool available;
@@ -5016,6 +5062,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         available = _socket!.Recv(received, RecvFlags.DontWait);
                     if (!available)
                         return;
+                    // Capacity was reserved before Recv. Only a received record
+                    // needs its own lease; unused slots stay in the budget owner.
+                    admission = reserved;
+                    reserved = null;
+                    admission ??= budget?.TakeReserved();
                     bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                     using var ownership = new RawIngressOwnership(received, admission);
                     received = null;
@@ -5031,8 +5082,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         finally
         {
-            queue?.ReleaseBatch(admissions);
-            Array.Clear(admissions);
+            reserved?.Dispose();
+            budget?.Dispose();
         }
     }
 
@@ -9037,12 +9088,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var created = 0;
         try
         {
-            wire[created++] = Message.From(
-                ZLinkServiceWireCodec.EncodeApplication(
-                    command,
-                    correlation,
-                    channelName,
-                    !metadata.IsEmpty));
+            wire[created++] = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                command,
+                correlation,
+                channelName,
+                !metadata.IsEmpty);
             if (!metadata.IsEmpty)
                 wire[created++] = Message.From(metadata);
             wire[created++] = ZLinkApplicationPayloadEnvelopeCodec
@@ -9889,11 +9939,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var created = 0;
         try
         {
-            wire[created++] = Message.From(
-                ZLinkServiceWireCodec.EncodeReply(
-                    correlation,
-                    (int)result,
-                    failureCode));
+            wire[created++] = ZLinkServiceWireCodec.EncodeReplyMessage(
+                correlation,
+                (int)result,
+                failureCode);
             if (parts.Count != 0)
                 wire[created++] = ZLinkApplicationPayloadEnvelopeCodec
                     .EncodeFrameworkMultipartMessage(parts);
@@ -10380,13 +10429,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool TryEnqueueInfrastructureCompletion(QueuedRecord queued)
     {
-        var mailbox = _ownedMailboxes.GetOrAdd(
-            MailboxKey.ForNode(MeshReadyDomains.Infrastructure),
-            _ => new OwnedMailbox(
-                RecordOwnedRecordEnqueued,
-                RecordOwnedRecordDequeued));
+        var mailbox = GetOwnedMailbox(MailboxKey.ForNode(MeshReadyDomains.Infrastructure));
         return mailbox.TryEnqueue(queued);
     }
+
+    private OwnedMailbox GetOwnedMailbox(MailboxKey key) =>
+        _ownedMailboxes.GetOrAdd(
+            key,
+            static (mailboxKey, node) => new OwnedMailbox(
+                node.RecordOwnedRecordEnqueued,
+                node.RecordOwnedRecordDequeued,
+                mailbox =>
+                {
+                    var owners = mailboxKey.Domain == MeshReadyDomains.Infrastructure
+                        ? node._readyInfrastructureOwners
+                        : node._readyApplicationOwners;
+                    owners.Enqueue(new KeyValuePair<MailboxKey, OwnedMailbox>(mailboxKey, mailbox));
+                }),
+            this);
 
     private static IDisposable AttachApplicationAdmission(
         IDisposable payloadOwner,
@@ -10409,11 +10469,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var queued = new QueuedRecord(record, parts, payloadBytes, payloadOwner);
         try
         {
-            var mailbox = _ownedMailboxes.GetOrAdd(
-                key,
-                _ => new OwnedMailbox(
-                    RecordOwnedRecordEnqueued,
-                    RecordOwnedRecordDequeued));
+            var mailbox = GetOwnedMailbox(key);
             if (admitApplication
                 && payloadOwner is ZLinkApplicationJobQueueRecordOwner
                 {

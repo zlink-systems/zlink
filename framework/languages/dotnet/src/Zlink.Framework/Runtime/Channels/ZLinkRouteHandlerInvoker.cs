@@ -76,12 +76,10 @@ internal sealed class ZLinkRouteHandlerInvoker(
         string routerChannelId,
         RoutingId sourceRid,
         ZLinkEnvelopeHeader header,
-        IReadOnlyList<Message> parts,
+        object? message,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null)
     {
-        var message = ZLinkEnvelopeCodec.DecodeBody(parts, descriptor.MessageType, codecs);
-
         var context = new ZLinkRouteMessageContext(
             routerChannelId,
             null,

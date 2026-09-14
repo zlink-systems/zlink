@@ -47,13 +47,36 @@ public final class RawStack implements AutoCloseable {
     }
 
     public RawOperation request() {
+        return request(0, 0, PayloadCodec.RAW_WIRE);
+    }
+
+    /**
+     * Test-only asymmetric request/reply shape. The logical driver payload may
+     * remain 4KB while this raw request is 64B and its reply is validated as a
+     * real 4KB body. Completion/admission ownership remains RawOperation's.
+     */
+    public RawOperation request(int requestPayloadSize, int expectedReplyPayloadSize) {
+        return request(requestPayloadSize, expectedReplyPayloadSize, PayloadCodec.RAW_WIRE);
+    }
+
+    /** Uses a test-only payload boundary without changing RawOperation progress ownership. */
+    public RawOperation request(int requestPayloadSize, int expectedReplyPayloadSize,
+        PayloadCodec codec) {
+        if ((requestPayloadSize == 0) != (expectedReplyPayloadSize == 0)
+            || requestPayloadSize < 0 || expectedReplyPayloadSize < 0) {
+            throw new IllegalArgumentException("request and reply shape must both be set or unset");
+        }
+        java.util.Objects.requireNonNull(codec, "codec");
         return new RawOperation() {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
+                int outboundPayloadSize = requestPayloadSize == 0
+                    ? payloadSize : requestPayloadSize;
+                int replyPayloadSize = expectedReplyPayloadSize == 0
+                    ? payloadSize : expectedReplyPayloadSize;
                 var operation = router.request(peer);
                 try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
-                     Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
+                     Message body = codec.encode(outboundPayloadSize, runId, phase, sequence)) {
                     var submission = operation
                         .message(header)
                         .message(body)
@@ -66,21 +89,26 @@ public final class RawStack implements AutoCloseable {
                     return new RawSubmission(submission.result(),
                         admitted,
                         submission.reply().toCompletableFuture().thenAccept(
-                            parts -> validate(parts, runId, phase, payloadSize,
-                                sequence)));
+                            parts -> validate(parts, runId, phase, replyPayloadSize, sequence,
+                                expectedReplyPayloadSize != 0, codec)));
                 }
             }
         };
     }
 
     public RawOperation send() {
+        return send(PayloadCodec.RAW_WIRE);
+    }
+
+    /** Uses a test-only payload boundary without changing RawOperation progress ownership. */
+    public RawOperation send(PayloadCodec codec) {
+        java.util.Objects.requireNonNull(codec, "codec");
         return new RawOperation() {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.send(peer);
                 try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
-                     Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
+                     Message body = codec.encode(payloadSize, runId, phase, sequence)) {
                     var submission = operation
                         .message(header)
                         .message(body)
@@ -129,13 +157,16 @@ public final class RawStack implements AutoCloseable {
     }
 
     private static void validate(
-        List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+        List<Message> parts, int runId, byte phase, int payloadSize, long sequence,
+        boolean requireExactBodySize, PayloadCodec codec) {
         try {
             if (parts.isEmpty()) {
                 throw new IllegalStateException("raw request returned no reply parts");
             }
-            ByteBuffer body = RawWire.decodeBenchPayloadBody(
-                parts.get(parts.size() - 1).dataBuffer());
+            ByteBuffer body = codec.decode(parts.get(parts.size() - 1));
+            if (body == null || (requireExactBodySize && body.remaining() != payloadSize)) {
+                throw new IllegalStateException("raw reply body size mismatch");
+            }
             BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
             if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
                 throw new IllegalStateException("raw reply header mismatch");
@@ -145,6 +176,25 @@ public final class RawStack implements AutoCloseable {
                 part.close();
             }
         }
+    }
+
+    /** Exact typed-payload boundary used by RawOperation; the default is RawWire. */
+    public interface PayloadCodec {
+        PayloadCodec RAW_WIRE = new PayloadCodec() {
+            @Override
+            public Message encode(int payloadSize, int runId, byte phase, long sequence) {
+                return RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence);
+            }
+
+            @Override
+            public ByteBuffer decode(Message frame) {
+                return RawWire.decodeBenchPayloadBody(frame.dataBuffer());
+            }
+        };
+
+        Message encode(int payloadSize, int runId, byte phase, long sequence);
+
+        ByteBuffer decode(Message frame);
     }
 
     @Override

@@ -9,6 +9,58 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshPermitHandoffTests
 {
     [Fact]
+    public async Task CompletionOnlyIngress_DoesNotReserveApplicationPermits()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = context.CreateRouterSocket();
+        await using var target = context.CreateRouterSocket();
+        var targetRid = RoutingId.From("completion-target");
+        target.SetRoutingId(targetRid);
+        var endpoint = $"inproc://completion-permits-{Guid.NewGuid():N}";
+        target.Bind(endpoint);
+        source.Connect(endpoint);
+        using (var handshake = Message.From("handshake"))
+            source.Send(targetRid).Message(handshake).Submit();
+        using (var received = Received.Create())
+            Assert.True(target.Recv(received));
+
+        using var queue = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 64, 1, 64));
+        await using var node = new ZLinkManagedMeshNode(
+            context, "completion-permits", applicationJobQueue: queue);
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(source, PollEventFlags.PollCompletion, 1);
+        using var stop = new CancellationTokenSource();
+        SetField(node, "_socket", source);
+        SetField(node, "_poller", poller);
+        var receiveLoop = Task.Run(() => (Task)node.GetType()
+            .GetMethod("ReceiveLoop", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(node, [stop.Token])!);
+        try
+        {
+            using var request = Message.From("request");
+            var replyTask = source.Request(targetRid).Message(request).Async().Reply;
+            using var incoming = Received.Create();
+            Assert.True(target.Recv(incoming));
+            using var reply = Message.From("reply");
+            incoming.Reply().Message(reply).Submit();
+            var parts = await replyTask;
+            foreach (var part in parts)
+                part.Dispose();
+            stop.Cancel();
+            await receiveLoop;
+            Assert.Equal(0UL, queue.GetStatus().PeakPermitsInUse);
+        }
+        finally
+        {
+            stop.Cancel();
+            await receiveLoop;
+            SetField(node, "_socket", null);
+            SetField(node, "_poller", null);
+        }
+    }
+
+    [Fact]
     public async Task RawIngress_StopsReceivingAtApplicationPermitCapacity()
     {
         const int capacity = 2;
@@ -152,7 +204,7 @@ public sealed class MeshPermitHandoffTests
     private static void Drain(ZLinkManagedMeshNode node, CancellationToken stop) =>
         node.GetType().GetMethod("DrainRawSocket",
                 BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(node, [stop, new ZLinkApplicationJobQueueLease?[64]]);
+            .Invoke(node, [stop]);
 
     private static void SetField(object instance, string name, object? value) =>
         instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!

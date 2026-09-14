@@ -256,3 +256,45 @@ dependencies {
     implementation("org.lz4:lz4-java:1.8.0")
     implementation("org.slf4j:slf4j-api:2.0.16")
 }
+
+// A bench runner supplies the already generated bench Shared jar. This source set
+// is absent from ordinary builds: it is neither a production API nor a module export.
+val benchSharedJarPath = providers.gradleProperty("zlinkBenchSharedJar").orNull
+if (!benchSharedJarPath.isNullOrBlank()) {
+    require(File(benchSharedJarPath).isAbsolute) {
+        "zlinkBenchSharedJar must be an absolute path"
+    }
+    val benchSharedJar = file(benchSharedJarPath)
+    require(benchSharedJar.isFile) {
+        "zlinkBenchSharedJar must name an existing absolute bench Shared jar"
+    }
+    val diagnostic = sourceSets.create("diagnostic") {
+        java.srcDir("src/diagnostic/java")
+        java.exclude("module-info.java")
+        compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+        runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
+    }
+    configurations.named(diagnostic.implementationConfigurationName) {
+        extendsFrom(configurations.testImplementation.get())
+    }
+    configurations.named(diagnostic.runtimeOnlyConfigurationName) {
+        extendsFrom(configurations.testRuntimeOnly.get())
+    }
+    dependencies {
+        add(diagnostic.implementationConfigurationName, files(benchSharedJar))
+        // The supplied Shared jar is a plain test input, not a resolved Maven
+        // component, so retain its generated BenchPayload runtime dependency here.
+        add(diagnostic.implementationConfigurationName, "com.google.protobuf:protobuf-java:4.30.2")
+        add(diagnostic.implementationConfigurationName, project(":zlink-framework-codec-protobuf"))
+    }
+    tasks.register<Jar>("diagnosticJar") {
+        archiveClassifier.set("diagnostic")
+        from(diagnostic.output)
+        dependsOn(tasks.named(diagnostic.classesTaskName))
+    }
+    tasks.named<JavaCompile>(diagnostic.compileJavaTaskName) {
+        // This test-owned classpath source set may inspect internal ownership;
+        // production compilation and its module-boundary verification stay modular.
+        modularity.inferModulePath.set(false)
+    }
+}

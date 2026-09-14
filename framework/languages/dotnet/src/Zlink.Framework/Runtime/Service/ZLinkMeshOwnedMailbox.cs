@@ -50,10 +50,11 @@ internal sealed class ZLinkSharedEnvelopeOwner : IDisposable
 /// <summary>
 /// Bounded mailbox for records owned by one node, Spot or Actor.
 /// </summary>
-internal sealed class ZLinkMeshNodeOwnedMailbox(
-    Action<ulong> onRecordEnqueued,
-    Action<ulong> onRecordDequeued)
+internal sealed class ZLinkMeshNodeOwnedMailbox
 {
+    private readonly Action<ulong> _onRecordEnqueued;
+    private readonly Action<ulong> _onRecordDequeued;
+    private readonly Action<ZLinkMeshNodeOwnedMailbox>? _onReady;
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
     private ulong _pendingBytes;
@@ -62,26 +63,40 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     // Zero still holds that claim until Release; -1 means no active claim.
     private int _claimedRecordCount = -1;
 
-    internal bool HasRecords => AwaitStateLane(
-        _lane.RunAsync(() => _records.Count != 0));
+    internal ZLinkMeshNodeOwnedMailbox(Action<ulong> onRecordEnqueued,
+        Action<ulong> onRecordDequeued, Action<ZLinkMeshNodeOwnedMailbox>? onReady = null)
+    {
+        _onRecordEnqueued = onRecordEnqueued;
+        _onRecordDequeued = onRecordDequeued;
+        _onReady = onReady;
+    }
 
-    internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
+    internal bool HasRecords => AwaitStateLane(
+        _lane.RunAsync(this, static mailbox => mailbox._records.Count != 0));
+
+    internal int Count => AwaitStateLane(_lane.RunAsync(this, static mailbox => mailbox._records.Count));
 
     internal bool TryEnqueue(ZLinkMeshQueuedRecord record)
     {
-        var pendingBytes = record.PendingBytes;
-        return AwaitStateLane(_lane.RunAsync(() =>
+        return AwaitStateLane(_lane.RunAsync((Mailbox: this, Record: record), static state =>
         {
+            var mailbox = state.Mailbox;
+            var record = state.Record;
+            var pendingBytes = record.PendingBytes;
             if (pendingBytes == ulong.MaxValue)
                 return false;
-            _records.Enqueue(record);
+            mailbox._records.Enqueue(record);
             if (record.HasApplicationJobAdmission)
-                _applicationAdmissionRecords++;
-            _pendingBytes = checked(_pendingBytes + pendingBytes);
+                mailbox._applicationAdmissionRecords++;
+            mailbox._pendingBytes = checked(mailbox._pendingBytes + pendingBytes);
 
             // Publish accounting before another mailbox turn can dequeue
             // this record. Readiness reads this existing aggregate directly.
-            onRecordEnqueued(pendingBytes);
+            mailbox._onRecordEnqueued(pendingBytes);
+            // Only the empty -> ready transition posts an owner. An active
+            // claim posts its residue when released, not on every arrival.
+            if (mailbox._records.Count == 1 && mailbox._claimedRecordCount < 0)
+                mailbox._onReady?.Invoke(mailbox);
             return true;
         }));
     }
@@ -89,15 +104,18 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     internal bool TryClaim(bool requireApplicationAdmission, bool claim, out int count,
         out bool applicationAdmissionReserved)
     {
-        var result = AwaitStateLane(_lane.RunAsync(() =>
+        var result = AwaitStateLane(_lane.RunAsync(
+            (Mailbox: this, RequireAdmission: requireApplicationAdmission, Claim: claim), static state =>
         {
-            var admitted = _applicationAdmissionRecords == _records.Count;
-            if (_claimedRecordCount >= 0 || _records.Count == 0
-                || (requireApplicationAdmission && !admitted))
+            var mailbox = state.Mailbox;
+            var admitted = mailbox._applicationAdmissionRecords == mailbox._records.Count;
+            if (mailbox._claimedRecordCount >= 0 || mailbox._records.Count == 0)
                 return (Ready: false, Count: 0, Admitted: false);
-            if (claim)
-                _claimedRecordCount = _records.Count;
-            return (Ready: true, Count: _records.Count, Admitted: admitted);
+            if (state.RequireAdmission && !admitted)
+                return (Ready: false, Count: mailbox._records.Count, Admitted: false);
+            if (state.Claim)
+                mailbox._claimedRecordCount = mailbox._records.Count;
+            return (Ready: true, Count: mailbox._records.Count, Admitted: admitted);
         }));
         count = result.Count;
         applicationAdmissionReserved = result.Admitted;
@@ -106,21 +124,23 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal bool Drain(MeshReceiveBatch batch, int maximumRecords)
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
+        return AwaitStateLane(_lane.RunAsync((Mailbox: this, Batch: batch, Maximum: maximumRecords), static state =>
         {
+            var mailbox = state.Mailbox;
+            var batch = state.Batch;
             var count = 0;
-            var limit = Math.Min(maximumRecords, _claimedRecordCount);
-            while (count < limit && _records.Count != 0)
+            var limit = Math.Min(state.Maximum, mailbox._claimedRecordCount);
+            while (count < limit && mailbox._records.Count != 0)
             {
-                var candidate = _records.Peek();
+                var candidate = mailbox._records.Peek();
                 if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
                     break;
-                var record = _records.Dequeue();
-                _claimedRecordCount--;
+                var record = mailbox._records.Dequeue();
+                mailbox._claimedRecordCount--;
                 if (record.HasApplicationJobAdmission)
-                    _applicationAdmissionRecords--;
-                _pendingBytes -= record.PendingBytes;
-                onRecordDequeued(record.PendingBytes);
+                    mailbox._applicationAdmissionRecords--;
+                mailbox._pendingBytes -= record.PendingBytes;
+                mailbox._onRecordDequeued(record.PendingBytes);
                 batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
                 count++;
             }
@@ -130,27 +150,31 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal bool Release()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
+        return AwaitStateLane(_lane.RunAsync(this, static mailbox =>
         {
-            _claimedRecordCount = -1;
-            return _records.Count != 0;
+            mailbox._claimedRecordCount = -1;
+            if (mailbox._records.Count != 0)
+                mailbox._onReady?.Invoke(mailbox);
+            return mailbox._records.Count != 0;
         }));
     }
 
     internal void Dispose()
     {
         List<ZLinkMeshQueuedRecord> removed = [];
-        AwaitStateLane(_lane.RunAsync(() =>
+        AwaitStateLane(_lane.RunAsync((Mailbox: this, Removed: removed), static state =>
         {
-            while (_records.Count != 0)
+            var mailbox = state.Mailbox;
+            while (mailbox._records.Count != 0)
             {
-                var record = _records.Dequeue();
-                removed.Add(record);
-                onRecordDequeued(record.PendingBytes);
+                var record = mailbox._records.Dequeue();
+                state.Removed.Add(record);
+                mailbox._onRecordDequeued(record.PendingBytes);
             }
-            _pendingBytes = 0;
-            _applicationAdmissionRecords = 0;
-            _claimedRecordCount = -1;
+            mailbox._pendingBytes = 0;
+            mailbox._applicationAdmissionRecords = 0;
+            mailbox._claimedRecordCount = -1;
+            return true;
         }));
 
         foreach (var record in removed)
@@ -160,8 +184,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
 }
 
 internal sealed class ZLinkMeshQueuedRecord : IDisposable
@@ -173,9 +195,8 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal const ulong FixedRecordBytes = 256;
     private IReadOnlyList<Message>? _parts;
     private IDisposable? _payloadOwner;
-    private readonly ulong _payloadBytes;
     private readonly ulong _pendingBytes;
-    internal MeshReceiveRecord Record { get; private set; }
+    internal MeshReceiveRecord Record { get; }
 
     internal ZLinkMeshQueuedRecord(
         MeshReceiveRecord record,
@@ -184,20 +205,20 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
         IDisposable? payloadOwner = null)
     {
         _parts = parts;
-        _payloadBytes = applicationPayloadBytes
+        var payloadBytes = applicationPayloadBytes
                         ?? record.ApplicationPayloadBytes
                         ?? (parts is IZLinkApplicationPayloadSized sized
                             ? sized.ApplicationPayloadBytes
                             : throw new InvalidOperationException(
                                 "Queued mesh records must carry application payload bytes."));
-        record.ApplicationPayloadBytes = _payloadBytes;
+        record.ApplicationPayloadBytes = payloadBytes;
         Record = record;
         _payloadOwner = payloadOwner;
         _pendingBytes = ComputePendingBytes(
-            _payloadBytes,
+            payloadBytes,
             (ulong)(record.ApplicationMetadata?.Length ?? 0));
     }
-    internal ulong PayloadBytes => _payloadBytes;
+    internal ulong PayloadBytes => Record.ApplicationPayloadBytes!.Value;
 
     internal ulong PendingBytes => _pendingBytes;
 

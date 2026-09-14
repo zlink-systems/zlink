@@ -770,6 +770,82 @@ public sealed class ServiceRuntimeFoundationTests
     //  u32 terminalResult + u32 failureCode + tail. An empty tail therefore
     //  yields exactly 21 bytes with no u16 tail-length field. These vectors are
     //  byte-identical across C++/Java/Node/.NET.
+    [Theory]
+    [InlineData(16, null, false)]
+    [InlineData(17, null, true)]
+    [InlineData(18, "작업😀", true)]
+    [InlineData(19, "worker", false)]
+    public void Native_application_headers_preserve_wire_bytes(int commandValue, string? channel, bool metadata)
+    {
+        var command = (ServiceWireConstants.Command)commandValue;
+        var correlation = command is ServiceWireConstants.Command.NodeRequest or ServiceWireConstants.Command.ChannelRequest
+            ? ulong.MaxValue : 0;
+        var expected = ZLinkServiceWireCodec.EncodeApplication(command, correlation, channel, metadata);
+        using var actual = ZLinkServiceWireCodec.EncodeApplicationMessage(command, correlation, channel, metadata);
+        Assert.Equal(expected, actual.ToArray());
+        Assert.True(ZLinkServiceWireCodec.TryDecodeApplication(actual.AsReadOnlySpan(), out var decoded, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(correlation, decoded.Correlation);
+        Assert.Equal(channel, decoded.ChannelName);
+        Assert.Equal(metadata, decoded.HasMetadata);
+    }
+
+    [Theory]
+    [InlineData(0, 0, false)]
+    [InlineData(102, 14, true)]
+    [InlineData(104, 16, false)]
+    public void Native_reply_headers_preserve_inline_tail(int result, uint failure, bool hasTail)
+    {
+        byte[] tail = hasTail ? [1, 2, 3] : [];
+        var expected = ZLinkServiceWireCodec.EncodeReply(ulong.MaxValue, result, failure, tail);
+        using var actual = ZLinkServiceWireCodec.EncodeReplyMessage(ulong.MaxValue, result, failure, tail);
+        Assert.Equal(expected, actual.ToArray());
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(actual.AsReadOnlySpan(), out var decoded, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(ulong.MaxValue, decoded.Correlation);
+        Assert.Equal(tail, decoded.Tail);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Native_node_and_reply_headers_allocate_only_the_owned_message(int kind)
+    {
+        Func<Message> encode = kind switch
+        {
+            0 => () => ZLinkServiceWireCodec.EncodeApplicationMessage(ServiceWireConstants.Command.NodeSend, 0, null, false),
+            1 => () => ZLinkServiceWireCodec.EncodeApplicationMessage(ServiceWireConstants.Command.NodeRequest, 1, null, false),
+            _ => () => ZLinkServiceWireCodec.EncodeReplyMessage(1, 0, 0)
+        };
+        var length = kind switch { 0 => 5, 1 => 13, _ => 21 };
+        for (var index = 0; index < 256; index++) { using var frame = encode(); }
+        const int iterations = 1024;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++) { using var frame = new Message(length); }
+        var ownedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++) { using var frame = encode(); }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(allocated <= ownedBytes + iterations * 16L,
+            $"Native header encoding allocated {allocated} managed bytes; owned Message allocated {ownedBytes} bytes.");
+    }
+
+    [Fact]
+    public void Native_headers_preserve_invalid_field_rejections()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ZLinkServiceWireCodec.EncodeApplicationMessage(
+            ServiceWireConstants.Command.NodeRequest, 0, null, false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ZLinkServiceWireCodec.EncodeApplicationMessage(
+            ServiceWireConstants.Command.NodeSend, 1, null, false));
+        Assert.Throws<ArgumentNullException>(() => ZLinkServiceWireCodec.EncodeApplicationMessage(
+            ServiceWireConstants.Command.ChannelSend, 0, null, false));
+        Assert.Throws<ArgumentException>(() => ZLinkServiceWireCodec.EncodeApplicationMessage(
+            ServiceWireConstants.Command.ChannelSend, 0, "bad\0channel", false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ZLinkServiceWireCodec.EncodeReplyMessage(0, 0, 0));
+        Assert.Throws<ArgumentException>(() => ZLinkServiceWireCodec.EncodeReplyMessage(1, 101, 19));
+    }
+
     [Fact]
     public void Golden_ReplyHeader_PinsInlineSchemaTailByteLayout()
     {

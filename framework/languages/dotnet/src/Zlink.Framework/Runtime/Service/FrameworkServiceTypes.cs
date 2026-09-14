@@ -511,7 +511,11 @@ internal sealed class MeshReceiveBatch : IDisposable
         IDisposable? payloadOwner = null)
     {
         _entries.Add((record, parts, payloadOwner));
-        Bytes = checked(Bytes + parts.Sum(static part => Math.Max(part.Size, 0)));
+        // Admission and accounting use the same ingress-owned size, including
+        // zero-copy records whose materialized part list is empty.
+        Bytes = checked(Bytes + (record.ApplicationPayloadBytes is { } payloadBytes
+            ? checked((long)payloadBytes)
+            : Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MeasureParts(parts)));
     }
     public void Reset()
     {
@@ -722,6 +726,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     void PublishDraining();
     MeshNodeStatus Status();
     MeshNodePeer[] Peers();
+    ZLinkRouteMeshTargetClassification ClassifyPeerTarget(RoutingId peerRid);
     MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
     IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
     void SetReadyHandler(Func<MeshReadyDomains, MeshReadyDomains> handler);

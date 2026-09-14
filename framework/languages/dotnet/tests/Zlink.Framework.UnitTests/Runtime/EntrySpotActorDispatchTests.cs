@@ -10801,6 +10801,16 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public IReadOnlyList<MeshNodePeer> MeshPeers() => AdmittedMeshPeers;
 
+        public ZLinkRouteMeshTargetClassification ClassifyMeshPeerTarget(RoutingId peerRid)
+        {
+            var peer = AdmittedMeshPeers.FirstOrDefault(candidate => candidate.RoutingId == peerRid);
+            if (peer?.ObjectRole == ZLinkMeshNodeObjectRole.Client)
+                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
+            return peer?.State == MeshPeerState.Admitted
+                ? ZLinkRouteMeshTargetClassification.ReadyEligible
+                : ZLinkRouteMeshTargetClassification.Unknown;
+        }
+
         public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
             RoutingId peerRid,
             ulong lifecycleGeneration) => [];

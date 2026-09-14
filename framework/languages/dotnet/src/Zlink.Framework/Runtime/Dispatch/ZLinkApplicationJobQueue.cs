@@ -179,24 +179,25 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             return ValueTask.FromCanceled<ZLinkApplicationJobQueueLease>(
                 cancellationToken);
 
-        var acquired = AwaitStateLane(_lane.RunAsync(() =>
+        var acquired = AwaitStateLane(_lane.RunAsync((Owner: this, Token: cancellationToken), static state =>
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_waiters.Count == 0
-                && PermitsInUseUnderLock()
-                < _capacity.EffectiveMaxQueuedApplicationJobs)
+            var owner = state.Owner;
+            ObjectDisposedException.ThrowIf(owner._disposed, owner);
+            if (owner._waiters.Count == 0
+                && owner.PermitsInUseUnderLock()
+                < owner._capacity.EffectiveMaxQueuedApplicationJobs)
             {
-                _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
-                ObservePeakUnderLock();
-                var immediateLease = new ZLinkApplicationJobQueueLease(this);
-                return new AcquireResult(null, immediateLease, UpdatePressureStateOnLane());
+                owner._reservedSupplyPermits = checked(owner._reservedSupplyPermits + 1);
+                owner.ObservePeakUnderLock();
+                var immediateLease = new ZLinkApplicationJobQueueLease(owner);
+                return new AcquireResult(null, immediateLease, owner.UpdatePressureStateOnLane());
             }
             var waiter = new Waiter(
-                cancellationToken,
-                _timeProvider.GetTimestamp(),
-                _measurementEpoch);
-            waiter.Node = _waiters.AddLast(waiter);
-            _capacityWaiters = checked(_capacityWaiters + 1);
+                state.Token,
+                owner._timeProvider.GetTimestamp(),
+                owner._measurementEpoch);
+            waiter.Node = owner._waiters.AddLast(waiter);
+            owner._capacityWaiters = checked(owner._capacityWaiters + 1);
             return new AcquireResult(waiter, null, false);
         }));
 
@@ -230,26 +231,18 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
     {
-        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(1)));
-        if (acquired.PressureChanged)
-            _receiveFlowController.ApplyPending();
-        lease = acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this);
+        lease = TryAcquireBatch(1);
         return lease is not null;
     }
 
-    internal int TryAcquireBatch(
-        ZLinkApplicationJobQueueLease?[] destination, int offset, int maximum)
+    internal ZLinkApplicationJobQueueLease? TryAcquireBatch(int maximum)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(maximum);
-        if (offset > destination.Length - maximum)
-            throw new ArgumentOutOfRangeException(nameof(maximum));
-        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(maximum)));
-        for (var index = 0; index < acquired.Count; index++)
-            destination[offset + index] = new ZLinkApplicationJobQueueLease(this);
+        var acquired = AwaitStateLane(_lane.RunAsync((Owner: this, Maximum: maximum),
+            static state => state.Owner.ReserveAvailableOnLane(state.Maximum)));
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
-        return acquired.Count;
+        return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this, acquired.Count);
     }
 
     private (int Count, bool PressureChanged) ReserveAvailableOnLane(int maximum)
@@ -268,7 +261,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal ZLinkApplicationJobQueueStatus GetStatus()
     {
-        return AwaitStateLane(_lane.RunAsync(GetStatusOnLane));
+        return AwaitStateLane(_lane.RunAsync(this, static owner => owner.GetStatusOnLane()));
     }
 
     private ZLinkApplicationJobQueueStatus GetStatusOnLane()
@@ -327,45 +320,39 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     }
 
     internal void MarkQueued(ZLinkApplicationJobQueueLease lease) =>
-        AwaitStateLane(_lane.RunAsync(() => MarkQueuedOnLane(lease)));
+        AwaitStateLane(_lane.RunAsync((Owner: this, Lease: lease), static state =>
+        {
+            state.Owner.MarkQueuedOnLane(state.Lease);
+            return true;
+        }));
 
     internal void MarkQueuedBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases, int count)
     {
         if (count == 0) return;
-        AwaitStateLane(_lane.RunAsync(() =>
+        AwaitStateLane(_lane.RunAsync((Owner: this, Leases: leases, Count: count), static state =>
         {
-            for (var index = 0; index < count; index++)
-                if (leases[index] is { } lease)
-                    MarkQueuedOnLane(lease);
+            for (var index = 0; index < state.Count; index++)
+                if (state.Leases[index] is { } lease)
+                    state.Owner.MarkQueuedOnLane(lease);
+            return true;
         }));
     }
 
     private void MarkQueuedOnLane(ZLinkApplicationJobQueueLease lease)
     {
-        if (!lease.TryMarkQueued())
+        var count = lease.TryMarkQueued();
+        if (count == 0)
             return;
-        _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
-        _queuedApplicationJobs = checked(_queuedApplicationJobs + 1);
+        _reservedSupplyPermits = checked(_reservedSupplyPermits - (ulong)count);
+        _queuedApplicationJobs = checked(_queuedApplicationJobs + (ulong)count);
     }
 
     internal void Release(ZLinkApplicationJobQueueLease lease)
     {
-        var released = AwaitStateLane(_lane.RunAsync(() => ReleaseOnLane(lease)));
-        CompleteRelease(released);
-    }
-
-    internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
-    {
-        var released = AwaitStateLane(_lane.RunAsync(() =>
+        var released = AwaitStateLane(_lane.RunAsync((Owner: this, Lease: lease), static state =>
         {
             List<ReleaseResult>? results = null;
-            for (var index = 0; index < leases.Count; index++)
-                if (leases[index] is { } lease)
-                {
-                    var result = ReleaseOnLane(lease);
-                    if (result.AdmittedWaiter is not null || result.PressureChanged)
-                        (results ??= []).Add(result);
-                }
+            state.Owner.ReleaseOnLane(state.Lease, ref results);
             return results;
         }));
         if (released is not null)
@@ -373,34 +360,51 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                 CompleteRelease(result);
     }
 
-    private ReleaseResult ReleaseOnLane(ZLinkApplicationJobQueueLease lease)
+    internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
+    {
+        var released = AwaitStateLane(_lane.RunAsync((Owner: this, Leases: leases), static state =>
+        {
+            List<ReleaseResult>? results = null;
+            for (var index = 0; index < state.Leases.Count; index++)
+                if (state.Leases[index] is { } lease)
+                    state.Owner.ReleaseOnLane(lease, ref results);
+            return results;
+        }));
+        if (released is not null)
+            foreach (var result in released)
+                CompleteRelease(result);
+    }
+
+    private void ReleaseOnLane(
+        ZLinkApplicationJobQueueLease lease, ref List<ReleaseResult>? results)
     {
         var previous = lease.TryRelease();
-        if (previous == ZLinkApplicationJobQueueLease.LeaseState.Released)
-            return default;
-        if (previous == ZLinkApplicationJobQueueLease.LeaseState.Reserved)
-            _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
+        var remaining = Math.Abs(previous);
+        if (remaining == 0) return;
+        if (previous > 0)
+            _reservedSupplyPermits = checked(_reservedSupplyPermits - (ulong)remaining);
         else
-            _queuedApplicationJobs = checked(_queuedApplicationJobs - 1);
+            _queuedApplicationJobs = checked(_queuedApplicationJobs - (ulong)remaining);
 
-        while (_waiters.First is { } node)
+        // One lease returns one owned quantity. Only real FIFO waiters need
+        // individual admissions; unused receive-budget slots are not jobs.
+        while (remaining != 0 && _waiters.First is { } node)
         {
             var candidate = node.Value;
             _waiters.RemoveFirst();
             candidate.Node = null;
             if (candidate.State != WaiterState.Waiting)
                 continue;
+            remaining--;
             candidate.State = WaiterState.Admitted;
             _capacityWaiters = checked(_capacityWaiters - 1);
             RecordCompletedWaitUnderLock(candidate);
             _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
-            ObservePeakUnderLock();
-            return new ReleaseResult(
-                candidate,
-                new ZLinkApplicationJobQueueLease(this),
-                UpdatePressureStateOnLane());
+            (results ??= []).Add(new ReleaseResult(
+                candidate, new ZLinkApplicationJobQueueLease(this), false));
         }
-        return new ReleaseResult(null, null, UpdatePressureStateOnLane());
+        if (UpdatePressureStateOnLane())
+            (results ??= []).Add(new ReleaseResult(null, null, true));
     }
 
     private void CompleteRelease(ReleaseResult released)
@@ -911,36 +915,61 @@ internal sealed class ZLinkReceiveFlowController
 internal sealed class ZLinkApplicationJobQueueLease : IDisposable
 {
     private readonly ZLinkApplicationJobQueue _owner;
-    private int _state;
+    // One atomic quantity owns the permits: positive = reserved,
+    // negative = queued, zero = released. Splitting moves reservation ownership
+    // without changing the queue's aggregate or allocating unused budget slots.
+    private int _permits;
 
-    internal ZLinkApplicationJobQueueLease(ZLinkApplicationJobQueue owner)
+    internal ZLinkApplicationJobQueueLease(ZLinkApplicationJobQueue owner, int permits = 1)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(permits);
         _owner = owner;
+        _permits = permits;
     }
 
     internal void MarkQueued()
     {
         // The state is monotonic: a queued/released lease cannot become reserved again.
-        if (Volatile.Read(ref _state) == (int)LeaseState.Reserved)
+        if (Volatile.Read(ref _permits) > 0)
             _owner.MarkQueued(this);
     }
 
     internal ZLinkApplicationJobQueue Owner => _owner;
 
     internal bool IsReleased =>
-        Volatile.Read(ref _state) == (int)LeaseState.Released;
+        Volatile.Read(ref _permits) == 0;
+
+    internal int ReservedPermitCount => Math.Max(0, Volatile.Read(ref _permits));
+
+    internal ZLinkApplicationJobQueueLease TakeReserved()
+    {
+        // Allocate before transferring so an allocation failure leaves every
+        // permit owned by this reservation and its ordinary Dispose path.
+        var lease = new ZLinkApplicationJobQueueLease(_owner);
+        while (true)
+        {
+            var count = Volatile.Read(ref _permits);
+            if (count <= 0)
+                throw new InvalidOperationException("The lease has no reserved permits to transfer.");
+            if (Interlocked.CompareExchange(ref _permits, count - 1, count) == count)
+                return lease;
+        }
+    }
 
     internal void ReleaseForHandlerStart() => _owner.Release(this);
 
-    internal bool TryMarkQueued() =>
-        Interlocked.CompareExchange(
-            ref _state,
-            (int)LeaseState.Queued,
-            (int)LeaseState.Reserved)
-        == (int)LeaseState.Reserved;
+    internal int TryMarkQueued()
+    {
+        while (true)
+        {
+            var count = Volatile.Read(ref _permits);
+            if (count <= 0) return 0;
+            if (Interlocked.CompareExchange(ref _permits, -count, count) == count)
+                return count;
+        }
+    }
 
-    internal LeaseState TryRelease() =>
-        (LeaseState)Interlocked.Exchange(ref _state, (int)LeaseState.Released);
+    internal int TryRelease() => Interlocked.Exchange(ref _permits, 0);
 
     public void Dispose()
     {
@@ -948,12 +977,6 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
             _owner.Release(this);
     }
 
-    internal enum LeaseState
-    {
-        Reserved = 0,
-        Queued = 1,
-        Released = 2
-    }
 }
 
 internal sealed class ZLinkApplicationJobQueueRecordOwner : IDisposable

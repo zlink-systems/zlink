@@ -7,6 +7,47 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshMailboxReadinessTests
 {
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(4096UL)]
+    public void QueuedRecord_NormalizesPayloadSizeIntoItsOwnedRecord(ulong payloadBytes)
+    {
+        var record = default(MeshReceiveRecord);
+        record.ApplicationPayloadBytes = 1;
+        using var queued = new ZLinkMeshQueuedRecord(record, [], applicationPayloadBytes: payloadBytes);
+        Assert.Equal(payloadBytes, queued.PayloadBytes);
+        Assert.Equal(payloadBytes, queued.Record.ApplicationPayloadBytes);
+        Assert.Equal(payloadBytes + ZLinkMeshQueuedRecord.FixedRecordBytes, queued.PendingBytes);
+
+        var copy = queued.Record;
+        copy.ApplicationPayloadBytes = 2;
+        Assert.Equal(payloadBytes, queued.PayloadBytes);
+    }
+
+    [Fact]
+    public void PayloadOnlyRecords_RespectBatchByteBudgetAndKeepResidueClaimed()
+    {
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(static _ => { }, static _ => { });
+        using var batch = new MeshReceiveBatch { MaximumBytes = 4096 };
+        try
+        {
+            for (var index = 0; index < 2; index++)
+                Assert.True(mailbox.TryEnqueue(new ZLinkMeshQueuedRecord(default, [],
+                    applicationPayloadBytes: 4096)));
+            Assert.True(mailbox.TryClaim(false, true, out _, out _));
+            Assert.True(mailbox.Drain(batch, 64));
+            Assert.Equal(1, batch.Count);
+            Assert.Equal(4096, batch.Bytes);
+            Assert.False(mailbox.TryClaim(false, true, out _, out _));
+            batch.Reset();
+            Assert.True(mailbox.Drain(batch, 64));
+            Assert.Equal(1, batch.Count);
+            Assert.Equal(4096, batch.Bytes);
+            Assert.False(mailbox.Release());
+        }
+        finally { mailbox.Dispose(); }
+    }
+
     [Fact]
     public void AdmittedClaimKeepsItsOriginalPrefixWhenUnadmittedRecordsArrive()
     {
@@ -190,6 +231,146 @@ public sealed class MeshMailboxReadinessTests
         Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
         Assert.Equal(3, notifications);
         Assert.Equal(1, Drain(node));
+    }
+
+    [Fact]
+    public void OwnerIsPostedOnlyWhenReadyAndWhenClaimResidueIsReleased()
+    {
+        var postings = 0;
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { }, _ => postings++);
+        try
+        {
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.Equal(1, postings);
+            Assert.True(mailbox.TryClaim(false, true, out _, out _));
+            using var received = new MeshReceiveBatch();
+            Assert.True(mailbox.Drain(received, 64));
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.Equal(1, postings);
+            Assert.True(mailbox.Release());
+            Assert.Equal(2, postings);
+            Assert.True(mailbox.TryClaim(false, true, out _, out _));
+            received.Reset();
+            Assert.True(mailbox.Drain(received, 64));
+            Assert.False(mailbox.Release());
+            Assert.Equal(2, postings);
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.Equal(3, postings);
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ReadyOwnersFollowReadinessOrderAndRearmBehindOtherOwners()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "ready-order");
+        node.SetRoutingId(RoutingId.From("ready-order-node"));
+        var first = node.CreateActor("z-first");
+        var second = node.CreateActor("a-second");
+        var third = node.CreateActor("m-third");
+        Drain(node);
+        using var payload = Message.From(new byte[] { 1 });
+        foreach (var actor in new[] { first, second, third })
+            Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
+
+        using var ready = new MeshReadyBatch { MaximumRecords = 1 };
+        Assert.True(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(first, ready[0].Actor);
+        // The first claim is still exclusive; release its undrained prefix.
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(first, [payload]));
+        ready.Reset();
+        Assert.True(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(second, ready[0].Actor);
+        using var received = new MeshReceiveBatch();
+        Assert.True(ready.TakeClaim(0).Receive(received, RecvFlags.DontWait));
+        ready.Reset();
+        received.Reset();
+        Assert.True(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(third, ready[0].Actor);
+        Assert.True(ready.TakeClaim(0).Receive(received, RecvFlags.DontWait));
+        ready.Reset();
+        received.Reset();
+        Assert.False(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(first, ready[0].Actor);
+        Assert.True(ready.TakeClaim(0).Receive(received, RecvFlags.DontWait));
+        Assert.Equal(2, received.Count);
+        ready.Reset();
+        received.Reset();
+        Assert.False(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(0, ready.Count);
+    }
+
+    [Fact]
+    public async Task EmptyOwnersDoNotIncreaseReadyDrainAllocationCost()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "empty-owners");
+        node.SetRoutingId(RoutingId.From("empty-owners-node"));
+        using var ready = new MeshReadyBatch();
+        var emptyCost = MeasureEmptyDrains();
+        using var payload = Message.From(new byte[] { 1 });
+        var actors = new List<ActorRef>();
+        for (var index = 0; index < 32; index++)
+            actors.Add(node.CreateActor($"empty-owner-{index}"));
+        // Actor creation itself queues a lifecycle record. Finish activation
+        // before measuring the 32 explicitly submitted application records.
+        Drain(node);
+        foreach (var actor in actors)
+            Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
+        Assert.Equal(32, DrainApplication());
+        Drain(node);
+        var manyEmptyOwnersCost = MeasureEmptyDrains();
+        // Readiness cost depends on posted owners, not all owners retained in
+        // the registry. Allow small runtime noise, not a per-owner sort buffer.
+        Assert.True(manyEmptyOwnersCost <= emptyCost + 8192,
+            $"Empty drains allocated {emptyCost} bytes before and {manyEmptyOwnersCost} bytes after 32 owners.");
+
+        long MeasureEmptyDrains()
+        {
+            for (var index = 0; index < 20; index++)
+                node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 200; index++)
+                node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        int DrainApplication()
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            var count = 0;
+            using var received = new MeshReceiveBatch();
+            for (var index = 0; index < ready.Count; index++)
+            {
+                Assert.True(ready.TakeClaim(index).Receive(received, RecvFlags.DontWait));
+                count += received.Count;
+                received.Reset();
+            }
+            ready.Reset();
+            return count;
+        }
+    }
+
+    [Fact]
+    public async Task ReservedAdmissionConsumerDoesNotLoseAnUnadmittedReadyOwner()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "raw-ready");
+        var rid = RoutingId.From("raw-ready-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        using var payload = Message.From(new byte[] { 1 });
+        Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+        using var reserved = new MeshReadyBatch { RequireReservedApplicationAdmission = true };
+        Assert.False(node.DrainReady(MeshReadyDomains.Application, reserved, RecvFlags.DontWait));
+        Assert.Equal(0, reserved.Count);
+        Assert.Equal(1, Drain(node));
+        Assert.Equal(0, Drain(node));
     }
 
     [Fact]

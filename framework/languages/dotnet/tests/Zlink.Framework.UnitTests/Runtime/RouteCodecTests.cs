@@ -12,6 +12,21 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class RouteCodecTests
 {
     [Fact]
+    public void ClientEnvelopeGeneratesCorrelationOnlyForRequests()
+    {
+        foreach (var kind in new[] { ZLinkMessageKind.Command, ZLinkMessageKind.Publish })
+        {
+            var header = ZLinkClientCallCodec.CreateEnvelope(kind, "bench", "payload");
+            Assert.Null(header.CorrelationId);
+        }
+
+        var first = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "bench", "payload");
+        var second = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "bench", "payload");
+        Assert.False(string.IsNullOrWhiteSpace(first.CorrelationId));
+        Assert.NotEqual(first.CorrelationId, second.CorrelationId);
+    }
+
+    [Fact]
     public void MeshMetadataCodec_RoundTrips_The_Last_Value_Snapshot()
     {
         var callMetadata = new ZLinkCallMetadata();
@@ -119,7 +134,7 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public async Task RouteHandlerInvoker_Uses_Configured_Codec()
+    public async Task RouteHandlerInvoker_Dispatches_Configured_Codec_Payload()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.AddSerializer("application/route-test", new RouteProbeSerializer());
@@ -156,12 +171,15 @@ public sealed class RouteCodecTests
             registration);
         var invoker = new ZLinkRouteHandlerInvoker(dispatcher, codecs);
 
+        var decodedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
+        var message = ZLinkEnvelopeCodec.DecodeBody(
+            parts, descriptor.MessageType, decodedHeader.ContentType, codecs);
         var reply = await invoker.InvokeRequestAsync(
             descriptor,
             "play",
             RoutingId.From("source-node"),
-            ZLinkEnvelopeCodec.DecodeHeader(parts),
-            parts,
+            decodedHeader,
+            message,
             CancellationToken.None);
 
         Assert.Equal("hello", RouteProbeHandler.LastRequest?.Text);

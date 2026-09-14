@@ -10,6 +10,58 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshApplicationWorkerTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task WorkersStopWithoutFurtherReadyRecords(
+        bool cancelRuntime, bool afterDispatch)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "worker-stop");
+        var rid = RoutingId.From("worker-stop-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        using var runtimeStop = new CancellationTokenSource();
+        var failures = new Failures();
+        var runner = new ZLinkRuntimeTaskRunner(failures, runtimeStop.Token);
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
+        var dispatched = Signal();
+        var handled = 0;
+        pump.SetNodeRouteHandler((records, _) =>
+        {
+            foreach (var record in records)
+            {
+                using (record)
+                    Interlocked.Increment(ref handled);
+            }
+            dispatched.TrySetResult();
+            return ValueTask.CompletedTask;
+        }, runner);
+        pump.EnsureStarted();
+        var workers = runner.ActiveOnSupervisorLane.ToArray();
+        Assert.Equal(Math.Max(2, Environment.ProcessorCount), workers.Length);
+
+        if (afterDispatch)
+        {
+            using var payload = Message.From(new byte[64]);
+            Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+            await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        if (cancelRuntime)
+        {
+            runtimeStop.Cancel();
+            await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        await pump.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.StopAsync();
+
+        Assert.All(workers, worker => Assert.True(worker.IsCompleted));
+        Assert.Equal(afterDispatch ? 1 : 0, handled);
+        Assert.Empty(failures.Errors);
+    }
+
     [Fact]
     public async Task SerialDrainReservation_UsesWorkerAndRetainsLifecycleOrdering()
     {

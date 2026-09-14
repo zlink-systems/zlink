@@ -53,3 +53,8 @@ include(":zlink-framework-server")
 include(":client")
 include(":kotlin-client")
 include(":repro")
+// Test-only, compile-fixed Core-like/codec attribution fixture. It is deliberately
+// separate from the production-comparison cells above.
+if (providers.gradleProperty("zlinkBenchDiagnosticOwnerJar").isPresent) {
+    include(":diagnostics")
+}

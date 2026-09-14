@@ -49,7 +49,6 @@ internal sealed class ZLinkPublishCall(
             ZLinkMessageNameResolver.ResolveFromMessage(message),
             topic: topic,
             source: channelName,
-            includeCorrelationId: false,
             includeDeadline: false);
         var envelopedMsg = ZLinkEnvelopeCodec.EncodeParts(
             header, message, message?.GetType(), registration.Codecs);

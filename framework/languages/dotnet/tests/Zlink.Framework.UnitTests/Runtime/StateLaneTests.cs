@@ -9,6 +9,96 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StateLaneTests
 {
     [Fact]
+    public async Task ContendingProducerAndSynchronousWorker_CompleteTurnsInRegisteredOrder()
+    {
+        await using var lane = new ZLinkStateLane();
+        using var firstEntered = new ManualResetEventSlim();
+        using var secondRegistered = new ManualResetEventSlim();
+        var order = new List<int>();
+        var active = 0;
+        void Record(int value)
+        {
+            Assert.Equal(1, Interlocked.Increment(ref active));
+            Assert.Same(lane, ZLinkStateLane.Current);
+            order.Add(value);
+            if (value == 1)
+            {
+                firstEntered.Set();
+                Assert.True(secondRegistered.Wait(TimeSpan.FromSeconds(5)));
+            }
+            Assert.Equal(0, Interlocked.Decrement(ref active));
+        }
+
+        var producer = Task.Factory.StartNew(() =>
+        {
+            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(5)));
+            var second = lane.RunAsync(() => Record(2));
+            // Turn A remains held until this pending registration is observed.
+            Assert.False(second.IsCompleted);
+            secondRegistered.Set();
+            second.AsTask().GetAwaiter().GetResult();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        var worker = Task.Run(() =>
+        {
+            lane.RunAsync(() => Record(1)).GetAwaiter().GetResult();
+            // A's release must schedule the already registered B. Immediately
+            // submit C and synchronously wait on the same ThreadPool worker.
+            lane.RunAsync(() => Record(3)).GetAwaiter().GetResult();
+            Assert.Null(ZLinkStateLane.Current);
+            Assert.Equal(new[] { 1, 2, 3 }, order);
+        });
+
+        await Task.WhenAll(worker, producer).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, active);
+    }
+
+    [Fact]
+    public async Task CallbackState_IsPreservedWhenTheTurnQueuesBehindAnAsyncTurn()
+    {
+        await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(lane.TryPost(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+        await entered.Task;
+        var values = new int[1];
+        try
+        {
+            var queued = lane.RunAsync((Values: values, Value: 42), static state =>
+                state.Values[0] = state.Value);
+            Assert.False(queued.IsCompleted);
+            release.SetResult();
+            Assert.Equal(42, await queued);
+            Assert.Equal(42, values[0]);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentFirstPosts_ShareOneMailboxAndDrainEveryItem()
+    {
+        for (var iteration = 0; iteration < 16; iteration++)
+        {
+            var lane = new ZLinkStateLane();
+            var seen = new int[64];
+            await Task.WhenAll(Enumerable.Range(0, seen.Length).Select(index => Task.Run(() =>
+                Assert.True(lane.TryPost(() =>
+                {
+                    seen[index]++;
+                    return ValueTask.CompletedTask;
+                })))));
+            await lane.DisposeAsync();
+            Assert.All(seen, count => Assert.Equal(1, count));
+        }
+    }
+
+    [Fact]
     public async Task IdleSynchronousTurn_ReturnsValueWithoutATask()
     {
         await using var lane = new ZLinkStateLane();

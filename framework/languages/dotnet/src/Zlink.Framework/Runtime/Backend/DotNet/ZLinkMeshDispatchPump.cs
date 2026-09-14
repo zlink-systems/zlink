@@ -329,22 +329,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         // session-relayed actor sends), so it cannot address the local consumer.
         var readyRecord = readyBatch[index];
         ZLinkApplicationJobQueueLease?[] admissions = [];
-        var admissionCount = 0;
-        if (readyRecord.Domain == MeshReadyDomains.Application
+        var requiresAdmission = readyRecord.Domain == MeshReadyDomains.Application
             && !readyRecord.ApplicationAdmissionReserved
-            && _applicationJobQueue is not null)
-        {
-            var first = TryTakeApplicationAdmission(cancellationToken);
-            if (first is null)
-                return;
-            var admissionBudget = Math.Min(
-                readyRecord.AvailableRecords,
-                ZLinkReceiveBatchBudget.MaximumRecords);
-            admissions = new ZLinkApplicationJobQueueLease?[admissionBudget];
-            admissions[0] = first;
-            admissionCount = 1 + _applicationJobQueue.TryAcquireBatch(
-                admissions, 1, admissionBudget - 1);
-        }
+            && _applicationJobQueue is not null;
+        using var first = requiresAdmission ? TryTakeApplicationAdmission(cancellationToken) : null;
+        if (requiresAdmission && first is null)
+            return;
+        using var budget = first is null ? null : _applicationJobQueue!.TryAcquireBatch(
+            Math.Min(readyRecord.AvailableRecords, ZLinkReceiveBatchBudget.MaximumRecords) - 1);
+        var admissionCount = (first?.ReservedPermitCount ?? 0) + (budget?.ReservedPermitCount ?? 0);
         var ownerSpotId = readyRecord.SpotId;
         if (string.IsNullOrEmpty(ownerSpotId)
             && readyRecord.OwnerKind == MeshOwnerKind.Actor
@@ -394,11 +387,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     if (RequiresApplicationAdmission(receiveBatch[record].Kind)
                         && receiveBatch.GetApplicationJobAdmission(record) is null)
                         externalAdmissions++;
+                admissions = new ZLinkApplicationJobQueueLease?[externalAdmissions];
+                for (var record = 0; record < externalAdmissions; record++)
+                    admissions[record] = first!.ReservedPermitCount != 0
+                        ? first.TakeReserved()
+                        : budget!.TakeReserved();
                 _applicationJobQueue!.MarkQueuedBatch(admissions, externalAdmissions);
             }
-            // Reservations have no record identity. Assign the required prefix
-            // to application records; unused and embedded-owner duplicates stay
-            // in this same array for one ReleaseBatch below.
+            // Only records without receive-side admission have materialized
+            // leases. Unused reservations remain in the same budget owners.
             var externalIndex = 0;
             try
             {

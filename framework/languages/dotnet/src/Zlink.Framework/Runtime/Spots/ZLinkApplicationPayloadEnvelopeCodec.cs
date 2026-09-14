@@ -323,7 +323,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         var payloadOffset = WriteMultipartEnvelopeFields(
             result,
             offset,
-            checked((uint)GetMultipartPayloadLength(parts)));
+            checked((uint)(encodedLength - GetEnvelopeLength(0))));
         WriteMultipartPayload(result, payloadOffset, parts);
     }
 
@@ -337,7 +337,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         var payloadOffset = WriteMultipartEnvelopeFields(
             result,
             offset,
-            checked((uint)GetMultipartPayloadLength(parts)));
+            checked((uint)(encodedLength - GetEnvelopeLength(0))));
         WriteMultipartPayload(result, payloadOffset, parts);
     }
 
@@ -377,13 +377,13 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         offset += sizeof(uint);
         for (var index = 0; index < parts.Count; index++)
         {
-            var part = parts[index];
+            var part = parts[index].AsReadOnlySpan();
             BinaryPrimitives.WriteUInt32BigEndian(
                 result.Slice(offset, sizeof(uint)),
-                checked((uint)part.Size));
+                checked((uint)part.Length));
             offset += sizeof(uint);
-            part.AsReadOnlySpan().CopyTo(result.Slice(offset, part.Size));
-            offset += part.Size;
+            part.CopyTo(result.Slice(offset, part.Length));
+            offset += part.Length;
         }
     }
 
@@ -413,34 +413,12 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         out Message[] parts)
     {
         parts = [];
-        if (span.Length < sizeof(uint))
+        if (!TryValidateMultipart(span, int.MaxValue, out var partCount))
             return false;
-
-        var count = BinaryPrimitives.ReadUInt32BigEndian(span);
-        if (count == 0
-            || count > int.MaxValue
-            || count > (span.Length - sizeof(uint)) / sizeof(uint))
-            return false;
-
-        var partCount = checked((int)count);
         var offset = sizeof(uint);
-        for (var index = 0; index < partCount; index++)
-        {
-            if (span.Length - offset < sizeof(uint))
-                return false;
-            var length = BinaryPrimitives.ReadUInt32BigEndian(
-                span.Slice(offset, sizeof(uint)));
-            offset += sizeof(uint);
-            if (length > (uint)(span.Length - offset))
-                return false;
-            offset += checked((int)length);
-        }
-        if (offset != span.Length)
-            return false;
 
         var decoded = new Message[partCount];
         var created = 0;
-        offset = sizeof(uint);
         try
         {
             for (var index = 0; index < decoded.Length; index++)
@@ -472,18 +450,27 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         out ZLinkMultipartPayloadView? parts)
     {
         parts = null;
-        if (span.Length - payloadOffset < sizeof(uint))
+        if (!TryValidateMultipart(span[payloadOffset..], int.MaxValue / 2, out var count))
+            return false;
+
+        parts = new ZLinkMultipartPayloadView(frame, payloadOffset, count);
+        return true;
+    }
+
+    private static bool TryValidateMultipart(ReadOnlySpan<byte> span, int maximumParts, out int partCount)
+    {
+        partCount = 0;
+        if (span.Length < sizeof(uint))
             return false;
 
         var count = BinaryPrimitives.ReadUInt32BigEndian(
-            span.Slice(payloadOffset, sizeof(uint)));
+            span);
         if (count == 0
-            || count > int.MaxValue / 2
-            || count > (span.Length - payloadOffset - sizeof(uint)) / sizeof(uint))
+            || count > maximumParts
+            || count > (span.Length - sizeof(uint)) / sizeof(uint))
             return false;
 
-        var ranges = new int[checked((int)count * 2)];
-        var offset = payloadOffset + sizeof(uint);
+        var offset = sizeof(uint);
         for (var index = 0; index < checked((int)count); index++)
         {
             if (span.Length - offset < sizeof(uint))
@@ -493,14 +480,12 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
             offset += sizeof(uint);
             if (length > (uint)(span.Length - offset))
                 return false;
-            ranges[index * 2] = offset;
-            ranges[index * 2 + 1] = checked((int)length);
             offset += checked((int)length);
         }
         if (offset != span.Length)
             return false;
 
-        parts = new ZLinkMultipartPayloadView(frame, ranges);
+        partCount = checked((int)count);
         return true;
     }
 }

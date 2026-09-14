@@ -59,11 +59,14 @@ public sealed class ZLinkProtobufCodec :
 
     private static IMessage CreateMessage(Type type)
     {
-        return Factories.GetOrAdd(type, CreateFactory)();
+        return Factories.GetOrAdd(type ?? throw new InvalidOperationException(
+            $"Protobuf codec cannot deserialize payload type '{type}'."), CreateFactory)();
     }
 
     private static Func<IMessage> CreateFactory(Type type)
     {
+        if (!typeof(IMessage).IsAssignableFrom(type))
+            throw new InvalidOperationException($"Protobuf codec cannot deserialize payload type '{type}'.");
         var constructor = type.GetConstructor(Type.EmptyTypes)
                           ?? throw new InvalidOperationException(
                               $"{type.FullName} must have a public parameterless constructor.");
@@ -81,24 +84,29 @@ public sealed class ZLinkProtobufCodec :
 
         public unsafe Systems.Zlink.Message SerializePart(object value, Type type)
         {
-            if (value is not IMessage protobuf || !typeof(IMessage).IsAssignableFrom(type))
-                throw new InvalidOperationException($"Protobuf codec cannot serialize payload type '{type}'.");
-
-            var part = Systems.Zlink.Message.Allocate(protobuf.CalculateSize());
+            var protobuf = RequireSerializablePayload(value, type);
+            var part = new Systems.Zlink.Message(protobuf.CalculateSize());
             try
             {
-                // Use the IMessage writer for both current and legacy generated
-                // messages. WriteTo(Span) only accepts IBufferMessage and breaks
-                // the existing IMessage contract. The stream writes into the
-                // final native owner; protobuf owns its fixed-size writer buffer.
-                byte empty = 0;
-                fixed (byte* storage = part.AsSpan())
+                if (protobuf is IBufferMessage)
                 {
-                    using var destination = new UnmanagedMemoryStream(
-                        storage == null ? &empty : storage, part.Size, part.Size, FileAccess.Write);
-                    protobuf.WriteTo(destination);
-                    if (destination.Position != part.Size)
-                        throw new InvalidOperationException("Protobuf serialized size differs from CalculateSize.");
+                    // The public span writer validates the exact serialized
+                    // length and writes into the final native owner.
+                    protobuf.WriteTo(part.AsSpan());
+                }
+                else
+                {
+                    // Older IMessage implementations have no span writer.
+                    // Keep their existing public CodedOutputStream contract.
+                    byte empty = 0;
+                    fixed (byte* storage = part.AsSpan())
+                    {
+                        using var destination = new UnmanagedMemoryStream(
+                            storage == null ? &empty : storage, part.Size, part.Size, FileAccess.Write);
+                        protobuf.WriteTo(destination);
+                        if (destination.Position != part.Size)
+                            throw new InvalidOperationException("Protobuf serialized size differs from CalculateSize.");
+                    }
                 }
                 return part;
             }
@@ -111,10 +119,15 @@ public sealed class ZLinkProtobufCodec :
 
         public ZLinkEncodedPayload Serialize(object value, Type type)
         {
+            var protobuf = RequireSerializablePayload(value, type);
+            return ZLinkEncodedPayload.From(protobuf.ToByteArray());
+        }
+
+        private static IMessage RequireSerializablePayload(object value, Type type)
+        {
             if (value is not IMessage protobuf || !typeof(IMessage).IsAssignableFrom(type))
                 throw new InvalidOperationException($"Protobuf codec cannot serialize payload type '{type}'.");
-
-            return ZLinkEncodedPayload.From(protobuf.ToByteArray());
+            return protobuf;
         }
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
@@ -124,9 +137,6 @@ public sealed class ZLinkProtobufCodec :
 
         public object? Deserialize(ReadOnlySpan<byte> payload, Type type)
         {
-            if (!typeof(IMessage).IsAssignableFrom(type))
-                throw new InvalidOperationException($"Protobuf codec cannot deserialize payload type '{type}'.");
-
             // Hot path: compiled factories avoid Activator reflection in every
             // response decode while still honoring protobuf's parameterless ctor
             // contract.

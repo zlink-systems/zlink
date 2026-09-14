@@ -7,6 +7,79 @@
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
     </PropertyGroup>
 
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true'">
+        <OutputType>Exe</OutputType>
+        <DefineConstants>$(DefineConstants);ZLINK_FEATURE_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and ('$(MessagingFixedCodec)' == 'core' or '$(MessagingFixedCodec)' == 'codec' or '$(MessagingFixedCodec)' == 'envelope' or '$(MessagingFixedCodec)' == 'wire' or '$(MessagingFixedCodec)' == 'mailbox')">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_CODEC_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and ('$(MessagingFixedCodec)' == 'codec' or '$(MessagingFixedCodec)' == 'envelope' or '$(MessagingFixedCodec)' == 'wire' or '$(MessagingFixedCodec)' == 'mailbox')">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_FRAMEWORK_CODEC</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and ('$(MessagingFixedCodec)' == 'envelope' or '$(MessagingFixedCodec)' == 'wire' or '$(MessagingFixedCodec)' == 'mailbox')">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_ENVELOPE_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and ('$(MessagingFixedCodec)' == 'wire' or '$(MessagingFixedCodec)' == 'mailbox')">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_WIRE_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and '$(MessagingFixedCodec)' == 'mailbox'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_MAILBOX_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup>
+        <MessagingFixedRuntimeLevel Condition="'$(MessagingFixedRuntimeLevel)' == ''">0</MessagingFixedRuntimeLevel>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and '$(MessagingFixedCodec)' == 'mailbox' and '$(MessagingFixedRuntimeLevel)' &gt;= '1'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_RECEIVE_OWNER_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and '$(MessagingFixedCodec)' == 'mailbox' and '$(MessagingFixedRuntimeLevel)' &gt;= '2'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_PERMIT_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingFeatureRamp)' == 'true' and '$(MessagingFixedCodec)' == 'mailbox' and '$(MessagingFixedRuntimeLevel)' &gt;= '3'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_WORKER_BENCH</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MessagingDedicatedIngress)' == 'true'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_DEDICATED_INGRESS_BENCH</DefineConstants>
+    </PropertyGroup>
+    <Target Name="ValidateMessagingDedicatedIngress" BeforeTargets="CoreCompile"
+            Condition="'$(MessagingDedicatedIngress)' != ''">
+        <Error Condition="'$(MessagingDedicatedIngress)' != 'true' or '$(MessagingFeatureRamp)' != 'true' or '$(MessagingFixedCodec)' != 'mailbox' or '$(MessagingFixedRuntimeLevel)' != '3'"
+               Text="MessagingDedicatedIngress requires true, MessagingFeatureRamp=true, MessagingFixedCodec=mailbox, and MessagingFixedRuntimeLevel=3."/>
+    </Target>
+    <PropertyGroup Condition="'$(MessagingChannelHandoff)' == 'true'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_CHANNEL_HANDOFF_BENCH</DefineConstants>
+    </PropertyGroup>
+    <Target Name="ValidateMessagingChannelHandoff" BeforeTargets="CoreCompile"
+            Condition="'$(MessagingChannelHandoff)' != ''">
+        <Error Condition="'$(MessagingChannelHandoff)' != 'true' or '$(MessagingFeatureRamp)' != 'true' or '$(MessagingFixedCodec)' != 'mailbox' or '$(MessagingFixedRuntimeLevel)' != '3' or '$(MessagingDedicatedIngress)' != 'true'"
+               Text="MessagingChannelHandoff requires true, MessagingFeatureRamp=true, MessagingFixedCodec=mailbox, MessagingFixedRuntimeLevel=3, and MessagingDedicatedIngress=true."/>
+    </Target>
+    <PropertyGroup Condition="'$(MessagingNoHostPermit)' == 'true'">
+        <DefineConstants>$(DefineConstants);ZLINK_FIXED_NO_HOST_PERMIT_BENCH</DefineConstants>
+    </PropertyGroup>
+    <Target Name="ValidateMessagingNoHostPermit" BeforeTargets="CoreCompile"
+            Condition="'$(MessagingNoHostPermit)' != ''">
+        <Error Condition="'$(MessagingNoHostPermit)' != 'true' or '$(MessagingChannelHandoff)' != 'true'"
+               Text="MessagingNoHostPermit requires true and MessagingChannelHandoff=true; this diagnostic removes the host capacity bound without replacement."/>
+    </Target>
+    <Target Name="ValidateMessagingFixedCodec" BeforeTargets="CoreCompile"
+            Condition="'$(MessagingFixedCodec)' != ''">
+        <Error Condition="'$(MessagingFeatureRamp)' != 'true'"
+               Text="MessagingFixedCodec requires MessagingFeatureRamp=true."/>
+        <Error Condition="'$(MessagingFixedCodec)' != 'core' and '$(MessagingFixedCodec)' != 'codec' and '$(MessagingFixedCodec)' != 'envelope' and '$(MessagingFixedCodec)' != 'wire' and '$(MessagingFixedCodec)' != 'mailbox'"
+               Text="MessagingFixedCodec must be core, codec, envelope, wire, or mailbox."/>
+        <Error Condition="'$(MessagingFixedRuntimeLevel)' &lt; '0' or '$(MessagingFixedRuntimeLevel)' &gt; '3' or ('$(MessagingFixedRuntimeLevel)' != '0' and '$(MessagingFixedCodec)' != 'mailbox')"
+               Text="MessagingFixedRuntimeLevel must be 0..3; cumulative runtime features require mailbox."/>
+    </Target>
+    <ItemGroup Condition="'$(MessagingFeatureRamp)' == 'true'">
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+        <Compile Include="../../../../bench/grpc/dotnet/Diagnostics/MessagingFeatureRamp.cs" Link="Diagnostics/MessagingFeatureRamp.cs"/>
+        <Compile Include="../../../../bench/grpc/dotnet/Client/Program.cs" Link="Diagnostics/BenchClient.cs"/>
+        <PackageReference Include="Grpc.Net.Client"/>
+        <ProjectReference Include="../../../../bench/grpc/dotnet/Shared/WithGrpcBench.Shared.csproj"/>
+        <ProjectReference Include="../../perf/ZLink.Framework.Perf.ServerSupport/ZLink.Framework.Perf.ServerSupport.csproj"/>
+    </ItemGroup>
+
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
@@ -80,6 +153,7 @@
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
+        <Compile Include="Runtime/MeshPeerTargetClassificationTests.cs"/>
         <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>

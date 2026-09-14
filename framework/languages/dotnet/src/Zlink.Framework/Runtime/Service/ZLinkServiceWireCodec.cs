@@ -156,6 +156,38 @@ internal static partial class ZLinkServiceWireCodec
         string? channelName,
         bool hasMetadata)
     {
+        var fields = PrepareApplication(command, correlation, channelName, hasMetadata);
+        var bytes = new byte[fields.Length];
+        WriteApplication(bytes, command, correlation, fields.Flags, fields.Channel);
+        return bytes;
+    }
+
+    internal static Message EncodeApplicationMessage(
+        ServiceWireConstants.Command command,
+        ulong correlation,
+        string? channelName,
+        bool hasMetadata)
+    {
+        var fields = PrepareApplication(command, correlation, channelName, hasMetadata);
+        var message = new Message(fields.Length);
+        try
+        {
+            WriteApplication(message.AsSpan(), command, correlation, fields.Flags, fields.Channel);
+            return message;
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static (int Length, ServiceWireConstants.Flag Flags, byte[] Channel) PrepareApplication(
+        ServiceWireConstants.Command command,
+        ulong correlation,
+        string? channelName,
+        bool hasMetadata)
+    {
         var request = command is ServiceWireConstants.Command.NodeRequest
             or ServiceWireConstants.Command.ChannelRequest;
         var channel = command is ServiceWireConstants.Command.ChannelSend
@@ -176,15 +208,24 @@ internal static partial class ZLinkServiceWireCodec
         var flags = hasMetadata
             ? ServiceWireConstants.Flag.Metadata
             : ServiceWireConstants.Flag.None;
-        var bytes = Prefix(command, flags, bodyLength);
+        return (5 + bodyLength, flags, encodedChannel);
+    }
+
+    private static void WriteApplication(
+        Span<byte> bytes,
+        ServiceWireConstants.Command command,
+        ulong correlation,
+        ServiceWireConstants.Flag flags,
+        ReadOnlySpan<byte> encodedChannel)
+    {
+        WritePrefix(bytes, command, flags);
         var offset = 5;
-        if (request)
+        if (correlation != 0)
         {
-            BinaryPrimitives.WriteUInt64BigEndian(bytes.AsSpan(offset), correlation);
+            BinaryPrimitives.WriteUInt64BigEndian(bytes[offset..], correlation);
             offset += sizeof(ulong);
         }
-        encodedChannel.CopyTo(bytes, offset);
-        return bytes;
+        encodedChannel.CopyTo(bytes[offset..]);
     }
 
     internal static bool TryDecodeApplication(
@@ -353,6 +394,36 @@ internal static partial class ZLinkServiceWireCodec
         uint failureCode,
         ReadOnlySpan<byte> tail = default)
     {
+        var bytes = new byte[GetReplyEncodedLength(correlation, terminalResult, failureCode, tail.Length)];
+        WriteReply(bytes, correlation, terminalResult, failureCode, tail);
+        return bytes;
+    }
+
+    internal static Message EncodeReplyMessage(
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        ReadOnlySpan<byte> tail = default)
+    {
+        var message = new Message(GetReplyEncodedLength(correlation, terminalResult, failureCode, tail.Length));
+        try
+        {
+            WriteReply(message.AsSpan(), correlation, terminalResult, failureCode, tail);
+            return message;
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static int GetReplyEncodedLength(
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        int tailLength)
+    {
         if (correlation == 0)
             throw new ArgumentOutOfRangeException(nameof(correlation));
         //  Schema terminal-failure-integrity (service-wire-v1.schema.json):
@@ -371,16 +442,22 @@ internal static partial class ZLinkServiceWireCodec
         //  tail length on the wire; an empty tail yields exactly 21 bytes.
         //  (Contrast `actor-join-reply-tail` / `actor-create-terminal`, which do
         //  declare `bodyLengthType: u16` and carry their own inner prefix.)
-        var bytes = Prefix(
-            ServiceWireConstants.Command.Reply,
-            ServiceWireConstants.Flag.None,
-            sizeof(ulong) + sizeof(uint) + sizeof(uint) + tail.Length);
-        var span = bytes.AsSpan(5);
+        return checked(5 + sizeof(ulong) + sizeof(uint) + sizeof(uint) + tailLength);
+    }
+
+    private static void WriteReply(
+        Span<byte> bytes,
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        ReadOnlySpan<byte> tail)
+    {
+        WritePrefix(bytes, ServiceWireConstants.Command.Reply, ServiceWireConstants.Flag.None);
+        var span = bytes[5..];
         BinaryPrimitives.WriteUInt64BigEndian(span, correlation);
         BinaryPrimitives.WriteInt32BigEndian(span[8..], terminalResult);
         BinaryPrimitives.WriteUInt32BigEndian(span[12..], failureCode);
         tail.CopyTo(span[16..]);
-        return bytes;
     }
 
     internal static bool TryDecodeReply(
@@ -2031,12 +2108,20 @@ internal static partial class ZLinkServiceWireCodec
         int bodyLength)
     {
         var bytes = new byte[5 + bodyLength];
+        WritePrefix(bytes, command, flags);
+        return bytes;
+    }
+
+    private static void WritePrefix(
+        Span<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags)
+    {
         bytes[0] = ServiceWireConstants.Magic0;
         bytes[1] = ServiceWireConstants.Magic1;
         bytes[2] = ServiceWireConstants.WireMajor;
         bytes[3] = (byte)command;
         bytes[4] = (byte)flags;
-        return bytes;
     }
 
     private static byte[] EncodeDescriptorExtension(byte objectRole, byte runtimeState)

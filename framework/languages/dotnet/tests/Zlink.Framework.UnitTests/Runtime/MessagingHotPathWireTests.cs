@@ -9,18 +9,78 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class MessagingHotPathWireTests
 {
+    [Theory]
+    [InlineData("zero-count")]
+    [InlineData("oversized-count")]
+    [InlineData("oversized-part")]
+    [InlineData("trailing-bytes")]
+    public void All_multipart_decode_paths_reject_malformed_inner_boundaries(string mutation)
+    {
+        using var header = Message.From("{}"u8);
+        using var body = Message.From(new byte[64]);
+        var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart([header, body]);
+        var payloadOffset = frame.Length - (sizeof(uint) * 3 + header.Size + body.Size);
+        var offset = mutation == "oversized-part" ? payloadOffset + sizeof(uint)
+            : mutation == "trailing-bytes" ? payloadOffset + sizeof(uint) * 2 + header.Size
+            : payloadOffset;
+        BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(offset),
+            mutation is "oversized-count" or "oversized-part" ? uint.MaxValue : 0);
+
+        Assert.False(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(frame, out _));
+        using var native = Message.From(frame);
+        Assert.False(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(native, out _));
+        Assert.False(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(native, out _));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(16)]
+    [InlineData(128)]
+    public void Multipart_view_allocation_is_independent_of_part_count(int partCount)
+    {
+        var parts = Enumerable.Range(0, partCount)
+            .Select(index => Message.From(new byte[index % 9]))
+            .ToArray();
+        try
+        {
+            using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+            for (var index = 0; index < 256; index++)
+                Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out _));
+            const int iterations = 1024;
+            var start = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < iterations; index++)
+                if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out _))
+                    throw new InvalidOperationException("Invalid multipart fixture.");
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+            Assert.True(allocated <= iterations * 64L, $"Multipart view allocated {allocated} bytes.");
+            Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out var view));
+            Assert.Equal(partCount, view.Count);
+            for (var index = partCount - 1; index >= 0; index--)
+                Assert.Equal(parts[index].ToArray(), view.GetSpan(index).ToArray());
+            var retained = view.RetainMessages();
+            try
+            {
+                frame.Dispose();
+                for (var index = 0; index < partCount; index++)
+                    Assert.Equal(parts[index].ToArray(), retained[index].ToArray());
+            }
+            finally { ZLinkMessageParts.DisposeAll(retained); }
+        }
+        finally { ZLinkMessageParts.DisposeAll(parts); }
+    }
+
     private const string CommandHeader =
-        "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null}";
     private const string RequestHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null}";
     private const string ResponseHeader =
-        "{\"formatMarker\":242,\"kind\":2,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":2,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null}";
     private const string ErrorHeader =
-        "{\"formatMarker\":242,\"kind\":5,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":\"Failed\",\"errorMessage\":\"fixed failure\",\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":5,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":\"Failed\",\"errorMessage\":\"fixed failure\"}";
     private const string ProtobufHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null}";
     private const string PartSerializerHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-wire-part\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-wire-part\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null}";
 
     public static IEnumerable<object[]> HeaderVectors()
     {
@@ -46,6 +106,7 @@ public sealed class MessagingHotPathWireTests
     }
 
     [Theory]
+    [InlineData(64)]
     [InlineData(1024)]
     [InlineData(4096)]
     public void Framework_multipart_matches_reference_frame_for_large_payload(int payloadSize)
@@ -75,6 +136,39 @@ public sealed class MessagingHotPathWireTests
         {
             ZLinkMessageParts.DisposeAll(decoded);
         }
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(4096)]
+    [InlineData(262144)]
+    public void Multipart_native_encoding_allocates_only_its_owner_not_payload_sized_scratch(int payloadSize)
+    {
+        using var header = Message.From(Encoding.UTF8.GetBytes(RequestHeader));
+        using var body = new Message(payloadSize);
+        body.AsSpan().Clear();
+        IReadOnlyList<Message> parts = [header, body];
+        var length = checked((int)ZLinkApplicationPayloadEnvelopeCodec.GetFrameworkMultipartEncodedLength(parts));
+        const int iterations = 128;
+        for (var index = 0; index < iterations; index++)
+        {
+            using var baseline = new Message(length);
+            using var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+        }
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var baseline = new Message(length);
+        }
+        var ownerBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+        }
+        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(encodedBytes <= ownerBytes + iterations * 16L,
+            $"Multipart encoding allocated {encodedBytes} bytes; native owners allocated {ownerBytes} bytes.");
     }
 
     [Fact]
@@ -111,7 +205,7 @@ public sealed class MessagingHotPathWireTests
             FlowOrigin = ZLinkFlowOrigin.Application,
             Metadata = new() { ["first"] = "a\"b", ["second"] = "한글<&" }
         };
-        const string expected = """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","errorCode":null,"errorMessage":null,"source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\u0022b","second":"\uD55C\uAE00\u003C\u0026"}}""";
+        const string expected = """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\u0022b","second":"\uD55C\uAE00\u003C\u0026"}}""";
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         Assert.Equal(Encoding.UTF8.GetBytes(expected), encoded.ToArray());

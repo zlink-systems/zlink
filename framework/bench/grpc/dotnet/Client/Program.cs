@@ -17,6 +17,17 @@ using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using ZLink.Framework.Perf;
 
+#if ZLINK_FEATURE_BENCH
+// Only compiled by the diagnostic test-friend executable; the production
+// benchmark Client keeps its existing entry point and transport behavior.
+Console.WriteLine($"BENCH_DIAGNOSTIC_GC_SERVER={System.Runtime.GCSettings.IsServerGC};PROCESSOR_COUNT={Environment.ProcessorCount}");
+if (args.Contains("--role") || args.Contains("--codec-cost") || args.Contains("--pending-cost") || args.Contains("--envelope-cost") || args.Contains("--wire-cost") || args.Contains("--payload-fidelity") || args.Contains("--header-format-size") || args.Contains("--reply-header-fidelity") || args.Contains("--idle-readiness"))
+{
+    await Zlink.Framework.UnitTests.Diagnostics.MessagingFeatureRamp.Run(args);
+    return;
+}
+#endif
+
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
 var options = BenchOptions.Parse(args);
@@ -231,7 +242,7 @@ static async Task RunRequestBackpressureAsync(
     CancellationTokenSource operationCancellation,
     int drainBoundMs)
 {
-    var pending = new HashSet<Task>();
+    var pending = new List<Task>();
     var issuedSincePump = 0;
     while (Stopwatch.GetTimestamp() < deadline)
     {
@@ -240,7 +251,7 @@ static async Task RunRequestBackpressureAsync(
             transport, metrics, trigger, runId, 0, sequence, operationCancellation.Token));
         if (++issuedSincePump == 256)
         {
-            pending.RemoveWhere(static task => task.IsCompleted);
+            pending.RemoveAll(static task => task.IsCompleted);
             issuedSincePump = 0;
             await Task.Yield();
         }
@@ -282,7 +293,7 @@ static async Task RunRawRequestBackpressureAsync(
     CancellationTokenSource operationCancellation,
     int drainBoundMs)
 {
-    var pendingReplies = new HashSet<Task>();
+    var pendingReplies = new List<Task>();
     Task? pendingAdmission = null;
     var completionPoller = transport.OpenRequestCompletionPoller();
     var completionEvents = new PollEvent[1];
@@ -335,7 +346,7 @@ static async Task RunRawRequestBackpressureAsync(
                 }
             }
 
-            pendingReplies.RemoveWhere(static task => task.IsCompleted);
+            pendingReplies.RemoveAll(static task => task.IsCompleted);
             var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
             _ = completionPoller.Wait(completionEvents,
                 TimeSpan.FromMilliseconds(waitMs));
@@ -693,12 +704,17 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public static async Task<FrameworkBenchTransport> CreateAsync(BenchOptions options)
     {
+        var traceFlow = Environment.GetEnvironmentVariable("BENCH_DIAGNOSTIC_FULL_FLOW") == "1";
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        builder.Logging.SetMinimumLevel(traceFlow ? LogLevel.Information : LogLevel.Warning);
         builder.Services.AddZLinkFramework(framework =>
         {
+            if (traceFlow)
+                framework.ConfigureDispatch().Diagnostics
+                    .SetLevel(Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel.Normal)
+                    .SetSampleRate(0.001);
             framework.Codecs.Use(ZLinkProtobufCodec.Default);
             var mesh = framework.AddRouteMesh("bench")
                 .Listen("tcp://127.0.0.1:0")
@@ -793,8 +809,12 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
+#if ZLINK_FEATURE_BENCH
+            (header, body) = Zlink.Framework.UnitTests.Diagnostics.MessagingFeatureRamp.EncodeBenchMessage(payload);
+#else
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
+#endif
             RequestSubmission submission = request!.SubmitRequest(
                 header, body, cancellationToken);
             return new RawRequestSubmission(
@@ -831,8 +851,12 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
+#if ZLINK_FEATURE_BENCH
+            (header, body) = Zlink.Framework.UnitTests.Diagnostics.MessagingFeatureRamp.EncodeBenchMessage(payload, command: true);
+#else
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
+#endif
             await commands[stream % commands.Length].SubmitSendAsync(
                 header, body, cancellationToken);
         }
@@ -853,6 +877,9 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     private static Message EncodeRawPayload(BenchPayload payload)
     {
+#if ZLINK_FEATURE_BENCH
+        return Zlink.Framework.UnitTests.Diagnostics.MessagingFeatureRamp.EncodeBenchPayload(payload);
+#else
         var body = Message.Allocate(payload.CalculateSize());
         try
         {
@@ -864,6 +891,7 @@ internal sealed class RawBenchTransport : IBenchTransport
             body.Dispose();
             throw;
         }
+#endif
     }
 
     private static async Task<BenchPayload> DecodeRawReplyAsync(
@@ -875,9 +903,13 @@ internal sealed class RawBenchTransport : IBenchTransport
             parts = await replyTask;
             if (parts.Count == 0)
                 throw new InvalidOperationException("Raw request returned no reply parts.");
+#if ZLINK_FEATURE_BENCH
+            return Zlink.Framework.UnitTests.Diagnostics.MessagingFeatureRamp.DecodeBenchReply(parts);
+#else
             return RawWire.Decode(parts.Count == 1
                 ? parts[0].AsReadOnlySpan()
                 : parts[^1].AsReadOnlySpan());
+#endif
         }
         finally
         {

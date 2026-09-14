@@ -65,7 +65,15 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask<T> RunAsync<T>(Func<T> work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        ThrowIfReentrant();
+        return RunAsync(work, static callback => callback());
+    }
+
+    /// <summary>Runs a callback with caller-owned input without capturing that input.</summary>
+    internal ValueTask<T> RunAsync<TState, T>(TState state, Func<TState, T> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        var previous = CurrentLane.Value;
+        ThrowIfReentrant(previous);
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
 
@@ -77,12 +85,11 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         {
             if (_mailbox.IsEmpty)
             {
-                var previous = CurrentLane.Value;
                 try
                 {
                     ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
                     CurrentLane.Value = this;
-                    return ValueTask.FromResult(work());
+                    return ValueTask.FromResult(work(state));
                 }
                 catch (Exception error)
                 {
@@ -98,30 +105,37 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             ReleaseDrain();
         }
 
-        var completion = new TaskCompletionSource<T>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        _mailbox.Enqueue(() =>
-        {
-            try
-            {
-                completion.TrySetResult(work());
-            }
-            catch (Exception error)
-            {
-                completion.TrySetException(error);
-            }
+        // Keep the queued callback's capture in the contention path. A lambda
+        // in this method would allocate its capture even before the idle return.
+        return Enqueue(this, state, work);
 
-            return ValueTask.CompletedTask;
-        });
-        ScheduleDrain(inline: true);
-        return new ValueTask<T>(completion.Task);
+        static ValueTask<T> Enqueue(ZLinkStateLane lane, TState queuedState, Func<TState, T> queuedWork)
+        {
+            var completion = new TaskCompletionSource<T>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            lane._mailbox.Enqueue(() =>
+            {
+                try
+                {
+                    completion.TrySetResult(queuedWork(queuedState));
+                }
+                catch (Exception error)
+                {
+                    completion.TrySetException(error);
+                }
+
+                return ValueTask.CompletedTask;
+            });
+            lane.ScheduleDrain(inline: true);
+            return new ValueTask<T>(completion.Task);
+        }
     }
 
     /// <summary>Runs <paramref name="work"/> on the lane.</summary>
     internal ValueTask RunAsync(Action work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        var operation = RunAsync(() => { work(); return true; });
+        var operation = RunAsync(work, static callback => { callback(); return true; });
         if (operation.IsCompletedSuccessfully)
         {
             operation.GetAwaiter().GetResult();
@@ -150,9 +164,11 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     /// method that will post to the lane, so a reentrant path fails at its source with a name
     /// attached instead of deadlocking somewhere later.
     /// </summary>
-    internal void ThrowIfReentrant()
+    internal void ThrowIfReentrant() => ThrowIfReentrant(CurrentLane.Value);
+
+    private void ThrowIfReentrant(ZLinkStateLane? currentLane)
     {
-        if (IsOnLane)
+        if (ReferenceEquals(currentLane, this))
             throw new InvalidOperationException(
                 "This code already runs on the state lane it is trying to enter. Call the "
                 + "component's private state method directly instead of re-entering its public "
@@ -169,7 +185,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             _ = DrainAsync();
         else
             ThreadPool.UnsafeQueueUserWorkItem(
-                static state => _ = state.DrainAsync(), this, preferLocal: true);
+                static state => _ = state.DrainAsync(), this, preferLocal: false);
     }
 
     private async Task DrainAsync()

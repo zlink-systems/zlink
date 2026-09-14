@@ -7,6 +7,42 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class EnvelopeHeaderCacheHotPathTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void CorrelatedHeaderEncodingAllocatesOnlyTheOwnedMessage(int kindValue)
+    {
+        var kind = (ZLinkMessageKind)kindValue;
+        var header = Header("correlated-allocation") with
+        {
+            Kind = kind,
+            CorrelationId = "owned-header",
+            Deadline = kind == ZLinkMessageKind.Request ? DateTimeOffset.UnixEpoch : null
+        };
+        int length;
+        using (var encoded = ZLinkEnvelopeCodec.EncodeHeader(header)) length = encoded.Size;
+        for (var index = 0; index < 256; index++)
+        {
+            using var owned = new Message(length);
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        }
+        const int iterations = 1024;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var owned = new Message(length);
+        }
+        var ownedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        }
+        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(encodedBytes <= ownedBytes + iterations * 16L,
+            $"Correlated encoding allocated {encodedBytes} bytes; owned Message allocated {ownedBytes} bytes.");
+    }
+
     [Fact]
     public void WarmEncodingAllocatesOnlyTheOwnedMessage()
     {
@@ -145,6 +181,44 @@ public sealed class EnvelopeHeaderCacheHotPathTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(31)]
+    [InlineData(32)]
+    [InlineData(63)]
+    [InlineData(64)]
+    [InlineData(255)]
+    [InlineData(256)]
+    [InlineData(257)]
+    [InlineData(511)]
+    [InlineData(512)]
+    [InlineData(513)]
+    [InlineData(4096)]
+    public void PlannedHeaderPreservesEscapingAfterPlainPrefix(int prefixLength)
+    {
+        string[] suffixes = ["", "\"", "\\", "<&", "한글", "😀",
+            new string(new[] { '\uD800' }), new string(new[] { '\uDC00' })];
+        foreach (var suffix in suffixes)
+        {
+            var text = new string('a', prefixLength) + suffix;
+            var header = Header("escape-boundary") with
+            {
+                Kind = ZLinkMessageKind.Error,
+                FormatMarker = 242,
+                CorrelationId = "preserved-correlation",
+                Topic = text,
+                Source = text,
+                ErrorCode = "failure",
+                ErrorMessage = text,
+                Metadata = new() { [text] = text }
+            };
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+            Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header), encoded.ToArray());
+        }
+    }
+
+    [Theory]
     [InlineData(0, 0)]
     [InlineData(1, 14)]
     [InlineData(100, -14)]
@@ -166,11 +240,13 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         Assert.Equal(header.Deadline, ZLinkEnvelopeCodec.DecodeHeader(encoded).Deadline);
     }
 
-    [Fact]
-    public void DynamicHeaderEncodingDoesNotAllocateAManagedBufferProportionalToValues()
+    [Theory]
+    [InlineData("x")]
+    [InlineData("<&\"😀\ud800")]
+    public void DynamicHeaderEncodingDoesNotAllocateAManagedBufferProportionalToValues(string value)
     {
         var small = Header("dynamic-allocation") with { CorrelationId = "small" };
-        var large = small with { CorrelationId = new string('x', 4096) };
+        var large = small with { CorrelationId = string.Concat(Enumerable.Repeat(value, 4096)) };
         for (var index = 0; index < 256; index++)
         {
             using var first = ZLinkEnvelopeCodec.EncodeHeader(small);
@@ -217,6 +293,11 @@ public sealed class EnvelopeHeaderCacheHotPathTests
     [InlineData("{\"formatMarker\":242")]
     [InlineData("""{"formatMarker":242,"kind":"3"}""")]
     [InlineData("""{"formatMarker":"256","kind":3}""")]
+    [InlineData("""{"formatMarker":256,"kind":3}""")]
+    [InlineData("""{"formatMarker":-1,"kind":3}""")]
+    [InlineData("""{"formatMarker":242.0,"kind":3}""")]
+    [InlineData("""{"formatMarker":2.42e2,"kind":3}""")]
+    [InlineData("""{"formatMarker":null,"kind":3}""")]
     [InlineData("""{"formatMarker":242,"kind":3,"deadline":123}""")]
     [InlineData("""{"formatMarker":242,"kind":3,"metadata":{"key":123}}""")]
     [InlineData("""{"formatMarker":242,"kind":3,"source":{}}""")]

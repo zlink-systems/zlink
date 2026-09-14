@@ -9,13 +9,19 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
-    [Fact]
-    public async Task MeshNode_Rid_Send_Decodes_The_Retained_Body_View_Directly()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task MeshNode_Rid_Dispatch_Decodes_The_Retained_Body_View_Directly(
+        bool request, bool nativeMessage)
     {
         var capture = new RetainedBodyCapture();
         await using var services = new ServiceCollection()
             .AddSingleton(capture)
             .AddTransient<RetainedBodyRouteSendHandler>()
+            .AddTransient<RetainedBodyRouteRequestHandler>()
+            .AddTransient<RetainedNativeRouteRequestHandler>()
             .BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration
         {
@@ -27,10 +33,11 @@ public sealed partial class EntrySpotActorDispatchTests
             SpotNodeName = "mesh",
             RoutingId = RoutingId.From("mesh-node")
         };
-        spotNode.RouteSendHandlers.Add(new ZLinkRouteHandlerRegistration(
-            typeof(RetainedBodyRouteSendHandler),
-            typeof(RetainedBody),
-            null,
+        (request ? spotNode.RouteRequestHandlers : spotNode.RouteSendHandlers).Add(new ZLinkRouteHandlerRegistration(
+            nativeMessage ? typeof(RetainedNativeRouteRequestHandler)
+                : request ? typeof(RetainedBodyRouteRequestHandler) : typeof(RetainedBodyRouteSendHandler),
+            nativeMessage ? typeof(Message) : typeof(RetainedBody),
+            nativeMessage ? typeof(Message) : request ? typeof(bool) : null,
             "RetainedBody"));
         registration.Codecs.AddSerializer(
             "application/x-retained-body",
@@ -55,11 +62,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 taskRunner));
         var header = new ZLinkEnvelopeHeader(
-            ZLinkMessageKind.Command,
+            request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
             "mesh",
             "RetainedBody",
             "application/x-retained-body",
-            null,
+            request ? "retained-body-request" : null,
             null,
             null,
             null,
@@ -77,12 +84,22 @@ public sealed partial class EntrySpotActorDispatchTests
             sourceNodeRid: RoutingId.From("source-node"),
             spotId: null,
             requestSeq: null,
-            reply: null,
+            reply: request ? parts =>
+            {
+                capture.Replied.TrySetResult(!nativeMessage
+                    || parts[1].AsReadOnlySpan().SequenceEqual(new byte[] { 1, 2, 3, 4 }));
+                return SubmitResult.Ok;
+            } : null,
             payloadOwner: owner,
             applicationPayloadView: view));
 
         Assert.True(await capture.Result.Task.WaitAsync(TimeSpan.FromSeconds(5)));
         await taskRunner.StopAsync();
+        if (request)
+            Assert.True(await capture.Replied.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        using var nativeWitness = capture.NativeWitness;
+        if (nativeWitness is not null)
+            Assert.Equal(1, nativeWitness.RefCount);
     }
 
     [Fact]
@@ -434,6 +451,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public Message Owner { get; set; } = null!;
 
+        public Message? NativeWitness { get; set; }
+
+        public TaskCompletionSource<bool> Replied { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public TaskCompletionSource<bool> Result { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -444,7 +466,7 @@ public sealed partial class EntrySpotActorDispatchTests
         : IZLinkMessageSerializer, IZLinkMessageSpanDeserializer
     {
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
-            throw new NotSupportedException();
+            ZLinkEncodedPayload.From(ZLinkEnvelopeCodec.EncodeJsonBytes(value, type));
 
         public object Deserialize(ZLinkEncodedPayload payload, Type type) =>
             throw new NotSupportedException();
@@ -469,6 +491,36 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RetainedBodyRouteRequestHandler
+        : IZLinkRouteRequestHandler<RetainedBody, bool>
+    {
+        public ValueTask<bool> HandleAsync(
+            RetainedBody message,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(true);
+        }
+    }
+
+    private sealed class RetainedNativeRouteRequestHandler(RetainedBodyCapture capture)
+        : IZLinkRouteRequestHandler<Message, Message>
+    {
+        public async ValueTask<Message> HandleAsync(
+            Message request,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken)
+        {
+            capture.NativeWitness = request.Copy();
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            capture.Result.TrySetResult(request.AsReadOnlySpan()
+                .SequenceEqual(new byte[] { 1, 2, 3, 4 }));
+            return request;
         }
     }
 

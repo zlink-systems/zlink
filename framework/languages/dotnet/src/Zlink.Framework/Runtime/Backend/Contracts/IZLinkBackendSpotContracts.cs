@@ -131,6 +131,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     MeshOperationId AllocateOperationId();
 
     IReadOnlyList<MeshNodePeer> MeshPeers();
+    ZLinkRouteMeshTargetClassification ClassifyMeshPeerTarget(RoutingId peerRid);
 
     IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,

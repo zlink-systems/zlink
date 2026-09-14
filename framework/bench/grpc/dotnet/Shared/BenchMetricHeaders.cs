@@ -97,7 +97,10 @@ public static class BenchMetricHeaders
 
     public static long NowNs()
     {
-        return Stopwatch.GetTimestamp() * 1_000_000_000L / Stopwatch.Frequency;
+        // Absolute ticks overflow long during multiplication well before the
+        // nanosecond result does. Widen before scaling, not after it.
+        return checked((long)((Int128)Stopwatch.GetTimestamp()
+            * 1_000_000_000L / Stopwatch.Frequency));
     }
 
     private static void Stamp(
