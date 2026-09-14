@@ -47,7 +47,9 @@ scripts/local-package/build-wsl.sh
 C, C++, .NET, Go, Java, Node.js, Python, Rust binding을 차례로 package한다.
 
 `bindings/`와 `scripts/local-package/`가 깨끗하면 입력 hash에 해당하는 공유
-binding package를 재사용한다. Cache miss에서는 8개 binding을 모두 빌드한다.
+binding package를 재사용한다. Cache key는 8개 binding의 입력 전체를 계속 포함하지만,
+그 아래 package entry는 언어별로 불변 게시한다. Cache miss에서는 요청한 binding만
+각각 빌드하므로 한 언어의 실패가 요청하지 않은 언어의 package 생성을 막지 않는다.
 `.artifacts/wsl/`은 worktree별 디렉터리이며 binding package 파일만 공유 cache로
 연결한다. Framework package와 빌드 디렉터리는 worktree별로 유지한다.
 

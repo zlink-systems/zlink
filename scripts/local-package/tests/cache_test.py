@@ -36,6 +36,9 @@ if os.environ.get('BUILD_WAIT'):
 if os.environ.get('BUILD_FAIL'):
     (root / 'partial').touch()
     sys.exit(3)
+if any(language == os.environ.get('BUILD_FAIL_LANGUAGE') for language in sys.argv[1:]):
+    (root / 'partial').touch()
+    sys.exit(3)
 files = {
     'c': ['c/zlink-c-1.0.0.tar.gz'],
     'cpp': ['install/zlink-cpp/1.0.0/include/zlink.hpp',
@@ -70,7 +73,7 @@ if os.environ.get('BUILD_EDIT_ORIGINAL'):
 
 class CacheTests(unittest.TestCase):
     def setUp(self):
-        parent = Path('/tmp/zlink-sol-work-sh-cache')
+        parent = Path('/tmp/zlink-rel-307')
         parent.mkdir(exist_ok=True)
         self.temp = Path(tempfile.mkdtemp(prefix='cache-test.', dir=parent))
         self.addCleanup(shutil.rmtree, self.temp)
@@ -160,20 +163,24 @@ if os.environ.get('CHECK_FAIL'):
     def test_01_miss_atomic_publication_and_file_links(self):
         self.run_script()
         entry, = self.published()
-        self.assertRegex(self.builds()[0], rf'{entry.name}\.staging-\d+$')
+        self.assertRegex(self.builds()[0], rf'{entry.name}\.c\.staging-\d+$')
         self.assertFalse(list(self.entries.glob('*.staging-*')))
-        manifest = json.loads((entry / '.complete').read_text())
-        self.assertEqual(manifest['binding_versions'], {language: '1.0.0' for language in cache.LANGUAGES})
-        self.assertEqual({v['language'] for v in manifest['files'].values()}, set(cache.LANGUAGES))
+        manifests = {language: json.loads((entry / language / '.complete').read_text())
+                     for language in cache.LANGUAGES}
+        for language, manifest in manifests.items():
+            self.assertEqual(manifest['binding_versions'], {language: '1.0.0'})
+            self.assertEqual({v['language'] for v in manifest['files'].values()}, {language})
         self.assertFalse((entry / 'build').exists())
         self.assertFalse((entry / 'install/zlink-core').exists())
         self.assertEqual(self.git('status', '--porcelain'), b'')
         output = self.root / '.artifacts/wsl'
         self.assertFalse(output.is_symlink())
         self.assertTrue((output / 'build/native.o').is_file())
-        for name, record in manifest['files'].items():
-            self.assertTrue((output / name).is_symlink())
-            self.assertEqual(cache.digest(output / name), record['sha256'])
+        for language, manifest in manifests.items():
+            for name, record in manifest['files'].items():
+                self.assertTrue((output / name).is_symlink())
+                self.assertTrue((output / name).resolve().is_relative_to(entry / language))
+                self.assertEqual(cache.digest(output / name), record['sha256'])
 
     def test_02_second_worktree_hit_checks_versions_and_digests(self):
         self.run_script()
@@ -181,21 +188,22 @@ if os.environ.get('CHECK_FAIL'):
         self.checks.write_text('')
         self.run_script(root=other)
         self.assertTrue((other / '.artifacts/wsl/install/zlink-core/1.0.0/share/zlink/core-package-provenance.json').is_file())
-        self.assertEqual(len(self.builds()), 1)
+        self.assertEqual(len(self.builds()), 8)
         self.assertEqual(len(self.checks.read_text().splitlines()), 2)
         self.assertTrue((other / '.artifacts/wsl/npm/zlink-systems-zlink-1.0.0.tgz').is_symlink())
         self.run_script(root=other, extra={'CHECK_FAIL': '1'}, ok=False)
-        self.assertEqual(len(self.builds()), 1)
+        self.assertEqual(len(self.builds()), 8)
         entry, = self.published()
         for name in ['npm/zlink-systems-zlink-1.0.0.tgz',
                      'maven/systems/zlink/zlink/1.0.0/zlink-1.0.0.jar',
                      'nuget/Zlink.1.0.0.nupkg']:
-            package = entry / name
+            language = {'npm': 'node', 'maven': 'java', 'nuget': 'dotnet'}[name.split('/', 1)[0]]
+            package = entry / language / name
             original = package.read_bytes()
             package.write_text('corrupt')
             failure = self.run_script(root=other, ok=False)
             self.assertIn('digest mismatch', failure.stderr)
-            self.assertEqual(len(self.builds()), 1)
+            self.assertEqual(len(self.builds()), 8)
             package.write_bytes(original)
 
     def test_03_dirty_staged_unstaged_untracked_use_private(self):
@@ -246,7 +254,7 @@ if os.environ.get('CHECK_FAIL'):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
-        self.assertEqual(len(self.builds()), 1)
+        self.assertEqual(len(self.builds()), 8)
         self.assertEqual(len(self.published()), 1)
         for root in [self.root, other]:
             self.assertTrue((root / '.artifacts/wsl/nuget/Zlink.1.0.0.nupkg').is_symlink())
@@ -255,20 +263,21 @@ if os.environ.get('CHECK_FAIL'):
         self.run_script(extra={'BUILD_FAIL': '1'}, ok=False)
         self.assertFalse(self.published())
         self.assertFalse(list(self.entries.glob('*.staging-*')))
-        self.run_script(extra={'BUILD_OMIT': 'node'}, ok=False)
+        self.run_script(args=('node',), extra={'BUILD_OMIT': 'node'}, ok=False)
         self.assertFalse(self.published())
         self.assertFalse(list(self.entries.glob('*.staging-*')))
         # Failure at the rename itself, after successful validation.
         with patch.dict(os.environ, self.env), patch.object(Path, 'rename', side_effect=OSError('publish failed')):
             with self.assertRaisesRegex(OSError, 'publish failed'):
-                cache.prepare(self.root, self.root / '.artifacts/wsl', self.entries, cache.LANGUAGES)
+                cache.prepare(self.root, self.root / '.artifacts/wsl', self.entries, ('node',))
         self.assertFalse(self.published())
         self.assertFalse(list(self.entries.glob('*.staging-*')))
 
     def test_06_prune_keeps_recent_linked_and_baseline_keys(self):
         self.run_script()
         linked, = self.published()
-        os.utime(linked / '.complete', (1, 1))
+        for marker in linked.glob('*/.complete'):
+            os.utime(marker, (1, 1))
         baseline = self.temp / 'baseline'
         (baseline / '.artifacts/wsl/npm').mkdir(parents=True)
         for i in range(1, 10):
@@ -326,15 +335,25 @@ if os.environ.get('CHECK_FAIL'):
         self.run_script()
         self.assertEqual(package.read_text(), 'framework output')
         self.assertFalse(package.is_symlink())
-        self.assertEqual(len(self.builds()), 1)
+        self.assertEqual(len(self.builds()), 8)
 
-    def test_09_input_changes_during_build_refuse_publication(self):
+    def test_09_requested_languages_are_isolated_from_go_failure(self):
+        selected = ('cpp', 'dotnet', 'java', 'node')
+        self.run_script(args=selected, extra={'BUILD_FAIL_LANGUAGE': 'go'})
+        entry, = self.published()
+        self.assertEqual({path.name for path in entry.iterdir()}, set(selected))
+        self.assertEqual(len(self.builds()), len(selected))
+        self.run_script(args=('go',), extra={'BUILD_FAIL_LANGUAGE': 'go'}, ok=False)
+        self.assertFalse((entry / 'go').exists())
+        self.assertEqual({path.name for path in entry.iterdir()}, set(selected))
+
+    def test_10_input_changes_during_build_refuse_publication(self):
         result = self.run_script(extra={'BUILD_EDIT_ORIGINAL': str(self.root / 'bindings/input')}, ok=False)
         self.assertIn('inputs changed during build', result.stderr)
         self.assertFalse(self.published())
         self.assertFalse(list(self.entries.glob('*.staging-*')))
 
-    def test_10_real_shell_build_boundary_with_fake_language_builders(self):
+    def test_11_real_shell_build_boundary_with_fake_language_builders(self):
         scripts = self.root / 'scripts/local-package'
         (scripts / 'native').mkdir()
         sync = scripts / 'native/sync-local-core-libs.sh'
@@ -356,20 +375,22 @@ if os.environ.get('CHECK_FAIL'):
         self.run_script(root=other, extra={'ZLINK_PACKAGE_BUILD_CMD': ''})
         self.assertEqual(len(self.builds()), 8)
 
-    def test_11_dirty_inputs_bypass_existing_shared_entry(self):
+    def test_12_dirty_inputs_bypass_existing_shared_entry(self):
         self.run_script()
         entry, = self.published()
-        before = (entry / '.complete').read_bytes()
+        before = {language: (entry / language / '.complete').read_bytes()
+                  for language in cache.LANGUAGES}
         (self.root / 'bindings/input').write_text('dirty after hit')
         self.run_script(args=('dotnet',))
-        self.assertEqual(len(self.builds()), 2)
+        self.assertEqual(len(self.builds()), 9)
         self.assertEqual(Path(self.builds()[-1]), self.root / '.artifacts/wsl-private')
-        self.assertEqual((entry / '.complete').read_bytes(), before)
+        self.assertEqual({language: (entry / language / '.complete').read_bytes()
+                          for language in cache.LANGUAGES}, before)
         self.assertEqual(self.published(), [entry])
         target = self.root / '.artifacts/wsl/nuget/Zlink.1.0.0.nupkg'
         self.assertTrue(target.resolve().is_relative_to(self.root / '.artifacts/wsl-private'))
 
-    def test_12_custom_build_flags_do_not_reuse_release_cache(self):
+    def test_13_custom_build_flags_do_not_reuse_release_cache(self):
         self.run_script()
         entry, = self.published()
         other = self.worktree()
