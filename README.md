@@ -104,12 +104,6 @@ Java, Kotlin, and TypeScript; see
 [Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/)
 and switch language at the top of the chapter.
 
-## Performance
-
-Messaging throughput and latency are measured against gRPC across the Framework
-languages, with the benchmark specification and the per-language results
-published together: [gRPC comparison report](https://zlink.systems/bench/comparison/).
-
 ## Language support
 
 **ZLink Framework — four runtimes.** Each is implemented independently in its
