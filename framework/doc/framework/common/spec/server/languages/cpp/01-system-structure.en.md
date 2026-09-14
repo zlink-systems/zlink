@@ -186,6 +186,16 @@ injection is used.
   within the scope.**
 - **When the Framework closes a scope, it cleans up that scope's
   `scoped`/`transient` instances together.**
+- **Cleanup runs in reverse creation order.** Closing a provider or a
+  scope cleans up the instances built inside it in the **reverse of the
+  order they were built**. A dependency is cleaned up **after**
+  everything that depends on it.
+
+A dependency must exist before it can be injected, so reverse creation
+order alone yields reverse dependency order; registration order and the
+dependency graph are never computed separately. The structure holding the
+registrations must preserve that order - cleanup order is never left to a
+container whose iteration order is unspecified.
 
 **A closed provider can't be used again.** Every subsequent resolve
 fails.
