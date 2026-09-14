@@ -201,7 +201,6 @@ core_platform() {
         Darwin/x86_64|Darwin/amd64) printf 'macos-x64\n' ;;
         Darwin/arm64|Darwin/aarch64) printf 'macos-arm64\n' ;;
         MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64) printf 'windows-x64\n' ;;
-        MINGW*/aarch64|MSYS*/aarch64|CYGWIN*/aarch64) printf 'windows-arm64\n' ;;
         *) return 1 ;;
     esac
 }

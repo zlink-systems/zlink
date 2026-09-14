@@ -72,10 +72,6 @@ jobs:
             runner: windows-latest
             msvc_arch: x64
             core_platform: windows-x64
-          - name: win-arm64
-            runner: windows-11-arm
-            msvc_arch: arm64
-            core_platform: windows-arm64
           - name: linux-x64
             runner: ubuntu-24.04
             core_platform: linux-x64
@@ -376,6 +372,6 @@ jobs:
       - name: Confirm matrix completed
         run: |
           echo "Framework Node release gate passed."
-          echo "ABI matrix: win-x64, win-arm64, linux-x64, linux-arm64, darwin-arm64 (Core ships no macOS Intel release)"
+          echo "ABI matrix: win-x64, linux-x64, linux-arm64, darwin-arm64 (Core ships no macOS Intel release)"
           echo "Node runtime matrix: node20, node22"
           echo "Cross-language smoke: Node <-> dotnet channel and stream paths"

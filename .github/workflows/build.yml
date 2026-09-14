@@ -211,61 +211,6 @@ jobs:
           path: core/dist/windows-x64/
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
-  build-windows-arm64:
-    name: Build Windows ARM64
-    runs-on: windows-2022
-    needs: read-versions
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install OpenSSL (ARM64) via vcpkg
-        shell: pwsh
-        run: |
-          vcpkg install openssl:arm64-windows-static
-          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          $opensslDir = "$vcpkgRoot\installed\arm64-windows-static"
-          echo "OPENSSL_ROOT_DIR=$opensslDir" >> $env:GITHUB_ENV
-          Write-Host "OpenSSL (ARM64) installed via vcpkg at $opensslDir"
-
-      - name: Build libzlink
-        shell: pwsh
-        run: |
-          $buildDir = "build-win-arm64"
-          $distDir = "core\dist\windows-arm64"
-          New-Item -ItemType Directory -Force -Path $buildDir
-          cd $buildDir
-          cmake ..\core `
-            -G "Visual Studio 17 2022" `
-            -A ARM64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED=ON `
-            -DBUILD_STATIC=OFF `
-            -DBUILD_TESTS=OFF `
-            -DZLINK_CXX_STANDARD=17 `
-            -DWITH_TLS=ON `
-            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          cmake --build . --config Release --parallel
-
-          New-Item -ItemType Directory -Force -Path "..\$distDir\bin", "..\$distDir\lib", "..\$distDir\include", "..\$distDir\lib\pkgconfig" | Out-Null
-          Copy-Item ".\bin\Release\zlink.dll" "..\$distDir\bin\zlink.dll" -Force
-          Copy-Item ".\lib\Release\zlink.lib" "..\$distDir\lib\zlink.lib" -Force
-          if (Test-Path ".\bin\Release\zlink.pdb") {
-            Copy-Item ".\bin\Release\zlink.pdb" "..\$distDir\bin\zlink.pdb" -Force
-          }
-          if (Test-Path ".\libzlink.pc") {
-            Copy-Item ".\libzlink.pc" "..\$distDir\lib\pkgconfig\libzlink.pc" -Force
-          }
-          Copy-Item "..\core\include\*.h" "..\$distDir\include\" -Force
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: libzlink-windows-arm64
-          path: core/dist/windows-arm64/
-          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
-
   build-linux:
     name: Build Linux x64
     runs-on: ubuntu-22.04
@@ -423,7 +368,6 @@ jobs:
     needs:
       - read-versions
       - build-windows
-      - build-windows-arm64
       - build-linux
       - build-linux-arm64
       - build-macos-arm64
@@ -446,7 +390,7 @@ jobs:
 
       - name: Verify public headers
         run: |
-          for platform in windows-x64 windows-arm64 linux-x64 linux-arm64 macos-arm64; do
+          for platform in windows-x64 linux-x64 linux-arm64 macos-arm64; do
             for header in zlink.h zlink_enum.h zlink_errno.h; do
               test -f "artifacts/libzlink-${platform}/include/${header}" || {
                 echo "missing public header: ${platform}/include/${header}" >&2
@@ -465,7 +409,7 @@ jobs:
           echo "### Built Platforms" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          for platform in windows-x64 windows-arm64 linux-x64 linux-arm64 macos-arm64; do
+          for platform in windows-x64 linux-x64 linux-arm64 macos-arm64; do
             if [ -d "artifacts/libzlink-${platform}" ]; then
               echo "- ✅ ${platform}" >> $GITHUB_STEP_SUMMARY
               file_count=$(find "artifacts/libzlink-${platform}" -type f | wc -l)
@@ -515,12 +459,10 @@ jobs:
           cd artifacts
           # Use recursive zip to handle subdirectories and avoid 'Nothing to do' error
           zip -r libzlink-windows-x64.zip libzlink-windows-x64/
-          zip -r libzlink-windows-arm64.zip libzlink-windows-arm64/
           zip -r libzlink-linux-x64.zip libzlink-linux-x64/
           zip -r libzlink-linux-arm64.zip libzlink-linux-arm64/
           zip -r libzlink-macos-arm64.zip libzlink-macos-arm64/
           tar -czf libzlink-windows-x64.tar.gz libzlink-windows-x64/
-          tar -czf libzlink-windows-arm64.tar.gz libzlink-windows-arm64/
           tar -czf libzlink-linux-x64.tar.gz libzlink-linux-x64/
           tar -czf libzlink-linux-arm64.tar.gz libzlink-linux-arm64/
           tar -czf libzlink-macos-arm64.tar.gz libzlink-macos-arm64/
@@ -625,7 +567,6 @@ jobs:
           | Platform | File |
           |----------|------|
           | Windows x64 | `libzlink-windows-x64.zip` |
-          | Windows ARM64 | `libzlink-windows-arm64.zip` |
           | Linux x64 | `libzlink-linux-x64.zip` |
           | Linux ARM64 | `libzlink-linux-arm64.zip` |
           | macOS ARM64 (Apple Silicon) | `libzlink-macos-arm64.zip` |
@@ -654,12 +595,10 @@ jobs:
           body_path: release-notes.md
           files: |
             artifacts/libzlink-windows-x64.zip
-            artifacts/libzlink-windows-arm64.zip
             artifacts/libzlink-linux-x64.zip
             artifacts/libzlink-linux-arm64.zip
             artifacts/libzlink-macos-arm64.zip
             artifacts/libzlink-windows-x64.tar.gz
-            artifacts/libzlink-windows-arm64.tar.gz
             artifacts/libzlink-linux-x64.tar.gz
             artifacts/libzlink-linux-arm64.tar.gz
             artifacts/libzlink-macos-arm64.tar.gz
