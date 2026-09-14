@@ -8,6 +8,7 @@ param(
     [string]$Configuration = "Release",
     [ValidateRange(1, 64)]
     [int]$Parallel = 8,
+    [string[]]$Target = @(),
     [switch]$IncludeTests,
     [switch]$IncludeE2E,
     [switch]$Install
@@ -140,46 +141,24 @@ $ConfigureArguments = @(
 ) + $ImportedConfigurationMaps
 Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $ConfigureArguments
 
-Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(
-    "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel"
-)
+if ($Target.Count -gt 0) {
+    $BuildArguments = @(
+        "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
+    ) + $Target
+    Invoke-ZlinkCMake -FailureMessage "C++ Framework target build failed" -Arguments $BuildArguments
+} else {
+    Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(
+        "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel"
+    )
 
-# Server sample targets are intentionally EXCLUDE_FROM_ALL. Build every client
-# and server target explicitly so a successful default build cannot omit them.
-$SampleTargets = @(
-    "sample_cpp_framework_bingo_api",
-    "sample_cpp_framework_bingo_matchmaking",
-    "sample_cpp_framework_bingo_play",
-    "sample_cpp_framework_bingo_session",
-    "sample_cpp_framework_bingo_client",
-    "sample_cpp_framework_tictactoe_api",
-    "sample_cpp_framework_tictactoe_play",
-    "sample_cpp_framework_tictactoe_client",
-    "sample_cpp_framework_deliverydispatch_dispatch",
-    "sample_cpp_framework_deliverydispatch_courier_actor_node",
-    "sample_cpp_framework_deliverydispatch_customer_gateway",
-    "sample_cpp_framework_deliverydispatch_courier_session",
-    "sample_cpp_framework_deliverydispatch_tracking",
-    "sample_cpp_framework_deliverydispatch_client",
-    "sample_cpp_framework_gamequest_game_api",
-    "sample_cpp_framework_gamequest_quest_mission",
-    "sample_cpp_framework_gamequest_client",
-    "sample_cpp_framework_shoppingmall_commerce_api",
-    "sample_cpp_framework_shoppingmall_order_workflow",
-    "sample_cpp_framework_shoppingmall_client",
-    "sample_cpp_framework_supportchat_api",
-    "sample_cpp_framework_supportchat_session",
-    "sample_cpp_framework_supportchat_support",
-    "sample_cpp_framework_supportchat_client",
-    "sample_cpp_framework_zoneworld_zone_node",
-    "sample_cpp_framework_zoneworld_gateway",
-    "sample_cpp_framework_zoneworld_ops",
-    "sample_cpp_framework_zoneworld_client"
-)
-$SampleBuildArguments = @(
-    "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
-) + $SampleTargets
-Invoke-ZlinkCMake -FailureMessage "C++ Framework sample build failed" -Arguments $SampleBuildArguments
+    # Server sample targets are intentionally EXCLUDE_FROM_ALL. Build every
+    # client and server target so a successful default build cannot omit them.
+    $SampleTargets = @(Get-ZlinkCppWindowsSampleTargets)
+    $SampleBuildArguments = @(
+        "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
+    ) + $SampleTargets
+    Invoke-ZlinkCMake -FailureMessage "C++ Framework sample build failed" -Arguments $SampleBuildArguments
+}
 
 if ($Install) {
     $InstallPrefix = Join-Path $LocalPackageRoot "install/zlink-framework-cpp/$FrameworkVersion"
@@ -189,4 +168,8 @@ if ($Install) {
     Write-Host "C++ Framework install result=passed prefix=$InstallPrefix"
 }
 
-Write-Host "C++ Framework build result=passed configuration=$Configuration samples=$($SampleTargets.Count) buildDir=$BuildDir"
+if ($Target.Count -gt 0) {
+    Write-Host "C++ Framework build result=passed configuration=$Configuration targets=$($Target.Count) buildDir=$BuildDir"
+} else {
+    Write-Host "C++ Framework build result=passed configuration=$Configuration samples=$($SampleTargets.Count) buildDir=$BuildDir"
+}

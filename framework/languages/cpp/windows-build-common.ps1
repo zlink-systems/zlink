@@ -23,6 +23,64 @@ function Get-ZlinkStableBuildToken {
     }
 }
 
+function Get-ZlinkCppWindowsSampleTargets {
+    param([string[]]$Sample = @())
+
+    $TargetsBySample = [ordered]@{
+        TicTacToe = @(
+            "sample_cpp_framework_tictactoe_api",
+            "sample_cpp_framework_tictactoe_play",
+            "sample_cpp_framework_tictactoe_client"
+        )
+        Bingo = @(
+            "sample_cpp_framework_bingo_api",
+            "sample_cpp_framework_bingo_matchmaking",
+            "sample_cpp_framework_bingo_play",
+            "sample_cpp_framework_bingo_session",
+            "sample_cpp_framework_bingo_client"
+        )
+        DeliveryDispatch = @(
+            "sample_cpp_framework_deliverydispatch_dispatch",
+            "sample_cpp_framework_deliverydispatch_courier_actor_node",
+            "sample_cpp_framework_deliverydispatch_customer_gateway",
+            "sample_cpp_framework_deliverydispatch_courier_session",
+            "sample_cpp_framework_deliverydispatch_tracking",
+            "sample_cpp_framework_deliverydispatch_client"
+        )
+        SupportChat = @(
+            "sample_cpp_framework_supportchat_api",
+            "sample_cpp_framework_supportchat_session",
+            "sample_cpp_framework_supportchat_support",
+            "sample_cpp_framework_supportchat_client"
+        )
+        GameQuest = @(
+            "sample_cpp_framework_gamequest_game_api",
+            "sample_cpp_framework_gamequest_quest_mission",
+            "sample_cpp_framework_gamequest_client"
+        )
+        ShoppingMall = @(
+            "sample_cpp_framework_shoppingmall_commerce_api",
+            "sample_cpp_framework_shoppingmall_order_workflow",
+            "sample_cpp_framework_shoppingmall_client"
+        )
+        ZoneWorld = @(
+            "sample_cpp_framework_zoneworld_zone_node",
+            "sample_cpp_framework_zoneworld_gateway",
+            "sample_cpp_framework_zoneworld_ops",
+            "sample_cpp_framework_zoneworld_client"
+        )
+    }
+
+    $SampleNames = if ($Sample.Count -gt 0) { $Sample } else { @($TargetsBySample.Keys) }
+    $Targets = foreach ($Name in $SampleNames) {
+        if (-not $TargetsBySample.Contains($Name)) {
+            throw "Unknown C++ sample: $Name"
+        }
+        $TargetsBySample[$Name]
+    }
+    return @($Targets)
+}
+
 function Resolve-ZlinkCppWindowsBuildInputs {
     param(
         [Parameter(Mandatory = $true)][string]$CppRoot,
