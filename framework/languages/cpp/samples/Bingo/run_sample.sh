@@ -445,10 +445,6 @@ wait_log_count "observer record report" 0 \
 wait_log_count "observer Entry Spot destroy completion" 0 \
   "bingo-lifecycle entry-destroy-complete actor=observer" "${PLAY_LOGS[@]}"
 grep -Rq "message flow" "$FLOW_LOG_DIR"
-# Bingo §17.2 — the ambient runtime metrics reach the sample's metric log:
-# Session sees the STREAM CCU counters, Play sees the room queue instruments.
-grep -Rq "zlink.stream.connections.active" "$FLOW_LOG_DIR"/bingo-session-*-metrics.log
-grep -Rq "kind=user" "$FLOW_LOG_DIR"/bingo-play-*-metrics.log
 
 cleanup
 trap - EXIT

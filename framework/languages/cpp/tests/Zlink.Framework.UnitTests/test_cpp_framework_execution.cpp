@@ -614,6 +614,123 @@ bool verify_close_waits_for_timer_callback_barrier ()
                 == dependencies_destroyed_before + 1;
 }
 
+bool verify_timer_terminal_precedes_lifecycle_close_turn ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    serializer_registry_t serializers;
+    auto state = std::make_shared<spot_context_state_t> ();
+    state->node = std::make_shared<spot_node_builder_state_t> (
+      "timer-terminal-before-close");
+    state->spot_id = "timer-terminal-before-close-spot";
+    state->spot_name = "timer-terminal-before-close-player";
+    state->lifecycle_domain = spot_lifecycle_domain_t::instance ();
+    state->object_generation = 1;
+    state->authority_owner_generation = 1;
+    state->spot_instance = std::make_shared<int> (1);
+    state->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    state->channel_runtime->serializers = &serializers;
+    auto timer_state = std::make_shared<timer_state_t> ();
+    timer_state->name = "closing";
+    auto handler_instance = std::make_shared<int> (1);
+    timer_state->handler_instance = handler_instance;
+    state->timers.push_back (timer_state);
+    auto timer = timer_test_access_t::create (timer_state);
+
+    std::atomic_bool close_requested{false};
+    std::atomic_bool closing_called{false};
+    std::atomic_bool cancel_completed_in_closing{false};
+    state->lifecycle.on_closing = [timer_state, &closing_called,
+                                   &cancel_completed_in_closing] (
+                                    void *, const spot_closing_context_t &,
+                                    std::stop_token) {
+        closing_called.store (true, std::memory_order_release);
+        auto cancellation = timer_test_access_t::create (timer_state).cancel ();
+        const auto result = cancellation.result ();
+        cancel_completed_in_closing.store (
+          bool (result), std::memory_order_release);
+    };
+    timer_state->handler_invoker = [state, &close_requested] (
+                                    void *, void *, serializer_registry_t &,
+                                    const timer_tick_t &) -> task_t<zlink::message_t> {
+        auto context = spot_context_access_t::create (state);
+        const auto close_result = context.close ().result ();
+        close_requested.store (
+          bool (close_result) && close_result.value (), std::memory_order_release);
+        co_return zlink::message_t{};
+    };
+
+    auto dispatch = std::async (std::launch::async,
+                                [state, timer = std::move (timer)] () mutable {
+                                    auto runtime = timer_runtime_t (state);
+                                    return runtime.dispatch_fire_count_async (timer, 1).result ();
+                                });
+    if (dispatch.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
+        // Release the intentionally reproduced old-order deadlock so the test
+        // can fail within its finite wait instead of leaving its worker blocked.
+        timer_test_access_t::finish_callback (timer_state);
+        if (dispatch.wait_for (std::chrono::seconds (1)) != std::future_status::ready)
+            return false;
+        (void) dispatch.get ();
+        return false;
+    }
+
+    const auto result = dispatch.get ();
+    return result && close_requested.load (std::memory_order_acquire)
+           && closing_called.load (std::memory_order_acquire)
+           && cancel_completed_in_closing.load (std::memory_order_acquire);
+}
+
+bool verify_timer_self_cancel_completes_after_callback ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    serializer_registry_t serializers;
+    auto state = std::make_shared<spot_context_state_t> ();
+    state->spot_instance = std::make_shared<int> (1);
+    state->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    state->channel_runtime->serializers = &serializers;
+    auto timer_state = std::make_shared<timer_state_t> ();
+    timer_state->name = "self-cancel";
+    auto handler_instance = std::make_shared<int> (1);
+    timer_state->handler_instance = handler_instance;
+    auto timer = timer_test_access_t::create (timer_state);
+
+    std::atomic_bool callback_completed{false};
+    std::atomic_bool cancel_was_pending_in_callback{false};
+    timer_state->handler_invoker = [timer_state, &callback_completed,
+                                    &cancel_was_pending_in_callback] (
+                                     void *, void *, serializer_registry_t &,
+                                     const timer_tick_t &) -> task_t<zlink::message_t> {
+        auto cancellation = timer_test_access_t::create (timer_state).cancel ();
+        cancel_was_pending_in_callback.store (
+          !cancellation.await_ready (), std::memory_order_release);
+        callback_completed.store (true, std::memory_order_release);
+        co_return zlink::message_t{};
+    };
+
+    auto dispatch = std::async (std::launch::async,
+                                [state, timer = std::move (timer)] () mutable {
+                                    auto runtime = timer_runtime_t (state);
+                                    return runtime.dispatch_fire_count_async (timer, 1).result ();
+                                });
+    if (dispatch.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
+        timer_test_access_t::finish_callback (timer_state);
+        if (dispatch.wait_for (std::chrono::seconds (1)) != std::future_status::ready)
+            return false;
+        (void) dispatch.get ();
+        return false;
+    }
+
+    const auto dispatch_result = dispatch.get ();
+    auto cancellation = timer_test_access_t::create (timer_state).cancel ();
+    return dispatch_result && callback_completed.load (std::memory_order_acquire)
+           && cancel_was_pending_in_callback.load (std::memory_order_acquire)
+           && cancellation.await_ready () && cancellation.result ();
+}
+
 zlink::framework::spot_context_t
 context_with_scheduler (const std::shared_ptr<controlled_worker_scheduler_t> &scheduler)
 {
@@ -6745,6 +6862,12 @@ int main ()
     }
     if (!verify_close_waits_for_timer_callback_barrier ()) {
         return 41;
+    }
+    if (!verify_timer_terminal_precedes_lifecycle_close_turn ()) {
+        return 120;
+    }
+    if (!verify_timer_self_cancel_completes_after_callback ()) {
+        return 121;
     }
 
     if (!verify_request_turn_mode (false, {1, 3, 2})) {
