@@ -1,7 +1,20 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
-find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
-find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
+find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG
+  PATHS "${CMAKE_CURRENT_LIST_DIR}/../zlink" NO_DEFAULT_PATH)
+if(NOT TARGET zlink::cpp)
+  include("${CMAKE_CURRENT_LIST_DIR}/../zlink_cpp/zlink_cppTargets.cmake")
+  if(TARGET libzlink)
+    set(_zlink_cpp_core_target libzlink)
+  elseif(TARGET libzlink-static)
+    set(_zlink_cpp_core_target libzlink-static)
+  else()
+    message(FATAL_ERROR "The bundled zlink package exports no supported Core target")
+  endif()
+  set_property(TARGET zlink::cpp APPEND PROPERTY
+    INTERFACE_LINK_LIBRARIES "${_zlink_cpp_core_target}")
+  unset(_zlink_cpp_core_target)
+endif()
 find_dependency(Threads)
 find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)
 find_dependency(nlohmann_json CONFIG)
