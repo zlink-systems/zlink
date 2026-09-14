@@ -29,6 +29,16 @@ if (-not $SkipFrameworkBuild) {
     if (-not $?) { throw "Node Framework Windows build failed." }
 }
 
+Write-Output "Node sample browser dependency install start"
+Push-Location (Join-Path $scriptDir "..")
+try {
+    & npm.cmd run browser:install
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+Write-Output "Node sample browser dependency install completed"
+
 foreach ($sample in $selectedSamples) {
     $runner = Join-Path $scriptDir "$sample/run_sample.ps1"
     if (-not (Test-Path $runner)) {

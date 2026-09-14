@@ -273,6 +273,12 @@ async function runFullLane(ctx) {
     'maintenance-arm'
   );
   await maintenanceArm.complete();
+  const maintenanceRestore = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'E5', targetNode.nodeId),
+    'maintenance-restore'
+  );
+  await maintenanceRestore.waitFor('scenario ZW-E5 restore armed');
   await stopAndWaitForLocationLease(
     ctx,
     'target-after-failure',
@@ -283,6 +289,7 @@ async function runFullLane(ctx) {
     waitForPlacementPeer: true,
     allowEmptyZoneSet: true
   });
+  await maintenanceRestore.waitFor('scenario ZW-E5 replacement waiting');
   await ctx.start('target-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterMaintenance.path]);
   await waitForExactLogLine(
     ctx,
@@ -290,11 +297,6 @@ async function runFullLane(ctx) {
     `topology=ready node=${targetNode.nodeId} zones=`
   );
   await ctx.waitLog('target-after-maintenance', `maintenance restored node=${targetNode.nodeId} enabled=true`);
-  const maintenanceRestore = startScenarioClient(
-    ctx,
-    specialClientConfig(ctx, shared, gateway, ops, 'E5', targetNode.nodeId),
-    'maintenance-restore'
-  );
   await maintenanceRestore.complete();
   process.stdout.write(maintenanceRestore.output());
   collectVerdicts(verdicts, maintenanceRestore.output());

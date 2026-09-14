@@ -296,16 +296,22 @@ async function runMaintenanceRestore(opsEndpoint: string, targetNodeId: string):
   const ops = connector(opsEndpoint);
   try {
     await ops.connect();
-    const nodes = await watch(ops);
-    const target = nodes.nodes.find((node) => node.nodeId === targetNodeId);
-    if (target?.registered !== true || target.connected !== true) {
-      await ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-        .where((message) => message.payload.nodeId === targetNodeId
-          && message.payload.registered
-          && message.payload.connected)
-        .timeout(20_000)
-        .submit();
-    }
+    // Status payloads have no incarnation token, so accept ready only after this connection observes the old node leave.
+    const targetStopped = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where((message) => message.payload.nodeId === targetNodeId
+        && (!message.payload.registered || !message.payload.connected))
+      .timeout(20_000)
+      .submit();
+    console.log('scenario ZW-E5 restore armed');
+    await targetStopped;
+    const replacementReady = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where((message) => message.payload.nodeId === targetNodeId
+        && message.payload.registered
+        && message.payload.connected)
+      .timeout(20_000)
+      .submit();
+    console.log('scenario ZW-E5 replacement waiting');
+    await replacementReady;
     const diagnostics = await diagnose(ops, targetNodeId);
     zlinkStreamAssert.ensure(
       diagnostics.error === null,
