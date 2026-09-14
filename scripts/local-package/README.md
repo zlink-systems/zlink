@@ -142,7 +142,10 @@ On Windows too, the bindings use the release prefix rather than building Core fr
 The commands below download and verify the Windows x64 Core release.
 
 ```powershell
-$prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1
+# fetch-release.ps1 writes progress to the host stream and only the prefix to
+# stdout. Call it with `&` in the current session so $prefix holds just the path;
+# a child powershell.exe merges the progress messages into stdout.
+$prefix = & .\scripts\local-package\coreetch-release.ps1
 
 # All of the C++/.NET/Java/Node bindings, or one language at a time
 scripts/local-package/build-windows.ps1 -SyncVersions
@@ -174,15 +177,19 @@ record it as separate evidence in the Java plan document.
 
 Windows package inputs and results use these paths.
 
-- .NET: `ZLinkWindowsX64NativeRoot=<release-prefix>/bin`, result in
- `.artifacts/windows/dotnet/package/`
-- C++: pass `<release-prefix>/` as `ZLINK_CPP_CORE_PACKAGE_PREFIX`; the CMake install result lands in
- `.artifacts/windows/cpp/package/`
-- Go: place the release prefix's `bin/` runtime in `bindings/go/native/windows-x86_64/`; result in `.artifacts/windows/go/package/`
-- Java: a version-only consumer that uses the release prefix's `bin/zlink.dll`
-- Node.js: place the release prefix's `bin/zlink.dll` in `bindings/node/prebuilds/win32-x64/`; result in `.artifacts/windows/node/package/`
-- Python: place the release prefix runtime at the wheel's `native/windows-x86_64/zlink.dll`; result in `.artifacts/windows/python/wheel/`
-- Rust: place the release prefix runtime in the crate's `native/windows-x86_64/`; result in `.artifacts/windows/rust/`
+- The input is a single release prefix, passed as `-CorePrefix <prefix>`.
+- Results land under `.artifacts/windows/` in each language's package-manager format.
+
+| Language | Result |
+| --- | --- |
+| .NET | `.artifacts/windows/nuget/Zlink.<binding-version>.nupkg` (+ `.snupkg`) |
+| C++ | `.artifacts/windows/install/zlink-cpp/<binding-version>/` |
+| Java | `.artifacts/windows/maven/systems/zlink/zlink/<binding-version>/zlink-<binding-version>.jar` |
+| Node.js | `.artifacts/windows/npm/zlink-systems-zlink-<binding-version>.tgz` |
+
+`build/`, `staging/`, and `logs/` under `.artifacts/windows/` are intermediates, not package
+content. `build-windows.ps1 -Language` accepts only `cpp`, `dotnet`, `java`, and `node`; the
+Windows local-package path does not produce Go, Python, or Rust packages.
 
 When consolidating the Windows native packaging procedure, update these paths together with the
 per-language version pinning. The current state of Windows performance runs and their failure

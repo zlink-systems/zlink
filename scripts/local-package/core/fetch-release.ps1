@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+. (Join-Path $PSScriptRoot "windows-x64-contract.ps1")
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $repoVersion = (Select-String -LiteralPath (Join-Path $repoRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
@@ -52,7 +53,8 @@ if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
       throw "Cached Core provenance must be UTF-8 without BOM"
     }
     $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($existing.version -eq $Version -and $existing.package -eq "zlink-core") {
+    if ($existing.version -eq $Version -and $existing.package -eq "zlink-core" -and
+        $existing.platform -eq $Platform) {
       Write-Output $prefix
       exit 0
     }
@@ -180,6 +182,7 @@ try {
   if (-not (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
     throw "Windows Core runtime is missing: $runtimePath"
   }
+  Assert-ZlinkWindowsX64Image -Path $runtimeFile
   $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
     [ordered]@{
       path = $_.FullName.Substring($stage.Length + 1).Replace("\", "/")
@@ -190,6 +193,7 @@ try {
     schema = 1
     package = "zlink-core"
     version = $Version
+    platform = $Platform
     abiMajor = 0
     runtime = [ordered]@{
       path = $runtimePath

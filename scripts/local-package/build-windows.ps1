@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "core\windows-x64-contract.ps1")
 
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
   $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -78,6 +79,7 @@ $runtimeHash = (Get-FileHash -LiteralPath (Join-Path $CorePrefix 'bin\zlink.dll'
 if ($provenance.runtime.sha256 -ne $runtimeHash) {
   throw "Core runtime hash does not match its provenance: $CorePrefix"
 }
+Assert-ZlinkWindowsCorePrefix -Prefix $CorePrefix -Provenance $provenance
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
