@@ -1886,12 +1886,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    public MeshNodePeer[] Peers()
-    {
-        return RunState(() => _peersByIntent.Values
-                .Select(static peer => peer.Snapshot())
-                .ToArray());
-    }
+    // State ownership §5: IMeshNode.Peers has a public synchronous signature.
+    // Capture completes before return; internal async callers use PeersAsync
+    // and do not block a worker on the mesh lane's completion.
+    public MeshNodePeer[] Peers() => AwaitStateLane(PeersAsync());
+
+    internal ValueTask<MeshNodePeer[]> PeersAsync() =>
+        _lane.RunAsync(() => _peersByIntent.Values
+            .Select(static peer => peer.Snapshot())
+            .ToArray());
 
     public MeshPeerChannel[] PeerChannels(
         RoutingId peerRid,

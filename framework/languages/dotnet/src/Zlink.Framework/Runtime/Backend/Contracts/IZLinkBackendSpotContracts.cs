@@ -132,6 +132,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     IReadOnlyList<MeshNodePeer> MeshPeers();
 
+    ValueTask<IReadOnlyList<MeshNodePeer>> MeshPeersAsync();
+
     IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration);
