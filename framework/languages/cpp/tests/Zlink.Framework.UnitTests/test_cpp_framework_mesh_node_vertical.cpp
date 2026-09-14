@@ -1385,6 +1385,33 @@ struct automatic_identity_send_t
     }
 };
 
+class automatic_source_spot_t final : public zlink::framework::spot_t<contract_actor_t>
+{
+  public:
+    explicit automatic_source_spot_t (zlink::framework::spot_context_t context) :
+        _context (std::move (context)) {}
+    zlink::framework::spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
+    void configure () override
+    {
+        _context.handlers ().add_handler<&automatic_source_spot_t::request> ();
+        _context.handlers ().add_handler<&automatic_source_spot_t::send> ();
+    }
+    std::string request (const std::string &message) { return message; }
+    void send (const int &message)
+    {
+        assert (message == 42);
+        ++automatic_identity_send_t::deliveries;
+    }
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    { co_return zlink::framework::spot_actor_join_result_t::accept (); }
+    zlink::framework::task_t<void> on_actor_joined (contract_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor (contract_actor_t &) override { co_return; }
+  private:
+    zlink::framework::spot_context_t _context;
+};
+
 class automatic_identity_probe_t final : public zlink::framework::hosted_service_t
 {
   public:
@@ -1403,7 +1430,7 @@ class automatic_identity_probe_t final : public zlink::framework::hosted_service
 };
 
 void verify_default_store_identity_and_manual_identity (
-  std::initializer_list<int> registration_kinds)
+  std::initializer_list<int> registration_kinds, bool object_client_source = false)
 {
 #if defined(__unix__)
     // RouteMesh selects a remote Server: a node never selects its own membership.
@@ -1427,6 +1454,15 @@ void verify_default_store_identity_and_manual_identity (
                 mesh.set_routing_id (zlink::routing_id_t::from (
                   serving ? "manual-server" : "manual-client"));
                 mesh.peer_connections ().connect (serving ? client_endpoint : server_endpoint);
+            }
+            if (object_client_source) {
+                if (serving)
+                    mesh.objects ().server ().add_spot_factory<automatic_source_spot_t> (
+                      "source-authority-spot").disable_relocation ();
+                else {
+                    mesh.objects ().client ();
+                    mesh.set_placement_weight (0);
+                }
             }
             if (serving)
                 mesh.channel ("identity-echo").server ().add_request_handler<
@@ -1532,6 +1568,28 @@ void verify_default_store_identity_and_manual_identity (
                       R"(default-identity-mesh-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")));
                 assert (state->spot_state->snapshot.routing_id
                         && state->spot_state->snapshot.routing_id->to_string () == identity);
+            }
+            if (object_client_source) {
+                auto &manager = server_services.get ()->get_required<zlink::framework::spot_manager_t> ();
+                const auto created = manager.get_or_create (
+                  zlink::framework::spot_id_t ("public-source-authority-target"), "source-authority-spot")
+                  .in_mesh ("default-identity-mesh").timeout (1s).async ().result ();
+                assert (created);
+                const auto response = routes.request_to_spot (
+                  zlink::framework::spot_id_t ("public-source-authority-target"),
+                  std::string ("object-client-weight-zero"))
+                  .timeout (1s).async<std::string> ().result ();
+                assert (response && response.value () == "object-client-weight-zero");
+                const auto before = automatic_identity_send_t::deliveries.load ();
+                const auto sent = routes.send_to_spot (
+                  zlink::framework::spot_id_t ("public-source-authority-target"),
+                  42).async ().result ();
+                assert (sent);
+                const auto deadline = std::chrono::steady_clock::now () + 1s;
+                while (automatic_identity_send_t::deliveries.load () == before
+                       && std::chrono::steady_clock::now () < deadline)
+                    std::this_thread::sleep_for (1ms);
+                assert (automatic_identity_send_t::deliveries.load () == before + 1);
             }
             assert (server_state->routing_id != client_state->routing_id);
         }
@@ -2297,6 +2355,10 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--object-client-source") {
+        verify_default_store_identity_and_manual_identity ({0}, true);
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--public-runtime-surface") {
         verify_public_runtime_surface ();
         return 0;
@@ -2322,6 +2384,7 @@ int main (int argc, char **argv)
     verify_local_join_timeout_releases_membership ();
     verify_automatic_identity_and_port_builder ();
     verify_default_store_identity_and_manual_identity ({0, 1, 2});
+    verify_default_store_identity_and_manual_identity ({0}, true);
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();

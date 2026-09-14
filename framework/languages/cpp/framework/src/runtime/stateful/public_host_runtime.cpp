@@ -726,27 +726,14 @@ spot_handle_t::send_to_spot (const zlink::routing_id_t &target_node_rid,
                              const std::string &target_spot_id,
                              std::uint64_t target_spot_generation,
                              const std::vector<zlink::message_t> &parts,
-                             zlink::send_flags_t,
+                             zlink::send_flags_t flags,
                              std::span<const std::uint8_t> metadata)
 {
-    if (!_host) {
-        co_return zlink::submit_result_t::invalid_handle;
-    }
-    const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
-    const auto target_node_generation =
-      peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
-    const auto route_fence =
-      _host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
-    if (!route_fence)
-        co_return zlink::submit_result_t::not_found;
-    const auto target = protocol::spot_route_fence_t{
-      target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
-      target_node_generation, route_fence->first,     route_fence->second};
-    if (target.target_node_routing_id == _host->status ().routing_id ().to_bytes ()) {
-        co_return _host->enqueue_local_spot_send (target, parts);
-    }
-    co_return co_await _host->transport ().send_to_spot_result (
-      target_node_rid.to_bytes (), spot_id (), target, _host->encode_application (parts, metadata));
+    const auto host = _host;
+    if (!host)
+        return task_t<zlink::submit_result_t> (
+          result_t<zlink::submit_result_t>::success (zlink::submit_result_t::invalid_handle));
+    return host->send_to_spot (spot_id (), target_node_rid, target_spot_id, target_spot_generation, parts, flags, metadata);
 }
 
 task_t<zlink::submit_result_t>
@@ -755,83 +742,16 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                                 std::uint64_t target_spot_generation,
                                 const std::vector<zlink::message_t> &parts,
                                 pending_operation_t &operation,
-                                zlink::send_flags_t,
+                                zlink::send_flags_t flags,
                                 std::chrono::milliseconds timeout,
                                 std::span<const std::uint8_t> metadata,
                                 spot_request_completion_t completion)
 {
-    if (!_host) {
-        co_return zlink::submit_result_t::invalid_handle;
-    }
-    if (timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("framework SPOT request timeout must be positive");
-    }
-    try {
-        const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
-        const auto target_node_generation =
-          peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
-        const auto route_fence =
-          _host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
-        if (!route_fence) {
-            co_return zlink::submit_result_t::not_found;
-        }
-        const auto target = protocol::spot_route_fence_t{
-          target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
-          target_node_generation, route_fence->first,     route_fence->second};
-        const auto host = _host;
-        const auto direct_completion = static_cast<bool> (completion);
-        if (target.target_node_routing_id == host->status ().routing_id ().to_bytes ()) {
-            const auto submitted = host->enqueue_local_spot_request (
-              target, parts, operation, timeout, metadata, std::move (completion));
-            co_return submitted;
-        }
-        operation.prepare_for_registration ();
-        operation.id = _host->next_operation ();
-        const auto accepted = co_await _host->transport ().request_to_spot (
-          target_node_rid.to_bytes (), spot_id (), target,
-          _host->encode_application (parts, metadata), timeout,
-          [host, operation, completion = std::move (completion), direct_completion] (
-            foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) mutable {
-              if (!direct_completion) {
-                  host->complete_operation (operation, operation_kind_t::none, terminal,
-                                            std::move (payload));
-                  return;
-              }
-              result_t<std::vector<zlink::message_t>> decoded =
-                result_t<std::vector<zlink::message_t>>::failure (
-                  framework_error_kind_t::internal_failure,
-                  "SPOT request completion was not decoded");
-              if (terminal == foundation::operation_terminal_t::completed) {
-                  try {
-                      /* flow-correlation §4: reply flow pair is observation-
-                       * only — skip validation/materialization at Off. */
-                      decoded =
-                        result_t<std::vector<zlink::message_t>>::success (protocol::decode_application_parts (
-                          protocol::decode_application_payload (payload, host->capture_flow ())));
-                  }
-                  catch (const protocol::service_wire_error_t &error) {
-                      decoded = result_t<std::vector<zlink::message_t>>::failure (
-                        framework_error_kind_t::protocol_error, error.what ());
-                  }
-                  catch (const std::exception &error) {
-                      decoded = result_t<std::vector<zlink::message_t>>::failure (
-                        framework_error_kind_t::internal_failure, error.what ());
-                  }
-              }
-
-              try {
-                  completion (terminal, std::move (decoded));
-              }
-              catch (...) {
-              }
-          },
-          protocol::wire_operation_id_t{operation.id.high, operation.id.low}, std::nullopt);
-        co_return submitted (accepted);
-    }
-    catch (...) {
-
-        throw;
-    }
+    const auto host = _host;
+    if (!host)
+        return task_t<zlink::submit_result_t> (
+          result_t<zlink::submit_result_t>::success (zlink::submit_result_t::invalid_handle));
+    return host->request_to_spot (spot_id (), target_node_rid, target_spot_id, target_spot_generation, parts, operation, flags, timeout, metadata, std::move (completion));
 }
 
 zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
@@ -2249,6 +2169,117 @@ public_host_runtime_t::close_user_spot_remote (const zlink::routing_id_t &target
           }
           completion (terminal, std::move (reply));
       });
+}
+
+task_t<zlink::submit_result_t>
+public_host_runtime_t::send_to_spot (std::string source_spot_id,
+                             const zlink::routing_id_t &target_node_rid,
+                             const std::string &target_spot_id,
+                             std::uint64_t target_spot_generation,
+                             const std::vector<zlink::message_t> &parts,
+                             zlink::send_flags_t,
+                             std::span<const std::uint8_t> metadata)
+{
+    const auto host = shared_from_this ();
+    const auto peer = host->transport ().topology ().peer (target_node_rid.to_bytes ());
+    const auto target_node_generation =
+      peer ? peer->descriptor.lifecycle_generation : host->status ().lifecycle_generation ();
+    const auto route_fence =
+      host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
+    if (!route_fence)
+        co_return zlink::submit_result_t::not_found;
+    const auto target = protocol::spot_route_fence_t{
+      target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
+      target_node_generation, route_fence->first,     route_fence->second};
+    if (target.target_node_routing_id == host->status ().routing_id ().to_bytes ()) {
+        co_return host->enqueue_local_spot_send (target, parts);
+    }
+    co_return co_await host->transport ().send_to_spot_result (
+      target_node_rid.to_bytes (), source_spot_id, target, host->encode_application (parts, metadata));
+}
+
+
+task_t<zlink::submit_result_t>
+public_host_runtime_t::request_to_spot (std::string source_spot_id,
+                             const zlink::routing_id_t &target_node_rid,
+                                const std::string &target_spot_id,
+                                std::uint64_t target_spot_generation,
+                                const std::vector<zlink::message_t> &parts,
+                                pending_operation_t &operation,
+                                zlink::send_flags_t,
+                                std::chrono::milliseconds timeout,
+                                std::span<const std::uint8_t> metadata,
+                                spot_request_completion_t completion)
+{
+    const auto host = shared_from_this ();
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument ("framework SPOT request timeout must be positive");
+    }
+    try {
+        const auto peer = host->transport ().topology ().peer (target_node_rid.to_bytes ());
+        const auto target_node_generation =
+          peer ? peer->descriptor.lifecycle_generation : host->status ().lifecycle_generation ();
+        const auto route_fence =
+          host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
+        if (!route_fence) {
+            co_return zlink::submit_result_t::not_found;
+        }
+        const auto target = protocol::spot_route_fence_t{
+          target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
+          target_node_generation, route_fence->first,     route_fence->second};
+        const auto direct_completion = static_cast<bool> (completion);
+        if (target.target_node_routing_id == host->status ().routing_id ().to_bytes ()) {
+            const auto submitted = host->enqueue_local_spot_request (
+              target, parts, operation, timeout, metadata, std::move (completion));
+            co_return submitted;
+        }
+        operation.prepare_for_registration ();
+        operation.id = host->next_operation ();
+        const auto accepted = co_await host->transport ().request_to_spot (
+          target_node_rid.to_bytes (), source_spot_id, target,
+          host->encode_application (parts, metadata), timeout,
+          [host, operation, completion = std::move (completion), direct_completion] (
+            foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) mutable {
+              if (!direct_completion) {
+                  host->complete_operation (operation, operation_kind_t::none, terminal,
+                                            std::move (payload));
+                  return;
+              }
+              result_t<std::vector<zlink::message_t>> decoded =
+                result_t<std::vector<zlink::message_t>>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "SPOT request completion was not decoded");
+              if (terminal == foundation::operation_terminal_t::completed) {
+                  try {
+                      /* flow-correlation §4: reply flow pair is observation-
+                       * only — skip validation/materialization at Off. */
+                      decoded =
+                        result_t<std::vector<zlink::message_t>>::success (protocol::decode_application_parts (
+                          protocol::decode_application_payload (payload, host->capture_flow ())));
+                  }
+                  catch (const protocol::service_wire_error_t &error) {
+                      decoded = result_t<std::vector<zlink::message_t>>::failure (
+                        framework_error_kind_t::protocol_error, error.what ());
+                  }
+                  catch (const std::exception &error) {
+                      decoded = result_t<std::vector<zlink::message_t>>::failure (
+                        framework_error_kind_t::internal_failure, error.what ());
+                  }
+              }
+
+              try {
+                  completion (terminal, std::move (decoded));
+              }
+              catch (...) {
+              }
+          },
+          protocol::wire_operation_id_t{operation.id.high, operation.id.low}, std::nullopt);
+        co_return submitted (accepted);
+    }
+    catch (...) {
+
+        throw;
+    }
 }
 
 spot_handle_t public_host_runtime_t::entry_spot ()

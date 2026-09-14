@@ -669,6 +669,18 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                          std::chrono::milliseconds timeout,
                                          user_spot_close_completion_t completion);
 
+    task_t<zlink::submit_result_t> send_to_spot (
+      std::string source_spot_id, const zlink::routing_id_t &target_node_rid,
+      const std::string &target_spot_id, std::uint64_t target_spot_generation,
+      const std::vector<zlink::message_t> &parts, zlink::send_flags_t flags,
+      std::span<const std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t> request_to_spot (
+      std::string source_spot_id, const zlink::routing_id_t &target_node_rid,
+      const std::string &target_spot_id, std::uint64_t target_spot_generation,
+      const std::vector<zlink::message_t> &parts, pending_operation_t &operation,
+      zlink::send_flags_t flags, std::chrono::milliseconds timeout,
+      std::span<const std::uint8_t> metadata = {}, spot_request_completion_t completion = {});
+
     spot_handle_t entry_spot ();
     spot_handle_t get_or_create_spot (std::string spot_id);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);

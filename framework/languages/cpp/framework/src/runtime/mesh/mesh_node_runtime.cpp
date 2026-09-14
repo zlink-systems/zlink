@@ -2023,8 +2023,7 @@ mesh_node_runtime_t::send_to_spot (const std::string &source_spot_id,
                                    const std::vector<zlink::message_t> &parts,
                                    std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .send_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
+    co_return co_await native_node ().send_to_spot (source_spot_id, target_node_rid, target_spot_id, target_spot_generation, parts,
                      zlink::send_flags_t::dontwait, metadata);
 }
 
@@ -2038,8 +2037,7 @@ mesh_node_runtime_t::request_to_spot (const std::string &source_spot_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .request_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
+    co_return co_await native_node ().request_to_spot (source_spot_id, target_node_rid, target_spot_id, target_spot_generation, parts,
                         operation_id, zlink::send_flags_t::none, timeout, metadata);
 }
 
@@ -2307,9 +2305,9 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
                                                     runtime::messaging::message_parts_t encoded,
                                                     std::chrono::milliseconds timeout)
 {
-    auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+    const auto origin = "__zlink-route-origin-" + routing_id ()->to_hex ();
     host::pending_operation_t operation;
-    const auto submitted = co_await origin.request_to_spot (
+    const auto submitted = co_await _node->request_to_spot (origin,
       target.node_rid, spot_id_t (target.spot_id), target.object_generation, encoded.items (),
       operation, zlink::send_flags_t::none, timeout);
     if (submitted != zlink::submit_result_t::ok) {
@@ -3554,9 +3552,9 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                   framework_error_kind_t::not_found,
                   "Actor message follow target Spot generation is unavailable");
             }
-            auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+            const auto origin = "__zlink-route-origin-" + routing_id ()->to_hex ();
             host::pending_operation_t operation;
-            const auto submitted = co_await origin.request_to_spot (
+            const auto submitted = co_await _node->request_to_spot (origin,
               target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
               operation, zlink::send_flags_t::none, timeout);
             if (submitted != zlink::submit_result_t::ok) {
