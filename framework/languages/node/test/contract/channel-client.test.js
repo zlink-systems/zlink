@@ -5473,3 +5473,70 @@ function fakeMessagePart(part) {
     close() {}
   };
 }
+
+test('public Spot outbound uses every registered Mesh and preserves ClientServer calls through both host factories', async () => {
+  const { ZLinkSpotRuntimeOptionsFactory } = require('../../packages/framework/dist/runtime/host/spot-runtime-options-factory');
+  const { ZLinkSpotNodeRuntimeOptionsFactory } = require('../../packages/framework/dist/runtime/host/spot-node-runtime-options-factory');
+  const registration = framework.createFrameworkRegistration({
+    channels: { cs: { client: { manualConnections: ['tcp://127.0.0.1:9901'] }, requestTimeoutMs: 777 } },
+    spotNodes: {
+      source: { router: { bind: 'inproc://source' } },
+      destination: { router: { bind: 'inproc://destination' }, requestTimeoutMs: 555, meshChannels: { mesh: { client: true } } }
+    }
+  });
+  for (const Factory of [ZLinkSpotRuntimeOptionsFactory, ZLinkSpotNodeRuntimeOptionsFactory]) {
+    const calls = [];
+    const options = { registration,
+      channelTransport: { async send(name, _packetName, payload) { calls.push(['cs-send', name, payload.constructor.name]); }, async request(name, _packetName, payload, timeout) { calls.push(['cs-request', name, payload.constructor.name, timeout]); return { path: 'cs' }; } },
+      routeTransport: { async submitToChannel(mesh, name, _packetName, payload) { calls.push(['mesh-send', mesh, name, payload.constructor.name]); }, async requestToChannel(mesh, name, _packetName, payload, timeout) { calls.push(['mesh-request', mesh, name, payload.constructor.name, timeout]); return { path: 'mesh' }; } },
+      meshRouters: { primaryMeshName: () => 'source', spotRouterChannelIdByMesh: () => name => name },
+      locationLifecycle: () => undefined, createLocationSpotRouteResolver: () => undefined,
+      dispatchErrorReporter: () => ({}), boundSessionRelay: { boundSessions: {} }
+    };
+    const created = new Factory(options).create({});
+    const serial = new framework.ZLinkSpotSerialTurnExecutor();
+    const outbound = new framework.DefaultZLinkSpotOutbound({ serial, meshName: 'source', channelClient: created.channelClient });
+    try {
+      await outbound.sendToChannel('mesh', typedPacket('Notice')).submit();
+      assert.deepEqual(await outbound.requestToChannel('mesh', typedPacket('Ping')).submit(), { path: 'mesh' });
+      await outbound.sendToChannel('cs', typedPacket('Notice')).submit();
+      assert.deepEqual(await outbound.requestToChannel('cs', typedPacket('Ping')).submit(), { path: 'cs' });
+      assert.deepEqual(calls, [['mesh-send', 'destination', 'mesh', 'Notice'], ['mesh-request', 'destination', 'mesh', 'Ping', 555], ['cs-send', 'cs', 'Notice'], ['cs-request', 'cs', 'Ping', 777]]);
+      await assert.rejects(outbound.requestToChannel('unknown', typedPacket('Ping')).submit(), error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+      assert.equal(calls.length, 4);
+    } finally { await serial.close(); }
+  }
+});
+
+test('RouteClient composed ClientServer owner preserves invalid role and explicit request timeout', async () => {
+  const registration = framework.createFrameworkRegistration({ channels: {
+    client: { client: { manualConnections: ['tcp://127.0.0.1:9902'] }, requestTimeoutMs: 777 },
+    server: { server: { bind: 'inproc://server-only' }, requestHandlers: [{ packetName: 'Ping', handler: { async handle() { return {}; } } }] }
+  } });
+  const calls = [];
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
+  const channelClient = new framework.DefaultZLinkRouteClient(registration, {}, undefined, {
+    async send(name, packetName, _request, _signal, metadata) { calls.push({ name, packetName, metadata: [...metadata] }); },
+    async request(name, packetName, _request, timeout, _signal, metadata) { calls.push({ name, packetName, timeout, metadata: [...metadata] }); return { ok: true }; }
+  });
+  const client = new framework.DefaultZLinkSpotOutbound({ serial, channelClient });
+  try {
+    assert.deepEqual(await client.requestToChannel('client', typedPacket('Ping')).timeout(123).metadata('key', 'value').submit(), { ok: true });
+    assert.deepEqual(calls, [{ name: 'client', packetName: undefined, timeout: 123, metadata: [['key', 'value']] }]);
+    assert.equal(await client.sendToChannel('client', typedPacket('Notice')).metadata('key', 'send').submit(), undefined);
+    assert.deepEqual(calls[1], { name: 'client', packetName: undefined, metadata: [['key', 'send']] });
+    await assert.rejects(client.requestToChannel('server', typedPacket('Ping')).submit(), error => error.message.includes('client role') && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured);
+  } finally { await serial.close(); }
+});
+
+test('RouteClient retains duplicate Mesh channel rejection without invoking either transport', async () => {
+  const registration = framework.createFrameworkRegistration({ spotNodes: {
+    first: { router: { bind: 'inproc://first' }, meshChannels: { api: { client: true } } },
+    second: { router: { bind: 'inproc://second' }, meshChannels: { api: { client: true } } }
+  } });
+  const client = new framework.DefaultZLinkRouteClient(registration, {
+    requestToChannel() { throw new Error('ambiguous registration reached transport'); }
+  });
+  await assert.rejects(client.requestToChannel('api', typedPacket('Ping')).submit(),
+    error => error instanceof framework.ZLinkConfigurationException && error.message.includes('must be unique'));
+});
