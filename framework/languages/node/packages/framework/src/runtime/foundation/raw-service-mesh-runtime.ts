@@ -631,8 +631,9 @@ export class RawServiceMeshRuntime {
     this.requireStarted().setReadableHandler(handler);
   }
 
-  /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
+  /** Drive completion on every platform turn, then receive within the ingress budget. */
   async pumpBatch(receiveReady = true): Promise<boolean> {
+    receiveReady = this.requireStarted().poll() || receiveReady;
     await this.drainMonitorEvents();
     const startedAtMs = performance.now();
     let messages = 0;

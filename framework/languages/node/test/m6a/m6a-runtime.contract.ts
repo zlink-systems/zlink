@@ -287,6 +287,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
     async send(target: string, parts: readonly Uint8Array[]) {
       sent.push({ target, parts });
     },
+    poll: () => false,
     receive: () => undefined,
     close() {}
   } as unknown as ZLinkRawRouterPort;

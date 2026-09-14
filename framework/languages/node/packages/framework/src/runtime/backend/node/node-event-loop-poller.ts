@@ -6,9 +6,8 @@ import type {
 import { zlink } from './node-backend-adapter-support';
 
 /**
- * Owns one binding public Poller and drives it from the socket's libuv
- * readiness callback. PollCompletion is drained only by Poller.wait; the
- * socket callback itself is only the event-loop wakeup.
+ * Owns one binding public Poller. Platform turns drive PollCompletion through
+ * poll(); socket receive callbacks do not guarantee completion progress.
  */
 export class ZLinkNodeEventLoopPoller {
   private readonly poller = zlink.createPoller();
@@ -45,10 +44,16 @@ export class ZLinkNodeEventLoopPoller {
     this.poller.close();
   }
 
+  poll(): number {
+    if (this.disposed) return 0;
+    const ready = this.poller.wait(this.events, 0);
+    return ready === 0 ? 0 : this.events.revents(0);
+  }
+
   private readonly onReady = (): void => {
     if (this.disposed) return;
-    const ready = this.poller.wait(this.events, 0);
-    if (ready === 0 || this.events.hasEvent(0, zlink.PollEventFlag.PollIn)) {
+    const ready = this.poll();
+    if (ready === 0 || (ready & zlink.PollEventFlag.PollIn) !== 0) {
       this.readableHandler();
     }
   };
