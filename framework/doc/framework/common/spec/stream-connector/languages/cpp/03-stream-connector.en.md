@@ -125,7 +125,7 @@ in the payload as is, for external protocol interworking.
 ## 4. Test Wait Interface
 
 The behavioral contract is owned by
-[Common Spec §10.2](../../32-stream-connector.en.md).
+[Common Spec §10.1](../../32-stream-connector.en.md).
 
 ### 4.1 Push Observation — Connector Method
 
@@ -226,9 +226,6 @@ enum class error_code_t
     tls_validation_failed,
     decompression_failed,
     user_callback_failed,
-    observer_failed,
-    observer_dropped,
-    received_message_dropped,
     remote_error
 };
 ```
@@ -254,7 +251,7 @@ flow context. The wire format and async context boundary is owned by
 
 `connector_options_t` expresses endpoint, transport,
 connect/request/wait timeout, heartbeat, reconnect, send/receive
-payload bound, observer and receive message queue bound, TLS
+payload bound, TLS
 validation, dispatch mode, and compression. The default value and
 validation rule follow
 [Common Spec §6.1](../../32-stream-connector.en.md).
@@ -287,9 +284,6 @@ struct connector_options_t {
     reconnect_options_t reconnect;
     std::size_t max_send_payload_size = 64 * 1024;
     std::size_t max_receive_payload_size = 64 * 1024;
-    std::size_t max_inbound_observer_notifications = 1024;
-    std::size_t max_received_messages = 1024;
-    std::size_t max_inbound_observer_payload_preview_bytes = 0;
     bool skip_server_certificate_validation = false;
     dispatch_mode_t dispatch_mode = dispatch_mode_t::manual;
     compression_t compression = compression_t::lz4;
@@ -347,15 +341,7 @@ frame's encode or decode between two levels. `options()` reflects the
 level `diagnostics_level()` would return at the time of the call, not
 necessarily the value passed at `create()`.
 
-## 7. Inbound Observer
-
-`observe_inbound(...)` is registered before connection starts and
-returns a move-only `inbound_observer_registration_t`. The
-registration's `close()` deregisters the observation. The observer's
-isolation, payload preview, and overflow behavior follows
-[Common Spec §10](../../32-stream-connector.en.md).
-
-## 8. Verification
+## 7. Verification
 
 `test_cpp_stream_connector` verifies the C++ connector's public
 behavior. The existence of the per-language contract document and the

@@ -22,13 +22,7 @@ public sealed class ZlinkStreamConnectorOptions
 
     public int MaxReceivePayloadSize { get; init; } = 64 * 1024;
 
-    public int MaxReceivedMessages { get; init; } = 1024;
-
     public int MaxPendingDispatchCallbacks { get; init; } = 1024;
-
-    public int MaxInboundObserverNotifications { get; init; } = 1024;
-
-    public int MaxInboundObserverPayloadPreviewBytes { get; init; }
 
     public bool SkipServerCertificateValidation { get; init; }
 

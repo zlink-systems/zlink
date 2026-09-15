@@ -108,7 +108,7 @@ Raw encoded payload는 외부 protocol 연동을 위해 payload에 이미 기록
 
 ## 4. 테스트 대기 인터페이스
 
-동작 계약은 [공통 스펙 §10.2](../../32-stream-connector.ko.md)가 소유한다.
+동작 계약은 [공통 스펙 §10.1](../../32-stream-connector.ko.md)가 소유한다.
 
 ### 4.1 push 관측 — connector 메서드
 
@@ -195,9 +195,6 @@ enum class error_code_t
     tls_validation_failed,
     decompression_failed,
     user_callback_failed,
-    observer_failed,
-    observer_dropped,
-    received_message_dropped,
     remote_error
 };
 ```
@@ -217,7 +214,7 @@ connector runtime이 current flow context를 정리한다. wire 형식과 비동
 ## 6. options
 
 `connector_options_t`는 endpoint, transport, connect/request/wait timeout, heartbeat, reconnect,
-송수신 payload 한도, observer와 수신 메시지 queue 한도, TLS 검증, dispatch mode와 compression을
+송수신 payload 한도, TLS 검증, dispatch mode와 compression을
 표현한다. 기본값과 검증 규칙은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)을 따른다.
 
 Connector metric은 다음 public sink로 전달한다. Sink를 설정하지 않으면 metric 기록만 생략하며 connector
@@ -247,9 +244,6 @@ struct connector_options_t {
     reconnect_options_t reconnect;
     std::size_t max_send_payload_size = 64 * 1024;
     std::size_t max_receive_payload_size = 64 * 1024;
-    std::size_t max_inbound_observer_notifications = 1024;
-    std::size_t max_received_messages = 1024;
-    std::size_t max_inbound_observer_payload_preview_bytes = 0;
     bool skip_server_certificate_validation = false;
     dispatch_mode_t dispatch_mode = dispatch_mode_t::manual;
     compression_t compression = compression_t::lz4;
@@ -297,13 +291,7 @@ encode·decode된 frame에는 소급 적용하지 않는다. 각 처리 지점�
 나뉘는 일은 없다. `options()`가 보여주는 diagnostics_level도 호출 시점에 `diagnostics_level()`이
 반환할 값과 같으며, `create()`에 전달한 값과 다를 수 있다.
 
-## 7. Inbound observer
-
-`observe_inbound(...)`는 연결 시작 전에 등록하고 이동 전용 `inbound_observer_registration_t`를
-반환한다. registration의 `close()`가 관측을 해제한다. observer의 격리, payload preview와 overflow
-동작은 [공통 스펙 §10](../../32-stream-connector.ko.md)을 따른다.
-
-## 8. 검증
+## 7. 검증
 
 C++ connector의 공개 동작은 `test_cpp_stream_connector`가 검증한다. 언어별 계약 문서의 존재와
 테스트 helper 인터페이스는 `test_cpp_framework_target_contract`의 `TH-CP-01` 게이트가 검증한다.

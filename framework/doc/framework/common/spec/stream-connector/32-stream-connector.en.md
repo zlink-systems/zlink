@@ -444,8 +444,6 @@ the same across every language.**
 | Codec | JSON (§5.4) |
 | Compression | Lz4 (§8) |
 | Send/receive payload bound | 64KB each (§4.7) |
-| Inbound observer queue | 1024 notifications, 0-byte payload preview (§10) |
-| Receive message queue | 1024 messages (§10.1) |
 | TLS certificate validation | On — the default of the validation-skip option is off, used only for a test's self-signed certificate |
 | Diagnostics level | `Errors` (§13) |
 
@@ -552,7 +550,6 @@ request callback.
 | `CompressionFailed` / `DecompressionFailed` | Compression/decompression failure |
 | `TlsValidationFailed` | TLS validation failure |
 | `UserCallbackFailed` | A user callback failed |
-| `ObserverFailed` / `ObserverDropped` | Inbound observer callback failure / queue overflow |
 | `RemoteError` | The server responded with an Error payload satisfying §5.3. If `request_seq` matches a pending request, that request fails; if absent or mismatched, it's delivered as an error event |
 
 The effect an error has on the current operation and connection is
@@ -571,7 +568,7 @@ reason, or the reconnect condition.
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
-| `UserCallbackFailed`, `ObserverFailed`, `ObserverDropped`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
+| `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
 **The delivery method differs by surface, but the meaning is the
 same.**
@@ -581,43 +578,26 @@ same.**
 - A stream-level error with no request id is delivered as an
   **error event.**
 
-## 10. Inbound Observer
+## 10. Receive Message Queue
 
-A surface that **read-only observes** an inbound frame. Can be
-registered **only before** connection starts.
+A `Send` packet the server sent stays in the **receive message queue** until it moves to a handler
+(`on` family) or a wait surface (`waitFor` family).
 
-- Observed values: message kind, packet name, codec, request sequence,
-  metadata, payload byte length, whether compressed, receive time,
-  payload preview
-- **The default payload preview length is 0.**
-- Metadata and preview are a snapshot. Even if the observer changes
-  them, the value a request completion or handler sees doesn't change.
-- The observer callback **isn't run directly on the receive path.** A
-  slow log/metric transmission mustn't block receive processing.
-- A callback failure is reported as `ObserverFailed`, and a queue
-  overflow as `ObserverDropped`, **without blocking the original
-  frame processing.**
-- The observer notification queue is **separate** from the user
-  receive message queue, and the **default bound is 1024
-  notifications** (§6.1). Adjusted with an option.
+- **The client keeps receiving and processing what it is given.** The queue has no bound, no
+  message is discarded, and the connection is never closed over it.
+- **The connector applies no backpressure.** It does not implement a socket of its own; it uses
+  what the runtime provides (§2, §3.2). Browser and WASM builds run on the platform's native
+  WebSocket API, which offers no surface for withholding reads. Flow control belongs to the
+  server's STREAM socket and is outside this document.
+- **A response, error response, and heartbeat control frame do not pass through this queue.**
+  They are needed for request completion and connection keep-alive.
 
-### 10.1 Receive Message Queue
+Messages do not pile up in a client that works. A handler dispatches them or a wait surface
+consumes them. If they do pile up it is a client bug, and neither discarding them nor closing the
+connection gains anything - the client has to be restarted either way. So the connector holds no
+policy for it.
 
-A `Send` packet the server sent stays in the **receive message queue**
-until it moves to a handler (`on` family) or a wait surface (`waitFor`
-family). The default bound is **1024 messages**, adjusted with an
-option.
-
-- **When the queue is full the connector stops reading from the socket.** No message is
-  discarded. What is left unread stays in the Core queue, and Core's byte limit holds the
-  server's send right there. Reading resumes once the application drains the queue.
-- **A response, error response, and heartbeat control frame aren't
-  counted against this bound.** Because they're needed for request
-  completion and connection keep-alive.
-- This queue is **separate** from the inbound observer notification
-  queue (§10).
-
-### 10.2 Test Wait Surface
+### 10.1 Test Wait Surface
 
 The connector provides a **wait surface for observing a push in a
 test** as a public API. All five languages must provide the same
@@ -627,10 +607,10 @@ condition checking, expected error, and timeout verification, isn't a
 connector public contract. E2E owns that auxiliary code in each
 language's `Client/Support`.
 
-#### 10.2.1 Push Observation Surface — The `waitFor` Family
+#### 10.1.1 Push Observation Surface — The `waitFor` Family
 
 Something that can only be judged by observing the receive message
-queue (§10.1). A method of the connector instance.
+queue (§10). A method of the connector instance.
 
 All three surfaces let the caller specify the packet name explicitly,
 or decide it from the payload type. The exact argument and overload,
@@ -640,7 +620,7 @@ builder chaining.
 
 | Surface | Contract | Failure |
 |------|------|------|
-| `waitFor<T>(name)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Throws an error** if it doesn't arrive within the timeout (§10.1 specifies this surface consumes the queue) |
+| `waitFor<T>(name)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Throws an error** if it doesn't arrive within the timeout (§10 specifies this surface consumes the queue) |
 | `expectNone<T>(name)` | Confirms that packet **doesn't arrive** during `.within(window)` (negative). The symmetric of `waitFor` | **Throws an error** if it arrives within the window |
 | `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — confirms a push of the same name arrives **in the given predicate order** and returns the payload list | **Throws an error** if the order is wrong or it times out. This surface exists to verify **"arrived in order"**, not "N arrived" |
 
@@ -707,7 +687,6 @@ test name differs, the meaning must be the same.
 | Codec | Connector option injection, codec number sharing, and browser/server dependency separation (§5.4) |
 | Compression | Per-direction behavior (§8) |
 | Error handling | Error meaning (§9) |
-| Inbound observer | Observation/isolation/overflow (§10) |
 | Connection lifecycle | State transition/reconnect/heartbeat (§6) |
 | Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
 

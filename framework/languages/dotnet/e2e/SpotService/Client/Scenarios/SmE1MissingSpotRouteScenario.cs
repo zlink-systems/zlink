@@ -29,7 +29,6 @@ internal static class SmE1MissingSpotRouteScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
         await client.Request(new AuthReq(actorId, "missing handler actor"))

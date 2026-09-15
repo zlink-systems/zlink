@@ -39,7 +39,6 @@
         <Compile Include="Support/StreamConnectorTestSupport.cs"/>
         <Compile Include="Transport/DiagnosticsLevelLiveTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
-        <Compile Include="Transport/InboundObserverTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
         <Compile Include="Transport/RuntimeMetricsTests.cs"/>
         <Compile Include="Transport/TestHelperTests.cs"/>

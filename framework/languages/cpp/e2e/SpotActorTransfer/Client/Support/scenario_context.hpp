@@ -425,7 +425,6 @@ class bound_session_t
         options.request_timeout = std::chrono::seconds (10);
         options.heartbeat.enabled = false;
         options.dispatch_mode = sc::dispatch_mode_t::immediate;
-        options.max_received_messages = 1024;
         _connector.emplace (sc::connector_factory_t::create (options));
         auto connected = _connector->connect ();
         require (static_cast<bool> (connected), scenario + " bound session connect failed");

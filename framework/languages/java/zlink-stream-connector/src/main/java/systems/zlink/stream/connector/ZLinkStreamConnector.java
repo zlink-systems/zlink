@@ -63,8 +63,6 @@ public interface ZLinkStreamConnector {
         return new ZLinkTypedStreamConnectorRequestCall(request(encodeTypedPayload(payload)));
     }
 
-    AutoCloseable observeInbound(ZLinkStreamInboundObserver observer);
-
     default ZLinkStreamWaitCall waitFor(String name) {
         return new DefaultZLinkStreamWaitCall(
             this,

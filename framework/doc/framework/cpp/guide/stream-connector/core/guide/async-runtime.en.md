@@ -23,7 +23,7 @@ wait for connection completion or the handshake. TLS and WSS can be used in a bu
 OpenSSL feature turned on.
 
 `send().submit()` submits a one-way send request and doesn't return a completion result to the
-caller. Send acceptance and backpressure handling are the connector's internal responsibility.
+caller. Send ordering and transport-write completion are the connector's internal responsibility.
 
 `request().submit(callback)` returns after registering the request-frame write. When one of a
 reply, timeout, close, or transport error occurs, it's delivered to the callback as a `result_t<T>`.

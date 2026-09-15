@@ -18,7 +18,6 @@ export async function runSmD13(options: ClientOptions): Promise<void> {
       intervalMs: 200,
       timeoutMs: 2000
     },
-    maxReceivedMessages: 1024,
     waitTimeoutMs: 10000
   });
 

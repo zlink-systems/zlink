@@ -1,12 +1,10 @@
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
-internal sealed class ZlinkStreamReceivedMessages(int maxMessages)
+internal sealed class ZlinkStreamReceivedMessages
 {
     private readonly object _gate = new();
-    private readonly LinkedList<ReceivedMessage> _messageOrder = new();
-    private readonly Dictionary<string, List<ReceivedMessage>> _messages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>> _messages = new(StringComparer.Ordinal);
     private TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int _messageCount;
 
     public int Count(string name)
     {
@@ -16,29 +14,23 @@ internal sealed class ZlinkStreamReceivedMessages(int maxMessages)
         }
     }
 
-    public bool Record(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
+    public void Record(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
     {
         TaskCompletionSource arrived;
         lock (_gate)
         {
-            if (_messageCount >= maxMessages) return false;
-
             if (!_messages.TryGetValue(message.Name, out var messages))
             {
                 messages = [];
                 _messages.Add(message.Name, messages);
             }
 
-            var received = new ReceivedMessage(message.Name, message);
-            received.OrderNode = _messageOrder.AddLast(received);
-            messages.Add(received);
-            _messageCount++;
+            messages.Add(message);
             arrived = _arrived;
             _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         arrived.TrySetResult();
-        return true;
     }
 
     public async ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> WaitForAsync(
@@ -94,36 +86,14 @@ internal sealed class ZlinkStreamReceivedMessages(int maxMessages)
         for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
-            if (predicate is not null && !predicate(message.Value)) continue;
+            if (predicate is not null && !predicate(message)) continue;
 
             messages.RemoveAt(index);
-            _messageCount--;
-            RemoveFromOrder(message);
             if (messages.Count == 0) _messages.Remove(name);
-            return message.Value;
+            return message;
         }
 
         return null;
-    }
-
-    private void RemoveFromOrder(ReceivedMessage message)
-    {
-        if (message.OrderNode is not null)
-        {
-            _messageOrder.Remove(message.OrderNode);
-            message.OrderNode = null;
-        }
-    }
-
-    private sealed class ReceivedMessage(
-        string name,
-        ZlinkStreamMessage<ZlinkStreamEncodedPayload> value)
-    {
-        public string Name { get; } = name;
-
-        public ZlinkStreamMessage<ZlinkStreamEncodedPayload> Value { get; } = value;
-
-        public LinkedListNode<ReceivedMessage>? OrderNode { get; set; }
     }
 
     private readonly record struct PendingMessage(

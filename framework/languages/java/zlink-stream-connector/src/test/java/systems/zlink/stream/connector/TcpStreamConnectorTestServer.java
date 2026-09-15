@@ -116,36 +116,6 @@ final class TcpStreamConnectorTestServer implements Closeable {
 
     ZLinkStreamConnectorOptions options(
         ZLinkStreamDispatchMode dispatchMode,
-        int maxReceivedMessages) {
-        ZLinkStreamConnectorOptions base = options(dispatchMode);
-        return new ZLinkStreamConnectorOptions(
-            base.endpoint(),
-            base.dispatchMode(),
-            base.requestTimeout(),
-            base.waitTimeout(),
-            base.maxReconnectAttempts(),
-            base.connectTimeout(),
-            base.maxSendPayloadSize(),
-            base.maxReceivePayloadSize(),
-            maxReceivedMessages,
-            base.maxInboundObserverNotifications(),
-            base.maxInboundObserverPayloadPreviewBytes(),
-            base.heartbeatEnabled(),
-            base.heartbeatInterval(),
-            base.heartbeatTimeout(),
-            base.reconnectEnabled(),
-            base.reconnectInitialDelay(),
-            base.reconnectMaxDelay(),
-            base.reconnectBackoffFactor(),
-            base.skipServerCertificateValidation(),
-            base.compression(),
-            base.compressionCodec(),
-            base.nameResolver(),
-            base.typedCodec());
-    }
-
-    ZLinkStreamConnectorOptions options(
-        ZLinkStreamDispatchMode dispatchMode,
         Duration requestTimeout,
         int maxReconnectAttempts,
         boolean heartbeatEnabled,

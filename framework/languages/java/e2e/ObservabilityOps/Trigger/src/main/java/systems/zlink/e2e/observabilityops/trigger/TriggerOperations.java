@@ -117,7 +117,6 @@ public final class TriggerOperations {
             defaults.connectTimeout(),
             defaults.maxSendPayloadSize(),
             defaults.maxReceivePayloadSize(),
-            defaults.maxReceivedMessages(),
             defaults.heartbeatEnabled(),
             defaults.heartbeatInterval(),
             defaults.heartbeatTimeout(),

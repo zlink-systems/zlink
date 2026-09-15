@@ -74,9 +74,7 @@ public static class TicTacToeClientConnections
 {
     public static IZlinkStreamConnector CreateStreamClient(
         string streamEndpoint,
-        TicTacToeClientOptions options,
-        string role,
-        ILogger logger)
+        TicTacToeClientOptions options)
     {
         var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
         {
@@ -84,17 +82,6 @@ public static class TicTacToeClientConnections
             ConnectTimeout = options.StreamTimeout,
             RequestTimeout = options.StreamTimeout,
             DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
-        connector.ObserveInbound((observation, _) =>
-        {
-            logger.LogInformation(
-                "stream-inbound sample=TicTacToe client={0} kind={1} name={2} seq={3} bytes={4}",
-                role,
-                observation.Kind,
-                observation.Name,
-                observation.RequestSeq?.ToString() ?? "-",
-                observation.PayloadLength);
-            return ValueTask.CompletedTask;
         });
         return connector;
     }

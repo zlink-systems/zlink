@@ -61,13 +61,6 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public void ReceivedMessageDroppedAppendsWithoutRenumberingExistingErrorCodes()
-    {
-        Assert.Equal(14, (int)ZlinkStreamErrorCode.RemoteError);
-        Assert.Equal(15, (int)ZlinkStreamErrorCode.ReceivedMessageDropped);
-    }
-
-    [Fact]
     public void ConnectorCallInterfacesMatchTheFrozenSurface()
     {
         AssertMethod(
@@ -212,10 +205,7 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(TimeSpan.FromSeconds(5), options.WaitTimeout);
         Assert.Equal(64 * 1024, options.MaxSendPayloadSize);
         Assert.Equal(64 * 1024, options.MaxReceivePayloadSize);
-        Assert.Equal(1024, options.MaxReceivedMessages);
         Assert.Equal(1024, options.MaxPendingDispatchCallbacks);
-        Assert.Equal(1024, options.MaxInboundObserverNotifications);
-        Assert.Equal(0, options.MaxInboundObserverPayloadPreviewBytes);
         Assert.False(options.SkipServerCertificateValidation);
         Assert.Equal(ZlinkStreamDispatchMode.Manual, options.DispatchMode);
         Assert.Equal(ZlinkStreamCompression.Lz4, options.Compression);

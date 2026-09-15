@@ -11,7 +11,6 @@ import {
 } from './Protocol/ZlinkStreamFrameProtocol';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import type { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
-import type { ZlinkStreamInboundObservers } from './ZlinkStreamInboundObservers';
 import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, toStreamError, utf8Decode } from './ZlinkStreamSupport';
@@ -29,7 +28,6 @@ export class ZlinkStreamReceiveDispatcher {
   constructor(
     private readonly protocol: ZlinkStreamFrameProtocol,
     private readonly pendingRequests: ZlinkStreamPendingRequests,
-    private readonly inboundObservers: ZlinkStreamInboundObservers,
     private readonly receivedMessages: ZlinkStreamReceivedMessages,
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly events: ZlinkStreamConnectorEvents,
@@ -96,7 +94,6 @@ export class ZlinkStreamReceiveDispatcher {
     signal: AbortSignal | undefined,
     flowEnabled: boolean
   ): Promise<void> {
-    this.inboundObservers.enqueue(header, payload, signal);
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
       try {
         if (!this.pendingRequests.resolve(header.requestSeq, {

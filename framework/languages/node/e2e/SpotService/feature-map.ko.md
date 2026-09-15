@@ -5,7 +5,7 @@
 현재 상태: Node.js `SpotService` config는 `.NET` runner처럼 `all`을 child group으로 나누어 실행한다.
 `default-batch`는 SM-A1, SM-A2, SM-A3, SM-A4, SM-A5, SM-A6, SM-A7, SM-A8, SM-B1, SM-B2, SM-B3, SM-B4,
 SM-B6, SM-B7, SM-B8, SM-B9, SM-C1, SM-C2, SM-C3, SM-C4, SM-C5, SM-D2, SM-D3, SM-D4, SM-D5, SM-D6,
-SM-D7, SM-D8, SM-D9, SM-D10, SM-D11, SM-D12, SM-D13, SM-D14, SM-D15, SM-E1, SM-E2, SM-E3, SM-E4, SM-F1,
+SM-D7, SM-D8, SM-D11, SM-D12, SM-D13, SM-D14, SM-D15, SM-E1, SM-E2, SM-E3, SM-E4, SM-F1,
 SM-F2, SM-F3, SM-F4, SM-F5를 operation group 단위로 실행하고,
 outer `all`은 이어서 SM-F6, SM-G2, SM-G3, SM-G4, SM-G1을 별도 child scenario로 실행한다.
 공통 Config 2에 없는 SM-Q9는 보조 operation으로만 선택 실행한다.
@@ -53,8 +53,6 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
 | SM-D6 | 구현 | bound consumer와 별도 consumer를 각각 `session-a`, `session-b` stream session에 연결하고, `ActorPushReq`로 발생한 `ActorPushNotify`가 target actor에 bind된 consumer에게만 전달되는지 검증한다. 별도 consumer는 다른 actor에 bind되어 있으며 target actor push count가 0인지 확인한다. 선택 PASS: `logs/20260629-213945-1613927`; `all` PASS: `logs/20260702-064908-43303` |
 | SM-D7 | 구현 | stream connector가 `AuthReq`로 actor bind를 완료하고, 같은 stream의 `ActorPingReq`가 bound actor로 dispatch되어 reply payload가 유지되는지 검증한다. 선택 PASS: `logs/20260629-214310-1624231`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D8 | 구현 | slow actor request가 pending인 상태에서 stream connector를 close하면 pending request가 실패하고 자동 재전송되지 않는지 확인한다. 이후 새 stream connector가 같은 actor id로 다시 auth/rebind하고 `ActorPingReq`가 정상 reply되는지 검증한다. 선택 PASS: `logs/20260629-214843-1639970`; `all` PASS: `logs/20260630-074201-3148526` |
-| SM-D9 | 구현 | stream connector에 public `observeInbound(...)`를 `connect()` 전에 등록하고, stream auth 뒤 두 번의 `ActorPingReq` reply를 받는 동안 inbound response frame의 kind, request sequence, payload length가 관측되는지 검증한다. 선택 PASS: `logs/20260629-215409-1654253`; `all` PASS: `logs/20260630-074201-3148526` |
-| SM-D10 | 전환 필요 | 공통 connector 계약대로 `maxReceivedMessages=1`에서 이미 수락한 메시지를 유지하고 이후 새 send를 버리는지 payload identity로 확인해야 한다. 현재 검사는 `ReceivedMessageDropped` 횟수와 총 수신 수만 확인하므로 어느 메시지가 수락·폐기됐는지 구분하지 못한다. 기존 request route 생존과 다른 actor stream 격리 증거는 유지한다. |
 | SM-D11 | 구현 | 같은 client flow에서 stream `ActorPingReq`와 Session HTTP channel control-pingMsg을 차례로 호출해 stream reply와 channel reply가 서로 간섭 없이 각 경로로 돌아오는지 검증한다. 선택 PASS: `logs/20260629-220146-1678135`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D12 | 구현 | runner가 `session-a`와 별도 `session-b` stream host를 함께 시작하고, client가 `session-a`에서 actor state를 만든 뒤 close하고 `session-b`로 재auth/rebind한다. 이후 `SnapshotReq`와 `ActorPushReq`로 play-a actor state가 보존되고 push가 새 stream으로 돌아오는지 검증한다. 선택 PASS: `logs/20260629-220618-1691419`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D13 | 구현 | stream connector heartbeat를 public option으로 켜고 200ms interval, 2s timeout으로 여러 heartbeat 주기 동안 stream auth 상태가 유지되는지 검증한다. 현재 `.NET` 기준 scenario와 동일하게 정상 heartbeat 유지 경로만 완료로 본다. 선택 PASS: `logs/20260629-221012-1704641`; `all` PASS: `logs/20260630-074201-3148526` |
@@ -138,10 +136,6 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
   - Historical local variant PASS: `logs/20260629-211928-1555127` (local stream auth, actor request relay, bound session push)
 - 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D5`
   - PASS: `logs/20260630-073619-3133519` (stream close 후 `session-disconnected`/`entry-disconnected` evidence 확인)
-- 선택 scenario: `timeout 420s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D9`
-  - PASS: `logs/20260629-215409-1654253` (stream inbound observer response frame 관측)
-- 선택 scenario: `timeout 420s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D10`
-  - PASS: `logs/20260629-215844-1670329` (bounded received-message drop, request route 생존, 다른 stream push 격리)
 - 선택 scenario: `timeout 420s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D11`
   - PASS: `logs/20260629-220146-1678135` (stream actor request와 channel control request 혼합)
 - 선택 scenario: `timeout 420s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D12`

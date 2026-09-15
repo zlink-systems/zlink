@@ -233,6 +233,12 @@ connector_runtime_t connector_runtime_t::from (const connector_t &connector)
     return connector_runtime_t (state_from (connector_internal_handle (connector)));
 }
 
+void enqueue_received_message (connector_state_t &state, packet_t packet)
+{
+    state.dispatch_queue.push_back (std::move (packet));
+    state.state_changed.notify_all ();
+}
+
 void deliver_received_packet (connector_state_t &state, packet_t packet)
 {
     if (packet.name.rfind ("$zlink.", 0) == 0) {
@@ -243,15 +249,7 @@ void deliver_received_packet (connector_state_t &state, packet_t packet)
         state.state_changed.notify_all ();
         return;
     }
-    if (state.dispatch_queue.size () >= state.options.max_received_messages) {
-        publish_error (
-          state, error_t{error_code_t::received_message_dropped,
-                         "Received message was dropped because the receive queue is full."});
-        state.state_changed.notify_all ();
-        return;
-    }
-    state.dispatch_queue.push_back (std::move (packet));
-    state.state_changed.notify_all ();
+    enqueue_received_message (state, std::move (packet));
 }
 
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback)
@@ -548,56 +546,6 @@ connector_t::~connector_t () = default;
 connector_t::connector_t (connector_t &&) noexcept = default;
 connector_t &connector_t::operator= (connector_t &&) noexcept = default;
 
-inbound_observer_registration_t::inbound_observer_registration_t (
-  std::shared_ptr<void> state, std::uint64_t id) :
-    _state (std::move (state)), _id (id)
-{
-}
-
-inbound_observer_registration_t::~inbound_observer_registration_t ()
-{
-    close ();
-}
-
-inbound_observer_registration_t::inbound_observer_registration_t (
-  inbound_observer_registration_t &&other) noexcept :
-    _state (std::move (other._state)), _id (std::exchange (other._id, 0))
-{
-}
-
-inbound_observer_registration_t &
-inbound_observer_registration_t::operator= (inbound_observer_registration_t &&other) noexcept
-{
-    if (this != &other) {
-        close ();
-        _state = std::move (other._state);
-        _id = std::exchange (other._id, 0);
-    }
-    return *this;
-}
-
-void inbound_observer_registration_t::close ()
-{
-    if (!_state || _id == 0) {
-        return;
-    }
-    auto state = detail::state_from (_state);
-    std::lock_guard<std::mutex> lock (state->transport_mutex);
-    for (auto &observer : state->inbound_observers) {
-        if (observer && observer->id == _id) {
-            observer->active.store (false);
-            break;
-        }
-    }
-    _state.reset ();
-    _id = 0;
-}
-
-inbound_observer_registration_t::operator bool () const noexcept
-{
-    return _state && _id != 0;
-}
-
 bool connector_t::is_connected () const
 {
     auto state = detail::state_from (_state);
@@ -685,11 +633,6 @@ parse_connect_options (const std::shared_ptr<detail::connector_state_t> &state)
         return result_t<parsed_endpoint_options_t>::failure (
           error_code_t::configuration_error,
           "stream connector does not support the configured transport in this build");
-    }
-    if (state->options.max_received_messages == 0) {
-        return result_t<parsed_endpoint_options_t>::failure (
-          error_code_t::configuration_error,
-          "stream connector max_received_messages must be greater than zero");
     }
     if (state->options.connect_timeout <= std::chrono::milliseconds::zero ()) {
         return result_t<parsed_endpoint_options_t>::failure (
@@ -1193,12 +1136,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         state->pending_requests.clear ();
         state->pending_sends.clear ();
         state->pending_writes.clear ();
-        for (auto &observer : state->inbound_observers) {
-            if (observer) {
-                observer->active.store (false);
-            }
-        }
-        state->inbound_observers.clear ();
         state->read_in_progress = false;
         state->inbound_buffer.clear ();
         state->dispatch_queue.clear ();
@@ -1268,21 +1205,6 @@ connector_t &connector_t::on_error (std::function<void (const error_t &)> handle
     std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
     state->error_handlers.push_back (std::move (handler));
     return *this;
-}
-
-inbound_observer_registration_t
-connector_t::observe_inbound (std::function<void (const inbound_observation_t &)> observer)
-{
-    auto state = detail::state_from (_state);
-    std::lock_guard<std::mutex> lock (state->transport_mutex);
-    if (state->connect_started) {
-        return {};
-    }
-    auto entry = std::make_shared<detail::inbound_observer_entry_t> ();
-    entry->id = state->next_inbound_observer_id++;
-    entry->callback = std::move (observer);
-    state->inbound_observers.push_back (entry);
-    return inbound_observer_registration_t (_state, entry->id);
 }
 
 connector_t &connector_t::on_disconnected (std::function<void ()> handler)

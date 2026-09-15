@@ -37,10 +37,7 @@ final class ZLinkStreamConnectorConfiguration {
             options.connectTimeout(), options.requestTimeout(), options.waitTimeout());
         this.limits = new Limits(
             options.maxSendPayloadSize(),
-            options.maxReceivePayloadSize(),
-            options.maxReceivedMessages(),
-            options.maxInboundObserverNotifications(),
-            options.maxInboundObserverPayloadPreviewBytes());
+            options.maxReceivePayloadSize());
         this.heartbeat = new Heartbeat(
             options.heartbeatEnabled(), options.heartbeatInterval(), options.heartbeatTimeout());
         this.reconnect = new Reconnect(
@@ -84,17 +81,6 @@ final class ZLinkStreamConnectorConfiguration {
         }
         if (options.maxReceivePayloadSize() <= 0) {
             throw new IllegalArgumentException("maxReceivePayloadSize must be positive");
-        }
-        if (options.maxReceivedMessages() <= 0) {
-            throw new IllegalArgumentException("maxReceivedMessages must be positive");
-        }
-        if (options.maxInboundObserverNotifications() <= 0) {
-            throw new IllegalArgumentException(
-                "maxInboundObserverNotifications must be positive");
-        }
-        if (options.maxInboundObserverPayloadPreviewBytes() < 0) {
-            throw new IllegalArgumentException(
-                "maxInboundObserverPayloadPreviewBytes must not be negative");
         }
         Objects.requireNonNull(options.compression(), "compression");
         Objects.requireNonNull(options.diagnosticsLevel(), "diagnosticsLevel");
@@ -145,12 +131,7 @@ final class ZLinkStreamConnectorConfiguration {
     }
 
     record Timeouts(Duration connect, Duration request, Duration waitForMessage) { }
-    record Limits(
-        int sendPayload,
-        int receivePayload,
-        int receivedMessages,
-        int inboundObserverNotifications,
-        int inboundObserverPayloadPreviewBytes) { }
+    record Limits(int sendPayload, int receivePayload) { }
     record Heartbeat(boolean enabled, Duration interval, Duration timeout) { }
     record Reconnect(
         boolean enabled,

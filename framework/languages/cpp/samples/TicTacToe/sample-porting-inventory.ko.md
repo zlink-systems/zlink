@@ -56,7 +56,7 @@ raw frame 조작, 샘플 전용 route helper로 공통 계약을 우회하지 �
 | `common: Spot pub/sub milestone fan-out` | `Server/Play/Infrastructure/ZLink/Spots/EntrySpot/tictactoe_entry_spot.hpp`; `Client/tictactoe_client_scenario.hpp` | message-flow | done | room Spot publish와 Entry Spot subscribe handler로 observer milestone push를 검증한다. |
 | `common: public connector wait interface로 push 대기` | `Client/tictactoe_client_scenario.hpp` | validation | done | wait filter와 future를 직접 사용하고 sample-local polling으로 push 대기를 숨기지 않는다. |
 | `common: tictactoe=completed marker` | `Client/main.cpp`; `run_sample.sh`; `run_sample.ps1` | validation | done | runner가 client log marker를 검사한다. |
-| `common: stream-inbound marker와 message-flow evidence` | `Client/main.cpp`; `run_sample.sh`; `run_sample.ps1`; role `main.cpp` trace option | validation | done | runner가 client marker, `LeaveGameMsg` 완료, Entry Spot destroy 완료, sample log directory message-flow 기록을 검사한다. |
+| `common: stream handler marker와 message-flow evidence` | `Client/tictactoe_client_scenario.hpp`; `run_sample.sh`; `run_sample.ps1`; role `main.cpp` trace option | validation | done | runner가 typed push handler marker, `LeaveGameMsg` 완료, Entry Spot destroy 완료, sample log directory message-flow 기록을 검사한다. |
 | `common: Domain은 framework 타입을 모름` | `Server/Play/Domain/TicTacToe/tictactoe_match.hpp` | layering | done | board, turn, win/draw 판정은 domain type에 있고 framework 배선은 Infrastructure에 있다. |
 
 ## 남은 gap

@@ -69,7 +69,7 @@ Each role reads `Sample` settings from the config file through
 settings, starts `play-a`, `play-b`, `api-a`, and `api-b` with `--config`, waits
 for stream, MeshNode, HTTP, and Redis endpoints, and
 then runs the standalone client. The runner fails if the logs do not contain
-stream-inbound response and push evidence, observer milestone verification,
+observer milestone verification,
 `LeaveGameMsg` completion for both players, entry-spot actor destroy evidence
 for both players. Framework diagnostics use the standard .NET
 `ActivitySource` and `Meter` surfaces instead of a sample-owned trace file.

@@ -23,7 +23,6 @@ internal static class SmD13HeartbeatRequestScenario
                 Timeout = TimeSpan.FromSeconds(2)
             },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         stream.Disconnected += (message, _) =>
         {

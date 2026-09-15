@@ -46,13 +46,6 @@ public final class Program {
             Duration.ofSeconds(5),
             2.0,
             ZLinkProtobufCodec.defaultCodec()));
-        client.observeInbound(observation -> {
-            System.out.println(
-                "stream-inbound sample=Bingo kind=" + observation.kind()
-                    + " name=" + observation.packetName()
-                    + " bytes=" + observation.payloadLength());
-            return CompletableFuture.completedFuture(null);
-        });
         return client;
     }
 }

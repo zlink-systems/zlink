@@ -58,8 +58,6 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
     await page.evaluate((endpoint) => window.browserConnectorTest.connect(endpoint), `ws://127.0.0.1:${wsPort}`);
     const explicitFlowId = '019f5c16-14f8-7701-9438-753e036a9b94';
     assert.deepEqual(await requestFromPage(page, 'plain-ws', wsServer, explicitFlowId), { value: 'plain-ws' });
-    const flowState = await page.evaluate(() => window.browserConnectorTest.state());
-    assert(flowState.observations.some((row) => row.flowId === explicitFlowId));
 
     await stopStreamServer(wsServer);
     await page.waitForFunction(() => window.browserConnectorTest.state().connectionState !== 'connected', null, { timeout: 10_000 });

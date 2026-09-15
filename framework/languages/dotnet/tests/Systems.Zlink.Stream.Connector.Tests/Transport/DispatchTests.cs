@@ -61,65 +61,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ReceivedMessagesDropNewestEntryAndReportOverflowAtConfiguredLimit()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var headerCodec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            using var tcp = await listener.AcceptTcpClientAsync();
-            await using var stream = tcp.GetStream();
-            for (var index = 1; index <= 3; index++)
-                await WritePacketAsync(
-                    stream,
-                    headerCodec.Encode(new ZlinkStreamHeader(
-                        ZlinkStreamMessageKind.Send,
-                        ZlinkStreamCodec.Raw,
-                        ZlinkStreamHeaderFlags.None,
-                        null,
-                        "buffered",
-                        ZlinkStreamMetadata.Empty)).ToArray(),
-                    [(byte)index]);
-        });
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 2
-        });
-        var dropped = new TaskCompletionSource<ZlinkStreamError>(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += (error, _) =>
-        {
-            if (error.Code == ZlinkStreamErrorCode.ReceivedMessageDropped) dropped.TrySetResult(error);
-            return ValueTask.CompletedTask;
-        };
-        await connector.Connect.Async();
-        await server;
-        await WaitUntilAsync(
-            () => connector.ReceivedCount("buffered") == 2,
-            TimeSpan.FromSeconds(15));
-        var dropError = await dropped.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        var first = await connector.WaitFor("buffered")
-            .Where(message => message.Payload.Payload.Span[0] == 1)
-            .Timeout(TimeSpan.FromSeconds(1))
-            .Async();
-        var second = await connector.WaitFor("buffered")
-            .Timeout(TimeSpan.FromSeconds(1))
-            .Async();
-
-        Assert.Equal(ZlinkStreamErrorCode.ReceivedMessageDropped, dropError.Code);
-        Assert.Equal(1, first.Payload.Payload.Span[0]);
-        Assert.Equal(2, second.Payload.Payload.Span[0]);
-        Assert.Equal(0, connector.ReceivedCount("buffered"));
-    }
-
-    [Fact]
-    public async Task OnHandlerConsumesMoreMessagesThanUnreadHistoryCapacityWithoutDropping()
+    public async Task OnHandlerDoesNotRetainHandledMessages()
     {
         const int messageCount = 5;
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -163,17 +105,9 @@ public sealed partial class StreamConnectorTests
             Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
             Heartbeat = DisabledHeartbeat(),
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 2
+            DispatchMode = ZlinkStreamDispatchMode.Immediate
         });
         var handled = new List<byte>();
-        var dropped = 0;
-        connector.ErrorReceived += (error, _) =>
-        {
-            if (error.Code == ZlinkStreamErrorCode.ReceivedMessageDropped)
-                Interlocked.Increment(ref dropped);
-            return ValueTask.CompletedTask;
-        };
         using var subscription = connector.On("handled", (message, _) =>
         {
             handled.Add(message.Payload.Payload.Span[0]);
@@ -188,11 +122,10 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, handled);
         Assert.Equal(2, connector.ReceivedCount("buffered-before-handler"));
         Assert.Equal(0, connector.ReceivedCount("handled"));
-        Assert.Equal(0, Volatile.Read(ref dropped));
     }
 
     [Fact]
-    public async Task UnmatchedResponse_DoesNotConsumeReceivedMessageCapacity()
+    public async Task UnmatchedResponseIsNotRetained()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -229,23 +162,15 @@ public sealed partial class StreamConnectorTests
             Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
             Heartbeat = DisabledHeartbeat(),
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1
+            DispatchMode = ZlinkStreamDispatchMode.Immediate
         });
-        var dropped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += (error, _) =>
-        {
-            if (error.Code == ZlinkStreamErrorCode.ReceivedMessageDropped) dropped.TrySetResult();
-            return ValueTask.CompletedTask;
-        };
 
         await connector.Connect.Async();
         await server;
         await WaitUntilAsync(
-            () => connector.ReceivedCount("kept") == 1 || dropped.Task.IsCompleted,
+            () => connector.ReceivedCount("kept") == 1,
             TimeSpan.FromSeconds(5));
 
-        Assert.False(dropped.Task.IsCompleted);
         Assert.Equal(0, connector.ReceivedCount("late.response"));
         Assert.Equal(1, connector.ReceivedCount("kept"));
     }

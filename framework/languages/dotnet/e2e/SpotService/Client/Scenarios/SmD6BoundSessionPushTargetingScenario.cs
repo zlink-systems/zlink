@@ -23,7 +23,6 @@ internal static class SmD6BoundSessionPushTargetingScenario
                 RequestTimeout = TimeSpan.FromSeconds(10),
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
-                MaxReceivedMessages = 1024
             });
             await bound.Connect.Async();
         await bound.Request(new AuthReq("actor-sm-d6", "bound"))
@@ -40,7 +39,6 @@ internal static class SmD6BoundSessionPushTargetingScenario
                 RequestTimeout = TimeSpan.FromSeconds(10),
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
-                MaxReceivedMessages = 1024
             });
             await unbound.Connect.Async();
         await unbound.Request(new AuthReq("actor-sm-d6-shadow", "unbound"))

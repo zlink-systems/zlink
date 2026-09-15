@@ -7,7 +7,7 @@
 ## Connecting And Codec
 
 Import the connector from the package root and pass the payload codec you need as a creation
-option. An inbound observer must be registered before starting the connection.
+option.
 
 ```ts
 import {
@@ -20,10 +20,6 @@ const client = zlinkStreamConnectorFactory.create({
   endpoint: 'wss://game.example.com/stream', // Production connections use wss, whose certificate the browser verifies.
   codec: zlinkStreamMessagePackCodec,        // This codec handles encoding and decoding of the business payload.
   dispatchMode: ZlinkStreamDispatchMode.Immediate
-});
-
-client.observeInbound((message) => {
-  console.log(message.name); // The observer must be registered before connect, to observe from the first frame.
 });
 
 await client.connect(); // Waits until the platform WebSocket connection is ready.

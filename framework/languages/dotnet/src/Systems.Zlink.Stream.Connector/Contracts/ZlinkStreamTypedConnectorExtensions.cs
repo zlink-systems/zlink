@@ -47,15 +47,6 @@ public static class ZlinkStreamJsonExtensions
 
 public static class ZlinkStreamTypedConnectorExtensions
 {
-    public static IZlinkStreamConnector WithInboundObserver(
-        this IZlinkStreamConnector connector,
-        Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer)
-    {
-        ArgumentNullException.ThrowIfNull(connector);
-        connector.ObserveInbound(observer);
-        return connector;
-    }
-
     public static ZlinkStreamTypedSendBuilder Send<TPayload>(
         this IZlinkStreamConnector connector,
         TPayload payload)

@@ -29,8 +29,6 @@ import { runSmD5A } from './Scenarios/sm-d5a-scenario';
 import { runSmD6 } from './Scenarios/sm-d6-scenario';
 import { runSmD7 } from './Scenarios/sm-d7-scenario';
 import { runSmD8 } from './Scenarios/sm-d8-scenario';
-import { runSmD9 } from './Scenarios/sm-d9-scenario';
-import { runSmD10 } from './Scenarios/sm-d10-scenario';
 import { runSmD11 } from './Scenarios/sm-d11-scenario';
 import { runSmD12 } from './Scenarios/sm-d12-scenario';
 import { runSmD13 } from './Scenarios/sm-d13-scenario';
@@ -99,8 +97,6 @@ async function main(): Promise<void> {
     'SM-D6': () => runSmD6(options),
     'SM-D7': () => runSmD7(options),
     'SM-D8': () => runSmD8(options),
-    'SM-D9': () => runSmD9(options),
-    'SM-D10': () => runSmD10(options),
     'SM-D11': () => runSmD11(options),
     'SM-D12': () => runSmD12(options),
     'SM-D13': () => runSmD13(options),
@@ -134,7 +130,7 @@ async function main(): Promise<void> {
     'SM-G5A': () => runSMG5A(options),
     'SM-G5B': () => runSMG5B(options),
   };
-  const defaultScenarioIds = ['SM-A1', 'SM-A2', 'SM-A3', 'SM-A4', 'SM-A5', 'SM-A6', 'SM-A7', 'SM-A8', 'SM-A9', 'SM-A10', 'SM-A11', 'SM-A12', 'SM-A13', 'SM-B0', 'SM-B0A', 'SM-B1', 'SM-B2', 'SM-B3', 'SM-B4', 'SM-B6', 'SM-B7', 'SM-B8', 'SM-B9', 'SM-B10', 'SM-B11', 'SM-C1', 'SM-C2', 'SM-C3', 'SM-C4', 'SM-C5', 'SM-C6', 'SM-D2', 'SM-D3', 'SM-D4', 'SM-D5', 'SM-D6', 'SM-D7', 'SM-D9', 'SM-D10', 'SM-D11', 'SM-D12', 'SM-D13', 'SM-D14', 'SM-D15', 'SM-E1', 'SM-E2', 'SM-E3', 'SM-E4', 'SM-F1', 'SM-F2', 'SM-F3', 'SM-F4', 'SM-F5', 'SM-F6', 'SM-G5A', 'SM-G5B'];
+  const defaultScenarioIds = ['SM-A1', 'SM-A2', 'SM-A3', 'SM-A4', 'SM-A5', 'SM-A6', 'SM-A7', 'SM-A8', 'SM-A9', 'SM-A10', 'SM-A11', 'SM-A12', 'SM-A13', 'SM-B0', 'SM-B0A', 'SM-B1', 'SM-B2', 'SM-B3', 'SM-B4', 'SM-B6', 'SM-B7', 'SM-B8', 'SM-B9', 'SM-B10', 'SM-B11', 'SM-C1', 'SM-C2', 'SM-C3', 'SM-C4', 'SM-C5', 'SM-C6', 'SM-D2', 'SM-D3', 'SM-D4', 'SM-D5', 'SM-D6', 'SM-D7', 'SM-D11', 'SM-D12', 'SM-D13', 'SM-D14', 'SM-D15', 'SM-E1', 'SM-E2', 'SM-E3', 'SM-E4', 'SM-F1', 'SM-F2', 'SM-F3', 'SM-F4', 'SM-F5', 'SM-F6', 'SM-G5A', 'SM-G5B'];
   const operationGroups: Record<string, readonly string[]> = {
     'default-batch': defaultScenarioIds,
     'sm-b1-b2-b3': ['SM-B1', 'SM-B2', 'SM-B3'],
@@ -148,8 +144,7 @@ async function main(): Promise<void> {
     'sm-d5': ['SM-D5'],
     'sm-d7': ['SM-D7'],
     'sm-d8': ['SM-D8'],
-    'sm-d9-d11-d13': ['SM-D9', 'SM-D11', 'SM-D13'],
-    'sm-d10': ['SM-D10'],
+    'sm-d11-d13': ['SM-D11', 'SM-D13'],
     'sm-d12': ['SM-D12'],
     'sm-d14': ['SM-D14'],
     'sm-c1-c2': ['SM-C1', 'SM-C2'],

@@ -33,29 +33,11 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
             Endpoint = new Uri(options.GatewayEndpoint),
             ConnectTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = TimeSpan.FromSeconds(10),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxInboundObserverPayloadPreviewBytes = options.StreamTrace ? 2048 : 0
+            DispatchMode = ZlinkStreamDispatchMode.Immediate
         });
 
         if (options.StreamTrace)
         {
-            connector.WithInboundObserver((observation, _) =>
-            {
-                var preview = observation.PayloadPreview.IsEmpty
-                    ? string.Empty
-                    : Convert.ToBase64String(observation.PayloadPreview.Span);
-                Console.Error.WriteLine(
-                    "stream-trace inbound player={0} packet={1} kind={2} codec={3} "
-                    + "length={4} compressed={5} preview_b64={6}",
-                    playerId,
-                    observation.Name,
-                    observation.Kind,
-                    observation.Codec,
-                    observation.PayloadLength,
-                    observation.IsCompressed,
-                    preview);
-                return ValueTask.CompletedTask;
-            });
             connector.ErrorReceived += (error, _) =>
             {
                 Console.Error.WriteLine(

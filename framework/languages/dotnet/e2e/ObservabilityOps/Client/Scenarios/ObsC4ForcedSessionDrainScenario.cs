@@ -22,8 +22,6 @@ internal static class ObsC4ForcedSessionDrainScenario
 
         var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var closingObserved = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var connector = await context.ConnectAsync(
             reconnectEnabled: false,
             configure: candidate =>
@@ -33,11 +31,6 @@ internal static class ObsC4ForcedSessionDrainScenario
                     disconnected.TrySetResult(closed.CloseReason);
                     return ValueTask.CompletedTask;
                 };
-                candidate.ObserveInbound((frame, _) =>
-                {
-                    if (frame.Name == "session-closing") closingObserved.TrySetResult();
-                    return ValueTask.CompletedTask;
-                });
             });
         await connector.Request(new AuthenticateReq(actorId))
             .Async<AuthenticateRes>();
@@ -80,7 +73,6 @@ internal static class ObsC4ForcedSessionDrainScenario
         await context.Session.Post("/operation-gate/wait-started")
             .Query("timeoutMs", "5000").AsyncRaw();
         await context.Session.Post("/shutdown?deadlineMs=100").AsyncRaw();
-        await closingObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
         ZlinkStreamAssert.Ensure(reason == ZlinkStreamCloseReason.ServerDrain,
             $"OBS-C4 connector close reason was {reason}, not ServerDrain.");

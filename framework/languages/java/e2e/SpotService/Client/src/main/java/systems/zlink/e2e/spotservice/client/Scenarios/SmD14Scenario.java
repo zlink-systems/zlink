@@ -19,7 +19,6 @@ public final class SmD14Scenario extends SpotServiceScenarioContext {
         ZLinkStreamConnector strict = createStreamConnector(
             endpoint,
             ZLinkStreamDispatchMode.IMMEDIATE,
-            Integer.MAX_VALUE,
             false);
         boolean strictTlsRejected = false;
         try {
@@ -36,7 +35,6 @@ public final class SmD14Scenario extends SpotServiceScenarioContext {
         ZLinkStreamConnector tls = createStreamConnector(
             endpoint,
             ZLinkStreamDispatchMode.IMMEDIATE,
-            Integer.MAX_VALUE,
             true);
         try {
             tls.connect().submit().toCompletableFuture().join();

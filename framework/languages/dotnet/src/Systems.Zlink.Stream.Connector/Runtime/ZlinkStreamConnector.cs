@@ -11,7 +11,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     private readonly IZlinkStreamCompressionCodec? _compressionCodec;
     private readonly ZlinkStreamFrameSender _frameSender;
     private readonly ZlinkStreamHeaderCodec _headerCodec;
-    private readonly ZlinkStreamInboundObserverDispatcher _inboundObservers;
     private readonly ZlinkStreamConnectorLifecycle _lifecycle;
     private readonly ZlinkStreamOneWaySubmitQueue _oneWaySubmits;
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -40,18 +39,12 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         Options = options ?? throw new ArgumentNullException(nameof(options));
         ZlinkStreamConnectorOptionsValidator.Validate(options);
         _taskRunner = new ZlinkStreamTaskRunner(_lifetimeCts.Token);
-        _receivedMessages = new ZlinkStreamReceivedMessages(options.MaxReceivedMessages);
+        _receivedMessages = new ZlinkStreamReceivedMessages();
         _callbacks = new ZlinkStreamConnectorCallbacks(
             _taskRunner,
             options.DispatchMode,
             options.MaxPendingDispatchCallbacks,
             options);
-        _inboundObservers = new ZlinkStreamInboundObserverDispatcher(
-            _taskRunner,
-            _callbacks,
-            options.MaxInboundObserverNotifications,
-            options.MaxInboundObserverPayloadPreviewBytes);
-
         _headerCodec = new ZlinkStreamHeaderCodec();
         _compressionCodec = CreateCompressionCodec(options);
 
@@ -81,7 +74,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _receivedMessages,
             _frameSender,
             _callbacks,
-            _inboundObservers,
             _lifecycle.HandleServerCloseAsync);
         _receiveLoop = new ZlinkStreamReceiveLoop(
             _receiveDispatcher,
@@ -159,19 +151,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     public IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload)
     {
         return new ZlinkStreamRequestBuilder(this, ResolveNameOrDefault(payload), payload);
-    }
-
-    public IDisposable ObserveInbound(
-        Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(observer);
-        if (_lifecycle.State != ZlinkStreamConnectionState.Created)
-            throw Error(
-                ZlinkStreamErrorCode.ValidationFailed,
-                "Inbound observers must be registered before connecting.");
-
-        return _inboundObservers.Add(observer);
     }
 
     public IDisposable On(
@@ -346,7 +325,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             await _lifetimeCts.CancelAsync().ConfigureAwait(false);
             await _taskRunner.StopAndDrainAsync().ConfigureAwait(false);
             _callbacks.Complete();
-            _inboundObservers.Dispose();
             _sendGate.Dispose();
             _lifecycle.Dispose();
             _lifetimeCts.Dispose();

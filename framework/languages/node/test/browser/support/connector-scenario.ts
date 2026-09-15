@@ -2,13 +2,10 @@ import {
   ZlinkStreamDispatchMode,
   zlinkStreamConnectorFactory,
   zlinkStreamJsonCodec,
-  type ZlinkFlowOrigin,
   type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
 
-type Observation = { name: string; flowId?: string; flowOrigin?: ZlinkFlowOrigin };
 let client: ZlinkStreamConnector | undefined;
-const observations: Observation[] = [];
 
 async function connect(endpoint: string): Promise<void> {
   client = zlinkStreamConnectorFactory.create({
@@ -17,13 +14,6 @@ async function connect(endpoint: string): Promise<void> {
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
     reconnect: { enabled: true, maxAttempts: 20, initialDelayMs: 25, maxDelayMs: 100 }
-  });
-  client.observeInbound((observation) => {
-    observations.push({
-      name: observation.name,
-      flowId: observation.flowId,
-      flowOrigin: observation.flowOrigin
-    });
   });
   await client.connect();
 }
@@ -50,8 +40,7 @@ async function close(): Promise<void> {
 function state(): unknown {
   return {
     connectionState: client?.state,
-    closeReason: client?.closeReason,
-    observations: [...observations]
+    closeReason: client?.closeReason
   };
 }
 
