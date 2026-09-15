@@ -45,13 +45,17 @@ internal object Scenarios {
 
     private suspend fun a2(options: ClientOptions) {
         val player = Game.create(options, unique("a2"))
-        withResources(player) { player.join(); player.moveTo(28, 27) }
+        withResources(player) {
+            ensure(player.join().error == null, "JoinWorld succeeds")
+            player.moveTo(28, 27)
+        }
     }
 
     private suspend fun a3(options: ClientOptions) {
         val player = Game.create(options, unique("a3")); val probes = Probes.create(options); val ops = Ops.create(options)
         withResources(player, probes, ops) {
-            player.join(); reject(player, -1, 25, "OutOfRange"); reject(player, 31, 25, "TooFar")
+            ensure(player.join().error == null, "JoinWorld succeeds")
+            reject(player, -1, 25, "OutOfRange"); reject(player, 31, 25, "TooFar")
             player.moveTo(49, 49); reject(player, 50, 50, "DiagonalCrossing"); resetMaintenance(ops)
             val pair = probes.pair(); ensure(pair.error == null, "cross-owner pair exists")
             val crossing = edge(pair.sourceZoneId, pair.targetZoneId)
@@ -65,7 +69,8 @@ internal object Scenarios {
     private suspend fun a4(options: ClientOptions) {
         val first = Game.create(options, unique("a4-b")); val second = Game.create(options, unique("a4-a"))
         withResources(first, second) {
-            first.join(); second.join()
+            ensure(first.join().error == null, "first JoinWorld succeeds")
+            ensure(second.join().error == null, "second JoinWorld succeeds")
             for (client in listOf(first, second)) {
                 val state = client.connector.waitFor<Messages.ZoneStateNotify>()
                     .where { has(it.payload(), first.playerId) && has(it.payload(), second.playerId) }
@@ -80,7 +85,8 @@ internal object Scenarios {
         val firstId = unique("a5-\uE000"); val secondId = unique("a5-\uD800\uDC00")
         val first = Game.create(options, firstId); val second = Game.create(options, secondId)
         withResources(first, second) {
-            first.join(); second.join()
+            ensure(first.join().error == null, "first JoinWorld succeeds")
+            ensure(second.join().error == null, "second JoinWorld succeeds")
             val state = first.connector.waitFor<Messages.ZoneStateNotify>()
                 .where { has(it.payload(), firstId) && has(it.payload(), secondId) }
                 .timeout(Duration.ofSeconds(20)).await().payload()
@@ -95,7 +101,9 @@ internal object Scenarios {
     private suspend fun b1(options: ClientOptions) {
         val west = Game.create(options, unique("b1-w")); val east = Game.create(options, unique("b1-e"))
         withResources(west, east) { coroutineScope {
-            west.join(); east.join(); east.moveTo(55, 25)
+            ensure(west.join().error == null, "west JoinWorld succeeds")
+            ensure(east.join().error == null, "east JoinWorld succeeds")
+            east.moveTo(55, 25)
             val visible = async(start = CoroutineStart.UNDISPATCHED) {
                 east.connector.waitFor<Messages.ZoneStateNotify>()
                     .where { it.payload().zoneId == "zone-ne" && has(it.payload(), west.playerId) }
@@ -116,7 +124,8 @@ internal object Scenarios {
     private suspend fun b2(options: ClientOptions) {
         val id = unique("b2"); val probes = Probes.create(options); val player = Game.create(options, id)
         withResources(probes, player) {
-            val pair = requiredPair(probes); player.join(); player.moveTo(center(pair.sourceZoneId).x, center(pair.sourceZoneId).y)
+            val pair = requiredPair(probes); ensure(player.join().error == null, "JoinWorld succeeds")
+            player.moveTo(center(pair.sourceZoneId).x, center(pair.sourceZoneId).y)
             val before = probes.actor(id); player.moveTo(center(pair.targetZoneId).x, center(pair.targetZoneId).y)
             val after = probes.actor(id)
             ensure(before.ownerNodeRid == pair.sourceOwnerNodeRid && after.ownerNodeRid == pair.targetOwnerNodeRid &&
@@ -130,7 +139,8 @@ internal object Scenarios {
     private suspend fun b3(options: ClientOptions) {
         val id = unique("b3"); val probes = Probes.create(options); val player = Game.create(options, id)
         withResources(probes, player) {
-            val pair = requiredPair(probes); player.join(); val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
+            val pair = requiredPair(probes); ensure(player.join().error == null, "JoinWorld succeeds")
+            val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
             player.moveTo(source.x, source.y); val before = probes.actor(id)
             player.moveTo(target.x, target.y); val after = probes.actor(id)
             ensure(before.actorId == after.actorId && before.objectGeneration == after.objectGeneration &&
@@ -141,7 +151,8 @@ internal object Scenarios {
     private data class Follow(val probes: Probes, val player: Game, val generation: Long)
     private suspend fun preparedFollow(prefix: String, options: ClientOptions): Follow {
         val probes = Probes.create(options); val player = Game.create(options, unique(prefix))
-        val pair = requiredPair(probes); player.join(); val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
+        val pair = requiredPair(probes); ensure(player.join().error == null, "JoinWorld succeeds")
+        val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
         player.moveTo(source.x, source.y); val before = probes.actor(player.playerId)
         val prime = "route-prime".toByteArray(StandardCharsets.UTF_8)
         val primed = probes.probe(player.playerId, "prime-${player.playerId}", prime)
@@ -174,7 +185,8 @@ internal object Scenarios {
     private suspend fun b7(options: ClientOptions) {
         val id = unique("b7"); val probes = Probes.create(options); val player = Game.create(options, id)
         withResources(probes, player) {
-            val pair = requiredPair(probes); player.join(); val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
+            val pair = requiredPair(probes); ensure(player.join().error == null, "JoinWorld succeeds")
+            val source = center(pair.sourceZoneId); val target = center(pair.targetZoneId)
             player.moveTo(source.x, source.y); val home = probes.actor(id)
             player.moveTo(target.x, target.y); val away = probes.actor(id)
             val returned = player.moveTo(source.x, source.y); player.moveTo(source.x, source.y + 3); val back = probes.actor(id)
@@ -207,7 +219,8 @@ internal object Scenarios {
         try { coroutineScope {
             ZoneWorldSpec.zones().forEach { zone ->
                 val player = Game.create(options, unique("d1-$zone")); players += player
-                player.join(); center(zone).also { player.moveTo(it.x, it.y) }
+                ensure(player.join().error == null, "JoinWorld succeeds")
+                center(zone).also { player.moveTo(it.x, it.y) }
             }
             val waits = players.map { player -> async(start = CoroutineStart.UNDISPATCHED) {
                 player.connector.waitFor<Messages.WorldAnnounceNotify>().timeout(REQUEST_TIMEOUT).await().payload()
@@ -249,7 +262,8 @@ internal object Scenarios {
 
     private suspend fun e3(options: ClientOptions) {
         val ops = Ops.create(options); val player = Game.create(options, unique("e3")); withResources(ops, player) {
-            resetMaintenance(ops); player.join(); val node = nodeOwning(ops.watch(), "zone-nw"); ops.maintenance(node, true)
+            resetMaintenance(ops); ensure(player.join().error == null, "JoinWorld succeeds")
+            val node = nodeOwning(ops.watch(), "zone-nw"); ops.maintenance(node, true)
             try { player.moveTo(30, 30) } finally { ops.maintenance(node, false) }
         }
     }
@@ -270,7 +284,8 @@ internal object Scenarios {
                 delay(100)
             }
             val pair = requireNotNull(selected); val node = nodes.nodes.first { it.registered && it.zones.containsAll(pair) }.nodeId
-            val crossing = edge(pair[0], pair[1]); player.join(); player.moveTo(crossing.source.x, crossing.source.y)
+            val crossing = edge(pair[0], pair[1]); ensure(player.join().error == null, "JoinWorld succeeds")
+            player.moveTo(crossing.source.x, crossing.source.y)
             ops.maintenance(node, true)
             // The Ops push and the same-process Spot join run on independent framework turns.
             // Let the observed maintenance fanout finish applying before the intra-node join.
@@ -296,7 +311,8 @@ internal object Scenarios {
                 player.connector.waitFor<Messages.ZoneStateNotify>().where { it.payload().players.any(Messages.PlayerView::isBot) }
                     .timeout(Duration.ofSeconds(30)).await().payload()
             }
-            player.join(); val bots = first.await().players.filter { it.isBot }.associate { it.playerId to Point(it.x, it.y) }
+            ensure(player.join().error == null, "JoinWorld succeeds")
+            val bots = first.await().players.filter { it.isBot }.associate { it.playerId to Point(it.x, it.y) }
             player.connector.waitFor<Messages.ZoneStateNotify>().where { state -> state.payload().players.any {
                 it.isBot && bots[it.playerId]?.let { old -> old.x != it.x || old.y != it.y } == true
             } }.timeout(Duration.ofSeconds(30)).await()
@@ -305,7 +321,8 @@ internal object Scenarios {
 
     private suspend fun f3(options: ClientOptions) {
         val ops = Ops.create(options); val player = Game.create(options, unique("f3")); withResources(ops, player) {
-            resetMaintenance(ops); player.join()
+            resetMaintenance(ops); val join = player.join()
+            ensure(join.error == null, "JoinWorld failed: ${join.error}")
             val boundary = player.connector.waitFor<Messages.ZoneStateNotify>().where { aboutToCross(it.payload()) != null }
                 .timeout(Duration.ofSeconds(45)).await().payload()
             val bot = requireNotNull(aboutToCross(boundary)); val targetZone = if (bot.zoneId == "zone-nw") "zone-ne" else "zone-nw"
@@ -322,7 +339,8 @@ internal object Scenarios {
 
     private suspend fun f4(options: ClientOptions) {
         val player = Game.create(options, unique("f4")); val ops = Ops.create(options); withResources(player, ops) {
-            player.join(); ops.connector.request(Messages.AnnounceWorldReq("bots receive nothing"))
+            ensure(player.join().error == null, "JoinWorld succeeds")
+            ops.connector.request(Messages.AnnounceWorldReq("bots receive nothing"))
                 .timeout(REQUEST_TIMEOUT).awaitReply<Messages.AnnounceWorldRes>()
             reject(player, -40, player.y, "OutOfRange")
             val state = player.connector.waitFor<Messages.ZoneStateNotify>().where { it.payload().players.any(Messages.PlayerView::isBot) }
@@ -336,7 +354,9 @@ internal object Scenarios {
             val pair = requiredPair(probes); val crossing = edge(pair.sourceZoneId, pair.targetZoneId)
             val source = Game.create(options, unique("b4-source")); val target = Game.create(options, unique("b4-target"))
             withResources(source, target) {
-                source.join(); target.join(); source.moveTo(crossing.source.x, crossing.source.y)
+                ensure(source.join().error == null, "source JoinWorld succeeds")
+                ensure(target.join().error == null, "target JoinWorld succeeds")
+                source.moveTo(crossing.source.x, crossing.source.y)
                 val visible = async(start = CoroutineStart.UNDISPATCHED) {
                     source.connector.waitFor<Messages.ZoneStateNotify>().where {
                         it.payload().zoneId == pair.sourceZoneId && has(it.payload(), target.playerId)
@@ -429,7 +449,8 @@ internal object Scenarios {
                 observed.targetZoneId, observed.sourceZoneId, observed.targetOwnerNodeRid, observed.sourceOwnerNodeRid)
             val crossing = edge(pair.sourceZoneId, pair.targetZoneId); val player = Game.create(options, unique("g4-crash"))
             withResources(player) {
-                player.join(); player.moveTo(crossing.source.x, crossing.source.y)
+                ensure(player.join().error == null, "JoinWorld succeeds")
+                player.moveTo(crossing.source.x, crossing.source.y)
                 val failed = async(start = CoroutineStart.UNDISPATCHED) {
                     player.connector.waitFor<Messages.CrashRelocationProbeRes>().where { it.payload().error == "Unavailable" }
                         .timeout(Duration.ofSeconds(60)).await().payload()
@@ -459,7 +480,8 @@ internal object Scenarios {
         val probes = Probes.create(options); withResources(probes) {
             val pair = requiredPair(probes); val crossing = edge(pair.sourceZoneId, pair.targetZoneId); val id = unique("b8-seal")
             val player = Game.create(options, id); withResources(player) {
-                player.join(); player.moveTo(crossing.source.x, crossing.source.y)
+                ensure(player.join().error == null, "JoinWorld succeeds")
+                player.moveTo(crossing.source.x, crossing.source.y)
                 val disconnected = CompletableFuture<String>()
                 player.connector.onDisconnected { event ->
                     disconnected.complete(event.closeReason().toString()); CompletableFuture.completedFuture(null)
@@ -476,6 +498,7 @@ internal object Scenarios {
                     ensure(!Files.exists(arm),
                         "ZW-B8 precondition unmet: runner did not prove command-44 interception and target relocation commit")
                     player.connector.connect().await(); val rebound = player.join()
+                    ensure(rebound.error == null, "reconnect JoinWorld failed: ${rebound.error}")
                     ensure(rebound.playerId == id, "reconnect preserves the PlayerId")
                     ensure(rebound.zoneId == pair.targetZoneId,
                         "reconnect rebinds the existing relocated actor at the target zone")

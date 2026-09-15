@@ -63,7 +63,7 @@ final class Scenarios {
 
     private static void a2(ClientOptions options) {
         try (Game player = new Game(options, unique("a2"))) {
-            player.join();
+            ensure(player.join().error() == null, "JoinWorld succeeds");
             player.moveTo(28, 27);
         }
     }
@@ -71,7 +71,7 @@ final class Scenarios {
     private static void a3(ClientOptions options) {
         try (Game player = new Game(options, unique("a3"));
              Probes probes = new Probes(options); Ops ops = new Ops(options)) {
-            player.join();
+            ensure(player.join().error() == null, "JoinWorld succeeds");
             reject(player, -1, 25, "OutOfRange");
             reject(player, 31, 25, "TooFar");
             player.moveTo(49, 49);
@@ -91,7 +91,8 @@ final class Scenarios {
     private static void a4(ClientOptions options) {
         try (Game first = new Game(options, unique("a4-b"));
              Game second = new Game(options, unique("a4-a"))) {
-            first.join(); second.join();
+            ensure(first.join().error() == null, "first JoinWorld succeeds");
+            ensure(second.join().error() == null, "second JoinWorld succeeds");
             for (Game client : List.of(first, second)) {
                 Messages.ZoneStateNotify state = waitFor(client.connector,
                     Messages.ZoneStateNotify.class, value -> has(value, first.playerId)
@@ -107,7 +108,8 @@ final class Scenarios {
         String firstId = unique("a5-\uE000");
         String secondId = unique("a5-\uD800\uDC00");
         try (Game first = new Game(options, firstId); Game second = new Game(options, secondId)) {
-            first.join(); second.join();
+            ensure(first.join().error() == null, "first JoinWorld succeeds");
+            ensure(second.join().error() == null, "second JoinWorld succeeds");
             Messages.ZoneStateNotify state = waitFor(first.connector, Messages.ZoneStateNotify.class,
                 value -> has(value, firstId) && has(value, secondId), Duration.ofSeconds(20))
                 .toCompletableFuture().join().payload();
@@ -124,7 +126,8 @@ final class Scenarios {
     private static void b1(ClientOptions options) {
         try (Game west = new Game(options, unique("b1-w"));
              Game east = new Game(options, unique("b1-e"))) {
-            west.join(); east.join();
+            ensure(west.join().error() == null, "west JoinWorld succeeds");
+            ensure(east.join().error() == null, "east JoinWorld succeeds");
             east.moveTo(55, 25);
             CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> visible = waitFor(
                 east.connector, Messages.ZoneStateNotify.class,
@@ -150,7 +153,8 @@ final class Scenarios {
         String id = unique("b2");
         try (Probes probes = new Probes(options); Game player = new Game(options, id)) {
             Messages.RelocationPairRes pair = requiredPair(probes);
-            player.join(); player.moveTo(center(pair.sourceZoneId()).x(), center(pair.sourceZoneId()).y());
+            ensure(player.join().error() == null, "JoinWorld succeeds");
+            player.moveTo(center(pair.sourceZoneId()).x(), center(pair.sourceZoneId()).y());
             Messages.ActorLocationProbeRes before = probes.actor(id);
             player.moveTo(center(pair.targetZoneId()).x(), center(pair.targetZoneId()).y());
             Messages.ActorLocationProbeRes after = probes.actor(id);
@@ -168,7 +172,8 @@ final class Scenarios {
     private static void b3(ClientOptions options) {
         String id = unique("b3");
         try (Probes probes = new Probes(options); Game player = new Game(options, id)) {
-            Messages.RelocationPairRes pair = requiredPair(probes); player.join();
+            Messages.RelocationPairRes pair = requiredPair(probes);
+            ensure(player.join().error() == null, "JoinWorld succeeds");
             Point source = center(pair.sourceZoneId()), target = center(pair.targetZoneId());
             player.moveTo(source.x(), source.y()); Messages.ActorLocationProbeRes before = probes.actor(id);
             player.moveTo(target.x(), target.y()); Messages.ActorLocationProbeRes after = probes.actor(id);
@@ -181,7 +186,8 @@ final class Scenarios {
 
     private static Follow preparedFollow(String prefix, ClientOptions options) {
         Probes probes = new Probes(options); Game player = new Game(options, unique(prefix));
-        Messages.RelocationPairRes pair = requiredPair(probes); player.join();
+        Messages.RelocationPairRes pair = requiredPair(probes);
+        ensure(player.join().error() == null, "JoinWorld succeeds");
         Point source = center(pair.sourceZoneId()), target = center(pair.targetZoneId());
         player.moveTo(source.x(), source.y()); Messages.ActorLocationProbeRes before = probes.actor(player.playerId);
         byte[] prime = "route-prime".getBytes(StandardCharsets.UTF_8);
@@ -221,7 +227,8 @@ final class Scenarios {
     private static void b7(ClientOptions options) {
         String id = unique("b7");
         try (Probes probes = new Probes(options); Game player = new Game(options, id)) {
-            Messages.RelocationPairRes pair = requiredPair(probes); player.join();
+            Messages.RelocationPairRes pair = requiredPair(probes);
+            ensure(player.join().error() == null, "JoinWorld succeeds");
             Point source = center(pair.sourceZoneId()), target = center(pair.targetZoneId());
             player.moveTo(source.x(), source.y()); Messages.ActorLocationProbeRes home = probes.actor(id);
             player.moveTo(target.x(), target.y()); Messages.ActorLocationProbeRes away = probes.actor(id);
@@ -259,7 +266,8 @@ final class Scenarios {
         try {
             for (String zone : ZoneWorldSpec.zones()) {
                 Game player = new Game(options, unique("d1-" + zone)); players.add(player);
-                player.join(); Point point = center(zone); player.moveTo(point.x(), point.y());
+                ensure(player.join().error() == null, "JoinWorld succeeds");
+                Point point = center(zone); player.moveTo(point.x(), point.y());
             }
             List<CompletionStage<ZLinkStreamMessage<Messages.WorldAnnounceNotify>>> waits = players.stream()
                 .map(player -> waitFor(player.connector, Messages.WorldAnnounceNotify.class,
@@ -310,7 +318,9 @@ final class Scenarios {
 
     private static void e3(ClientOptions options) {
         try (Ops ops = new Ops(options); Game player = new Game(options, unique("e3"))) {
-            resetMaintenance(ops); player.join(); String node = nodeOwning(ops.watch(), "zone-nw");
+            resetMaintenance(ops);
+            ensure(player.join().error() == null, "JoinWorld succeeds");
+            String node = nodeOwning(ops.watch(), "zone-nw");
             ops.maintenance(node, true);
             try { player.moveTo(30, 30); }
             finally { ops.maintenance(node, false); }
@@ -340,7 +350,8 @@ final class Scenarios {
             String node = nodes.nodes().stream().filter(value -> value.registered()
                 && value.zones().containsAll(pair)).findFirst().orElseThrow().nodeId();
             Edge edge = edge(pair.get(0), pair.get(1));
-            player.join(); player.moveTo(edge.source().x(), edge.source().y());
+            ensure(player.join().error() == null, "JoinWorld succeeds");
+            player.moveTo(edge.source().x(), edge.source().y());
             ops.maintenance(node, true);
             try { reject(player, edge.target().x(), edge.target().y(), "ZoneMaintenance"); }
             finally { ops.maintenance(node, false); }
@@ -364,7 +375,8 @@ final class Scenarios {
             CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> first = waitFor(
                 player.connector, Messages.ZoneStateNotify.class,
                 value -> value.players().stream().anyMatch(Messages.PlayerView::isBot), Duration.ofSeconds(30));
-            player.join(); Messages.ZoneStateNotify state = first.toCompletableFuture().join().payload();
+            ensure(player.join().error() == null, "JoinWorld succeeds");
+            Messages.ZoneStateNotify state = first.toCompletableFuture().join().payload();
             Map<String, Point> bots = new java.util.HashMap<>();
             state.players().stream().filter(Messages.PlayerView::isBot).forEach(value ->
                 bots.put(value.playerId(), new Point(value.x(), value.y())));
@@ -377,7 +389,9 @@ final class Scenarios {
 
     private static void f3(ClientOptions options) {
         try (Ops ops = new Ops(options); Game player = new Game(options, unique("f3"))) {
-            resetMaintenance(ops); player.join();
+            resetMaintenance(ops);
+            Messages.JoinWorldNotify join = player.join();
+            ensure(join.error() == null, "JoinWorld failed: " + join.error());
             Messages.ZoneStateNotify boundary = waitFor(player.connector, Messages.ZoneStateNotify.class,
                 value -> aboutToCross(value) != null, Duration.ofSeconds(45)).toCompletableFuture().join().payload();
             Messages.PlayerView bot = aboutToCross(boundary); String targetZone = bot.zoneId().equals("zone-nw")
@@ -397,7 +411,8 @@ final class Scenarios {
 
     private static void f4(ClientOptions options) {
         try (Game player = new Game(options, unique("f4")); Ops ops = new Ops(options)) {
-            player.join(); request(ops.connector, new Messages.AnnounceWorldReq("bots receive nothing"),
+            ensure(player.join().error() == null, "JoinWorld succeeds");
+            request(ops.connector, new Messages.AnnounceWorldReq("bots receive nothing"),
                 Messages.AnnounceWorldRes.class); reject(player, -40, player.y, "OutOfRange");
             ensure(waitFor(player.connector, Messages.ZoneStateNotify.class,
                 value -> value.players().stream().anyMatch(Messages.PlayerView::isBot), Duration.ofSeconds(20))
@@ -411,7 +426,9 @@ final class Scenarios {
             Messages.RelocationPairRes pair = requiredPair(probes); Edge edge = edge(pair.sourceZoneId(), pair.targetZoneId());
             try (Game source = new Game(options, unique("b4-source"));
                  Game target = new Game(options, unique("b4-target"))) {
-                source.join(); target.join(); source.moveTo(edge.source().x(), edge.source().y());
+                ensure(source.join().error() == null, "source JoinWorld succeeds");
+                ensure(target.join().error() == null, "target JoinWorld succeeds");
+                source.moveTo(edge.source().x(), edge.source().y());
                 CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> visible = waitFor(source.connector,
                     Messages.ZoneStateNotify.class, value -> value.zoneId().equals(pair.sourceZoneId())
                         && has(value, target.playerId), Duration.ofSeconds(30));
@@ -509,7 +526,8 @@ final class Scenarios {
                     observed.targetOwnerNodeRid(), observed.sourceOwnerNodeRid(), null);
             Edge edge = edge(pair.sourceZoneId(), pair.targetZoneId());
             try (Game player = new Game(options, unique("g4-crash"))) {
-                player.join(); player.moveTo(edge.source().x(), edge.source().y());
+                ensure(player.join().error() == null, "JoinWorld succeeds");
+                player.moveTo(edge.source().x(), edge.source().y());
                 CompletionStage<ZLinkStreamMessage<Messages.CrashRelocationProbeRes>> failed = waitFor(
                     player.connector, Messages.CrashRelocationProbeRes.class,
                     value -> "Unavailable".equals(value.error()), Duration.ofSeconds(60));
@@ -548,7 +566,8 @@ final class Scenarios {
             Messages.RelocationPairRes pair = requiredPair(probes); Edge edge = edge(pair.sourceZoneId(), pair.targetZoneId());
             String id = unique("b8-seal");
             try (Game player = new Game(options, id)) {
-                player.join(); player.moveTo(edge.source().x(), edge.source().y());
+                ensure(player.join().error() == null, "JoinWorld succeeds");
+                player.moveTo(edge.source().x(), edge.source().y());
                 CompletableFuture<String> disconnected = new CompletableFuture<>();
                 player.connector.onDisconnected(event -> {
                     disconnected.complete(event.closeReason().toString());
@@ -572,6 +591,7 @@ final class Scenarios {
                 }
                 player.connector.connect().submit().toCompletableFuture().join();
                 Messages.JoinWorldNotify rebound = player.join();
+                ensure(rebound.error() == null, "reconnect JoinWorld failed: " + rebound.error());
                 ensure(id.equals(rebound.playerId()), "reconnect preserves the PlayerId");
                 ensure(pair.targetZoneId().equals(rebound.zoneId()),
                     "reconnect rebinds the existing relocated actor at the target zone");

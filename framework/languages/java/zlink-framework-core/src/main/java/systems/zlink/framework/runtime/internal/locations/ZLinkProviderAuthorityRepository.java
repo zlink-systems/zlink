@@ -1782,12 +1782,56 @@ final class ZLinkProviderAuthorityRepository {
                                                     conditions,
                                                     mutations),
                                                 cancellation)
-                                            .thenApply(result -> {
+                                            .thenCompose(result -> {
                                                 if (result instanceof ZLinkStoreWriteApplied) {
                                                     installed.add(rowKey);
-                                                    return true;
+                                                    return completed(true);
                                                 }
-                                                return false;
+                                                return provider.read(
+                                                        rowKey,
+                                                        cancellation)
+                                                    .thenCompose(raced -> {
+                                                        if (!(raced instanceof ZLinkStoreReadFound
+                                                                racedFound)
+                                                            || !sameAggregateMarker(
+                                                                decode(racedFound.value().bytes())
+                                                                    .aggregate(),
+                                                                fence,
+                                                                participantIndex,
+                                                                participant)) {
+                                                            return completed(false);
+                                                        }
+                                                        return provider.read(
+                                                                aggregateKey(fence),
+                                                                cancellation)
+                                                            .thenCompose(aggregateRaced -> {
+                                                                if (!(aggregateRaced
+                                                                        instanceof ZLinkStoreReadFound
+                                                                            aggregateFound)) {
+                                                                    return completed(false);
+                                                                }
+                                                                PreparedAggregate aggregate =
+                                                                    decodeAggregate(
+                                                                        aggregateFound.value()
+                                                                            .bytes());
+                                                                if (!sameAggregateRequest(
+                                                                        aggregate,
+                                                                        request)
+                                                                    || (aggregate.state()
+                                                                        != AGGREGATE_STAGING
+                                                                        && aggregate.state()
+                                                                        != AGGREGATE_PREPARED)) {
+                                                                    return completed(false);
+                                                                }
+                                                                return prepareAggregate(
+                                                                        request,
+                                                                        cancellation
+                                                                            ::isCancellationRequested)
+                                                                    .thenApply(reentered ->
+                                                                        !(reentered
+                                                                            instanceof ZLinkAggregateConflict));
+                                                            });
+                                                    });
                                             });
                                     });
                             });
