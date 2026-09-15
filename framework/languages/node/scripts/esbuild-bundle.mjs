@@ -6,9 +6,15 @@
 // be launched with `node <path>` either. Using the esbuild JavaScript API keeps
 // one invocation that works everywhere.
 //
-// Usage: node scripts/esbuild-bundle.mjs <entry> --bundle --format=<esm|cjs>
+// Usage: node scripts/esbuild-bundle.mjs <entry> --bundle --format=<esm|cjs|iife>
 //        --platform=<browser|node> --target=<target> --outfile=<path>
-//        [--external:<name> ...]
+//        [--global-name=<identifier>] [--external:<name> ...]
+//
+// --global-name is esbuild's `globalName` for `--format=iife`. The Unity WebGL
+// UPM adapter needs the package root as a plain identifier because an
+// emscripten pre-js file cannot use `import`. Passing the option through is
+// one line here; a separate entry file that assigns to a global would add a
+// second module instance to maintain and would still need this bundler to run.
 import { build } from 'esbuild';
 
 const args = process.argv.slice(2);
@@ -19,6 +25,7 @@ for (const arg of args) {
   else if (arg.startsWith('--platform=')) options.platform = arg.slice('--platform='.length);
   else if (arg.startsWith('--target=')) options.target = arg.slice('--target='.length);
   else if (arg.startsWith('--outfile=')) options.outfile = arg.slice('--outfile='.length);
+  else if (arg.startsWith('--global-name=')) options.globalName = arg.slice('--global-name='.length);
   else if (arg.startsWith('--external:')) options.external.push(arg.slice('--external:'.length));
   else if (arg.startsWith('--')) throw new Error(`unsupported esbuild argument: ${arg}`);
   else options.entryPoints.push(arg);
