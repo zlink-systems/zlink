@@ -5,7 +5,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import java.util.logging.Logger;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.time.Duration;
@@ -352,10 +351,6 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 }
 
 final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final Logger LOGGER =
-        Logger.getLogger(DefaultSpotContext.class.getName());
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -639,16 +634,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
-        streamTrace(STREAM_TRACE ? "dispatch-enqueue spot=" + spotId() : null);
         return serials.executeSpot(payloadBytes, () -> {
-            streamTrace(STREAM_TRACE ? "dispatch-start spot=" + spotId() : null);
             CompletionStage<Void> stage = runApplicationExecution(
                 null,
                 serials.usesSharedExecutionGate(),
                 operation);
-            stage.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
-                "dispatch-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error) : null));
             return stage;
         });
     }
@@ -673,8 +663,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(actorId, "actorId");
-        streamTrace(STREAM_TRACE ? "actor-enqueue spot=" + spotId() + " actor=" + actorId
-            + " shared=" + serials.usesSharedExecutionGate() : null);
         return host.enqueueActorDispatch(
             serials,
             actorId,
@@ -707,8 +695,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         String actorId,
         boolean yieldAllowed,
         Supplier<CompletionStage<Void>> operation) {
-        streamTrace(STREAM_TRACE ? "actor-start spot=" + spotId()
-            + " actor=" + actorId : null);
         CompletionStage<Void> stage;
         try (var ignored = systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.enterActorDispatch(actorId)) {
@@ -716,10 +702,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         } catch (RuntimeException failure) {
             stage = CompletableFuture.failedFuture(failure);
         }
-        stage.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
-            "actor-complete spot=" + spotId()
-                + " actor=" + actorId
-                + " error=" + (error == null ? "none" : error) : null));
         return stage;
     }
 
@@ -794,12 +776,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 candidate -> host.isActorMember(spotId(), candidate));
         try (var ignored = systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
-            streamTrace(STREAM_TRACE ? "lifecycle-start spot=" + spotId() : null);
             CompletionStage<T> stage = Objects.requireNonNull(
                 operation.get(), "operation result");
-            stage.whenComplete((ignoredValue, error) -> streamTrace(STREAM_TRACE ?
-                "lifecycle-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error) : null));
             return stage;
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
@@ -1011,12 +989,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             throw invalidRelocationReady(
                 "relocationReady().defer() can be called once per Spot turn");
         }
-        streamTrace(STREAM_TRACE ? "relocation-ready-deferred spot=" + spotId() : null);
         serials.enqueueSpotBarrierNext(this::reachRelocationReadyBoundary);
     }
 
     private CompletionStage<Void> reachRelocationReadyBoundary() {
-        streamTrace(STREAM_TRACE ? "relocation-ready-boundary-start spot=" + spotId() : null);
         RelocationReadyWaiter waiter;
         waiter = inRelocationStateLane(() -> {
             RelocationReadyWaiter current = relocationReadyWaiter;
@@ -1029,9 +1005,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             }
             CompletionStage<Void> continued = runRelocationReadyCompletion(
                 ZLinkSpotRelocationReadyOutcome.CONTINUED);
-            continued.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
-                "relocation-ready-boundary-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error) : null));
             return continued;
         }
         Optional<ZLinkUserSpotRelocationBarrier.Seal> claimed;
@@ -1047,17 +1020,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             ? CompletableFuture.completedFuture(null)
             : runRelocationReadyCompletion(
                 ZLinkSpotRelocationReadyOutcome.CONTINUED);
-        completed.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
-            "relocation-ready-boundary-complete spot=" + spotId()
-                + " claimed=" + claimed.isPresent()
-                + " error=" + (error == null ? "none" : error) : null));
         return completed;
-    }
-
-    private static void streamTrace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] spot-context " + message);
-        }
     }
 
     private void pollRelocationReadyCancellation(

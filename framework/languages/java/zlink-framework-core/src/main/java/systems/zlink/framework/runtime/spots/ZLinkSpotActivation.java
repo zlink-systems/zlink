@@ -307,8 +307,6 @@ final class SpotActivation
                     received.parts(),
                     received.applicationMetadataSize(),
                     received.acceptedJournalRecordSize()));
-                ZLinkSpotRuntime.traceSpotRouteInbound(
-                    "spot-recv", backendSpot, received);
                 if (host.dispatchSpotRouteBridgePacket(received)) {
                     received.close();
                     continue;
@@ -365,7 +363,6 @@ final class SpotActivation
             failRouteInvalidFlow(received, invalidEnvelope);
             return CompletableFuture.completedFuture(null);
         }
-        ZLinkSpotRuntime.traceSpotRouteDispatch("spot-dispatch", backendSpot, received, packet);
         host.traceSpotRouteFlow(
             ZLinkMessageFlowOutcome.RECEIVED,
             received.requestSeq().isPresent()

@@ -5,15 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import java.util.logging.Handler;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.contracts.core.RoutingId;
@@ -239,64 +234,6 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                         : ZLinkServiceNodeDescriptor.State.SERVING,
                     remoteState(replacement, local.routingId()));
             }
-        }
-    }
-
-    @Test
-    @EnabledIfEnvironmentVariable(named = "ZLINK_JAVA_STREAM_TRACE", matches = "1")
-    void crossedHelloAdmitUsesCompletionDiagnosticOnBothSidesWithoutResettingLiveness()
-        throws Exception {
-        Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
-        var records = new CopyOnWriteArrayList<String>();
-        Handler capture = new Handler() {
-            @Override public void publish(LogRecord record) { records.add(record.getMessage()); }
-            @Override public void flush() { }
-            @Override public void close() { }
-        };
-        logger.addHandler(capture);
-        try (var context = Zlink.createContext();
-             var left = new ZLinkJavaRawMeshNode(context, "mesh");
-             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            start(left, "cross-left");
-            start(right, "cross-right");
-            left.connectPeer(endpoint(right), right.routingId());
-            right.connectPeer(endpoint(left), left.routingId());
-            await(() -> admitted(left) && admitted(right));
-            String rightEndpoint = endpoint(right);
-            await(() -> monitorRegistered(left, "|" + rightEndpoint)
-                && monitorRegistered(right, rightEndpoint + "|"));
-            // Wire admission can precede the monitor READY edge. Consume
-            // its registered connection identity before taking the epoch
-            // baseline; the test below concerns identical logical admission,
-            // not the monitor's separate pair-validation transition.
-            records.clear();
-            sendAdmission(left, right, ServiceWireConstants.COMMAND_HELLO);
-            sendAdmission(right, left, ServiceWireConstants.COMMAND_HELLO);
-            await(() -> completed(records, left, "Hello") && completed(records, right, "Hello"));
-            sendAdmission(left, right, ServiceWireConstants.COMMAND_ADMIT);
-            sendAdmission(right, left, ServiceWireConstants.COMMAND_ADMIT);
-            await(() -> completed(records, left, "Admit") && completed(records, right, "Admit")
-                && ready(left, right.routingId()) && ready(right, left.routingId()));
-            Object leftEpoch = livenessEpoch(left, right.routingId());
-            Object rightEpoch = livenessEpoch(right, left.routingId());
-            records.clear();
-            // Force the crossed ordering: both Hello completions precede
-            // the repeated Admit. Same descriptors and selected Core routes.
-            sendAdmission(left, right, ServiceWireConstants.COMMAND_HELLO);
-            sendAdmission(right, left, ServiceWireConstants.COMMAND_HELLO);
-            await(() -> completed(records, left, "Hello") && completed(records, right, "Hello"));
-            sendAdmission(left, right, ServiceWireConstants.COMMAND_ADMIT);
-            sendAdmission(right, left, ServiceWireConstants.COMMAND_ADMIT);
-            await(() -> completed(records, left, "Admit") && completed(records, right, "Admit"));
-            assertSame(leftEpoch, livenessEpoch(left, right.routingId()));
-            assertSame(rightEpoch, livenessEpoch(right, left.routingId()));
-            assertEquals(1, left.peers().size());
-            assertEquals(1, right.peers().size());
-            assertFalse(records.stream().anyMatch(s -> s.startsWith("ZLINK_FRAMEWORK_PEER_READY")));
-            assertFalse(records.stream().anyMatch(s -> s.contains("admission-invalid")
-                || s.contains("admission-rejected") || s.contains("duplicate-admission-reject")));
-        } finally {
-            logger.removeHandler(capture);
         }
     }
 

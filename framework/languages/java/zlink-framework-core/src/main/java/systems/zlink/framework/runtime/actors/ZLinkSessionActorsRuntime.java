@@ -47,8 +47,6 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private static final Logger LOGGER = Logger.getLogger(ZLinkSessionActorsRuntime.class.getName());
     static final Duration RELAY_SUBMIT_TIMEOUT = Duration.ofSeconds(30);
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private static final ZLinkSessionRelayHeaders RELAY_HEADERS = new ZLinkSessionRelayHeaders();
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
@@ -419,10 +417,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private CompletionStage<ZLinkSessionActor> bindBackendRef(
         ZLinkBackendActorRef ref,
         String meshName) {
-        trace(STREAM_TRACE ? "session-actor bind-start sessionRid=" + sessionRid
-            + " actorNode=" + ref.nodeRid()
-            + " actorId=" + ref.actorId()
-            + " generation=" + ref.generation() : null);
         if (actors != null) {
             Optional<ZLinkActor> localActor = actors.localActor(ref.actorId());
             if (localActor.isPresent()) {
@@ -430,10 +424,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 if (localRef.nodeRid().equals(ref.nodeRid())
                     && localRef.actorId().equals(ref.actorId())
                     && localRef.generation() == ref.generation()) {
-                    trace(STREAM_TRACE ? "session-actor bind-local sessionRid=" + sessionRid
-                        + " actorNode=" + ref.nodeRid()
-                        + " actorId=" + ref.actorId()
-                        + " generation=" + ref.generation() : null);
                     return bindManagedAsyncCore(localActor.get());
                 }
             }
@@ -444,18 +434,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return authorityReady.thenCompose(ignored -> replaceBinding(
             ref.actorId(),
             () -> awaitRouteReady(ref).thenCompose(routeReadyIgnored -> {
-                trace(STREAM_TRACE ? "session-actor bind-native-submit sessionRid=" + sessionRid
-                    + " actorNode=" + ref.nodeRid()
-                    + " actorId=" + ref.actorId()
-                    + " generation=" + ref.generation() : null);
                 return ZLinkBoundSessionRuntime.bindActorWithRetry(
                     stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT);
             })
             .thenApply(bindIgnored -> {
-                trace(STREAM_TRACE ? "session-actor bind-native-ok sessionRid=" + sessionRid
-                    + " actorNode=" + ref.nodeRid()
-                    + " actorId=" + ref.actorId()
-                    + " generation=" + ref.generation() : null);
                 AtomicReference<ZLinkBoundActor> binding = new AtomicReference<>();
                 long bindingGeneration = currentBindingGeneration(ref.actorId());
                 ZLinkBoundActor actor = new ZLinkBoundActor(
@@ -486,13 +468,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             .whenComplete((actor, error) -> {
                 if (error != null && actor != null) {
                     removeBinding(actor);
-                }
-                if (error != null) {
-                    trace(STREAM_TRACE ? "session-actor bind-native-error sessionRid=" + sessionRid
-                        + " actorNode=" + ref.nodeRid()
-                        + " actorId=" + ref.actorId()
-                        + " generation=" + ref.generation()
-                        + " error=" + errorSummary(error) : null);
                 }
             })
             .thenApply(actor -> (ZLinkSessionActor) actor);
@@ -996,20 +971,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 || gate.objectGeneration != command.actor().actor().generation()
                 || gate.bindingGeneration
                     != command.session().bindingGeneration()) {
-                LOGGER.warning("[zlink-java-stream-trace] session-seal stale-fence"
-                    + " refused actor=" + command.actor().actor().actorId()
-                    + " commandBinding=" + command.session().bindingGeneration()
-                    + " commandGeneration=" + command.actor().actor().generation()
-                    + " commandNode=" + command.actor().actor().nodeRid()
-                    + " commandAuthority="
-                    + command.actor().authorityOwnerGeneration()
-                    + (observed == null
-                        ? " observed=none"
-                        : " observedBinding=" + observed.bindingGeneration()
-                            + " observedGeneration=" + observed.objectGeneration()
-                            + " observedNode=" + observed.nodeRid()
-                            + " observedAuthority="
-                            + observed.authorityOwnerGeneration()));
                 return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                         "Session relocation seal fence differs from the current "
@@ -1048,11 +1009,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 () -> expireRelocationSeal(installed),
                 sessionRelocationSealTimeout);
         pruneSpentSealTerminals();
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] session-seal recorded"
-                + " actor=" + command.actor().actor().actorId()
-                + " binding=" + command.session().bindingGeneration());
-        }
         if (ingressDrainedCore(command)) {
             installed.completeSealed();
         }
@@ -1077,10 +1033,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         });
         try {
             stream.disconnectPeer(sessionRid);
-        } catch (RuntimeException disconnectFailure) {
-            LOGGER.warning("[zlink-java-stream-trace] session relocation "
-                + "timeout transport disconnect failed session=" + sessionRid
-                + " error=" + disconnectFailure.getMessage());
+        } catch (RuntimeException ignored) {
         }
         current.forEach(actor ->
             notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT));
@@ -1967,7 +1920,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 || !sealMatchesRoute(seal.seal(), command)
                 || observed.bindingGeneration()
                     != command.session().bindingGeneration()) {
-                LOGGER.warning(staleFenceDiagnostic(command, observed));
                 return CompletableFuture.completedFuture(null);
             }
             RelocationRouteUpdate update;
@@ -1982,11 +1934,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     command.currentAuthorityOwnerGeneration(),
                     command.session().bindingGeneration());
             } catch (RuntimeException invalid) {
-                LOGGER.warning(staleFenceDiagnostic(command, observed));
                 return CompletableFuture.completedFuture(null);
             }
             if (!observed.matchesSource(update)) {
-                LOGGER.warning(staleFenceDiagnostic(command, observed));
                 return CompletableFuture.completedFuture(null);
             }
             ZLinkBackendActorRef target = new ZLinkBackendActorRef(
@@ -2044,7 +1994,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 || !sealMatchesRoute(terminal.seal(), command)
                 || gate == null
                 || !command.relocation().equals(gate.seal)) {
-                LOGGER.warning(staleFenceDiagnostic(command, null));
                 return CompletableFuture.completedFuture(null);
             }
             terminal.rejectOutbound();
@@ -2177,24 +2126,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             current = current.getCause();
         }
         return current;
-    }
-
-    private static String staleFenceDiagnostic(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
-        StoredBindingRoute observed) {
-        return "[zlink-java-stream-trace] session-route stale-fence rejected"
-            + " actor=" + command.actor().actorId()
-            + " commandBinding=" + command.session().bindingGeneration()
-            + " commandPrevAuthority=" + command.previousAuthorityOwnerGeneration()
-            + " commandTargetAuthority=" + command.currentAuthorityOwnerGeneration()
-            + " commandTarget=" + command.targetNodeRid()
-            + " commandGeneration=" + command.actor().generation()
-            + (observed == null
-                ? " observed=none"
-                : " observedBinding=" + observed.bindingGeneration()
-                    + " observedAuthority=" + observed.authorityOwnerGeneration()
-                    + " observedNode=" + observed.nodeRid()
-                    + " observedGeneration=" + observed.objectGeneration());
     }
 
     private record RelocationRouteUpdate(
@@ -2350,10 +2281,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return ZLinkActorRetryScheduler.waitUntilRelay(
             RELAY_SUBMIT_TIMEOUT,
             () -> routeReady.test(ref.nodeRid()),
-            () -> trace(STREAM_TRACE ? "session-actor route-ready sessionRid=" + sessionRid
-                + " actorNode=" + ref.nodeRid()
-                + " actorId=" + ref.actorId()
-                + " generation=" + ref.generation() : null),
+            () -> {},
             () -> {
                 String message =
                     "session relay route was not ready before timeout: "
@@ -2366,23 +2294,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     message,
                     new TimeoutException(message));
             });
-    }
-
-    private static void trace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.fine("[zlink-java-stream-trace] " + message);
-        }
-    }
-
-    private static String errorSummary(Throwable error) {
-        Throwable current = error;
-        while (current instanceof CompletionException
-            && current.getCause() != null) {
-            current = current.getCause();
-        }
-        String message = current.getMessage();
-        return current.getClass().getSimpleName()
-            + (message == null || message.isBlank() ? "" : ":" + message);
     }
 
 }

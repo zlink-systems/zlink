@@ -229,8 +229,6 @@ final class EntrySpotActivation
                     received.parts(),
                     received.applicationMetadataSize(),
                     received.acceptedJournalRecordSize()));
-                ZLinkSpotRuntime.traceSpotRouteInbound(
-                    "entry-recv", backendSpot, received);
                 if (host.dispatchSpotRouteBridgePacket(received)) {
                     received.close();
                     continue;
@@ -286,7 +284,6 @@ final class EntrySpotActivation
             failRouteInvalidFlow(received, invalidEnvelope);
             return;
         }
-        ZLinkSpotRuntime.traceSpotRouteDispatch("entry-dispatch", backendSpot, received, packet);
         host.traceSpotRouteFlow(
             ZLinkMessageFlowOutcome.RECEIVED,
             received.requestSeq().isPresent()

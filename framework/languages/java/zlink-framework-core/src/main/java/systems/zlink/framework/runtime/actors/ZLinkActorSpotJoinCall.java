@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.actors;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.logging.Logger;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpotKind;
@@ -57,10 +56,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         "ZLinkFrameworkActorJoinRequest";
     private static final String CANONICAL_ACTOR_JOIN_CONTENT_TYPE =
         "application/json";
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkActorSpotJoinCall.class.getName());
     private final ZLinkActorRuntime.DefaultActorContext context;
     private final String spotId;
     private final Message request;
@@ -370,36 +365,15 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
 
     private CompletionStage<Void> notifyCompletion(
         ZLinkActorJoinCompletion completion) {
-        String outcomeDetails = completion instanceof ZLinkActorJoinCompletion.Failed failed
-            ? " kind=" + failed.kind()
-            : "";
-        streamTrace(STREAM_TRACE ? "join completion callback-start actor="
-            + context.actorRef().actorId()
-            + " outcome=" + completion.getClass().getSimpleName()
-            + outcomeDetails : null);
         try {
             CompletionStage<Void> stage =
                 context.actor().onJoinCompleted(completion);
             CompletionStage<Void> normalized = stage == null
                 ? CompletableFuture.completedFuture(null)
                 : stage;
-            return normalized.whenComplete((ignored, error) ->
-                streamTrace(STREAM_TRACE ? "join completion callback-complete actor="
-                    + context.actorRef().actorId()
-                    + " outcome=" + completion.getClass().getSimpleName()
-                    + " error=" + (error == null ? "none" : error) : null));
+            return normalized;
         } catch (RuntimeException error) {
-            streamTrace(STREAM_TRACE ? "join completion callback-throw actor="
-                + context.actorRef().actorId()
-                + " outcome=" + completion.getClass().getSimpleName()
-                + " error=" + error : null);
             return CompletableFuture.failedFuture(error);
-        }
-    }
-
-    private static void streamTrace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] " + message);
         }
     }
 

@@ -6,7 +6,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import java.util.function.Consumer;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -18,15 +17,12 @@ final class ZLinkActorBoundSessionSender {
     private static final long RETRY_DELAY_MILLIS = 25;
     private final Duration timeout;
     private final BooleanSupplier closing;
-    private final Consumer<String> trace;
 
     ZLinkActorBoundSessionSender(
         Duration timeout,
-        BooleanSupplier closing,
-        Consumer<String> trace) {
+        BooleanSupplier closing) {
         this.timeout = timeout;
         this.closing = closing;
-        this.trace = trace;
     }
 
     CompletionStage<Void> send(
@@ -132,9 +128,6 @@ final class ZLinkActorBoundSessionSender {
                 if (closing.getAsBoolean()) {
                     result.complete(null);
                 } else if (failure == null) {
-                    trace.accept("bound-session-send-ok"
-                        + " actor=" + actorId
-                        + " actorNode=" + actor.nodeRid());
                     result.complete(null);
                 } else if (isMissingLogicalRoute(failure)) {
                     scheduleLogicalRouteRetry();

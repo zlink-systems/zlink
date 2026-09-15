@@ -21,7 +21,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Logger;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
@@ -51,10 +50,6 @@ import systems.zlink.framework.spots.ZLinkSpotKind;
 public final class ZLinkActorCreationCoordinator
     implements ZLinkActorRuntime.CreationSubmitter,
         ZLinkInternalMeshNode.ActorCreateOperationHandler {
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkActorCreationCoordinator.class.getName());
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private static final Duration TERMINAL_RETENTION =
         Duration.ofMinutes(5);
@@ -105,10 +100,6 @@ public final class ZLinkActorCreationCoordinator
         if (high == 0 && low == 0) {
             low = 1;
         }
-        streamTrace(STREAM_TRACE ? "actor-create coordinator-submit actor=" + actorId
-            + " type=" + actorType
-            + " getOrCreate=" + getOrCreate
-            + " timeout=" + timeout : null);
         var operation = new ZLinkCreationOperationIdentity(
             node.status().routingId(),
             node.status().lifecycleGeneration(),
@@ -136,12 +127,9 @@ public final class ZLinkActorCreationCoordinator
         boolean getOrCreate,
         long deadline,
         Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        streamTrace(STREAM_TRACE ? "actor-create resume actor=" + actorId
-            + " excluded=" + excludedTargets.size() : null);
         return locations.readCreationTerminal(operation, OPEN)
             .thenCompose(read -> {
                 if (read instanceof ZLinkCreationTerminalFound found) {
-                    streamTrace(STREAM_TRACE ? "actor-create terminal-found actor=" + actorId : null);
                     return completedResult(found.terminal());
                 }
                 if (System.currentTimeMillis() >= deadline) {
@@ -150,9 +138,6 @@ public final class ZLinkActorCreationCoordinator
                 return selectTarget(
                         actorType, deadline, excludedTargets)
                     .thenCompose(target -> {
-                        streamTrace(STREAM_TRACE ? "actor-create target-selected actor=" + actorId
-                            + " node=" + target.rid()
-                            + " mesh=" + target.meshName() : null);
                         return resolveEntrySpot(target)
                         .thenCompose(entry -> reserveAndSubmit(
                             operation,
@@ -178,13 +163,7 @@ public final class ZLinkActorCreationCoordinator
         ZLinkMeshNodeDescriptor target,
         EntrySpot entry,
         Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        streamTrace(STREAM_TRACE ? "actor-create reserve-start actor=" + actorId
-            + " target=" + target.rid()
-            + " entry=" + entry.spotId() : null);
         if (!isExactReadyTarget(target, node.status(), node.peers())) {
-            streamTrace(STREAM_TRACE ? "actor-create reserve-deferred actor=" + actorId
-                + " target=" + target.rid()
-                + " generation=" + target.lifecycleGeneration() : null);
             if (System.currentTimeMillis() >= deadline) {
                 return admissionUnavailable(
                     "Actor placement target is no longer ready");
@@ -228,8 +207,6 @@ public final class ZLinkActorCreationCoordinator
             ZLinkPlacementCapacityBundle.actor(1));
         return locations.reserve(request, OPEN)
             .thenCompose(result -> {
-                streamTrace(STREAM_TRACE ? "actor-create reserve-result actor=" + actorId
-                    + " result=" + result.getClass().getSimpleName() : null);
                 if (result instanceof ZLinkObjectAlreadyExists exists) {
                     return existing(exists.current(), actorId, actorType);
                 }
@@ -279,17 +256,11 @@ public final class ZLinkActorCreationCoordinator
                     operation.operationIdHigh(),
                     operation.operationIdLow(),
                     deadline);
-                streamTrace(STREAM_TRACE ? "actor-create mesh-request actor=" + actorId
-                    + " target=" + target.rid() : null);
                 return node.requestActorCreate(
                         target.rid(), intent, remainingTimeout(deadline))
-                    .thenCompose(response -> {
-                        streamTrace(STREAM_TRACE ? "actor-create mesh-response actor=" + actorId : null);
-                        return completedResult(response.terminalEnvelope());
-                    })
+                    .thenCompose(response ->
+                        completedResult(response.terminalEnvelope()))
                     .exceptionallyCompose(failure -> {
-                        streamTrace(STREAM_TRACE ? "actor-create mesh-failure actor=" + actorId
-                            + " error=" + unwrap(failure) : null);
                         return locations.readCreationTerminal(operation, OPEN)
                             .thenCompose(read ->
                                 read instanceof
@@ -342,8 +313,6 @@ public final class ZLinkActorCreationCoordinator
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
         executeTarget(ZLinkInternalMeshNode.ActorCreateRequest request) {
-        streamTrace(STREAM_TRACE ? "actor-create target-execute actor="
-            + request.intent().actorId() : null);
         ZLinkCreationOperationIdentity operation =
             new ZLinkCreationOperationIdentity(
                 request.sourceNodeRid(),
@@ -768,12 +737,6 @@ public final class ZLinkActorCreationCoordinator
                                 && isExactReadyTarget(
                                     candidate, localStatus, peerSnapshot))
                         .toList();
-                streamTrace(STREAM_TRACE ? "actor-create candidates actorType=" + actorType
-                    + " count=" + candidates.size()
-                    + " nodes=" + candidates.stream()
-                        .map(candidate -> candidate.rid()
-                            + "@" + candidate.lifecycleGeneration())
-                        .toList() : null);
                 if (candidates.isEmpty()) {
                     boolean capacityKnown = page.items().stream()
                         .filter(candidate ->
@@ -806,9 +769,6 @@ public final class ZLinkActorCreationCoordinator
                 Optional<ZLinkMeshNodeDescriptor> localTarget =
                     localCandidate(candidates, node.status().routingId());
                 if (localTarget.isPresent()) {
-                    streamTrace(STREAM_TRACE ? "actor-create local-target actorType="
-                        + actorType
-                        + " node=" + localTarget.get().rid() : null);
                     return CompletableFuture.completedFuture(
                         localTarget.get());
                 }
@@ -1028,12 +988,6 @@ public final class ZLinkActorCreationCoordinator
     private static ZLinkFrameworkException stale(String message) {
         return frameworkFailure(
             ZLinkFrameworkErrorKind.INTERNAL_FAILURE, message);
-    }
-
-    private static void streamTrace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] " + message);
-        }
     }
 
     private static ZLinkFrameworkException frameworkFailure(

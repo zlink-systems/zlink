@@ -85,8 +85,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY =
         Duration.ofMillis(100);
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration registration;
@@ -312,7 +310,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             // Notification records must be enabled before bind. Framework
             // ingress below uses recv mode and never registers onPacket.
             for (String bindEndpoint : streamNode.bindEndpoints()) {
-                trace(STREAM_TRACE ? "stream-node bind node=" + streamNode.name() + " endpoint=" + bindEndpoint : null);
                 stream.bind(bindEndpoint);
             }
             stream.onTransportError((routingId, nativeCode, message) ->
@@ -935,13 +932,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         final ZLinkFlowContext.State incomingFlow = capturedFlow;
         final ZLinkStreamHeader dispatchHeader = streamHeader;
-        trace(STREAM_TRACE ? "stream-node frame-received node=" + streamNode.name()
-            + " routingId=" + routingId
-            + " kind=" + streamHeader.kind()
-            + " name=" + streamHeader.packetName()
-            + " requestSeq=" + streamHeader.requestSequence().orElse(null)
-            + " correlation=" + streamHeader.correlationId().orElse(null)
-            + " payloadBytes=" + payload.size() : null);
         if (streamHeader.kind() == ZLinkStreamMessageKind.CONTROL) {
             dispatchControl(streamNode, stream, routingId, streamHeader, payload);
             return CompletableFuture.completedFuture(null);
@@ -980,11 +970,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkCodecRegistration.serializerForReceivedStreamCodec(
                 serializer, dispatchHeader.codec()));
         payloadCopy.close();
-        trace(STREAM_TRACE ? "stream-node dispatch-enqueue node=" + streamNode.name()
-            + " routingId=" + routingId
-            + " name=" + dispatchHeader.packetName()
-            + " requestSeq=" + dispatchHeader.requestSequence().orElse(null)
-            + " correlation=" + dispatchHeader.correlationId().orElse(null) : null);
         CompletionStage<Void> completion = state.serials().executeApplication(
             () -> {
             traceStreamPhase(
@@ -1667,13 +1652,4 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             .orElse(ZLinkStreamCodec.JSON);
     }
 
-    static void trace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.fine("[zlink-java-stream-trace] " + message);
-        }
-    }
-
-    static boolean traceEnabled() {
-        return STREAM_TRACE;
-    }
 }

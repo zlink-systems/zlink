@@ -72,7 +72,7 @@ function Invoke-Sample {
     $process = Start-Process -FilePath $PowerShell `
         -ArgumentList @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"") `
-        -WindowStyle Hidden -PassThru
+        -NoNewWindow -PassThru
     [void]$process.Handle
     try {
         $process.WaitForExit()
