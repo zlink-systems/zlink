@@ -49,8 +49,26 @@
     target_link_libraries(app PRIVATE zlink::framework)
     ```
 
-    Core는 vcpkg 또는 Conan 레시피로 설치한다. framework는 GitHub Release의 source archive를
-    CMake로 설치하거나, 저장소가 제공하는 vcpkg overlay port `zlink-framework`로 설치한다.
+    설치 경로는 셋이다. `zlink`는 아직 공식 vcpkg 레지스트리와 ConanCenter에 없으므로,
+    앞의 둘은 이 저장소가 제공하는 overlay port와 recipe를 쓴다.
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink.git
+
+    # vcpkg
+    vcpkg install zlink zlink-cpp zlink-framework \
+      --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
+
+    # Conan
+    conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    ```
+
+    셋째는 GitHub Release의 source archive를 `core/vX.Y.Z` → `cpp/vX.Y.Z` →
+    `framework-cpp/vA.B.C` 순으로 빌드해 설치하는 것이다. 세 경로의 전체 절차는
+    [C++ Quickstart](cpp/quickstart.ko.md)가 다룬다.
+
     IDE에서는 `CMakePresets.json`의 preset을 고른다. Visual Studio는 `vs2022`, Rider·VS Code·
     CLion은 `windows-ninja`·`linux-ninja`·`macos-ninja`다. 다음 절차는
     [설치와 첫 동작](cpp/guide/server/02-getting-started.ko.md)에 있다.
@@ -66,7 +84,7 @@
     | --- | --- | --- |
     | `lz4` | STREAM 압축(`use_lz4()`) | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost`(asio·beast) | HTTP·전송 | `-DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=OFF`(동봉본 사용) |
+    | `boost`(asio·beast) | HTTP·전송 | 끌 수 없다. Core와 framework가 **같은 Boost 트리**를 써야 한다 |
     | `nlohmann_json` | 기본 JSON serializer | 끌 수 없다 |
     | `opentelemetry-cpp` | 관측 | 끌 수 없다 |
     | `protobuf` | protobuf codec | |
