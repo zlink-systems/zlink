@@ -49,9 +49,29 @@ and running the first handler is covered by each language's "Installation and fi
     target_link_libraries(app PRIVATE zlink::framework)
     ```
 
-    Core comes from the vcpkg/Conan recipes; the framework from the GitHub Release source archive
-    or the repository's vcpkg overlay port. IDEs open the project through the `CMakePresets.json`
-    presets (`vs2022`, `windows-ninja`, `linux-ninja`, `macos-ninja`). Continue with
+    There are three installation paths. `zlink` is not in the official vcpkg registry or
+    ConanCenter yet, so the first two use the overlay port and the recipes this repository
+    ships.
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink.git
+
+    # vcpkg
+    vcpkg install zlink zlink-cpp zlink-framework \
+      --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
+
+    # Conan
+    conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    ```
+
+    The third builds the GitHub Release source archives in order — `core/vX.Y.Z` →
+    `cpp/vX.Y.Z` → `framework-cpp/vA.B.C`. The [C++ Quickstart](cpp/quickstart.en.md) covers
+    all three end to end.
+
+    IDEs open the project through the `CMakePresets.json` presets (`vs2022`, `windows-ninja`,
+    `linux-ninja`, `macos-ninja`). Continue with
     [Installation and first run](cpp/guide/server/02-getting-started.en.md).
 
     **Third-party packages.** The installed configs never install a third-party library alongside
@@ -66,7 +86,7 @@ and running the first handler is covered by each language's "Installation and fi
     | --- | --- | --- |
     | `lz4` | STREAM compression (`use_lz4()`) | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost` (asio, beast) | HTTP and transport | `-DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=OFF` to use the packaged copy |
+    | `boost` (asio, beast) | HTTP and transport | not optional. Core and the framework must resolve the **same Boost tree** |
     | `nlohmann_json` | default JSON serializer | not optional |
     | `opentelemetry-cpp` | observability | not optional |
     | `protobuf` | protobuf codec | |
