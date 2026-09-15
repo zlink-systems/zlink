@@ -2,8 +2,8 @@
 
 > In effect from 2026-09-10 (after the framework 0.11.0 release, for the 1.0 preparation). User decision.
 > This page owns "where a piece of work is registered, on which branch it is done, and how it lands
-> on main". Commit messages, versions and release procedure stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §9;
-> agent operating rules and the paths jobs may not touch stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §10 and
+> on main". Commit messages, versions and release procedure stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §8;
+> agent operating rules and the paths jobs may not touch stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §9 and
 > [`AGENTS.md`](../../../AGENTS.md) (this page references them and does not restate them).
 > Revised after the 2026-09-10 codex review (`.artifacts/codex/workflow-doc-review/summary.md`, adoption table `adoption.md`).
 
@@ -90,7 +90,7 @@ does not apply.
 - A codex job receives the worktree path via `-C` and commits **only on that branch** (commit
   delegation only when the brief says so; a job without it delivers a diff and a report). The
   supervisor pushes, opens the PR and merges. The paths a job may not touch are owned by
-  `CONTRIBUTING.md` §10.
+  `CONTRIBUTING.md` §9.
 - Catch up with main using `git fetch && git merge origin/main` (no rebase on shared branches).
 
 ### 4.1 Shared local-package cache (content-addressed)
@@ -206,7 +206,7 @@ Everything else (production code, tests, bench runners and aggregator, specs and
 
 ## 7. Relation to releases
 
-- Releases start from a tag as in `CONTRIBUTING.md` §9 and `doc/building/release-pipeline.md`. The
+- Releases start from a tag as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. The
   tagged commit is a main commit that satisfies the §3 milestone condition (`work.sh status --milestone`).
 - Fixes discovered during a release follow §6-3.
 

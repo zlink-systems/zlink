@@ -2,8 +2,8 @@
 
 > 적용 시작: 2026-09-10 (framework 0.11.0 릴리스 뒤, 1.0 준비부터). 사용자 결정.
 > 이 문서는 "어떤 작업을 어디에 등록하고, 어느 브랜치에서 하고, 어떻게 main에 넣는가"를 소유한다.
-> 커밋 메시지·버전·릴리스 절차는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §9, 에이전트
-> 운영 규칙과 job의 금지 범위는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §10과
+> 커밋 메시지·버전·릴리스 절차는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §8, 에이전트
+> 운영 규칙과 job의 금지 범위는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §9과
 > [`AGENTS.md`](../../../AGENTS.md)가 소유한다(이 문서는 그 규칙을 반복하지 않고 참조만 한다).
 > 2026-09-10 codex 리뷰(`.artifacts/codex/workflow-doc-review/summary.md`, 채택표 `adoption.md`) 반영판.
 
@@ -80,7 +80,7 @@ Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-�
   같은 브랜치를 두 worktree에서 열지 않는다.
 - codex job에는 worktree 경로를 `-C`로 주고 **그 브랜치에만** 커밋하게 한다(commit 위임은 브리프에
   명시한 경우만; 위임하지 않은 job의 완료물은 diff와 보고서다). push·PR·merge는 감독자가 한다. job이
-  만지지 못하는 경로는 `CONTRIBUTING.ko.md` §10이 정본이다.
+  만지지 못하는 경로는 `CONTRIBUTING.ko.md` §9가 정본이다.
 - main을 따라잡을 때는 `git fetch && git merge origin/main`(rebase는 공유 브랜치에서 쓰지 않는다).
 
 ### 4.1 로컬 패키지 공유 캐시 (content-addressed)
@@ -184,7 +184,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 
 ## 7. 릴리스와의 관계
 
-- 릴리스는 `CONTRIBUTING.ko.md` §9와 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
+- 릴리스는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
   커밋은 §3의 milestone 조건을 만족하는 main 커밋이다(`work.sh status --milestone`).
 - 릴리스 중 드러난 수정은 §6-3에 따른다.
 
