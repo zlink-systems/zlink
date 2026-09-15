@@ -62,7 +62,6 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IZlinkStreamSequenceCall WaitForSequence(string name);
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
-    IDisposable ObserveInbound(Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer);
 
     event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
     event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>?           Disconnected;
@@ -183,21 +182,15 @@ public interface IZlinkStreamCodecRegistration
 
 ## 8. 수신 메시지 history
 
-`WaitFor(...)`가 사용할 unread 수신 기록은 `MaxReceivedMessages`로 제한한다. **이 제한은 response와
-heartbeat 같은 control frame의 처리를 막지 않는다.**
+`On(...)` handler가 등록된 이름의 message는 dispatch가 handler snapshot을 인수하면 unread 기록에
+남기지 않는다. handler가 없는 이름의 message는 unread 기록에 남고 `WaitFor(...)`가 하나씩 소비한다.
+response와 heartbeat 같은 control frame은 이 기록을 거치지 않는다.
 
-`On(...)` handler가 등록된 이름의 message도 공통 수신 메시지 큐의 admission을 거친다. dispatch가
-handler snapshot을 인수하면 unread 기록에는 남기지 않는다. handler가 없는 이름의 message는 unread
-기록에 남고 `WaitFor(...)`가 하나씩 소비한다. 따라서 `MaxReceivedMessages`는 dispatch 전 대기와 unread
-기록을 함께 제한한다. inbound observer는 이 선택과 별도의 관찰 경로이므로 두 경우 모두 frame
-snapshot을 받는다.
-
-**큐가 가득 차면 socket에서 더 읽지 않는다. 메시지를 버리지 않는다**
-([공통 스펙 §10.1](../../32-stream-connector.ko.md)).
+수신에 한도를 두지 않고 message를 버리지 않는다([공통 스펙 §10](../../32-stream-connector.ko.md)).
 
 ### 8.1 테스트 대기 표면
 
-계약은 [공통 스펙 §10.2](../../32-stream-connector.ko.md)가 소유한다. `.NET` 표면은 다음과 같다.
+계약은 [공통 스펙 §10.1](../../32-stream-connector.ko.md)가 소유한다. `.NET` 표면은 다음과 같다.
 
 **push 관측 — connector 메서드**(§4의 `WaitFor`와 같은 자리). 각각 typed builder를 반환한다.
 
@@ -236,17 +229,7 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 
 - **도메인 REST 폴링(`GET /deliveries/{id}` 등)은 이 표면이 아니다.** 그건 `ZLinkHttpClient`의 일이다.
 
-## 9. Inbound observer
-
-관찰 의미와 격리·overflow 규칙은 [공통 스펙 §10](../../32-stream-connector.ko.md)이 소유한다.
-`.NET` 표면의 제약은 다음과 같다.
-
-- `ObserveInbound(...)`는 **연결 시작 전에만** 등록하고 `IDisposable`을 반환한다.
-- **observer callback에서 connector의 send·request·wait·dispatch를 호출하지 않는다.**
-- **observer는 frame을 drop·변환·reply할 수 없다.**
-- **`DisposeAsync()`는 cancellation을 무시하고, 실행 중인 observer가 끝날 때까지 기다린다.**
-
-## 10. Transport와 TLS
+## 9. Transport와 TLS
 
 scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.ko.md)이 소유한다. `.NET`은 이를
 `ZlinkStreamTransport` enum(`Tcp`, `Tls`, `WebSocket`, `WebSocketSecure`)으로 표현한다.
@@ -291,9 +274,6 @@ send/request 결과나 연결 상태를 바꾸지 않는다.**
 **기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다.** `.NET`은 이를
 `ZlinkStreamConnectorOptions`(+ `ZlinkStreamHeartbeatOptions`, `ZlinkStreamReconnectOptions`)의
 property로 표현한다.
-
-공통 계약의 `MaxInboundObserverPayloadPreviewBytes`는 payload preview 길이를 byte 단위로 제한하며 기본값은
-0이다. `.NET`은 이 공통 option을 같은 이름의 property로 투영한다.
 
 공통 계약의 diagnostics level([공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level))은
 다음 property로 투영한다. 미정의 enum 값은 검증에서 거부한다.
@@ -366,10 +346,6 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | one-way terminal은 bounded queue 수락까지 비동기로 기다리고 결과값 없이 완료한다. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | 먼저 수락된 one-way send와 뒤 request의 wire 전송 순서를 보존한다. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다. |
-| `StreamConnectorTests.InboundObserverRegistrationIsRejectedAfterConnectAndStopsAfterDispose` | observer 등록 시점과 해제 의미를 고정한다. |
-| `StreamConnectorTests.Dispose_Waits_For_Cancellation_Ignoring_Inbound_Observer` | dispose는 cancellation을 무시하는 observer 종료를 기다린다. |
-| `StreamConnectorTests.InboundObserverFailureReportsObserverFailedAndMessageStillDispatches` | observer 실패를 보고하면서 원래 message를 계속 처리한다. |
-| `StreamConnectorTests.InboundObserverOverflowReportsObserverDroppedAndRequestStillCompletes` | observer overflow가 request 완료를 막지 않는다. |
 | `StreamConnectorTests.OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic` | outbound flow를 한 번 생성하고 header codec 결과를 고정한다. |
 | `StreamConnectorTests.HeaderProtocolEnforcesControlPacketContract` | control packet의 codec·flag·payload 계약을 고정한다. |
 

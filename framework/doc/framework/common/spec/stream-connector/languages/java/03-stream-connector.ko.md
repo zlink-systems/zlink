@@ -93,7 +93,6 @@ public interface ZLinkStreamConnector {
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
-    AutoCloseable observeInbound(ZLinkStreamInboundObserver observer);
 }
 
 public interface ZLinkStreamLifecycleCall {
@@ -149,9 +148,6 @@ public record ZLinkStreamConnectorOptions(
     Duration connectTimeout,                   // default 5s
     int maxSendPayloadSize,                    // default 64 * 1024
     int maxReceivePayloadSize,                 // default 64 * 1024
-    int maxReceivedMessages,                   // default 1024 (수신 메시지 큐 상한)
-    int maxInboundObserverNotifications,       // default 1024
-    int maxInboundObserverPayloadPreviewBytes, // default 0
     boolean heartbeatEnabled,                  // default true
     Duration heartbeatInterval,                // default 1s
     Duration heartbeatTimeout,                 // default 5s
@@ -331,7 +327,7 @@ Connector instance의 mutable 필드나 thread ID로 current flow를 추정하�
 
 ### 7.2 테스트 대기 표면
 
-계약은 [공통 스펙 §10.2](../../32-stream-connector.ko.md)가 소유한다. Java 표면은 다음과 같다.
+계약은 [공통 스펙 §10.1](../../32-stream-connector.ko.md)가 소유한다. Java 표면은 다음과 같다.
 
 **push 관측 — connector 메서드**(`waitFor`와 같은 자리). 각각 builder를 반환한다.
 
@@ -441,40 +437,12 @@ public enum ZLinkStreamErrorCode {
     TLS_VALIDATION_FAILED,
     DECOMPRESSION_FAILED,
     USER_CALLBACK_FAILED,
-    OBSERVER_FAILED,
-    OBSERVER_DROPPED,
     RECEIVED_MESSAGE_DROPPED,   // 수신 메시지 큐 overflow(공통 스펙 32 §10)
     REMOTE_ERROR
 }
 ```
 
-## 12. Inbound Observer
-
-관찰 의미와 격리·overflow 규칙은 [공통 스펙 §10](../../32-stream-connector.ko.md)이 소유한다.
-Java는 **연결 시작 전에만 등록**하고 `AutoCloseable`로 해제한다.
-
-```java
-try (AutoCloseable log = connector.observeInbound(observation -> {
-    System.out.printf(
-        "stream-inbound kind=%s name=%s seq=%s bytes=%d%n",
-        observation.kind(),
-        observation.packetName(),
-        observation.requestSeq(),
-        observation.payloadLength());
-})) {
-    connector.connect().submit(); // 연결 완료는 반환된 CompletionStage로 관찰한다.
-}
-```
-
-### 12.1 Metric
-
-Java connector는 [공통 스펙 §6.2](../../32-stream-connector.ko.md#62-connector-reconnect-계기)의
-`zlink.stream.reconnects`와 닫힌 tag를 Micrometer global registry에 게시한다. Application과 E2E는 public
-`MeterRegistry`를 `Metrics.addRegistry(...)`로 등록하고 같은 registry에서 counter를 읽는다. Kotlin
-wrapper도 Java connector와 같은 registry를 사용한다. Registry 또는 listener failure는 send, request와
-연결 상태를 바꾸지 않는다.
-
-## 13. Kotlin 표면
+## 12. Kotlin 표면
 
 Kotlin module은 Java connector 위의 thin wrapper다. lifecycle과 request처럼 완료값이
 있는 작업은 Kotlin wrapper의 suspend `await()`로 기다린다. 이 `await()`는 Java
@@ -585,7 +553,6 @@ Java connector는 아래 테스트를 별도 suite로 가진다.
 - JSON, MessagePack, Protobuf codec smoke
 - typed helper packet name resolver와 codec selection
 - typed request/reply decode
-- inbound observer response/send/control 관찰, callback 실패, queue overflow
 - Kotlin coroutine/Flow wrapper smoke
 
 ---

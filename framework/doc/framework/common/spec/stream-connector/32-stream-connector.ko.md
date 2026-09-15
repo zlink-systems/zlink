@@ -397,8 +397,6 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | codec | JSON(§5.4) |
 | 압축 | Lz4(§8) |
 | 송신·수신 payload 한도 | 각 64KB(§4.7) |
-| inbound observer 큐 | notification 1024개, payload preview 0바이트(§10) |
-| 수신 메시지 큐 | message 1024개(§10.1) |
 | TLS 인증서 검증 | 켜짐 — 검증 생략 option의 기본값은 꺼짐이며 테스트의 자체 서명 인증서에만 사용한다 |
 | diagnostics level | `Errors`(§13) |
 
@@ -485,7 +483,6 @@ request callback만 실행한다.
 | `CompressionFailed` / `DecompressionFailed` | 압축·해제 실패 |
 | `TlsValidationFailed` | TLS 검증 실패 |
 | `UserCallbackFailed` | 사용자 callback이 실패 |
-| `ObserverFailed` / `ObserverDropped` | inbound observer callback 실패 / 큐 overflow |
 | `RemoteError` | 서버가 §5.3을 충족하는 Error payload로 응답함. `request_seq`가 pending request와 맞으면 그 request를 실패시키고, 없거나 맞지 않으면 error 이벤트로 전달함 |
 
 오류가 현재 operation과 연결에 미치는 영향은 다음과 같다. 언어별 문서는 오류 이름의 표현만 소유하며
@@ -502,7 +499,7 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
-| `UserCallbackFailed`, `ObserverFailed`, `ObserverDropped`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
+| `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
 **전달 방식은 표면에 따라 다르되 의미는 같다.**
 
@@ -510,44 +507,33 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 - callback 기반 표면은 **결과 객체로 실패를 전달한다.**
 - request id가 없는 stream 수준 오류는 **error 이벤트**로 전달한다.
 
-## 10. Inbound observer
-
-수신 frame을 **읽기 전용으로 관찰**하는 표면이다. 연결 시작 **전에만** 등록할 수 있다.
-
-- 관찰 값: message kind, packet name, codec, request sequence, metadata, payload 바이트 길이,
-  압축 여부, 수신 시각, payload preview
-- **payload preview 기본 길이는 0**이다.
-- metadata와 preview는 snapshot이다. observer가 바꿔도 request 완료나 handler가 보는 값은
-  바뀌지 않는다.
-- observer callback은 **receive 경로에서 직접 실행하지 않는다.** 느린 로그·metric 전송이
-  수신 처리를 막으면 안 된다.
-- callback 실패는 `ObserverFailed`, 큐 overflow는 `ObserverDropped`로 보고하며 **원래 frame
-  처리를 막지 않는다.**
-- observer notification 큐는 사용자 수신 메시지 큐와 **별도**이며 **기본 한도는 notification
-  1024개**다(§6.1). option으로 조절한다.
-
-### 10.1 수신 메시지 큐
+## 10. 수신 메시지 큐
 
 서버가 보낸 `Send` packet은 handler(`on` 계열)나 대기 표면(`waitFor` 계열)으로 넘어가기 전까지
-**수신 메시지 큐**에 머문다. 기본 한도는 **message 1024개**이며 option으로 조절한다.
+**수신 메시지 큐**에 머문다.
 
-- **큐가 가득 차면 socket에서 더 읽지 않는다.** 메시지를 버리지 않는다. 읽지 않은 것은 Core
-  queue에 남고, Core의 byte 상한이 서버의 send를 그 자리에서 멈춘다. 앱이 큐를 비우면 다시
-  읽는다.
-- **response·error response·heartbeat control frame은 이 한도에 넣지 않는다.** request 완료와
+- **client는 받은 것을 계속 받아서 처리한다.** 큐에 한도를 두지 않고, message를 버리지 않으며,
+  이 때문에 연결을 닫지도 않는다.
+- **connector는 backpressure를 하지 않는다.** connector는 socket을 직접 구현하지 않고 실행 환경이
+  주는 것을 쓴다(§2·§3.2). 브라우저·WASM은 네이티브 WebSocket API 위에서 동작하는데 거기에는
+  읽기를 보류할 표면이 없다. 흐름 제어는 서버 STREAM socket이 소유하며 이 문서의 범위가 아니다.
+- **response·error response·heartbeat control frame은 이 큐를 거치지 않는다.** request 완료와
   연결 유지에 필요하기 때문이다.
-- 이 큐는 inbound observer notification 큐와 **별도**다(§10).
 
-### 10.2 테스트 대기 표면
+정상 동작하는 client에서는 메시지가 쌓이지 않는다. handler가 dispatch하거나 wait 표면이 소비한다.
+쌓인다면 client 버그이며, 그 상태에서 connector가 버리거나 연결을 닫아도 얻는 것이 없다 — 어차피
+client를 재기동해야 한다. 그래서 connector에는 이에 대한 정책을 두지 않는다.
+
+### 10.1 테스트 대기 표면
 
 connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 API로 제공한다. 다섯 언어는 같은 timeout,
 소비 순서와 부정 관측 의미를 제공해야 한다. 조건 확인, 예상 오류와 timeout 검증처럼 connector 상태와
 무관한 범용 단언은 connector 공개 계약이 아니다. E2E는 언어별 `Client/Support`에서 그 보조 코드를
 소유한다.
 
-#### 10.2.1 push 관측 표면 — `waitFor` 계열
+#### 10.1.1 push 관측 표면 — `waitFor` 계열
 
-수신 메시지 큐(§10.1)를 관측해야만 판정할 수 있는 것. connector 인스턴스의 메서드다.
+수신 메시지 큐(§10)를 관측해야만 판정할 수 있는 것. connector 인스턴스의 메서드다.
 
 세 표면 모두 packet 이름을 호출자가 명시하거나 payload type에서 결정한다. 정확한 인자와 overload,
 완료 종결자(`.Async`/`.submit`/`.run`)는 각 언어 문서가 소유하며, 나머지 조건은 builder 체이닝으로
@@ -555,7 +541,7 @@ connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 AP
 
 | 표면 | 계약 | 실패 |
 |------|------|------|
-| `waitFor<T>(name)` | 그 packet이 올 때까지 대기. `.where(predicate)`·`.timeout(t)`로 좁힌다. 기본 timeout은 §6.1의 `wait timeout`(5초) | timeout 내 미도착이면 **오류를 던진다**(§10.1은 이 표면이 큐를 소비한다고 규정) |
+| `waitFor<T>(name)` | 그 packet이 올 때까지 대기. `.where(predicate)`·`.timeout(t)`로 좁힌다. 기본 timeout은 §6.1의 `wait timeout`(5초) | timeout 내 미도착이면 **오류를 던진다**(§10은 이 표면이 큐를 소비한다고 규정) |
 | `expectNone<T>(name)` | `.within(window)` 동안 그 packet이 **오지 않는지** 확인한다(negative). `waitFor`의 대칭 | window 안에 도착하면 **오류를 던진다** |
 | `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — 같은 이름의 push가 **주어진 술어 순서대로** 도착하는지 확인하고 payload 목록을 돌려준다 | 순서가 어긋나거나 timeout이면 **오류를 던진다.** "N개가 도착했다"가 아니라 **"순서대로 도착했다"** 를 검증하는 것이 이 표면의 존재 이유다 |
 
@@ -616,7 +602,6 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | codec | connector option 주입, codec 번호 공유와 browser/server dependency 분리(§5.4) |
 | compression | 방향별 동작(§8) |
 | error handling | 오류 의미(§9) |
-| inbound observer | 관찰·격리·overflow(§10) |
 | 연결 생명주기 | 상태 전이·재연결·heartbeat(§6) |
 | diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
 

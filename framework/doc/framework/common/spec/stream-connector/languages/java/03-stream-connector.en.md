@@ -105,7 +105,6 @@ public interface ZLinkStreamConnector {
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
-    AutoCloseable observeInbound(ZLinkStreamInboundObserver observer);
 }
 
 public interface ZLinkStreamLifecycleCall {
@@ -173,9 +172,6 @@ public record ZLinkStreamConnectorOptions(
     Duration connectTimeout,                   // default 5s
     int maxSendPayloadSize,                    // default 64 * 1024
     int maxReceivePayloadSize,                 // default 64 * 1024
-    int maxReceivedMessages,                   // default 1024 (the receive message queue bound)
-    int maxInboundObserverNotifications,       // default 1024
-    int maxInboundObserverPayloadPreviewBytes, // default 0
     boolean heartbeatEnabled,                  // default true
     Duration heartbeatInterval,                // default 1s
     Duration heartbeatTimeout,                 // default 5s
@@ -375,7 +371,7 @@ owned by
 ### 7.2 Test Wait Surface
 
 The contract is owned by
-[Common Spec §10.2](../../32-stream-connector.en.md). The Java surface
+[Common Spec §10.1](../../32-stream-connector.en.md). The Java surface
 is below.
 
 **Push observation — connector method** (the same spot as `waitFor`).
@@ -505,44 +501,12 @@ public enum ZLinkStreamErrorCode {
     TLS_VALIDATION_FAILED,
     DECOMPRESSION_FAILED,
     USER_CALLBACK_FAILED,
-    OBSERVER_FAILED,
-    OBSERVER_DROPPED,
     RECEIVED_MESSAGE_DROPPED,   // receive message queue overflow (Common Spec 32 §10)
     REMOTE_ERROR
 }
 ```
 
-## 12. Inbound Observer
-
-Observation meaning and the isolation/overflow rule is owned by
-[Common Spec §10](../../32-stream-connector.en.md). Java **registers
-only before connection starts** and deregisters with `AutoCloseable`.
-
-```java
-try (AutoCloseable log = connector.observeInbound(observation -> {
-    System.out.printf(
-        "stream-inbound kind=%s name=%s seq=%s bytes=%d%n",
-        observation.kind(),
-        observation.packetName(),
-        observation.requestSeq(),
-        observation.payloadLength());
-})) {
-    connector.connect().submit(); // connection completion is observed through the returned CompletionStage.
-}
-```
-
-### 12.1 Metric
-
-The Java connector publishes
-[Common Spec §6.2](../../32-stream-connector.en.md#62-connector-reconnect-instrument)'s
-`zlink.stream.reconnects` and its closed tag to the Micrometer global
-registry. The application and E2E register a public `MeterRegistry`
-with `Metrics.addRegistry(...)` and read the counter from the same
-registry. The Kotlin wrapper also uses the same registry as the Java
-connector. A registry or listener failure doesn't change send, request,
-or connection state.
-
-## 13. Kotlin Surface
+## 12. Kotlin Surface
 
 The Kotlin module is a thin wrapper on top of the Java connector. An
 operation with a completion value, such as lifecycle and request, is
@@ -658,8 +622,6 @@ The Java connector has the tests below as a separate suite.
 - JSON, MessagePack, Protobuf codec smoke
 - Typed helper packet name resolver and codec selection
 - Typed request/reply decode
-- Inbound observer response/send/control observation, callback failure,
-  queue overflow
 - Kotlin coroutine/Flow wrapper smoke
 
 ---

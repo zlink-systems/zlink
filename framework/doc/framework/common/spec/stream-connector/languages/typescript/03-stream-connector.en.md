@@ -112,9 +112,6 @@ interface ZlinkStreamConnector {
   onConnectionStateChanged(
     handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
-  observeInbound(
-    observer: (observation: ZlinkStreamInboundObservation, signal?: AbortSignal) => Promise<void> | void
-  ): Disposable;
 }
 
 interface ZlinkStreamSendCall {
@@ -226,8 +223,7 @@ enum ZlinkStreamErrorCode {
   FrameTooLarge = 'frameTooLarge', SendFailed = 'sendFailed',
   CompressionFailed = 'compressionFailed', DecompressionFailed = 'decompressionFailed',
   TlsValidationFailed = 'tlsValidationFailed',
-  UserCallbackFailed = 'userCallbackFailed', ObserverFailed = 'observerFailed',
-  ObserverDropped = 'observerDropped',
+  UserCallbackFailed = 'userCallbackFailed',
   RemoteError = 'remoteError'
 }
 
@@ -270,9 +266,6 @@ interface ZlinkStreamConnectorOptions {
   readonly reconnect?: ZlinkStreamReconnectOptions;
   readonly maxSendPayloadSize?: number;
   readonly maxReceivePayloadSize?: number;
-  readonly maxReceivedMessages?: number;
-  readonly maxInboundObserverNotifications?: number;
-  readonly maxInboundObserverPayloadPreviewBytes?: number;
   readonly dispatchMode?: ZlinkStreamDispatchMode;
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
@@ -341,9 +334,6 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly reconnect: Required<ZlinkStreamReconnectOptions>;
   readonly maxSendPayloadSize: number;
   readonly maxReceivePayloadSize: number;
-  readonly maxReceivedMessages: number;
-  readonly maxInboundObserverNotifications: number;
-  readonly maxInboundObserverPayloadPreviewBytes: number;
   readonly dispatchMode: ZlinkStreamDispatchMode;
   readonly compression: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
@@ -383,7 +373,7 @@ the fully resolved value as `RequiredZlinkStreamConnectorOptions`.
 ### 4.1 Test Wait Surface
 
 The contract is owned by
-[Common Spec §10.2](../../32-stream-connector.en.md). The TypeScript
+[Common Spec §10.1](../../32-stream-connector.en.md). The TypeScript
 surface is below.
 
 **Push observation — connector method** (the same spot as `waitFor`).
@@ -408,27 +398,12 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 - **Domain REST polling isn't this surface.** That's the HTTP client's
   job.
 
-## 5. Inbound Observer And The Receive Queue
+## 5. Receive Queue
 
-Observation meaning and the isolation/overflow rule is owned by
-[Common Spec §10](../../32-stream-connector.en.md). This document only
-fixes the TypeScript surface.
-
-`observeInbound(...)` returns a `Disposable`, and can be registered
-**only before** calling `connect(...)`. Registering after the
-connection starts throws an error.
-
-The two queues' bounds are adjusted with the options below. The
-default is owned by [Common Spec §6.1](../../32-stream-connector.en.md).
-
-| Option | Target Queue | The Code Reported To The Error Handler On Overflow |
-|---|---|---|
-| `maxInboundObserverNotifications` | Observer notification queue | `ZlinkStreamErrorCode.ObserverDropped` |
-
-An observer callback failure is reported as
-`ZlinkStreamErrorCode.ObserverFailed`.
-`maxInboundObserverPayloadPreviewBytes` decides the payload preview
-length put in an observation.
+The receive queue's meaning is owned by
+[Common Spec §10](../../32-stream-connector.en.md). It has no bound
+and discards no message, so the TypeScript surface carries no related
+option or error code.
 
 ## 6. Session Close Reason
 
