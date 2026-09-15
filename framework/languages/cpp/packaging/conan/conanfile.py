@@ -32,6 +32,9 @@ class ZlinkFrameworkConan(ConanFile):
     def requirements(self):
         for dependency in (
             "zlink-cpp/1.1.0",
+            # CMakeLists.txt:22가 COMPONENTS api로 무조건 요구한다. 빠져 있으면
+            # conan create가 find_package 단계에서 실패한다.
+            "opentelemetry-cpp/1.26.0",
             "boost/1.85.0",
             "nlohmann_json/3.11.3",
             "openssl/[>=3.0 <4]",

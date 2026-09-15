@@ -1,4 +1,4 @@
-"""Draft: the public source asset must be completed before conan create works."""
+"""Conan recipe for the zlink C++20 binding (zlink-cpp)."""
 
 import os
 
