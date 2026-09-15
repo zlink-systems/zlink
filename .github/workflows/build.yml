@@ -139,6 +139,11 @@ jobs:
           $distDir = "core\dist\windows-x64"
           New-Item -ItemType Directory -Force -Path $buildDir
           cd $buildDir
+          # core/CMakeLists.txt defaults WIN32 to installing the CMake
+          # package under <prefix>/CMake (no lib/cmake/zlink). Override it
+          # so every platform's archive has the same lib/cmake/zlink/*.cmake
+          # layout, matching vcpkg/ports/zlink/portfile.cmake:38 — the
+          # archive's own layout must not depend on which platform built it.
           cmake ..\core `
             -G "Visual Studio 17 2022" `
             -A x64 `
@@ -147,7 +152,8 @@ jobs:
             -DBUILD_STATIC=ON `
             -DBUILD_TESTS=OFF `
             -DZLINK_CXX_STANDARD=17 `
-            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR"
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            -DZLINK_CMAKECONFIG_INSTALL_DIR=lib/cmake/zlink
           cmake --build . --config Release --parallel
 
           New-Item -ItemType Directory -Force -Path "..\$distDir\bin", "..\$distDir\lib", "..\$distDir\include", "..\$distDir\lib\pkgconfig" | Out-Null
@@ -173,6 +179,11 @@ jobs:
           if ($LASTEXITCODE -ge 8) {
             throw "robocopy failed merging the install prefix into $distDir (exit $LASTEXITCODE)"
           }
+          # robocopy returns 1 ("files copied") on ordinary success, not 0.
+          # GitHub Actions appends `exit $LASTEXITCODE` to every pwsh step,
+          # so left alone this fails the step even though nothing is wrong.
+          # Reset it now that the guard above has judged the real outcome.
+          $global:LASTEXITCODE = 0
 
       - name: Install Visual C++ Redistributable
         shell: pwsh
@@ -469,6 +480,16 @@ jobs:
           cat > "$project/CMakeLists.txt" <<EOF
           cmake_minimum_required(VERSION 3.16)
           project(zlink_package_smoke C)
+          # zlinkTargets-release.cmake already declares
+          # IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "CXX" on
+          # libzlink-static (Core is implemented in C++), but CMake can only
+          # act on that and route the final link through the C++ driver
+          # once a CXX compiler is available to the project. A plain
+          # project(... C) never enables one, so linking libzlink-static
+          # fails with undefined libstdc++ references until this is added.
+          # Every real consumer (bindings/cpp, vcpkg's zlink-cpp) is already
+          # a C++ project and enables CXX itself, so it never hits this.
+          enable_language(CXX)
           find_package(zlink ${LIBZLINK_VERSION} EXACT CONFIG REQUIRED)
           if(NOT TARGET libzlink)
             message(FATAL_ERROR "libzlink (shared) target is missing")
@@ -480,14 +501,6 @@ jobs:
           target_link_libraries(consumer_shared PRIVATE libzlink)
           add_executable(consumer_static main.c)
           target_link_libraries(consumer_static PRIVATE libzlink-static)
-          # libzlink-static is implemented in C++; its exported target does
-          # not declare IMPORTED_LINK_INTERFACE_LANGUAGES, so a pure-C
-          # consumer must force the final link step through the C++
-          # driver to pull in the C++ runtime. Every real consumer
-          # (bindings/cpp, vcpkg's zlink-cpp) is already a C++ project and
-          # never hits this.
-          enable_language(CXX)
-          set_target_properties(consumer_static PROPERTIES LINKER_LANGUAGE CXX)
           EOF
           cat > "$project/main.c" <<'EOF'
           #include <zlink.h>
