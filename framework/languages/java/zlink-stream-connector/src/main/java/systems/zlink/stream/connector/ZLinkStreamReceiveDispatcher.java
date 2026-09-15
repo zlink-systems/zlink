@@ -20,7 +20,6 @@ final class ZLinkStreamReceiveDispatcher {
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers;
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamPendingRequests pendingRequests;
-    private final ZLinkStreamInboundObserverDispatcher inboundObservers;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     private final Consumer<ZLinkStreamError> errorPublisher;
     private final Function<String, CompletionStage<Void>> controlSender;
@@ -31,7 +30,6 @@ final class ZLinkStreamReceiveDispatcher {
         Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers,
         ZLinkStreamDispatchQueue dispatchQueue,
         ZLinkStreamPendingRequests pendingRequests,
-        ZLinkStreamInboundObserverDispatcher inboundObservers,
         ZLinkStreamConnectorPayloadCodec payloadCodec,
         Consumer<ZLinkStreamError> errorPublisher,
         Function<String, CompletionStage<Void>> controlSender,
@@ -40,7 +38,6 @@ final class ZLinkStreamReceiveDispatcher {
         this.handlers = handlers;
         this.dispatchQueue = dispatchQueue;
         this.pendingRequests = pendingRequests;
-        this.inboundObservers = inboundObservers;
         this.payloadCodec = payloadCodec;
         this.errorPublisher = errorPublisher;
         this.controlSender = controlSender;
@@ -68,7 +65,6 @@ final class ZLinkStreamReceiveDispatcher {
             + " correlation=" + header.correlationId()
             + " flow=" + header.flowId()
             + " origin=" + flowOriginName(header.flowOrigin()));
-        inboundObservers.enqueue(header, payload);
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
             return;

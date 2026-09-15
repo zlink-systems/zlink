@@ -31,8 +31,6 @@
 #include "Scenarios/sm_d6_scenario.hpp"
 #include "Scenarios/sm_d7_scenario.hpp"
 #include "Scenarios/sm_d8_scenario.hpp"
-#include "Scenarios/sm_d9_scenario.hpp"
-#include "Scenarios/sm_d10_scenario.hpp"
 #include "Scenarios/sm_d11_scenario.hpp"
 #include "Scenarios/sm_d12_scenario.hpp"
 #include "Scenarios/sm_d13_scenario.hpp"
@@ -278,14 +276,6 @@ void run_scenario (const e2e_client::client_options_t &options)
     } else if (mode == "sm-d8") {
         scenarios::run_sm_d8_scenario (options.stream_endpoint);
         std::cout << "scenario SM-D8 passed\n";
-    } else if (mode == "sm-d9") {
-        scenarios::run_sm_d9_scenario (options.stream_endpoint);
-        std::cout << "scenario SM-D9 passed\n";
-    } else if (mode == "sm-d10") {
-        scenarios::run_sm_d10_scenario (
-          options.stream_endpoint, options.alternate_stream_endpoint, options.play_http_endpoint,
-          options.play_b_http_endpoint);
-        std::cout << "scenario SM-D10 passed\n";
     } else if (mode == "sm-d11") {
         scenarios::run_sm_d11_scenario (options.session_http_endpoint, options.stream_endpoint);
         std::cout << "scenario SM-D11 passed\n";

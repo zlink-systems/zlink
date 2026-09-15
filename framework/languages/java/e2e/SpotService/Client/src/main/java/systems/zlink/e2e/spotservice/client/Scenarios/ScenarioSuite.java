@@ -48,8 +48,6 @@ public final class ScenarioSuite {
             case "SM-D6" -> SmD6Scenario.run(context);
             case "SM-D7" -> SmD7Scenario.run(context);
             case "SM-D8" -> SmD8Scenario.run(context);
-            case "SM-D9" -> SmD9Scenario.run(context);
-            case "SM-D10" -> SmD10Scenario.run(context);
             case "SM-D11" -> SmD11Scenario.run(context);
             case "SM-D12" -> SmD12Scenario.run(context);
             case "SM-D13" -> SmD13Scenario.run(context);
@@ -95,7 +93,6 @@ public final class ScenarioSuite {
             case "stream-reconnect" -> SmD8Scenario.run(context);
             case "stream-rebind-transfer" -> SmD12Scenario.run(context);
             case "multi-actor-bind" -> SmD4Scenario.run(context);
-            case "stream-backpressure" -> SmD10Scenario.run(context);
             case "mixed-stream-channel" -> SmD11Scenario.run(context);
             case "stream-heartbeat" -> SmD13Scenario.run(context);
             case "stream-tls" -> SmD14Scenario.run(context);

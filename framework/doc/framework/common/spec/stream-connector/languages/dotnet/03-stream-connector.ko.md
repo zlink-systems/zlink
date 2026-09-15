@@ -24,7 +24,7 @@ runtime에 의존하지 않는다.**
 - [package snapshot](../../../../../../../languages/dotnet/contract/packages/Zlink.Stream.Connector.package.txt)
 
 이 문서는 [snapshot](../../../server/00-foundation/02-glossary.ko.md#snapshot)의 member를 반복해 나열하지 않고 **표면의 구조와 `.NET` 고유 의미**를 고정한다.
-검증 절차는 [이 문서 §15](#15-회귀-테스트)가 소유한다.
+검증 절차는 [이 문서 §14](#14-회귀-테스트)가 소유한다.
 
 **담당 대상은 네이티브 빌드다**(데스크톱·서버, Unity, Godot C#). Unity 네이티브 빌드는 별도
 package 없이 같은 `Zlink.Stream.Connector` NuGet package를 사용한다. **웹(브라우저·WASM)
@@ -62,7 +62,6 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IZlinkStreamSequenceCall WaitForSequence(string name);
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
-    IDisposable ObserveInbound(Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer);
 
     event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
     event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>?           Disconnected;
@@ -173,7 +172,7 @@ public interface IZlinkStreamCodecRegistration
 | 항목 | 계약 |
 |---|---|
 | `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
-| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 backpressure가 그대로 걸린다 |
+| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 후속 receive 처리가 지연된다 |
 | `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
 | outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 자리가 없으면 날 때까지 기다리고, 기다리다 시간이 다 되면 `DeadlineExceeded`다. 자리가 없다는 이유로 거절하지 않는다 |
 
@@ -183,21 +182,13 @@ public interface IZlinkStreamCodecRegistration
 
 ## 8. 수신 메시지 history
 
-`WaitFor(...)`가 사용할 unread 수신 기록은 `MaxReceivedMessages`로 제한한다. **이 제한은 response와
-heartbeat 같은 control frame의 처리를 막지 않는다.**
-
-`On(...)` handler가 등록된 이름의 message도 공통 수신 메시지 큐의 admission을 거친다. dispatch가
-handler snapshot을 인수하면 unread 기록에는 남기지 않는다. handler가 없는 이름의 message는 unread
-기록에 남고 `WaitFor(...)`가 하나씩 소비한다. 따라서 `MaxReceivedMessages`는 dispatch 전 대기와 unread
-기록을 함께 제한한다. inbound observer는 이 선택과 별도의 관찰 경로이므로 두 경우 모두 frame
-snapshot을 받는다.
-
-**큐가 가득 차면 socket에서 더 읽지 않는다. 메시지를 버리지 않는다**
-([공통 스펙 §10.1](../../32-stream-connector.ko.md)).
+`On(...)` handler가 등록된 이름의 message는 dispatch가 handler snapshot을 인수하면 unread 기록에
+남기지 않는다. handler가 없는 이름의 message는 unread 기록에 남고 `WaitFor(...)`가 하나씩 소비한다.
+response와 heartbeat 같은 control frame은 이 기록을 거치지 않는다.
 
 ### 8.1 테스트 대기 표면
 
-계약은 [공통 스펙 §10.2](../../32-stream-connector.ko.md)가 소유한다. `.NET` 표면은 다음과 같다.
+계약은 [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)가 소유한다. `.NET` 표면은 다음과 같다.
 
 **push 관측 — connector 메서드**(§4의 `WaitFor`와 같은 자리). 각각 typed builder를 반환한다.
 
@@ -236,17 +227,7 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 
 - **도메인 REST 폴링(`GET /deliveries/{id}` 등)은 이 표면이 아니다.** 그건 `ZLinkHttpClient`의 일이다.
 
-## 9. Inbound observer
-
-관찰 의미와 격리·overflow 규칙은 [공통 스펙 §10](../../32-stream-connector.ko.md)이 소유한다.
-`.NET` 표면의 제약은 다음과 같다.
-
-- `ObserveInbound(...)`는 **연결 시작 전에만** 등록하고 `IDisposable`을 반환한다.
-- **observer callback에서 connector의 send·request·wait·dispatch를 호출하지 않는다.**
-- **observer는 frame을 drop·변환·reply할 수 없다.**
-- **`DisposeAsync()`는 cancellation을 무시하고, 실행 중인 observer가 끝날 때까지 기다린다.**
-
-## 10. Transport와 TLS
+## 9. Transport와 TLS
 
 scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.ko.md)이 소유한다. `.NET`은 이를
 `ZlinkStreamTransport` enum(`Tcp`, `Tls`, `WebSocket`, `WebSocketSecure`)으로 표현한다.
@@ -257,7 +238,7 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
   `SkipServerCertificateValidation`의 기본값은 `false`이며 **테스트의 자체 서명 인증서에만**
   사용한다.
 
-## 11. 종료 사유
+## 10. 종료 사유
 
 값 집합과 의미는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-종료-사유)가 소유한다. `.NET`은
 `ZlinkStreamCloseReason` enum으로 표현하고 **`Disconnected` event의 인자
@@ -270,7 +251,7 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
 [공통 스펙 §9](../../32-stream-connector.ko.md#9-오류-의미)이 소유한다. `.NET`은 그 오류를
 `ZlinkStreamErrorCode.FrameTooLarge`, 종료 사유를 `ZlinkStreamCloseReason.TransportError`로 표현한다.
 
-## 12. Flow
+## 11. Flow
 
 **connector outbound operation은 별도 public 옵션 없이 UUIDv7 `flow_id`를 한 번 생성한다.**
 callback 안에서 시작한 후속 operation은 **현재 inbound flow를 재사용하고, callback이 끝나면 ambient
@@ -279,21 +260,18 @@ flow를 정리한다.**
 wire 표현은 [공통 스펙 §4.2](../../32-stream-connector.ko.md)와
 [flow-correlation](../../../server/06-observability/04-flow-correlation.ko.md)이 소유한다.
 
-## 13. Metric
+## 12. Metric
 
 connector metric은 [Stream Connector 공통 계약 §6.2](../../32-stream-connector.ko.md#62-connector-reconnect-계기)의
 이름과 닫힌 label을 따른다. `.NET` connector는 `System.Diagnostics.Metrics` provider에
 `zlink.stream.reconnects`를 게시하며 application과 E2E는 `MeterListener`로 읽는다. **metric listener 실패는
 send/request 결과나 연결 상태를 바꾸지 않는다.**
 
-## 14. Options와 검증
+## 13. Options와 검증
 
 **기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다.** `.NET`은 이를
 `ZlinkStreamConnectorOptions`(+ `ZlinkStreamHeartbeatOptions`, `ZlinkStreamReconnectOptions`)의
 property로 표현한다.
-
-공통 계약의 `MaxInboundObserverPayloadPreviewBytes`는 payload preview 길이를 byte 단위로 제한하며 기본값은
-0이다. `.NET`은 이 공통 option을 같은 이름의 property로 투영한다.
 
 공통 계약의 diagnostics level([공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level))은
 다음 property로 투영한다. 미정의 enum 값은 검증에서 거부한다.
@@ -346,7 +324,7 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 
 모든 timeout과 queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
 
-## 15. 회귀 테스트
+## 14. 회귀 테스트
 
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
@@ -366,10 +344,6 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | one-way terminal은 bounded queue 수락까지 비동기로 기다리고 결과값 없이 완료한다. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | 먼저 수락된 one-way send와 뒤 request의 wire 전송 순서를 보존한다. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다. |
-| `StreamConnectorTests.InboundObserverRegistrationIsRejectedAfterConnectAndStopsAfterDispose` | observer 등록 시점과 해제 의미를 고정한다. |
-| `StreamConnectorTests.Dispose_Waits_For_Cancellation_Ignoring_Inbound_Observer` | dispose는 cancellation을 무시하는 observer 종료를 기다린다. |
-| `StreamConnectorTests.InboundObserverFailureReportsObserverFailedAndMessageStillDispatches` | observer 실패를 보고하면서 원래 message를 계속 처리한다. |
-| `StreamConnectorTests.InboundObserverOverflowReportsObserverDroppedAndRequestStillCompletes` | observer overflow가 request 완료를 막지 않는다. |
 | `StreamConnectorTests.OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic` | outbound flow를 한 번 생성하고 header codec 결과를 고정한다. |
 | `StreamConnectorTests.HeaderProtocolEnforcesControlPacketContract` | control packet의 codec·flag·payload 계약을 고정한다. |
 

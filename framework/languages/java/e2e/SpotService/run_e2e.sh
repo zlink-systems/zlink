@@ -803,7 +803,7 @@ scenario_modes() {
     SM-B0) echo "SM-B0" ;;
     SM-B0A) echo "SM-B0A" ;;
     SM-B11) echo "SM-B11" ;;
-    SM-B1|SM-B3|SM-B7|SM-D1|SM-D3|SM-D9) echo "actor-session" ;;
+    SM-B1|SM-B3|SM-B7|SM-D1|SM-D3) echo "actor-session" ;;
     SM-B2|SM-B4|SM-D2) echo "remote-actor-session" ;;
     SM-B5) echo "actor-missing" ;;
     SM-B6) echo "actor-leave-disconnect" ;;
@@ -823,7 +823,6 @@ scenario_modes() {
     SM-D7) echo "stream-auth" ;;
     SM-D8) echo "stream-reconnect" ;;
     SM-D4) echo "multi-actor-bind" ;;
-    SM-D10) echo "stream-backpressure" ;;
     SM-D11) echo "mixed-stream-channel" ;;
     SM-D12) echo "stream-rebind-transfer" ;;
     SM-D13) echo "stream-heartbeat" ;;

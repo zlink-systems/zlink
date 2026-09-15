@@ -57,6 +57,8 @@ class bingo_client_scenario_t
             client1_auth_request.set_access_token (bingo_sample_players_t::player1);
             auto client1_auth = co_await authenticate (client1, client1_auth_request);
             ensure (client1_auth.actor_id () == bingo_sample_players_t::player1);
+            std::cout << "stream-result sample=Bingo client=player1 operation=authenticate"
+                      << std::endl;
 
             trace ("authenticate client2");
             authenticate_req_t client2_auth_request;
@@ -121,6 +123,8 @@ class bingo_client_scenario_t
                                  [] (const bingo_player_state_message_t &player) {
                                      return player.wins () == 0 && player.losses () == 0;
                                  }));
+            std::cout << "stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify"
+                      << std::endl;
 
             trace ("wait game started");
             ensure (client1_started.state ().room_id () == room_id);

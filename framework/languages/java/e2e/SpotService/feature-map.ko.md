@@ -113,12 +113,6 @@ E2E runner에 아직 추가되지 않았다. 현재 증거는 JVM runtime의 foc
   request와 push가 metadata 없이 정상 처리되는지 확인한다.
 - `SM-D8`: 끊긴 stream의 pending session request가 실패하고, 같은 actor id로 재접속해 auth한 뒤
   actor request가 다시 성공하는지 확인한다.
-- `SM-D9`: `ScenarioSession.onDispatch`가 stream inbound packet name을 `StreamInbound` evidence로 남기고,
-  client가 actor-session 경로에서 그 evidence를 확인한다.
-- `SM-D10`: **blocked — §12.1.** public stream connector의 bounded received-message queue는 기존
-  message를 유지하고 새 message를 버리며 `RECEIVED_MESSAGE_DROPPED`를 보고해야 한다. 현재 Java
-  connector는 오래된 push를 제거하므로 정식 admission 의미를 검증하지 못한다. 수정 뒤 같은 흐름의
-  후속 request와 다른 session push가 계속 정상 동작하는지도 함께 확인한다.
 - `SM-D11`: 같은 client driver process에서 public stream connector actor request와 route-channel
   request를 함께 실행하고, stream inbound evidence와 route request evidence를 함께 확인한다.
 - `SM-D12`: `session-a` stream에서 actor 상태를 만든 뒤 `session-b` stream으로 같은 actor id를

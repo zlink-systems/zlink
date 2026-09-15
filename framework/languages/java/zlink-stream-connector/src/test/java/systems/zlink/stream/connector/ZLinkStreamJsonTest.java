@@ -311,11 +311,6 @@ final class ZLinkStreamJsonTest {
         }
 
         @Override
-        public AutoCloseable observeInbound(ZLinkStreamInboundObserver observer) {
-            return () -> { };
-        }
-
-        @Override
         public AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler) {
             return () -> { };
         }

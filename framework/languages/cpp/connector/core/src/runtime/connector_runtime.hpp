@@ -62,13 +62,6 @@ struct pending_wait_t
     std::shared_ptr<boost::asio::steady_timer> timeout_timer;
 };
 
-struct inbound_observer_entry_t
-{
-    std::uint64_t id = 0;
-    std::function<void (const inbound_observation_t &)> callback;
-    std::atomic_bool active{true};
-};
-
 class connector_state_t : public std::enable_shared_from_this<connector_state_t>
 {
   public:
@@ -108,10 +101,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::vector<std::function<void (const connection_state_changed_t &)>> state_handlers;
     std::vector<std::function<void (const error_t &)>> error_handlers;
     std::vector<std::function<void ()>> disconnected_handlers;
-    std::uint64_t next_inbound_observer_id = 1;
-    std::vector<std::shared_ptr<inbound_observer_entry_t>> inbound_observers;
-    std::atomic_size_t pending_inbound_observer_notifications{0};
-    std::atomic_bool inbound_observer_drop_report_pending{false};
     bool connect_started = false;
     codec_t default_codec = codec_t::json;
     std::set<codec_t> enabled_codecs{codec_t::json};
@@ -192,6 +181,7 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
                                     std::function<bool (const packet_t &)> predicate,
                                     std::chrono::milliseconds timeout);
 void deliver_received_packet (connector_state_t &state, packet_t packet);
+void enqueue_received_message (connector_state_t &state, packet_t packet);
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback);
 void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
                                   std::function<void ()> callback);

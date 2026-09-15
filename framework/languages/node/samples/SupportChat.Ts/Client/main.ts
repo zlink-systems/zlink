@@ -6,7 +6,7 @@ import { runBrowserSample } from './browser-client-runtime';
 
 async function main(): Promise<void> {
   const config = await loadSampleConfig();
-  const clients = Array.from({ length: 9 }, (_, index) => createClient(config.sessionStreamEndpoint, `client-${index + 1}`));
+  const clients = Array.from({ length: 9 }, () => createClient(config.sessionStreamEndpoint));
   try {
     await new SupportChatClientScenario().run(
       clients[0], clients[1], clients[2], clients[3], clients[4], clients[5], clients[6], clients[7], clients[8]
@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   console.log('PASS SupportChat.Ts');
 }
 
-function createClient(endpoint: string, label: string): ZlinkStreamConnector {
+function createClient(endpoint: string): ZlinkStreamConnector {
   const client = connector.zlinkStreamConnectorFactory.create({
     endpoint,
     codec: connector.zlinkStreamJsonCodec,
@@ -26,9 +26,6 @@ function createClient(endpoint: string, label: string): ZlinkStreamConnector {
     requestTimeoutMs: 5000,
     waitTimeoutMs: 10000,
     heartbeat: { enabled: false }
-  });
-  client.observeInbound((observation) => {
-    console.log(`stream-inbound sample=SupportChat client=${label} kind=${observation.kind} name=${observation.name}`);
   });
   return client;
 }

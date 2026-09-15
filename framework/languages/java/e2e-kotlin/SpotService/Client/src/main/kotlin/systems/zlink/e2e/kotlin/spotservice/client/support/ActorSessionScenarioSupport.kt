@@ -4,8 +4,6 @@ import systems.zlink.framework.kotlin.*
 
 import java.time.Duration
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -16,11 +14,6 @@ import systems.zlink.e2e.kotlin.spotservice.Env
 internal class ActorSessionScenarioContext {
     private val connector = createStreamConnector(Env.get("e2e.stream.a.endpoint"))
     private val unbound = createStreamConnector(Env.get("e2e.stream.a.endpoint"))
-    private val inboundNames = CopyOnWriteArrayList<String>()
-    private val inboundObserver = connector.observeInbound { observation ->
-        inboundNames.add(observation.packetName())
-        CompletableFuture.completedFuture(null)
-    }
     val actorId: String = "actor-local-" + UUID.randomUUID().toString().replace("-", "")
 
     val profile = Contracts.ActorProfile(
@@ -48,8 +41,6 @@ internal class ActorSessionScenarioContext {
         private set
     lateinit var userPush3: Contracts.ActorPushNotify
         private set
-
-    fun observedInboundNames(): List<String> = inboundNames.toList()
 
     suspend fun connectAndAuthenticate() {
         connector.connect().await()
@@ -112,16 +103,8 @@ internal class ActorSessionScenarioContext {
             .awaitReply<Contracts.ActorEchoRes>()
 
     suspend fun close() {
-        closeQuietly(inboundObserver)
         closeQuietly(connector)
         closeQuietly(unbound)
-    }
-
-    private fun closeQuietly(registration: AutoCloseable) {
-        try {
-            registration.close()
-        } catch (_: Exception) {
-        }
     }
 
     private suspend fun closeQuietly(stream: ZLinkKotlinStreamConnector) {

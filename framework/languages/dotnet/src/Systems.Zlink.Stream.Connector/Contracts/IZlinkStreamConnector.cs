@@ -121,18 +121,6 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload);
 
     /// <summary>
-    ///     Registers an observer for immutable inbound frame snapshots.
-    /// </summary>
-    /// <remarks>
-    ///     Observers are for logging, metrics, and tracing. They cannot drop,
-    ///     transform, or reply to messages, and they must not call connector
-    ///     send, request, wait, or dispatch APIs from the callback. Registration is
-    ///     only supported before the connector starts connecting.
-    /// </remarks>
-    IDisposable ObserveInbound(
-        Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer);
-
-    /// <summary>
     ///     Registers a callback for messages with the given packet name.
     /// </summary>
     /// <remarks>

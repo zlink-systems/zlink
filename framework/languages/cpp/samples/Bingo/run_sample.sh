@@ -412,9 +412,8 @@ wait_log_contains "session-b room route readiness" \
 }
 
 grep -q "bingo=completed" "$LOG_DIR/client.stdout.log"
-grep -q "stream-inbound sample=Bingo" "$LOG_DIR/client.stdout.log"
-grep -Eq "stream-inbound sample=Bingo .* seq=[0-9]" "$LOG_DIR/client.stdout.log"
-grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "$LOG_DIR/client.stdout.log"
+grep -q "stream-result sample=Bingo client=player1 operation=authenticate" "$LOG_DIR/client.stdout.log"
+grep -q "stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify" "$LOG_DIR/client.stdout.log"
 PLAY_LOGS=("$LOG_DIR/play-a.stdout.log" "$LOG_DIR/play-b.stdout.log")
 SESSION_LOGS=("$LOG_DIR/session-a.stdout.log" "$LOG_DIR/session-b.stdout.log")
 

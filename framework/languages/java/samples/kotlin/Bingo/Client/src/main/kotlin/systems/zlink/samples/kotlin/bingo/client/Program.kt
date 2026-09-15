@@ -46,12 +46,5 @@ private fun createClient(endpoint: String): ZLinkKotlinStreamConnector {
             ZLinkProtobufCodec.defaultCodec(),
         ),
     )
-    client.observeInbound { observation ->
-        println(
-            "stream-inbound sample=Bingo kind=${observation.kind()} " +
-                "name=${observation.packetName()} bytes=${observation.payloadLength()}",
-        )
-        CompletableFuture.completedFuture(null)
-    }
     return client.kotlin()
 }

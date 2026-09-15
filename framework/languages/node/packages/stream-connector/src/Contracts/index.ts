@@ -19,7 +19,6 @@ export type {
   ZlinkStreamMessage,
   ZlinkStreamError,
   ZlinkStreamConnectionStateChanged,
-  ZlinkStreamInboundObservation,
   ZlinkStreamResult,
   ZlinkStreamResultOf
 } from './ZlinkStreamModels';

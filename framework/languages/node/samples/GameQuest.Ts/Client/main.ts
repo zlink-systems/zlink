@@ -46,13 +46,6 @@ function createClient(endpoint: string, name: string): ZlinkStreamConnector {
     waitTimeoutMs: SampleNames.clientTimeout,
     heartbeat: { enabled: false }
   });
-  client.observeInbound((observation) => {
-    console.log(
-      `stream-inbound sample=GameQuest client=${name} kind=${observation.kind} ` +
-      `name=${observation.name} seq=${observation.requestSeq?.toString() ?? '-'} ` +
-      `bytes=${observation.payloadLength}`
-    );
-  });
   client.onErrorReceived((error) => {
     console.error(`stream-error sample=GameQuest client=${name} code=${error.code} message=${error.message}`);
   });

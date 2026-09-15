@@ -18,29 +18,6 @@
 namespace zlink::stream_connector
 {
 
-class inbound_observer_registration_t
-{
-  public:
-    inbound_observer_registration_t () = default;
-    ~inbound_observer_registration_t ();
-
-    inbound_observer_registration_t (inbound_observer_registration_t &&) noexcept;
-    inbound_observer_registration_t &operator= (inbound_observer_registration_t &&) noexcept;
-
-    inbound_observer_registration_t (const inbound_observer_registration_t &) = delete;
-    inbound_observer_registration_t &operator= (const inbound_observer_registration_t &) = delete;
-
-    void close ();
-    explicit operator bool () const noexcept;
-
-  private:
-    friend class connector_t;
-    inbound_observer_registration_t (std::shared_ptr<void> state, std::uint64_t id);
-
-    std::shared_ptr<void> _state;
-    std::uint64_t _id = 0;
-};
-
 class connector_t
 {
   public:
@@ -187,14 +164,6 @@ class connector_t
 
     /// Registers an error callback owned by this connector.
     connector_t &on_error (std::function<void (const error_t &)> handler);
-
-    /// Registers an inbound observer before connect().
-    ///
-    /// The observer receives immutable snapshots for logging, metrics, or tracing. It cannot
-    /// change packet dispatch, complete requests, or reply to messages. The callback is scheduled
-    /// outside the receive path.
-    inbound_observer_registration_t
-    observe_inbound (std::function<void (const inbound_observation_t &)> observer);
 
     /// Registers a disconnected callback owned by this connector.
     connector_t &on_disconnected (std::function<void ()> handler);

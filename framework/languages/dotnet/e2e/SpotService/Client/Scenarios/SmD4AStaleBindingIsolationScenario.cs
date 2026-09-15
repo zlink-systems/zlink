@@ -136,6 +136,5 @@ internal static class SmD4AStaleBindingIsolationScenario
             RequestTimeout = TimeSpan.FromSeconds(10),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
 }

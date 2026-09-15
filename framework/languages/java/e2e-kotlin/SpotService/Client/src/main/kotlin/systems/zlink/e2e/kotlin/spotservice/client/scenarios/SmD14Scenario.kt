@@ -18,7 +18,6 @@ internal object SmD14Scenario {
         val strict = createStreamConnector(
             endpoint,
             ZLinkStreamDispatchMode.IMMEDIATE,
-            Int.MAX_VALUE,
             false
         )
         var strictTlsRejected = false
@@ -36,7 +35,6 @@ internal object SmD14Scenario {
         val tls = createStreamConnector(
             endpoint,
             ZLinkStreamDispatchMode.IMMEDIATE,
-            Int.MAX_VALUE,
             true
         )
         try {

@@ -57,10 +57,9 @@ class TicTacToeClientScenario {
     const observerPlayNode = game.playNodes.find((node) => node.streamEndpoint === observerPlayEndpoint);
     connector.zlinkStreamAssert.ensure(observerPlayNode !== undefined, 'Sample scenario assertion failed.');
 
-    const observedClients = new Set<string>();
-    const client1 = createPlayerClient(hostPlayEndpoint, 'host', observedClients);
-    const client2 = createPlayerClient(observerPlayEndpoint, 'guest', observedClients);
-    const observer = createPlayerClient(observerPlayEndpoint, 'observer', observedClients);
+    const client1 = createPlayerClient(hostPlayEndpoint);
+    const client2 = createPlayerClient(observerPlayEndpoint);
+    const observer = createPlayerClient(observerPlayEndpoint);
     let reconnectedClient1: ZlinkStreamConnector | undefined;
 
     try {
@@ -211,7 +210,7 @@ class TicTacToeClientScenario {
       // A fresh connector authenticates the same player and asks the Room Spot
       // for its authoritative state through the existing JoinGameMsg contract.
       await client1.close(signal);
-      reconnectedClient1 = createPlayerClient(hostPlayEndpoint, 'reconnected-host', observedClients);
+      reconnectedClient1 = createPlayerClient(hostPlayEndpoint);
       await reconnectedClient1.connect(signal);
       const reconnectedAuth = await reconnectedClient1
         .request(authenticateReq('player-x'))
@@ -239,9 +238,6 @@ class TicTacToeClientScenario {
         reconnectedClient1.send(new LeaveGameMsg(game.roomId)).packetName(PacketNames.leaveGameMsg).submit(),
         client2.send(new LeaveGameMsg(game.roomId)).packetName(PacketNames.leaveGameMsg).submit()
       ]);
-      assertInboundObserved(observedClients, 'host');
-      assertInboundObserved(observedClients, 'guest');
-      assertInboundObserved(observedClients, 'observer');
       if (lifecycleCompletionPath !== undefined) {
         const completion = await fetch(lifecycleCompletionPath, { signal });
         connector.zlinkStreamAssert.ensure(completion.ok, 'Runner lifecycle completion failed.');
@@ -268,28 +264,14 @@ function waitState(
     .submit(signal);
 }
 
-function createPlayerClient(endpoint: string, name: string, observedClients: Set<string>): ZlinkStreamConnector {
+function createPlayerClient(endpoint: string): ZlinkStreamConnector {
   const client = connector.zlinkStreamConnectorFactory.create({
     endpoint,
     dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
     waitTimeoutMs: 60000,
     heartbeat: { enabled: false }
   });
-  client.observeInbound((observation) => {
-    if (observation.name.length > 0 && Number.isInteger(observation.kind) && observation.payloadLength >= 0) {
-      observedClients.add(name);
-    }
-    console.log(
-      `stream-inbound sample=TicTacToe client=${name} kind=${observation.kind} ` +
-      `name=${observation.name} seq=${observation.requestSeq?.toString() ?? '-'} ` +
-      `bytes=${observation.payloadLength}`
-    );
-  });
   return client;
-}
-
-function assertInboundObserved(observedClients: ReadonlySet<string>, clientName: string): void {
-  connector.zlinkStreamAssert.ensure(observedClients.has(clientName), 'Sample scenario assertion failed.');
 }
 
 function stateOf(message: { state: GameState }): GameState {

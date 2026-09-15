@@ -45,7 +45,6 @@ internal sealed class ScenarioContext(ClientOptions options) : IDisposable
                 }
                 : new ZlinkStreamReconnectOptions { Enabled = true },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 256
         });
         configure?.Invoke(connector);
         await connector.Connect.Async();

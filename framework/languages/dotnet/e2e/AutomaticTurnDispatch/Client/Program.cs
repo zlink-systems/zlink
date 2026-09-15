@@ -27,7 +27,6 @@ await using var client =
         RequestTimeout = TimeSpan.FromSeconds(60),
         Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
         DispatchMode = ZlinkStreamDispatchMode.Immediate,
-        MaxReceivedMessages = 1024
     });
 client.ErrorReceived += (error, _) =>
 {

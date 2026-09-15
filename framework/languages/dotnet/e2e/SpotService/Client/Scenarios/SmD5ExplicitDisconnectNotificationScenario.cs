@@ -137,7 +137,6 @@ internal static class SmD5ExplicitDisconnectNotificationScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
 
     private static async Task<EnsureActorRes> EnsureActorAsync(

@@ -21,7 +21,6 @@ export function createSessionClient(endpoint: string): ZlinkStreamConnector {
     codec: zlinkStreamJsonCodec,
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
-    maxReceivedMessages: 1024,
     waitTimeoutMs: 10000,
     requestTimeoutMs: 5000
   });

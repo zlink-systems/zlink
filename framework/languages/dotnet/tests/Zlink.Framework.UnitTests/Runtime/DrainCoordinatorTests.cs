@@ -1459,8 +1459,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
         var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var closingObserved = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
@@ -1474,12 +1472,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             disconnected.TrySetResult(closed.CloseReason);
             return ValueTask.CompletedTask;
         };
-        connector.ObserveInbound((frame, _) =>
-        {
-            if (string.Equals(frame.Name, "session-closing", StringComparison.Ordinal))
-                closingObserved.TrySetResult();
-            return ValueTask.CompletedTask;
-        });
         await connector.Connect.Async();
         await connector.Send(new DrainProbeMessage("connected"))
             .PacketName("drain.probe")
@@ -1490,7 +1482,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             .ShutdownAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, result.Outcome);
-        await closingObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(
             ZlinkStreamCloseReason.ServerDrain,
             await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(30)));

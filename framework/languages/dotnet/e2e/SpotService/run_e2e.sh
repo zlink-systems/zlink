@@ -129,7 +129,7 @@ case "$SCENARIO_SET" in
     NEED_SESSION_NODES=0
     NEED_PLAY_B=0
     ;;
-  sm-d2-d6|sm-d4a|sm-d4b|sm-d10|sm-d12|sm-g1)
+  sm-d2-d6|sm-d4a|sm-d4b|sm-d12|sm-g1)
     NEED_SESSION_B=1
     if [[ "$SCENARIO_SET" == "sm-d4b" ]]; then
       NEED_MESSAGE_FOLLOW_PROXY=1
@@ -145,7 +145,6 @@ case "$SCENARIO_SET" in
     ;;
 esac
 if scenario_selector_contains sm-d2-d6 \
-  || scenario_selector_contains sm-d10 \
   || scenario_selector_contains sm-d4a \
   || scenario_selector_contains sm-d4b \
   || scenario_selector_contains sm-d12 \
@@ -1505,8 +1504,7 @@ elif [[ "$SCENARIO_SET" == "all" || "$SCENARIO_SET" == "default-batch" ]]; then
   run_client sm-d5a
   run_client sm-d7
   run_client sm-d8
-  run_client sm-d9-d11-d13
-  run_client sm-d10
+  run_client sm-d11-d13
   run_client sm-d12
   run_client sm-d14
   run_client sm-d15

@@ -537,8 +537,7 @@ elif [[ "$SCENARIO" == "default-batch" ]]; then
   run_client sm-d5
   run_client session-binding-regression
   run_client sm-d7
-  run_client sm-d9-d11-d13
-  run_client sm-d10
+  run_client sm-d11-d13
   run_client sm-d12
   run_client sm-d14
   run_client sm-c1-c2

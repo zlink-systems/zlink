@@ -3103,117 +3103,6 @@ PY
   exit 0
 fi
 
-if [[ "$SCENARIO" == "SM-D9" || "$SCENARIO" == "sm-d9" ]]; then
-  ensure_location_store
-  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A"
-  start_play play-b "$ROUTE_B" "$SPOT_B" "$PUB_B" "$HTTP_B"
-  start_session session-a "$ROUTE_SESSION_A" "$SPOT_SESSION_A" "$PUB_SESSION_A" "$STREAM_A" "$HTTP_SESSION_A"
-  settle_scenario
-  ensure_servers_started_and_ready
-  wait_control_ping sm-d9-session-a-play-a "$HTTP_SESSION_A" play-a "sm-d9-session-a-play-a-ready"
-  run_client_from_options \
-    routeEndpoint="$ROUTE_CLIENT" \
-    routeAEndpoint="$ROUTE_A" \
-    routeBEndpoint="$ROUTE_B" \
-    spotRouterEndpoint="$SPOT_CLIENT" \
-    pubsubEndpoint="$PUB_CLIENT" \
-    publisherEndpoint="$PUBLISHER_CLIENT" \
-    apiEndpoint="$API_CLIENT" \
-    streamEndpoint="$STREAM_A" \
-    scenarioMode=sm-d9 \
-    playHttpEndpoint="$HTTP_A" \
-    playBHttpEndpoint="$HTTP_B" \
-    clientRid="client-sm-d9" \
-    logDir="$LOG_DIR" \
-     >"$LOG_DIR/client-sm-d9.stdout.log" 2>"$LOG_DIR/client-sm-d9.stderr.log"
-  cat "$LOG_DIR/client-sm-d9.stdout.log"
-  fetch_evidence play-a-sm-d9 "$HTTP_A"
-  fetch_evidence play-b-sm-d9 "$HTTP_B"
-  fetch_evidence session-a-sm-d9 "$HTTP_SESSION_A"
-  python3 - "$LOG_DIR/play-a-sm-d9-evidence.json" "$LOG_DIR/play-b-sm-d9-evidence.json" "$LOG_DIR/session-a-sm-d9-evidence.json" <<'PY'
-import json
-import sys
-
-play_a = json.load(open(sys.argv[1], encoding="utf-8"))
-play_b = json.load(open(sys.argv[2], encoding="utf-8"))
-session_a = json.load(open(sys.argv[3], encoding="utf-8"))
-actor = "actor-sm-d9"
-
-def has(snapshot, marker, actor_id, value=None):
-    return any(item["marker"] == marker
-               and item["actor_id"] == actor_id
-               and (value is None or item["value"] == value)
-               for item in snapshot["entries"])
-
-assert has(play_a, "ActorEnsured", actor, "SM-D9 Observer")
-assert has(play_a, "EntryActorPing", actor, "observer-1:1")
-assert has(play_a, "EntryActorPing", actor, "observer-2:2")
-assert has(session_a, "StreamBound", actor)
-assert not any(item["actor_id"] == actor for item in play_b["entries"])
-print("scenario SM-D9 evidence passed")
-PY
-  echo "spot-service e2e result=passed"
-  exit 0
-fi
-
-if [[ "$SCENARIO" == "SM-D10" || "$SCENARIO" == "sm-d10" ]]; then
-  ensure_location_store
-  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A"
-  start_play play-b "$ROUTE_B" "$SPOT_B" "$PUB_B" "$HTTP_B"
-  start_session session-a "$ROUTE_SESSION_A" "$SPOT_SESSION_A" "$PUB_SESSION_A" "$STREAM_A" "$HTTP_SESSION_A"
-  start_session session-b "$ROUTE_SESSION_B" "$SPOT_SESSION_B" "$PUB_SESSION_B" "$STREAM_B" "$HTTP_SESSION_B"
-  settle_scenario
-  ensure_servers_started_and_ready
-  wait_control_ping sm-d10-session-a-play-a "$HTTP_SESSION_A" play-a "sm-d10-session-a-ready"
-  wait_control_ping sm-d10-session-b-play-b "$HTTP_SESSION_B" play-b "sm-d10-session-b-ready"
-  run_client_from_options \
-    routeEndpoint="$ROUTE_CLIENT" \
-    routeAEndpoint="$ROUTE_A" \
-    routeBEndpoint="$ROUTE_B" \
-    spotRouterEndpoint="$SPOT_CLIENT" \
-    pubsubEndpoint="$PUB_CLIENT" \
-    publisherEndpoint="$PUBLISHER_CLIENT" \
-    apiEndpoint="$API_CLIENT" \
-    streamEndpoint="$STREAM_A" \
-    alternateStreamEndpoint="$STREAM_B" \
-    scenarioMode=sm-d10 \
-    playHttpEndpoint="$HTTP_A" \
-    playBHttpEndpoint="$HTTP_B" \
-    clientRid="client-sm-d10" \
-    logDir="$LOG_DIR" \
-     >"$LOG_DIR/client-sm-d10.stdout.log" 2>"$LOG_DIR/client-sm-d10.stderr.log"
-  cat "$LOG_DIR/client-sm-d10.stdout.log"
-  fetch_evidence play-a-sm-d10 "$HTTP_A"
-  fetch_evidence play-b-sm-d10 "$HTTP_B"
-  fetch_evidence session-a-sm-d10 "$HTTP_SESSION_A"
-  fetch_evidence session-b-sm-d10 "$HTTP_SESSION_B"
-  python3 - "$LOG_DIR/play-a-sm-d10-evidence.json" "$LOG_DIR/play-b-sm-d10-evidence.json" "$LOG_DIR/session-a-sm-d10-evidence.json" "$LOG_DIR/session-b-sm-d10-evidence.json" <<'PY'
-import json
-import sys
-
-play_a = json.load(open(sys.argv[1], encoding="utf-8"))
-play_b = json.load(open(sys.argv[2], encoding="utf-8"))
-session_a = json.load(open(sys.argv[3], encoding="utf-8"))
-session_b = json.load(open(sys.argv[4], encoding="utf-8"))
-congested = "actor-sm-d10-congested"
-isolated = "actor-sm-d10-isolated"
-
-def has(snapshot, marker, actor_id, value=None):
-    return any(item["marker"] == marker
-               and item["actor_id"] == actor_id
-               and (value is None or item["value"] == value)
-               for item in snapshot["entries"])
-
-assert has(session_a, "StreamBound", congested)
-assert has(session_b, "StreamBound", isolated)
-assert has(play_a, "ActorPing", congested, "after-backpressure:9")
-assert has(play_b, "ActorPushedSession", isolated, "isolated-push")
-print("scenario SM-D10 evidence passed")
-PY
-  echo "spot-service e2e result=passed"
-  exit 0
-fi
-
 if [[ "$SCENARIO" == "SM-D11" || "$SCENARIO" == "sm-d11" ]]; then
   ensure_location_store
   start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A"
@@ -3827,7 +3716,7 @@ scenario_index=0
 for scenario in \
   SM-B1 SM-B2 SM-B3 SM-B5 \
   SM-B6 SM-B8 SM-B9 \
-  SM-D1 SM-D2 SM-D6 SM-D3 SM-D4 SM-D5 SM-D7 SM-D8 SM-D9 SM-D11 SM-D13 SM-D10 SM-D12 SM-D14 SM-D15 \
+  SM-D1 SM-D2 SM-D6 SM-D3 SM-D4 SM-D5 SM-D7 SM-D8 SM-D11 SM-D13 SM-D12 SM-D14 SM-D15 \
   SM-C1 SM-C2 SM-C3 SM-C5 \
   SM-E4 SM-E1 SM-E2 SM-E3 \
   SM-A7 SM-A8 SM-C4 \

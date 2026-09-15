@@ -27,17 +27,6 @@ public sealed record ZlinkStreamConnectionStateChanged(
     ZlinkStreamConnectionState Current,
     ZlinkStreamError? Error = null);
 
-public sealed record ZlinkStreamInboundObservation(
-    ZlinkStreamMessageKind Kind,
-    string Name,
-    ZlinkStreamCodec Codec,
-    ulong? RequestSeq,
-    ZlinkStreamMetadata Metadata,
-    int PayloadLength,
-    bool IsCompressed,
-    DateTimeOffset ReceivedAt,
-    ReadOnlyMemory<byte> PayloadPreview);
-
 public sealed class ZlinkStreamException(ZlinkStreamError error) : Exception(error.Message, error.Exception)
 {
     public ZlinkStreamError Error { get; } = error;
