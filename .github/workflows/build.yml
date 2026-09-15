@@ -161,6 +161,19 @@ jobs:
           }
           Copy-Item "..\core\include\*.h" "..\$distDir\include\" -Force
 
+          # Merge the full `cmake --install` prefix (lib\cmake\zlink\*.cmake,
+          # the static archive, the complete include\ tree) into the
+          # archive. This is additive: robocopy merges directory contents
+          # without nesting, so it sits alongside the flat bin\zlink.dll /
+          # lib\zlink.lib / include\*.h files copied above, which existing
+          # consumers (fetch-release.sh, fetch-release.ps1, node/java
+          # prebuild downloads, framework CI) still read from those paths.
+          cmake --install . --config Release --prefix "$PWD\install"
+          robocopy ".\install" "..\$distDir" /E /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) {
+            throw "robocopy failed merging the install prefix into $distDir (exit $LASTEXITCODE)"
+          }
+
       - name: Install Visual C++ Redistributable
         shell: pwsh
         run: |
