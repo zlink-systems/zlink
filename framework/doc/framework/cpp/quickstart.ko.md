@@ -9,26 +9,59 @@
 location store 없이 process 둘이 서로의 endpoint를 직접 지정해 request/reply 한 번을
 주고받는다. 다음 단계는 [설치와 첫 동작](guide/server/02-getting-started.ko.md)이다.
 
+## 설치 경로
+
+C++은 세 가지 경로가 있다. 셋 다 같은 결과를 낸다 — 무엇을 이미 쓰고 있는지로 고른다.
+
+| 경로 | 언제 |
+|---|---|
+| vcpkg | 이미 vcpkg를 쓰는 프로젝트 |
+| Conan | 이미 Conan을 쓰는 프로젝트 |
+| GitHub Release | 패키지 관리자를 쓰지 않을 때. source archive 세 개를 차례로 빌드한다 |
+
+`zlink`는 아직 공식 vcpkg 레지스트리와 ConanCenter에 없다. 이 저장소가 제공하는 overlay
+port와 recipe를 쓴다.
+
+### vcpkg
+
+```bash
+git clone https://github.com/zlink-systems/zlink.git
+vcpkg install zlink zlink-cpp zlink-framework \
+  --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
+```
+
+소비자 프로젝트는 vcpkg toolchain을 쓴다.
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+```
+
+### Conan
+
+```bash
+git clone https://github.com/zlink-systems/zlink.git
+conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+```
+
+소비자 프로젝트의 `conanfile.txt`에 `zlink-framework/0.14.0`을 적고 `conan install`한다.
+
+### GitHub Release
+
+세 아카이브를 차례로 빌드해 설치한다 — `core/vX.Y.Z` → `cpp/vX.Y.Z` → `framework-cpp/vA.B.C`.
+순서와 실제 명령은 프로젝트의
+[`README.md`](../../../languages/cpp/quickstart/README.md)에 있다.
+
+이 경로에서는 서드파티를 직접 갖춘다. `nlohmann_json`·Boost·liblz4·libprotobuf·OpenSSL은
+배포판 패키지로 설치하고, `opentelemetry-cpp`는 배포판 패키지가 없어 소스로 빌드한다.
+framework가 링크하는 것은 `opentelemetry-cpp::api` 하나이므로 `-DOTELCPP_WITH_API_ONLY=ON`이면
+헤더만 빌드된다.
+
 ## 전제
 
-C++은 다른 네 언어와 달리 패키지 관리자 명령 한 줄로 끝나지 않는다. **GitHub Release의
-source archive 세 개를 차례로 빌드해 설치한 뒤** 이 프로젝트를 빌드한다.
-
 - CMake 3.20 이상, C++20 컴파일러
-- `nlohmann_json`, Boost, liblz4, libprotobuf, OpenSSL — 배포판 패키지로 설치한다
-- `opentelemetry-cpp` — 배포판 패키지가 없어 소스로 빌드한다. framework가 링크하는 것은
-  `opentelemetry-cpp::api` 하나이므로 `-DOTELCPP_WITH_API_ONLY=ON`으로 헤더만 빌드하면 된다
-
-빌드 순서와 실제 명령은 프로젝트의 [`README.md`](../../../languages/cpp/quickstart/README.md)에
-있다.
-
-!!! warning "게시된 0.12.0 아카이브는 Core를 `-DBUILD_STATIC=OFF`로 빌드해야 한다"
-
-    `framework-cpp/v0.12.0` 아카이브는 Core의 CMake config를 통째로 담으면서 `libzlink.a`는
-    담지 않는다. Core를 기본값(`BUILD_STATIC=ON`)으로 빌드하면
-    `find_package(zlink_framework CONFIG REQUIRED)`가 없는 파일을 참조해 실패한다.
-    저장소에서는 고쳤고([#384](https://github.com/zlink-systems/zlink/issues/384)) 다음
-    릴리스부터 해소된다.
 
 ## 1. 소비자 쪽 CMake
 
