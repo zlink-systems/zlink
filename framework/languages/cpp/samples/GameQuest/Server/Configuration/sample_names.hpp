@@ -15,8 +15,8 @@ struct sample_names_t
     static constexpr const char *quest_spot_route = "gamequest.quest.spot.route";
     static constexpr const char *player_quest_spot = "gamequest.player.quest";
     static constexpr const char *stream_node = "gamequest.stream";
-    static constexpr const char *mission_a_rid = "gamequest-mission-a";
-    static constexpr const char *mission_b_rid = "gamequest-mission-b";
+    static constexpr const char *mission_a_rid = "gamequest-mission-a-spot";
+    static constexpr const char *mission_b_rid = "gamequest-mission-b-spot";
 };
 
 /* API 노드마다 자기 이름의 spot mesh를 연다. owner spot이 notify를 route하려면 이 mesh 이름에

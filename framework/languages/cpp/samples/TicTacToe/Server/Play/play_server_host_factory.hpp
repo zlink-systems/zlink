@@ -55,10 +55,10 @@ class play_server_host_factory_t
             api_client.connect (endpoint);
         }
         auto game_spot = options.add_route_mesh (sample_names_t::game_spot_node);
-        game_spot.set_routing_id (
-          zlink::routing_id_t::from ("tictactoe-play-" + topology.play_node));
+        game_spot.set_routing_id (zlink::routing_id_t::from (
+          topology.play_node == "b" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid));
         if (topology.play_node == "a") {
-            game_spot.peer_connections ().connect (zlink::routing_id_t::from ("tictactoe-play-b"),
+            game_spot.peer_connections ().connect (zlink::routing_id_t::from (sample_names_t::play_b_rid),
                                                    topology.play_b_route_endpoint);
         }
         game_spot.listen (topology.selected_play_route_endpoint ());
@@ -74,7 +74,7 @@ class play_server_host_factory_t
           .register_session<play_session_t> ();
         app.add_hosted_service (std::make_unique<play_route_readiness_service_t> (
           sample_names_t::game_spot_node, "play-" + topology.play_node,
-          "tictactoe-play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a"))));
+          topology.play_node == "a" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid));
         return app;
     }
 };

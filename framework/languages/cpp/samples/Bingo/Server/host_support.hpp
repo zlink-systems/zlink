@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace zlink::samples::bingo
 {
@@ -155,10 +156,12 @@ class route_mesh_readiness_service_t final : public hosted_service_t
   public:
     route_mesh_readiness_service_t (std::string node_name,
                                     std::string mesh_name,
-                                    std::string label) :
+                                    std::string label,
+                                    std::vector<std::string> target_rids) :
         _node_name (std::move (node_name)),
         _mesh_name (std::move (mesh_name)),
-        _label (std::move (label))
+        _label (std::move (label)),
+        _target_rids (std::move (target_rids))
     {
     }
 
@@ -169,15 +172,11 @@ class route_mesh_readiness_service_t final : public hosted_service_t
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
         _observation = runtime.observe (
           _mesh_name, 64,
-          [state, node_name = _node_name, label = _label] (
+          [state, node_name = _node_name, label = _label, target_rids = _target_rids] (
             const observed_status_t<mesh_node_snapshot_t> &observed) {
-              const auto &snapshot = observed.status;
-              if (!snapshot.is_ready
-                  || state->reported.exchange (true, std::memory_order_acq_rel))
-                  return;
-              std::cout << "bingo-ready kind=mesh-route node=" << node_name
-                        << " mesh=" << label << std::endl;
+              report_if_ready (state, node_name, label, target_rids, observed.status);
           });
+        report_if_ready (state, _node_name, _label, _target_rids, runtime.snapshot (_mesh_name));
         co_return;
     }
 
@@ -200,9 +199,30 @@ class route_mesh_readiness_service_t final : public hosted_service_t
         std::atomic_bool reported{false};
     };
 
+    static void report_if_ready (const std::shared_ptr<state_t> &state,
+                                 const std::string &node_name,
+                                 const std::string &label,
+                                 const std::vector<std::string> &target_rids,
+                                 const mesh_node_snapshot_t &snapshot)
+    {
+        const auto targets_ready = std::ranges::all_of (
+          target_rids, [&snapshot] (const std::string &target_rid) {
+              return std::ranges::any_of (
+                snapshot.peers, [&target_rid] (const mesh_peer_snapshot_t &peer) {
+                    return peer.node_rid.to_string () == target_rid
+                           && peer.state == peer_state_t::ready;
+                });
+          });
+        if (!targets_ready || state->reported.exchange (true, std::memory_order_acq_rel))
+            return;
+        std::cout << "bingo-ready kind=mesh-route node=" << node_name
+                  << " mesh=" << label << std::endl;
+    }
+
     std::string _node_name;
     std::string _mesh_name;
     std::string _label;
+    std::vector<std::string> _target_rids;
     std::shared_ptr<state_t> _state;
     std::unique_ptr<mesh_runtime_observation_t> _observation;
 };

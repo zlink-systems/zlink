@@ -116,6 +116,8 @@ int main (int argc, char **argv)
       .bind (topology.courier_stream_endpoint)
       .register_session<courier_session_t> ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::courier_session_node, sample_names_t::courier_actor_discovery));
+      sample_names_t::courier_session_node, sample_names_t::courier_actor_discovery,
+      std::vector<std::string>{sample_names_t::courier_actor_instance_1,
+                               sample_names_t::courier_actor_instance_2}));
     return app.run (argc, argv);
 }
