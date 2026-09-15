@@ -1483,7 +1483,7 @@ public static class Scenarios
             // connection observes the old node leave.
             var targetStopped = ops.Connector.WaitFor<NodeStatusNotify>()
                 .Where(message => message.Payload.NodeId == targetNodeId
-                                  && (!message.Payload.Registered || !message.Payload.Connected))
+                                  && !message.Payload.Connected)
                 .Timeout(TimeSpan.FromSeconds(20))
                 .Async(ct);
             Console.WriteLine("scenario ZW-E5 restore armed");
