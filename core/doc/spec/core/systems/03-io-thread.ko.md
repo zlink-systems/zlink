@@ -2,7 +2,7 @@
 title: "I/O thread"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/systems/03-io-thread/) | 한국어
+[English](03-io-thread.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [시스템 목차](README.ko.md) | [이전: Threading model](02-threading-model.ko.md) | [다음: Thread safety](04-thread-safety.ko.md)

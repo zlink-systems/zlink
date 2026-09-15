@@ -2,7 +2,7 @@
 title: "Runtime Boundary"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/08-runtime-boundary/) | English
+[한국어](08-runtime-boundary.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Utilities](07-utilities.en.md) | [Next: Socket Overview](socket/README.en.md)

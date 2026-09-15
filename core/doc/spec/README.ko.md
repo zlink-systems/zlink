@@ -1,4 +1,4 @@
-[English](https://zlink-systems.github.io/zlink/spec/) | 한국어
+[English](README.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](core/README.ko.md) | [프로토콜 목차](core/protocol/README.ko.md) | [시스템 목차](core/systems/README.ko.md)

@@ -1,11 +1,11 @@
 # ZLink Framework
 
 **HTTP 요청-응답을 위해 설계된 기존 프레임워크는 TCP 기반의 실시간 메시징을
-다루지 않는다.** ZLink Framework는 그 요구를 충족하는 메시징 계층을, Spring 위에
-Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위에 완전히
-통합된 형태로 제공한다. 별도 런타임으로 옮겨갈 필요가 없다.
+다루지 않는다.** ZLink Framework는 그 요구를 충족하는 메시징 계층을 제공한다.
+Spring 위에 Spring MVC가 얹히듯, `ASP.NET Core` · Spring Boot · NestJS · C++ host
+위에 완전히 통합된 형태로 들어간다. 별도 런타임으로 옮겨갈 필요가 없다.
 
-가장 뚜렷하게 요구되는 영역은 실시간 게임이지만, 대상은 거기에 한정되지 않는다.
+이 요구가 가장 뚜렷하게 나타나는 분야는 실시간 게임이다. 대상은 여기에 한정되지 않는다.
 방·세션·플레이어처럼 메모리에 상주하는 상태를 여러 서버에 나눠 두고 client에
 실시간으로 전달해야 하는 시스템이라면, 기존 web 서비스가 실시간 기능을 더하며
 떠안던 복잡도도 이 계층 하나로 흡수한다.
@@ -47,8 +47,8 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
 요청을 보낸다. 두 번째는 그 요청을 받는 guild Instance Spot의 handler — 동기화
 없이 그대로 반영한다.
 
-두 가지가 한 번에 보인다. **lock이 없다** — 두 handler 모두
-각자의 spot 안에서 이미 직렬로 처리된다. 그리고 **비동기 호출이 동기 코드처럼
+여기서 다음이 함께 보인다. **lock이 없다** — 두 handler 모두
+각자의 spot 안에서 이미 직렬로 처리된다. **비동기 호출이 동기 코드처럼
 읽힌다** — player 쪽에서 길드로 보내는 요청도 콜백이나 futures 조합 없이 그냥
 다음 줄이다.
 
@@ -385,14 +385,14 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 
 ## 핵심 개념
 
-나머지 장은 전부 이 다섯의 조합이다.
+나머지 장은 전부 다음 개념들의 조합이다.
 
 | | 무엇인가 | 해결하는 것 |
 | --- | --- | --- |
 | **channel** | 서버 간 호출의 논리 주소. request/reply · send · pub/sub | 대상 서버의 주소를 코드가 알 필요가 없다 |
 | **Spot** | room · stage · zone처럼 상태를 쥐고 **직렬로** 실행되는 단위 | 여러 source에서 동시에 온 요청을 한곳에서 순서대로 처리해, handler 코드에 lock이 없어도 되게 한다 |
 | **Actor** | 연결·사용자 하나를 대표하는 상태 객체. Spot 안에 둔다 | 사용자 단위 message 요청을 처리하고 그 상태를 관리한다 |
-| **STREAM** | 외부 client가 붙는 장기 연결(TCP · TLS · WS · WSS) | 소켓 framing과 세션 수명 관리 |
+| **STREAM** | 외부 client가 연결해 유지하는 장기 연결(TCP · TLS · WS · WSS) | 소켓 framing과 세션 수명 관리 |
 | **relocation** | Spot·Actor를 다른 노드로 옮기는 절차 | state가 특정 물리 머신에 고정되는 stateful 시스템의 약점을 보완해, 위치 투명성을 유지한 채 무중단 배포를 가능하게 한다 |
 
 ## 적용 분야
@@ -409,8 +409,8 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 
 ## 설치
 
-설치 명령과 host 등록 코드는 언어별로 [설치](install.ko.md) 문서에 있다. framework 패키지가
-binding과 Core native 런타임을 함께 끌어오므로 Core를 직접 빌드할 필요가 없다.
+설치 명령과 host 등록 코드는 언어별로 [설치](install.ko.md) 문서에 있다. framework 패키지를
+설치하면 binding과 Core native 런타임이 함께 설치되므로 Core를 직접 빌드할 필요가 없다.
 
 ## 언어 선택
 
@@ -445,8 +445,8 @@ C++에만 있는 DI · configuration · HTTP hosting · 실행 모델이 18~21�
 | | |
 | --- | --- |
 | 언어 중립 의미와 공개 계약 | [공통 스펙](common/README.ko.md) |
-| 그 아래 메시징 엔진 — 소켓 패턴, 전송, 옵션 | [Core 가이드](https://zlink-systems.github.io/zlink/ko/guide/01-overview/) · [Core 스펙](https://zlink-systems.github.io/zlink/ko/spec/core/) |
-| Core를 언어에서 직접 쓸 때 — C API binding | [Bindings 가이드](https://zlink-systems.github.io/zlink/ko/bindings/guide/) · [Bindings 스펙](https://zlink-systems.github.io/zlink/ko/bindings/spec/) |
+| 그 아래 메시징 엔진 — 소켓 패턴, 전송, 옵션 | [Core 가이드](../../../core/doc/guide/01-overview.ko.md) · [Core 스펙](../../../core/doc/spec/core/README.ko.md) |
+| Core를 언어에서 직접 쓸 때 — C API binding | [Bindings 가이드](../../../bindings/doc/guide/README.ko.md) · [Bindings 스펙](../../../bindings/doc/spec/README.ko.md) |
 | 소스와 이슈 | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |
 
 Core는 이 프레임워크가 얹히는 메시징 엔진이다. 프레임워크만 사용할 때는 참고할

@@ -1,4 +1,4 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/) | English
+[한국어](README.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](core/README.en.md) | [Protocol Index](core/protocol/README.en.md) | [Systems Index](core/systems/README.en.md)

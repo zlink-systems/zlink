@@ -2,7 +2,7 @@
 title: "Core Glossary"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/glossary/) | English
+[한국어](glossary.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md)

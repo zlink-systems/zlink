@@ -1,0 +1,25 @@
+[versions]
+# 세 zlink-framework-* artifact를 한 번에 고정한다.
+zlinkFramework = "0.12.0"
+# 아래 셋은 zlink-framework 0.12.0의 POM이 선언한 값과 맞춘 것이다.
+# 충돌 해석에 맡기지 않는다.
+springBoot = "3.5.14"
+kotlin = "2.3.21"
+jackson = "2.17.2"
+# systems.zlink:zlink(binding)는 적지 않는다. zlink-framework-core의 POM이 정한다.
+
+[libraries]
+zlink-framework-core = { module = "systems.zlink:zlink-framework-core", version.ref = "zlinkFramework" }
+zlink-framework-spring-boot-starter = { module = "systems.zlink:zlink-framework-spring-boot-starter", version.ref = "zlinkFramework" }
+zlink-framework-kotlin = { module = "systems.zlink:zlink-framework-kotlin", version.ref = "zlinkFramework" }
+spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "springBoot" }
+spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
+# Kotlin data class를 기본 JSON codec이 다루려면 필요하다. Kotlin Server는 web starter가
+# 없어 전이로 들어오지 않는다.
+jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+# Spring이 @Configuration·@RestController를 CGLIB로 감싸는데 Kotlin class는 기본이 final이다.
+# 이 플러그인이 해당 class를 열어 준다.
+kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }

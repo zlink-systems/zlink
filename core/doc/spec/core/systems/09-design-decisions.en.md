@@ -2,7 +2,7 @@
 title: "Core design decisions"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/09-design-decisions/) | English
+[한국어](09-design-decisions.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: POSD Module Structure](08-posd-module-structure.en.md) | [Next: Core Hot Path](10-hot-path.en.md)

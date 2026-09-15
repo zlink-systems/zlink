@@ -2,7 +2,7 @@
 title: "Errors"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/03-errors/) | English
+[한국어](03-errors.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Message](02-message.en.md) | [Next: Events](04-events.en.md)
@@ -31,7 +31,7 @@ The following documents own the related contracts.
 | Ownership of an input message submitted to a [socket](glossary.en.md#socket) and detailed failure conditions for each socket | [Socket common specification](socket/README.en.md) and each formal socket document |
 | Function declaration and state enum for `zlink_socket_set_receive_flow_state()` | [Socket common specification](socket/README.en.md) |
 | Behavior resulting from receive flow state configuration | [DEALER](socket/06-dealer.en.md), [ROUTER](socket/07-router.en.md) |
-| Per-function error type hierarchy for language bindings | [Bindings specification](https://zlink-systems.github.io/zlink/bindings/spec/README/) |
+| Per-function error type hierarchy for language bindings | [Bindings specification](../../../../bindings/doc/spec/README.en.md) |
 
 ## 2. Basic result and errno rules
 
@@ -543,7 +543,7 @@ Language bindings inherit this eight-category structure as eight per-function
 exception/error subclasses (for example, `SubmitException` / `BindException` /
 `RecvException` ...). A method signature identifies the failure category that can occur.
 See
-[bindings/doc/spec/README.md](https://zlink-systems.github.io/zlink/bindings/spec/README/)
+[bindings/doc/spec/README.md](../../../../bindings/doc/spec/README.en.md)
 (Per-Function Error Type Hierarchy) for the formal binding rules and
 [Result and errno mapping](#result-and-errno-mapping) above for the complete enum list.
 

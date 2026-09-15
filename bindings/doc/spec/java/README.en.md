@@ -53,7 +53,7 @@ operation/model grouping.
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
 | [Performance Policy](#performance-policy) | Hot-path constraints |
-| [Architecture requirements](#architecture-requirements-1) | Contract/runtime boundary requirements |
+| [Architecture requirements](#architecture-requirements_1) | Contract/runtime boundary requirements |
 | [Implementation Checklist](#implementation-checklist) | Checks before declaring alignment |
 | [Verification](#verification) | Required verification commands and structural searches |
 

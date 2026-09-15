@@ -1,0 +1,21 @@
+{
+  "name": "zlink-quickstart",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "server": "node dist/Server/main.js",
+    "client": "node dist/Client/main.js"
+  },
+  "dependencies": {
+    "@zlink-systems/framework": "0.12.0",
+    "@zlink-systems/nestjs": "0.12.0",
+    "@nestjs/common": "10.4.22",
+    "@nestjs/core": "10.4.22",
+    "reflect-metadata": "0.2.2"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3",
+    "@types/node": "22.15.30"
+  }
+}

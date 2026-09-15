@@ -2,7 +2,7 @@
 title: "Core runtime architecture"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/01-architecture/) | English
+[한국어](01-architecture.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Systems Overview](README.en.md) | [Next: Threading Model](02-threading-model.en.md)

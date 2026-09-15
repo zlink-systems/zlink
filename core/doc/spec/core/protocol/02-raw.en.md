@@ -2,7 +2,7 @@
 title: "Protocol — RAW"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/protocol/02-raw/) | English
+[한국어](02-raw.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Protocol Index](README.en.md) | [Previous: ZMP Protocol Details](01-zmp.en.md) | [Next: Systems Overview](../systems/README.en.md)

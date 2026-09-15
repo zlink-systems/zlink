@@ -2,7 +2,7 @@
 title: "Thread safety"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/04-thread-safety/) | English
+[한국어](04-thread-safety.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: I/O Thread](03-io-thread.en.md) | [Next: Per-Connection Memory](05-connection-memory.en.md)
