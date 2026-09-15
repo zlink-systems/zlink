@@ -30,7 +30,7 @@ class ZlinkCppConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        self.requires("zlink/0.17.5", transitive_headers=True, transitive_libs=True)
+        self.requires("zlink/1.1.0", transitive_headers=True, transitive_libs=True)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):

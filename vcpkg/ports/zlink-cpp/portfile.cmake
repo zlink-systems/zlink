@@ -6,7 +6,7 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/cpp/v${VERSION}/zlink-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-cpp-${VERSION}.tar.gz"
-    SHA512 5c77a3260a8786f473ed7a002a1bb34e5668cc430a03bcfe1683ff5c1b304077befbecb6220f9e8f32743fa4599875eec3f7c8cb96c66579827570c24f8151b9
+    SHA512 d278785a154622aaaa7a5df7ac6aeea18caa571b3931a9a5274a8e61071c172af09294aa013106167880d741365db57a459a96ae930cec81d16e7e0588a08215
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 foreach(required_path CMakeLists.txt cmake/zlink_cppConfig.cmake.in src/Runtime/Core/context.cpp include/zlink.hpp LICENSE)
@@ -19,7 +19,9 @@ endforeach()
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
-        -DZLINK_CPP_CORE_VERSION=0.17.5
+        # ZLINK_CPP_CORE_VERSION은 주지 않는다. 아카이브의 CMakeLists.txt가 자기가 요구하는
+        # Core 버전을 기본값으로 담고 있고 그 값은 sync-version.py가 소유한다. 여기서 다시
+        # 적으면 릴리스마다 어긋난다(실제로 0.17.5에 멈춰 있었다).
         -DZLINK_CPP_CORE_PACKAGE_PREFIX=${CURRENT_INSTALLED_DIR}
         -DZLINK_CPP_BUILD_TESTS=OFF
         -DZLINK_CPP_BUILD_SAMPLES=OFF
