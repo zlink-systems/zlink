@@ -122,25 +122,38 @@ function Invoke-ZlinkSampleExecutable {
 function Stop-ZlinkSampleProcessTree {
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
-    $descendants = [System.Collections.Generic.List[int]]::new()
-    if ($IsWindows -and -not $Process.HasExited) {
-        $pending = [System.Collections.Generic.Queue[int]]::new()
-        $pending.Enqueue($Process.Id)
-        while ($pending.Count -gt 0) {
-            $parentId = $pending.Dequeue()
-            Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentId" |
-                ForEach-Object {
-                    $childId = [int]$_.ProcessId
-                    $descendants.Add($childId)
-                    $pending.Enqueue($childId)
-                }
-        }
-    }
-    for ($i = $descendants.Count - 1; $i -ge 0; $i--) {
-        Stop-Process -Id $descendants[$i] -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $Process.HasExited) {
+    [void]$Process.Handle
+    if ($Process.HasExited) { return }
+    if (-not $IsWindows) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    $processId = $Process.Id
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "taskkill.exe"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = "/PID $processId /T /F"
+
+    $taskkill = [System.Diagnostics.Process]::new()
+    $taskkill.StartInfo = $startInfo
+    try {
+        if (-not $taskkill.Start()) { throw "Failed to start taskkill.exe." }
+        $stdout = $taskkill.StandardOutput.ReadToEndAsync()
+        $stderr = $taskkill.StandardError.ReadToEndAsync()
+        if (-not $taskkill.WaitForExit(5000)) {
+            $taskkill.Kill()
+            throw "taskkill.exe timed out while terminating process $processId."
+        }
+        if ($taskkill.ExitCode -ne 0 -and
+            $null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            throw "taskkill.exe failed for process $processId`: $($stderr.GetAwaiter().GetResult().Trim()) $($stdout.GetAwaiter().GetResult().Trim())"
+        }
+    } finally {
+        $taskkill.Dispose()
     }
 }
 
