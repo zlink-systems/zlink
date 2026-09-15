@@ -54,6 +54,18 @@ namespace Zlink.Verification
         private string _stage = "starting";
         private bool _finished;
 
+        // Continuation-scheduling probe. The adapter awaits its own frame loop with
+        // ConfigureAwait(false) at every call site, which asks for the continuation
+        // to run without the captured context. On a single-threaded WebGL player
+        // there is no other place for it to run, so these two say whether that is
+        // where the chain dies: both completions are signalled from Update, on the
+        // Unity main thread, and differ only in ConfigureAwait.
+        private TaskCompletionSource<bool> _captured;
+        private TaskCompletionSource<bool> _uncaptured;
+        private bool _capturedResumed;
+        private bool _uncapturedResumed;
+        private int _connectPolls;
+
         [DllImport("__Internal")]
         private static extern void ZlinkVerificationReport(string json);
 
@@ -74,6 +86,7 @@ namespace Zlink.Verification
         private async void Start()
         {
             YieldWatchdog();
+            ContinuationProbe();
             try
             {
                 await RunAsync();
@@ -90,13 +103,24 @@ namespace Zlink.Verification
         private void Update()
         {
             _frames += 1;
+            // Signalled from the main thread, a few frames in, so neither completion
+            // can run inline on the awaiting stack.
+            if (_frames == 30 && _captured != null)
+            {
+                _captured.TrySetResult(true);
+                _uncaptured.TrySetResult(true);
+            }
+
             ZlinkVerificationHeartbeat(
                 "{\"frames\":" + _frames +
                 ",\"yields\":" + _yields +
                 ",\"stage\":" + Quote(_stage) +
                 ",\"state\":" + (_connector == null ? "null" : ((int)_connector.State).ToString()) +
                 ",\"pending\":" + (_connector == null ? "null" : _connector.PendingDispatchCount.ToString()) +
-                ",\"pushes\":" + _pushes.Count + "}");
+                ",\"pushes\":" + _pushes.Count +
+                ",\"connectPolls\":" + _connectPolls +
+                ",\"capturedResumed\":" + (_capturedResumed ? "true" : "false") +
+                ",\"uncapturedResumed\":" + (_uncapturedResumed ? "true" : "false") + "}");
 
             if (!_pumping || _dispatchInFlight || _connector == null) return;
             _dispatchInFlight = true;
@@ -113,6 +137,21 @@ namespace Zlink.Verification
                 _yields += 1;
                 await Task.Yield();
             }
+        }
+
+        private async void ContinuationProbe()
+        {
+            _captured = new TaskCompletionSource<bool>();
+            _uncaptured = new TaskCompletionSource<bool>();
+            Resume();
+            await _captured.Task;
+            _capturedResumed = true;
+        }
+
+        private async void Resume()
+        {
+            await _uncaptured.Task.ConfigureAwait(false);
+            _uncapturedResumed = true;
         }
 
         private async void PumpOnce()
@@ -149,8 +188,26 @@ namespace Zlink.Verification
             });
             Step("created state=" + _connector.State);
 
+            // Polled rather than awaited directly: if the task completes and the
+            // await does not resume, the fault is in continuation scheduling; if it
+            // never completes, the fault is upstream of that.
             _stage = "connect";
-            await _connector.Connect.Async();
+            var connect = _connector.Connect.Async();
+            var connectDeadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
+            while (!connect.IsCompleted && Time.realtimeSinceStartup < connectDeadline)
+            {
+                _connectPolls += 1;
+                await Task.Yield();
+            }
+
+            if (!connect.IsCompleted)
+            {
+                Fail("Connect did not complete in " + StepTimeoutSeconds + "s");
+                return;
+            }
+
+            _stage = "connect-completed";
+            await connect;
             Step("connected isConnected=" + _connector.IsConnected + " state=" + _connector.State);
 
             _stage = "request";
@@ -267,6 +324,9 @@ namespace Zlink.Verification
                 .Append(",\"bundle\":").Append((linked & 2) != 0 ? "true" : "false").Append('}');
             json.Append(",\"stage\":").Append(Quote(_stage));
             json.Append(",\"frames\":").Append(_frames).Append(",\"yields\":").Append(_yields);
+            json.Append(",\"connectPolls\":").Append(_connectPolls);
+            json.Append(",\"capturedResumed\":").Append(_capturedResumed ? "true" : "false");
+            json.Append(",\"uncapturedResumed\":").Append(_uncapturedResumed ? "true" : "false");
             json.Append(",\"steps\":[");
             for (var index = 0; index < _steps.Count; index += 1)
             {

@@ -199,6 +199,11 @@ jobs:
           status=0
           rows=""
           players=0
+          # The same grep over the committed plugins, so the expectation follows the
+          # bundle instead of being a number written down here.
+          expected=$(cat framework/languages/unity/com.zlink.stream-connector.webgl/Plugins/WebGL/*.jspre \
+            | grep -c -e 'message, signal' -e 'message,signal')
+          echo "committed message-drain lines: ${expected}"
           for framework in "${PROJECT_PATH}"/Builds/*/Build/*.framework.js; do
             [ -e "${framework}" ] || continue
             players=$((players + 1))
@@ -209,13 +214,18 @@ jobs:
             # bundle body arrived, and it is the class the JSDCE defect breaks.
             internals=$(grep -c ZlinkStreamReceivedMessages "${framework}" || true)
             jslib=$(grep -c _ZlinkStreamPump "${framework}" || true)
-            # Evidence for the JSDCE defect at the Unity level, reported rather
-            # than asserted: whether the connector's destructuring survived the
-            # optimizer this level runs. Both spacings, because -O2 minifies
-            # whitespace.
+            # The committed plugin text has to reach the player unrewritten. Unity
+            # merges it in after emscripten has run, so the count matches the
+            # source; a Unity release that starts feeding .jspre content to the JS
+            # optimizer would drop it, and emscripten 3.1.38's dead-code pass
+            # deletes exactly this declaration.
             drain=$(grep -c -e 'message, signal' -e 'message,signal' "${framework}" || true)
-            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} destructuring=${drain}"
-            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${drain} |"$'\n'
+            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} drain=${drain}/${expected}"
+            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${drain}/${expected} |"$'\n'
+            if [ "${drain}" -ne "${expected}" ]; then
+              echo "::error title=Plugin text rewritten::${level}: ${drain} of the connector's ${expected} message-drain lines survived into ${framework}. Something in the build now rewrites the .jspre content."
+              status=1
+            fi
             for pair in "runtime:${runtime}" "bundle:${bundle}" "internals:${internals}" "jslib:${jslib}"; do
               if [ "${pair#*:}" -eq 0 ]; then
                 echo "::error title=Plugin not linked::${level}: ${pair%%:*} is absent from ${framework}"
@@ -232,10 +242,12 @@ jobs:
             echo
             echo "Symbol counts in each player's framework.js. The first four must all"
             echo "be non-zero: that is Unity having passed both .jspre files to --pre-js"
-            echo "and the .jslib to --js-library. The last is how many destructuring"
-            echo "declarations survived in the connector's drain loop, reported only."
+            echo "and the .jslib to --js-library. The last is how many lines of the"
+            echo "connector's message drain reached the player, against the"
+            echo "count in the committed .jspre - it must match, so plugin text that the"
+            echo "build starts rewriting is caught here."
             echo
-            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | destructuring |'
+            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | drain lines |'
             echo '|---|---|---|---|---|---|'
             printf '%s' "${rows}"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -426,12 +438,12 @@ jobs:
             --expect pass \
             --outcome "${GITHUB_WORKSPACE}/players/BuildTimes.outcome.json"
 
-      # RuntimeSpeed is emcc -O2, where Emscripten 3.1.38-unity's JSDCE deletes
-      # the connector's destructuring declarations from the --pre-js content. The
-      # link succeeds and the player dies on the first delivered message, so the
-      # expected observation is a ReferenceError and not a build failure. If this
-      # step fails because the player passed, the fork has been fixed and the
-      # adapter README's build-setting restriction can be revisited.
+      # A release Code Optimization level is expected to work, not to fail.
+      # Unity links emcc against a .jspre placeholder and merges the real plugin
+      # text into the emitted framework.js in a later build step ("Merging
+      # JavaScript Code"), so emscripten's JS optimizer - JSDCE included - never
+      # sees this package. Unity's own emcc line is -O3 at every level; the
+      # setting moves the wasm side.
       - name: Run the RuntimeSpeed player
         id: release
         working-directory: framework/languages/node
@@ -439,8 +451,7 @@ jobs:
           node test/browser/support/unity-player/drive-player.js \
             --player "${GITHUB_WORKSPACE}/players/RuntimeSpeed" \
             --label RuntimeSpeed \
-            --expect known-failure \
-            --expect-error 'is not defined' \
+            --expect pass \
             --outcome "${GITHUB_WORKSPACE}/players/RuntimeSpeed.outcome.json"
 
       - name: Summarize the runs
