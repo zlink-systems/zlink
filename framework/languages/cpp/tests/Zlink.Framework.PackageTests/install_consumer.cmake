@@ -4,6 +4,13 @@ endif()
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_INSTALL_PREFIX)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_INSTALL_PREFIX is required")
 endif()
+if(NOT DEFINED ZLINK_FRAMEWORK_CPP_CONFIGURATION
+    OR ZLINK_FRAMEWORK_CPP_CONFIGURATION STREQUAL "")
+  message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_CONFIGURATION is required")
+endif()
+if(NOT DEFINED ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
+  message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG is required")
+endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef consumer_run_id)
 set(consumer_run_dir
@@ -21,6 +28,7 @@ file(MAKE_DIRECTORY "${consumer_source_dir}")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --install "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
           --prefix "${consumer_install_prefix}"
+          --config "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}"
   RESULT_VARIABLE install_result)
 if(NOT install_result EQUAL 0)
   message(FATAL_ERROR "C++ framework install failed")
@@ -242,9 +250,15 @@ main ()
 }
 ]=])
 
+set(consumer_configure_command
+  "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
+  "-DCMAKE_PREFIX_PATH=${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}")
+if(NOT ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
+  list(APPEND consumer_configure_command
+    "-DCMAKE_BUILD_TYPE=${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")
+endif()
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
-          "-DCMAKE_PREFIX_PATH=${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}"
+  COMMAND ${consumer_configure_command}
   RESULT_VARIABLE configure_result)
 if(NOT configure_result EQUAL 0)
   message(FATAL_ERROR "installed C++ framework consumer configure failed")
@@ -252,6 +266,7 @@ endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --build "${consumer_build_dir}"
+          --config "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}"
   RESULT_VARIABLE build_result)
 if(NOT build_result EQUAL 0)
   message(FATAL_ERROR "installed C++ framework consumer build failed")
@@ -271,11 +286,20 @@ endif()
 set(consumer_gcov_prefix "${consumer_run_dir}/gcov")
 file(MAKE_DIRECTORY "${consumer_gcov_prefix}")
 
+set(consumer_executable "${consumer_build_dir}/consumer")
+if(ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
+  set(consumer_executable
+    "${consumer_build_dir}/${ZLINK_FRAMEWORK_CPP_CONFIGURATION}/consumer")
+endif()
+if(WIN32)
+  string(APPEND consumer_executable ".exe")
+endif()
+
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env "${runtime_path}"
           "GCOV_PREFIX=${consumer_gcov_prefix}"
           "GCOV_PREFIX_STRIP=0"
-          "${consumer_build_dir}/consumer"
+          "${consumer_executable}"
   RESULT_VARIABLE run_result)
 if(NOT run_result EQUAL 0)
   message(FATAL_ERROR "installed C++ framework consumer run failed")

@@ -4,6 +4,10 @@ endif()
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_SOURCE_DIR)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_SOURCE_DIR is required")
 endif()
+if(NOT DEFINED ZLINK_FRAMEWORK_CPP_CONFIGURATION
+    OR ZLINK_FRAMEWORK_CPP_CONFIGURATION STREQUAL "")
+  message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_CONFIGURATION is required")
+endif()
 
 set(required_labels
   framework-contract
@@ -155,7 +159,8 @@ if(ZLINK_FRAMEWORK_CPP_EXPECT_COVERAGE_LABEL)
 endif()
 
 execute_process(
-  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}" --print-labels
+  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
+    -C "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}" --print-labels
   RESULT_VARIABLE print_labels_result
   OUTPUT_VARIABLE print_labels_output
   ERROR_VARIABLE print_labels_error)
@@ -181,9 +186,11 @@ string(REGEX MATCHALL
   "(^|\n)  [A-Za-z0-9_-]+"
   label_lines
   "${print_labels_output}")
+set(actual_labels)
 foreach(label_line IN LISTS label_lines)
   string(REGEX REPLACE "^(\\n)?  " "" actual_label "${label_line}")
   string(STRIP "${actual_label}" actual_label)
+  list(APPEND actual_labels "${actual_label}")
   list(FIND known_labels "${actual_label}" known_index)
   if(known_index EQUAL -1)
     message(FATAL_ERROR
@@ -192,25 +199,15 @@ foreach(label_line IN LISTS label_lines)
 endforeach()
 
 foreach(label IN LISTS required_labels)
-  execute_process(
-    COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}" -N -L "${label}"
-    RESULT_VARIABLE ctest_result
-    OUTPUT_VARIABLE ctest_output
-    ERROR_VARIABLE ctest_error)
-  if(NOT ctest_result EQUAL 0)
-    message(FATAL_ERROR "ctest label scan failed for ${label}: ${ctest_error}")
-  endif()
-  if(NOT ctest_output MATCHES "Total Tests: *([0-9]+)")
-    message(FATAL_ERROR "ctest label scan did not report a test count for ${label}")
-  endif()
-  set(test_count "${CMAKE_MATCH_1}")
-  if(test_count LESS 1)
+  list(FIND actual_labels "${label}" actual_index)
+  if(actual_index EQUAL -1)
     message(FATAL_ERROR "CTest label ${label} selects no tests")
   endif()
 endforeach()
 
 execute_process(
-  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}" -N -L http-client-https
+  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
+    -C "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}" -N -L http-client-https
   RESULT_VARIABLE http_client_https_result
   OUTPUT_VARIABLE http_client_https_output
   ERROR_VARIABLE http_client_https_error)
