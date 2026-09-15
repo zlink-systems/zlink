@@ -113,29 +113,34 @@ STREAM server: connect, send, request, `on`, dispatch, close, the `tcp://` confi
 error, buffer ownership and the nested-pump guard.
 
 `framework/languages/node/test/browser/unity-webgl-emscripten.test.js` links the same
-files the way Unity does - `.jslib` through `emcc --js-library`, both `.jspre` through
+files with a real emcc - the `.jslib` through `--js-library`, both `.jspre` through
 `--pre-js` - and runs the result in Chromium against that server. It stands in for the
 IL2CPP side with a C harness that declares the same `[DllImport("__Internal")]`
 signatures and hands `ZlinkStreamSetEventSink` a real wasm function pointer, so the
 link, the function-pointer callback and the `_malloc`/`_free`/`HEAPU8` marshalling are
-exercised for real. It needs an emsdk install and skips without one.
+exercised for real. It needs an emsdk install and skips without one. Note that plain
+emcc puts `--pre-js` content through the JavaScript optimizer and Unity does not; that
+difference is what the optimization section above describes.
 
-Unity itself is not in CI. Check these by hand after changing the package:
+`framework/languages/unity/webgl-adapter-check` is a Unity project that builds a real
+WebGL player with this package installed and drives it in Chromium against the same
+server, run by `.github/workflows/framework-unity-webgl.yml`. It covers what only Unity
+can answer: that IL2CPP turns `[AOT.MonoPInvokeCallback]` into a reverse call that
+delivers, that `"includePlatforms": ["WebGL"]` selects this assembly, that Unity imports
+the package from a `file:` path with this layout, and that Unity's build pipeline links
+both `.jspre` files and the `.jslib`. It builds at two Code Optimization levels and runs
+both, and it asserts that the committed plugin text reaches the player unrewritten. A
+Unity licence lives in repository secrets, so a fork pull request skips the workflow and
+says so.
 
-1. **WebGL build passes.** Build a WebGL player with the package installed and no
-   compile errors from `Systems.Zlink.Stream.Connector.WebGL`.
-2. **The plugins are linked.** The built `Build/*.framework.js` contains
-   `ZlinkStreamWebGlRuntime` and `ZlinkStreamConnectorBundle`. If it does not, the
-   `.jspre` and `.jslib` files were not picked up - check that their WebGL platform box
-   is ticked in the Plugin Inspector.
-3. **A real connection works.** Run the player against a STREAM server over `ws://` (or
-   `wss://` with a certificate the browser trusts) and confirm connect, request/reply and
-   a push handler.
-4. **The main-thread pump works.** With `Dispatch.Async()` called from `Update()`,
-   handlers run on the Unity main thread (touch a `Transform` inside a handler; it must
-   not throw), and no callback arrives while `Update` is not running.
-5. **The Editor still uses the native package.** Entering Play mode in the Editor must
-   compile and run against `Zlink.Stream.Connector`, not this assembly.
+Two things are still checked by hand, because the project in CI is a connector check and
+not a game:
+
+1. **The main-thread pump reaches game objects.** Touch a `Transform` inside an `On`
+   handler with `Dispatch.Async()` called from `Update()`; it must not throw.
+2. **The Editor still uses the native package.** Entering Play mode in the Editor must
+   compile and run against `Zlink.Stream.Connector`, not this assembly. The check project
+   installs no NuGet assembly, so nothing in CI exercises the two side by side.
 
 ## License
 

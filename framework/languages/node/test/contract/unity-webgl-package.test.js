@@ -105,3 +105,46 @@ test('the jslib exports exactly the boundary the C# side declares', () => {
   assert.ok(exported.length > 0, 'the jslib declares boundary functions');
   assert.deepEqual(imported, exported, 'every DllImport has a jslib function and the reverse');
 });
+
+// A Unity WebGL player is single-threaded and has no thread pool. A continuation
+// that did not capture the synchronization context has nowhere to run, so it is
+// queued and never executed: the connector stops after its first awaited boundary
+// call, with no exception, no log, and a connect that simply never returns. That
+// was measured in a real player - a TaskCompletionSource completed from Update
+// resumed the awaiter that captured the context and not the one that did not.
+//
+// The native Zlink.Stream.Connector package uses ConfigureAwait(false) correctly,
+// and this is the file that stops the convention being copied back in. Deleting
+// this test re-opens a failure mode that produces no diagnostic at all.
+test('the WebGL runtime never suppresses the synchronization context', () => {
+  const runtime = path.join(packageRoot, 'Runtime');
+  const sources = [];
+  const walk = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.cs')) sources.push(full);
+    }
+  };
+  walk(runtime);
+  assert.ok(sources.length > 0, 'the package ships C# sources');
+
+  const offenders = [];
+  for (const source of sources) {
+    const lines = fs.readFileSync(source, 'utf8').split('\n');
+    lines.forEach((line, index) => {
+      // Skip the comments that explain the rule; only code counts.
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return;
+      if (line.includes('ConfigureAwait')) {
+        offenders.push(`${path.relative(packageRoot, source)}:${index + 1}: ${line.trim()}`);
+      }
+    });
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'ConfigureAwait in a WebGL-only assembly queues continuations to a thread pool that does not exist:\n' +
+    offenders.join('\n')
+  );
+});

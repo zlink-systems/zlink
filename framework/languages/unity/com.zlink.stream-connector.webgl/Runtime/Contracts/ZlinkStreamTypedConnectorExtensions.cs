@@ -1,3 +1,6 @@
+// No ConfigureAwait(false) in this package: a WebGL player has no thread pool, so a
+// continuation that did not capture the context is queued and never runs. See the
+// remarks on ZlinkStreamWebGlConnector.
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -185,7 +188,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         public async ValueTask<IReadOnlyList<ZlinkStreamMessage<TPayload>>> Async(
             CancellationToken cancellationToken = default)
         {
-            var messages = await _inner.Async(cancellationToken).ConfigureAwait(false);
+            var messages = await _inner.Async(cancellationToken);
             var decoded = new List<ZlinkStreamMessage<TPayload>>(messages.Count);
             foreach (var message in messages) decoded.Add(Decode(message));
             return decoded;
@@ -229,7 +232,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         public async ValueTask<ZlinkStreamMessage<TPayload>> Async(CancellationToken cancellationToken = default)
         {
-            var message = await _inner.Async(cancellationToken).ConfigureAwait(false);
+            var message = await _inner.Async(cancellationToken);
             return new ZlinkStreamMessage<TPayload>(
                 message.Name,
                 message.Metadata,
@@ -319,7 +322,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         public async ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
         {
-            var reply = await _inner.Async(cancellationToken).ConfigureAwait(false);
+            var reply = await _inner.Async(cancellationToken);
             return ZlinkStreamTypedConnectorExtensions.DecodePayload<TReply>(_codec, reply);
         }
 
