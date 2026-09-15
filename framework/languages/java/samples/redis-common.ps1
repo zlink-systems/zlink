@@ -490,3 +490,30 @@ function Remove-ZlinkSampleRedis {
         Invoke-ZlinkDockerCommand -Arguments @("rm", "-fv", $ContainerId) -AllowFailure | Out-Null
     }
 }
+
+function Assert-ZlinkSampleSourcePolicy {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Extension,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    # Matches the shell runners' rg scan: case-sensitive, and every source file is
+    # read through an extended-length path so the scan never silently skips one.
+    $regex = [regex]::new($Pattern)
+    $offenders = @()
+    foreach ($file in Get-ChildItem -LiteralPath $Path -Recurse -File) {
+        if ($Extension -notcontains $file.Extension) { continue }
+        $lineNumber = 0
+        $extendedPath = '\\?\' + [IO.Path]::GetFullPath($file.FullName)
+        foreach ($line in [IO.File]::ReadLines($extendedPath)) {
+            $lineNumber++
+            if ($regex.IsMatch($line)) { $offenders += "$($file.FullName):${lineNumber}:$line" }
+        }
+    }
+    if ($offenders.Count -gt 0) {
+        $offenders | ForEach-Object { [Console]::Error.WriteLine($_) }
+        throw $Message
+    }
+}

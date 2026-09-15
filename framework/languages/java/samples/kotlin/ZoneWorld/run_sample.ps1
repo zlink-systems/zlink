@@ -408,17 +408,9 @@ try {
     Write-ServerConfig "ops" "ops" "ops" $OpsMesh $OpsStream
     Write-ServerConfig "gateway" "gateway" "gateway" $GatewayMesh $GatewayStream
 
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $fixedRouting = & rg -n 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shared --glob '*.kt' 2>&1
-        $scanExitCode = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $previousErrorActionPreference }
-    if ($scanExitCode -eq 0) {
-        $fixedRouting | ForEach-Object { [Console]::Error.WriteLine($_) }
-        throw "fixed placement/routing id found in Kotlin ZoneWorld"
-    }
-    if ($scanExitCode -ne 1) { throw "Kotlin ZoneWorld placement scan failed with exit code $scanExitCode" }
+    Assert-ZlinkSampleSourcePolicy -Path "Server", "Shared" -Extension ".kt" `
+        -Pattern 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' `
+        -Message "fixed placement/routing id found in Kotlin ZoneWorld"
 
     Write-Host "==> build"
     Push-Location "../../.."

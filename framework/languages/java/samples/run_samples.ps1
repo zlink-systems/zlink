@@ -142,21 +142,8 @@ Write-Output "java fake-backend public-manager gate completed"
 Invoke-ManifestSamples "java" $Manifest["JAVA_SAMPLES"]
 Invoke-ManifestSamples "kotlin" $Manifest["KOTLIN_SAMPLES"]
 
-$previousErrorActionPreference = $ErrorActionPreference
-try {
-    $ErrorActionPreference = "Continue"
-    $offenders = & rg -n $Manifest["FORBIDDEN_SAMPLE_PATTERN"] $RootDir `
-        -g "*.java" -g "*.kt" 2>&1
-    $policyExitCode = $LASTEXITCODE
-} finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-}
-if ($policyExitCode -eq 0) {
-    $offenders | ForEach-Object { [Console]::Error.WriteLine($_.ToString()) }
-    throw "sample gate failed: forbidden sample pattern found"
-}
-if ($policyExitCode -ne 1) {
-    throw "sample gate failed: source policy scan exited with code $policyExitCode"
-}
+Assert-ZlinkSampleSourcePolicy -Path $RootDir -Extension ".java", ".kt" `
+    -Pattern $Manifest["FORBIDDEN_SAMPLE_PATTERN"] `
+    -Message "sample gate failed: forbidden sample pattern found"
 
 Write-Output "All Java/Kotlin samples passed"
