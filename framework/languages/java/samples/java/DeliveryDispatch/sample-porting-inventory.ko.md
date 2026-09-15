@@ -1,7 +1,7 @@
 # Java DeliveryDispatch sample porting inventory
 
-이 문서는 `framework/doc/plan/framework-java-sample-dotnet-porting-plan.ko.md`의 샘플 단위 절차에 따라
-`.NET` DeliveryDispatch 샘플과 공통 DeliveryDispatch 문서의 요구를 Java 샘플에 매핑한다.
+이 문서는 샘플 단위 절차에 따라 `.NET` DeliveryDispatch 샘플과 공통 DeliveryDispatch 문서의
+요구를 Java 샘플에 매핑한다.
 
 ## `.NET` 기준 파일 매핑
 

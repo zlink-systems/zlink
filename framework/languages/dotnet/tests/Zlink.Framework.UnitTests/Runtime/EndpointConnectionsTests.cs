@@ -85,7 +85,8 @@ public sealed class EndpointConnectionsTests
         Assert.Equal(["tcp://host:80"], connected);
 
         // Disconnect with a different (but equivalent) notation must still
-        // remove the same endpoint, per doc/plan/endpoint-notation-policy.
+        // remove the same endpoint: normalization is applied once at write
+        // time, so downstream comparisons are plain string equality.
         connections.Disconnect("tcp://Host:80/");
 
         Assert.Empty(connections.ListConnections());

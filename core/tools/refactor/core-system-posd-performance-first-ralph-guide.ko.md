@@ -486,10 +486,10 @@ ctest --test-dir core/build --output-on-failure
 
 ```bash
 ./core/perf/run_benchmarks.sh \
-  --build-dir /home/hep7/project/kairos/zlink/core/build
+  --build-dir core/build
 
 ./core/perf/run_benchmarks_multi.sh \
-  --build-dir /home/hep7/project/kairos/zlink/core/build
+  --build-dir core/build
 ```
 
 해석 규칙:
@@ -508,7 +508,7 @@ ctest --test-dir core/build --output-on-failure
 ```bash
 ./core/tests/run_test_lanes.sh --include-e2e
 ./core/tools/ralphloop/run_execution_gate_loop.sh \
-  --logs-dir /home/hep7/project/kairos/zlink/core/tools/refactor/logs \
+  --logs-dir core/tools/refactor/logs \
   --label posd_perf_first_gate \
   --count 10
 ```
@@ -519,7 +519,7 @@ ctest --test-dir core/build --output-on-failure
 ./core/tests/run_thread_safe_contract_perf.sh --build-dir core/build
 
 ./core/perf/run_benchmarks.sh \
-  --build-dir /home/hep7/project/kairos/zlink/core/build \
+  --build-dir core/build \
   --pattern PAIR \
   --transports tcp \
   --msg-sizes 64,1024 \
@@ -750,7 +750,7 @@ core/tools/refactor/logs/
 
 게이트/성능 로그 규칙:
 
-- `run_execution_gate_loop.sh`를 사용할 때는 항상 `--logs-dir /home/hep7/project/kairos/zlink/core/tools/refactor/logs` 를 명시한다.
+- `run_execution_gate_loop.sh`를 사용할 때는 항상 `--logs-dir core/tools/refactor/logs` 를 명시한다.
 - perf 로그는 마지막 종료 단계에서만 남긴다. baseline과 candidate 비교가 있으면 파일명이나 메모에 태그를 남기고, 비교가 없으면 무실패 실행 로그만 남긴다.
 - `검증 증거` 칸은 비워 두지 않는다. 명령만 적지 말고 실제 로그 파일 경로 또는 명시적 생략 사유를 함께 적는다.
 

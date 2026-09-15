@@ -1912,4 +1912,4 @@ RESULT,current,ROUTER_ROUTER_REQREP,wss,262144,latency_p99,1.743
 - expected_result_lines: 1260
 - actual_result_lines: 1260
 
-Saved result file: /home/hep7/project/kairos/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260718_181626.txt (status=complete)
+Saved result file: /repo/bindings/c/perf/results/single/report/perf_c_single_linux_20260718_181626.txt (status=complete)

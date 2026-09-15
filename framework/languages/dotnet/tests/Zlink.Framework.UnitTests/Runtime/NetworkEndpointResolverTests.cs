@@ -68,8 +68,8 @@ public sealed class NetworkEndpointResolverTests
     {
         // inproc/ipc endpoints carry a process-local identity in the "host"
         // segment, not a dialable network address. AdvertiseHost must never
-        // overwrite it, even though every scheme is now normalized the same
-        // way (doc/plan/endpoint-notation-policy.ko.md §2.2/§2.3).
+        // overwrite it, even though every scheme is now normalized the
+        // same way.
         var network = new ZLinkNetworkOptionsModel { AdvertiseHost = "Host.Example.com" };
 
         var advertised = ZLinkNetworkEndpointResolver.Advertise(

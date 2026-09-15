@@ -267,7 +267,7 @@ class asio_engine_t : public i_engine
 
     //  Handshake-phase reads (no decoder yet) use a small lazily-allocated
     //  buffer; frames are parsed incrementally so a small buffer only costs
-    //  extra reads. Sizing background: core/study/connection-memory-study.ko.md §6.1.
+    //  extra reads.
     static const size_t handshake_read_buffer_size = 512;
     enum
     {

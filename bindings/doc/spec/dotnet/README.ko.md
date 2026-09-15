@@ -450,7 +450,7 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
   `Message Clone()`(독립 버퍼 깊은 복사). .NET의 기존 `CopyTo(Span<byte>)`/
   `CopyTo(IBufferWriter<byte>)`는 payload를 호출자 버퍼에 채우는 span-fill 메서드로 Message
   deep copy(`Clone`)와 별개이므로 그대로 유지한다. 정의는
-  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  [Message ownership 공통 계약](../message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - pair, dealer, router, pub, sub, xpub, xsub, stream socket.
 - 공통 옵션, 타입화된 socket 옵션, TLS, bind/connect/disconnect, routing id,
   channel name, request/reply, publish/subscribe, 콜백 표면.

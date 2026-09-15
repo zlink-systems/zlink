@@ -5,7 +5,6 @@
 # WSL reinstall wiped the previously materialized cache.
 set -euo pipefail
 
-repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null || echo /home/hep7/project/zlink)"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_dir="${1:-$repo_root/core/build-dev}"
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"

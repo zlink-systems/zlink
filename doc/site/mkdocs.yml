@@ -211,10 +211,6 @@ exclude_docs: |
   guide/EXAMPLES.en.md
   guide/STYLE.ko.md
   guide/STYLE.en.md
-  # 확정 전 초안.
-  spec/draft/
-  # 작업이 끝나면 사라지는 임시 문서다. nav에도 없다.
-  bindings/plan/
 
 nav:
   - Install: install.md

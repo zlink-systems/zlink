@@ -193,9 +193,9 @@ cd bindings/node && npm run perf:multi -- --recv recv --pattern STREAM --warmup 
   - `PUBSUB`: `--recv recv`
   - `STREAM`: `--recv recv`
 - perf structure and review criteria are defined by
-  [`bindings/README.md`](/home/hep7/project/kairos/zlink/doc/spec/bindings/README.md)
+  [`bindings/doc/spec/README.en.md`](../doc/spec/README.en.md)
   and the shared policy docs under
-  [`doc/perf/`](/home/hep7/project/kairos/zlink/doc/perf)
+  [`doc/perf/`](../../doc/perf)
 - readiness gates in binding perf must use low-cost event counting, not
   aggregate ready counts from monitor payloads or snapshots
 - raw sockets: `CONNECTION_READY` event counting

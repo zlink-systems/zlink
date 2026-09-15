@@ -4,7 +4,6 @@
 
 - `framework/doc/framework/common/e2e/config-4-registration-codec.ko.md`
 - `framework/languages/dotnet/e2e/RegistrationCodec/feature-map.ko.md`
-- `framework/doc/plan/framework-java-e2e-dotnet-porting-plan.ko.md`
 
 이 문서는 `.NET` 기준 역할과 파일 책임에 맞춘 현재 Java 구현 매핑이다. 기존 Java 구현에서 보존한
 handler, filter, DI, evidence 저장 책임은 server role로 옮겼고, Client는 HTTP driver로만 남긴다.

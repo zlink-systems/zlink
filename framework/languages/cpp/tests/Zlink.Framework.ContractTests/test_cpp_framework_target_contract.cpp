@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-/* G0 target-contract gate for the C++ public-contract gap plan.
- * Each check maps to a ledger row in
- * framework/doc/plan/log/framework-public-contract-gap-implementation/
- * cpp-g0-contract-ledger.ko.md and stays red until the gap is closed.
+/* G0 target-contract gate for the C++ public-contract gap effort.
+ * Each check corresponds to a target the C++ public headers and e2e wiring
+ * must expose, and stays red until that target lands.
  * The checks scan installed public headers and e2e wiring textually so the
  * build keeps compiling while target signatures are still missing. */
 

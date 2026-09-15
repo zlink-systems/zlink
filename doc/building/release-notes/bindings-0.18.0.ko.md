@@ -29,8 +29,7 @@ submit 종결자가 Core 제출 결과를 호출자에게 돌려줍니다. 1.0 �
 request `submit()`이 admission과 reply를 한 stage로 합쳐, producer가 backpressure를 볼 수 없었습니다.
 socket 하나로는 깊이가 1에 묶여 multi perf의 `ROUTER_ROUTER_REQREP` clients=1이 ~8.5k/s에 머물렀습니다.
 결과 객체로 admission과 reply를 분리하니 `OK`에서 연속 제출해 HWM 깊이까지 파이프라인됩니다 — clients=1이
-~300k/s로 약 38배 개선되었고(C reference 동급), clients=100의 회귀는 없습니다(설계·측정: `doc/draft/bindings-submit-result-terminal.ko.md`,
-`doc/plan/fw-bench-worklog/decisions.ko.md` FB-071).
+~300k/s로 약 38배 개선되었고(C reference 동급), clients=100의 회귀는 없습니다(FB-071).
 
 ## 마이그레이션
 

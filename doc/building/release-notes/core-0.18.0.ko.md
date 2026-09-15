@@ -11,12 +11,12 @@ Core 0.18.0은 공개 C ABI가 바뀌는 릴리스입니다. 0.17 계열과 SONA
 - recv capacity가 record의 part 수보다 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`(`ENOBUFS`)을 돌려주고 record는 소비하지 않으며 필요한 part 수를 씁니다. 충분한 capacity로 재시도하면 같은 record를 정확히 한 번 받습니다.
 - CPack NSIS 아이콘 경로 수정.
 
-설계와 결정: `doc/draft/core-whole-message-recv-api.ko.md` §7, `doc/plan/issue-63-worklog/decisions.ko.md`(D63-1~8). Issue #63, PR #86.
+설계와 결정: Issue #63, PR #86.
 
 ## 검증
 
 - release-gate 빌드(LTO) ctest 214/214, 공개 표면 검사 PASS(함수 99개, export 일치), binding 계약 테스트 6종 PASS.
-- bindings perf(multi routed, tcp)는 0.17.4 대비 4언어 모두 향상(cpp +8~+187%, java +16~+240%, dotnet +27~+187%, node +18~+284%). `doc/plan/issue-63-worklog/perf-results.ko.md`.
+- bindings perf(multi routed, tcp)는 0.17.4 대비 4언어 모두 향상(cpp +8~+187%, java +16~+240%, dotnet +27~+187%, node +18~+284%).
 - hotpath_gate 결과는 Issue #102에 기록합니다.
 
 ## 마이그레이션

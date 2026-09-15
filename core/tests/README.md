@@ -153,7 +153,7 @@ Recommended per-test budget:
   tests themselves.
 - `run_execution_gate_loop.sh` is a repo-local wrapper for long-running stress
   gates. It keeps one shell process alive across gate completion, writes
-  timestamped logs under `doc/plan/refactor/2nd/logs/`, and automatically runs
+  timestamped logs under `core/tools/ralphloop/logs/`, and automatically runs
   a single-test repro when the stress gate fails.
 - `run_codex_execution_guide_loop.sh` is a higher-level Codex supervisor for
   the remaining execution guide. It repeatedly runs `codex exec`, tells Codex

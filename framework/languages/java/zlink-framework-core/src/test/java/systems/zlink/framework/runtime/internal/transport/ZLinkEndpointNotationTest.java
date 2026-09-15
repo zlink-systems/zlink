@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins {@code doc/plan/endpoint-notation-policy.ko.md} behavior for the Java
+ * Pins the cross-language endpoint-notation contract's behavior for the Java
  * normalization utility, mirroring the C++ reference implementation's test
  * intent (framework/languages/cpp/framework/src/runtime/transport/
  * endpoint_notation.hpp, commit dfcb2177c9).

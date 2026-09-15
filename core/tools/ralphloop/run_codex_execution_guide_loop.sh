@@ -615,7 +615,7 @@ EOF
   fi
 
   cat > "${prompt_file}" <<'EOF'
-/home/hep7/project/kairos/zlink/AGENTS.md 지침과 저장소 규칙을 따른다.
+AGENTS.md 지침과 저장소 규칙을 따른다.
 
 작업 목표:
 - __GUIDE_PATH__

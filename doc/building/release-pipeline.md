@@ -168,5 +168,4 @@ tests that fail from scheduler noise on shared runners are rerun once, failed te
 - [Release accounts and secrets](./release-accounts.md)
 - [Packaging procedure](./packaging.md)
 - [Release notes](./release-notes/)
-- [Release preparation records](./release-prep/) — workflow fixes on 2026-09-08 and 09
 - [PR drafts](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

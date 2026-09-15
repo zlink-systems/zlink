@@ -5,7 +5,7 @@
 
 ## 1. 목적
 
-`/home/hep7/project/kairos/zlink/core/perf/baseline/` 의 core C API baseline
+`core/perf/baseline/` 의 core C API baseline
 측정값을 기준으로, 선택된 바인딩 언어의 perf surface를 먼저 정책 준수 상태로
 전체 패턴/전체 사이즈에서 정상 동작하게 만든 뒤, 그 다음 perf hot path 비효율을
 줄여 언어별 목표 비율 이상으로 끌어올린다.
@@ -17,9 +17,9 @@
   우선하는 상위 계약이다.
   `doc/perf`, `core/perf`, 이 guide가 shared stream client 사용을 규정한 경우,
   개별 binding perf는 그 계약을 임의로 binding-local client로 치환하면 안 된다.
-- `perf` 수정은 `/home/hep7/project/kairos/zlink/doc/perf/PERF_POLICY.md`,
-  `/home/hep7/project/kairos/zlink/doc/perf/PERF_SINGLE_TEST_POLICY.md`,
-  `/home/hep7/project/kairos/zlink/doc/perf/PERF_MULTI_TEST_POLICY.md`
+- `perf` 수정은 `doc/perf/PERF_POLICY.md`,
+  `doc/perf/PERF_SINGLE_TEST_POLICY.md`,
+  `doc/perf/PERF_MULTI_TEST_POLICY.md`
   와 다르거나, `core/perf` 구현 의미와 다르거나, benchmark 자체 버그가 있는 경우만 허용한다.
 - 항상 `core/perf` 와 동일한 측정 방식을 준수해야 한다.
   측정 방식이 다르면 성능 비교나 원인 판단은 무효로 보며, 그 경우 먼저 perf를
@@ -39,7 +39,7 @@
 - bug가 확인되면 우회 코드를 작성하면 안 된다.
 - `bindings/<lang>/` 라이브러리 버그면 해당 바인딩 라이브러리를 직접 수정한 뒤 개선 작업을 계속한다.
 - `core` 계약 실패나 core 버그면 우회하지 말고 재현 근거와 함께
-  `/home/hep7/project/kairos/zlink/core/doc/bug/` 아래에 `.md` bug report를 작성하고 대기한다.
+  `core/doc/bug/` 아래에 `.md` bug report를 작성하고 대기한다.
 - 효과 없는 실험, 의미 왜곡, 정책 위반 수정은 남기지 않는다.
 - POSD, 언어 스타일, 공통화 축소 같은 구조 원칙은 상위 policy authority를
   덮어쓸 수 없다.
@@ -48,8 +48,8 @@
 
 policy authority 해석 순서:
 
-1. `/home/hep7/project/kairos/zlink/doc/perf/*.md`
-2. `/home/hep7/project/kairos/zlink/core/perf/` 의 현재 canonical 구현 의미
+1. `doc/perf/*.md`
+2. `core/perf/` 의 현재 canonical 구현 의미
 3. 이 execution guide
 4. 각 binding의 `perf/README.md`, porting plan, implementation plan
 5. POSD / 언어 스타일 / 리팩토링 선호
@@ -75,7 +75,7 @@ policy authority 해석 순서:
 - `python`
 
 baseline 디렉터리는 `BINDINGS_PERF_BASELINE_DIR` 를 따른다.
-값이 없으면 `/home/hep7/project/kairos/zlink/core/perf/baseline` 를 사용한다.
+값이 없으면 `core/perf/baseline` 를 사용한다.
 
 baseline report 파일은 recv/callback을 분리해서 선택한다.
 
@@ -294,7 +294,7 @@ bug 처리 규칙:
 - 바인딩 라이브러리 버그: 해당 `bindings/<lang>/` 코드 직접 수정, 관련 검증 후 perf 개선 계속 진행
 - 바인딩/통합층에서만 재현되고 `core/tests/` 저장소 재현으로 아직 옮기지 못한 문제는
   우선 `bindings/<lang>` 또는 binding-to-core integration bug 후보로 분류한다.
-- core 라이브러리 버그: `/home/hep7/project/kairos/zlink/core/doc/bug/` 디렉터리를 만들고
+- core 라이브러리 버그: `core/doc/bug/` 디렉터리를 만들고
   `YYYYMMDD_<lang>_<pattern>_<short-title>.md` 형식으로 버그레포트 작성 후 대기
 - core bug로 분류하려면 같은 실패가 binding 레이어 밖의 `core/tests/` 저장소 재현에서
   다시 확인돼야 하며, binding-only 원인이 충분히 배제돼야 한다.
