@@ -72,18 +72,6 @@ struct connector_options_t
     /// Maximum encoded payload bytes accepted from inbound stream frames.
     std::size_t max_receive_payload_size = 64 * 1024;
 
-    /// Maximum pending inbound observer notifications before new notifications are dropped.
-    std::size_t max_inbound_observer_notifications = 1024;
-
-    /// Maximum received push packets kept for manual dispatch or wait_for().
-    ///
-    /// When the queue is full, newer unmatched push packets are dropped and reported through
-    /// on_error(...). Request/reply frames are still routed to their pending request.
-    std::size_t max_received_messages = 1024;
-
-    /// Maximum payload bytes copied into an inbound observer snapshot.
-    std::size_t max_inbound_observer_payload_preview_bytes = 0;
-
     /// Disables TLS server certificate validation when true.
     bool skip_server_certificate_validation = false;
 

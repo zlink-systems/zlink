@@ -69,7 +69,7 @@ inventory다. C++ 샘플은 public framework API와 Stream Connector public wait
 | `common: payload codec` | `Shared/Contracts/messages.hpp`, role별 host factory, `Client/main.cpp` | codec | done | stream, channel, actor, Spot payload는 root에서 한 번 등록한 C++ framework Protobuf codec extension과 `application/x-protobuf` stream codec 경로를 사용한다. |
 | `common: public connector wait interface로 push 대기` | `Client/bingo_client_scenario.hpp` | validation | done | wait filter와 future를 직접 사용하고 sample-local inbox로 숨기지 않는다. |
 | `common: `bingo=completed` marker` | `Client/main.cpp`, `run_sample.sh` | validation | done | runner가 client log marker를 검사한다. |
-| `common: stream-inbound marker와 Notify marker` | `Client/main.cpp`, `run_sample.sh` | validation | done | inbound observer log와 notify 수신 marker를 검사한다. |
+| `common: stream response와 Notify handler marker` | `Client/bingo_client_scenario.hpp`, `run_sample.sh`, `run_sample.ps1` | validation | done | typed response 처리와 notify handler marker를 검사한다. |
 | `common: message-flow server evidence` | `Server/sample_log_dir.hpp`, `run_sample.sh`, `run_sample.ps1` | validation | done | runner가 sample log directory에서 message-flow log를 검사하고 player actor destroy 완료와 observer 미-destroy 조건을 확인한다. |
 | `common: runner가 Docker Redis 준비` | `run_sample.sh` | runner | done | 전용 Redis container를 만들고 cleanup에서 제거한다. 외부 Redis endpoint를 받아 로컬 Redis나 공유 Redis를 건드리지 않는다. |
 | `common: Redis key prefix 격리` | `run_sample.sh`, `Server/Configuration/sample_topology.hpp` | runner | done | 실행마다 고유한 `BINGO_REDIS_KEY_PREFIX`를 전달한다. |

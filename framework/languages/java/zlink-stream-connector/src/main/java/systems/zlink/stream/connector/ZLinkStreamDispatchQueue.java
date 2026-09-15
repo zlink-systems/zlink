@@ -19,18 +19,14 @@ final class ZLinkStreamDispatchQueue {
     private final Queue<QueuedDispatch> queue = new ArrayDeque<>();
     private final Map<String, Integer> receivedCounts = new HashMap<>();
     private final List<Waiter> waiters = new ArrayList<>();
-    private final int maxReceivedMessages;
     private final Consumer<ZLinkStreamError> publishError;
     private long version;
 
-    ZLinkStreamDispatchQueue(int maxReceivedMessages) {
-        this(maxReceivedMessages, ignored -> { });
+    ZLinkStreamDispatchQueue() {
+        this(ignored -> { });
     }
 
-    ZLinkStreamDispatchQueue(
-        int maxReceivedMessages,
-        Consumer<ZLinkStreamError> publishError) {
-        this.maxReceivedMessages = maxReceivedMessages;
+    ZLinkStreamDispatchQueue(Consumer<ZLinkStreamError> publishError) {
         this.publishError = publishError;
     }
 
@@ -114,29 +110,16 @@ final class ZLinkStreamDispatchQueue {
                     return;
                 }
             }
-            boolean dropped = false;
             synchronized (queue) {
                 if (version != observedVersion) {
                     continue;
                 }
                 if (!immediate) {
-                    if (receivedMessageCount() >= maxReceivedMessages) {
-                        dropped = true;
-                    } else {
-                        queue.add(new QueuedDispatch(
-                            message.packetName(), message, dispatch, dispatchable));
-                        receivedCounts.merge(message.packetName(), 1, Integer::sum);
-                        version++;
-                    }
+                    queue.add(new QueuedDispatch(
+                        message.packetName(), message, dispatch, dispatchable));
+                    receivedCounts.merge(message.packetName(), 1, Integer::sum);
+                    version++;
                 }
-            }
-            if (dropped) {
-                closeMessage(message);
-                publishError.accept(new ZLinkStreamError(
-                    ZLinkStreamErrorCode.RECEIVED_MESSAGE_DROPPED,
-                    "Received message queue is full; dropped packet '"
-                        + message.packetName() + "'."));
-                return;
             }
             if (immediate) {
                 try {
@@ -283,14 +266,6 @@ final class ZLinkStreamDispatchQueue {
             closeMessage(next.message());
             return CompletableFuture.failedFuture(error);
         }
-    }
-
-    private int receivedMessageCount() {
-        int total = 0;
-        for (int value : receivedCounts.values()) {
-            total += value;
-        }
-        return total;
     }
 
     private void removeWaiter(Waiter waiter) {

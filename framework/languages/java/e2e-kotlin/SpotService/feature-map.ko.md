@@ -123,14 +123,6 @@ projection의 focused contract test다.
   남은 뒤 같은 actor가 새 stream에서 재auth/rebind되어 request를 처리하는지 확인한다.
   `logs/focused-actor-session-20260630-025247-2408499`에서 `SM-D8` marker와 actor-session 통과
   marker를 확인했다.
-- `SM-D9`: public stream connector의 `observeInbound` observer가 stream reply packet name을 관측하는지
-  확인한다. `logs/focused-actor-session-20260630-021110-2323861`에서 `SM-D9` marker와 Session
-  `StreamInbound` evidence를 함께 확인했다.
-- `SM-D10`: **blocked — Java §12.1 상속.** `maxReceivedMessages = 1`과 manual dispatch를 사용하는
-  public stream connector는 기존 actor push를 유지하고 새 push를 버리며
-  `RECEIVED_MESSAGE_DROPPED`를 보고해야 한다. 공유 Java connector가 오래된 push를 제거하므로 현재
-  marker는 정식 admission 의미의 완료 증거가 아니다. 수정 뒤 backpressure의 session별 격리도 함께
-  검증한다.
 - `SM-D11`: 같은 client process에서 public stream connector로 actor request를 처리한 뒤 Play HTTP
   endpoint를 통해 public `ZLinkRouteClient` route-channel request를 보내 stream 경로와 channel 경로가 함께 동작하는지
   확인한다. `logs/focused-actor-session-20260630-030200-2426602`에서 `SM-D11` marker와 actor-session

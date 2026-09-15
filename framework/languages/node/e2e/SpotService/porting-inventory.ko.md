@@ -7,7 +7,7 @@
 현재 상태: Node.js `SpotService` config는 `.NET` runner처럼 `all`을 child group으로 나누어 실행한다.
 `default-batch`는 SM-A1, SM-A2, SM-A3, SM-A4, SM-A5, SM-A6, SM-A7, SM-A8, SM-B1, SM-B2, SM-B3, SM-B4,
 SM-B6, SM-B7, SM-B8, SM-B9, SM-C1, SM-C2, SM-C3, SM-C4, SM-C5, SM-D2, SM-D3, SM-D4, SM-D5, SM-D6,
-SM-D7, SM-D8, SM-D9, SM-D10, SM-D11, SM-D12, SM-D13, SM-D14, SM-D15, SM-E1, SM-E2, SM-E3, SM-E4, SM-F1,
+SM-D7, SM-D8, SM-D11, SM-D12, SM-D13, SM-D14, SM-D15, SM-E1, SM-E2, SM-E3, SM-E4, SM-F1,
 SM-F2, SM-F3, SM-F4, SM-F5를 operation group 단위로 실행하고,
 outer `all`은 이어서 SM-F6, SM-G2, SM-G3, SM-G4, SM-G1을 별도 child scenario로 실행한다.
 공통 Config 2에 없는 SM-Q9는 보조 operation으로만 선택 실행한다.
@@ -46,8 +46,6 @@ SM-F4는 존재하지 않는 location의 request 실패를 선택 scenario로 �
 | SM-D6 | `Client/Scenarios/SmD6Scenario.cs` | `Client/Scenarios/sm-d6-scenario.ts`, `Server/Play/Spots/scenario-actors.ts` | done | target actor에 bind된 `session-a` stream consumer만 `ActorPushNotify`를 받고, `session-b`의 별도 consumer는 target actor push를 받지 않는지 검증. 선택 PASS: `logs/20260629-213945-1613927`; `all` PASS: `logs/20260702-064908-43303` |
 | SM-D7 | `Client/Scenarios/SmD7Scenario.cs` | `Client/Scenarios/sm-d7-scenario.ts`, `Server/Session/Handlers/scenario-session.ts` | done | stream auth reply와 bound actor packet dispatch/reply를 검증. 선택 PASS: `logs/20260629-214310-1624231`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D8 | `Client/Scenarios/SmD8Scenario.cs` | `Client/Scenarios/sm-d8-scenario.ts`, `Server/Play/Spots/scenario-actors.ts`, `Shared/messages.ts` | done | slow actor pending request가 stream close 후 실패하고, 새 stream에서 재auth/rebind 후 messaging이 재개되는지 검증. 선택 PASS: `logs/20260629-214843-1639970`; `all` PASS: `logs/20260630-074201-3148526` |
-| SM-D9 | — | — | 미구현 | 이전 `.cs`/`.ts` 구현은 client observer 기반이라 spec 의미(서버 logger provider)와 달랐고 `#371`에서 삭제됐다. 재구현 대상 |
-| SM-D10 | — | — | 미구현 | 이전 구현은 client 수신 한도 drop 기반이라 spec 의미(서버 Session별 job queue 격리)와 달랐고 `#371`에서 삭제됐다. 재구현 대상 |
 | SM-D11 | `Client/Scenarios/SmD11Scenario.cs` | `Client/Scenarios/sm-d11-scenario.ts` | done | 같은 flow에서 stream actor request와 Session HTTP channel control request를 함께 보내 두 reply 경로가 분리되는지 검증. 선택 PASS: `logs/20260629-220146-1678135`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D12 | `Client/Scenarios/SmD12Scenario.cs` | `Client/Scenarios/sm-d12-scenario.ts`, `run_e2e.sh` | done | `session-a` stream에서 actor state를 만든 뒤 `session-b` stream으로 재auth/rebind하고 `SnapshotReq`/`ActorPushReq`로 state 보존과 새 stream push를 검증. 선택 PASS: `logs/20260629-220618-1691419`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D13 | `Client/Scenarios/SmD13Scenario.cs` | `Client/Scenarios/sm-d13-scenario.ts` | done | `.NET` 기준과 같이 public heartbeat option이 켜진 stream이 여러 heartbeat interval 동안 연결 상태를 유지하는지 검증. 선택 PASS: `logs/20260629-221012-1704641`; `all` PASS: `logs/20260630-074201-3148526` |

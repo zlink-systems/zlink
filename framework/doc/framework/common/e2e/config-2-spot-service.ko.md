@@ -656,39 +656,6 @@ Reconnect는 새 physical Session이므로 이전 pending request와 binding을 
 - 검증: Old request는 disconnected failure이며 replay되지 않는다. New request만 Actor에서 한 번 처리된다.
 - 세부 동작: [Failover policy §6](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
 
-#### SM-D9 Logger provider가 STREAM message-flow 결과를 기록한다
-
-우선순위: `P1`
-
-Application logger provider는 correlation ID, packet name과 message kind를 정식 field로 받고 payload나
-wire 내부 sequence를 성공 조건으로 복제하지 않는다.
-
-**검증 질문:** Logger evidence와 handler evidence가 같은 correlation ID·packet name·message kind를 가지는가.
-
-- 시작 조건: Application logger provider와 handler가 등록되어 있다.
-- 절차: Request와 one-way packet을 각각 한 번 보낸다.
-- 검증: Logger provider가 두 message의 정식 fields를 한 번씩 기록하고 handler results와 일치한다.
-- 세부 동작: [Message flow tracing — 공통 attribute](../spec/server/06-observability/03-message-flow-tracing.ko.md#3-공통-attribute)와
-  [Flow correlation — 전파 규칙](../spec/server/06-observability/04-flow-correlation.ko.md#5-전파-규칙)을 검증한다.
-
-#### SM-D10 Stream backpressure를 Session별로 격리한다
-
-우선순위: `P1`
-
-한 Session의 slow consumer가 다른 Session의 send·reply를 막아서는 안 된다.
-
-**검증 질문:** Session A가 shared job queue capacity에서 pending이어도 B request와 push가 완료되는가.
-
-- 시작 조건: A와 B를 서로 다른 Session gateway process에 배치한다. A gateway만
-  `MaxQueuedApplicationJobs = 1`과 handler-start gate를 사용하고 B gateway는 독립된 기본 capacity를 쓴다.
-  A의 첫 callback 진입을 막은 뒤 public status에서 reserved/queued 1을 확인한다.
-- 절차: A에 sends를 시작해 source awaitable pending을 확인하고 B request·push를 실행한다. A gate를
-  해제한다.
-- 검증: B results는 A gate 해제 전에 완료한다. A operations는 success 또는 deadline terminal 하나씩을
-  가지며 Session state가 손상되지 않는다.
-- 세부 동작: [STREAM recv loop와 application 표면](../spec/server/04-session/01-stream-session.ko.md)과
-  [Admission deadline](../spec/server/01-execution/01-submit-and-completion.ko.md)을 검증한다.
-
 #### SM-D11 Stream과 Channel requests를 같은 client에서 분리한다
 
 우선순위: `P1`

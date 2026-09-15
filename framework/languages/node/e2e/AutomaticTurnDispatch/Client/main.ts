@@ -94,8 +94,7 @@ function createClient(endpoint: string) {
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
     waitTimeoutMs: 30000,
-    requestTimeoutMs: 60000,
-    maxReceivedMessages: 1024
+    requestTimeoutMs: 60000
   });
 }
 

@@ -345,17 +345,6 @@ public final class TicTacToeClientScenario {
             Duration.ofSeconds(5),
             2.0,
             null));
-        connector.observeInbound(observation -> {
-            if (observation.kind() != ZLinkStreamMessageKind.CONTROL) {
-                System.out.println(
-                    "stream-inbound sample=TicTacToe role=" + role
-                        + " kind=" + observation.kind()
-                        + " name=" + observation.packetName()
-                        + " seq=" + (observation.requestSeq() == null ? "-" : observation.requestSeq())
-                        + " bytes=" + observation.payloadLength());
-            }
-            return CompletableFuture.completedFuture(null);
-        });
         return connector;
     }
 

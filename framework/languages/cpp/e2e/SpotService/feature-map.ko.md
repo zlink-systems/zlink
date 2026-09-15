@@ -81,10 +81,6 @@ spot route 요청은 server HTTP endpoint 뒤에서 public framework API로 수�
   끝나며, auth 성공 후 request dispatch가 정상 동작하는지 검증한다.
 - `SM-D8`: stream 연결 종료 시 pending request가 실패하고 자동 재전송되지 않으며, 새 stream
   session에서 재auth/rebind한 뒤 actor messaging이 정상 재개되는지 검증한다.
-- `SM-D9`: stream inbound observer가 auth/join/state response의 kind/name/request-seq를
-  관측하는지 검증한다.
-- `SM-D10`: `max_received_messages`로 stream push 수신 queue를 제한하고, 느린 push callback에서도
-  같은 session request와 다른 session push가 계속 정상 동작하는지 검증한다.
 - `SM-D11`: 같은 client process에서 stream actor request와 일반 channel request를 동시에 보내도
   각각 stream dispatcher와 channel dispatcher에서 reply를 받는지 검증한다.
 - `SM-D12`: `session-a`에서 join/state/push를 수행한 actor가 연결을 끊은 뒤 `session-b`로

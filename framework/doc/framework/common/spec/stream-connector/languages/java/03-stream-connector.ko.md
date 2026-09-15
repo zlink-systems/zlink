@@ -437,7 +437,6 @@ public enum ZLinkStreamErrorCode {
     TLS_VALIDATION_FAILED,
     DECOMPRESSION_FAILED,
     USER_CALLBACK_FAILED,
-    RECEIVED_MESSAGE_DROPPED,   // 수신 메시지 큐 overflow(공통 스펙 32 §10)
     REMOTE_ERROR
 }
 ```

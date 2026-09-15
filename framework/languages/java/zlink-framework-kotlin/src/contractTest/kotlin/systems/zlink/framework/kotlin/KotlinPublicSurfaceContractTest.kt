@@ -518,7 +518,7 @@ class KotlinPublicSurfaceContractTest {
                 "isConnected" to 1, "getState" to 1, "getOptions" to 1,
                 "getDiagnosticsLevel" to 1, "setDiagnosticsLevel" to 1,
                 "getPendingDispatchCount" to 1, "receivedCount" to 1,
-                "observeInbound" to 1, "on" to 2, "onErrorReceived" to 1,
+                "on" to 2, "onErrorReceived" to 1,
                 "onDisconnected" to 1, "onConnectionStateChanged" to 1,
                 "connect" to 1,
                 "close" to 1, "dispatch" to 1, "send" to 2, "request" to 2,

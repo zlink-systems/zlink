@@ -117,7 +117,6 @@ public final class SmB1Scenario extends SpotServiceScenarioContext {
             System.out.println("scenario SM-B7 passed");
             System.out.println("scenario SM-D1 passed");
             System.out.println("scenario SM-D3 passed");
-            System.out.println("scenario SM-D9 passed");
         } catch (Exception error) {
             throw new IllegalStateException("actor/session scenario failed", error);
         } finally {

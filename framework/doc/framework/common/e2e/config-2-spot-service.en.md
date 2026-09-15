@@ -734,42 +734,6 @@ succeeding only after explicit auth/rebind on reconnect?
   is processed exactly once at the Actor.
 - Detailed behavior: verifies [Failover Policy §6](../spec/server/05-location-relocation/06-failure-failover-policy.en.md).
 
-#### SM-D9 A Logger Provider Records STREAM Message-Flow Results
-
-Priority: `P1`
-
-The application logger provider receives correlation ID, packet name, and message kind as formal
-fields without copying payload or wire-internal sequence into the success condition.
-
-**Verification question:** Do logger and handler evidence carry the same correlation ID, packet
-name, and message kind?
-
-- Starting condition: An application logger provider and a handler are registered.
-- Procedure: A request and a one-way packet are each sent once.
-- Verification: The logger provider records the formal fields for both messages exactly once,
-  matching the handler results.
-- Detailed behavior: verifies [Message Flow Tracing — Common Attributes](../spec/server/06-observability/03-message-flow-tracing.en.md#3-common-attributes)
-  and [Flow Correlation — Propagation Rule](../spec/server/06-observability/04-flow-correlation.en.md#5-propagation-rule).
-
-#### SM-D10 Isolate Stream Backpressure Per Session
-
-Priority: `P1`
-
-One Session's slow consumer must not block another Session's send/reply.
-
-**Verification question:** Do B's request and push complete while Session A is pending on
-shared job queue capacity?
-
-- Starting condition: A and B are on separate Session gateway processes. Only A uses
-  `MaxQueuedApplicationJobs = 1` and a handler-start gate; B uses independent default
-  capacity. Block A's first callback entry and confirm reserved/queued 1 in public status.
-- Procedure: Sends are started to A, confirming the source awaitable is pending, then B's
-  request/push are run. A's gate is released.
-- Verification: B's results complete before A's gate is released. A's operations each have exactly
-  one success or deadline terminal, with Session state not corrupted.
-- Detailed behavior: verifies [The STREAM Recv Loop And Application Surface](../spec/server/04-session/01-stream-session.en.md)
-  and [Admission Deadline](../spec/server/01-execution/01-submit-and-completion.en.md).
-
 #### SM-D11 Separate Stream And Channel Requests On The Same Client
 
 Priority: `P1`

@@ -44,7 +44,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     //  never creates a correlation_id.
     private final AtomicLong correlationCounter = new AtomicLong();
     private final ZLinkStreamPendingRequests pendingRequests = new ZLinkStreamPendingRequests();
-    private final ZLinkStreamInboundObserverDispatcher inboundObservers;
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
     private final ZLinkStreamConnectionLifecycle lifecycle;
 
@@ -53,20 +52,13 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
-        this.dispatchQueue = new ZLinkStreamDispatchQueue(
-            this.configuration.limits().receivedMessages(),
-            this::publishError);
-        this.inboundObservers = new ZLinkStreamInboundObserverDispatcher(
-            this.configuration.limits().inboundObserverNotifications(),
-            this.configuration.limits().inboundObserverPayloadPreviewBytes(),
-            this::publishError);
+        this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
         this.payloadCodec = new ZLinkStreamConnectorPayloadCodec(this.configuration);
         this.receiveDispatcher = new ZLinkStreamReceiveDispatcher(
             this.configuration,
             handlers,
             dispatchQueue,
             pendingRequests,
-            inboundObservers,
             payloadCodec,
             this::publishError,
             this::sendControl,
@@ -76,7 +68,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             timeouts,
             dispatchQueue,
             pendingRequests,
-            inboundObservers,
             receiveDispatcher,
             this::publishError,
             this::notifyDisconnected,
@@ -182,13 +173,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             new CompletableFuture<>();
         dispatchQueue.awaitMessage(name, predicate, result);
         return result;
-    }
-
-    @Override
-    public AutoCloseable observeInbound(ZLinkStreamInboundObserver observer) {
-        Objects.requireNonNull(observer, "observer");
-        lifecycle.requireCanRegisterInboundObserver();
-        return inboundObservers.add(observer);
     }
 
     @Override
