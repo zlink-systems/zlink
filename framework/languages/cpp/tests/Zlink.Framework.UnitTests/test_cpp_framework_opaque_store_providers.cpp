@@ -339,6 +339,54 @@ class reject_next_authority_capacity_write_store_t final :
     std::size_t rejected_capacity_mutations = 0;
 };
 
+class aggregate_lock_contention_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        const auto publishes_lock = std::any_of (
+          request.mutations.begin (), request.mutations.end (),
+          [] (const auto &mutation) {
+              const auto *put = std::get_if<store_put_t> (&mutation);
+              return put && put->key.value.starts_with ("zlink:v11:aggregate-lock:");
+          });
+        if (!peer_marker_published && publishes_lock) {
+            peer_marker_published = true;
+            auto peer_request = request;
+            for (auto &mutation : peer_request.mutations) {
+                auto *put = std::get_if<store_put_t> (&mutation);
+                if (!put || !put->key.value.starts_with ("zlink:v11:aggregate-lock:"))
+                    continue;
+                auto marker = nlohmann::json::parse (
+                  reinterpret_cast<const char *> (put->bytes.data ()),
+                  reinterpret_cast<const char *> (put->bytes.data ()) + put->bytes.size ());
+                marker["peerMarker"] = true;
+                put->bytes = bytes (marker.dump ());
+            }
+            const auto published = inner.write (std::move (peer_request)).result ().value ();
+            const auto now = std::holds_alternative<store_write_applied_t> (published)
+              ? std::get<store_write_applied_t> (published).store_now
+              : std::get<store_write_conflict_t> (published).store_now;
+            return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
+              store_write_conflict_t{now}));
+        }
+        return inner.write (std::move (request));
+    }
+
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+
+    in_memory_location_store_t inner;
+    bool peer_marker_published = false;
+};
+
 class post_commit_failure_relocation_store_t final :
     public relocation_store_t
 {
@@ -616,6 +664,89 @@ TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThrou
     EXPECT_TRUE (std::holds_alternative<object_aborted_t> (
       repository.abort ({request.key, second_reservation->fence}).result ().value ()));
     EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 0);
+}
+
+TEST (CppFrameworkOpaqueLocationStore,
+      AggregatePrepareAdoptsPeerLockAfterConditionalWriteConflict)
+{
+    aggregate_lock_contention_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto claim = repository.claim_owner_lease ("aggregate-race-owner", 30s).result ().value ();
+    const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "aggregate-race";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"aggregate-race-node"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities = {
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0},
+      {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::snapshot, true, 1}};
+    descriptor.capacity.actors.limit = 1;
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types.push_back (
+      {placement_object_kind_t::user_spot, "room", {0, 0, 1}});
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+
+    const object_creation_target_t target{
+      descriptor.mesh_name, node_rid_t::from_string ("aggregate-race-node"), 1, claimed->token};
+    object_reserve_request_t actor_request;
+    actor_request.key = {placement_object_kind_t::actor, "aggregate-race-actor"};
+    actor_request.intent.stable_type = "player";
+    actor_request.target = target;
+    actor_request.creating_payload = bytes ("creating");
+    actor_request.capacity_bundle.actor_slots = 1;
+    const auto actor_reserved = repository.reserve (actor_request).result ().value ();
+    const auto *actor_fence = std::get_if<object_reserved_t> (&actor_reserved);
+    ASSERT_NE (actor_fence, nullptr);
+    const auto actor_committed = repository.commit (
+      {actor_request.key, actor_fence->fence, bytes ("ready")}).result ().value ();
+    const auto *actor = std::get_if<object_committed_t> (&actor_committed);
+    ASSERT_NE (actor, nullptr);
+
+    object_reserve_request_t spot_request;
+    spot_request.key = {placement_object_kind_t::user_spot, "aggregate-race-spot"};
+    spot_request.intent.stable_type = "room";
+    spot_request.target = target;
+    spot_request.creating_payload = bytes ("creating");
+    spot_request.capacity_bundle.spot_slots = 1;
+    spot_request.capacity_bundle.spot_type =
+      spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
+    const auto spot_reserved = repository.reserve (spot_request).result ().value ();
+    const auto *spot_fence = std::get_if<object_reserved_t> (&spot_reserved);
+    ASSERT_NE (spot_fence, nullptr);
+    const auto spot_committed = repository.commit (
+      {spot_request.key, spot_fence->fence, bytes ("ready")}).result ().value ();
+    const auto *spot = std::get_if<object_committed_t> (&spot_committed);
+    ASSERT_NE (spot, nullptr);
+
+    aggregate_prepare_request_t aggregate;
+    aggregate.aggregate_id.value[15] = std::byte{0x44};
+    aggregate.aggregate_generation = 1;
+    aggregate.participants = {
+      {actor_authority_key (actor_request.key.global_id), actor->ready.store_version,
+       authority_generation_transition_t::new_owner, bytes ("aggregate-actor"), {}},
+      {spot_authority_key (spot_request.key.global_id), spot->ready.store_version,
+       authority_generation_transition_t::new_owner, bytes ("aggregate-spot"), {}}};
+    aggregate.target_descriptor = {descriptor.mesh_name, descriptor.rid};
+    aggregate.target_descriptor_lifecycle_generation = 1;
+    aggregate.capacity_bundle.actor_slots = 1;
+    aggregate.capacity_bundle.spot_slots = 1;
+    aggregate.capacity_bundle.spot_type =
+      spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
+    aggregate.target_owner = claimed->token;
+
+    const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
+    EXPECT_TRUE (provider.peer_marker_published);
+    ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared));
 }
 
 TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecycleThroughProvider)
