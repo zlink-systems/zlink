@@ -1264,72 +1264,35 @@ else()
     # (nonexistent, for a plain `ar` archive) link step. With LTO on,
     # `objects` inherits CMake's IPO default, which passes
     # -flto -fno-fat-lto-objects: a real ELF symbol table (nm/file/ar all
-    # read it as an ordinary object) but an empty .text section, with the
-    # actual code only in .gnu.lto_* GIMPLE/bitcode sections -- readable
-    # only by the exact toolchain major version that produced it. That
-    # breaks the distributed static archive (issue #397; CI run
-    # 34948757858 reproduced it: a libzlink.a built under GCC 11.3 failed
-    # to link under GCC 13.1).
+    # read it as an ordinary object) but the actual code living only in
+    # .gnu.lto_* GIMPLE/bitcode sections, readable only by the exact
+    # toolchain major version that produced it. That breaks the
+    # distributed static archive (issue #397; CI run 34948757858
+    # reproduced it: a libzlink.a built under GCC 11.3 failed to link
+    # under GCC 13.1).
     #
-    # Prefer -ffat-lto-objects: it embeds real object code alongside the
-    # bytecode, so `objects` keeps serving both targets from one compile
-    # (avoiding the double build the comment above this block describes)
-    # -- the shared library still links with full LTO, and the static
-    # archive is an ordinary, portable object archive. Checked via
-    # check_cxx_compiler_flag rather than assumed, since it is GCC-only
-    # for certain and AppleClang only gained it in LLVM 17 -- this must
-    # hold on whatever compiler this configure is actually using, not on a
-    # guess about which one that is. (A compiler that silently accepts and
-    # ignores the flag rather than rejecting it would defeat this check;
-    # the per-platform archive-content verification in
-    # .github/workflows/build.yml's `verify` job exists specifically to
-    # catch that.)
-    #
-    # Where the flag is unavailable, fall back to the same shape MinGW and
-    # the Xcode generator already use below: libzlink-static compiles
-    # ${sources} itself instead of archiving `objects`. A second OBJECT
-    # library that duplicates `objects` was tried first and reached CI
-    # (issue #397, run 34965258927): it never went through the
-    # `foreach(target ${build_targets})` loop a few hundred lines down
-    # that gives every real target its include directories and Boost/ASIO
-    # compile definitions (that loop only walks ${target_outputs} plus
-    # `objects`), so it failed to find platform.hpp the moment the
-    # fallback path actually ran for the first time in CI. Copying
-    # properties one at a time onto a second target is exactly the kind
-    # of list that goes stale again the next time something is added to
-    # that loop or to `objects` directly; compiling libzlink-static from
-    # ${sources} sidesteps the whole class of bug by reusing the one path
-    # in this file already proven to receive everything a real target
-    # needs (MinGW and Xcode never shared `objects` with libzlink-static
-    # and have not had this problem). It also means the
-    # INTERPROCEDURAL_OPTIMIZATION OFF this file already sets on
-    # libzlink-static (below) finally has something to act on: a target
-    # that compiles its own sources, rather than one that just archives
-    # objects someone else already compiled.
+    # -ffat-lto-objects (embedding real object code alongside the
+    # bytecode, so `objects` could keep serving both targets from one
+    # compile) was tried and does not work: GCC's LTO linker plugin reads
+    # .gnu.lto_* sections whenever they are present, real code alongside
+    # them or not, and still fails across toolchain versions (CI run
+    # 34967905036 reproduced the exact same fatal error against a fat
+    # archive that had passed a real-code-presence check). A distributed
+    # static archive must have no .gnu.lto_* sections at all, so
+    # libzlink-static always compiles ${sources} itself -- the same shape
+    # MinGW and the Xcode generator already use below, and already
+    # confirmed working (including on the AppleClang that made this
+    # necessary in the first place, run 34967905036's build jobs) --
+    # instead of archiving `objects`. That reintroduces the double build
+    # the comment above this block was written to avoid, but a static
+    # archive that only links on the exact toolchain that built it is
+    # worse than one that took longer to build, and that comment predates
+    # libzlink-static being a distributed artifact. There is no
+    # compiler-conditional path here on purpose: GCC, clang and MSVC all
+    # take the same route, so there is nothing left to detect.
     set(ZLINK_STATIC_COMPILE_OWN_SOURCES FALSE)
     if(BUILD_STATIC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
-      # -ffat-lto-objects only means anything once LTO is already on, and
-      # AppleClang rejects the combination outright for some targets
-      # ("unsupported option '-ffat-lto-objects' for target
-      # arm64-apple-darwin...") even though it accepts the flag fine on
-      # its own -- probing it without -flto present (as a bare
-      # check_cxx_compiler_flag call would) is not the condition this is
-      # actually used under, so it reported a false Success once (issue
-      # #397; CI run 34962128541 reproduced it: detection succeeded, the
-      # real compile of `objects` with both flags together then failed).
-      # CMAKE_REQUIRED_FLAGS is not reset by check_cxx_compiler_flag
-      # itself, so setting it here makes the probe compile with -flto
-      # too, matching how the flag is actually used below.
-      include(CMakePushCheckState)
-      cmake_push_check_state(RESET)
-      set(CMAKE_REQUIRED_FLAGS "-flto")
-      check_cxx_compiler_flag("-ffat-lto-objects" ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
-      cmake_pop_check_state()
-      if(ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
-        target_compile_options(objects PRIVATE -ffat-lto-objects)
-      else()
-        set(ZLINK_STATIC_COMPILE_OWN_SOURCES TRUE)
-      endif()
+      set(ZLINK_STATIC_COMPILE_OWN_SOURCES TRUE)
     endif()
   endif()
 

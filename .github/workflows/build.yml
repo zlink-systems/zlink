@@ -209,6 +209,18 @@ jobs:
       # to run this locally; confirmed the anonymous-object format and
       # this exact dumpbin string against Microsoft's own documentation
       # and reference material instead of assuming.)
+      #
+      # Re-reviewed after CI run 34967905036 showed the Linux/macOS
+      # equivalents of this check both had to move from "is real code
+      # absent" to "is bytecode present" (a *fat* GCC/-ffat-lto-objects
+      # archive has real code but still fails to link cross-toolchain, so
+      # checking for real code was never sufficient there). MSVC has no
+      # documented fat-IL equivalent -- /GL's whole-program IL is either
+      # unresolved (ANONYMOUS OBJECT, checked below) or, after the final
+      # /LTCG link step, gone from the static archive entirely; there is
+      # no third form that carries both. So "is IL present" and "is real
+      # code present" are the same question here, unlike on GCC/clang,
+      # and this check did not need the same change.
       - name: Verify static archive is portable object code, not LTO/GL-only IL
         shell: pwsh
         run: |
@@ -357,32 +369,48 @@ jobs:
       - name: Verify build output
         run: test -f core/dist/linux-x64/libzlink.so
 
-      # `nm`/`file`/`ar t` all read a GCC LTO-bytecode-only object as an
-      # ordinary one -- it keeps a real ELF symbol table for archiver
-      # bookkeeping, the actual code living only in .gnu.lto_* sections
-      # readable by the exact GCC major version that produced them (issue
-      # #397; CI run 34948757858 shipped a bytecode-only libzlink.a that
-      # nm/file both read as fine). An earlier version of this check
-      # looked for an empty .text section instead, which is the wrong
-      # signal in the other direction: a translation unit with no
-      # function bodies (e.g. src/runtime/utils/precompiled.cpp, which is
-      # just one #include) legitimately has an empty .text with or
-      # without LTO, so that check flagged linux-arm64's
-      # precompiled.cpp.o as a false positive (CI run 34962128541).
+      # `nm`/`file`/`ar t` all read a GCC LTO object as an ordinary one --
+      # it keeps a real ELF symbol table for archiver bookkeeping
+      # regardless (issue #397; CI run 34948757858 shipped a
+      # bytecode-only libzlink.a that nm/file both read as fine).
       #
-      # The correct, GCC-documented signal is presence, not absence: GCC
-      # marks every slim/thin (bytecode-only) LTO object with a global
-      # COMMON symbol named `__gnu_lto_slim` (so the linker can complain
-      # if such an object is ever linked without going through the LTO
-      # plugin); a fat LTO object (real code + bytecode, what
-      # -ffat-lto-objects above produces) and a normal non-LTO object
-      # never define it. `nm` does not print this symbol at all (tested);
-      # `readelf -s` does. Verified directly against a real bad archive
-      # (a worktree at the commit CI reproduced 34948757858 against, i.e.
-      # before -ffat-lto-objects existed): every one of 154 members had
-      # __gnu_lto_slim, including precompiled.cpp.o; after this fix, 0 of
-      # 154 do, precompiled.cpp.o included -- see this change's commit
-      # message for the exact commands and counts.
+      # Two earlier versions of this check got the actual condition
+      # wrong:
+      # - Checking for an empty .text section flagged a false positive:
+      #   a translation unit with no function bodies (e.g.
+      #   src/runtime/utils/precompiled.cpp, just one #include)
+      #   legitimately has an empty .text with or without LTO
+      #   (CI run 34962128541, linux-arm64).
+      # - Checking for the `__gnu_lto_slim` marker symbol (GCC's own
+      #   marker for slim/bytecode-only LTO objects, present only when
+      #   there is no real code at all) missed a *fat* LTO object -- one
+      #   built with -ffat-lto-objects, containing real object code
+      #   alongside the bytecode. That seemed safe (the real code is
+      #   right there to link against) but is not: GCC's LTO linker
+      #   plugin reads any .gnu.lto_* section it finds and tries to
+      #   resolve it, real code sitting next to it or not, so a fat
+      #   archive fails to link cross-toolchain-version with the exact
+      #   same fatal error a slim one does (CI run 34967905036 reproduced
+      #   it against a fat archive that had already passed the
+      #   __gnu_lto_slim check). core/CMakeLists.txt no longer produces
+      #   fat objects for this reason -- libzlink-static always compiles
+      #   its own sources with LTO off -- but this check now verifies
+      #   that directly instead of trusting the CMake logic never
+      #   regresses: a distributed static archive must carry no
+      #   .gnu.lto_* section of any kind, fat or slim. `readelf -S`
+      #   reports section names directly.
+      #
+      # Verified all three ways this has gone wrong before, against real
+      # archives, not just the current one: a worktree at 7e39007c5b
+      # (bytecode-only/slim, the commit CI run 34948757858 broke on) --
+      # 152/154 members carry a .gnu.lto_* section, correctly caught; a
+      # worktree at 40781e1a56 forced down the -ffat-lto-objects path
+      # (fat) -- 152/154 members still carry .gnu.lto_* sections despite
+      # having real code too, also correctly caught, which is exactly
+      # what __gnu_lto_slim (0/154 on that same archive) missed; and the
+      # current archive (libzlink-static compiling its own sources, IPO
+      # off) -- 0/154. See this change's commit message for the exact
+      # commands.
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -391,17 +419,17 @@ jobs:
           (cd "$work" && ar x "$lib")
           fail=0
           for obj in "$work"/*.o; do
-            if readelf -s "$obj" | grep -q '__gnu_lto_slim'; then
-              echo "LTO-bytecode-only member (defines __gnu_lto_slim): $(basename "$obj")" >&2
+            if readelf -S "$obj" | grep -q '\.gnu\.lto_'; then
+              echo "LTO bytecode present (fat or slim): $(basename "$obj")" >&2
               fail=1
             fi
           done
           rm -rf "$work"
           if [ "$fail" -ne 0 ]; then
-            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            echo "libzlink.a has members carrying LTO bytecode -- GCC's LTO linker plugin will try to resolve it and fail across toolchain versions even if real object code sits alongside it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: no libzlink.a member defines __gnu_lto_slim (no LTO-bytecode-only members)."
+          echo "OK: no libzlink.a member carries a .gnu.lto_* section."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -436,14 +464,17 @@ jobs:
       - name: Verify build output
         run: test -f core/dist/linux-arm64/libzlink.so
 
-      # Same check as build-linux, same reason: nm/file/ar t cannot tell a
-      # GCC LTO-bytecode-only object from a real one, and checking for an
-      # empty .text section (an earlier version of this check) false-
-      # positives on translation units with no function bodies, such as
-      # src/runtime/utils/precompiled.cpp -- this job's own CI run
-      # (34962128541) hit exactly that false positive. See the identical
-      # comment in build-linux for the __gnu_lto_slim marker this uses
-      # instead, and how it was verified (issue #397).
+      # Same check as build-linux, same reason: this job's own CI run
+      # (34962128541) is what first exposed the "check for absence"
+      # false positive (empty .text on precompiled.cpp.o, a translation
+      # unit with no function bodies), and a later CI run (34967905036)
+      # showed that even the presence-based __gnu_lto_slim marker this
+      # check used next misses a *fat* LTO object (real code + bytecode
+      # together) -- GCC's LTO linker plugin still tries to resolve the
+      # bytecode and still fails cross-toolchain-version even though real
+      # code sits right next to it. See the identical, longer comment in
+      # build-linux for the full history and the three-archive
+      # verification (issue #397).
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -452,17 +483,17 @@ jobs:
           (cd "$work" && ar x "$lib")
           fail=0
           for obj in "$work"/*.o; do
-            if readelf -s "$obj" | grep -q '__gnu_lto_slim'; then
-              echo "LTO-bytecode-only member (defines __gnu_lto_slim): $(basename "$obj")" >&2
+            if readelf -S "$obj" | grep -q '\.gnu\.lto_'; then
+              echo "LTO bytecode present (fat or slim): $(basename "$obj")" >&2
               fail=1
             fi
           done
           rm -rf "$work"
           if [ "$fail" -ne 0 ]; then
-            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            echo "libzlink.a has members carrying LTO bytecode -- GCC's LTO linker plugin will try to resolve it and fail across toolchain versions even if real object code sits alongside it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: no libzlink.a member defines __gnu_lto_slim (no LTO-bytecode-only members)."
+          echo "OK: no libzlink.a member carries a .gnu.lto_* section."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -501,26 +532,34 @@ jobs:
             arm64 \
             "ON"
 
-      # Same class of problem as build-linux's check, different shape: with
-      # plain -flto (no -ffat-lto-objects), clang's ".o" output is not a
-      # Mach-O object at all -- it is a raw LLVM bitcode file (only
-      # -ffat-lto-objects wraps real object code plus a __LLVM,__bitcode
-      # section in an actual Mach-O container; see
-      # https://llvm.org/docs/BitCodeFormat.html and the FatLTO design,
-      # https://discourse.llvm.org/t/rfc-ffat-lto-objects-support/63977).
+      # Same class of problem as build-linux's check, and the same lesson
+      # from CI run 34967905036: check for bytecode being present at all,
+      # not for real code being absent -- a "fat" object with both would
+      # not save it, because whichever tool resolves the bytecode side
+      # does not first check whether it needs to. Two cases:
+      # - Plain -flto (no -ffat-lto-objects): clang's ".o" output is not
+      #   a Mach-O object at all, it is a raw LLVM bitcode file (see
+      #   https://llvm.org/docs/BitCodeFormat.html). `file` recognizes
+      #   the bitcode magic directly.
+      # - -ffat-lto-objects (not used by core/CMakeLists.txt for the
+      #   reason in its comment, but checked for directly here rather
+      #   than trusted): wraps real object code plus an embedded
+      #   __LLVM,__bitcode section in an actual Mach-O container (the
+      #   FatLTO design, https://discourse.llvm.org/t/rfc-ffat-lto-objects-support/63977)
+      #   -- `file` alone would call this a normal Mach-O object and miss
+      #   it, the same way __gnu_lto_slim missed a fat GCC object on
+      #   Linux. `otool -l` lists Mach-O sections by name, so check that
+      #   for the embedded-bitcode section too.
       # An earlier version of this check used otool -l's __text section
-      # size, which has the same false-positive shape build-linux's
-      # original .text check did (empty is not unique to LTO -- and would
-      # not even apply here, since a bitcode-only file has no Mach-O
-      # section table for otool to read in the first place). `file`
-      # recognizes the bitcode magic directly, so check that instead: a
-      # real Mach-O object (fat-LTO or plain non-LTO, whichever this
-      # toolchain produced -- see core/CMakeLists.txt for which) is never
-      # reported as bitcode. (No local macOS access to verify this
-      # against actual clang output; based on documented LLVM bitcode/
-      # FatLTO behavior rather than a guess about file's exact wording,
-      # matched case-insensitively against "bitcode" to tolerate small
-      # phrasing differences across libmagic versions.)
+      # size instead, which has the same false-positive shape
+      # build-linux's original .text check did (empty is not unique to
+      # LTO -- and would not even apply to the raw-bitcode case, which
+      # has no Mach-O section table for otool to read in the first
+      # place). (No local macOS access to verify either branch against
+      # actual clang output; based on documented LLVM bitcode/FatLTO
+      # behavior rather than a guess about exact tool wording, matched
+      # case-insensitively to tolerate small phrasing differences across
+      # libmagic versions.)
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -530,16 +569,19 @@ jobs:
           fail=0
           for obj in "$work"/*.o; do
             if file "$obj" | grep -qi 'bitcode'; then
-              echo "LLVM-bitcode-only member (not a native object file): $(basename "$obj") -- $(file "$obj")" >&2
+              echo "LLVM-bitcode member (raw bitcode file, not Mach-O): $(basename "$obj") -- $(file "$obj")" >&2
+              fail=1
+            elif otool -l "$obj" 2>/dev/null | grep -qi '__bitcode'; then
+              echo "LLVM-bitcode member (fat Mach-O with an embedded __bitcode section): $(basename "$obj")" >&2
               fail=1
             fi
           done
           rm -rf "$work"
           if [ "$fail" -ne 0 ]; then
-            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            echo "libzlink.a has members carrying LLVM bitcode, embedded or standalone -- it would only link reliably on the exact toolchain that built it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: no libzlink.a member is raw LLVM bitcode."
+          echo "OK: no libzlink.a member carries LLVM bitcode."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
