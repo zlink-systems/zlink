@@ -236,6 +236,13 @@ FRAMEWORK_NODE_PACKAGE_REGISTRY = (
     ("framework/languages/node/packages/nestjs/package.json", "@zlink-systems/nestjs", 2),
     ("framework/languages/node/packages/stream-connector/package.json", "@zlink-systems/stream-connector", 1),
     ("framework/languages/node/packages/stream-wire/package.json", "@zlink-systems/stream-wire", 0),
+    # The Unity WebGL UPM adapter embeds the stream-connector browser bundle, so it
+    # releases with the Node framework version and carries no dependency pin.
+    (
+        "framework/languages/unity/com.zlink.stream-connector.webgl/package.json",
+        "com.zlink.stream-connector.webgl",
+        0,
+    ),
 )
 
 
