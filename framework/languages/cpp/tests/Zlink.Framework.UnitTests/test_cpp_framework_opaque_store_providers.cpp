@@ -671,37 +671,56 @@ TEST (CppFrameworkOpaqueLocationStore,
 {
     aggregate_lock_contention_store_t provider;
     provider_location_repository_t repository (provider);
-    const auto claim = repository.claim_owner_lease ("aggregate-race-owner", 30s).result ().value ();
-    const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
-    ASSERT_NE (claimed, nullptr);
+    const auto source_claim =
+      repository.claim_owner_lease ("aggregate-race-source-owner", 30s).result ().value ();
+    const auto *source_owner = std::get_if<owner_lease_claimed_t> (&source_claim);
+    ASSERT_NE (source_owner, nullptr);
+    const auto target_claim =
+      repository.claim_owner_lease ("aggregate-race-target-owner", 30s).result ().value ();
+    const auto *target_owner = std::get_if<owner_lease_claimed_t> (&target_claim);
+    ASSERT_NE (target_owner, nullptr);
 
-    mesh_node_descriptor_t descriptor;
-    descriptor.mesh_name = "aggregate-race";
-    descriptor.rid = zlink::routing_id_t::from (std::string{"aggregate-race-node"});
-    descriptor.lifecycle_generation = 1;
-    descriptor.descriptor_revision = 1;
-    descriptor.endpoint = "tcp://127.0.0.1:7001";
-    descriptor.owner_id = claimed->token.owner_id;
-    descriptor.lease_generation = claimed->token.lease_generation;
-    descriptor.object_role = object_role_t::server;
-    descriptor.state = framework_runtime_state_t::serving;
-    descriptor.object_capabilities = {
+    mesh_node_descriptor_t source_descriptor;
+    source_descriptor.mesh_name = "aggregate-race";
+    source_descriptor.rid =
+      zlink::routing_id_t::from (std::string{"aggregate-race-source"});
+    source_descriptor.lifecycle_generation = 1;
+    source_descriptor.descriptor_revision = 1;
+    source_descriptor.endpoint = "tcp://127.0.0.1:7001";
+    source_descriptor.owner_id = source_owner->token.owner_id;
+    source_descriptor.lease_generation = source_owner->token.lease_generation;
+    source_descriptor.object_role = object_role_t::server;
+    source_descriptor.state = framework_runtime_state_t::serving;
+    source_descriptor.object_capabilities = {
       {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0},
       {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::snapshot, true, 1}};
-    descriptor.capacity.actors.limit = 1;
-    descriptor.capacity.spots.limit = 1;
-    descriptor.capacity.spot_types.push_back (
+    source_descriptor.capacity.actors.limit = 1;
+    source_descriptor.capacity.spots.limit = 1;
+    source_descriptor.capacity.spot_types.push_back (
       {placement_object_kind_t::user_spot, "room", {0, 0, 1}});
-    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+    ASSERT_EQ (repository.update_mesh_node (source_descriptor,
+                                            location_write_intent_t::new_claim)
                  .result ().value ().status,
                location_write_status_t::stored);
 
-    const object_creation_target_t target{
-      descriptor.mesh_name, node_rid_t::from_string ("aggregate-race-node"), 1, claimed->token};
+    auto target_descriptor = source_descriptor;
+    target_descriptor.rid =
+      zlink::routing_id_t::from (std::string{"aggregate-race-target"});
+    target_descriptor.endpoint = "tcp://127.0.0.1:7002";
+    target_descriptor.owner_id = target_owner->token.owner_id;
+    target_descriptor.lease_generation = target_owner->token.lease_generation;
+    ASSERT_EQ (repository.update_mesh_node (target_descriptor,
+                                            location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+
+    const object_creation_target_t source_target{
+      source_descriptor.mesh_name, node_rid_t::from_string ("aggregate-race-source"), 1,
+      source_owner->token};
     object_reserve_request_t actor_request;
     actor_request.key = {placement_object_kind_t::actor, "aggregate-race-actor"};
     actor_request.intent.stable_type = "player";
-    actor_request.target = target;
+    actor_request.target = source_target;
     actor_request.creating_payload = bytes ("creating");
     actor_request.capacity_bundle.actor_slots = 1;
     const auto actor_reserved = repository.reserve (actor_request).result ().value ();
@@ -715,7 +734,7 @@ TEST (CppFrameworkOpaqueLocationStore,
     object_reserve_request_t spot_request;
     spot_request.key = {placement_object_kind_t::user_spot, "aggregate-race-spot"};
     spot_request.intent.stable_type = "room";
-    spot_request.target = target;
+    spot_request.target = source_target;
     spot_request.creating_payload = bytes ("creating");
     spot_request.capacity_bundle.spot_slots = 1;
     spot_request.capacity_bundle.spot_type =
@@ -728,6 +747,12 @@ TEST (CppFrameworkOpaqueLocationStore,
     const auto *spot = std::get_if<object_committed_t> (&spot_committed);
     ASSERT_NE (spot, nullptr);
 
+    const auto source_capacity = capacity_record (provider, source_descriptor);
+    EXPECT_EQ (source_capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (source_capacity.at ("spotsActive"), 1);
+    EXPECT_TRUE (std::holds_alternative<store_missing_t> (
+      provider.read (capacity_key (target_descriptor)).result ().value ()));
+
     aggregate_prepare_request_t aggregate;
     aggregate.aggregate_id.value[15] = std::byte{0x44};
     aggregate.aggregate_generation = 1;
@@ -736,13 +761,13 @@ TEST (CppFrameworkOpaqueLocationStore,
        authority_generation_transition_t::new_owner, bytes ("aggregate-actor"), {}},
       {spot_authority_key (spot_request.key.global_id), spot->ready.store_version,
        authority_generation_transition_t::new_owner, bytes ("aggregate-spot"), {}}};
-    aggregate.target_descriptor = {descriptor.mesh_name, descriptor.rid};
+    aggregate.target_descriptor = {target_descriptor.mesh_name, target_descriptor.rid};
     aggregate.target_descriptor_lifecycle_generation = 1;
     aggregate.capacity_bundle.actor_slots = 1;
     aggregate.capacity_bundle.spot_slots = 1;
     aggregate.capacity_bundle.spot_type =
       spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
-    aggregate.target_owner = claimed->token;
+    aggregate.target_owner = target_owner->token;
 
     const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
     EXPECT_TRUE (provider.peer_marker_published);
