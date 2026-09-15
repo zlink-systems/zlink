@@ -241,6 +241,64 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           exit "${status}"
 
+      # The first two runs showed the .jspre content reaching the player
+      # untouched at every optimization level, while emscripten's own generated
+      # JavaScript beside it is whitespace-minified. That says the JS optimizer
+      # ran and did not see the plugin content, which is the opposite of what an
+      # upstream `emcc --pre-js -O2` does. Reading the link command settles why
+      # instead of leaving it to inference: Unity's Bee backend writes the
+      # emscripten arguments to response files under Library/Bee.
+      - name: Report the emscripten link arguments
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          root="${PROJECT_PATH}/Library/Bee"
+          out="${RUNNER_TEMP}/emscripten-link"
+          mkdir -p "${out}"
+          if [ ! -d "${root}" ]; then
+            echo "::warning title=No Bee artifacts::${root} does not exist; the link arguments could not be read."
+            exit 0
+          fi
+          # -I skips binaries, -l lists names only, and the list goes to a file
+          # rather than through a pipe that could close early.
+          grep -rlIF -e '--pre-js' -e '--extern-pre-js' -e '--js-library' "${root}" \
+            > "${RUNNER_TEMP}/emscripten-link-files.txt" 2>/dev/null || true
+          echo "files naming a JS plugin flag: $(wc -l < "${RUNNER_TEMP}/emscripten-link-files.txt")"
+          {
+            echo "## emscripten link arguments"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+          while IFS= read -r file; do
+            [ -n "${file}" ] || continue
+            rel="${file#"${root}/"}"
+            cp "${file}" "${out}/$(printf '%s' "${rel}" | tr '/' '_')"
+            # A response file is one argument per line; a recorded command line is
+            # not. Splitting on whitespace reads both.
+            interesting=$(tr ' \t' '\n\n' < "${file}" \
+              | grep -E '^(-O[0-9sz]|--pre-js|--extern-pre-js|--post-js|--js-library|--closure|--minify|--emit-symbol-map|-g[0-9]?|-flto)' \
+              || true)
+            {
+              echo "### ${rel}"
+              echo '```'
+              printf '%s\n' "${interesting:-(no optimization or JS plugin flags in this file)}"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "--- ${rel}"
+            printf '%s\n' "${interesting}"
+          done < "${RUNNER_TEMP}/emscripten-link-files.txt"
+          # Names only, so the next iteration knows where to look even when the
+          # grep above finds nothing.
+          find "${root}" -name '*.rsp*' -o -name '*.json' > "${out}/bee-file-names.txt" 2>/dev/null || true
+
+      - name: Upload the emscripten link arguments
+        if: always() && steps.license.outputs.licensed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: unity-emscripten-link
+          path: ${{ runner.temp }}/emscripten-link
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload the players
         if: always() && steps.license.outputs.licensed == 'true'
         uses: actions/upload-artifact@v6
@@ -318,31 +376,28 @@ jobs:
           tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
+      # Installed from the committed lockfile, so the workspace gets the released
+      # @zlink-systems/zlink and its linux-x64 prebuild.
+      #
+      # framework-node.yml repins this dependency to the checkout-built tarball
+      # because testing that tarball is what that workflow is for. Doing the same
+      # here breaks: the checkout tarball carries no prebuild, npm builds the addon
+      # with node-gyp into build/Release, and loading it from there runs
+      # prepareDevelopmentRuntimeLink, which reads <packageRoot>/../../VERSION -
+      # a path that only resolves in a source checkout, not under node_modules
+      # (bindings/node/src/zlink/runtime/native/native_load_paths.ts). This job
+      # needs a STREAM server that runs, not a binding under test, so it takes the
+      # published consumer path.
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
         shell: bash
         run: |
-          export BINDING_VERSION="${{ steps.core.outputs.binding_version }}"
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const file = 'package.json';
-          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
-          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
-          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
-          NODE
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
           npm run build
-
-      - name: Place the Core runtime beside a source-built addon
-        shell: bash
-        run: |
-          addon_dir=framework/languages/node/node_modules/@zlink-systems/zlink/build/Release
-          if [ ! -f "${addon_dir}/zlink.node" ]; then
-            echo "prebuilt addon in use; nothing to place"
-            exit 0
-          fi
-          cp -P "${{ steps.core.outputs.prefix }}"/lib/libzlink.so* "${addon_dir}/"
+          # The Unity player talks to a server this binding has to load. Failing
+          # here names the cause; failing later reads as "the STREAM server exited
+          # with 1" from inside the driver.
+          node -e "require('@zlink-systems/zlink'); console.log('native addon loads');"
 
       - name: Cache Chromium
         uses: actions/cache@v5

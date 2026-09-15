@@ -20,6 +20,14 @@ mergeInto(LibraryManager.library, {
     console.log('ZLINK-VERIFY ' + text);
   },
 
+  // A liveness channel for a run that never finishes. Without it a stalled
+  // player is indistinguishable from a player that never started, and every
+  // diagnosis costs another Unity build.
+  ZlinkVerificationHeartbeat__deps: ['$UTF8ToString'],
+  ZlinkVerificationHeartbeat: function (jsonPtr) {
+    globalThis.zlinkVerificationHeartbeat = UTF8ToString(jsonPtr);
+  },
+
   // Reports whether the adapter's own .jspre plugins reached the module scope.
   // The README's manual check "the built framework.js contains
   // ZlinkStreamWebGlRuntime and ZlinkStreamConnectorBundle" asked of the running

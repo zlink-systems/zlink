@@ -42,11 +42,26 @@ namespace Zlink.Verification
         private bool _dispatchInFlight;
         private string _pumpError;
 
+        // Liveness counters, published from Update every frame. A stalled run has
+        // to say which of its moving parts stopped, because the alternative is a
+        // Unity build per hypothesis:
+        //   frames rising, yields flat -> Task.Yield continuations are not being
+        //     resumed, so the connector's own frame loop cannot advance.
+        //   both rising, stage stuck   -> the loop runs and the call never
+        //     completes, which is the reverse callback's job.
+        private int _frames;
+        private int _yields;
+        private string _stage = "starting";
+        private bool _finished;
+
         [DllImport("__Internal")]
         private static extern void ZlinkVerificationReport(string json);
 
         [DllImport("__Internal")]
         private static extern int ZlinkVerificationLinkedPlugins();
+
+        [DllImport("__Internal")]
+        private static extern void ZlinkVerificationHeartbeat(string json);
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Bootstrap()
@@ -58,6 +73,7 @@ namespace Zlink.Verification
 
         private async void Start()
         {
+            YieldWatchdog();
             try
             {
                 await RunAsync();
@@ -73,9 +89,30 @@ namespace Zlink.Verification
         // one started from the next Update would drain the same queue.
         private void Update()
         {
+            _frames += 1;
+            ZlinkVerificationHeartbeat(
+                "{\"frames\":" + _frames +
+                ",\"yields\":" + _yields +
+                ",\"stage\":" + Quote(_stage) +
+                ",\"state\":" + (_connector == null ? "null" : ((int)_connector.State).ToString()) +
+                ",\"pending\":" + (_connector == null ? "null" : _connector.PendingDispatchCount.ToString()) +
+                ",\"pushes\":" + _pushes.Count + "}");
+
             if (!_pumping || _dispatchInFlight || _connector == null) return;
             _dispatchInFlight = true;
             PumpOnce();
+        }
+
+        // Its only job is to say whether an awaited continuation ever resumes.
+        // It is the control for the connector's own DriveAsync loop, which uses
+        // the same Task.Yield to advance once per frame.
+        private async void YieldWatchdog()
+        {
+            while (!_finished)
+            {
+                _yields += 1;
+                await Task.Yield();
+            }
         }
 
         private async void PumpOnce()
@@ -112,9 +149,11 @@ namespace Zlink.Verification
             });
             Step("created state=" + _connector.State);
 
+            _stage = "connect";
             await _connector.Connect.Async();
             Step("connected isConnected=" + _connector.IsConnected + " state=" + _connector.State);
 
+            _stage = "request";
             var reply = await _connector
                 .Request(Encode("unity-request"))
                 .PacketName(RequestPacket)
@@ -138,8 +177,10 @@ namespace Zlink.Verification
             });
             _pumping = true;
 
+            _stage = "send";
             await _connector.Send(Encode("unity-send")).PacketName(RequestPacket).Async();
             Step("sent");
+            _stage = "await-push";
 
             var deadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
             while (_pushes.Count == 0 && _pumpError == null && Time.realtimeSinceStartup < deadline)
@@ -168,6 +209,7 @@ namespace Zlink.Verification
             }
 
             _subscription.Dispose();
+            _stage = "close";
             await _connector.Close.Async();
             Step("closed state=" + _connector.State);
 
@@ -177,6 +219,7 @@ namespace Zlink.Verification
                 return;
             }
 
+            _stage = "done";
             Report(true, null);
         }
 
@@ -204,6 +247,7 @@ namespace Zlink.Verification
 
         private void Report(bool ok, string reason)
         {
+            _finished = true;
             var linked = 0;
             try
             {
@@ -221,6 +265,8 @@ namespace Zlink.Verification
                 .Append(Quote(typeof(ZlinkStreamConnectorFactory).Assembly.GetName().Name));
             json.Append(",\"linkedPlugins\":{\"runtime\":").Append((linked & 1) != 0 ? "true" : "false")
                 .Append(",\"bundle\":").Append((linked & 2) != 0 ? "true" : "false").Append('}');
+            json.Append(",\"stage\":").Append(Quote(_stage));
+            json.Append(",\"frames\":").Append(_frames).Append(",\"yields\":").Append(_yields);
             json.Append(",\"steps\":[");
             for (var index = 0; index < _steps.Count; index += 1)
             {

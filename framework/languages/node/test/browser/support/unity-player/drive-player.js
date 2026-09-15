@@ -90,7 +90,19 @@ async function run(player, label) {
 
   const streamServer = await startStreamServer(endpoint);
   const staticServer = await startStaticServer(player, index);
-  const browser = await chromium.launch({ headless: true });
+  // Unity's player loop is requestAnimationFrame. Headless Chromium throttles
+  // rAF for a renderer it considers backgrounded or occluded, and a throttled
+  // player stops calling Update, stops pumping the connector, and looks exactly
+  // like a boundary that went silent. These flags keep the loop running.
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-features=CalculateNativeWinOcclusion'
+    ]
+  });
   const messages = [];
   const errors = [];
 
@@ -120,13 +132,26 @@ async function run(player, label) {
         { timeout: PAGE_TIMEOUT_MS, polling: 250 }
       ).then((handle) => handle.jsonValue());
     } catch {
+      // The player publishes a heartbeat from Update every frame. Reading it
+      // here turns "it stopped" into "it stopped here, with the frame loop
+      // still running / already stopped", which is the difference between one
+      // more Unity build and none.
+      const heartbeat = await page.evaluate(
+        () => globalThis.zlinkVerificationHeartbeat ?? null
+      ).catch(() => null);
+      const linked = await page.evaluate(() => ({
+        runtime: typeof globalThis.ZlinkStreamWebGlRuntime !== 'undefined',
+        bundle: typeof globalThis.ZlinkStreamConnectorBundle !== 'undefined'
+      })).catch(() => null);
       return {
         ok: false,
         reason: errors.length > 0
           ? `the player never reported; first page error: ${errors[0]}`
-          : `the player never reported within ${PAGE_TIMEOUT_MS} ms`,
+          : `the player never reported within ${PAGE_TIMEOUT_MS} ms; heartbeat ${heartbeat ?? 'absent'}`,
+        heartbeat: heartbeat === null ? null : JSON.parse(heartbeat),
+        linkedPlugins: linked,
         pageErrors: errors,
-        console: messages
+        console: messages.slice(-40)
       };
     }
 

@@ -64,10 +64,15 @@ player links and then dies on the first delivered message.
 
 Unity 6000.0 through 6000.4 bundle `3.1.38-unity`, whose
 `tools/acorn-optimizer.js` is upstream 3.1.38's byte for byte apart from the
-`require` path for acorn - the defect is in the fork too. Unity 6000.5 and later
-bundle `4.0.19-unity`, which has the upstream fix (`walkPattern`).
+`require` path for acorn. Running that fork's JSDCE over the committed bundle by
+hand does delete `const { message, signal } = queued`.
 
-So the `RuntimeSpeed` run is expected to fail, and the driver asserts that it
-fails rather than assuming it: a Unity version that fixes this turns the job red
-with a reason, instead of quietly passing a check that is no longer checking
-anything.
+Unity's own builds do not. In both players the `.jspre` content arrives verbatim
+- comments, indentation and all five destructuring declarations - while
+emscripten's generated JavaScript beside it is whitespace-minified, at both
+optimization levels. The optimizer runs and never sees the plugin content. The
+workflow reads the link arguments out of `Library/Bee` to say why.
+
+That is what the two levels are here to compare, so the comparison stays: the
+driver asserts the outcome it expects for each rather than accepting whatever
+happens.
