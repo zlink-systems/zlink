@@ -33,6 +33,9 @@ namespace Zlink.Verification
         private const string RequestPacket = "EchoReq";
         private const float StepTimeoutSeconds = 30f;
 
+        // Frames to let a signalled continuation run in before calling it absent.
+        private const int ProbeSettleFrames = 10;
+
         private readonly List<string> _steps = new List<string>();
         private readonly List<string> _pushes = new List<string>();
 
@@ -64,6 +67,7 @@ namespace Zlink.Verification
         private TaskCompletionSource<bool> _uncaptured;
         private bool _capturedResumed;
         private bool _uncapturedResumed;
+        private int _probeSignalFrame;
         private int _connectPolls;
 
         [DllImport("__Internal")]
@@ -103,10 +107,14 @@ namespace Zlink.Verification
         private void Update()
         {
             _frames += 1;
-            // Signalled from the main thread, a few frames in, so neither completion
-            // can run inline on the awaiting stack.
-            if (_frames == 30 && _captured != null)
+            // Signalled from the main thread, after both awaits are already parked,
+            // so neither completion can run inline on the awaiting stack. Frame 2 and
+            // not frame 30: the scenario finishes in single-digit frames, and a probe
+            // that is still unsignalled when the run ends measures nothing while
+            // reading like a negative result.
+            if (_frames == 2 && _captured != null)
             {
+                _probeSignalFrame = _frames;
                 _captured.TrySetResult(true);
                 _uncaptured.TrySetResult(true);
             }
@@ -119,8 +127,8 @@ namespace Zlink.Verification
                 ",\"pending\":" + (_connector == null ? "null" : _connector.PendingDispatchCount.ToString()) +
                 ",\"pushes\":" + _pushes.Count +
                 ",\"connectPolls\":" + _connectPolls +
-                ",\"capturedResumed\":" + (_capturedResumed ? "true" : "false") +
-                ",\"uncapturedResumed\":" + (_uncapturedResumed ? "true" : "false") + "}");
+                ",\"capturedContinuation\":" + Quote(ProbeState(_capturedResumed)) +
+                ",\"uncapturedContinuation\":" + Quote(ProbeState(_uncapturedResumed)) + "}");
 
             if (!_pumping || _dispatchInFlight || _connector == null) return;
             _dispatchInFlight = true;
@@ -137,6 +145,18 @@ namespace Zlink.Verification
                 _yields += 1;
                 await Task.Yield();
             }
+        }
+
+        /// <summary>
+        ///     "pending" until the probe has been signalled and given frames to run in,
+        ///     so an unfinished measurement can never be read as a resumption that did
+        ///     not happen.
+        /// </summary>
+        private string ProbeState(bool resumed)
+        {
+            if (resumed) return "resumed";
+            if (_probeSignalFrame == 0 || _frames < _probeSignalFrame + ProbeSettleFrames) return "pending";
+            return "not-resumed";
         }
 
         private async void ContinuationProbe()
@@ -224,14 +244,36 @@ namespace Zlink.Verification
                 return;
             }
 
-            // Registered after the request, so the push the request produced is
-            // already in the unread history and this handler only sees the next
-            // one. Same ordering as the emscripten-level test.
+            // The server answers every EchoReq with a push as well as a reply, so
+            // one EchoPush is already outstanding here. Spec 32 section 10 keeps it
+            // in the received-message queue until a handler or a wait surface takes
+            // it, and section 7 gives the wait surfaces the job of consuming the
+            // queue without running a registered callback. Take it that way first,
+            // exactly as test/browser/unity-webgl-emscripten.test.js does, so the
+            // handler below has one message to receive and not two.
+            _stage = "wait-for";
+            var observed = await _connector.WaitFor(PushPacket)
+                .Timeout(TimeSpan.FromSeconds(StepTimeoutSeconds))
+                .Async();
+            var observedText = Decode(observed.Payload);
+            Step("observed " + observedText);
+            if (observedText.IndexOf("unity-request", StringComparison.Ordinal) < 0)
+            {
+                Fail("the wait surface took the wrong push: " + observedText);
+                return;
+            }
+
             _subscription = _connector.On(PushPacket, (message, _) =>
             {
                 _pushes.Add(Decode(message.Payload));
                 return default;
             });
+            if (_pushes.Count != 0)
+            {
+                Fail("registering a handler ran it: " + _pushes[0]);
+                return;
+            }
+
             _pumping = true;
 
             _stage = "send";
@@ -274,6 +316,17 @@ namespace Zlink.Verification
             {
                 Fail("close left the connector in " + _connector.State);
                 return;
+            }
+
+            // The probe is the reason the package forbids ConfigureAwait(false); a
+            // report that goes out before it settles says "pending" and proves
+            // nothing. The scenario is faster than the probe, so wait for it.
+            _stage = "probe";
+            var probeDeadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
+            while ((ProbeState(_capturedResumed) == "pending" || ProbeState(_uncapturedResumed) == "pending")
+                   && Time.realtimeSinceStartup < probeDeadline)
+            {
+                await Task.Yield();
             }
 
             _stage = "done";
@@ -325,8 +378,8 @@ namespace Zlink.Verification
             json.Append(",\"stage\":").Append(Quote(_stage));
             json.Append(",\"frames\":").Append(_frames).Append(",\"yields\":").Append(_yields);
             json.Append(",\"connectPolls\":").Append(_connectPolls);
-            json.Append(",\"capturedResumed\":").Append(_capturedResumed ? "true" : "false");
-            json.Append(",\"uncapturedResumed\":").Append(_uncapturedResumed ? "true" : "false");
+            json.Append(",\"capturedContinuation\":").Append(Quote(ProbeState(_capturedResumed)));
+            json.Append(",\"uncapturedContinuation\":").Append(Quote(ProbeState(_uncapturedResumed)));
             json.Append(",\"steps\":[");
             for (var index = 0; index < _steps.Count; index += 1)
             {

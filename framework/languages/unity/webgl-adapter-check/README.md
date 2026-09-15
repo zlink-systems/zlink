@@ -23,10 +23,16 @@ exists for exactly those four:
 | Path | Role |
 |---|---|
 | `Packages/manifest.json` | the adapter as a local `file:` package, relative to `Packages/` |
-| `Assets/Zlink/` | the WebGL-only check assembly: connect, request/reply, `On` + `Update` pump, close |
+| `Assets/Zlink/` | the WebGL-only check assembly: connect, request/reply, `WaitFor`, `On` + `Update` pump, close |
 | `Assets/Editor/` | the Editor-only batchmode build entry point |
 | `Assets/Plugins/WebGL/ZlinkVerificationReport.jslib` | the check's own result channel, and the control for "did Unity link plugins at all" |
 | `Assets/link.xml` | preserves the check's entry point, and only that |
+
+The scenario follows `test/browser/unity-webgl-emscripten.test.js` step for step,
+including the `WaitFor` that consumes the push the request produced. The server
+answers every request with a push as well as a reply, so without it two pushes
+are outstanding and the handler takes the older one - spec 32 section 10 keeps a
+push in the received-message queue until a handler or a wait surface takes it.
 
 The check assembly is `WebGL`-only, exactly like the adapter's, so the Editor
 cannot see its types. That is why the player entry point is a
