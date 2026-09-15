@@ -68,14 +68,15 @@ CMAKE_ARCH_FLAGS="-DCMAKE_OSX_ARCHITECTURES=$ARCH"
 
 # Determine BUILD_TESTS flag
 BUILD_TESTS_FLAG="OFF"
-BUILD_STATIC_FLAG="OFF"
 if [ "$RUN_TESTS" = "ON" ]; then
     BUILD_TESTS_FLAG="ON"
-    # Internal contract tests use private Core helpers. Build the static target
-    # so those tests do not depend on symbols intentionally hidden from the
-    # distributable dylib.
-    BUILD_STATIC_FLAG="ON"
 fi
+# The static archive (libzlink.a) is always built: internal contract tests
+# use private Core helpers not exported from the distributable dylib, and
+# the release archive ships it so vcpkg's default static triplet can
+# consume the install prefix instead of building Core from source
+# (issue #397).
+BUILD_STATIC_FLAG="ON"
 
 # Configure build
 if [ -z "$OPENSSL_ROOT_DIR" ]; then
@@ -112,6 +113,16 @@ make -j$(sysctl -n hw.ncpu)
 echo ""
 echo "Step 4: Installing to output directory..."
 make install
+
+# Merge the full `make install` prefix (lib/cmake/zlink/*.cmake, libzlink.a,
+# lib/pkgconfig/libzlink.pc, the complete include/ tree) into the output
+# directory. This is additive: it sits alongside the flat libzlink.dylib /
+# include/*.h files the steps below produce, which existing consumers
+# (fetch-release.sh, node/java prebuild downloads, framework CI) still read
+# from the archive root.
+echo ""
+echo "Step 4b: Merging install prefix into output directory..."
+cp -a install/. "$REPO_ROOT/$OUTPUT_DIR/"
 
 # Copy .dylib to output
 DYLIB_FILE=$(find install/lib -name "libzlink.[0-9]*.dylib" 2>/dev/null | head -n 1)
