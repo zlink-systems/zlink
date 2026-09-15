@@ -1,7 +1,7 @@
 # Kotlin DeliveryDispatch Sample Porting Inventory
 
-이 문서는 `framework/doc/plan/framework-kotlin-sample-dotnet-porting-plan.ko.md`의 샘플 단위
-절차에 따라 `.NET` DeliveryDispatch 샘플과 공통 샘플 문서를 Kotlin 구현에 매핑한다.
+이 문서는 샘플 단위 절차에 따라 `.NET` DeliveryDispatch 샘플과 공통 샘플 문서를 Kotlin
+구현에 매핑한다.
 
 현재 Kotlin 루트는 `.NET` DeliveryDispatch와 공통 샘플 문서의 역할 배치, message 계약, 검증 marker를
 따른다. client stream connector, entry spot, actor, dispatch worker, tracking fanout source는 compile

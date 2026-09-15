@@ -82,8 +82,8 @@ internal sealed class TicTacToeMeshReadinessReporter(
         return report.Kind switch
         {
             // Spec 10.1 wants the named peer confirmed. Without a fixed RID (see PlayServer) the
-            // peer cannot be named: peer status carries no endpoint. Deviation tracked in
-            // doc/plan/spec-server-reorg/spec-gap.ko.md.
+            // peer cannot be named: peer status carries no endpoint. This is the same known
+            // spec deviation as PlayServer/ApiServer's fixed-RID gap.
             // Spec 10.1: confirm the peer named in the row, not merely that some peer is ready.
             // The spot mesh uses a fixed RID so the expected peer can be named at all.
             TicTacToeReadyKind.PeerRoute => status.Peers.Any(peer =>

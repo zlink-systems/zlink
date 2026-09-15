@@ -542,7 +542,7 @@ A C++ caller never has to reason about cleaning up a C handle.
   and a deep copy). The C++ signatures are `message_t::copy()` (share, returns a new value),
   `message_t::move(message_t&)` (ownership transfer, caller left empty), and
   `message_t::clone()` (independent deep copy); `move` wraps the C API directly, separate
-  from C++ move semantics. See the [common Message ownership contract](../draft/message-ownership.ko.md)
+  from C++ move semantics. See the [common Message ownership contract](../message-ownership.ko.md)
   §"명시적 Copy / Move / Clone".
 - The data-plane receive and subscribe paths use caller-provided storage.
 - Receive-result lifetime APIs follow the C++ output-object description in

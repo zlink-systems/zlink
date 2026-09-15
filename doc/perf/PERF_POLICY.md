@@ -54,7 +54,7 @@ bindings 성능 개선 계획 문서는 실행 규칙과 완료 기준을 정의
 목표와 범위, 마지막 완료 판정, 필요한 근거 링크만 둔다.
 
 새 Core 버전의 작업은
-`doc/perf/perf/bindings-library-performance-improvement-plan-template.ko.md`를 복사한 뒤
+`doc/perf/perf/bindings-library-performance-improvement-plan-core-template.ko.md`를 복사한 뒤
 `doc/perf/perf/core-<version>/` 폴더에 버전별 문서를 만든다. 언어별 계획 문서와 측정 시트를
 그 폴더에 둔다. 
 측정 시트의 상태 값은 `미측정`, `측정 gap`,
@@ -121,10 +121,9 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   0개)의 `latency_p95`·`latency_p99`는 **평균 latency와 같은 값**으로 보고한다.
   `0`으로 보고하지 않는다. 전체 count와 sum은 sample 보관 여부와 무관하게 계속
   누적한다.
-- public API 동작에 문제가 있으면 perf 코드에서 우회하지 않고 버그로
-  레포팅한다. 버그레포팅 문서는 doc/bug/perf 아래에 md 파일 형식으로 작성한다.
-  버그는 회귀테스트를 작성해서 재현을 확인하고 수정한다. 버그를 우선 수정하고
-  이어서 perf 작업을 계속한다.
+- public API 동작에 문제가 있으면 perf 코드에서 우회하지 않고 GitHub Issue로
+  버그를 레포팅한다. 버그는 회귀테스트를 작성해서 재현을 확인하고 수정한다.
+  버그를 우선 수정하고 이어서 perf 작업을 계속한다.
 - **시간원은 monotonic clock 하나로 고정한다.** 모든 러너의 경과 시간, active
   deadline, timeout, drain 한도, 그리고 metric header의 `sent_ts_ns`와 수신 판정
   시각은 monotonic 시간원에서 읽는다. wall clock은 결과 파일과 report의 timestamp

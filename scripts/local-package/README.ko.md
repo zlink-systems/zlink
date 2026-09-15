@@ -194,8 +194,7 @@ Windows package 입력과 결과는 다음 경로를 사용한다.
 package는 Windows local-package 경로가 만들지 않는다.
 
 Windows native package 생성 절차를 통합할 때는 이 경로와 언어별 version pinning을 함께
-갱신한다. 현재 Windows 성능 실행 결과의 상태와 실패 원인은
-`doc/perf/perf/core-0.10.0/` 아래의 개별 measurement sheet와 `log/`가 소유한다.
+갱신한다.
 
 ## Core runtime 동기화
 

@@ -2,8 +2,8 @@
 
 > In effect from 2026-09-10 (after the framework 0.11.0 release, for the 1.0 preparation). User decision.
 > This page owns "where a piece of work is registered, on which branch it is done, and how it lands
-> on main". Commit messages, versions and release procedure stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §9;
-> agent operating rules and the paths jobs may not touch stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §10 and
+> on main". Commit messages, versions and release procedure stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §8;
+> agent operating rules and the paths jobs may not touch stay with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) §9 and
 > [`AGENTS.md`](../../../AGENTS.md) (this page references them and does not restate them).
 > Revised after the 2026-09-10 codex review (`.artifacts/codex/workflow-doc-review/summary.md`, adoption table `adoption.md`).
 
@@ -51,19 +51,18 @@ does not apply.
 ### 2.1 Writing the Issue
 
 - Every piece of work is an Issue before it starts. The title is a one-line outcome; the body has
-  three sections — **scope / done criteria / evidence** — and none may be empty. Evidence names the
-  decision record number (`FB-nnn`, `D-nnn`) **with its file path and anchor**
-  (`doc/plan/fw-bench-worklog/decisions.ko.md#fb-056`), measurements and report paths.
+  three sections — **scope / done criteria / evidence** — and none may be empty. Evidence carries the
+  measurements and the report paths, written into the Issue body itself rather than linked from a
+  location a reader cannot open.
 - Two label axes only:
   - `area:` `core` · `bindings` · `framework-dotnet` · `framework-java` · `framework-node` · `framework-cpp` · `bench` · `ci` · `docs`
   - `kind:` `bug` · `perf` · `feature` · `chore`
 - One Issue is one cause and one outcome. The same fix in several languages becomes one Issue per
   language, cross-linked. Follow-up stages with the same cause (diagnosis, then fix) stay in **one
   Issue** and are split into PRs (§5).
-- Decision records (`doc/plan/**/decisions*.md`) are the evidence; an Issue is that evidence turned
-  into a to-do. Cross-reference format: the Issue body says `evidence: decisions.ko.md#fb-056`, the
-  record's heading says `(Issue #7)`. Add the back-link in the record in the same commit that creates
-  the Issue (a §6 exception document).
+- The evidence that justifies the work lives in the Issue body; an Issue is that evidence turned
+  into a to-do. When later work builds on an earlier finding, cross-reference it by Issue or PR
+  number so the whole chain stays readable from GitHub alone.
 
 ## 3. Grouping — Milestones and Projects
 
@@ -91,7 +90,7 @@ does not apply.
 - A codex job receives the worktree path via `-C` and commits **only on that branch** (commit
   delegation only when the brief says so; a job without it delivers a diff and a report). The
   supervisor pushes, opens the PR and merges. The paths a job may not touch are owned by
-  `CONTRIBUTING.md` §10.
+  `CONTRIBUTING.md` §9.
 - Catch up with main using `git fetch && git merge origin/main` (no rebase on shared branches).
 
 ### 4.1 Shared local-package cache (content-addressed)
@@ -176,8 +175,7 @@ Three rules apply to all of them.
   The body carries (1) what changed and (2) **verification — commands run, target SHA, package
   digests, the key result numbers (as a table), remaining failures — written into the body itself**.
   Local report paths (`.artifacts/codex/<job>/summary.md`) are secondary: they are gitignored and
-  invisible from another machine, so the tables used for the judgement are copied into the PR body
-  (or into a `doc/plan/**` record).
+  invisible from another machine, so the tables used for the judgement are copied into the PR body.
 - CI: pull_request workflows run under production-code path filters. Today that is framework
   .NET and Node; Core, bindings and framework Java/C++ are Issue #16. Documentation, bench, samples,
   scenario E2E, `VERSION` and `scripts/local-package` changes have no PR CI, so the local verification
@@ -196,8 +194,8 @@ Three rules apply to all of them.
 
 ## 6. Exceptions — direct commits to main (the only list)
 
-1. **Record documents** with no effect on code, CI or specs: `doc/plan/**` (plans, decision records,
-   worklogs, results), typo fixes in release notes. The supervisor commits them with an explicit pathspec
+1. **Record documents** with no effect on code, CI or specs: typo fixes in release notes and
+   equivalent editorial corrections. The supervisor commits them with an explicit pathspec
    (`git commit -- <paths>`).
 2. Release workflow dispatches and tag pushes (tags are not PR material).
 3. **A fix that blocks a release in flight** (a workflow check, a version field — something that only
@@ -208,7 +206,7 @@ Everything else (production code, tests, bench runners and aggregator, specs and
 
 ## 7. Relation to releases
 
-- Releases start from a tag as in `CONTRIBUTING.md` §9 and `doc/building/release-pipeline.md`. The
+- Releases start from a tag as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. The
   tagged commit is a main commit that satisfies the §3 milestone condition (`work.sh status --milestone`).
 - Fixes discovered during a release follow §6-3.
 

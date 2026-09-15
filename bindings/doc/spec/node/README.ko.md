@@ -678,7 +678,7 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
   `clone()`으로 이동한다. `copy`는 이제 **ref-share**다 — JS는 동일 시그니처를 반환 의미만
   달리해 공존시킬 수 없어 deprecated alias가 불가능하므로, 이는 **major 버전 breaking
   change**로 처리하고 마이그레이션(`copy`→`clone`)을 안내한다(조용한 변경 아님). 정의는
-  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  [Message ownership 공통 계약](../message-ownership.ko.md) §"명시적 Copy / Move / Clone".
   - **refcount 관찰 타이밍(Node 한정):** Node는 payload를 JS `Buffer`로 노출하며, 노출된
     `Buffer` view가 살아 있는 동안 native frame은 그 view가 GC/finalize될 때 정리된다(예전부터
     안전하게 이렇게 동작). 따라서 `copy()`로 공유한 두 핸들 중 하나를 `close()`해도, 버퍼 view가

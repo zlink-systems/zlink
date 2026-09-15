@@ -18,8 +18,8 @@
   zlink_raw_command_endpoint: tcp://127.0.0.1:5077
   raw_socket: router
   zlink_raw_stats_url: http://127.0.0.1:5076
-  result_json: /home/hep7/project/zlink/zlink-work/fwb-02/gated2/dotnet-router-1/results.json
-  report_txt: /home/hep7/project/zlink/zlink-work/fwb-02/gated2/dotnet-router-1/report.txt
+  result_json: /work/bench/gated2/dotnet-router-1/results.json
+  report_txt: /work/bench/gated2/dotnet-router-1/report.txt
     Testing local:
     Testing local:
     Testing local:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.11.1 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.12.0 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
@@ -838,8 +838,14 @@ if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_R
       ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
       "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
       DIRECTORY)
+    # Copy whatever Core actually built: the shared runtime plus, when
+    # BUILD_STATIC=ON (Core's default), the static archive that the copied
+    # zlinkTargets.cmake declares as libzlink-static's IMPORTED_LOCATION.
+    # The glob yields nothing for a pattern that has no match, so this stays
+    # correct when Core is built with BUILD_STATIC=OFF too.
     file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.so*")
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.so*"
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.a")
     install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
       COMPONENT StreamConnector)
@@ -847,6 +853,19 @@ if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_R
     install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
       COMPONENT StreamConnector)
+    # Same promise/installed-files mismatch as the Linux branch above: the
+    # copied Core config can declare libzlink-static even though this
+    # install rule only ever staged the shared framework. Copy the static
+    # archive too when Core produced one.
+    get_filename_component(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}" DIRECTORY)
+    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.a")
+    if(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES)
+      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES}
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT StreamConnector)
+    endif()
   endif()
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)

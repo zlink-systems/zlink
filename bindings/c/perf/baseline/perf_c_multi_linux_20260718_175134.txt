@@ -1481,4 +1481,4 @@ RESULT,current,MULTI_STREAM,wss,65536,throughput,8872.800
 - expected_result_lines: 800
 - actual_result_lines: 800
 
-Saved result file: /home/hep7/project/kairos/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260718_175134.txt (status=complete)
+Saved result file: /repo/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260718_175134.txt (status=complete)

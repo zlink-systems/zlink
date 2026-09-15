@@ -3,6 +3,7 @@
 set -euo pipefail
 
 DRY_RUN=0
+WRITE_MODE=0
 RELEASE_TARGET=""
 RELEASE_LANGUAGE=""
 RELEASE_VERSION=""
@@ -19,6 +20,15 @@ usage() {
   release-check.sh [--dry-run] core <X.Y.Z>
   release-check.sh [--dry-run] bindings <cpp|node|java|dotnet> <X.Y.Z>
   release-check.sh [--dry-run] framework <cpp|node|java|dotnet> <X.Y.Z>
+  release-check.sh --write [--dry-run] core <X.Y.Z>
+  release-check.sh --write [--dry-run] bindings cpp <X.Y.Z>
+  release-check.sh --write [--dry-run] framework cpp <X.Y.Z>
+
+--write는 vcpkg port·Conan recipe(vcpkg.json·portfile.cmake·conandata.yml·
+conanfile.py)에 릴리스 태그·자산의 버전·SHA를 채운다. core 대상과
+bindings/framework의 cpp 언어에서만 의미가 있다(다른 언어는 npm·NuGet·Maven이라
+이 자동화의 대상이 아니다). --write와 함께 쓴 --dry-run은 값을 계산해 보여주기만
+하고 파일을 바꾸지 않는다.
 EOF
 }
 
@@ -113,11 +123,15 @@ check_release_notes() {
 }
 
 validate_metadata() {
-    local root=$1 mode=$2
-    python3 - "$root" "$RELEASE_TARGET" "$RELEASE_LANGUAGE" "$RELEASE_VERSION" "$mode" <<'PY'
+    local root=$1 mode=$2 action=${3:-check} dry_run=${4:-0}
+    python3 - "$root" "$RELEASE_TARGET" "$RELEASE_LANGUAGE" "$RELEASE_VERSION" "$mode" "$action" "$dry_run" <<'PY'
+import hashlib
 import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -125,7 +139,15 @@ target = sys.argv[2]
 language = sys.argv[3]
 version = sys.argv[4]
 mode = sys.argv[5]
+action = sys.argv[6] if len(sys.argv) > 6 else "check"
+dry_run = (sys.argv[7] if len(sys.argv) > 7 else "0") == "1"
 errors = []
+GITHUB_REPO = "zlink-systems/zlink"
+# Overridable only so release-check-test.sh can point write mode at a local
+# fixture server instead of the real GitHub; unset in every real invocation.
+GITHUB_BASE_URL = os.environ.get(
+    "ZLINK_RELEASE_CHECK_GITHUB_BASE_URL", "https://github.com"
+)
 
 
 def error(message):
@@ -332,6 +354,51 @@ def validate_maven():
             error(f"framework Maven 배포 목록 불일치: 누락={missing}, 추가={extra}")
 
 
+# The one target table check and write both read. A vcpkg port·Conan recipe
+# pair exists for exactly three release targets; keeping their paths and
+# tag/asset naming in a single place is the point of this module (issue #378):
+# check and write must never be able to disagree about what "correct" means.
+CPP_TARGETS = {
+    ("core", None): {
+        "vcpkg_manifest": "vcpkg/ports/zlink/vcpkg.json",
+        "portfile": "vcpkg/ports/zlink/portfile.cmake",
+        "conandata": "core/packaging/conan/conandata.yml",
+        "conanfile": None,
+        "tag_template": "core/v{version}",
+        "asset_template": "zlink-{version}-source.tar.gz",
+    },
+    ("bindings", "cpp"): {
+        "vcpkg_manifest": "vcpkg/ports/zlink-cpp/vcpkg.json",
+        "portfile": "vcpkg/ports/zlink-cpp/portfile.cmake",
+        "conandata": "bindings/cpp/packaging/conan/conandata.yml",
+        "conanfile": "bindings/cpp/packaging/conan/conanfile.py",
+        "tag_template": "cpp/v{version}",
+        "asset_template": "zlink-cpp-{version}.tar.gz",
+    },
+    ("framework", "cpp"): {
+        "vcpkg_manifest": "vcpkg/ports/zlink-framework/vcpkg.json",
+        "portfile": "vcpkg/ports/zlink-framework/portfile.cmake",
+        "conandata": "framework/languages/cpp/packaging/conan/conandata.yml",
+        "conanfile": "framework/languages/cpp/packaging/conan/conanfile.py",
+        "tag_template": "framework-cpp/v{version}",
+        "asset_template": "zlink-framework-cpp-{version}.tar.gz",
+    },
+}
+
+
+def cpp_target():
+    key = (target, None if target == "core" else language)
+    row = CPP_TARGETS.get(key)
+    if row is None:
+        error(f"지원하지 않는 cpp 대상입니다: {target}/{language}")
+        return None
+    return {
+        **row,
+        "tag": row["tag_template"].format(version=version),
+        "asset": row["asset_template"].format(version=version),
+    }
+
+
 def conan_source(relative, tag, asset):
     source = text(relative)
     match = re.search(
@@ -365,37 +432,161 @@ def vcpkg_port(manifest, portfile, tag, asset=None):
 
 
 def validate_cpp():
+    t = cpp_target()
+    if t is None:
+        return
     if target == "core":
-        vcpkg_port(
-            "vcpkg/ports/zlink/vcpkg.json",
-            "vcpkg/ports/zlink/portfile.cmake",
-            f"core/v{version}",
-        )
-        conan_source(
-            "core/packaging/conan/conandata.yml",
-            f"core/v{version}",
-            f"zlink-{version}-source.tar.gz",
-        )
+        vcpkg_port(t["vcpkg_manifest"], t["portfile"], t["tag"])
+        conan_source(t["conandata"], t["tag"], t["asset"])
+        return
+    vcpkg_port(t["vcpkg_manifest"], t["portfile"], t["tag"], t["asset"])
+    contains(t["conanfile"], f'version = "{version}"')
+    conan_source(t["conandata"], t["tag"], t["asset"])
+
+
+# --- write mode -------------------------------------------------------
+#
+# Fills the same fields validate_cpp() checks, from the published release
+# tag and asset. Values depend on state that only exists after a release is
+# published (the tag and its GitHub Release asset), so this network access
+# is unavoidable; it happens only in write mode, never in check mode.
+
+
+def download(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "zlink-release-check"})
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return response.read()
+    except (OSError, urllib.error.URLError) as exc:
+        error(f"{url}: 다운로드 실패: {exc}")
+        return None
+
+
+def detect_archive_kind(portfile_source, portfile):
+    has_github = bool(re.search(r"(?m)^\s*vcpkg_from_github\(", portfile_source))
+    has_distfile = bool(re.search(r"(?m)^\s*vcpkg_download_distfile\(", portfile_source))
+    if has_github and not has_distfile:
+        return "github"
+    if has_distfile and not has_github:
+        return "distfile"
+    error(
+        f"{portfile}: vcpkg_from_github/vcpkg_download_distfile 형태를 판정할 수 "
+        "없음(SHA512가 무엇의 해시인지 정할 수 없어 계산을 거부함)"
+    )
+    return None
+
+
+def write_text_if_changed(relative, new_source):
+    path = root / relative
+    try:
+        old_source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        error(f"{relative}: 읽기 실패: {exc}")
+        return
+    if old_source == new_source:
+        print(f"변경 없음: {relative}")
+        return
+    if dry_run:
+        print(f"dry-run: 갱신 예정: {relative}")
+        return
+    path.write_text(new_source, encoding="utf-8")
+    print(f"갱신함: {relative}")
+
+
+def regex_replace_file(relative, pattern, replacement, what):
+    source = text(relative)
+    if not source:
+        return
+    new_source, count = pattern.subn(replacement, source, count=1)
+    if count == 0:
+        error(f"{relative}: {what} 필드를 찾지 못함")
+        return
+    write_text_if_changed(relative, new_source)
+
+
+def template_regex(template):
+    # Exactly one "{version}" placeholder; matches that slot with any X.Y.Z so
+    # a template ("...${VERSION}...") is left untouched (nothing to match)
+    # while a stale literal version is replaced.
+    prefix, _, suffix = template.partition("{version}")
+    return re.compile(re.escape(prefix) + r"[0-9]+\.[0-9]+\.[0-9]+" + re.escape(suffix))
+
+
+def write_cpp():
+    t = cpp_target()
+    if t is None:
         return
 
-    if target == "bindings":
-        prefix = "bindings/cpp/packaging/conan"
-        port = "zlink-cpp"
-        tag = f"cpp/v{version}"
-        asset = f"zlink-cpp-{version}.tar.gz"
+    asset_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
+    asset_bytes = download(asset_url)
+    if asset_bytes is None:
+        return
+    asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
+
+    portfile_source = text(t["portfile"])
+    if not portfile_source:
+        return
+    kind = detect_archive_kind(portfile_source, t["portfile"])
+    if kind is None:
+        return
+
+    if kind == "github":
+        source_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/archive/{t['tag']}.tar.gz"
+        source_bytes = download(source_url)
+        if source_bytes is None:
+            return
+        vcpkg_sha512 = hashlib.sha512(source_bytes).hexdigest()
     else:
-        prefix = "framework/languages/cpp/packaging/conan"
-        port = "zlink-framework"
-        tag = f"framework-cpp/v{version}"
-        asset = f"zlink-framework-cpp-{version}.tar.gz"
-    vcpkg_port(
-        f"vcpkg/ports/{port}/vcpkg.json",
-        f"vcpkg/ports/{port}/portfile.cmake",
-        tag,
-        asset,
+        vcpkg_sha512 = hashlib.sha512(asset_bytes).hexdigest()
+
+    # vcpkg.json: version
+    regex_replace_file(
+        t["vcpkg_manifest"],
+        re.compile(r'"version":\s*"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?"'),
+        f'"version": "{version}"',
+        "version",
     )
-    contains(f"{prefix}/conanfile.py", f'version = "{version}"')
-    conan_source(f"{prefix}/conandata.yml", tag, asset)
+
+    # portfile.cmake: tag, asset (no-op where already ${VERSION}-templated) and SHA512
+    new_portfile = template_regex(t["tag_template"]).sub(t["tag"], portfile_source)
+    new_portfile = template_regex(t["asset_template"]).sub(t["asset"], new_portfile)
+    new_portfile, sha_count = re.subn(
+        r"(?m)^(\s*SHA512\s+)[0-9a-fA-F]+(\s*)$",
+        rf"\g<1>{vcpkg_sha512}\g<2>",
+        new_portfile,
+        count=1,
+    )
+    if sha_count == 0:
+        error(f"{t['portfile']}: SHA512 필드를 찾지 못함")
+    else:
+        write_text_if_changed(t["portfile"], new_portfile)
+
+    # conandata.yml: add or replace this version's source entry
+    url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
+    new_entry = f'  "{version}":\n    url: "{url}"\n    sha256: "{asset_sha256}"\n'
+    conandata_source = text(t["conandata"])
+    if conandata_source:
+        existing = re.compile(rf'(?ms)^  "{re.escape(version)}":\s*\n(?:    .*(?:\n|$))*')
+        if existing.search(conandata_source):
+            new_conandata = existing.sub(new_entry, conandata_source, count=1)
+        else:
+            new_conandata, header_count = re.subn(
+                r"(?m)^sources:\s*\n", "sources:\n" + new_entry, conandata_source, count=1
+            )
+            if header_count == 0:
+                error(f"{t['conandata']}: sources: 헤더를 찾지 못함")
+                new_conandata = None
+        if new_conandata is not None:
+            write_text_if_changed(t["conandata"], new_conandata)
+
+    # conanfile.py: version (bindings/framework only; core has no conanfile.py)
+    if t["conanfile"]:
+        regex_replace_file(
+            t["conanfile"],
+            re.compile(r'(?m)^(\s*version\s*=\s*)"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?"'),
+            rf'\g<1>"{version}"',
+            "version",
+        )
 
 
 validators = {
@@ -404,7 +595,13 @@ validators = {
     "maven": validate_maven,
     "cpp": validate_cpp,
 }
-validators[mode]()
+if action == "write":
+    if mode != "cpp":
+        error(f"쓰기 모드는 cpp에서만 지원합니다: mode={mode}")
+    else:
+        write_cpp()
+else:
+    validators[mode]()
 if errors:
     for item in errors:
         print(f"메타데이터 오류: {item}", file=sys.stderr)
@@ -444,6 +641,27 @@ check_package_metadata() {
             esac
             ;;
     esac
+}
+
+cpp_write_supported() {
+    case "$RELEASE_TARGET" in
+        core) return 0 ;;
+        bindings|framework) [[ "$RELEASE_LANGUAGE" == cpp ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+cmd_write() {
+    local root=$1
+    cpp_write_supported \
+        || die 2 '쓰기 모드는 core 또는 bindings/framework의 cpp 대상에만 있습니다(vcpkg·Conan 레시피).'
+    printf '릴리스 레시피 쓰기: %s%s %s\n' "$RELEASE_TARGET" "${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" "$RELEASE_VERSION"
+    ((DRY_RUN)) && printf 'dry-run: 값을 계산해 보여주기만 하고 파일을 바꾸지 않습니다.\n'
+    if validate_metadata "$root" cpp write "$DRY_RUN"; then
+        printf '\n쓰기 완료: %s%s %s\n' "$RELEASE_TARGET" "${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" "$RELEASE_VERSION"
+    else
+        die 1 '릴리스 레시피 쓰기가 실패했습니다.'
+    fi
 }
 
 print_check_table() {
@@ -493,6 +711,7 @@ main() {
     while (($#)); do
         case "$1" in
             --dry-run) DRY_RUN=1; shift ;;
+            --write) WRITE_MODE=1; shift ;;
             -h|--help) usage; return 0 ;;
             --*) usage >&2; die 2 "알 수 없는 옵션입니다: $1" ;;
             *) positional+=("$1"); shift ;;
@@ -529,6 +748,12 @@ main() {
     fi
     require_command python3
     root=$(repo_root)
+
+    if ((WRITE_MODE)); then
+        cmd_write "$root"
+        return 0
+    fi
+
     if ((DRY_RUN)); then
         printf 'dry-run: 읽기 전용 검사를 동일하게 수행하며 파일이나 외부 상태를 바꾸지 않습니다.\n'
     fi

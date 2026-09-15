@@ -84,10 +84,6 @@ internal static class FrameworkTestEnvironment
 
     public static string GetDotNetHostPath()
     {
-        const string localHostPath = "/home/hep7/.dotnet/dotnet";
-
-        if (File.Exists(localHostPath)) return localHostPath;
-
         var hostPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
 
         if (!string.IsNullOrWhiteSpace(hostPath) && File.Exists(hostPath)) return hostPath;

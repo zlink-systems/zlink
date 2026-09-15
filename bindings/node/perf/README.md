@@ -3,10 +3,10 @@
 Node perf exposes in-repo single and multi runners for the aligned binding
 surface. The authoritative policy contract remains:
 
-- [`bindings/README.md`](/home/hep7/project/kairos/zlink/doc/spec/bindings/README.md)
-- [`doc/perf/PERF_POLICY.md`](/home/hep7/project/kairos/zlink/doc/perf/PERF_POLICY.md)
-- [`doc/perf/PERF_SINGLE_TEST_POLICY.md`](/home/hep7/project/kairos/zlink/doc/perf/PERF_SINGLE_TEST_POLICY.md)
-- [`doc/perf/PERF_MULTI_TEST_POLICY.md`](/home/hep7/project/kairos/zlink/doc/perf/PERF_MULTI_TEST_POLICY.md)
+- [`bindings/doc/spec/README.en.md`](../../doc/spec/README.en.md)
+- [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)
+- [`doc/perf/PERF_SINGLE_TEST_POLICY.md`](../../../doc/perf/PERF_SINGLE_TEST_POLICY.md)
+- [`doc/perf/PERF_MULTI_TEST_POLICY.md`](../../../doc/perf/PERF_MULTI_TEST_POLICY.md)
 
 Available entrypoints:
 

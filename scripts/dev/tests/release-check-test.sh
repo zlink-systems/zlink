@@ -9,7 +9,10 @@ REAL_PYTHON=$(command -v python3)
 PASS=0
 export TEST_ROOT REAL_PYTHON
 
+HTTP_SERVER_PID=""
+
 cleanup() {
+    [[ -n "$HTTP_SERVER_PID" ]] && kill "$HTTP_SERVER_PID" >/dev/null 2>&1
     [[ "$TEST_ROOT" == /tmp/zlink-release-check-test.* ]] && rm -rf -- "$TEST_ROOT"
 }
 trap cleanup EXIT
@@ -343,5 +346,148 @@ assert_failure 'Conan SHA 실패 검출 실패' 1 release_check core 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| Conan·vcpkg \| FAIL \|'
 mv "$TEST_ROOT/conandata.backup" "$TEST_ROOT/repo/core/packaging/conan/conandata.yml"
 pass 'Conan recipe 버전·자산 URL·SHA 형식을 검사한다'
+
+### 쓰기 모드 (Task 1, 이슈 #378): vcpkg port·Conan recipe 자동화.
+#
+# --write는 GitHub에서 실제 바이트를 받는다. 오프라인 재현을 위해 로컬
+# HTTP 서버가 고정된 fixture 바이트를 내주고, ZLINK_RELEASE_CHECK_GITHUB_BASE_URL로
+# release-check.sh가 그 서버를 보게 한다(write_cpp()만 이 변수를 읽고, 실제
+# 실행에서는 설정하지 않는다).
+
+HTTP_ROOT="$TEST_ROOT/http-root"
+mkdir -p "$HTTP_ROOT/zlink-systems/zlink/releases/download" "$HTTP_ROOT/zlink-systems/zlink/archive"
+HTTP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+(cd "$HTTP_ROOT" && exec python3 -m http.server "$HTTP_PORT" --bind 127.0.0.1 >"$TEST_ROOT/http-server.log" 2>&1) &
+HTTP_SERVER_PID=$!
+for _ in $(seq 1 50); do
+    curl -s -o /dev/null "http://127.0.0.1:$HTTP_PORT/" && break
+    sleep 0.1
+done
+
+release_check_write() {
+    env PATH="$TEST_ROOT/fake-bin:$PATH" \
+        ZLINK_RELEASE_CHECK_GITHUB_BASE_URL="http://127.0.0.1:$HTTP_PORT" \
+        "$RELEASE_CHECK" "$@"
+}
+
+# --- distfile 형태(vcpkg_download_distfile): framework cpp, 값이 이미 맞음 ---
+fw_asset_dir="$HTTP_ROOT/zlink-systems/zlink/releases/download/framework-cpp/v1.2.3"
+mkdir -p "$fw_asset_dir"
+printf 'framework-cpp fixture asset\n' >"$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz"
+fw_sha256=$(sha256sum "$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz" | awk '{print $1}')
+fw_sha512=$(sha512sum "$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz" | awk '{print $1}')
+
+assert_success 'framework cpp 쓰기 실패' release_check_write --write framework cpp 1.2.3
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" "SHA512 ${fw_sha512}\$"
+assert_file_contains "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml" \
+    "sha256: \"${fw_sha256}\""
+pass 'distfile 형태(vcpkg_download_distfile) 포트는 릴리스 자산 하나로 vcpkg SHA512와 Conan sha256을 함께 채운다'
+
+assert_success '재실행 무변경 확인 실패' release_check_write --write framework cpp 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '^변경 없음: vcpkg/ports/zlink-framework/portfile.cmake$'
+assert_file_contains "$TEST_ROOT/last.out" '^변경 없음: framework/languages/cpp/packaging/conan/conandata.yml$'
+pass '값이 이미 맞으면 재실행해도 파일을 다시 쓰지 않는다(재실행 안전)'
+
+# --- 문자 그대로 박힌 오래된 버전·해시 복구: bindings cpp (issue #378 재현) ---
+sed -i 's/1\.2\.3/1.2.2/g' \
+    "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/vcpkg.json" \
+    "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/portfile.cmake" \
+    "$TEST_ROOT/repo/bindings/cpp/packaging/conan/conanfile.py" \
+    "$TEST_ROOT/repo/bindings/cpp/packaging/conan/conandata.yml"
+assert_failure '갱신 전 검사가 실패해야 함' 1 release_check bindings cpp 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| Conan·vcpkg \| FAIL \|'
+
+cpp_asset_dir="$HTTP_ROOT/zlink-systems/zlink/releases/download/cpp/v1.2.3"
+mkdir -p "$cpp_asset_dir"
+printf 'bindings cpp fixture asset\n' >"$cpp_asset_dir/zlink-cpp-1.2.3.tar.gz"
+cpp_sha256=$(sha256sum "$cpp_asset_dir/zlink-cpp-1.2.3.tar.gz" | awk '{print $1}')
+cpp_sha512=$(sha512sum "$cpp_asset_dir/zlink-cpp-1.2.3.tar.gz" | awk '{print $1}')
+
+assert_success 'bindings cpp 쓰기 실패' release_check_write --write bindings cpp 1.2.3
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/vcpkg.json" '"version": "1.2.3"'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/portfile.cmake" 'cpp/v1\.2\.3/zlink-cpp-1\.2\.3\.tar\.gz'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/portfile.cmake" "SHA512 ${cpp_sha512}\$"
+assert_file_contains "$TEST_ROOT/repo/bindings/cpp/packaging/conan/conanfile.py" 'version = "1.2.3"'
+assert_file_contains "$TEST_ROOT/repo/bindings/cpp/packaging/conan/conandata.yml" '"1\.2\.3":'
+assert_file_contains "$TEST_ROOT/repo/bindings/cpp/packaging/conan/conandata.yml" "sha256: \"${cpp_sha256}\""
+
+assert_success '되살린 뒤 검사 실패' release_check bindings cpp 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '릴리스 사전 검사 통과: bindings/cpp 1.2.3'
+pass '오래된 버전·해시가 박힌 vcpkg port·Conan recipe를 --write가 최신 릴리스 자산에 맞춰 복구한다(검사 FAIL에서 PASS로)'
+
+# --- dry-run: 값을 계산해 보여주기만 하고 파일은 바꾸지 않는다 ---
+sed -i 's/1\.2\.3/1.2.2/g' \
+    "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/vcpkg.json" \
+    "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" \
+    "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conanfile.py" \
+    "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml"
+before_portfile=$(cat "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake")
+assert_success 'framework cpp dry-run 쓰기 실패' release_check_write --write --dry-run framework cpp 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '^dry-run: 갱신 예정: vcpkg/ports/zlink-framework/portfile\.cmake$'
+after_portfile=$(cat "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake")
+[[ "$before_portfile" == "$after_portfile" ]] || fail '--dry-run인데 portfile.cmake가 실제로 바뀜'
+pass '--write --dry-run은 갱신 내용을 계산해 보여주기만 하고 파일은 바꾸지 않는다'
+
+# --- github 자동 아카이브 형태(vcpkg_from_github): core, 자산과 다른 바이트 ---
+cat >"$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" <<'EOF'
+vcpkg_from_github(
+    OUT_SOURCE_PATH SOURCE_PATH
+    REPO zlink-systems/zlink
+    REF core/v1.2.2
+    SHA512 1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
+    HEAD_REF main
+)
+EOF
+sed -i 's/"version":"1.2.3"/"version":"1.2.2"/' "$TEST_ROOT/repo/vcpkg/ports/zlink/vcpkg.json"
+sed -i 's/"1\.2\.3":/"1.2.2":/' "$TEST_ROOT/repo/core/packaging/conan/conandata.yml"
+
+mkdir -p "$HTTP_ROOT/zlink-systems/zlink/archive/core" \
+    "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3"
+printf 'core github-archive fixture bytes\n' \
+    >"$HTTP_ROOT/zlink-systems/zlink/archive/core/v1.2.3.tar.gz"
+printf 'core release-asset fixture bytes (다른 내용)\n' \
+    >"$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/zlink-1.2.3-source.tar.gz"
+core_archive_sha512=$(sha512sum "$HTTP_ROOT/zlink-systems/zlink/archive/core/v1.2.3.tar.gz" | awk '{print $1}')
+core_asset_sha256=$(sha256sum \
+    "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/zlink-1.2.3-source.tar.gz" | awk '{print $1}')
+
+assert_success 'core(vcpkg_from_github) 쓰기 실패' release_check_write --write core 1.2.3
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/vcpkg.json" '"version": "1.2.3"'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" '^[[:space:]]*REF core/v1\.2\.3$'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" "SHA512 ${core_archive_sha512}\$"
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" '"1\.2\.3":'
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" "sha256: \"${core_asset_sha256}\""
+grep -q -- "$core_archive_sha512" "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" \
+    && fail 'vcpkg SHA512이 실수로 conandata에 들어감(자산과 아카이브를 구분하지 못함)'
+pass 'vcpkg_from_github 포트는 GitHub 자동 아카이브의 SHA512를, Conan sha256은 릴리스 자산에서 따로 계산한다(서로 다른 바이트, 서로 다른 해시)'
+
+# --- 판정 불가: vcpkg_from_github와 vcpkg_download_distfile이 함께 있으면 거부 ---
+cat >>"$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" <<'EOF'
+
+vcpkg_download_distfile(ARCHIVE
+    URLS "https://example.invalid/x.tar.gz"
+    SHA512 2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222
+)
+EOF
+assert_failure '형태 판정 모호 거부 실패' 1 release_check_write --write core 1.2.3
+assert_file_contains "$TEST_ROOT/last.err" '판정할 수 없음'
+pass 'vcpkg_from_github와 vcpkg_download_distfile이 함께 있으면 어느 해시를 계산할지 정하지 않고 실패한다'
+
+# --- 릴리스 자산이 없으면 실패하고 아무 파일도 바꾸지 않는다 ---
+before_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
+assert_failure '존재하지 않는 릴리스 자산 다운로드 실패 검출 실패' 1 release_check_write --write framework cpp 9.9.9
+assert_file_contains "$TEST_ROOT/last.err" '다운로드 실패'
+after_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
+[[ "$before_hash" == "$after_hash" ]] || fail '다운로드 실패에도 portfile.cmake가 바뀜(부분 쓰기 금지 위반)'
+pass '릴리스 자산이 없으면 값을 추측하지 않고 실패하며 아무 파일도 바꾸지 않는다'
+
+# --- 대상 검증: --write는 core 또는 bindings/framework의 cpp에만 있다 ---
+assert_failure '--write node 거부 실패' 2 release_check_write --write bindings node 1.2.3
+assert_failure '--write dotnet 거부 실패' 2 release_check_write --write framework dotnet 1.2.3
+pass '--write는 npm·NuGet·Maven 언어를 거부한다(vcpkg·Conan 레시피만 이 자동화의 대상)'
+
+kill "$HTTP_SERVER_PID" >/dev/null 2>&1 || true
+wait "$HTTP_SERVER_PID" 2>/dev/null || true
+HTTP_SERVER_PID=""
 
 printf '1..%d\n' "$PASS"

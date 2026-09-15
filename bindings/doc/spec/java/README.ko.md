@@ -670,7 +670,7 @@ Submit과 completion의 합류는 [공통 실행 모델](../async-execution-mode
   `void move(Message dest)`(소유권 이전, 호출자 empty, `zlink_msg_move`),
   `Message clone()`(독립 버퍼 deep copy). 기존 `sharedCopyOf`/`moveInto`/`moveTo`는
   공개 API가 아니라 내부 bridge/package-private였으므로 공개 deprecated alias는 두지 않고
-  내부 호출 경로만 유지한다. 정의는 [Message ownership 공통 계약](../draft/message-ownership.ko.md)
+  내부 호출 경로만 유지한다. 정의는 [Message ownership 공통 계약](../message-ownership.ko.md)
   §"명시적 Copy / Move / Clone";
 - `Message.from(...)` 같은 Java 친화적 factory를 노출한다;
 - raw `wrapNative`, `wrapDirect`, native pointer, borrow된 Java buffer send

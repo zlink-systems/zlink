@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/http-client",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/framework": "0.11.1",
+    "@zlink-systems/framework": "0.12.0",
     "undici": "6.27.0"
   }
 }

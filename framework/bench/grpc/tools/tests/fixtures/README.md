@@ -7,5 +7,5 @@ diagnostic lines from each run's stdout. The full run directories (server logs,
 measurement archive, it is the input that pins the aggregator's acceptance
 criterion.
 
-`doc/plan/fw-bench-worklog/bench-dotnet-summary.ko.md` is the expected output.
-`tests/test_acceptance_gated2.py` compares the two cell by cell.
+The expected output is transcribed into `tests/test_acceptance_gated2.py`, which
+compares the two cell by cell.

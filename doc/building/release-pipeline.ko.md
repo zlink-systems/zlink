@@ -62,9 +62,19 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 3. Framework: 대상 언어 VERSION을 갱신하고 `framework-<language>/vA.B.C` 태그를 push한다.
    C++·Node·JVM은 `framework-release.yml`, .NET은 `release-dotnet.yml`이 해당 언어 패키지만
    배포한다. 워크플로우는 pin한 binding 패키지가 레지스트리에서 실제로 제공될 때까지 기다린다.
-4. Conan·vcpkg: Release의 source tarball 해시로 `core/packaging/conan/conandata.yml`과
-   `vcpkg/ports/zlink/portfile.cmake`를 갱신하고 두 upstream 저장소에 PR을 낸다. 초안 본문은
-   `doc/building/pr-drafts/`에 있다.
+
+   > **태그는 한 번에 세 개까지만 push한다.** GitHub은 한 push에 태그가 셋을 넘으면
+   > workflow 이벤트를 만들지 않는다. 태그는 정상적으로 생기므로 겉보기에는 성공이고,
+   > `gh run list`를 보지 않으면 아무것도 돌지 않은 것을 모른다. 네 언어를 낼 때는
+   > 태그를 하나씩 push한다. 이미 셋을 넘겨 밀었다면 원격 태그를 지우고 다시 밀어야
+   > 이벤트가 생긴다(0.12.0에서 실제로 겪었다).
+
+4. Conan·vcpkg: **릴리스가 끝나면 `sync-recipes` job이 `release-check.sh --write`로
+   `conandata.yml`과 `portfile.cmake`를 갱신해 `main`으로 PR을 연다**(Issue #378).
+   사람이 할 일은 그 PR의 값을 확인하고 merge하는 것이다. 값은 릴리스 자산의 해시라
+   태그가 나온 뒤에만 계산할 수 있으므로 이 단계는 3번 뒤에 온다.
+   upstream 저장소(`microsoft/vcpkg`·`conan-io/conan-center-index`)에 PR을 내는 것은 여전히
+   사람이 한다. 초안 본문은 `doc/building/pr-drafts/`에 있다.
 
 dispatch 예시:
 
@@ -169,5 +179,4 @@ Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타�
 - [배포 계정과 secret](./release-accounts.ko.md)
 - [패키징 절차](./packaging.ko.md)
 - [릴리스 노트](./release-notes/)
-- [릴리스 준비 작업 기록](./release-prep/) — 2026-09-08·09의 워크플로우 수정 이력
 - [PR 초안](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

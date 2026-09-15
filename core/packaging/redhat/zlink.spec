@@ -163,7 +163,7 @@ autoreconf -fi
 %{_mandir}/man7/zlink_*
 
 %changelog
-* Tue Feb 11 2026 zlink maintainers <ulalax@kairoscode.dev>
+* Tue Feb 11 2026 zlink maintainers <zlink@zlink.systems>
 - Fork from libzmq and rebrand as zlink
 - Switch to CMake-only build system
 - Add TLS/WSS transport support via Boost.Asio

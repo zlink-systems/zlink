@@ -1,6 +1,6 @@
 """Focused parity tests for the receive-flow-state binding surface.
 
-Plan: doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md §5.1, §7.3, §8.1.1.
+Spec: bindings/doc/spec/README.en.md, "Receive-flow projection".
 The C ABI mirror lives in bindings/c/include; Core owns
 zlink_socket_set_receive_flow_state() and zlink_receive_flow_state_t.
 """

@@ -236,12 +236,8 @@ exclude_docs: |
   guide/EXAMPLES.en.md
   guide/STYLE.ko.md
   guide/STYLE.en.md
-  # 확정 전 초안.
-  spec/draft/
   # 측정이 끝나지 않은 messaging bench다. 결과는 별도 보고서로 낸다.
   common/bench/
-  # 작업이 끝나면 사라지는 임시 문서다. nav에도 없다.
-  bindings/plan/
   # 독자용 시나리오가 아니라 언어별 문서를 새로 쓸지 판단하는 작성 규약이다.
   common/sample/languages/
 

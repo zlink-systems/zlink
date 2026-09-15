@@ -2,8 +2,8 @@
 
 > 적용 시작: 2026-09-10 (framework 0.11.0 릴리스 뒤, 1.0 준비부터). 사용자 결정.
 > 이 문서는 "어떤 작업을 어디에 등록하고, 어느 브랜치에서 하고, 어떻게 main에 넣는가"를 소유한다.
-> 커밋 메시지·버전·릴리스 절차는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §9, 에이전트
-> 운영 규칙과 job의 금지 범위는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §10과
+> 커밋 메시지·버전·릴리스 절차는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §8, 에이전트
+> 운영 규칙과 job의 금지 범위는 [`CONTRIBUTING.ko.md`](../../../CONTRIBUTING.ko.md) §9과
 > [`AGENTS.md`](../../../AGENTS.md)가 소유한다(이 문서는 그 규칙을 반복하지 않고 참조만 한다).
 > 2026-09-10 codex 리뷰(`.artifacts/codex/workflow-doc-review/summary.md`, 채택표 `adoption.md`) 반영판.
 
@@ -47,17 +47,15 @@ Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-�
 ### 2.1 Issue 작성
 
 - 모든 작업은 시작 전에 Issue로 등록한다. 제목은 한 줄 결과("무엇이 어떻게 되어야 한다"), 본문은
-  **범위 / 완료 조건 / 근거** 세 항목이며 각 항목이 비어 있으면 안 된다. 근거는 결정 기록의 번호
-  (`FB-nnn`·`D-nnn`)와 **파일 경로**(`doc/plan/fw-bench-worklog/decisions.ko.md#fb-056`처럼 절 anchor까지),
-  측정값, 보고서 경로다.
+  **범위 / 완료 조건 / 근거** 세 항목이며 각 항목이 비어 있으면 안 된다. 근거는 측정값과 보고서
+  경로이며, 읽는 사람이 열 수 없는 위치를 링크하지 말고 Issue 본문에 직접 적는다.
 - 라벨은 두 축만 쓴다.
   - `area:` `core` · `bindings` · `framework-dotnet` · `framework-java` · `framework-node` · `framework-cpp` · `bench` · `ci` · `docs`
   - `kind:` `bug` · `perf` · `feature` · `chore`
 - 한 Issue는 원인 하나·결과 하나다. 여러 언어에 같은 수정이 필요하면 언어별 Issue로 나누고 본문에서
   서로 링크한다. 진단과 수정처럼 **원인이 같은 후속 단계는 같은 Issue**에 둔다(PR을 나눈다, §5).
-- 결정 기록(`doc/plan/**/decisions*.md`)이 근거이고 Issue는 그것을 꺼낸 "할 일"이다. 상호 참조 형식:
-  Issue 본문에 `근거: decisions.ko.md#fb-056`, 결정 기록의 해당 항목 제목에 `(Issue #7)`. Issue를 만들 때
-  결정 기록 쪽 역링크를 같은 커밋에서 넣는다(§6 예외 문서).
+- 작업을 정당화하는 근거는 Issue 본문에 있고, Issue는 그것을 꺼낸 "할 일"이다. 뒤따르는 작업이 앞선
+  발견에 기대면 Issue·PR 번호로 상호 참조해서 GitHub만 보고도 전체 사슬을 따라갈 수 있게 한다.
 
 ## 3. 묶음 — Milestone과 Project
 
@@ -82,7 +80,7 @@ Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-�
   같은 브랜치를 두 worktree에서 열지 않는다.
 - codex job에는 worktree 경로를 `-C`로 주고 **그 브랜치에만** 커밋하게 한다(commit 위임은 브리프에
   명시한 경우만; 위임하지 않은 job의 완료물은 diff와 보고서다). push·PR·merge는 감독자가 한다. job이
-  만지지 못하는 경로는 `CONTRIBUTING.ko.md` §10이 정본이다.
+  만지지 못하는 경로는 `CONTRIBUTING.ko.md` §9가 정본이다.
 - main을 따라잡을 때는 `git fetch && git merge origin/main`(rebase는 공유 브랜치에서 쓰지 않는다).
 
 ### 4.1 로컬 패키지 공유 캐시 (content-addressed)
@@ -157,7 +155,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 - PR 제목은 `<모듈>: <한 줄 요약>`. 본문 첫 줄은 `Closes #N`(완료) 또는 `Refs #N`(부분). 본문에는
   (1) 무엇을 바꿨나, (2) **검증 — 실행 명령, 대상 SHA, 패키지 digest, 핵심 결과 수치(표), 남은 실패**를
   본문에 직접 싣는다. 로컬 보고서 경로(`.artifacts/codex/<job>/summary.md`)는 보조 위치이며 gitignore라
-  다른 machine에서 보이지 않으므로, 판정에 쓴 표는 PR 본문(또는 `doc/plan/**` 기록)에 옮겨 적는다.
+  다른 machine에서 보이지 않으므로, 판정에 쓴 표는 PR 본문에 옮겨 적는다.
 - CI: PR 이벤트에서 운영 코드 경로 필터로 워크플로우가 돈다. 현재 있는 것은 framework .NET·Node이고,
   Core·bindings·framework Java/C++는 Issue #16이다. 문서·벤치·샘플·scenario E2E·`VERSION`·`scripts/local-package`
   변경에는 PR CI가 없으므로 PR 본문의 로컬 검증 기록(§5 두 번째 항목)이 대신한다. 문서 PR은 `mkdocs build --strict`
@@ -175,7 +173,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 
 ## 6. 예외 — main 직접 커밋을 허용하는 것 (유일한 목록)
 
-1. 코드·CI·규격에 영향이 없는 **기록 문서**: `doc/plan/**`(계획·결정 기록·worklog·결과), 릴리스 노트 오탈자.
+1. 코드·CI·규격에 영향이 없는 **기록 문서**: 릴리스 노트 오탈자 등 편집상 교정.
    감독자가 `git commit -- <경로>`로 파일을 지정해 커밋한다.
 2. 릴리스 워크플로우 dispatch와 태그 push(태그는 PR 대상이 아니다).
 3. **진행 중인 릴리스를 막는 수정**(워크플로우 검사·버전 필드처럼 그 릴리스에서만 문제가 되는 것)은
@@ -186,7 +184,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 
 ## 7. 릴리스와의 관계
 
-- 릴리스는 `CONTRIBUTING.ko.md` §9와 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
+- 릴리스는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
   커밋은 §3의 milestone 조건을 만족하는 main 커밋이다(`work.sh status --milestone`).
 - 릴리스 중 드러난 수정은 §6-3에 따른다.
 

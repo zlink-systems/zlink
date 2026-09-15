@@ -605,4 +605,4 @@ Spot/Entry Spot handler까지 도달해야 하므로, HTTP trigger나 direct Spo
 ## 후속 관리
 
 Config 8 자체에는 남은 `partial` 또는 `gap` 항목을 두지 않는다. 이후 C++ E2E/sample 전체 점검은
-상위 계획인 `framework/doc/plan/framework-cpp-e2e-sample-gap-closure-plan.ko.md`에서 관리한다.
+상위 계획에서 관리한다.
