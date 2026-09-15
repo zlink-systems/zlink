@@ -7,6 +7,7 @@ This is the official user guide for the TypeScript STREAM client connector
 |------|------|
 | [01 — Overview](01-overview.en.md) | Target execution environment, package, and transport |
 | [02 — Browser](02-browser.en.md) | Connecting, codec injection, dispatch, and flow delivery |
+| [03 — Unity WebGL](03-unity-webgl.en.md) | Installing the `com.zlink.stream-connector.webgl` UPM adapter and the main-thread pump |
 
 The exact options, call builder, and error types are owned by the
 [TypeScript Public Contract](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.en.md).

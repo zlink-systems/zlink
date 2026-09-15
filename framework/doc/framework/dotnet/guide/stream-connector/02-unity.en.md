@@ -10,8 +10,9 @@ dedicated Unity connector package. Unity also uses the general `.NET` connector 
 
 > **A WebGL build is not the target of this document.** Unity WebGL runs in the browser sandbox, so
 > it can't open an OS socket and can't use the `.NET` connector. WebGL calls the TypeScript
-> connector through jslib interop. See the
-> [Node/TypeScript Connector Guide](../../../node/guide/stream-connector/01-overview.en.md).
+> connector through jslib interop, using the `com.zlink.stream-connector.webgl` UPM adapter, whose
+> C# surface is the one this document describes. See the
+> [Unity WebGL guide](../../../node/guide/stream-connector/03-unity-webgl.en.md).
 
 ## Basic Principle
 
