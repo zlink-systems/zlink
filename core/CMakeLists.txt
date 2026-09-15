@@ -1333,6 +1333,15 @@ endif()
 
 if(BUILD_STATIC)
   target_compile_definitions(libzlink-static PUBLIC ZLINK_STATIC)
+  # LTO/IPO (enabled globally above via CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+  # would put GCC/clang LTO bytecode, or MSVC /GL IL, into libzlink.a
+  # instead of real object code. That archive only links on the exact
+  # toolchain major version that built it — the distributed static archive
+  # must link on whatever toolchain a downstream consumer has (issue #397).
+  # Same fix as test-core above: turn IPO off for this one target rather
+  # than globally, so the shared library (fully linked at build time, so
+  # no bytecode ever leaves it) keeps LTO.
+  set_target_properties(libzlink-static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 endif()
 
 list(APPEND target_outputs "")

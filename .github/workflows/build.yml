@@ -237,6 +237,16 @@ jobs:
 
   build-linux:
     name: Build Linux x64
+    # Deliberately a different GCC major version than the `verify` job
+    # below (ubuntu-24.04). libzlink.a is an LTO archive; linking it is
+    # only a real test of "does the distributed static archive link on a
+    # downstream toolchain" if that toolchain differs from the one that
+    # built it. Aligning these runners would make the find_package(CONFIG)
+    # static-link smoke in `verify` pass regardless of a real cross-
+    # toolchain break (issue #397 caught exactly this: libzlink.a built
+    # here under GCC 11.3 failed to link under GCC 13.1 in `verify`,
+    # because BUILD_STATIC still inherited global LTO). Do not "fix" this
+    # by matching the runners.
     runs-on: ubuntu-22.04
     needs: read-versions
     steps:
@@ -388,6 +398,11 @@ jobs:
 
   verify:
     name: Verify Build Artifacts
+    # Deliberately a different GCC major version than `build-linux` above
+    # (ubuntu-22.04) — see the comment there. The find_package(CONFIG)
+    # static-link smoke below only proves the shipped libzlink.a links on
+    # a toolchain other than the one that built it if this runner actually
+    # differs. Do not align these to "fix" a CI flake.
     runs-on: ubuntu-24.04
     needs:
       - read-versions
