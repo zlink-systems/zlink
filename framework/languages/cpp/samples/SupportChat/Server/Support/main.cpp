@@ -889,7 +889,8 @@ int main (int argc, char **argv)
       .listen (topology.support_http_url)
       .map_health ("/health");
     auto support_spot = options.add_route_mesh (sample_names_t::mesh);
-    support_spot.set_routing_id (zlink::routing_id_t::from ("supportchat-support"));
+    support_spot.set_routing_id (
+      zlink::routing_id_t::from (sample_names_t::support_node_routing_id));
     support_spot.listen (topology.support_spot_router_endpoint);
     support_spot.objects ()
       .server ()
