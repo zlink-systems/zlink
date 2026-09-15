@@ -96,7 +96,7 @@ SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 
 start() {
   local name=$1; shift
-  ZLINK_JAVA_STREAM_TRACE=1 "$@" >>"$LOG_DIR/$name.log" 2>&1 &
+  "$@" >>"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!"); node_pid[$name]=$!; echo "    started $name pid=$!"
 }
 forget_pid() { local target=$1 kept=() pid; for pid in "${pids[@]:-}"; do [[ "$pid" == "$target" ]] || kept+=("$pid"); done; pids=("${kept[@]:-}"); }
@@ -139,7 +139,7 @@ client_config() {
   {
     echo "sample.gateway-endpoint=tcp://127.0.0.1:${gateway_stream}"
     echo "sample.ops-endpoint=tcp://127.0.0.1:${ops_stream}"
-    echo "sample.scenarios=$id"; echo "sample.stream-trace=true"
+    echo "sample.scenarios=$id"; echo "sample.stream-trace=$( [[ "${ZLINK_JAVA_STREAM_TRACE:-}" == "1" ]] && echo true || echo false )"
     echo "sample.fault-arm-file=$RUN_DIR/b8-block-command-44"
   } >"$path"; chmod 0600 "$path"; echo "$path"
 }

@@ -103,15 +103,9 @@ function Start-ManagedProcess {
         }
     }
     $argumentLine = ($Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " "
-    $previousTrace = $env:ZLINK_JAVA_STREAM_TRACE
-    try {
-        $env:ZLINK_JAVA_STREAM_TRACE = "1"
-        $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
+    $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
             -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $outputPath `
             -RedirectStandardError $errorPath -PassThru
-    } finally {
-        $env:ZLINK_JAVA_STREAM_TRACE = $previousTrace
-    }
     [void]$process.Handle
     $Processes.Add($process)
     return $process
@@ -256,7 +250,7 @@ function Write-ClientConfig {
         "sample.gateway-endpoint=tcp://127.0.0.1:$GatewayStream",
         "sample.ops-endpoint=tcp://127.0.0.1:$OpsStream",
         "sample.scenarios=$Id",
-        "sample.stream-trace=true",
+        "sample.stream-trace=$(if ($env:ZLINK_JAVA_STREAM_TRACE -eq '1') { 'true' } else { 'false' })",
         "sample.fault-arm-file=$armFile"
     )
     Protect-ConfigFile $path

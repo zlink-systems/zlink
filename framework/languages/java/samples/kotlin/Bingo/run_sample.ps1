@@ -10,7 +10,6 @@ $ConfigDir = Join-Path ([IO.Path]::GetTempPath()) ("zlink-bingo-" + [Guid]::NewG
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 $env:BINGO_LOG_DIR = if ($env:BINGO_LOG_DIR) { $env:BINGO_LOG_DIR } else { Join-Path $SampleDir "logs" }
-$env:ZLINK_JAVA_STREAM_TRACE = if ($env:ZLINK_JAVA_STREAM_TRACE) { $env:ZLINK_JAVA_STREAM_TRACE } else { "1" }
 New-Item -ItemType Directory -Force -Path $env:BINGO_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:BINGO_LOG_DIR "*.log")
 
