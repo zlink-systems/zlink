@@ -753,18 +753,29 @@ abrupt. Only the initial cold start claims zones.
 Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
 runs out, which is exactly the state the cpp implementation was in.
 
-**Before judging a restarted node, the judging connection first observes the previous incarnation
-leave.** A status snapshot is not evidence of readiness: it can still describe the previous
-incarnation, and status payloads carry no incarnation marker. The judging connection **starts
-watching before the restart, observes the `leave → rejoin` order, and only then judges.** Only the
-new incarnation can produce that order.
+**The ZW-E5 judging connection opens before the ZoneNode stop begins.** The order is fixed:
 
-Do not poll a diagnostics or query call while waiting for readiness. Polling can read the previous
-incarnation's answer as the new one's, and it leaves the verdict to elapsed time instead of an
-observation.
+1. The judging connection observes `Connected=false` for the target NodeId. This is the same
+   runtime event as ZW-C2. `Registered=false` is the 15-second report TTL transition from §2.2
+   (ZW-C3) and is not used for this judgment.
+2. The runner confirms the previous process has exited, then starts the replacement.
+3. **The same connection** observes a status with `Registered=true` and `Connected=true`.
+4. Only then does it send a single `NodeDiagnosticsReq` to judge the maintenance restore.
 
-This applies to every scenario that stops and restarts a node (ZW-E5, ZW-G3, ZW-G4). Leaving it
-unstated let three implementations use three different readiness judgments - an ordered
+A status snapshot is not evidence of readiness: it can still describe the previous incarnation, and
+status payloads carry no incarnation marker. That is why step 2's exit confirmation is part of the
+order - without it, `Connected=false` followed by `Connected=true` could be the same process
+re-establishing its connection.
+
+**Do not poll a diagnostics or query call while waiting for readiness.** Polling can read the
+previous incarnation's answer as the new one's, and it leaves the verdict to elapsed time instead
+of an observation.
+
+ZW-G3 and ZW-G4 judge the incarnation by the evidence each already fixes - the new RID, the fresh
+object, and the Unavailable boundary (§9.3, §11.2). No status transition is added there; the
+evidence they already use is stronger.
+
+Leaving this unstated let five implementations use different readiness judgments - an ordered
 observation, a snapshot short-circuit, and a diagnostics poll - and the latter two can pass while
 looking at the previous incarnation.
 
