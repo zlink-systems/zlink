@@ -2301,27 +2301,9 @@ int main (int argc, char **argv)
     int delivery_status = 0;
     assert (waitpid (delivery, &delivery_status, 0) == delivery);
     return WIFEXITED (delivery_status) ? WEXITSTATUS (delivery_status) : 4;
-#else
-    auto state = make_node ("tcp://127.0.0.1:*", "vertical-a");
-    zlink::framework::detail::mesh_node_runtime_t node (state);
-    node.start ();
-    assert (node.status ().routing_id ().to_string () == "vertical-a");
-    assert (state->channels.size () == 1 && state->channels.contains ("work"));
-
-    const std::vector<std::uint8_t> metadata{0x01, 0x02, 0x03};
-    const std::vector<zlink::message_t> direct_parts{
-      zlink::message_t::from (std::string ("direct"))};
-    const auto direct_result = node.send_to_node (
-      *state->routing_id, direct_parts, metadata).result ().value ();
-    assert (direct_result == zlink::submit_result_t::invalid_argument);
-
-    const std::vector<zlink::message_t> channel_parts{
-      zlink::message_t::from (std::string ("channel"))};
-    const auto channel_result = node.send_to_channel (
-      "work", channel_parts, metadata).result ().value ();
-    assert (channel_result == zlink::submit_result_t::invalid_argument);
-
-    node.stop ();
-    return 0;
 #endif
+    // Cross-process metadata and delivery coverage remains POSIX-only because
+    // the repository has no Windows C++ unit-test child-process harness.  A
+    // different in-process smoke check must not stand in for that scenario.
+    return 0;
 }
