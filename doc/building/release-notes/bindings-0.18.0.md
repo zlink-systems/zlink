@@ -36,8 +36,7 @@ Request `submit()` merged admission and reply into one stage, so a producer coul
 A single socket was pinned to depth 1, leaving multi-perf `ROUTER_ROUTER_REQREP` clients=1 at ~8.5k/s.
 Splitting admission from reply lets a client submit continuously on `OK`, pipelining to the HWM depth —
 clients=1 improved ~38× to ~300k/s (on par with the C reference), with no regression at clients=100
-(design and measurement: `doc/draft/bindings-submit-result-terminal.ko.md`,
-`doc/plan/fw-bench-worklog/decisions.ko.md` FB-071).
+(FB-071).
 
 ## Migration
 

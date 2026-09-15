@@ -384,11 +384,11 @@
 - 2026-07-03 location store 전환 proof:
   - `cmake --build framework/languages/cpp/build-redis-vcpkg --target zlink_cpp_e2e_spot_service_play zlink_cpp_e2e_spot_service_session zlink_cpp_e2e_spot_service_gateway zlink_cpp_e2e_spot_service_multinode zlink_cpp_e2e_spot_service_multinode_requester zlink_cpp_e2e_spot_service_client -j2`
     - 결과: passed
-  - `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 260s framework/languages/cpp/e2e/SpotService/run_e2e.sh SM-C1`
+  - `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 260s framework/languages/cpp/e2e/SpotService/run_e2e.sh SM-C1`
     - 결과: passed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260703-194053-28429`
     - 비고: native route backend가 request timeout을 transport disconnect로 오인해 peer를 끊던 문제를 수정한 뒤, timeout 이후 정상 spot route request가 유지되는지 확인했다.
-  - `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/SpotService/run_e2e.sh all`
+  - `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/SpotService/run_e2e.sh all`
     - 결과: passed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260703-194121-30065`
     - 비고: child sweep 전체가 Redis `redis_location_store_t`와 key prefix 격리 상태에서 통과했다. parent와 각 child 출력은 `spot-service e2e result=passed`로 끝났다.

@@ -4,7 +4,7 @@
 /*
  * Deterministic, lossless endpoint-string normalization.
  *
- * Implements doc/plan/endpoint-notation-policy.ko.md §2.2-2.4 for C++:
+ * Applies the cross-language endpoint-notation contract for C++:
  * lowercase scheme, lowercase host, unify IPv6 literals to bracket
  * notation (zone id preserved verbatim), decimal ports with leading
  * zeros stripped, trailing slash removed from the path, and the whole
@@ -19,7 +19,7 @@
  * (e.g. transport_endpoint_t::parse, advertised_tcp_endpoint's wildcard
  * guards).
  *
- * Per §2.3 this belongs at write time: call it once when an endpoint is
+ * This belongs at write time: call it once when an endpoint is
  * constructed (advertised endpoint assembly) or accepted from outside
  * the process (application-supplied bind/remote endpoints, peer
  * descriptor endpoints read off the wire, Location Store rows). Callers

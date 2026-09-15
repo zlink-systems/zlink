@@ -8,7 +8,7 @@ This suite must stay aligned with:
 - `bindings/README.md` perf policy
 - `doc/perf/PERF_POLICY.md`
 - `doc/perf/PERF_MULTI_TEST_POLICY.md`
-- [README.md](/home/hep7/project/kairos/zlink/bindings/python/perf/README.md)
+- [README.md](../README.md)
 
 ## Entrypoints
 

@@ -1740,7 +1740,7 @@ if(MSVC AND ENABLE_CPACK)
   set(CPACK_PACKAGE_NAME "Zlink")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Zlink lightweight messaging kernel")
   set(CPACK_PACKAGE_VENDOR "Miru")
-  set(CPACK_NSIS_CONTACT "zlink Developers <ulalax@kairoscode.dev>")
+  set(CPACK_NSIS_CONTACT "zlink Developers <zlink@zlink.systems>")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}\\\\LICENSE.txt")
   # set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_BINARY_DIR}\\\\README.txt") set(CPACK_RESOURCE_FILE_WELCOME
   # "${CMAKE_CURRENT_BINARY_DIR}\\\\WELCOME.txt") There is a bug in NSI that does not handle full unix paths properly.

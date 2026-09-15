@@ -736,7 +736,7 @@ covers all of the following stable user-facing capabilities.
   to `clone()`; `copy` is now **ref-share**. JS cannot host the same signature with two
   return meanings, so a deprecated alias is impossible — this is a **major-version breaking
   change** with a documented migration (`copy`→`clone`), not a silent one. See the
-  [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  [common Message ownership contract](../message-ownership.ko.md) §"명시적 Copy / Move / Clone".
   - **refcount observation timing (Node-specific):** Node exposes payload as a JS `Buffer`;
     while an exposed `Buffer` view is alive, the native frame is released when that view is
     GC'd/finalized (this has always been the safe behavior). So after `copy()` shares two

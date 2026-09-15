@@ -3,19 +3,24 @@
 This repository contains third-party source code and/or redistributable binaries.
 This file summarizes known components and where their license texts are located.
 
-## Bundled source dependencies
+## Bundled source dependencies (shipped)
+
+These are vendored into `core/` and are part of what `core/` and its
+bindings build and distribute.
 
 - Boost (header-only subset)
   - Location: `core/external/boost/`
   - License text: `core/external/boost/LICENSE_1_0.txt`
   - License type: Boost Software License 1.0
 
-- moodycamel::ConcurrentQueue
+- moodycamel::ConcurrentQueue v1.0.3
   - Location: `core/external/moodycamel/`
   - License text: `core/external/moodycamel/LICENSE`
-  - License type: Simplified BSD (2-Clause)
+  - License type: Simplified BSD (2-Clause). The license file also offers a
+    second option, the Boost Software License 1.0, as an alternative;
+    either satisfies redistribution.
 
-- wepoll
+- wepoll v1.5.8
   - Location: `core/external/wepoll/`
   - License text: `core/external/wepoll/license.txt`
   - License type: BSD-2-Clause style
@@ -24,11 +29,68 @@ This file summarizes known components and where their license texts are located.
   - Location: `core/external/unity/`
   - License text: `core/external/unity/license.txt`
   - License type: MIT
+  - Scope: used to build and run `core/`'s C unit tests; not linked into
+    the shipped `core`/`zlink` library itself.
 
 - SHA1 implementation (WIDE Project)
   - Location: `core/external/sha1/`
   - License text: `core/external/sha1/license.txt`
   - License type: BSD-3-Clause style
+
+## Vendored source used only for benchmarks (not shipped)
+
+These trees are used to build comparison benchmarks under
+`bindings/c/bench/`. They are not part of `core/`, any binding package, or
+any release archive — they exist only to compile side-by-side benchmark
+binaries that are run locally and are never distributed.
+
+- CppServer (bundled as `.../cppserver/upstream/`, version 1.0.5.0 per its
+  own `include/server/version.h`)
+  - Location: `bindings/c/bench/with_stream/stacks/cppserver/upstream/`
+  - Upstream: https://github.com/chronoxor/CppServer
+  - License text: `bindings/c/bench/with_stream/stacks/cppserver/upstream/LICENSE`
+  - License type: MIT
+  - Scope: bench-only comparison stack for the `with_stream` benchmark; not
+    built as part of `bindings/c` itself and not shipped in any package.
+    CppServer's own build additionally references further third-party
+    modules (asio, Catch2, CppCommon, etc.) via `.gitlinks`/CMake, but those
+    are fetched at build time and are not vendored into this repository.
+
+- libzmq public API headers (`zmq.h`, `zmq_utils.h`), v4.3.5 per their own
+  `ZMQ_VERSION_*` macros
+  - Location (three identical copies): `bindings/c/bench/with_routing/libzmq/libzmq_dist/`,
+    `bindings/c/bench/with_stream/stacks/zmq/libzmq_dist/`,
+    `bindings/c/bench/with_zmq/libzmq/libzmq_dist/` (each with `linux-x64`
+    and `windows-x64` variants)
+  - Upstream: https://github.com/zeromq/libzmq
+  - License text: none is bundled alongside these headers; each header
+    carries its own `SPDX-License-Identifier: MPL-2.0` line instead
+  - License type: MPL-2.0 (as declared in-file — the same license already
+    used by `core/` and `bindings/`, so no additional obligation is created)
+  - Scope: header-only, used to compile benchmark code against libzmq for
+    comparison; the compiled libzmq library itself is not vendored in the
+    repository, and none of this is shipped in any package.
+
+## Build-tooling binaries (not shipped)
+
+- Gradle Wrapper (`gradle-wrapper.jar`, `gradlew`, `gradlew.bat`)
+  - Location: `bindings/java/gradle/wrapper/gradle-wrapper.jar` with
+    `bindings/java/gradlew` and `bindings/java/gradlew.bat`;
+    `framework/languages/java/gradle/wrapper/gradle-wrapper.jar` with
+    `framework/languages/java/gradlew` and `framework/languages/java/gradlew.bat`;
+    `framework/languages/java/samples/gradle/wrapper/gradle-wrapper.jar` with
+    `framework/languages/java/samples/gradlew` and
+    `framework/languages/java/samples/gradlew.bat`
+  - Upstream: https://gradle.org (the Gradle build tool's wrapper module)
+  - License text: not present as a separate file in this repository;
+    `gradle-wrapper.jar` embeds its own copy at `META-INF/LICENSE`, and each
+    `gradlew`/`gradlew.bat` script states the same license inline in its
+    header comment
+  - License type: Apache License 2.0
+  - Scope: standard Gradle build-bootstrap tooling, committed so a checkout
+    can build without a pre-installed Gradle; it is not zlink source, is not
+    compiled into any binding or framework artifact, and is not part of any
+    published package (Maven or otherwise).
 
 ## Bundled runtime binaries in bindings
 

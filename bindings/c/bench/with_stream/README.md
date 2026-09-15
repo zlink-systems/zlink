@@ -204,3 +204,10 @@ Recommended check flow:
 
 - Benchmark runner keeps compatibility `phase` labels in outputs, while actual
   collection is single-pass.
+- The `jvmzlink`, `jvmzlink-recv` and `jvmzlink-len32be` stacks do not compile
+  against the current Java binding. They were written against an older flat
+  package layout and still reference `RecvException` and
+  `StreamUInt32FramedPacketHandler`, which no longer exist; the binding now
+  exposes STREAM through `systems.zlink.contracts.sockets.StreamSocket`,
+  `StreamPacket` and `StreamRecvMode`. Porting them is open work. The `jvmzmq`
+  and `netty` stacks are unaffected.

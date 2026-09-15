@@ -1,8 +1,10 @@
+**English** | [한국어](./SECURITY.ko.md)
+
 # Security Policy
 
 ## Supported Versions
 
-zlink는 최신 메이저/마이너 릴리스를 우선 지원합니다.
+zlink prioritizes support for the latest major/minor release.
 
 | Version | Supported |
 | ------- | --------- |
@@ -10,28 +12,29 @@ zlink는 최신 메이저/마이너 릴리스를 우선 지원합니다.
 | Previous minor release | :white_check_mark: |
 | Older releases | :x: |
 
-정확한 지원 범위는 릴리스 노트와 `core/CHANGELOG.md`와 `doc/building/release-notes/`를 기준으로 갱신됩니다.
+The exact support window is kept up to date in the release notes and in
+`core/CHANGELOG.md` and `doc/building/release-notes/`.
 
 ## Reporting a Vulnerability
 
-공개 이슈에 보안 취약점을 올리지 마세요.
+Please do not open a public issue for a security vulnerability.
 
-다음 중 하나로 비공개 제보해 주세요.
+Report it privately through one of the following channels instead.
 
-1. GitHub Private Vulnerability Reporting (권장)
-- Repository `Security` 탭에서 새 보안 권고(Advisory)를 생성
+1. GitHub Private Vulnerability Reporting (recommended)
+- Create a new security advisory from the `Security` tab of this repository.
 
-2. 메일 제보
-- `ulalax@kairoscode.dev`
+2. Email
+- `zlink@zlink.systems`
 
-제보 시 포함해 주세요.
-- 영향 버전/브랜치
-- 재현 절차(가능하면 PoC)
-- 영향도(DoS, 정보노출, RCE 등)
-- 완화 방법 제안(선택)
+Please include the following in your report:
+- Affected version(s)/branch(es)
+- Reproduction steps (a PoC if possible)
+- Impact (DoS, information disclosure, RCE, etc.)
+- Suggested mitigation (optional)
 
 ## Response Process
 
-- 가능한 빠르게 접수 확인 및 분류를 진행합니다.
-- 패치/완화 배포는 심각도에 따라 우선순위를 결정합니다.
-- 취약점 공개는 수정 릴리스 준비 후 조율하여 진행합니다.
+- We acknowledge and triage reports as quickly as possible.
+- Patch/mitigation rollout is prioritized by severity.
+- Public disclosure is coordinated after a fix release is prepared.

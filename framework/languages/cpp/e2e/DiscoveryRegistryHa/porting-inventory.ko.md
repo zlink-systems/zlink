@@ -90,7 +90,7 @@ C++ Config-6 E2E의 대응 파일과 검증 상태를 기록한다. C++ 디렉�
     복구 전 신규 연결 억제와 복구 후 신규 연결을 실제 요청으로 검증했다.
 - 2026-07-03: `cmake --build framework/languages/cpp/build-redis-vcpkg --target zlink_cpp_e2e_store_failure_provider zlink_cpp_e2e_store_failure_consumer zlink_cpp_e2e_store_failure_client -j2`
   - 결과: 통과
-- 2026-07-03: `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/DiscoveryRegistryHa/run_e2e.sh all`
+- 2026-07-03: `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/DiscoveryRegistryHa/run_e2e.sh all`
   - 결과: 통과
   - 로그: `logs/20260703-212414-2415`, `logs/20260703-212420-3257`,
     `logs/20260703-212425-3891`, `logs/20260703-212433-4740`,

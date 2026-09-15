@@ -169,5 +169,4 @@ Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타�
 - [배포 계정과 secret](./release-accounts.ko.md)
 - [패키징 절차](./packaging.ko.md)
 - [릴리스 노트](./release-notes/)
-- [릴리스 준비 작업 기록](./release-prep/) — 2026-09-08·09의 워크플로우 수정 이력
 - [PR 초안](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

@@ -151,7 +151,7 @@ def ignored_paths(paths: list[Path]) -> set[Path]:
 ABSOLUTE = re.compile(r"^/")
 
 
-#  redline 미러는 문서가 아니라 문서의 사본이다. `doc/plan/<캠페인>/<x>-redline/`
+#  redline 미러는 문서가 아니라 문서의 사본이다. `<x>-redline/` 디렉터리
 #  아래에 정본 트리의 경로를 그대로 재현해 스펙 파일을 복사해 두고 그 위에 교정을
 #  적는다. 사본 안의 상대 링크는 원본 위치 기준으로 쓰인 것이라 사본 자리에서는
 #  풀리지 않는다. 이것을 사본 기준으로 다시 쓰면 `../`가 열 단을 넘고, 무엇보다

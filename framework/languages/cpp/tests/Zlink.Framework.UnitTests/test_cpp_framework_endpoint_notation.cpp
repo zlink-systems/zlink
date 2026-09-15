@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 /*
- * Pins the endpoint-notation policy (doc/plan/endpoint-notation-policy.ko.md
- * §2.2-2.4) for the C++ normalization utility:
+ * Pins the cross-language endpoint-notation contract for the C++
+ * normalization utility:
  *   - deterministic normalization is a round trip (case, IPv6, leading
  *     zero ports, trailing slash, surrounding whitespace)
  *   - normalization is lossless (userInfo, query, fragment, IPv6 zone id)

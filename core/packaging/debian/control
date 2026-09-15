@@ -1,7 +1,7 @@
 Source: zlink
 Section: libs
 Priority: optional
-Maintainer: zlink Developers <ulalax@kairoscode.dev>
+Maintainer: zlink Developers <zlink@zlink.systems>
 Build-Depends: debhelper (>= 9),
  dh-autoreconf,
  libnorm-dev,

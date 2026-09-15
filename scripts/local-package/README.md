@@ -192,9 +192,7 @@ content. `build-windows.ps1 -Language` accepts only `cpp`, `dotnet`, `java`, and
 Windows local-package path does not produce Go, Python, or Rust packages.
 
 When consolidating the Windows native packaging procedure, update these paths together with the
-per-language version pinning. The current state of Windows performance runs and their failure
-causes are owned by the individual measurement sheets and `log/` under
-`doc/perf/perf/core-0.10.0/`.
+per-language version pinning.
 
 ## Core runtime synchronization
 
