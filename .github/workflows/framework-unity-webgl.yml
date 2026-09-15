@@ -24,13 +24,6 @@ name: Framework Unity WebGL
 # Unity release that fixes the fork turns this job red with a reason.
 
 on:
-  # TEMPORARY (issue #402): GitHub resolves workflow_dispatch by filename
-  # against the default branch, so a workflow that lives only on a feature
-  # branch cannot be dispatched at all. This push trigger gives it its first
-  # real run. Remove before merging — the repository runs CI explicitly (#348).
-  push:
-    branches:
-      - "ci/402-**"
 #   # Enabled deliberately, not by default: an IL2CPP WebGL build takes tens of
 #   # minutes and the repository moved to explicit runs in #348.
 #   push:
