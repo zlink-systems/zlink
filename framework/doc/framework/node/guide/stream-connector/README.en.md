@@ -14,6 +14,7 @@ environment — it's used only to run the test runner and server processes.
 | Document | Content |
 |------|------|
 | [Guide INDEX](INDEX.en.md) | Browser connection, codec, dispatch, and flow delivery |
+| [03 — Unity WebGL](03-unity-webgl.en.md) | The `com.zlink.stream-connector.webgl` UPM adapter |
 | [TypeScript Public Contract](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.en.md) | Exact public types and package root |
 | [Stream Connector Common Spec](../../../common/spec/stream-connector/32-stream-connector.en.md) | Target environment, transport, and wire contract |
 

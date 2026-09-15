@@ -133,6 +133,30 @@
     런타임은 Node.js 22 이상이 필요하다. 다음 절차는
     [설치와 첫 동작](node/guide/server/02-getting-started.ko.md)에 있다.
 
+## Client stream connector
+
+서버가 아니라 STREAM에 접속하는 client는 별도 패키지를 쓴다. 어느 것을 쓰는지는 언어가 아니라
+"엔진 × 빌드 타깃"이 정한다.
+
+| 대상 | 패키지 | 저장소 |
+|---|---|---|
+| .NET·Unity 네이티브·Godot C# | `Zlink.Stream.Connector` | nuget.org |
+| Java | `systems.zlink:zlink-stream-connector` | Maven Central |
+| C++·Unreal·Godot GDExtension·Axmol | `zlink-stream-connector` 외 | vcpkg · Conan · source |
+| 브라우저 계열(웹·Cocos web·Unity WebGL·Godot Web) | `@zlink-systems/stream-connector` | npm |
+| Unity WebGL 어댑터 | `com.zlink.stream-connector.webgl` | UPM git URL 또는 tarball |
+
+Unity WebGL은 브라우저 샌드박스에서 실행되므로 `.NET` connector를 쓸 수 없다. UPM 어댑터가 npm
+패키지의 browser bundle을 담고 jslib·C# 호출 경계만 제공하며, C# 표면은 네이티브 패키지와 같다.
+설치는 Package Manager의 **Add package from git URL**이다.
+
+```
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.14.0
+```
+
+절차와 확인 항목은
+[Unity WebGL 가이드](node/guide/stream-connector/03-unity-webgl.ko.md)에 있다.
+
 ## Binding만 사용
 
 framework 없이 Core API를 언어별 package로 직접 쓰려면 [Bindings 가이드](../../../bindings/doc/guide/README.ko.md)에서
