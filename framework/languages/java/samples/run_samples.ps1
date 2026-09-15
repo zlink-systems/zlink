@@ -69,37 +69,25 @@ function Invoke-Sample {
         return
     }
 
-    $stdoutLog = (New-TemporaryFile).FullName
-    $stderrLog = (New-TemporaryFile).FullName
     $process = Start-Process -FilePath $PowerShell `
         -ArgumentList @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"") `
-        -WindowStyle Hidden -RedirectStandardOutput $stdoutLog `
-        -RedirectStandardError $stderrLog -Wait -PassThru
+        -WindowStyle Hidden -PassThru
+    [void]$process.Handle
+    try {
+        $process.WaitForExit()
+        $sampleExitCode = $process.ExitCode
+    } finally {
+        Stop-ZlinkSampleProcessTree -Process $process
+        $process.Dispose()
+    }
 
-    $stdout = if (Test-Path -LiteralPath $stdoutLog) {
-        Get-Content -Raw -LiteralPath $stdoutLog
-    } else { "" }
-    $stderr = if (Test-Path -LiteralPath $stderrLog) {
-        Get-Content -Raw -LiteralPath $stderrLog
-    } else { "" }
-    if ($stdout) {
-        Write-Output $stdout.TrimEnd()
-    }
-    if ($stderr) {
-        [Console]::Error.WriteLine($stderr)
-    }
-    $sampleExitCode = $process.ExitCode
-    $process.Dispose()
     if ($null -eq $sampleExitCode) {
         throw "Sample exit code was unavailable: $ScriptPath"
     }
     if ($sampleExitCode -ne 0) {
-        [Console]::Error.WriteLine("sample stdout log: $stdoutLog")
-        [Console]::Error.WriteLine("sample stderr log: $stderrLog")
         throw "Sample failed: $ScriptPath"
     }
-    Remove-Item -LiteralPath $stdoutLog, $stderrLog -Force
 }
 
 function Invoke-ManifestSamples {

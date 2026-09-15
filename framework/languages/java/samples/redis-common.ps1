@@ -108,10 +108,13 @@ function Invoke-ZlinkSampleExecutable {
     $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
         -WorkingDirectory (Get-Location).Path -NoNewWindow `
         -RedirectStandardOutput $OutputPath -RedirectStandardError $errorPath `
-        -Wait -PassThru
+        -PassThru
+    [void]$process.Handle
     try {
+        $process.WaitForExit()
         $exitCode = [int]$process.ExitCode
     } finally {
+        Stop-ZlinkSampleProcessTree -Process $process
         $process.Dispose()
     }
     if ($exitCode -ne 0) {

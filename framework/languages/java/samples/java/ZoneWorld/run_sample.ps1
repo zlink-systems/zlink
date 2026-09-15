@@ -360,18 +360,19 @@ function Assert-Phase {
 function Invoke-IsolatedChild {
     param([string]$Name, [string[]]$Arguments)
     $powerShell = (Get-Process -Id $PID).Path
-    $stdout = Join-Path $LogDir "$Name.log"
-    $stderr = Join-Path $LogDir "$Name.err.log"
     $child = Start-Process -FilePath $powerShell -ArgumentList ((@(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath
     ) + $Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " ") `
-        -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $stdout `
-        -RedirectStandardError $stderr -Wait -PassThru
-    if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout | Write-Host }
-    if (Test-Path -LiteralPath $stderr) {
-        Get-Content -LiteralPath $stderr | ForEach-Object { [Console]::Error.WriteLine($_) }
+        -WorkingDirectory $SampleDir -NoNewWindow -PassThru
+    [void]$child.Handle
+    try {
+        $child.WaitForExit()
+        $childExitCode = $child.ExitCode
+    } finally {
+        Stop-ZlinkSampleProcessTree -Process $child
+        $child.Dispose()
     }
-    return $child.ExitCode -eq 0
+    return $childExitCode -eq 0
 }
 
 try {
