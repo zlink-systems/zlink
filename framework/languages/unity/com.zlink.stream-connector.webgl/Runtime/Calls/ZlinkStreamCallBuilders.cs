@@ -1,3 +1,6 @@
+// No ConfigureAwait(false) in this package: a WebGL player has no thread pool, so a
+// continuation that did not capture the context is queued and never runs. See the
+// remarks on ZlinkStreamWebGlConnector.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -272,8 +275,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
 
             try
             {
-                await _connector.WaitForEncodedAsync(_name, null, _window.Value, cancellationToken)
-                    .ConfigureAwait(false);
+                await _connector.WaitForEncodedAsync(_name, null, _window.Value, cancellationToken);
             }
             catch (TimeoutException)
             {
@@ -337,8 +339,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
                     throw new TimeoutException($"Timed out waiting for '{_name}' stream message sequence.");
 
                 var message = await _connector
-                    .WaitForEncodedAsync(_name, null, remaining, cancellationToken)
-                    .ConfigureAwait(false);
+                    .WaitForEncodedAsync(_name, null, remaining, cancellationToken);
                 if (!_expectations[index](message))
                     throw new InvalidOperationException(
                         $"Stream message '{_name}' arrived out of the expected sequence at index {index}.");

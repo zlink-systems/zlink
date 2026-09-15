@@ -34,6 +34,22 @@ namespace Systems.Zlink.Stream.Connector.Runtime
     ///         the frame loop reads - never by resuming an <c>await</c> from inside the
     ///         sink.
     ///     </para>
+    ///     <para><b>No <c>ConfigureAwait(false)</c> in this package.</b></para>
+    ///     <para>
+    ///         A WebGL player is single-threaded and has no thread pool, so a continuation
+    ///         that did not capture the synchronization context has nowhere to run: it is
+    ///         queued and never executed. Every <c>await</c> here therefore captures the
+    ///         context, which costs nothing when there is only one, and returns to the
+    ///         Unity main thread - the only thread that may touch a <c>Transform</c> or
+    ///         call back across the jslib boundary.
+    ///     </para>
+    ///     <para>
+    ///         The native <c>Zlink.Stream.Connector</c> package does the opposite, and is
+    ///         right to: it runs where a thread pool exists. Copying that convention into
+    ///         this package stops the connector after its first awaited boundary call, with
+    ///         no exception and no log. <c>test/contract/unity-webgl-package.test.js</c>
+    ///         fails the build if <c>ConfigureAwait</c> reappears under <c>Runtime/</c>.
+    ///     </para>
     /// </remarks>
     internal sealed class ZlinkStreamWebGlConnector : IZlinkStreamConnector
     {
@@ -188,7 +204,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             if (_disposed) return;
             try
             {
-                await Close.Async().ConfigureAwait(false);
+                await Close.Async();
             }
             catch (Exception)
             {
@@ -228,7 +244,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             var callId = NextCallId();
             var pending = RegisterPending(callId);
             ZlinkStreamInterop.Connect(_handle, callId);
-            await DriveAsync(callId, pending, false, cancellationToken).ConfigureAwait(false);
+            await DriveAsync(callId, pending, false, cancellationToken);
         }
 
         private async Task RunCloseAsync(CancellationToken cancellationToken)
@@ -236,7 +252,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             var callId = NextCallId();
             var pending = RegisterPending(callId);
             ZlinkStreamInterop.Close(_handle, callId);
-            await DriveAsync(callId, pending, false, cancellationToken).ConfigureAwait(false);
+            await DriveAsync(callId, pending, false, cancellationToken);
         }
 
         private async Task RunDispatchAsync(CancellationToken cancellationToken)
@@ -247,9 +263,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             // (stream-connector spec 32 section 7).
             StartAdvanceIfIdle();
             var advance = _advance;
-            if (advance != null) await advance.ConfigureAwait(false);
+            if (advance != null) await advance;
             PumpAndTransfer();
-            await RunDispatchQueueAsync(cancellationToken).ConfigureAwait(false);
+            await RunDispatchQueueAsync(cancellationToken);
         }
 
         internal async ValueTask SendAsync(
@@ -270,7 +286,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             var pending = RegisterPending(callId);
             InvokeWithPayload(payload, (pointer, length) =>
                 ZlinkStreamInterop.Send(_handle, callId, call.ToString(), pointer, length));
-            await DriveAsync(callId, pending, true, cancellationToken).ConfigureAwait(false);
+            await DriveAsync(callId, pending, true, cancellationToken);
         }
 
         internal async ValueTask<ZlinkStreamEncodedPayload> RequestAsync(
@@ -282,7 +298,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             CancellationToken cancellationToken)
         {
             var callId = StartRequest(payload, packetName, metadata, compress, timeout, out var pending);
-            await DriveAsync(callId, pending, true, cancellationToken).ConfigureAwait(false);
+            await DriveAsync(callId, pending, true, cancellationToken);
             return pending.Result;
         }
 
@@ -329,7 +345,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         {
             try
             {
-                await DriveAsync(callId, pending, true, CancellationToken.None).ConfigureAwait(false);
+                await DriveAsync(callId, pending, true, CancellationToken.None);
             }
             catch (Exception)
             {
@@ -517,7 +533,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 var item = _dispatchQueue.Dequeue();
                 try
                 {
-                    await item.InvokeAsync(this, cancellationToken).ConfigureAwait(false);
+                    await item.InvokeAsync(this, cancellationToken);
                 }
                 catch (Exception exception)
                 {
@@ -529,7 +545,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                         exception);
                     try
                     {
-                        await handler(error, cancellationToken).ConfigureAwait(false);
+                        await handler(error, cancellationToken);
                     }
                     catch (Exception)
                     {
@@ -964,26 +980,26 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 {
                     case 1:
                         foreach (var handler in _handlers)
-                            await handler.Handler(_message, cancellationToken).ConfigureAwait(false);
+                            await handler.Handler(_message, cancellationToken);
                         break;
                     case 2:
                     {
                         var handler = connector.ErrorReceived;
-                        if (handler != null) await handler(_error, cancellationToken).ConfigureAwait(false);
+                        if (handler != null) await handler(_error, cancellationToken);
                         break;
                     }
 
                     case 3:
                     {
                         var handler = connector.Disconnected;
-                        if (handler != null) await handler(_disconnected, cancellationToken).ConfigureAwait(false);
+                        if (handler != null) await handler(_disconnected, cancellationToken);
                         break;
                     }
 
                     case 4:
                     {
                         var handler = connector.ConnectionStateChanged;
-                        if (handler != null) await handler(_stateChange, cancellationToken).ConfigureAwait(false);
+                        if (handler != null) await handler(_stateChange, cancellationToken);
                         break;
                     }
 
