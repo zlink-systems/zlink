@@ -259,11 +259,18 @@ run_with_stop ZW-C3 KILL
 
 if selected ZW-E5; then
   run_client ZW-E5-arm || fail ZW-E5-arm "could not store maintenance"
-  kill_node zone-node-2 KILL
-  if start_zone zone-node-2 zone-node-crash-replacement; then
-    run_client ZW-E5 || fail ZW-E5 "maintenance not restored"
+  first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-E5 & client_pid=$!
+  if ! wait_log_while_running client 'scenario ZW-E5 restore armed' "$first" "$client_pid" 900; then
+    wait "$client_pid" || true; fail ZW-E5 "client did not arm restart observation"
   else
-    fail ZW-E5 "replacement did not reach topology ready"
+    kill_node zone-node-2 KILL
+    if ! wait_log_while_running client 'scenario ZW-E5 replacement waiting' "$first" "$client_pid" 900; then
+      wait "$client_pid" || true; fail ZW-E5 "client did not observe the stopped node"
+    elif start_zone zone-node-2 zone-node-crash-replacement; then
+      wait "$client_pid" || fail ZW-E5 "maintenance not restored"
+    else
+      fail ZW-E5 "replacement did not reach topology ready"
+    fi
   fi
 fi
 

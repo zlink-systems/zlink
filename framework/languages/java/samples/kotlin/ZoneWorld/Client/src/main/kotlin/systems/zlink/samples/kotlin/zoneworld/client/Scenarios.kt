@@ -378,23 +378,36 @@ internal object Scenarios {
 
     private suspend fun e5Arm(options: ClientOptions) {
         val ops = Ops.create(options); withResources(ops) {
-            val node = ops.watch().nodes.filter { it.registered }.maxBy { it.nodeId }.nodeId
+            val node = "zone-node-2"
             ensure(ops.maintenance(node, true).enabled, "maintenance is stored before restart")
             println("scenario ZW-E5-arm armed node=$node")
         }
     }
 
     private suspend fun e5(options: ClientOptions) {
-        val ops = Ops.create(options); withResources(ops) {
-            val nodeId = ops.watch().nodes.firstOrNull { it.registered && it.connected && it.maintenance }?.nodeId
-                ?: ops.connector.waitFor<Messages.NodeStatusNotify>()
-                    .where { it.payload().registered && it.payload().connected && it.payload().maintenance }
-                    .timeout(Duration.ofSeconds(20)).await().payload().nodeId
+        val ops = Ops.create(options); withResources(ops) { coroutineScope {
+            val nodeId = "zone-node-2"
+            // Status payloads have no incarnation token, so accept ready only after this
+            // connection observes the old node leave.
+            val targetStopped = async(start = CoroutineStart.UNDISPATCHED) {
+                ops.connector.waitFor<Messages.NodeStatusNotify>().where {
+                    it.payload().nodeId == nodeId && (!it.payload().registered || !it.payload().connected)
+                }.timeout(Duration.ofSeconds(20)).await()
+            }
+            println("scenario ZW-E5 restore armed")
+            targetStopped.await()
+            val replacementReady = async(start = CoroutineStart.UNDISPATCHED) {
+                ops.connector.waitFor<Messages.NodeStatusNotify>().where {
+                    it.payload().nodeId == nodeId && it.payload().registered && it.payload().connected
+                }.timeout(Duration.ofSeconds(20)).await()
+            }
+            println("scenario ZW-E5 replacement waiting")
+            replacementReady.await()
             val diagnostics = ops.connector.request(Messages.NodeDiagnosticsReq(nodeId))
                 .timeout(REQUEST_TIMEOUT).awaitReply<Messages.NodeDiagnosticsRes>()
             try { ensure(diagnostics.error == null && diagnostics.maintenance, "restart restores stored maintenance") }
             finally { ops.maintenance(nodeId, false) }
-        }
+        } }
     }
 
     private suspend fun g2(options: ClientOptions) {

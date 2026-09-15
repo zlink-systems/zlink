@@ -452,8 +452,7 @@ final class Scenarios {
 
     private static void e5Arm(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
-            String node = ops.watch().nodes().stream().filter(Messages.NodeView::registered)
-                .max(Comparator.comparing(Messages.NodeView::nodeId)).orElseThrow().nodeId();
+            String node = "zone-node-2";
             Messages.SetMaintenanceRes result = ops.maintenance(node, true);
             ensure(result.enabled(), "maintenance is stored before restart");
             System.out.println("scenario ZW-E5-arm armed node=" + node);
@@ -462,13 +461,21 @@ final class Scenarios {
 
     private static void e5(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
-            Messages.NodeView node = ops.watch().nodes().stream().filter(value -> value.registered()
-                && value.connected() && value.maintenance()).findFirst().orElse(null);
-            String nodeId = node == null
-                ? waitFor(ops.connector, Messages.NodeStatusNotify.class,
-                    value -> value.registered() && value.connected() && value.maintenance(),
-                    Duration.ofSeconds(20)).toCompletableFuture().join().payload().nodeId()
-                : node.nodeId();
+            String nodeId = "zone-node-2";
+            // Status payloads have no incarnation token, so accept ready only after this
+            // connection observes the old node leave.
+            CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> targetStopped = waitFor(
+                ops.connector, Messages.NodeStatusNotify.class,
+                value -> value.nodeId().equals(nodeId) && (!value.registered() || !value.connected()),
+                Duration.ofSeconds(20));
+            System.out.println("scenario ZW-E5 restore armed");
+            targetStopped.toCompletableFuture().join();
+            CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> replacementReady = waitFor(
+                ops.connector, Messages.NodeStatusNotify.class,
+                value -> value.nodeId().equals(nodeId) && value.registered() && value.connected(),
+                Duration.ofSeconds(20));
+            System.out.println("scenario ZW-E5 replacement waiting");
+            replacementReady.toCompletableFuture().join();
             Messages.NodeDiagnosticsRes diagnostics = request(ops.connector,
                 new Messages.NodeDiagnosticsReq(nodeId), Messages.NodeDiagnosticsRes.class);
             try { ensure(diagnostics.error() == null && diagnostics.maintenance(),

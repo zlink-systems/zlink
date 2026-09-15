@@ -725,9 +725,12 @@ try {
     Invoke-ZoneWorldClientWithStop "ZW-C3" "zone-node-2"
     if (Test-ZoneWorldScenario "ZW-E5") {
         Invoke-ZoneWorldClient "ZW-E5-arm"
+        $run = Start-ZoneWorldClient "ZW-E5"
+        Wait-ZoneWorldLog $run.Name "scenario ZW-E5 restore armed" -Attempts 600
         Stop-ZoneWorldNode "zone-node-2"
+        Wait-ZoneWorldLog $run.Name "scenario ZW-E5 replacement waiting" -Attempts 600
         Start-ZoneWorldNode "zone-node-2"
-        Invoke-ZoneWorldClient "ZW-E5"
+        Complete-ZoneWorldClient $run
     }
 
     if (Test-ZoneWorldVerdictSelected "ZW-D1-subscribers") {
