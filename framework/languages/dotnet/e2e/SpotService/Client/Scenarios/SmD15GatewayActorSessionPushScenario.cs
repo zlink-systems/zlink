@@ -23,7 +23,6 @@ internal static class SmD15GatewayActorSessionPushScenario
             RequestTimeout = TimeSpan.FromSeconds(10),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
         var auth = await client.Request(new AuthReq(actorId, "d15 push chain"))

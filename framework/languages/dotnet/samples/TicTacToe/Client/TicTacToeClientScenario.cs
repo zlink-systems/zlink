@@ -40,11 +40,11 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             string.Equals(node.StreamEndpoint, observerPlayEndpoint, StringComparison.Ordinal));
 
         await using var client1 =
-            TicTacToeClientConnections.CreateStreamClient(hostPlayEndpoint, options, "host", logger);
+            TicTacToeClientConnections.CreateStreamClient(hostPlayEndpoint, options);
         await using var client2 =
-            TicTacToeClientConnections.CreateStreamClient(guestPlayEndpoint, options, "guest", logger);
+            TicTacToeClientConnections.CreateStreamClient(guestPlayEndpoint, options);
         await using var observer =
-            TicTacToeClientConnections.CreateStreamClient(observerPlayEndpoint, options, "observer", logger);
+            TicTacToeClientConnections.CreateStreamClient(observerPlayEndpoint, options);
 
         // Client 1 connects, authenticates as player X, and joins the empty room.
         await client1.Connect.Async(cancellationToken);
@@ -196,11 +196,7 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         await client1.Close.Async(cancellationToken);
 
         await using var reconnectedClient =
-            TicTacToeClientConnections.CreateStreamClient(
-                hostPlayEndpoint,
-                options,
-                "reconnected-host",
-                logger);
+            TicTacToeClientConnections.CreateStreamClient(hostPlayEndpoint, options);
         await reconnectedClient.Connect.Async(cancellationToken);
 
         var reconnectedAuthentication = await reconnectedClient

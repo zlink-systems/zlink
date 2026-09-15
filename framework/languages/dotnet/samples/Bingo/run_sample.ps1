@@ -145,14 +145,11 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Bingo client did not complete."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
-        throw "Bingo client did not write stream-inbound marker."
+    if (-not (Select-String -Path $clientLog -Pattern "stream-message sample=Bingo .*kind=response.*name=AuthenticateRes" -Quiet)) {
+        throw "Bingo client did not write request completion marker."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo .* seq=[0-9]" -Quiet)) {
-        throw "Bingo client did not write sequenced stream-inbound response marker."
-    }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo .* name=.*Notify" -Quiet)) {
-        throw "Bingo client did not write stream-inbound push marker."
+    if (-not (Select-String -Path $clientLog -Pattern "stream-message sample=Bingo .*kind=push.*name=BingoGameStartedNotify" -Quiet)) {
+        throw "Bingo client did not write push handling marker."
     }
 
     $playLogs = @($playA, $playB)

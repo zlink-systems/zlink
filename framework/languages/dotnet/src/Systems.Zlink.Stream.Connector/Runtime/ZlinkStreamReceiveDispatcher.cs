@@ -10,7 +10,6 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     ZlinkStreamReceivedMessages receivedMessages,
     ZlinkStreamFrameSender frameSender,
     ZlinkStreamConnectorCallbacks callbacks,
-    ZlinkStreamInboundObserverDispatcher inboundObservers,
     Func<ZlinkStreamCloseReason, string?, CancellationToken, ValueTask> closeFromServer)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -27,8 +26,6 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         var header = headerCodec.Decode(
             frame.Header,
             diagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off);
-        inboundObservers.Enqueue(header, frame.Payload);
-
         if (header.Kind == ZlinkStreamMessageKind.Control)
         {
             await DispatchControlAsync(header, frame.Payload, cancellationToken).ConfigureAwait(false);
@@ -92,16 +89,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         var payloadObject = new ZlinkStreamEncodedPayload(header.Codec, payload);
         var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(header.Name, header.Metadata, payloadObject);
         var handlers = typedHandlers.Snapshot(header.Name);
-        if (handlers.Count == 0 && !receivedMessages.Record(message))
-        {
-            await callbacks.PublishErrorAsync(
-                    new ZlinkStreamError(
-                        ZlinkStreamErrorCode.ReceivedMessageDropped,
-                        "Received stream message was dropped because the received-message queue is full."),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
+        if (handlers.Count == 0) receivedMessages.Record(message);
 
         foreach (var handler in handlers)
             await callbacks.DispatchUserCallbackAsync(

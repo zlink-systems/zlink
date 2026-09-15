@@ -21,7 +21,6 @@ internal static class SmD5ALogicalDisconnectScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
         var bound = await client

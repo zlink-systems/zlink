@@ -38,7 +38,6 @@ internal static class SmD2RemoteActorSessionRelayScenario
             RequestTimeout = TimeSpan.FromSeconds(10),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await local.Connect.Async();
         await local.Request(new AuthReq("actor-sm-d2-local", "local relay"))
@@ -67,7 +66,6 @@ internal static class SmD2RemoteActorSessionRelayScenario
             RequestTimeout = TimeSpan.FromSeconds(10),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await remote.Connect.Async();
         await remote.Request(new AuthReq("actor-sm-d2", "remote relay"))

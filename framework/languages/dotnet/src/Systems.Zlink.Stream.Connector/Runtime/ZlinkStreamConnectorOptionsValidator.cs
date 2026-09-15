@@ -28,14 +28,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxSendPayloadSize must be positive.");
         if (options.MaxReceivePayloadSize <= 0)
             throw Validation("MaxReceivePayloadSize must be positive.");
-        if (options.MaxReceivedMessages <= 0)
-            throw Validation("MaxReceivedMessages must be positive.");
         if (options.MaxPendingDispatchCallbacks <= 0)
             throw Validation("MaxPendingDispatchCallbacks must be positive.");
-        if (options.MaxInboundObserverNotifications <= 0)
-            throw Validation("MaxInboundObserverNotifications must be positive.");
-        if (options.MaxInboundObserverPayloadPreviewBytes < 0)
-            throw Validation("MaxInboundObserverPayloadPreviewBytes must not be negative.");
         if (!Enum.IsDefined(options.DiagnosticsLevel))
             throw Validation("DiagnosticsLevel is invalid.");
     }
