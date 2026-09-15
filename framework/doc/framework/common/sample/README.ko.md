@@ -21,6 +21,11 @@ request/response/notify 이름, 상태 필드와 smoke 검증 순서를 따른�
 [언어별 표현 기준](languages/README.ko.md)에 따라 판단한다. 실제 표현 차이가 없으면 언어별
 샘플 문서를 만들지 않는다.
 
+샘플을 실행하는 방법은 사용하는 언어의 가이드에서 "14. 샘플 고르기" 장을 본다:
+[.NET](../../dotnet/guide/server/14-samples.ko.md), [C++](../../cpp/guide/server/14-samples.ko.md),
+[Java](../../java/guide/server/14-samples.ko.md), [Kotlin](../../kotlin/guide/server/14-samples.ko.md),
+[Node.js](../../node/guide/server/14-samples.ko.md).
+
 ## 샘플 목록
 
 | 샘플 | 목적 | 서버 구성 | 연결 방식 | Handler 등록 방식 | 기본 payload codec |

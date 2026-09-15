@@ -1,4 +1,4 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/dotnet/03-sockets/) | English
+[한국어](03-sockets.ko.md) | English
 
 [Reference index](README.en.md)
 

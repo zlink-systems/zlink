@@ -5234,7 +5234,7 @@ The [raw payload policy](#binding-raw-scope) defines the distribution scope.
 
 ## Sample Policy
 - Sample-authoring rules use
-  [`doc/spec/sample/SAMPLE_POLICY.md`](https://zlink-systems.github.io/zlink/spec/sample/SAMPLE_POLICY/)
+  [`doc/spec/sample/SAMPLE_POLICY.md`](../../../core/doc/spec/sample/SAMPLE_POLICY.en.md)
   as the single baseline document.
 - This document covers `core/samples/` and `bindings/*/samples/`
   together.

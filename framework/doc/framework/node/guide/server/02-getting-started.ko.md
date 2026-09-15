@@ -50,7 +50,7 @@ Node.js 20 이상이 필요하다.
 ## 2. 최소 예제 — 두 process가 서로 호출한다
 
 Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 request/reply 하나를
-돌려 본다. 여기까지가 "설치가 끝났다"를 확인하는 지점이다.
+돌려 본다. 여기까지 되면 설치가 끝난 것이다.
 
 **공유 계약.** 두 process가 같은 record를 참조한다.
 
@@ -129,7 +129,7 @@ export class HelloController {
 server를 먼저 띄우고 client를 띄운 뒤 `curl http://localhost:5000/hello/world`를 호출하면
 `hello, world`가 돌아온다.
 
-여기서 확인한 것은 셋이다 — 패키지가 붙었고, 두 process가 mesh로 연결됐고, 논리 이름
+여기서 확인한 것은 셋이다. 패키지가 제대로 설치됐고, 두 process가 mesh로 연결됐고, 논리 이름
 (`greeting`)만으로 호출이 라우팅됐다. 이 예제에는 Redis도 location store도 없다. 서버가
 늘고 줄어도 호출 코드가 그대로이려면 자동 연결이 필요하고, 그건
 [10-location](10-location.ko.md)이 다룬다.
@@ -220,7 +220,7 @@ async create(@Body() request: CreateGameHttpReq): Promise<CreateGameHttpRes> {
 }
 ```
 
-`create`는 호출자가 `SpotId`를 정하지 않는 새 User Spot 생성에 사용한다. 같은
+`create`는 호출자가 `SpotId`를 정하지 않고 새 User Spot을 만들 때 쓴다. 같은
 `SpotId`를 다시 찾거나 만들려면 `GetOrCreate(spotId, spotType)`을 사용한다.
 
 ## 6. Play 서버에서 stable type 등록
@@ -296,8 +296,8 @@ framework/languages/node/samples/TicTacToe.Ts/run_sample.sh
 ```
 
 runner는 API 두 개와 Play 두 개를 실행한다. Game Spot을 생성한 뒤 서로 다른 Play
-endpoint에 연결한 참가자들이 같은 방에 join하고, 게임 메시지와 종료 정리를
-검증한다.
+endpoint에 연결한 참가자들이 같은 방에 join하고, 게임 메시지가 오가는 것과 종료
+뒤 정리되는 것을 확인한다.
 
 ## 10. 실패할 때 확인할 항목
 

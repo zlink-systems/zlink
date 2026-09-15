@@ -121,12 +121,12 @@ correlation은 framework가 처리한다.
   세션 수명을 직접 다루고, 재접속하면 어느 서버의 어느 room에 있었는지 이어 줘야
   하고, 배포·축소 때 접속 유저와 진행 중인 게임 상태를 유지해야 한다.
 
-그래서 지금까지 선택지는 둘이었다 — 이걸 전부 직접 만들거나, 게임 서버 엔진이라는
+그래서 지금까지는 이걸 전부 직접 만들거나, 게임 서버 엔진이라는
 **별도 런타임으로 옮겨가** 로직 작성 방식·설정·배포·운영을 엔진 방식으로 다시
-배우거나.
+배우는 수밖에 없었다.
 
-**실제로는 어떻게 만들어 왔나.** 업계에서 통용되는 이름이 붙은 패턴으로 묶으면
-대략 네 방식이다. 어느 패턴이든 login/auth, gateway, DB cache 같은 상자가 반복해서
+**실제로는 어떻게 만들어 왔나.** 업계에서 통용되는 이름이 붙은 패턴으로 묶인다.
+어느 패턴이든 login/auth, gateway, DB cache 같은 상자가 반복해서
 등장하지만 — 그걸 받쳐 주는 공통 프레임워크는 없어서, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
@@ -158,7 +158,7 @@ correlation은 framework가 처리한다.
 
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#아키텍처--계층-구조와-등록-지점) · [05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[10](10-location.ko.md) |
+| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#33-계층-구조와-등록-지점) · [05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[10](10-location.ko.md) |
 | in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](06-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [09](09-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [08](08-actor-session.ko.md) |
@@ -178,7 +178,7 @@ correlation은 framework가 처리한다.
   가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
 - **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
   동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
-  [길드 서비스 예시](#하나의-엔티티에-대한-동시-접근)에서 이어진다.
+  [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
 
 위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 조립된다.
 
@@ -638,7 +638,7 @@ stateful stream processor(Kafka Streams/Flink)로 상태를 소비자 곁에 두
 <iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
-두 그림에서 Kafka의 색이 바뀐 것이 핵심이다. 처리 경로 **안에서** 순서를 담당하던
+두 그림에서 Kafka의 색이 바뀐다. 처리 경로 **안에서** 순서를 담당하던
 Kafka(주황)가 처리 경로 **밖으로** 나가 전파·보존만 맡는다(회색). 그러면서 순서
 담당을 위해 조립했던 조각들 — 주문 처리 소비자 그룹(offset·rebalance·dedupe), 캐시,
 조회용 read model, 재동기화 잡 — 이 사라진다. 같은 `OrderId`가 항상 같은 owner에서
@@ -761,7 +761,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 없이 HTTP API + 주문 workflow만으로 구성된 이 상황의 기준 샘플이다. 주문 상태
 전이·보상 흐름·중복 방지·projection 재생성을 owner routing 위에서 검증한다.
 
-세 상황의 차이는 진입점일 뿐, 쓰는 표면은 같다. 기능 하나씩 제공하는 제품은
+지금까지 살펴본 상황들의 차이는 진입점일 뿐, 쓰는 표면은 같다. 기능 하나씩 제공하는 제품은
 있어도 — RPC는 gRPC가, actor는 Orleans가, 연결은 게임 엔진이 — **메이저
 프레임워크 통합 + 직렬 실행 상태 단위 + 자동 연결 토폴로지를 한 몸에 담은
 조합**이 ZLink의 자리다.

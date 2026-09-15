@@ -48,7 +48,7 @@ Artifacts to add when you need them:
 | `zlink-stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
 | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
-JDK 21 or later is required.
+JDK 25 or later is required.
 
 The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
 `zlink-http-client` is Apache-2.0. There's no cost to building and selling a service

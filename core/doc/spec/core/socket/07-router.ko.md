@@ -2,7 +2,7 @@
 title: "Socket — ROUTER"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/socket/07-router/) | 한국어
+[English](07-router.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [소켓 목차](README.ko.md) | [이전: DEALER](06-dealer.ko.md) | [다음: STREAM](08-stream.ko.md)

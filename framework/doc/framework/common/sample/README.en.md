@@ -24,6 +24,11 @@ representation needs to be written separately is judged per the
 [per-language representation criteria](languages/README.en.md). If there's no actual representation
 difference, no per-language sample document is created.
 
+To run a sample, see the "14. Picking a sample" chapter of the guide for the language you use:
+[.NET](../../dotnet/guide/server/14-samples.en.md), [C++](../../cpp/guide/server/14-samples.en.md),
+[Java](../../java/guide/server/14-samples.en.md), [Kotlin](../../kotlin/guide/server/14-samples.en.md),
+[Node.js](../../node/guide/server/14-samples.en.md).
+
 ## Sample List
 
 | Sample | Purpose | Server Composition | Connection Method | Handler Registration Method | Default Payload Codec |

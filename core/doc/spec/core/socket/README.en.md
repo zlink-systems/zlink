@@ -2,7 +2,7 @@
 title: "Socket — Common Specification"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/) | English
+[한국어](README.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](../README.en.md) | [Previous: Runtime Boundary](../08-runtime-boundary.en.md) | [Next: PAIR](01-pair.en.md)

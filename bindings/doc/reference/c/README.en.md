@@ -1,4 +1,4 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/c/) | English
+[한국어](README.ko.md) | English
 
 [C binding spec](../../spec/c/README.en.md)
 

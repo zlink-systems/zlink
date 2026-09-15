@@ -137,3 +137,9 @@ doc/plan/stream-perf/README.ko.md (skip:too-short)
 doc/plan/stream-perf/stream-socket-performance-improvement-plan.ko.md
 doc/plan/thread-safe/thread-safe-socket-plan.ko.md
 doc/plan/thread-safe/thread-safe-socket-status.ko.md
+framework/doc/framework/index.ko.md
+framework/doc/framework/install.ko.md
+framework/doc/framework/dotnet/quickstart.ko.md
+framework/doc/framework/common/guide/server/02-getting-started.ko.md
+framework/doc/framework/common/guide/server/03-concepts.ko.md
+framework/doc/framework/common/guide/server/01-overview.ko.md

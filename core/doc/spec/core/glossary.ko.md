@@ -2,7 +2,7 @@
 title: "Core 용어"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/glossary/) | 한국어
+[English](glossary.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md)

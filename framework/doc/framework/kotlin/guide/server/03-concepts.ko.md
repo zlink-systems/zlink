@@ -40,9 +40,9 @@ ZLink framework는 **channel · spot · actor · stream · location**을 핵심 
   설명한다.
 - **Channel role** — request·send·publish를 주고받는 자리다. 이 문서에서 설명한다.
 
-`ChannelName`은 그 mesh 안에서 같은 기능을 맡은 node들을 묶는 논리 이름이다 —
+`ChannelName`은 그 mesh 안에서 같은 기능을 맡은 node들을 묶는 논리 이름이다.
 주소(`host:port`) 대신 `"orders"` 같은 이름으로 호출 대상을 고른다. 호출자는
-route client에 `ChannelName`만 넘긴다 — `MeshName`은 등록에서 정해지고 호출
+route client에 `ChannelName`만 넘긴다. `MeshName`은 등록에서 정해지고 호출
 인자에 나타나지 않는다.
 
 호출자는 지금 어느 node가 그 요청을 처리하는지 몰라도 된다. 주소도 node 번호도 아닌
@@ -60,7 +60,7 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 같은 `orders` channel을 맡은 node가 셋이면 호출마다 그중 하나가 선택된다. 호출자는
 어느 node가 선택됐는지 알지 못하고, 알 필요도 없다.
 
-MeshNode 하나에 두 역할을 함께 얹은 모양은 이렇다.
+MeshNode 하나에 두 역할을 함께 추가한 모양은 이렇다.
 
 ```kotlin
 // MeshNode 하나가 mesh "services"에 참여한다.
@@ -110,7 +110,7 @@ spot은 이 둘을 framework가 맡는다. 대상을 **메모리에 살아 있�
 
 id로 주소를 지정한다는 점이 channel과 다르다. `"orders"` channel로 전송하면 그 일을
 할 수 있는 아무 node나 처리한다. 반면 `"room-42"` 같은 spot id로 요청을 보내면, 그
-spot이 존재하는 node가 메시지를 받아 그 spot에게 전달해 처리하도록 한다. 그 node가
+spot이 있는 node가 메시지를 받아 그 spot에게 전달한다. 그 node가
 어디인지는 [앞에서 본](#1-channel--서버-간-연결) 위치 투명성 그대로 framework가 찾는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.html" title="spot — 상태 소유·순서 처리" loading="lazy" style="width:100%;border:0"></iframe>

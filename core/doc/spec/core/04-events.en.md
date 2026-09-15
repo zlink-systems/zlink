@@ -2,7 +2,7 @@
 title: "Events"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/04-events/) | English
+[한국어](04-events.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Errors](03-errors.en.md) | [Next: Polling](05-polling.en.md)

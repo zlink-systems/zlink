@@ -13,7 +13,7 @@ title: "Java Binding Guide"
 
 Explains how to use zlink in Java through working sample code.
 The deep explanation of messaging concepts is owned by the
-[core guide](https://zlink-systems.github.io/zlink/guide/01-overview/); this guide
+[core guide](../../../../core/doc/guide/01-overview.en.md); this guide
 focuses on using the Java API.
 
 ---
@@ -379,7 +379,7 @@ worker threads, so avoid blocking for long inside a handler.
 waiting for HWM admission. Other threads and virtual threads continue to run,
 so this is safe in those execution environments. Use asynchronous `submit()`
 to keep the caller available. See
-[thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/) for
+[thread safety](../../../../core/doc/guide/11-thread-safety.en.md) for
 details.
 
 ---
@@ -455,13 +455,13 @@ see messaging/service usage directly in Kotlin code.
 ## See Also
 
 **Socket patterns**
-- [Socket pattern overview](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
-  - [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/)
-  - [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/)
-  - [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/)
-  - [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/)
-  - [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/)
-  - [Proxy](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
+- [Socket pattern overview](../../../../core/doc/guide/03-0-socket-patterns.en.md)
+  - [PAIR](../../../../core/doc/guide/03-1-pair.en.md)
+  - [PUB/SUB](../../../../core/doc/guide/03-2-pubsub.en.md)
+  - [DEALER](../../../../core/doc/guide/03-3-dealer.en.md)
+  - [ROUTER](../../../../core/doc/guide/03-4-router.en.md)
+  - [STREAM](../../../../core/doc/guide/03-5-stream.en.md)
+  - [Proxy](../../../../core/doc/guide/03-6-proxy.en.md)
 
 **Services**
 - [Framework service overview](../../../../framework/doc/framework/common/guide/server/03-concepts.en.md)
@@ -469,9 +469,9 @@ see messaging/service usage directly in Kotlin code.
   - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.en.md)
 
 **Operations**
-- [Socket options](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
-- [TLS security](https://zlink-systems.github.io/zlink/guide/05-tls-security/)
-- [Monitoring](https://zlink-systems.github.io/zlink/guide/06-monitoring/)
-- [Thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
-- [Message API](https://zlink-systems.github.io/zlink/guide/09-message-api/)
-- [Routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)
+- [Socket options](../../../../core/doc/guide/12-socket-options.en.md)
+- [TLS security](../../../../core/doc/guide/05-tls-security.en.md)
+- [Monitoring](../../../../core/doc/guide/06-monitoring.en.md)
+- [Thread safety](../../../../core/doc/guide/11-thread-safety.en.md)
+- [Message API](../../../../core/doc/guide/09-message-api.en.md)
+- [Routing ID](../../../../core/doc/guide/08-routing-id.en.md)

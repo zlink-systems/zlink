@@ -1,25 +1,16 @@
 # 설치
 
 이 문서는 ZLink를 애플리케이션에 넣는 첫 단계다. framework는 각 언어의 패키지 저장소에 게시된
-패키지로 설치한다. framework 패키지는 자신이 의존하는 binding 패키지를 함께 끌어오고, binding
-패키지에는 Core 엔진의 native 런타임이 들어 있으므로 Core를 직접 빌드할 필요가 없다.
+패키지로 설치한다. framework 패키지를 설치하면 그 framework가 의존하는 binding 패키지도 함께
+설치된다. binding 패키지에는 Core 엔진의 native 런타임이 들어 있으므로 Core를 직접 빌드할
+필요가 없다.
 
 | 항목 | 값 |
 |---|---|
-| 게시 버전 | framework 0.11, binding 0.17.6 |
 | 지원 플랫폼 | linux-x64, linux-arm64, macos-arm64, windows-x64 (Windows ARM64·Intel Mac 미지원) |
 | 패키지 저장소 | nuget.org, Maven Central, npm, vcpkg/Conan + GitHub Release |
 
 ## Framework 패키지
-
-아래 탭은 언어별 설치 명령과 host 등록 코드다. 설치 뒤 첫 handler를 작성하고 실행하는
-절차는 각 언어의 "설치와 첫 동작" 장이 다룬다.
-
-framework는 각 언어의 패키지 저장소에 게시된 패키지로 설치한다. framework 패키지는
-자신이 의존하는 binding 패키지를 함께 끌어오고, binding 패키지에는 Core 엔진의 native
-런타임이 들어 있으므로 Core를 직접 빌드할 필요가 없다. 현재 게시 버전은 framework 0.11,
-binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, windows-x64
-넷이다.
 
 아래 탭은 언어별 설치 명령과 host 등록 코드다. 설치 뒤 첫 handler를 작성하고 실행하는
 절차는 각 언어의 "설치와 첫 동작" 장이 다룬다.
@@ -35,14 +26,20 @@ binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, w
     ```csharp
     builder.Services.AddZLinkFramework(options =>
     {
+        // handler 타입을 찾는다.
         options.AddHandlersFromAssemblyOf<Program>();
+        // 찾은 handler를 어느 channel에 열지는 따로 등록한다.
         options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7101")
-            .Channel("greeting").Server();
+            .Channel("greeting").Server()
+            .AddRequestHandler<GreetingHandler, Hello, Greeting>();
     });
     ```
 
     `AddZLinkFramework`가 framework host를 ASP.NET Core의 DI와 lifecycle에 등록한다.
-    다음 절차는 [설치와 첫 동작](dotnet/guide/server/02-getting-started.ko.md)에 있다.
+    `AddHandlersFromAssemblyOf`는 handler 타입을 찾기만 한다. 어느 channel에 노출할지는
+    `Channel(...).Server()`에 따로 등록한다.
+    런타임은 .NET 8 이상이 필요하다. 다음 절차는
+    [설치와 첫 동작](dotnet/guide/server/02-getting-started.ko.md)에 있다.
 
 === "C++"
 
@@ -89,8 +86,8 @@ binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, w
     ```
 
     Spring Boot auto-configuration이 framework host를 Bean으로 등록하고 애플리케이션의
-    lifecycle에 연결한다. 다음 절차는 [설치와 첫 동작](java/guide/server/02-getting-started.ko.md)에
-    있다.
+    lifecycle에 연결한다. 런타임은 JDK 25 이상이 필요하다. 다음 절차는
+    [설치와 첫 동작](java/guide/server/02-getting-started.ko.md)에 있다.
 
 === "Kotlin"
 
@@ -103,8 +100,8 @@ binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, w
     ```
 
     Java와 같은 starter를 쓰고, `zlink-framework-kotlin`이 suspend 함수 기반의 handler 작성
-    방식을 더한다. 다음 절차는 [설치와 첫 동작](kotlin/guide/server/02-getting-started.ko.md)에
-    있다.
+    방식을 더한다. 런타임은 Java와 같은 JDK 25 이상이 필요하다. 다음 절차는
+    [설치와 첫 동작](kotlin/guide/server/02-getting-started.ko.md)에 있다.
 
 === "Node/TypeScript"
 
@@ -115,16 +112,17 @@ binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, w
 
     `@zlink-systems/nestjs`는 NestJS의 module과 DI에 framework host를 등록한다. NestJS를
     쓰지 않는 서버(Express 등)는 framework 패키지만 설치하고 host를 코드에서 직접 시작한다.
-    다음 절차는 [설치와 첫 동작](node/guide/server/02-getting-started.ko.md)에 있다.
+    런타임은 Node.js 22 이상이 필요하다. 다음 절차는
+    [설치와 첫 동작](node/guide/server/02-getting-started.ko.md)에 있다.
 
 ## Binding만 사용
 
-framework 없이 Core API를 언어별 package로 직접 쓰려면 [Bindings 가이드](https://zlink.systems/ko/bindings/guide/)에서
-언어를 고른다. 7개 언어(C, C++, .NET, Java, Node.js, Python, Go, Rust)의 설치 절차와 5분 예제가 있다.
+framework 없이 Core API를 언어별 package로 직접 쓰려면 [Bindings 가이드](../../../bindings/doc/guide/README.ko.md)에서
+언어를 고른다. 7개 언어(C++, .NET, Java, Node.js, Python, Go, Rust)의 설치 절차와 5분 예제가 있다.
 
 ## 저장소에서 빌드
 
 Core를 소스에서 빌드하거나 저장소의 현재 source로 로컬 패키지를 만드는 절차는 저장소의
-[빌드 가이드](https://github.com/zlink-systems/zlink/blob/main/doc/building/build-guide.ko.md)와
-[local package 가이드](https://github.com/zlink-systems/zlink/blob/main/scripts/local-package/README.ko.md)가
+[빌드 가이드](../../../doc/building/build-guide.ko.md)와
+[local package 가이드](../../../scripts/local-package/README.ko.md)가
 소유한다. 패키지 사용자에게는 필요하지 않다.

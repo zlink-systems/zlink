@@ -2,7 +2,7 @@
 title: "Protocol — ZMP v1.0"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/protocol/01-zmp/) | 한국어
+[English](01-zmp.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [프로토콜 목차](README.ko.md) | [이전: 프로토콜 개요](README.ko.md) | [다음: RAW (STREAM) 프로토콜 상세](02-raw.ko.md)

@@ -2,7 +2,7 @@
 title: "Monitoring"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/06-monitoring/) | English
+[한국어](06-monitoring.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Polling](05-polling.en.md) | [Next: Utilities](07-utilities.en.md)

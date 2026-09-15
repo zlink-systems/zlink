@@ -539,7 +539,7 @@ sizes without a separate Framework message-size setting?
   with the provider handler running once for each request. The final normal
   request also receives a reply, and no evidence shows a partial payload.
 - Detailed behavior: verifies the SS boundary in
-  [RouteMesh Topology §8](../spec/server/02-channel-transport/01-channel-topology.en.md#11-routemesh-ss-message-size-and-mailbox-ceiling),
+  [RouteMesh Topology §8](../spec/server/02-channel-transport/01-channel-topology.en.md#11-routemesh-ss-message-size),
   where Framework doesn't provide a message-size setting. The StreamNode
   ceiling is defined separately in
   [STREAM Session — internal recv loop and application surface](../spec/server/04-session/01-stream-session.en.md).

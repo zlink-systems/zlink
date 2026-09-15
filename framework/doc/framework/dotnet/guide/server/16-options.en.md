@@ -68,7 +68,7 @@ app.MapPost("/admin/drain", (IZLinkRouteMeshRuntimeOptions runtime) =>
 | --- | --- | --- |
 | Root `options` | Process-wide default | Only before `app.Run()` |
 | Builder | That one node/channel/STREAM node | Only before `app.Run()` |
-| Runtime option | Some values already running | While running ([What Can Change While Running](#7-실행-중-바꿀-수-있는-것)) |
+| Runtime option | Some values already running | While running ([What Can Change While Running](#7-what-can-change-while-running)) |
 
 There's no surface to call a builder again after `app.Run()`. A bad combination isn't
 deferred to the first call — it's **blocked as an exception at host startup.**
@@ -150,7 +150,7 @@ await client.SendToChannel("profile", command).Async(ct);
 Why the peer's delay becomes this side's wait, and when the ceiling locks and unlocks, is
 covered by [04-backpressure](04-backpressure.en.md). This section and the next only cover
 the options that set values within that behavior. Flow control itself is owned by Core, and
-the exact contract is covered by [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/).
+the exact contract is covered by [the core guide's socket option](../../../../../../core/doc/guide/12-socket-options.en.md).
 
 > **Logical Multicast is judged separately per target.** Failing to submit to one target
 > doesn't roll back a target already accepted, and it doesn't return a per-target failure as
@@ -304,14 +304,14 @@ Everything else starts from its default.
 
 - **A setting changed, but it didn't take effect** → most options are fixed before
   `app.Run()`. What can change while running is listed in
-  [§7](#7-실행-중-바꿀-수-있는-것).
+  [§7](#7-what-can-change-while-running).
 - **Metadata isn't reaching the actor** → check whether `ConfigureMetadata()` allowed that
   key for the right direction. An unallowed key disappears with no error.
 - **Another node can't connect in a container** → the bind address may be getting used as the
   advertised address as-is. Use `ConfigureNetwork()` or the node's `SetAdvertiseHost` to
   specify the address a peer should connect to.
 - **`send` ends in `DeadlineExceeded`** → it waited for a send slot and hit the ceiling
-  ([backpressure](#31-backpressure--송신-대기-동작)). Check the receiving side's
+  ([backpressure](#31-backpressure--send-wait-behavior)). Check the receiving side's
   processing speed first, and if it's a short burst, raise `SendHighWaterMark` or
   `DefaultSocketSendTimeout`.
 - **The store slows down when activations pile up** → lower `SetActivationConcurrency`
