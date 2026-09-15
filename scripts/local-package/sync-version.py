@@ -772,16 +772,8 @@ def synchronize(
             rf"\g<1>{binding_version}",
             1,
         )
-    for relative in (
-        "framework/languages/dotnet/samples/Directory.Build.props",
-        "framework/languages/dotnet/samples/Directory.Packages.props",
-    ):
-        sync.regex(
-            relative,
-            rf"(<ZLinkBindingsPackageVersion Condition=\"'\$\(ZLinkBindingsPackageVersion\)' == ''\">){SEMVER}(</ZLinkBindingsPackageVersion>)",
-            rf"\g<1>{binding_version}\2",
-            1,
-        )
+    # 샘플은 binding 버전을 스스로 정하지 않는다. Zlink.Framework의 nuspec이 정하고
+    # 전이 의존으로 들어온다(#374). 그래서 여기서 맞출 필드가 없다.
     binding_version = bindings["java"]
     sync.regex(
         "framework/languages/java/gradle/libs.versions.toml",
