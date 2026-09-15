@@ -399,7 +399,7 @@ jobs:
         run: |
           echo "=== SHA256 Checksums ==="
           cd artifacts
-          find . -type f \( -name "*.dll" -o -name "*.so" -o -name "*.dylib" -o -name "*.a" -o -name "*.lib" -o -name "*.h" \) -exec sha256sum {} \; | tee checksums.txt
+          find . -type f \( -name "*.dll" -o -name "*.so" -o -name "*.dylib" -o -name "*.a" -o -name "*.lib" -o -name "*.h" -o -name "*.cmake" \) -exec sha256sum {} \; | tee checksums.txt
 
       - name: Verify public headers
         run: |
@@ -411,6 +411,97 @@ jobs:
               }
             done
           done
+
+      # Every archive must carry a complete `make install` prefix, not just
+      # the flat runtime + headers: bindings/cpp/CMakeLists.txt requires
+      # find_package(zlink CONFIG), and vcpkg's default static triplet
+      # requires the static archive (issue #397).
+      - name: Verify install prefix (CMake package + static archive)
+        run: |
+          set -euo pipefail
+          for platform in windows-x64 linux-x64 linux-arm64 macos-arm64; do
+            root="artifacts/libzlink-${platform}"
+            for cmake_file in zlinkConfig.cmake zlinkConfigVersion.cmake; do
+              test -f "${root}/lib/cmake/zlink/${cmake_file}" || {
+                echo "missing CMake package file: ${platform}/lib/cmake/zlink/${cmake_file}" >&2
+                exit 1
+              }
+            done
+            if [ "$platform" = "windows-x64" ]; then
+              # The shared import library (lib/zlink.lib) is not the static
+              # archive: the static target keeps the "lib" OUTPUT_NAME
+              # prefix plus an MSVC toolset/runtime postfix, e.g.
+              # lib/libzlink-mt-s-1_2_0.lib.
+              find "${root}/lib" -maxdepth 1 -name 'libzlink*.lib' | grep -q . || {
+                echo "missing static archive: ${platform}/lib/libzlink*.lib" >&2
+                exit 1
+              }
+            else
+              test -f "${root}/lib/libzlink.a" || {
+                echo "missing static archive: ${platform}/lib/libzlink.a" >&2
+                exit 1
+              }
+            fi
+          done
+
+      # zlinkConfig.cmake calls find_dependency(OpenSSL) when the archive was
+      # built WITH_TLS (the default); the runner needs the dev headers to
+      # satisfy that, same as the build-linux job.
+      - name: Install verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev
+
+      # The other three platforms only prove the files exist above; this
+      # proves the linux-x64 archive is *usable* as a find_package(CONFIG)
+      # prefix the way bindings/cpp/CMakeLists.txt and vcpkg's zlink port
+      # consume it — configure, build and link a C program against both
+      # the libzlink and libzlink-static imported targets.
+      - name: Verify find_package(zlink CONFIG) against the packaged archive (linux-x64)
+        env:
+          LIBZLINK_VERSION: ${{ needs.read-versions.outputs.libzlink_version }}
+        run: |
+          set -euo pipefail
+          prefix="$(mktemp -d)"
+          cp -a artifacts/libzlink-linux-x64/. "$prefix/"
+
+          project="$(mktemp -d)"
+          cat > "$project/CMakeLists.txt" <<EOF
+          cmake_minimum_required(VERSION 3.16)
+          project(zlink_package_smoke C)
+          find_package(zlink ${LIBZLINK_VERSION} EXACT CONFIG REQUIRED)
+          if(NOT TARGET libzlink)
+            message(FATAL_ERROR "libzlink (shared) target is missing")
+          endif()
+          if(NOT TARGET libzlink-static)
+            message(FATAL_ERROR "libzlink-static target is missing")
+          endif()
+          add_executable(consumer_shared main.c)
+          target_link_libraries(consumer_shared PRIVATE libzlink)
+          add_executable(consumer_static main.c)
+          target_link_libraries(consumer_static PRIVATE libzlink-static)
+          # libzlink-static is implemented in C++; its exported target does
+          # not declare IMPORTED_LINK_INTERFACE_LANGUAGES, so a pure-C
+          # consumer must force the final link step through the C++
+          # driver to pull in the C++ runtime. Every real consumer
+          # (bindings/cpp, vcpkg's zlink-cpp) is already a C++ project and
+          # never hits this.
+          enable_language(CXX)
+          set_target_properties(consumer_static PROPERTIES LINKER_LANGUAGE CXX)
+          EOF
+          cat > "$project/main.c" <<'EOF'
+          #include <zlink.h>
+          int main(void) {
+            void *ctx = zlink_ctx_new();
+            return ctx ? 0 : 1;
+          }
+          EOF
+
+          cmake -S "$project" -B "$project/build" -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build "$project/build" --target consumer_shared consumer_static
+          LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$project/build/consumer_shared"
+          "$project/build/consumer_static"
+          echo "find_package(zlink CONFIG) smoke passed: shared + static both link and run"
 
       - name: Build summary
         run: |
