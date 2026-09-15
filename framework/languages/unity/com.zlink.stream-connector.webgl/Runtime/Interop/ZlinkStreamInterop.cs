@@ -38,6 +38,19 @@ namespace Systems.Zlink.Stream.Connector.Runtime
     /// </remarks>
     internal static class ZlinkStreamInterop
     {
+        /// <summary>
+        ///     <c>ZlinkStreamPump</c> refused the call because a pump is already running
+        ///     on this stack. Nothing was dispatched; this is not a failure.
+        /// </summary>
+        public const int PumpRefused = -1;
+
+        /// <summary>
+        ///     <c>ZlinkStreamPump</c> failed. The reason is waiting in
+        ///     <see cref="TakeLastError" />. Every other result is the number of events
+        ///     delivered.
+        /// </summary>
+        public const int PumpFailed = -2;
+
         public const int EventCallCompleted = 1;
         public const int EventMessage = 2;
         public const int EventErrorReceived = 3;
@@ -73,6 +86,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         [DllImport("__Internal", EntryPoint = "ZlinkStreamSetEventSink")]
         public static extern int SetEventSink(int handle, IntPtr callback);
 
+        /// <summary>
+        ///     Returns the number of events delivered, <see cref="PumpRefused" />, or
+        ///     <see cref="PumpFailed" />.
+        /// </summary>
         [DllImport("__Internal", EntryPoint = "ZlinkStreamPump")]
         public static extern int Pump(int handle, int maxEvents);
 

@@ -137,6 +137,17 @@ var ZlinkStreamWebGlRuntime = (function () {
       return error;
     },
 
+    // Records why ZlinkStreamPump failed, so the -2 it returns can be explained.
+    // The error taxonomy in spec 32 section 9 describes stream errors; a pump
+    // that throws is the adapter's own boundary breaking, so this is reported as
+    // a message rather than dressed up as one of those codes.
+    reportPumpFailure: function (cause) {
+      lastError = JSON.stringify({
+        code: 'pumpFailed',
+        message: cause && cause.message ? String(cause.message) : String(cause)
+      });
+    },
+
     create: function (optionsJson) {
       var options;
       try {

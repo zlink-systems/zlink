@@ -12,6 +12,8 @@
 //     which is what IL2CPP produces for an [AOT.MonoPInvokeCallback] method.
 //   - Marshalling runs against the real _malloc, _free and HEAPU8, so buffer
 //     ownership and leaks are measured on the real allocator.
+//   - The optimization levels a Unity release player links at are linked here
+//     too, because the committed bundle has to survive emscripten's JS optimizer.
 //
 // The harness stands in for the IL2CPP output; see support/unity-webgl/harness.c.
 const assert = require('node:assert/strict');
@@ -72,7 +74,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
     browser = await require('playwright').chromium.connect({ wsEndpoint: browserServer.wsEndpoint() });
     context = await browser.newContext();
     page = await context.newPage();
-    page.on('pageerror', (error) => { process.stderr.write(`page error: ${error.message}\n`); });
+    page.on('pageerror', (error) => { process.stderr.write(`page error: ${error.stack ?? error.message}\n`); });
     page.on('console', (message) => {
       if (message.type() === 'error') process.stderr.write(`page console: ${message.text()}\n`);
     });
@@ -217,6 +219,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       `connection state changes reached the managed side: ${JSON.stringify(report.stateChanges)}`
     );
     assert.ok(report.snapshot.disconnects >= 1, 'the disconnect callback reached the managed side');
+    assert.equal(report.snapshot.pumpFailures, 0, report.snapshot.pumpFailureText);
     assert.equal(report.snapshot.violations, '', 'the sink saw a malformed event');
 
     await stopChild(streamServer);
@@ -258,6 +261,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
 
     const values = report.log.map((line) => JSON.parse(line.split('|').slice(2).join('|')).value);
     assert.deepEqual(values, ['nested-a', 'nested-b', 'nested-c'], 'each push must arrive exactly once');
+    assert.equal(report.snapshot.pumpFailures, 0, report.snapshot.pumpFailureText);
     assert.equal(report.snapshot.violations, '');
 
     await stopChild(streamServer);
@@ -314,49 +318,175 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
     streamServer = undefined;
   });
 
-  // ZlinkStreamConnector.jslib calls _malloc and _free but declares no __deps for
-  // them, so emscripten only defines the JS bindings when the link exports them.
-  // Unity's link does, which is why the adapter works there and why the
-  // Unity-equivalent build above passes -sEXPORTED_FUNCTIONS=_malloc,_free. This
-  // test pins the requirement: drop it from the link and the very first buffer the
-  // boundary allocates throws instead of allocating.
-  it('needs the host link to export _malloc and _free', async () => {
+  // ZlinkStreamConnector.jslib declares `malloc` and `free` in a __deps list, so
+  // emscripten pulls the _malloc and _free bindings in on the library's own say-so.
+  // This build drops them from -sEXPORTED_FUNCTIONS: the boundary must still
+  // allocate, because the requirement belongs to the library and not to the host
+  // link. Delete the __deps entries and this goes back to
+  // "ReferenceError: _malloc is not defined" on the first buffer.
+  it('brings its own _malloc and _free in, without the host link exporting them', async () => {
+    assert.ok(
+      !emccArguments(HARNESS_SOURCE, 'x.js', { exportAllocator: false }).some((flag) =>
+        flag.startsWith('-sEXPORTED_FUNCTIONS')),
+      'this build must not export the allocator'
+    );
+    const port = await freePort();
+    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
     const other = await context.newPage();
     try {
       await other.goto(`${staticServer.url}/no-allocator/`);
       await other.evaluate(() => window.harnessReady);
-      const failure = await other.evaluate(() => {
+      const report = await other.evaluate(async (endpoint) => {
+        const zl = window.zl;
+        const steps = {};
+        // Every allocating entry point: the failed create's last-error string,
+        // then the pump's text and payload buffers.
         try {
-          // A rejected endpoint makes the runtime record a last error, which
-          // ZlinkStreamTakeLastError then has to hand back as a malloc'd string.
-          window.zl.create({ ...window.connectorOptions, endpoint: 'tcp://127.0.0.1:19000' });
-          return { threw: false };
+          zl.create({ ...window.connectorOptions, endpoint: 'tcp://127.0.0.1:19000' });
+          steps.rejected = null;
         } catch (error) {
-          return { threw: true, name: error.name, message: error.message };
+          steps.rejected = error.detail;
         }
-      });
-      assert.equal(failure.threw, true);
-      assert.match(
-        failure.message,
-        /_malloc is not defined/,
-        `expected the missing allocator export to surface, got ${JSON.stringify(failure)}`
-      );
+        zl.create({ ...window.connectorOptions, endpoint });
+        await zl.connect();
+        const reply = await zl.request(JSON.stringify({ value: 'no-allocator-export' }), {
+          codec: 1, packetName: 'EchoReq', timeoutMs: 10000
+        });
+        steps.reply = reply.payload;
+        steps.observed = await zl.waitFor('EchoPush', 10000);
+        await zl.close(10000);
+        steps.snapshot = zl.snapshot();
+        zl.raw.destroy();
+        return steps;
+      }, `ws://127.0.0.1:${port}`);
+
+      assert.equal(JSON.parse(report.rejected).code, 'configurationError', 'TakeLastError must allocate');
+      assert.equal(JSON.parse(report.reply).value, 'no-allocator-export');
+      assert.equal(JSON.parse(report.observed.payload).value, 'no-allocator-export');
+      assert.equal(report.snapshot.pumpFailures, 0, report.snapshot.pumpFailureText);
+      assert.equal(report.snapshot.violations, '');
     } finally {
       await other.close();
+      await stopChild(streamServer);
+      streamServer = undefined;
     }
   });
 
-  // Unity's Code Optimization settings above "Shorter Build Time" link with -O2 or
-  // higher, which runs emscripten 3.1.38's acorn JS optimizer over the --pre-js
-  // content at ecmaVersion 2020. zlink-stream-connector.jspre is an esbuild es2022
-  // bundle whose `static` class fields ES2020 cannot parse, so that link fails.
-  // Fixing it belongs to the package (the bundle target), not to this test.
-  it('links at the optimization level a Unity release player uses', { todo: 'esbuild es2022 static class fields do not parse at emscripten 3.1.38 ecmaVersion 2020' }, () => {
-    const output = path.join(outputDirectory, 'release/harness.js');
-    fs.mkdirSync(path.dirname(output), { recursive: true });
-    const result = runEmcc(emscripten, emccArguments(HARNESS_SOURCE, output, { optimization: '-O2' }));
-    assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+  // Before the pump reported failures it logged to the console and returned the
+  // partial count, which reads exactly like "no events yet": the managed side kept
+  // waiting for events that had stopped coming. The fault is injected from the page
+  // so the path is exercised without the adapter having to be broken.
+  it('reports a pump failure to the managed side instead of going quiet', async () => {
+    const port = await freePort();
+    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    const report = await page.evaluate(async (endpoint) => {
+      const zl = window.zl;
+      zl.create({ ...window.connectorOptions, endpoint });
+      await zl.connect();
+      const runtime = globalThis.ZlinkStreamWebGlRuntime;
+      const original = runtime.takeEvent;
+      runtime.takeEvent = function () { throw new Error('injected pump fault'); };
+      let result;
+      try {
+        result = zl.raw.pump();
+      } finally {
+        runtime.takeEvent = original;
+      }
+      const after = { failures: zl.raw.pumpFailures(), text: zl.raw.pumpFailureText() };
+      // The boundary keeps working once the fault is gone.
+      const recovered = zl.raw.pump();
+      await zl.close(10000);
+      zl.raw.destroy();
+      return { result, after, recovered };
+    }, `ws://127.0.0.1:${port}`);
+
+    assert.equal(report.result, -2, 'a failed pump must not look like a count');
+    assert.equal(report.after.failures, 1);
+    assert.deepEqual(JSON.parse(report.after.text), {
+      code: 'pumpFailed',
+      message: 'injected pump fault'
+    });
+    assert.ok(report.recovered >= 0, 'the pump guard must be released after a failure');
+
+    await stopChild(streamServer);
+    streamServer = undefined;
   });
+
+  // Unity's Code Optimization settings above "Shorter Build Time" link with -O2 or
+  // higher, which hands the concatenated --pre-js content to emscripten 3.1.38's
+  // JS optimizer. Two of its stages set the language level the committed bundle
+  // has to stay inside: the parser is fixed at ecmaVersion 2020, and the terser
+  // that converts the tree predates ES2020 and has no ChainExpression handler. The
+  // IIFE bundle is built for es2019 for both reasons; raise the target again and
+  // these links die with "SyntaxError: Unexpected token" or "MOZ_TO_ME[node.type]
+  // is not a function".
+  it('links at every optimization level a Unity release player uses', () => {
+    for (const optimization of ['-O2', '-O3', '-Os']) {
+      const output = path.join(outputDirectory, `release${optimization.slice(1)}/harness.js`);
+      fs.mkdirSync(path.dirname(output), { recursive: true });
+      const result = runEmcc(emscripten, emccArguments(HARNESS_SOURCE, output, { optimization }));
+      assert.equal(result.status, 0, `${optimization}: ${result.stdout ?? ''}${result.stderr ?? ''}`);
+      assert.ok(fs.existsSync(output), `${optimization} produced no module`);
+    }
+  });
+
+  // The third stage of that optimizer, JSDCE, is not a language-level limit but a
+  // bug, and no bundler setting reaches it: esbuild refuses to lower destructuring
+  // while the target still allows async. JSDCE's VariableDeclarator handler reads
+  // `node.id.name`, which is undefined for a pattern, so every destructuring
+  // declaration registers a binding literally named "undefined". A scope with no
+  // reference to the identifier `undefined` therefore has one that is defined and
+  // never used, and the cleanup deletes every declarator whose id.name is undefined
+  // - the destructuring declarations. The connector's message drain loses
+  // `const { message, signal } = queued` and the player fails at runtime with
+  // "ReferenceError: message is not defined", after a link that reported success.
+  //
+  // What does work, verified by the assertion below: --extern-pre-js puts the same
+  // bundle outside the module, where emscripten emits it after the optimizer has
+  // run. Unity's importer only ever passes --pre-js for a .jspre, so reaching it
+  // needs PlayerSettings.WebGL.emscriptenArgs.
+  it('leaves the bundle intact at a Unity release optimization level', { todo: 'emscripten 3.1.38 JSDCE deletes destructuring declarations from --pre-js content' }, () => {
+    // The --extern-pre-js link is the same bundle with the optimizer skipped, so
+    // it says how many destructuring declarations the bundle has. Counting them
+    // in both outputs reports every one JSDCE deleted, not just the known name.
+    const counted = destructuringDeclarations();
+    assert.equal(
+      counted.optimized,
+      counted.untouched,
+      `JSDCE deleted ${counted.untouched - counted.optimized} of ${counted.untouched} destructuring declarations`
+    );
+  });
+
+  it('leaves the bundle intact when the optimizer never sees it', () => {
+    const output = link('extern', { optimization: '-O2', externBundle: true });
+    const linked = fs.readFileSync(output, 'utf8');
+    assert.match(linked, /const \{ message, signal \} = queued/, '--extern-pre-js content must reach the output unrewritten');
+    assert.ok(
+      (linked.match(DESTRUCTURING) ?? []).length > 0,
+      'the untouched bundle is the baseline for how many destructuring declarations there are'
+    );
+    assert.match(linked, /ZlinkStreamConnectorBundle/);
+  });
+
+  function link(name, options) {
+    const output = path.join(outputDirectory, `${name}/harness.js`);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const result = runEmcc(emscripten, emccArguments(HARNESS_SOURCE, output, options));
+    assert.equal(result.status, 0, `${name}: ${result.stdout ?? ''}${result.stderr ?? ''}`);
+    return output;
+  }
+
+  // The start of `const {a, b} = x` or `for (const [k, v] of xs)`, before and
+  // after minification. Counting the openers avoids matching nested braces.
+  const DESTRUCTURING = /\b(?:const|let|var)\s*[{[]/g;
+
+  function destructuringDeclarations() {
+    const count = (file) => (fs.readFileSync(file, 'utf8').match(DESTRUCTURING) ?? []).length;
+    return {
+      optimized: count(link('jsdce', { optimization: '-O2' })),
+      untouched: count(link('jsdce-extern', { optimization: '-O2', externBundle: true }))
+    };
+  }
 });
 
 async function startStaticServer(unityLike, withoutAllocator) {

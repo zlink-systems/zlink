@@ -400,8 +400,28 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         private void PumpAndTransfer()
         {
             if (_disposed) return;
-            ZlinkStreamInterop.Pump(_handle, MaxEventsPerPump);
+            var drained = ZlinkStreamInterop.Pump(_handle, MaxEventsPerPump);
+            // A refusal means an outer pump on this stack is draining the same queue,
+            // so there is nothing to do. A failure means the boundary stopped
+            // delivering, and staying quiet about it would leave every caller waiting
+            // for events that are no longer coming.
+            if (drained == ZlinkStreamInterop.PumpFailed) throw BoundaryFailure();
             while (_inbox.Count > 0) Transfer(_inbox.Dequeue());
+        }
+
+        /// <summary>
+        ///     The boundary itself broke. That is not one of the stream errors in
+        ///     stream-connector spec 32 section 9 - which is why this is not a
+        ///     <see cref="ZlinkStreamException" /> with an invented code - so it surfaces
+        ///     the way a broken object does, out of whichever call was pumping.
+        /// </summary>
+        private static InvalidOperationException BoundaryFailure()
+        {
+            var text = ZlinkStreamInterop.TakeLastErrorText();
+            return new InvalidOperationException(
+                string.IsNullOrEmpty(text)
+                    ? "The ZLink WebGL stream boundary failed while draining events."
+                    : "The ZLink WebGL stream boundary failed while draining events: " + text);
         }
 
         private void Transfer(ZlinkStreamInboundEvent inbound)

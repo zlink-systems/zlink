@@ -57,20 +57,28 @@ function findEmscripten() {
  *    HEAPU8 on every pump instead of caching the view.
  *  - ENVIRONMENT=web: a player build targets the browser only.
  *  - EXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString: for the page driver, not
- *    for the plugins. The plugins get _malloc, _free, HEAPU8, UTF8ToString,
- *    stringToUTF8, lengthBytesUTF8 and wasmTable from the link itself.
- *  - -O1 and not -O2: see the comment on OPTIMIZATION below.
- *
- * OPTIMIZATION: -O2 and above run emscripten 3.1.38's acorn-based JS optimizer
- * over the concatenated --pre-js content, and that parser is fixed at
- * ecmaVersion 2020. zlink-stream-connector.jspre is an esbuild es2022 bundle and
- * declares `static` class fields, which ES2020 cannot parse, so the link dies
- * with "SyntaxError: Unexpected token". -O1 does not run that pass.
+ *    for the plugins. The plugins get HEAPU8, UTF8ToString, stringToUTF8,
+ *    lengthBytesUTF8 and wasmTable from the link, and _malloc and _free from
+ *    their own __deps.
+ *  - -O1: the highest level at which the plugins both link and run. -O2 and
+ *    above link (the committed bundle is built for es2019 so that emscripten
+ *    3.1.38's parser and its pre-ES2020 terser converter both accept it), but
+ *    that level also runs JSDCE, whose VariableDeclarator handler reads
+ *    `node.id.name` and so registers a binding called `undefined` for every
+ *    destructuring declaration. With no reference to the identifier `undefined`
+ *    in that scope the binding looks unused, and the cleanup deletes every
+ *    declarator whose id.name is undefined - that is, the destructuring
+ *    declarations themselves. See the -O2 tests for what is and is not fixed.
  */
 const OPTIMIZATION = process.env.ZLINK_EMSCRIPTEN_OPT ?? '-O1';
 
 function emccArguments(source, output, options = {}) {
-  const { optimization = OPTIMIZATION, exportAllocator = true } = options;
+  const { optimization = OPTIMIZATION, exportAllocator = true, externBundle = false } = options;
+  // Unity links a .jspre with --pre-js. --extern-pre-js is the same content placed
+  // outside the module, and emscripten emits it after the JS optimizer has run, so
+  // nothing rewrites it. The tests use it to show which failures come from the
+  // optimizer rather than from the plugin.
+  const bundleFlag = externBundle ? '--extern-pre-js' : '--pre-js';
   return [
     source,
     optimization,
@@ -81,15 +89,14 @@ function emccArguments(source, output, options = {}) {
     '-sINITIAL_MEMORY=33554432',
     '-sENVIRONMENT=web',
     '-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString',
-    // ZlinkStreamConnector.jslib calls _malloc and _free without declaring them
-    // in a __deps list, so the JS bindings for them exist only when the link
-    // exports them. Unity's WebGL link does - its own jslib documentation writes
-    // `var buffer = _malloc(lengthBytesUTF8(str) + 1)` - so a Unity-equivalent
-    // link passes them here. See the "needs the host link to export" test for
-    // what happens without them.
+    // Unity's WebGL link exports the allocator - its own jslib documentation
+    // writes `var buffer = _malloc(lengthBytesUTF8(str) + 1)` - so the
+    // Unity-equivalent build does too. The jslib no longer needs it: it declares
+    // `malloc` and `free` in its own __deps, which the exportAllocator: false
+    // build exists to prove.
     ...(exportAllocator ? ['-sEXPORTED_FUNCTIONS=_main,_malloc,_free'] : []),
     '--js-library', path.join(pluginRoot, 'ZlinkStreamConnector.jslib'),
-    '--pre-js', path.join(pluginRoot, 'zlink-stream-connector.jspre'),
+    bundleFlag, path.join(pluginRoot, 'zlink-stream-connector.jspre'),
     '--pre-js', path.join(pluginRoot, 'ZlinkStreamRuntime.jspre'),
     '-o', output
   ];

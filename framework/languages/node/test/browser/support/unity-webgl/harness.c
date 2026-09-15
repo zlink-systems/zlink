@@ -55,6 +55,9 @@ extern int ZlinkStreamSetDiagnosticsLevel(int handle, int level);
 #define EVENT_STATE_CHANGED 5
 
 #define MAX_EVENTS_PER_PUMP 256
+/* ZlinkStreamPump's two negative results; see the jslib header. */
+#define PUMP_REFUSED (-1)
+#define PUMP_FAILED (-2)
 #define CALL_SLOTS 8192
 #define MAX_OBSERVERS 16
 #define NAME_MAX_LEN 96
@@ -150,6 +153,8 @@ static int nestedPumpEnabled = 0;
 static int nestedPumpCalls = 0;
 static int nestedPumpNotRefused = 0;
 static int handlerRuns = 0;
+static int pumpFailures = 0;
+static char pumpFailureText[512];
 static int disconnectCount = 0;
 static int errorCount = 0;
 static int stateChangeCount = 0;
@@ -248,7 +253,7 @@ void zlh_event_sink(int handle, int eventType, int id, int value, const char *te
     /* Worst case: managed code re-enters the boundary from inside the callback. */
     int nested = ZlinkStreamPump(handle, MAX_EVENTS_PER_PUMP);
     nestedPumpCalls += 1;
-    if (nested != -1) nestedPumpNotRefused += 1;
+    if (nested != PUMP_REFUSED) nestedPumpNotRefused += 1;
   }
 
   Event *event = (Event *)hmalloc(sizeof(Event));
@@ -433,6 +438,8 @@ void zlh_reset(void) {
   nestedPumpCalls = 0;
   nestedPumpNotRefused = 0;
   handlerRuns = 0;
+  pumpFailures = 0;
+  pumpFailureText[0] = '\0';
   disconnectCount = 0;
   errorCount = 0;
   stateChangeCount = 0;
@@ -459,10 +466,26 @@ void zlh_destroy(void) {
   connector = 0;
 }
 
+/*
+ * Mirrors ZlinkStreamWebGlConnector.PumpAndTransfer: a refusal is not a failure,
+ * but PUMP_FAILED means the boundary stopped delivering and the managed side has
+ * to say so instead of waiting for events that are no longer coming. The reason
+ * is read here the way the C# side reads it, through the last-error channel.
+ */
 EMSCRIPTEN_KEEPALIVE
 int zlh_pump(void) {
   if (!connector) return 0;
   int drained = ZlinkStreamPump(connector, MAX_EVENTS_PER_PUMP);
+  if (drained == PUMP_FAILED) {
+    pumpFailures += 1;
+    char *pointer = ZlinkStreamTakeLastError();
+    if (pointer) {
+      snprintf(pumpFailureText, sizeof(pumpFailureText), "%s", pointer);
+      ZlinkStreamFreeBuffer(pointer);
+    } else {
+      snprintf(pumpFailureText, sizeof(pumpFailureText), "%s", "<no reason reported>");
+    }
+  }
   drainInbox();
   return drained;
 }
@@ -722,6 +745,15 @@ EMSCRIPTEN_KEEPALIVE
 int zlh_handler_runs(void) { return handlerRuns; }
 
 EMSCRIPTEN_KEEPALIVE
+int zlh_pump_failures(void) { return pumpFailures; }
+
+EMSCRIPTEN_KEEPALIVE
+const char *zlh_pump_failure_text(void) {
+  snprintf(returnBuffer, sizeof(returnBuffer), "%s", pumpFailureText);
+  return returnBuffer;
+}
+
+EMSCRIPTEN_KEEPALIVE
 int zlh_disconnect_count(void) { return disconnectCount; }
 
 EMSCRIPTEN_KEEPALIVE
@@ -766,5 +798,6 @@ int main(void) {
   violations[0] = '\0';
   handlerLog[0] = '\0';
   stateLog[0] = '\0';
+  pumpFailureText[0] = '\0';
   return 0;
 }

@@ -1,3 +1,6 @@
+// Resolved inside the function body rather than in a parameter default: see the
+// note on defaultHeaderFlags in index.ts. Emscripten's dead-code pass deletes a
+// binding whose only references are parameter defaults.
 export const defaultMaxDecompressedPayloadSize = 64 * 1024;
 
 export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
@@ -12,8 +15,9 @@ export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
 
 export function lz4UnpicklePayload(
   payload: Uint8Array,
-  maxDecompressedSize = defaultMaxDecompressedPayloadSize
+  maxSize?: number
 ): Uint8Array {
+  const maxDecompressedSize = maxSize ?? defaultMaxDecompressedPayloadSize;
   if (payload.length === 0) {
     return new Uint8Array();
   }

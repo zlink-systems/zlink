@@ -66,6 +66,27 @@ request callbacks. The wait surfaces (`WaitFor`, `ExpectNone`, `WaitForSequence`
 the transport themselves and consume the unread queue without running any registered
 callback, so they work whether or not `Update` is pumping.
 
+If the JavaScript boundary itself fails while draining events, the call that was pumping
+throws an `InvalidOperationException` naming the reason. That is not one of the
+`ZlinkStreamErrorCode` values - the connection is fine, the adapter is not - and it is
+raised rather than logged so a broken boundary cannot look like an idle one.
+
+## Build setting: emscripten optimization
+
+Build the WebGL player with emscripten optimization at `-O1` or below. Player Settings →
+Publishing Settings → **Code Optimization** selects that level.
+
+At `-O2` and above emscripten runs its JavaScript optimizer over the `.jspre` plugins
+this package ships, and the Emscripten 3.1.38 that Unity 2023.2 and later bundle has a
+dead-code pass that deletes destructuring declarations from that content. The build
+links and reports success; the player then fails at runtime, the first symptom being
+`ReferenceError: message is not defined` when a message is delivered. The embedded
+bundle is built for es2019 so that the optimizer's parser and its tree converter both
+accept it, but no bundler setting reaches the dead-code pass.
+
+`framework/languages/node/test/browser/unity-webgl-emscripten.test.js` links at every one
+of these levels and reports which ones the plugins survive.
+
 ## Differences from the native package
 
 | Member | WebGL behaviour |
