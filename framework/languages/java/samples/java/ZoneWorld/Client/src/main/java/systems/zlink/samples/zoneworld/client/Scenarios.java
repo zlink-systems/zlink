@@ -464,6 +464,7 @@ final class Scenarios {
             String nodeId = "zone-node-2";
             // Status payloads have no incarnation token, so accept ready only after this
             // connection observes the old node leave.
+            ops.watch();
             CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> targetStopped = waitFor(
                 ops.connector, Messages.NodeStatusNotify.class,
                 value -> value.nodeId().equals(nodeId) && (!value.registered() || !value.connected()),

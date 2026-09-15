@@ -389,6 +389,7 @@ internal object Scenarios {
             val nodeId = "zone-node-2"
             // Status payloads have no incarnation token, so accept ready only after this
             // connection observes the old node leave.
+            ops.watch()
             val targetStopped = async(start = CoroutineStart.UNDISPATCHED) {
                 ops.connector.waitFor<Messages.NodeStatusNotify>().where {
                     it.payload().nodeId == nodeId && (!it.payload().registered || !it.payload().connected)
