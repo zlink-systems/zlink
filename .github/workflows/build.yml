@@ -185,6 +185,31 @@ jobs:
           # Reset it now that the guard above has judged the real outcome.
           $global:LASTEXITCODE = 0
 
+      # libzlink-static compiles its own sources directly on MSVC (see
+      # core/CMakeLists.txt's MSVC branch), not through the shared OBJECT
+      # library Linux/macOS use, and already has
+      # INTERPROCEDURAL_OPTIMIZATION OFF -- so MSVC /GL whole-program IL
+      # objects (resolved into real code only at the final /LTCG link step)
+      # should never reach this .lib. This is a regression guard, not a fix
+      # for a known Windows break, matching the equivalent Linux/macOS
+      # checks added for issue #397: a /GL-only member disassembles to
+      # nothing, so a real archive should produce a large `dumpbin /disasm`
+      # even for a coarse line-count threshold.
+      - name: Verify static archive is portable object code, not LTO/GL-only IL
+        shell: pwsh
+        run: |
+          $distDir = "core\dist\windows-x64"
+          $staticLib = Get-ChildItem "$distDir\lib\libzlink*.lib" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $staticLib) {
+            throw "static archive not found under $distDir\lib\libzlink*.lib"
+          }
+          $disasmOutput = & dumpbin /disasm $staticLib.FullName 2>&1
+          $lineCount = ($disasmOutput | Measure-Object -Line).Lines
+          if ($lineCount -lt 100) {
+            throw "dumpbin /disasm produced only $lineCount line(s) for $($staticLib.Name) -- looks like IL-only /GL object(s) with no real disassembled code (issue #397)"
+          }
+          Write-Host "OK: dumpbin /disasm produced $lineCount lines of real disassembly for $($staticLib.Name)"
+
       - name: Install Visual C++ Redistributable
         shell: pwsh
         run: |
@@ -319,6 +344,35 @@ jobs:
       - name: Verify build output
         run: test -f core/dist/linux-x64/libzlink.so
 
+      # `nm`/`file`/`ar t` all read a GCC LTO-bytecode-only object as an
+      # ordinary one -- it keeps a real ELF symbol table for archiver
+      # bookkeeping even with an empty .text section, the actual code
+      # living only in .gnu.lto_* sections readable by the exact GCC major
+      # version that produced them. `size` catches what those miss: a
+      # nonzero .text column means real object code shipped, not just
+      # bytecode (issue #397; CI run 34948757858 shipped a bytecode-only
+      # libzlink.a that nm/file both read as fine).
+      - name: Verify static archive is portable object code, not LTO bytecode
+        run: |
+          set -euo pipefail
+          lib="$(pwd)/core/dist/linux-x64/lib/libzlink.a"
+          work="$(mktemp -d)"
+          (cd "$work" && ar x "$lib")
+          fail=0
+          for obj in "$work"/*.o; do
+            text_size="$(size "$obj" | awk 'NR==2{print $1}')"
+            if [ "$text_size" = "0" ]; then
+              echo "LTO-bytecode-only member (empty .text section): $(basename "$obj")" >&2
+              fail=1
+            fi
+          done
+          rm -rf "$work"
+          if [ "$fail" -ne 0 ]; then
+            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            exit 1
+          fi
+          echo "OK: every libzlink.a member has real object code (nonzero .text)."
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -351,6 +405,29 @@ jobs:
 
       - name: Verify build output
         run: test -f core/dist/linux-arm64/libzlink.so
+
+      # Same check as build-linux, same reason: nm/file/ar t cannot tell a
+      # GCC LTO-bytecode-only object from a real one (issue #397).
+      - name: Verify static archive is portable object code, not LTO bytecode
+        run: |
+          set -euo pipefail
+          lib="$(pwd)/core/dist/linux-arm64/lib/libzlink.a"
+          work="$(mktemp -d)"
+          (cd "$work" && ar x "$lib")
+          fail=0
+          for obj in "$work"/*.o; do
+            text_size="$(size "$obj" | awk 'NR==2{print $1}')"
+            if [ "$text_size" = "0" ]; then
+              echo "LTO-bytecode-only member (empty .text section): $(basename "$obj")" >&2
+              fail=1
+            fi
+          done
+          rm -rf "$work"
+          if [ "$fail" -ne 0 ]; then
+            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            exit 1
+          fi
+          echo "OK: every libzlink.a member has real object code (nonzero .text)."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -388,6 +465,31 @@ jobs:
           ./core/builds/macos/build.sh \
             arm64 \
             "ON"
+
+      # Same reasoning as build-linux's check: nm/file/ar t all read an
+      # LTO-bitcode-only object as an ordinary one. otool -l reports each
+      # Mach-O section's real `size`; a __text section with size 0 means
+      # no real code shipped, only LTO/IL (issue #397).
+      - name: Verify static archive is portable object code, not LTO bytecode
+        run: |
+          set -euo pipefail
+          lib="$(pwd)/core/dist/macos-arm64/lib/libzlink.a"
+          work="$(mktemp -d)"
+          (cd "$work" && ar x "$lib")
+          fail=0
+          for obj in "$work"/*.o; do
+            text_size_hex="$(otool -l "$obj" | awk '/sectname __text/{f=1} f && /^ *size 0x/{print $2; exit}')"
+            if [ -z "$text_size_hex" ] || [ "$text_size_hex" = "0x0" ]; then
+              echo "LTO/IL-only member (missing or empty __text): $(basename "$obj")" >&2
+              fail=1
+            fi
+          done
+          rm -rf "$work"
+          if [ "$fail" -ne 0 ]; then
+            echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
+            exit 1
+          fi
+          echo "OK: every libzlink.a member has real object code (nonzero __text)."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6

@@ -1256,6 +1256,66 @@ else()
       target_link_libraries(objects PUBLIC OpenSSL::SSL OpenSSL::Crypto)
     endif()
     set_property(TARGET objects PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+    # libzlink-static below archives this target's already-compiled output
+    # ($<TARGET_OBJECTS:objects>) rather than recompiling ${sources} itself,
+    # so setting INTERPROCEDURAL_OPTIMIZATION on libzlink-static cannot
+    # change what those objects contain -- only what happens at its own
+    # (nonexistent, for a plain `ar` archive) link step. With LTO on,
+    # `objects` inherits CMake's IPO default, which passes
+    # -flto -fno-fat-lto-objects: a real ELF symbol table (nm/file/ar all
+    # read it as an ordinary object) but an empty .text section, with the
+    # actual code only in .gnu.lto_* GIMPLE/bitcode sections -- readable
+    # only by the exact toolchain major version that produced it. That
+    # breaks the distributed static archive (issue #397; CI run
+    # 34948757858 reproduced it: a libzlink.a built under GCC 11.3 failed
+    # to link under GCC 13.1).
+    #
+    # Prefer -ffat-lto-objects: it embeds real object code alongside the
+    # bytecode, so `objects` keeps serving both targets from one compile
+    # (avoiding the double build the comment above this block describes)
+    # -- the shared library still links with full LTO, and the static
+    # archive is an ordinary, portable object archive. Checked via
+    # check_cxx_compiler_flag rather than assumed, since it is GCC-only
+    # for certain and AppleClang only gained it in LLVM 17 -- this must
+    # hold on whatever compiler this configure is actually using, not on a
+    # guess about which one that is. (A compiler that silently accepts and
+    # ignores the flag rather than rejecting it would defeat this check;
+    # the per-platform archive-content verification in
+    # .github/workflows/build.yml's `verify` job exists specifically to
+    # catch that.)
+    #
+    # Where the flag is unavailable, compile a second, non-LTO copy of the
+    # same sources just for the static archive. That reintroduces the
+    # double build this block's original comment avoided, but a static
+    # archive that will not link is worse than one that took longer to
+    # build -- and that comment predates libzlink-static being a
+    # distributed artifact.
+    set(ZLINK_STATIC_OBJECTS_TARGET objects)
+    if(BUILD_STATIC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+      check_cxx_compiler_flag("-ffat-lto-objects" ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
+      if(ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
+        target_compile_options(objects PRIVATE -ffat-lto-objects)
+      else()
+        add_library(objects-static-lto-safe OBJECT ${sources})
+        if(ZLINK_HAVE_ASIO_SSL)
+          target_link_libraries(objects-static-lto-safe PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+        endif()
+        set_target_properties(
+          objects-static-lto-safe
+          PROPERTIES POSITION_INDEPENDENT_CODE ON INTERPROCEDURAL_OPTIMIZATION OFF)
+        if(APPLE)
+          # Match the hidden-visibility treatment `objects` gets below, so
+          # this fallback path does not also silently change the static
+          # archive's symbol visibility on Apple platforms.
+          set_target_properties(
+            objects-static-lto-safe
+            PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden
+                       VISIBILITY_INLINES_HIDDEN YES)
+        endif()
+        set(ZLINK_STATIC_OBJECTS_TARGET objects-static-lto-safe)
+      endif()
+    endif()
   endif()
 
   if(BUILD_SHARED)
@@ -1319,8 +1379,9 @@ else()
         add_library(libzlink-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs}
                                          ${zlink-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       else()
-        add_library(libzlink-static STATIC $<TARGET_OBJECTS:objects> ${public_headers} ${html-docs} ${readme-docs}
-                                         ${zlink-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+        add_library(libzlink-static STATIC $<TARGET_OBJECTS:${ZLINK_STATIC_OBJECTS_TARGET}> ${public_headers}
+                                         ${html-docs} ${readme-docs} ${zlink-pkgconfig}
+                                         ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       endif()
     endif()
     if(CMAKE_SYSTEM_NAME MATCHES "QNX")
