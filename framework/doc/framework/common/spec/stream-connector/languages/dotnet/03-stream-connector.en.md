@@ -30,7 +30,7 @@ snapshot.
 This document doesn't repeat listing the
 [snapshot](../../../server/00-foundation/02-glossary.en.md#snapshot)'s member — it fixes the
 **surface structure and `.NET`-specific meaning.** The verification
-procedure is owned by [this document §15](#15-regression-test).
+procedure is owned by [this document §14](#14-regression-test).
 
 **The target it's responsible for is a native build** (desktop/server,
 Unity, Godot C#). Unity's native build uses the same
@@ -202,7 +202,7 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 | Item | Contract |
 |---|---|
 | `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
-| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so backpressure applies as is |
+| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so the receives after it are delayed |
 | `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
 | Outbound send queue | An order-preserving queue **separate** from the dispatch bound. When it is full the send waits for room, and ends with `DeadlineExceeded` if the wait runs out of time. It is never rejected for want of room |
 
@@ -220,13 +220,10 @@ A message of a name with no handler stays in the unread history and
 `WaitFor(...)` consumes it one at a time. Control frames such as
 response and heartbeat do not pass through this history.
 
-Reception is unbounded and no message is discarded
-([Common Spec §10](../../32-stream-connector.en.md)).
-
 ### 8.1 Test Wait Surface
 
 The contract is owned by
-[Common Spec §10.1](../../32-stream-connector.en.md). The `.NET`
+[Common Spec §10](../../32-stream-connector.en.md). The `.NET`
 surface is below.
 
 **Push observation — connector method** (the same spot as §4's
@@ -290,7 +287,7 @@ this as the `ZlinkStreamTransport` enum (`Tcp`, `Tls`, `WebSocket`,
   default.** `SkipServerCertificateValidation` defaults to `false` and
   is used **only for a test's self-signed certificate.**
 
-## 11. Close Reason
+## 10. Close Reason
 
 The value set and meaning is owned by
 [Common Spec §6.3](../../32-stream-connector.en.md#63-close-reason).
@@ -309,7 +306,7 @@ the reconnect condition is owned by
 `.NET` expresses that error as `ZlinkStreamErrorCode.FrameTooLarge`,
 and the close reason as `ZlinkStreamCloseReason.TransportError`.
 
-## 12. Flow
+## 11. Flow
 
 **A connector outbound operation generates a UUIDv7 `flow_id` once,
 with no separate public option.** A follow-up operation started inside
@@ -320,7 +317,7 @@ The wire representation is owned by
 [Common Spec §4.2](../../32-stream-connector.en.md) and
 [flow-correlation](../../../server/06-observability/04-flow-correlation.en.md).
 
-## 13. Metric
+## 12. Metric
 
 The connector metric follows
 [Stream Connector Common Contract §6.2](../../32-stream-connector.en.md#62-connector-reconnect-instrument)'s
@@ -330,7 +327,7 @@ provider, and the application and E2E read it with `MeterListener`.
 **A metric listener failure doesn't change the send/request result or
 connection state.**
 
-## 14. Options And Validation
+## 13. Options And Validation
 
 **The default value is owned by
 [Common Spec §6.1](../../32-stream-connector.en.md).** `.NET`
@@ -390,7 +387,7 @@ affects work already under way, only the next processing point that starts after
 Every timeout and queue size option must be **positive**, and the
 preview length **can't be negative.**
 
-## 15. Regression Test
+## 14. Regression Test
 
 | Test Case | Verification Standard |
 |---------------|-----------|

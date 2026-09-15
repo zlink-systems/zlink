@@ -570,8 +570,8 @@ Client scenario는 다음 순서와 payload를 assertion으로 확인한다.
 11. Observer가 관찰 종료 response에서 `Stopped = true`를 확인한다.
 
 Push는 stream connector의 public wait interface와 filter를 사용해 기다린다. Sample-local polling,
-inbox 검사나 sleep으로 대기를 숨기지 않는다. Inbound observer와 structured log는 진단 evidence로
-남길 수 있지만 assertion을 대신하지 않는다.
+inbox 검사나 sleep으로 대기를 숨기지 않는다. Structured log는 진단 evidence로 남길 수
+있지만 assertion을 대신하지 않는다.
 
 배치 독립성도 함께 확인한다.
 

@@ -189,20 +189,6 @@ interface ZlinkStreamConnectionStateChanged {
   readonly error?: ZlinkStreamError;
 }
 
-interface ZlinkStreamInboundObservation {
-  readonly kind: ZlinkStreamMessageKind;
-  readonly name: string;
-  readonly codec: ZlinkStreamCodec;
-  readonly requestSeq?: bigint;
-  readonly flowId?: string;
-  readonly flowOrigin?: ZlinkFlowOrigin;
-  readonly metadata: ZlinkStreamMetadata;
-  readonly payloadLength: number;
-  readonly isCompressed: boolean;
-  readonly receivedAt: Date;
-  readonly payloadPreview: Uint8Array;
-}
-
 enum ZlinkStreamCodec { Raw = 0, Json = 1, MessagePack = 2, Protobuf = 3 }
 enum ZlinkStreamTransport { WebSocket = 'webSocket', WebSocketSecure = 'webSocketSecure' }
 enum ZlinkStreamCompression { None = 'none', Lz4 = 'lz4' }
@@ -400,10 +386,9 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 
 ## 5. Receive Queue
 
-The receive queue's meaning is owned by
-[Common Spec §10](../../32-stream-connector.en.md). It has no bound
-and discards no message, so the TypeScript surface carries no related
-option or error code.
+The receive queue's contract is owned by
+[Common Spec §10](../../32-stream-connector.en.md). The TypeScript surface
+carries no receive-queue option or error code.
 
 ## 6. Session Close Reason
 

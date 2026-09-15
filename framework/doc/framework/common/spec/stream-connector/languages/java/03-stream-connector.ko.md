@@ -394,7 +394,7 @@ handler를 직접 호출하지 않고 dispatch queue에 넣는다. application�
 thread에서 `dispatch().submit()`을 호출한다.
 
 `IMMEDIATE`는 receive 경로에서 callback을 인라인 실행하므로, 느린 handler가 receive loop를
-막고 그만큼 backpressure가 걸린다. UI thread나 game loop가 있는 client sample은 `MANUAL`을
+막고 그만큼 후속 receive 처리가 지연된다. UI thread나 game loop가 있는 client sample은 `MANUAL`을
 유지한다.
 
 ## 10. 연결 상태
@@ -529,12 +529,12 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 ```
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
-복사하는 extension은 **수신 메시지 한도를 포함해 모든 option 값을 보존해야 한다.**
+복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**
 `messages(...)`와 `errors()`는 Java connector의 `on(...)`, `onErrorReceived(...)`
 handler를 `callbackFlow`로 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
 
-## 14. 검증 기준
+## 13. 검증 기준
 
 Java connector는 아래 테스트를 별도 suite로 가진다.
 

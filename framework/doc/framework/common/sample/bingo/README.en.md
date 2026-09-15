@@ -602,8 +602,8 @@ The client scenario confirms the following order and payloads with assertions.
 11. The Observer confirms `Stopped = true` in the stop-observing response.
 
 Pushes are waited for using the stream connector's public wait interface and filters.
-Sample-local polling, inbox checks, or sleeps aren't used to hide the wait. Inbound observers and
-structured logs can be kept as diagnostic evidence but don't replace an assertion.
+Sample-local polling, inbox checks, or sleeps aren't used to hide the wait. Structured logs can be
+kept as diagnostic evidence but don't replace an assertion.
 
 Placement independence is also confirmed.
 

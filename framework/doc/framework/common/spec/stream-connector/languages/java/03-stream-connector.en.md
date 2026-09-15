@@ -454,7 +454,7 @@ dispatch queue. The application calls `dispatch().submit()` on the
 thread of its choice.
 
 `IMMEDIATE` runs the callback inline on the receive path, so a slow
-handler blocks the receive loop and backpressure applies accordingly.
+handler blocks the receive loop and the receives after it are delayed.
 A client sample with a UI thread or game loop keeps `MANUAL`.
 
 ## 10. Connection State
@@ -596,14 +596,14 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options
-**must preserve every option value, including the receive message
-bound.** `messages(...)` and `errors()` wrap the Java connector's
+**must preserve every option value currently defined.**
+`messages(...)` and `errors()` wrap the Java connector's
 `on(...)`, `onErrorReceived(...)` handler with `callbackFlow`. So in
 manual [dispatch mode](../../../server/00-foundation/02-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.
 
-## 14. Verification Standard
+## 13. Verification Standard
 
 The Java connector has the tests below as a separate suite.
 

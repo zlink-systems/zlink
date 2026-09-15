@@ -172,20 +172,6 @@ interface ZlinkStreamConnectionStateChanged {
   readonly error?: ZlinkStreamError;
 }
 
-interface ZlinkStreamInboundObservation {
-  readonly kind: ZlinkStreamMessageKind;
-  readonly name: string;
-  readonly codec: ZlinkStreamCodec;
-  readonly requestSeq?: bigint;
-  readonly flowId?: string;
-  readonly flowOrigin?: ZlinkFlowOrigin;
-  readonly metadata: ZlinkStreamMetadata;
-  readonly payloadLength: number;
-  readonly isCompressed: boolean;
-  readonly receivedAt: Date;
-  readonly payloadPreview: Uint8Array;
-}
-
 enum ZlinkStreamCodec { Raw = 0, Json = 1, MessagePack = 2, Protobuf = 3 }
 enum ZlinkStreamTransport { WebSocket = 'webSocket', WebSocketSecure = 'webSocketSecure' }
 enum ZlinkStreamCompression { None = 'none', Lz4 = 'lz4' }
@@ -362,8 +348,8 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 
 ## 5. 수신 큐
 
-수신 큐의 의미는 [공통 스펙 §10](../../32-stream-connector.ko.md)이 소유한다. 한도를 두지 않고
-message를 버리지 않으므로 TypeScript 표면에 관련 option이나 오류 코드가 없다.
+수신 큐의 계약은 [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 소유한다.
+TypeScript 표면에는 수신 큐 관련 option이나 오류 코드가 없다.
 
 ## 6. 세션 종료 사유 (close reason)
 

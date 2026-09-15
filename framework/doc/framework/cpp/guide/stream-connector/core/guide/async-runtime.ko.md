@@ -21,7 +21,7 @@ TCP, TLS, WebSocket, WSS transport에서 `connect(callback)`은 연결 완료나
 위해 호출 thread를 막지 않는다. TLS와 WSS는 OpenSSL feature가 켜진 build에서 사용할 수 있다.
 
 `send().submit()`은 one-way 전송 요청을 제출하고 완료 결과를 호출자에게 반환하지 않는다.
-송신 수락과 backpressure 처리는 connector 내부 책임이다.
+송신 순서와 transport write 완료 처리는 connector 내부 책임이다.
 
 `request().submit(callback)`은 request frame write를 등록한 뒤 반환한다. reply, timeout, close,
 transport 오류 중 하나가 발생하면 callback에 `result_t<T>`로 전달된다.
