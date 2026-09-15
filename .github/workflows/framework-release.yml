@@ -130,9 +130,20 @@ jobs:
       - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
+          # The workspace manifest pins http-client to a local tarball. Read the
+          # destination out of that pin instead of repeating it here — the two
+          # drifted apart once already (#187 moved the pin to .artifacts/node-install
+          # and this step kept packing into .artifacts/wsl, which broke the Node and
+          # Java releases at 0.12.0).
+          pin="$(node -p "require('./framework/languages/node/package.json').dependencies['@zlink-systems/http-client']")"
+          case "${pin}" in
+            file:*) ;;
+            *) echo "::error::http-client pin is not a local tarball: ${pin}" >&2; exit 1 ;;
+          esac
+          dest="$(cd framework/languages/node && mkdir -p "$(dirname "${pin#file:}")" \
+            && cd "$(dirname "${pin#file:}")" && pwd -P)"
+          npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
+          test -f "${dest}/$(basename "${pin#file:}")"
 
       - name: Build and pack
         working-directory: framework/languages/node
@@ -225,9 +236,20 @@ jobs:
       - name: Build the Node workspace for the Java/Node interop tests
         shell: bash
         run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
+          # The workspace manifest pins http-client to a local tarball. Read the
+          # destination out of that pin instead of repeating it here — the two
+          # drifted apart once already (#187 moved the pin to .artifacts/node-install
+          # and this step kept packing into .artifacts/wsl, which broke the Node and
+          # Java releases at 0.12.0).
+          pin="$(node -p "require('./framework/languages/node/package.json').dependencies['@zlink-systems/http-client']")"
+          case "${pin}" in
+            file:*) ;;
+            *) echo "::error::http-client pin is not a local tarball: ${pin}" >&2; exit 1 ;;
+          esac
+          dest="$(cd framework/languages/node && mkdir -p "$(dirname "${pin#file:}")" \
+            && cd "$(dirname "${pin#file:}")" && pwd -P)"
+          npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
+          test -f "${dest}/$(basename "${pin#file:}")"
           cd framework/languages/node
           npm ci
           npm run build
