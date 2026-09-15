@@ -26,6 +26,16 @@ vcpkg_cmake_configure(
         # would then look in the wrong place instead of failing loudly.
         -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX=${CURRENT_INSTALLED_DIR}
         -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=${CURRENT_INSTALLED_DIR}
+        # zlink and zlink-cpp are dependencies of this port (vcpkg.json), so
+        # they are already installed under ${CURRENT_INSTALLED_DIR} by the
+        # time this port's install step runs. The StreamConnector component's
+        # default staging of a *private* copy of their headers/libraries/
+        # CMake configs (for standalone consumption outside a shared prefix)
+        # is therefore both unnecessary and harmful here: re-staging "the"
+        # include directory means re-staging every dependency's headers, not
+        # just the binding's, and vcpkg's install step then refuses the
+        # package for conflicting with whichever dependency owns them.
+        -DZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF

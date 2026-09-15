@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.13.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.14.0 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
@@ -22,6 +22,25 @@ find_package(Threads REQUIRED)
 find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
+# The StreamConnector component is a standalone package: by default it
+# stages a private copy of the binding and Core package (headers, link
+# libraries, CMake configs) into its own install tree so a consumer who
+# installs *only* that component -- without the binding or Core installed
+# anywhere else on their CMAKE_PREFIX_PATH -- can still find_package() it.
+# That copy is redundant, and actively harmful, whenever the consumer's
+# build already has the binding and Core installed in the SAME prefix tree
+# this package installs into (e.g. a vcpkg triplet install, where zlink and
+# zlink-cpp are declared dependencies and are already sitting in
+# ${CURRENT_INSTALLED_DIR} before this package's own install step runs):
+# every one of those dependencies' installed headers -- not just the
+# binding's -- lives under that shared prefix's single "include/" tree, so
+# re-staging "the include directory" re-stages all of them, and vcpkg's
+# install step then refuses the package outright, reporting a file
+# conflict with whichever dependency happens to be listed first. Turn this
+# off wherever the binding and Core are already guaranteed to be
+# findable alongside this package.
+option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+  "Stage a private copy of the binding and Core package into the StreamConnector install tree for standalone consumption" ON)
 
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
@@ -799,7 +818,8 @@ function(zlink_framework_cpp_stage_debug_counterparts prefix found_files)
 endfunction()
 # The stream connector and Unreal adapter are standalone packages: stage the
 # exact binding and Core package that their relative config imports reference.
-if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE
+    AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES)
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT StreamConnector
@@ -903,8 +923,14 @@ endif()
 # skips staging entirely and find_package(zlink_framework CONFIG) then
 # fails downstream with "... references the file .../libzlink.a but this
 # file does not exist." The gate must trigger on either artifact existing.
-if((ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-    OR (ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME}"))
+# This block only exists to back the promise of the Core config copied
+# above, so it is gated by the same ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+# switch: when that staging is off, no copied config was installed to make
+# a promise in the first place, and re-staging Core's own already-installed
+# runtime file here would conflict with it exactly like the headers did.
+if(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+    AND ((ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+      OR (ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME}")))
   if(WIN32)
     if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
       install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"

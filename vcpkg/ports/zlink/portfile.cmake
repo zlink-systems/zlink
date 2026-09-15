@@ -14,9 +14,20 @@ else()
     set(ZLINK_BUILD_STATIC ON)
 endif()
 
+# One Boost tree per binary. Core compiles Boost.Asio and Beast into its own
+# objects from ZLINK_BOOST_INCLUDE_DIR (core/CMakeLists.txt), and zlink-framework
+# compiles the same headers out of vcpkg's boost-asio/boost-beast; both are
+# installed side by side here, so both must be the same checkout -- the rule
+# framework/languages/cpp/CMakeLists.txt already states for its own targets.
+# Without this, Core falls back to its vendored core/external/boost, whose
+# boost::asio symbols are weak and default-visible in a static libzlink.a (the
+# version script that hides them applies to the shared library only). The two
+# layouts then collapse onto one definition at link time and the consumer
+# crashes at run time, after building and linking cleanly.
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}/core"
     OPTIONS
+        -DZLINK_BOOST_INCLUDE_DIR=${CURRENT_INSTALLED_DIR}/include
         -DBUILD_SHARED=${ZLINK_BUILD_SHARED}
         -DBUILD_STATIC=${ZLINK_BUILD_STATIC}
         -DENABLE_LTO=OFF
