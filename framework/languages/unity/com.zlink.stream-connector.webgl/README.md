@@ -89,6 +89,14 @@ The jslib boundary is covered by
 STREAM server: connect, send, request, `on`, dispatch, close, the `tcp://` configuration
 error, buffer ownership and the nested-pump guard.
 
+`framework/languages/node/test/browser/unity-webgl-emscripten.test.js` links the same
+files the way Unity does - `.jslib` through `emcc --js-library`, both `.jspre` through
+`--pre-js` - and runs the result in Chromium against that server. It stands in for the
+IL2CPP side with a C harness that declares the same `[DllImport("__Internal")]`
+signatures and hands `ZlinkStreamSetEventSink` a real wasm function pointer, so the
+link, the function-pointer callback and the `_malloc`/`_free`/`HEAPU8` marshalling are
+exercised for real. It needs an emsdk install and skips without one.
+
 Unity itself is not in CI. Check these by hand after changing the package:
 
 1. **WebGL build passes.** Build a WebGL player with the package installed and no
