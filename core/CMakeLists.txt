@@ -1285,13 +1285,28 @@ else()
     # .github/workflows/build.yml's `verify` job exists specifically to
     # catch that.)
     #
-    # Where the flag is unavailable, compile a second, non-LTO copy of the
-    # same sources just for the static archive. That reintroduces the
-    # double build this block's original comment avoided, but a static
-    # archive that will not link is worse than one that took longer to
-    # build -- and that comment predates libzlink-static being a
-    # distributed artifact.
-    set(ZLINK_STATIC_OBJECTS_TARGET objects)
+    # Where the flag is unavailable, fall back to the same shape MinGW and
+    # the Xcode generator already use below: libzlink-static compiles
+    # ${sources} itself instead of archiving `objects`. A second OBJECT
+    # library that duplicates `objects` was tried first and reached CI
+    # (issue #397, run 34965258927): it never went through the
+    # `foreach(target ${build_targets})` loop a few hundred lines down
+    # that gives every real target its include directories and Boost/ASIO
+    # compile definitions (that loop only walks ${target_outputs} plus
+    # `objects`), so it failed to find platform.hpp the moment the
+    # fallback path actually ran for the first time in CI. Copying
+    # properties one at a time onto a second target is exactly the kind
+    # of list that goes stale again the next time something is added to
+    # that loop or to `objects` directly; compiling libzlink-static from
+    # ${sources} sidesteps the whole class of bug by reusing the one path
+    # in this file already proven to receive everything a real target
+    # needs (MinGW and Xcode never shared `objects` with libzlink-static
+    # and have not had this problem). It also means the
+    # INTERPROCEDURAL_OPTIMIZATION OFF this file already sets on
+    # libzlink-static (below) finally has something to act on: a target
+    # that compiles its own sources, rather than one that just archives
+    # objects someone else already compiled.
+    set(ZLINK_STATIC_COMPILE_OWN_SOURCES FALSE)
     if(BUILD_STATIC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
       # -ffat-lto-objects only means anything once LTO is already on, and
       # AppleClang rejects the combination outright for some targets
@@ -1313,23 +1328,7 @@ else()
       if(ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
         target_compile_options(objects PRIVATE -ffat-lto-objects)
       else()
-        add_library(objects-static-lto-safe OBJECT ${sources})
-        if(ZLINK_HAVE_ASIO_SSL)
-          target_link_libraries(objects-static-lto-safe PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-        endif()
-        set_target_properties(
-          objects-static-lto-safe
-          PROPERTIES POSITION_INDEPENDENT_CODE ON INTERPROCEDURAL_OPTIMIZATION OFF)
-        if(APPLE)
-          # Match the hidden-visibility treatment `objects` gets below, so
-          # this fallback path does not also silently change the static
-          # archive's symbol visibility on Apple platforms.
-          set_target_properties(
-            objects-static-lto-safe
-            PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden
-                       VISIBILITY_INLINES_HIDDEN YES)
-        endif()
-        set(ZLINK_STATIC_OBJECTS_TARGET objects-static-lto-safe)
+        set(ZLINK_STATIC_COMPILE_OWN_SOURCES TRUE)
       endif()
     endif()
   endif()
@@ -1391,11 +1390,17 @@ else()
       add_library(libzlink-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs} ${zlink-pkgconfig}
                                        ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
     else()
-      if (CMAKE_GENERATOR STREQUAL "Xcode")
+      # ZLINK_STATIC_COMPILE_OWN_SOURCES: see the comment where `objects`
+      # is created, above -- this is the no-fat-LTO fallback, compiling
+      # ${sources} itself exactly like the Xcode generator already does,
+      # rather than archiving a second OBJECT library that would miss
+      # every target_include_directories/target_compile_definitions call
+      # a few hundred lines down.
+      if(CMAKE_GENERATOR STREQUAL "Xcode" OR ZLINK_STATIC_COMPILE_OWN_SOURCES)
         add_library(libzlink-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs}
                                          ${zlink-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       else()
-        add_library(libzlink-static STATIC $<TARGET_OBJECTS:${ZLINK_STATIC_OBJECTS_TARGET}> ${public_headers}
+        add_library(libzlink-static STATIC $<TARGET_OBJECTS:objects> ${public_headers}
                                          ${html-docs} ${readme-docs} ${zlink-pkgconfig}
                                          ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       endif()
