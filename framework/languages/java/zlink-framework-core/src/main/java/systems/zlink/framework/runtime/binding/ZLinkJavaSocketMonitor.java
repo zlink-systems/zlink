@@ -18,6 +18,11 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
     private final SocketMonitor monitor;
     private final Poller poller;
     private final PollEvents events = new PollEvents(1);
+    // The drain loop holds the monitor for the length of a poll wait, so a close
+    // that needed the same lock could be starved by the loop reacquiring it.
+    // Requesting the close is therefore a volatile write the loop reads without
+    // locking; only the native close itself takes the monitor.
+    private volatile boolean closeRequested;
     private boolean closed;
 
     ZLinkJavaSocketMonitor(SocketMonitor monitor) {
@@ -30,7 +35,7 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
 
     @Override
     public synchronized boolean waitForReadable(Duration timeout) {
-        if (closed) {
+        if (closed || closeRequested) {
             return false;
         }
         return poller.wait(events, timeout) > 0;
@@ -38,7 +43,7 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
 
     @Override
     public synchronized ZLinkBackendSocketMonitorEvent recvDontWait() {
-        if (closed) {
+        if (closed || closeRequested) {
             return null;
         }
         MonitorEvent event = monitor.recv(RecvFlags.DONT_WAIT);
@@ -46,20 +51,23 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
     }
 
     @Override
-    public synchronized boolean isClosed() {
-        return closed;
+    public boolean isClosed() {
+        return closeRequested;
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
-        }
-        closed = true;
-        try {
-            poller.close();
-        } finally {
-            monitor.close();
+    public void close() {
+        closeRequested = true;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            try {
+                poller.close();
+            } finally {
+                monitor.close();
+            }
         }
     }
 
