@@ -3,6 +3,7 @@
 #include <zlink/http_client.hpp>
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/v6_only.hpp>
 #ifdef ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL
 #include <boost/asio/ssl/stream.hpp>
 #endif
@@ -395,17 +396,21 @@ class loopback_http_server_t
     {
         _stop = true;
         beast::error_code ignored;
-        _acceptor.close (ignored);
         try {
             tcp::socket wakeup (_io);
             wakeup.connect (tcp::endpoint (asio::ip::make_address ("127.0.0.1"), _port), ignored);
         }
         catch (...) {
         }
+        _acceptor.close (ignored);
         if (_thread.joinable ()) {
             _thread.join ();
         }
-        for (auto &worker : _workers) {
+        for (auto &[socket, worker] : _workers) {
+            socket->shutdown (tcp::socket::shutdown_both, ignored);
+            socket->close (ignored);
+        }
+        for (auto &[socket, worker] : _workers) {
             if (worker.joinable ()) {
                 worker.join ();
             }
@@ -427,7 +432,9 @@ class loopback_http_server_t
             }
             ++_connections;
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
-            _workers.emplace_back ([this, shared_socket] { handle (*shared_socket); });
+            _workers.emplace_back (
+              shared_socket,
+              std::thread ([this, shared_socket] { handle (*shared_socket); }));
         }
     }
 
@@ -464,7 +471,7 @@ class loopback_http_server_t
     std::atomic<int> _flaky_hits{0};
     std::atomic<int> _connections{0};
     std::thread _thread;
-    std::vector<std::thread> _workers;
+    std::vector<std::pair<std::shared_ptr<tcp::socket>, std::thread>> _workers;
 };
 
 class loopback_proxy_t
@@ -482,17 +489,21 @@ class loopback_proxy_t
     {
         _stop = true;
         beast::error_code ignored;
-        _acceptor.close (ignored);
         try {
             tcp::socket wakeup (_io);
             wakeup.connect (tcp::endpoint (asio::ip::make_address ("127.0.0.1"), _port), ignored);
         }
         catch (...) {
         }
+        _acceptor.close (ignored);
         if (_thread.joinable ()) {
             _thread.join ();
         }
-        for (auto &worker : _workers) {
+        for (auto &[socket, worker] : _workers) {
+            socket->shutdown (tcp::socket::shutdown_both, ignored);
+            socket->close (ignored);
+        }
+        for (auto &[socket, worker] : _workers) {
             if (worker.joinable ()) {
                 worker.join ();
             }
@@ -515,13 +526,13 @@ class loopback_proxy_t
                 continue;
             }
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
-            _workers.emplace_back ([this, shared_socket] {
+            _workers.emplace_back (shared_socket, std::thread ([this, shared_socket] {
                 try {
-                    handle (std::move (*shared_socket));
+                    handle (*shared_socket);
                 }
                 catch (...) {
                 }
-            });
+            }));
         }
     }
 
@@ -531,7 +542,7 @@ class loopback_proxy_t
         return {authority.substr (0, colon), authority.substr (colon + 1)};
     }
 
-    void handle (tcp::socket client)
+    void handle (tcp::socket &client)
     {
         beast::flat_buffer buffer;
         http::request<http::string_body> request;
@@ -554,7 +565,7 @@ class loopback_proxy_t
         }
 
         if (request.method () == http::verb::connect) {
-            tunnel (std::move (client), buffer, request);
+            tunnel (client, buffer, request);
             return;
         }
 
@@ -582,7 +593,7 @@ class loopback_proxy_t
         client.shutdown (tcp::socket::shutdown_send, ec);
     }
 
-    void tunnel (tcp::socket client,
+    void tunnel (tcp::socket &client,
                  beast::flat_buffer &buffer,
                  const http::request<http::string_body> &request)
     {
@@ -617,7 +628,8 @@ class loopback_proxy_t
                 }
             }
             beast::error_code ignored;
-            to.shutdown (tcp::socket::shutdown_send, ignored);
+            to.shutdown (tcp::socket::shutdown_both, ignored);
+            to.close (ignored);
         };
 
         std::thread downstream ([&] { pump (upstream, client); });
@@ -634,7 +646,7 @@ class loopback_proxy_t
     std::atomic<int> _tunnels{0};
     std::atomic<int> _rejected{0};
     std::thread _thread;
-    std::vector<std::thread> _workers;
+    std::vector<std::pair<std::shared_ptr<tcp::socket>, std::thread>> _workers;
 };
 
 #ifdef ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL
@@ -643,8 +655,12 @@ class loopback_https_server_t
   public:
     explicit loopback_https_server_t (bool require_client_certificate = false) :
         _context (asio::ssl::context::tls_server),
-        _acceptor (_io, tcp::endpoint (asio::ip::make_address ("127.0.0.1"), 0))
+        _acceptor (_io)
     {
+        _acceptor.open (tcp::v6 ());
+        _acceptor.set_option (asio::ip::v6_only (false));
+        _acceptor.bind (tcp::endpoint (tcp::v6 (), 0));
+        _acceptor.listen ();
         _context.use_certificate_chain_file (ZLINK_HTTP_CLIENT_TEST_CERT);
         _context.use_private_key_file (ZLINK_HTTP_CLIENT_TEST_KEY, asio::ssl::context::pem);
         if (require_client_certificate) {
@@ -670,7 +686,11 @@ class loopback_https_server_t
         if (_thread.joinable ()) {
             _thread.join ();
         }
-        for (auto &worker : _workers) {
+        for (auto &[socket, worker] : _workers) {
+            socket->shutdown (tcp::socket::shutdown_both, ignored);
+            socket->close (ignored);
+        }
+        for (auto &[socket, worker] : _workers) {
             if (worker.joinable ()) {
                 worker.join ();
             }
@@ -695,7 +715,9 @@ class loopback_https_server_t
                 continue;
             }
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
-            _workers.emplace_back ([this, shared_socket] { handle (*shared_socket); });
+            _workers.emplace_back (
+              shared_socket,
+              std::thread ([this, shared_socket] { handle (*shared_socket); }));
         }
     }
 
@@ -731,7 +753,7 @@ class loopback_https_server_t
     std::uint16_t _port = 0;
     std::atomic_bool _stop{false};
     std::thread _thread;
-    std::vector<std::thread> _workers;
+    std::vector<std::pair<std::shared_ptr<tcp::socket>, std::thread>> _workers;
 };
 #endif
 

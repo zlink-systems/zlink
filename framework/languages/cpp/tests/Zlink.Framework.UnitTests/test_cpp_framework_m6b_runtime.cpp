@@ -6889,7 +6889,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
       static_cast<std::uint64_t> (
         std::chrono::duration_cast<std::chrono::milliseconds> (
           std::chrono::system_clock::now ().time_since_epoch ()
-          + 20ms)
+          + 100ms)
           .count ());
     invalid_create.reservation = {
       invalid_reservation->fence.reservation_id,

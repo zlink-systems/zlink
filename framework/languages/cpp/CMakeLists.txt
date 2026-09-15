@@ -2000,6 +2000,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     connector/perf/connector_perf_client.cpp)
   target_include_directories(connector_perf_client PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)
+  zlink_framework_cpp_add_boost_headers(connector_perf_client)
   target_link_libraries(connector_perf_client PRIVATE
     zlink::stream_e2e_client)
   add_custom_target(connector_perf_smoke
