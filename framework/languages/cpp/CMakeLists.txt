@@ -2575,10 +2575,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
   add_subdirectory(samples/ZoneWorld)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
+    if(WIN32)
+      set(sample_runner_command
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+        "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.ps1")
+    else()
+      set(sample_runner_command
+        bash "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
+    endif()
     zlink_framework_cpp_add_test(
       NAME sample_smoke_sample_cpp_framework_${sample_name}
-      COMMAND bash
-        "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh"
+      COMMAND ${sample_runner_command}
       LABELS "${labels};framework-sample-smoke"
       TIMEOUT ${timeout_seconds}
       ENVIRONMENT "ZLINK_CPP_BUILD_DIR=${CMAKE_BINARY_DIR}"

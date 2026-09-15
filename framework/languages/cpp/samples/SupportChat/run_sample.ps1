@@ -74,6 +74,7 @@ function Start-Role([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $LogDir "$Name.stdout.log") `
         -RedirectStandardError (Join-Path $LogDir "$Name.stderr.log")
+    [void]$process.Handle
     $Processes.Add($process)
     return $process
 }

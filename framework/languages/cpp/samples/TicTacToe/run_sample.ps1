@@ -100,7 +100,43 @@ function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $stdout = Join-Path $LogDir "$Name.log"
     $stderr = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -NoNewWindow -PassThru
+    [void]$process.Handle
     $script:Processes.Add($process)
+}
+
+function Write-RoleConfig([string]$Name, [string]$ApiNode, [string]$PlayNode) {
+    $configuration = @{
+        sample = @{
+            host = @{ keepRunning = $true }
+            topology = @{
+                logDir = $env:TICTACTOE_LOG_DIR
+                apiNode = $ApiNode
+                playNode = $PlayNode
+                apiEndpoint = $ApiAEndpoint
+                apiAEndpoint = $ApiAEndpoint
+                apiBEndpoint = $ApiBEndpoint
+                apiHttpEndpoint = $ApiAHttpEndpoint
+                apiAHttpEndpoint = $ApiAHttpEndpoint
+                apiBHttpEndpoint = $ApiBHttpEndpoint
+                playEndpoint = $PlayAEndpoint
+                playAEndpoint = $PlayAEndpoint
+                playBEndpoint = $PlayBEndpoint
+                playARouteEndpoint = $PlayARouteEndpoint
+                playBRouteEndpoint = $PlayBRouteEndpoint
+                apiARouteEndpoint = $ApiARouteEndpoint
+                apiBRouteEndpoint = $ApiBRouteEndpoint
+                playASpotEndpoint = $PlayASpotEndpoint
+                playBSpotEndpoint = $PlayBSpotEndpoint
+                playASpotRouterEndpoint = $PlayASpotRouterEndpoint
+                playBSpotRouterEndpoint = $PlayBSpotRouterEndpoint
+                playAStreamEndpoint = $PlayAStreamEndpoint
+                playBStreamEndpoint = $PlayBStreamEndpoint
+                redisEndpoint = $RedisEndpoint
+                redisKeyPrefix = $RedisKeyPrefix
+            }
+        }
+    }
+    $configuration | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $ConfigDir "$Name.json") -Encoding utf8
 }
 
 function Print-Logs() {
@@ -173,7 +209,8 @@ $PlayBRouteEndpoint = "tcp://127.0.0.1:$($ports[13])"
 $ApiARouteEndpoint = "tcp://127.0.0.1:$($ports[14])"
 $ApiBRouteEndpoint = "tcp://127.0.0.1:$($ports[15])"
 $LogDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
-New-Item -ItemType Directory -Path $LogDir | Out-Null
+$ConfigDir = Join-Path $LogDir "config"
+New-Item -ItemType Directory -Path $LogDir, $ConfigDir | Out-Null
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $RedisContainer = $null
 $RedisKeyPrefix = if ($env:TICTACTOE_CPP_REDIS_KEY_PREFIX) { $env:TICTACTOE_CPP_REDIS_KEY_PREFIX } else { "zlink:tictactoe-cpp:${PID}:$([Guid]::NewGuid().ToString('N')):room:" }
@@ -185,52 +222,26 @@ try {
     $RedisEndpoint = $redis.Endpoint
     Wait-Port "redis" $RedisEndpoint
 
-    $topologyArgs = @(
-        "--sample.topology.apiEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiAEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiBEndpoint=$ApiBEndpoint",
-        "--sample.topology.apiHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiAHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiBHttpEndpoint=$ApiBHttpEndpoint",
-        "--sample.topology.playEndpoint=$PlayAEndpoint",
-        "--sample.topology.playAEndpoint=$PlayAEndpoint",
-        "--sample.topology.playBEndpoint=$PlayBEndpoint",
-        "--sample.topology.playARouteEndpoint=$PlayARouteEndpoint",
-        "--sample.topology.playBRouteEndpoint=$PlayBRouteEndpoint",
-        "--sample.topology.apiARouteEndpoint=$ApiARouteEndpoint",
-        "--sample.topology.apiBRouteEndpoint=$ApiBRouteEndpoint",
-        "--sample.topology.playASpotEndpoint=$PlayASpotEndpoint",
-        "--sample.topology.playBSpotEndpoint=$PlayBSpotEndpoint",
-        "--sample.topology.playASpotRouterEndpoint=$PlayASpotRouterEndpoint",
-        "--sample.topology.playBSpotRouterEndpoint=$PlayBSpotRouterEndpoint",
-        "--sample.topology.playAStreamEndpoint=$PlayAStreamEndpoint",
-        "--sample.topology.playBStreamEndpoint=$PlayBStreamEndpoint",
-        "--sample.topology.redisEndpoint=$RedisEndpoint",
-        "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
-    )
-    $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
+    Write-RoleConfig "play-a" "a" "a"
+    Write-RoleConfig "play-b" "a" "b"
+    Write-RoleConfig "api-a" "a" "a"
+    Write-RoleConfig "api-b" "b" "a"
 
-    Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
+    Start-Server "play-b" $PlayBin @("--config=$(Join-Path $ConfigDir 'play-b.json')")
+    Start-Server "play-a" $PlayBin @("--config=$(Join-Path $ConfigDir 'play-a.json')")
+    Wait-Port "play-a-route" $PlayARouteEndpoint
+    Wait-Port "play-a-stream" $PlayAStreamEndpoint
+    Wait-Port "play-b-route" $PlayBRouteEndpoint
+    Wait-Port "play-b-stream" $PlayBStreamEndpoint
+
+    Start-Server "api-a" $ApiBin @("--config=$(Join-Path $ConfigDir 'api-a.json')")
+    Start-Server "api-b" $ApiBin @("--config=$(Join-Path $ConfigDir 'api-b.json')")
     Wait-Port "api-a-channel" $ApiAEndpoint
     Wait-Port "api-a-http" $ApiAHttpEndpoint
     Wait-Port "api-a-route" $ApiARouteEndpoint
-
-    Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
     Wait-Port "api-b-channel" $ApiBEndpoint
     Wait-Port "api-b-http" $ApiBHttpEndpoint
     Wait-Port "api-b-route" $ApiBRouteEndpoint
-
-    Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
-    Wait-Port "play-a-channel" $PlayAEndpoint
-    Wait-Port "play-a-stream" $PlayAStreamEndpoint
-    Wait-Port "play-a-spot-router" $PlayASpotRouterEndpoint
-    Wait-Port "play-a-spot-pub" $PlayASpotEndpoint
-
-    Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
-    Wait-Port "play-b-channel" $PlayBEndpoint
-    Wait-Port "play-b-stream" $PlayBStreamEndpoint
-    Wait-Port "play-b-spot-router" $PlayBSpotRouterEndpoint
-    Wait-Port "play-b-spot-pub" $PlayBSpotEndpoint
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-a"
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-b"
 
