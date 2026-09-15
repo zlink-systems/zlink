@@ -606,3 +606,55 @@ jobs:
             zlink-${{ needs.read-versions.outputs.libzlink_version }}-source.tar.gz
             release-provenance.txt
           draft: false
+
+  sync-recipes:
+    name: Sync vcpkg/Conan recipes
+    runs-on: ubuntu-24.04
+    needs:
+      - read-versions
+      - release
+    if: startsWith(github.ref, 'refs/tags/core/v')
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # release-check.sh --write reuses validate_cpp()'s own target table
+      # (scripts/dev/release-check.sh), so this can never drift from what
+      # `release-check.sh core <version>` checks.
+      - name: Write vcpkg port and Conan recipe metadata
+        run: |
+          bash scripts/dev/release-check.sh --write core "${{ needs.read-versions.outputs.libzlink_version }}"
+
+      - name: Open a PR to main if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.read-versions.outputs.libzlink_version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- vcpkg/ports/zlink core/packaging/conan; then
+            echo "No recipe changes for core ${VERSION}; nothing to open a PR for."
+            exit 0
+          fi
+          branch="release-recipes/core-v${VERSION}"
+          title="release: core ${VERSION} 레시피 갱신"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add vcpkg/ports/zlink core/packaging/conan
+          git commit -m "${title}"
+          git push --force origin "HEAD:${branch}"
+          if gh pr view "${branch}" --json state -q .state >/dev/null 2>&1; then
+            echo "A PR for ${branch} already exists; the branch was updated instead."
+          else
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "${title}" \
+              --body "core/v${VERSION} 릴리스 태그·자산에 맞춰 vcpkg port와 Conan recipe(버전·SHA512·sha256)를 scripts/dev/release-check.sh --write로 갱신했다."
+          fi
