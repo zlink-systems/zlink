@@ -1,6 +1,6 @@
 {
   "name": "zlink-framework-cpp",
-  "version-string": "0.13.0",
+  "version-string": "0.14.0",
   "dependencies": [
     "boost-asio",
     "boost-beast",
