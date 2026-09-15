@@ -11,26 +11,59 @@ Without a location store, two processes name each other's endpoint directly and 
 request/reply. The next step is
 [Installation and first run](guide/server/02-getting-started.en.md).
 
-## Prerequisites
+## Installation paths
 
-Unlike the other four languages, C++ is not one package-manager command. **Three GitHub
-Release source archives are built and installed in order** before this project is built.
+C++ has three, and they reach the same place — pick by what the project already uses.
 
-- CMake 3.20 or later, a C++20 compiler
-- `nlohmann_json`, Boost, liblz4, libprotobuf, OpenSSL — from distribution packages
-- `opentelemetry-cpp` — no distribution package; build from source. The framework links only
-  `opentelemetry-cpp::api`, so `-DOTELCPP_WITH_API_ONLY=ON` is a header-only build
+| Path | When |
+|---|---|
+| vcpkg | A project already on vcpkg |
+| Conan | A project already on Conan |
+| GitHub Release | No package manager. Three source archives built in order |
 
-The build order and the exact commands are in the project's
+`zlink` is not in the official vcpkg registry or ConanCenter yet. Use the overlay port and
+the recipes this repository ships.
+
+### vcpkg
+
+```bash
+git clone https://github.com/zlink-systems/zlink.git
+vcpkg install zlink zlink-cpp zlink-framework \
+  --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
+```
+
+The consumer project uses the vcpkg toolchain.
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+```
+
+### Conan
+
+```bash
+git clone https://github.com/zlink-systems/zlink.git
+conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+```
+
+Put `zlink-framework/0.14.0` in the consumer's `conanfile.txt` and run `conan install`.
+
+### GitHub Release
+
+Three archives built and installed in order — `core/vX.Y.Z` → `cpp/vX.Y.Z` →
+`framework-cpp/vA.B.C`. The order and the exact commands are in the project's
 [`README.md`](../../../languages/cpp/quickstart/README.md).
 
-!!! warning "The published 0.12.0 archive needs Core built with `-DBUILD_STATIC=OFF`"
+This path supplies the third-party dependencies itself. `nlohmann_json`, Boost, liblz4,
+libprotobuf and OpenSSL come from distribution packages; `opentelemetry-cpp` has none and is
+built from source. The framework links only `opentelemetry-cpp::api`, so
+`-DOTELCPP_WITH_API_ONLY=ON` is a header-only build.
 
-    The `framework-cpp/v0.12.0` archive ships Core's whole CMake config but not
-    `libzlink.a`. With Core built at its default (`BUILD_STATIC=ON`),
-    `find_package(zlink_framework CONFIG REQUIRED)` references a file that is not there and
-    fails. Fixed in the repository ([#384](https://github.com/zlink-systems/zlink/issues/384));
-    the next release carries the fix.
+## Prerequisites
+
+- CMake 3.20 or later, a C++20 compiler
 
 ## 1. The consumer's CMake
 
