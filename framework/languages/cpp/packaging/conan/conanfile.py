@@ -1,4 +1,4 @@
-"""Draft CMake-only recipe; requires the complete prepared C++ source archive."""
+"""Conan recipe for the zlink C++ framework (HTTP client and stream connector)."""
 
 import os
 
@@ -32,6 +32,9 @@ class ZlinkFrameworkConan(ConanFile):
     def requirements(self):
         for dependency in (
             "zlink-cpp/1.1.0",
+            # CMakeLists.txt:22가 COMPONENTS api로 무조건 요구한다. 빠져 있으면
+            # conan create가 find_package 단계에서 실패한다.
+            "opentelemetry-cpp/1.26.0",
             "boost/1.85.0",
             "nlohmann_json/3.11.3",
             "openssl/[>=3.0 <4]",
@@ -72,6 +75,23 @@ class ZlinkFrameworkConan(ConanFile):
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT"] = True
         for engine in ("UNREAL", "GODOT", "AXMOL"):
             tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_" + engine] = False
+        # CMakeLists.txt's stream-connector staging step does not rely on the
+        # find_package(zlink_cpp CONFIG) result alone: it separately globs the
+        # binding's and Core's link libraries out of
+        # ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX / _CORE_PREFIX, two CACHE
+        # PATH variables that otherwise default to a workspace-relative
+        # ".artifacts/wsl/install/..." layout meant for the local-package
+        # workflow. Under Conan there is no such workspace tree next to the
+        # extracted source archive, so that glob finds nothing and CMake dies
+        # with "has no link library" at configure time. Point both prefixes at
+        # the actual Conan package folders so the existing override mechanism
+        # picks them up.
+        zlink_cpp_dep = self.dependencies["zlink-cpp"]
+        tc.variables["ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX"] = \
+            zlink_cpp_dep.package_folder.replace("\\", "/")
+        zlink_core_dep = self.dependencies["zlink"]
+        tc.variables["ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX"] = \
+            zlink_core_dep.package_folder.replace("\\", "/")
         tc.generate()
         CMakeDeps(self).generate()
 
