@@ -20,6 +20,7 @@ on:
 #       - "framework/languages/node/packages/**"
 #       - "framework/languages/node/scripts/**"
 #       - "framework/languages/node/test/**"
+#       - "framework/languages/unity/com.zlink.stream-connector.webgl/**"
 #       - "framework/languages/node/cross-language/**"
 #       - "framework/languages/dotnet/cross-language/**"
 #   pull_request:
@@ -41,6 +42,7 @@ on:
 #       - "framework/languages/node/packages/**"
 #       - "framework/languages/node/scripts/**"
 #       - "framework/languages/node/test/**"
+#       - "framework/languages/unity/com.zlink.stream-connector.webgl/**"
 #       - "framework/languages/node/cross-language/**"
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
@@ -231,6 +233,33 @@ jobs:
         if: matrix.node-version == 22 && matrix.target.name == 'win-x64'
         working-directory: framework/languages/node
         run: npm run browser:install
+
+      - name: Cache emsdk for the Unity WebGL adapter link
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/zlink/emsdk
+          key: emsdk-3.1.38-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install emsdk for the Unity WebGL adapter link
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        shell: bash
+        run: |
+          # test/browser/unity-webgl-emscripten.test.js links the UPM adapter's
+          # .jslib and .jspre plugins with emcc and runs them in Chromium, which
+          # is the only automated check that the WebGL player build would link.
+          # Unity 2023.2 and later - Unity 6 included - bundle Emscripten
+          # 3.1.38-unity, so pin upstream 3.1.38. Without emsdk the test skips.
+          root="${HOME}/.cache/zlink/emsdk"
+          if [ ! -x "${root}/upstream/emscripten/emcc" ]; then
+            git clone --depth 1 https://github.com/emscripten-core/emsdk.git "${root}"
+            "${root}/emsdk" install 3.1.38
+            "${root}/emsdk" activate 3.1.38
+            # The tarballs are only needed during install; dropping them keeps the
+            # cache entry to the toolchain itself.
+            rm -rf "${root}/downloads"
+          fi
+          "${root}/upstream/emscripten/emcc" --version | head -1
 
       - name: Run Node framework release gate
         working-directory: framework/languages/node
