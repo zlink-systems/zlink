@@ -46,7 +46,9 @@ Unity -batchmode -quit -nographics -buildTarget WebGL \
   -zlinkOutput Builds -zlinkOptimizations BuildTimes,RuntimeSpeed
 ```
 
-`-zlinkOutput` is relative to the project folder. Each level lands in
+`-zlinkOutput` is relative to the project folder, and `-zlinkOptimizations`
+defaults to both levels when it is not passed at all - a flag passed with no
+value is an error rather than a silent fallback. Each level lands in
 `Builds/<level>/`, with `Builds/build-summary.json` covering all of them, and
 `framework/languages/node/test/browser/support/unity-player/drive-player.js`
 serves one of those folders and drives it in Chromium.

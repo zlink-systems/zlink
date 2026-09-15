@@ -53,13 +53,17 @@ on:
     inputs:
       unity_version:
         description: >-
-          Unity Editor version. Pin to a 6000.0/6000.4 release: those bundle
-          Emscripten 3.1.38-unity, which is what the adapter is verified against.
-          Unity 6000.5 and later bundle 4.0.19-unity and change the answer.
-        default: "6000.0.83f1"
+          Unity Editor version. Blank uses the project's ProjectVersion.txt pin,
+          which is the only place the version is written down. Pin to a
+          6000.0-6000.4 release: those bundle Emscripten 3.1.38-unity, which is
+          what the adapter is verified against. Unity 6000.5 and later bundle
+          4.0.19-unity and change the answer.
       optimizations:
-        description: WasmCodeOptimization levels (UnityEditor.WebGL.UserBuildSettings.codeOptimization) to build, comma separated.
-        default: "BuildTimes,RuntimeSpeed"
+        description: >-
+          WasmCodeOptimization levels to build, comma separated. Blank uses the
+          build script's own default, which is both levels. Only a push event
+          reaches this workflow with the inputs unset, and that must still build
+          both, so no default is repeated here.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -70,7 +74,7 @@ env:
 
 jobs:
   build-player:
-    name: WebGL player (${{ inputs.unity_version }})
+    name: WebGL player
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -103,16 +107,6 @@ jobs:
             echo "the repository with workflow_dispatch to get the result."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # The Unity Editor image with the WebGL module is larger than what an
-      # ubuntu-24.04 runner has free by default.
-      - name: Make room for the Unity Editor image
-        if: steps.license.outputs.licensed == 'true'
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-          df -h /
-
       - name: Cache the Unity Library folder
         if: steps.license.outputs.licensed == 'true'
         uses: actions/cache@v5
@@ -130,7 +124,9 @@ jobs:
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
-          unityVersion: ${{ inputs.unity_version }}
+          # "auto" reads the project's ProjectVersion.txt, so the pin lives in
+          # one file instead of being repeated here.
+          unityVersion: ${{ inputs.unity_version || 'auto' }}
           targetPlatform: WebGL
           projectPath: ${{ env.PROJECT_PATH }}
           buildMethod: Zlink.Verification.Editor.ZlinkWebGlBuild.Build
@@ -139,7 +135,10 @@ jobs:
           # Unity writes .meta files into a file: package and generates the empty
           # scene during the build, so the tree is dirty by design.
           allowDirtyBuild: true
-          customParameters: -nographics -zlinkOutput Builds -zlinkOptimizations ${{ inputs.optimizations }}
+          # The flag is emitted only when there is a value for it. A push event
+          # leaves inputs empty, and "-zlinkOptimizations" with nothing after it
+          # is what built one level instead of two on the first run.
+          customParameters: -nographics -zlinkOutput Builds ${{ inputs.optimizations && format('-zlinkOptimizations {0}', inputs.optimizations) || '' }}
 
       - name: Take ownership of what the container wrote
         if: always() && steps.license.outputs.licensed == 'true'
@@ -169,7 +168,7 @@ jobs:
               cat "${meta}"
             done
             echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Summarize the builds
         if: always() && steps.license.outputs.licensed == 'true'
@@ -187,13 +186,60 @@ jobs:
             cat "${summary}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
-          # File-level answer to the README's manual check "the built
-          # framework.js contains ZlinkStreamWebGlRuntime and
-          # ZlinkStreamConnectorBundle", per level.
+      # The README's manual check - "the built framework.js contains
+      # ZlinkStreamWebGlRuntime and ZlinkStreamConnectorBundle" - asserted on the
+      # build output. The player run answers the same question better, by asking
+      # the running module, but it needs a working Node workspace and a browser.
+      # This needs neither, so "Unity linked the plugins" survives a driver that
+      # cannot run.
+      - name: Assert Unity linked the adapter plugins
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          status=0
+          rows=""
+          players=0
           for framework in "${PROJECT_PATH}"/Builds/*/Build/*.framework.js; do
             [ -e "${framework}" ] || continue
-            echo "${framework}: runtime=$(grep -c ZlinkStreamWebGlRuntime "${framework}" || true) bundle=$(grep -c ZlinkStreamConnectorBundle "${framework}" || true) jslib=$(grep -c _ZlinkStreamPump "${framework}" || true)"
+            players=$((players + 1))
+            level=$(basename "$(dirname "$(dirname "${framework}")")")
+            runtime=$(grep -c ZlinkStreamWebGlRuntime "${framework}" || true)
+            bundle=$(grep -c ZlinkStreamConnectorBundle "${framework}" || true)
+            # A symbol from inside the IIFE, not just its global name: it says the
+            # bundle body arrived, and it is the class the JSDCE defect breaks.
+            internals=$(grep -c ZlinkStreamReceivedMessages "${framework}" || true)
+            jslib=$(grep -c _ZlinkStreamPump "${framework}" || true)
+            # Evidence for the JSDCE defect at the Unity level, reported rather
+            # than asserted: whether the connector's destructuring survived the
+            # optimizer this level runs. Both spacings, because -O2 minifies
+            # whitespace.
+            drain=$(grep -c -e 'message, signal' -e 'message,signal' "${framework}" || true)
+            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} destructuring=${drain}"
+            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${drain} |"$'\n'
+            for pair in "runtime:${runtime}" "bundle:${bundle}" "internals:${internals}" "jslib:${jslib}"; do
+              if [ "${pair#*:}" -eq 0 ]; then
+                echo "::error title=Plugin not linked::${level}: ${pair%%:*} is absent from ${framework}"
+                status=1
+              fi
+            done
           done
+          if [ "${players}" -eq 0 ]; then
+            echo "::error title=No player to inspect::no Build/*.framework.js under ${PROJECT_PATH}/Builds"
+            status=1
+          fi
+          {
+            echo "## Plugin link (static)"
+            echo
+            echo "Symbol counts in each player's framework.js. The first four must all"
+            echo "be non-zero: that is Unity having passed both .jspre files to --pre-js"
+            echo "and the .jslib to --js-library. The last is how many destructuring"
+            echo "declarations survived in the connector's drain loop, reported only."
+            echo
+            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | destructuring |'
+            echo '|---|---|---|---|---|---|'
+            printf '%s' "${rows}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${status}"
 
       - name: Upload the players
         if: always() && steps.license.outputs.licensed == 'true'
@@ -266,7 +312,11 @@ jobs:
         shell: bash
         run: |
           bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz | grep -q 'package/dist/index.js'
+          # Listed to a file rather than piped into grep: grep -q exits on the
+          # first match, tar takes SIGPIPE, and pipefail turns a successful match
+          # into a failed step.
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
+          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node

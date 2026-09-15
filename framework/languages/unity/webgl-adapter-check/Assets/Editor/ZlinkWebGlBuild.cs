@@ -36,6 +36,13 @@ namespace Zlink.Verification.Editor
     {
         private const string ScenePath = "Assets/Generated/ZlinkWebGlAdapterCheck.unity";
 
+        // The set this project exists to compare. -O1 is the level the adapter
+        // README tells consumers to build at; -O2 is where emscripten runs its JS
+        // optimizer over the .jspre plugins. Building only one of them answers
+        // half the question, so both are the default and a caller has to say so
+        // to get anything else.
+        private const string DefaultOptimizations = "BuildTimes,RuntimeSpeed";
+
         public static void Build()
         {
             // Resolved against the Unity project folder, not the process working
@@ -43,7 +50,8 @@ namespace Zlink.Verification.Editor
             // a path that means something different in CI than locally is the
             // kind of thing that only shows up after a 30-minute build.
             var output = Resolve(Argument("-zlinkOutput") ?? "Builds");
-            var levels = (Argument("-zlinkOptimizations") ?? "BuildTimes").Split(',');
+            var levels = (Argument("-zlinkOptimizations") ?? DefaultOptimizations).Split(',');
+            Console.WriteLine("ZLINK-BUILD levels " + string.Join(",", levels));
 
             Directory.CreateDirectory(output);
             var scene = CreateEmptyScene();
@@ -84,16 +92,21 @@ namespace Zlink.Verification.Editor
                 return Entry.Failed(level, "unknown WasmCodeOptimization: " + error.Message);
             }
 
-            // The emscripten optimization level lives on the WebGL build module,
-            // not on PlayerSettings: BuildTimes is -O1, RuntimeSpeed and the rest
-            // are -O2 and above, which is where emscripten runs its JS optimizer
-            // over the .jspre plugins.
-            UnityEditor.WebGL.UserBuildSettings.codeOptimization =
-                (UnityEditor.WebGL.WasmCodeOptimization)parsed;
             Console.WriteLine("ZLINK-BUILD " + level + " -> " + target);
 
+            // Everything that can fail for one level is inside this try, so a level
+            // that dies still leaves an entry in the summary and the next level
+            // still runs. -O2 failing is an expected outcome here, not a reason to
+            // lose the -O1 result.
             try
             {
+                // The emscripten optimization level lives on the WebGL build
+                // module, not on PlayerSettings: BuildTimes is -O1, RuntimeSpeed
+                // and the rest are -O2 and above, which is where emscripten runs
+                // its JS optimizer over the .jspre plugins.
+                UnityEditor.WebGL.UserBuildSettings.codeOptimization =
+                    (UnityEditor.WebGL.WasmCodeOptimization)parsed;
+
                 if (Directory.Exists(target)) Directory.Delete(target, true);
                 Directory.CreateDirectory(target);
 
@@ -168,12 +181,26 @@ namespace Zlink.Verification.Editor
             return Path.GetFullPath(Path.Combine(projectRoot, relativeOrAbsolute));
         }
 
+        /// <summary>
+        ///     The value after <paramref name="name" />, or null when the flag is
+        ///     absent. A flag that is present with no value throws: the caller meant
+        ///     to pass something, and silently falling back to a default is how a
+        ///     workflow that passed an empty expansion built one level instead of two.
+        /// </summary>
         private static string Argument(string name)
         {
             var arguments = Environment.GetCommandLineArgs();
-            for (var index = 0; index < arguments.Length - 1; index += 1)
+            for (var index = 0; index < arguments.Length; index += 1)
             {
-                if (string.Equals(arguments[index], name, StringComparison.Ordinal)) return arguments[index + 1];
+                if (!string.Equals(arguments[index], name, StringComparison.Ordinal)) continue;
+
+                var value = index + 1 < arguments.Length ? arguments[index + 1] : null;
+                if (string.IsNullOrEmpty(value) || value.StartsWith("-", StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(name + " was passed with no value");
+                }
+
+                return value;
             }
 
             return null;
