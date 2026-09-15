@@ -11,7 +11,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'dev.kairoscode.stream.NettyStreamServer'
+    mainClass = 'systems.zlink.bench.stream.NettyStreamServer'
 }
 
 java {

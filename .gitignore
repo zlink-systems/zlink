@@ -30,6 +30,7 @@ build-*/
 build/
 build_*/
 /compile_commands.json
+CMakeUserPresets.json
 /.cache/
 /.tools/
 /.pytest_cache/
@@ -53,6 +54,8 @@ core/builds/android/prefix
 .vscode/
 ## Local assistant settings
 .claude/
+.agents/
+.codex/
 
 ## Common local and tool-generated files
 .DS_Store
@@ -82,13 +85,10 @@ bin/
 lib/
 !scripts/lib/
 !scripts/lib/framework-contract-documents.cjs
-!core/bench/benchwithzlink/baseline/zlink_dist/**/lib/
-!core/bench/benchwithzlink/baseline/zlink_dist/**/lib/libzlink*
-!core/bench/benchwithzmq/libzmq/libzmq_dist/**/lib/
-!core/bench/benchwithzmq/libzmq/libzmq_dist/**/lib/libzmq*
-!core/bench/benchwithzmq/libzmq/libzmq_dist/**/bin/
-!core/bench/benchwithzmq/libzmq/libzmq_dist/**/bin/libzmq*
 obj/
+## gRPC dist for the router-compare bench: produced by
+## bindings/c/bench/with_routing/setup_grpc_dist.sh from a local gRPC install.
+bindings/c/bench/with_routing/grpc/grpc_dist/
 ## Doxygen
 doxygen/
 ## Packaging 
@@ -310,7 +310,6 @@ core/tests/scenario/**/result/
 **/.gradle-codex/
 
 # Refactor execution logs
-core/tools/refactor/logs/
 
 # Perf Ralph-loop runtime logs and supervisor state
 doc/plan/perf/logs/
