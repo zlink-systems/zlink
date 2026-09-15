@@ -189,12 +189,26 @@ jobs:
       # core/CMakeLists.txt's MSVC branch), not through the shared OBJECT
       # library Linux/macOS use, and already has
       # INTERPROCEDURAL_OPTIMIZATION OFF -- so MSVC /GL whole-program IL
-      # objects (resolved into real code only at the final /LTCG link step)
-      # should never reach this .lib. This is a regression guard, not a fix
-      # for a known Windows break, matching the equivalent Linux/macOS
-      # checks added for issue #397: a /GL-only member disassembles to
-      # nothing, so a real archive should produce a large `dumpbin /disasm`
-      # even for a coarse line-count threshold.
+      # objects should never reach this .lib. This is a regression guard,
+      # not a fix for a known Windows break, matching the equivalent
+      # Linux/macOS checks added for issue #397.
+      #
+      # An earlier version of this check used a `dumpbin /disasm` line
+      # count, which is the wrong signal: Microsoft documents that dumpbin
+      # cannot disassemble a /GL object at all regardless of its content
+      # ("Only the /HEADERS DUMPBIN option is available for use on files
+      # produced with the /GL compiler option"), so that check would have
+      # been unreliable on a small archive even if it worked. What
+      # dumpbin does reliably report is the file's format: a /GL object
+      # is emitted in the special "anonymous object" COFF variant (an
+      # ANON_OBJ_HEADER, distinguished from a normal object by its
+      # version word), and `dumpbin /headers` prints exactly
+      # "File Type: ANONYMOUS OBJECT" for one. A resolved, ordinary COFF
+      # object (what INTERPROCEDURAL_OPTIMIZATION OFF should always
+      # produce here) never reports that. (No Windows toolchain available
+      # to run this locally; confirmed the anonymous-object format and
+      # this exact dumpbin string against Microsoft's own documentation
+      # and reference material instead of assuming.)
       - name: Verify static archive is portable object code, not LTO/GL-only IL
         shell: pwsh
         run: |
@@ -203,12 +217,11 @@ jobs:
           if (-not $staticLib) {
             throw "static archive not found under $distDir\lib\libzlink*.lib"
           }
-          $disasmOutput = & dumpbin /disasm $staticLib.FullName 2>&1
-          $lineCount = ($disasmOutput | Measure-Object -Line).Lines
-          if ($lineCount -lt 100) {
-            throw "dumpbin /disasm produced only $lineCount line(s) for $($staticLib.Name) -- looks like IL-only /GL object(s) with no real disassembled code (issue #397)"
+          $headers = & dumpbin /headers $staticLib.FullName 2>&1 | Out-String
+          if ($headers -match "ANONYMOUS OBJECT") {
+            throw "$($staticLib.Name) has an ANONYMOUS OBJECT member -- MSVC /GL whole-program IL not resolved into real code (issue #397)"
           }
-          Write-Host "OK: dumpbin /disasm produced $lineCount lines of real disassembly for $($staticLib.Name)"
+          Write-Host "OK: dumpbin /headers reports no ANONYMOUS OBJECT members in $($staticLib.Name)"
 
       - name: Install Visual C++ Redistributable
         shell: pwsh
@@ -346,12 +359,30 @@ jobs:
 
       # `nm`/`file`/`ar t` all read a GCC LTO-bytecode-only object as an
       # ordinary one -- it keeps a real ELF symbol table for archiver
-      # bookkeeping even with an empty .text section, the actual code
-      # living only in .gnu.lto_* sections readable by the exact GCC major
-      # version that produced them. `size` catches what those miss: a
-      # nonzero .text column means real object code shipped, not just
-      # bytecode (issue #397; CI run 34948757858 shipped a bytecode-only
-      # libzlink.a that nm/file both read as fine).
+      # bookkeeping, the actual code living only in .gnu.lto_* sections
+      # readable by the exact GCC major version that produced them (issue
+      # #397; CI run 34948757858 shipped a bytecode-only libzlink.a that
+      # nm/file both read as fine). An earlier version of this check
+      # looked for an empty .text section instead, which is the wrong
+      # signal in the other direction: a translation unit with no
+      # function bodies (e.g. src/runtime/utils/precompiled.cpp, which is
+      # just one #include) legitimately has an empty .text with or
+      # without LTO, so that check flagged linux-arm64's
+      # precompiled.cpp.o as a false positive (CI run 34962128541).
+      #
+      # The correct, GCC-documented signal is presence, not absence: GCC
+      # marks every slim/thin (bytecode-only) LTO object with a global
+      # COMMON symbol named `__gnu_lto_slim` (so the linker can complain
+      # if such an object is ever linked without going through the LTO
+      # plugin); a fat LTO object (real code + bytecode, what
+      # -ffat-lto-objects above produces) and a normal non-LTO object
+      # never define it. `nm` does not print this symbol at all (tested);
+      # `readelf -s` does. Verified directly against a real bad archive
+      # (a worktree at the commit CI reproduced 34948757858 against, i.e.
+      # before -ffat-lto-objects existed): every one of 154 members had
+      # __gnu_lto_slim, including precompiled.cpp.o; after this fix, 0 of
+      # 154 do, precompiled.cpp.o included -- see this change's commit
+      # message for the exact commands and counts.
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -360,9 +391,8 @@ jobs:
           (cd "$work" && ar x "$lib")
           fail=0
           for obj in "$work"/*.o; do
-            text_size="$(size "$obj" | awk 'NR==2{print $1}')"
-            if [ "$text_size" = "0" ]; then
-              echo "LTO-bytecode-only member (empty .text section): $(basename "$obj")" >&2
+            if readelf -s "$obj" | grep -q '__gnu_lto_slim'; then
+              echo "LTO-bytecode-only member (defines __gnu_lto_slim): $(basename "$obj")" >&2
               fail=1
             fi
           done
@@ -371,7 +401,7 @@ jobs:
             echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: every libzlink.a member has real object code (nonzero .text)."
+          echo "OK: no libzlink.a member defines __gnu_lto_slim (no LTO-bytecode-only members)."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -407,7 +437,13 @@ jobs:
         run: test -f core/dist/linux-arm64/libzlink.so
 
       # Same check as build-linux, same reason: nm/file/ar t cannot tell a
-      # GCC LTO-bytecode-only object from a real one (issue #397).
+      # GCC LTO-bytecode-only object from a real one, and checking for an
+      # empty .text section (an earlier version of this check) false-
+      # positives on translation units with no function bodies, such as
+      # src/runtime/utils/precompiled.cpp -- this job's own CI run
+      # (34962128541) hit exactly that false positive. See the identical
+      # comment in build-linux for the __gnu_lto_slim marker this uses
+      # instead, and how it was verified (issue #397).
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -416,9 +452,8 @@ jobs:
           (cd "$work" && ar x "$lib")
           fail=0
           for obj in "$work"/*.o; do
-            text_size="$(size "$obj" | awk 'NR==2{print $1}')"
-            if [ "$text_size" = "0" ]; then
-              echo "LTO-bytecode-only member (empty .text section): $(basename "$obj")" >&2
+            if readelf -s "$obj" | grep -q '__gnu_lto_slim'; then
+              echo "LTO-bytecode-only member (defines __gnu_lto_slim): $(basename "$obj")" >&2
               fail=1
             fi
           done
@@ -427,7 +462,7 @@ jobs:
             echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: every libzlink.a member has real object code (nonzero .text)."
+          echo "OK: no libzlink.a member defines __gnu_lto_slim (no LTO-bytecode-only members)."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -466,10 +501,26 @@ jobs:
             arm64 \
             "ON"
 
-      # Same reasoning as build-linux's check: nm/file/ar t all read an
-      # LTO-bitcode-only object as an ordinary one. otool -l reports each
-      # Mach-O section's real `size`; a __text section with size 0 means
-      # no real code shipped, only LTO/IL (issue #397).
+      # Same class of problem as build-linux's check, different shape: with
+      # plain -flto (no -ffat-lto-objects), clang's ".o" output is not a
+      # Mach-O object at all -- it is a raw LLVM bitcode file (only
+      # -ffat-lto-objects wraps real object code plus a __LLVM,__bitcode
+      # section in an actual Mach-O container; see
+      # https://llvm.org/docs/BitCodeFormat.html and the FatLTO design,
+      # https://discourse.llvm.org/t/rfc-ffat-lto-objects-support/63977).
+      # An earlier version of this check used otool -l's __text section
+      # size, which has the same false-positive shape build-linux's
+      # original .text check did (empty is not unique to LTO -- and would
+      # not even apply here, since a bitcode-only file has no Mach-O
+      # section table for otool to read in the first place). `file`
+      # recognizes the bitcode magic directly, so check that instead: a
+      # real Mach-O object (fat-LTO or plain non-LTO, whichever this
+      # toolchain produced -- see core/CMakeLists.txt for which) is never
+      # reported as bitcode. (No local macOS access to verify this
+      # against actual clang output; based on documented LLVM bitcode/
+      # FatLTO behavior rather than a guess about file's exact wording,
+      # matched case-insensitively against "bitcode" to tolerate small
+      # phrasing differences across libmagic versions.)
       - name: Verify static archive is portable object code, not LTO bytecode
         run: |
           set -euo pipefail
@@ -478,9 +529,8 @@ jobs:
           (cd "$work" && ar x "$lib")
           fail=0
           for obj in "$work"/*.o; do
-            text_size_hex="$(otool -l "$obj" | awk '/sectname __text/{f=1} f && /^ *size 0x/{print $2; exit}')"
-            if [ -z "$text_size_hex" ] || [ "$text_size_hex" = "0x0" ]; then
-              echo "LTO/IL-only member (missing or empty __text): $(basename "$obj")" >&2
+            if file "$obj" | grep -qi 'bitcode'; then
+              echo "LLVM-bitcode-only member (not a native object file): $(basename "$obj") -- $(file "$obj")" >&2
               fail=1
             fi
           done
@@ -489,7 +539,7 @@ jobs:
             echo "libzlink.a has members with no real object code -- it would only link on the exact toolchain that built it (issue #397)." >&2
             exit 1
           fi
-          echo "OK: every libzlink.a member has real object code (nonzero __text)."
+          echo "OK: no libzlink.a member is raw LLVM bitcode."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6

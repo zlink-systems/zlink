@@ -1293,7 +1293,23 @@ else()
     # distributed artifact.
     set(ZLINK_STATIC_OBJECTS_TARGET objects)
     if(BUILD_STATIC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+      # -ffat-lto-objects only means anything once LTO is already on, and
+      # AppleClang rejects the combination outright for some targets
+      # ("unsupported option '-ffat-lto-objects' for target
+      # arm64-apple-darwin...") even though it accepts the flag fine on
+      # its own -- probing it without -flto present (as a bare
+      # check_cxx_compiler_flag call would) is not the condition this is
+      # actually used under, so it reported a false Success once (issue
+      # #397; CI run 34962128541 reproduced it: detection succeeded, the
+      # real compile of `objects` with both flags together then failed).
+      # CMAKE_REQUIRED_FLAGS is not reset by check_cxx_compiler_flag
+      # itself, so setting it here makes the probe compile with -flto
+      # too, matching how the flag is actually used below.
+      include(CMakePushCheckState)
+      cmake_push_check_state(RESET)
+      set(CMAKE_REQUIRED_FLAGS "-flto")
       check_cxx_compiler_flag("-ffat-lto-objects" ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
+      cmake_pop_check_state()
       if(ZLINK_CXX_HAS_FAT_LTO_OBJECTS)
         target_compile_options(objects PRIVATE -ffat-lto-objects)
       else()
