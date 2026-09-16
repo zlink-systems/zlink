@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
+#include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
 
@@ -20,6 +21,7 @@ namespace
 using namespace std::chrono_literals;
 using namespace zlink::framework;
 using namespace zlink::framework::runtime;
+using zlink::framework::tests::owner_lease_time_store_t;
 
 std::vector<std::byte> bytes (std::string_view value)
 {
@@ -385,59 +387,6 @@ class aggregate_lock_contention_store_t final : public location_store_t
 
     in_memory_location_store_t inner;
     bool peer_marker_published = false;
-};
-
-class owner_lease_time_store_t final : public location_store_t
-{
-  public:
-    enum class lease_view_t
-    {
-        expired,
-        live,
-        missing_expiry
-    };
-
-    owner_lease_time_store_t (in_memory_location_store_t &inner,
-                              std::string owner_id,
-                              lease_view_t lease_view) :
-        _inner (&inner),
-        _owner_key (std::string ("owner-lease") + '\0' + std::move (owner_id)),
-        _lease_view (lease_view)
-    {
-    }
-
-    task_t<store_read_result_t> read (store_key_t key) override
-    {
-        const auto inject_owner_time = key.value == _owner_key;
-        auto result = _inner->read (std::move (key)).result ().value ();
-        if (inject_owner_time) {
-            if (auto *found = std::get_if<store_found_t> (&result)) {
-                if (_lease_view == lease_view_t::missing_expiry)
-                    found->value.expires_at.reset ();
-                else
-                    found->value.expires_at =
-                      found->value.store_now
-                      + (_lease_view == lease_view_t::live ? 1min : 0min);
-            }
-        }
-        return task_t<store_read_result_t> (
-          result_t<store_read_result_t>::success (std::move (result)));
-    }
-
-    task_t<store_write_result_t> write (store_write_request_t request) override
-    {
-        return _inner->write (std::move (request));
-    }
-
-    task_t<store_scan_result_t> scan (store_scan_request_t request) override
-    {
-        return _inner->scan (std::move (request));
-    }
-
-  private:
-    in_memory_location_store_t *_inner;
-    std::string _owner_key;
-    lease_view_t _lease_view;
 };
 
 class post_commit_failure_relocation_store_t final :

@@ -1620,6 +1620,8 @@ void app_t::_apply_zlink_framework ()
     if (!mesh_nodes.empty ()) {
         auto provider = _state->services.build_provider ();
         auto &location_store = provider.get_required<location_repository_t> ();
+        auto &location_resolvers =
+          provider.get_required<runtime::store_location_resolvers_t> ();
         auto operation_sequence = std::make_shared<std::atomic<std::uint64_t>> (1);
         struct selected_instance_target_t
         {
@@ -1628,8 +1630,9 @@ void app_t::_apply_zlink_framework ()
             std::string stable_type;
         };
         auto select_instance_target =
-          [mesh_nodes, &location_store] (const spot_id_t &spot_id,
-                                         const detail::spot_activation_intent_t &intent)
+          [mesh_nodes, &location_store, &location_resolvers] (
+            const spot_id_t &spot_id,
+            const detail::spot_activation_intent_t &intent)
           -> result_t<selected_instance_target_t> {
             std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> sources;
             for (const auto &mesh : mesh_nodes) {
@@ -1648,43 +1651,43 @@ void app_t::_apply_zlink_framework ()
             const auto source = sources.front ();
             std::vector<mesh_node_descriptor_t> candidates;
             std::vector<mesh_node_descriptor_t> visible_targets;
-            location_page_request_t page;
-            do {
-                auto listed =
-                  location_store.list_mesh_nodes (source->mesh_name (), page).result ().value ();
-                for (auto &descriptor : listed.items) {
-                    if (descriptor.state != framework_runtime_state_t::serving
-                        || descriptor.object_role != object_role_t::server
-                        || descriptor.placement_weight <= 0)
-                        continue;
-                    visible_targets.push_back (descriptor);
-                    const auto capable = std::any_of (
-                      descriptor.object_capabilities.begin (),
-                      descriptor.object_capabilities.end (), [&] (const auto &capability) {
-                          return capability.object_kind == placement_object_kind_t::instance_spot
-                                 && (!intent.stable_type
-                                     || capability.stable_type == *intent.stable_type);
-                      });
-                    const auto spot_capacity = descriptor.capacity.spots;
-                    const auto typed_capacity = std::find_if (
-                      descriptor.capacity.spot_types.begin (),
-                      descriptor.capacity.spot_types.end (), [&] (const auto &typed) {
-                          return typed.object_kind == placement_object_kind_t::instance_spot
-                                 && intent.stable_type && typed.stable_type == *intent.stable_type;
-                      });
-                    const auto typed_available =
-                      !intent.stable_type || typed_capacity == descriptor.capacity.spot_types.end ()
-                      || typed_capacity->usage.limit == 0
-                      || typed_capacity->usage.active + typed_capacity->usage.reserved
-                           < static_cast<std::uint64_t> (typed_capacity->usage.limit);
-                    if (capable && typed_available
-                        && (spot_capacity.limit == 0
-                            || spot_capacity.active + spot_capacity.reserved
-                                 < static_cast<std::uint64_t> (spot_capacity.limit)))
-                        candidates.push_back (std::move (descriptor));
-                }
-                page.continuation_token = std::move (listed.continuation_token);
-            } while (page.continuation_token);
+            auto listed = location_resolvers
+                            .list_live_mesh_nodes (source->mesh_name ())
+                            .result ();
+            if (!listed.has_value ())
+                return detail::propagate_failure<selected_instance_target_t> (
+                  listed, "Instance Spot target lookup failed");
+            for (auto &descriptor : listed.value ()) {
+                if (descriptor.state != framework_runtime_state_t::serving
+                    || descriptor.object_role != object_role_t::server
+                    || descriptor.placement_weight <= 0)
+                    continue;
+                visible_targets.push_back (descriptor);
+                const auto capable = std::any_of (
+                  descriptor.object_capabilities.begin (),
+                  descriptor.object_capabilities.end (), [&] (const auto &capability) {
+                      return capability.object_kind == placement_object_kind_t::instance_spot
+                             && (!intent.stable_type
+                                 || capability.stable_type == *intent.stable_type);
+                  });
+                const auto spot_capacity = descriptor.capacity.spots;
+                const auto typed_capacity = std::find_if (
+                  descriptor.capacity.spot_types.begin (),
+                  descriptor.capacity.spot_types.end (), [&] (const auto &typed) {
+                      return typed.object_kind == placement_object_kind_t::instance_spot
+                             && intent.stable_type && typed.stable_type == *intent.stable_type;
+                  });
+                const auto typed_available =
+                  !intent.stable_type || typed_capacity == descriptor.capacity.spot_types.end ()
+                  || typed_capacity->usage.limit == 0
+                  || typed_capacity->usage.active + typed_capacity->usage.reserved
+                       < static_cast<std::uint64_t> (typed_capacity->usage.limit);
+                if (capable && typed_available
+                    && (spot_capacity.limit == 0
+                        || spot_capacity.active + spot_capacity.reserved
+                             < static_cast<std::uint64_t> (spot_capacity.limit)))
+                    candidates.push_back (std::move (descriptor));
+            }
             const auto authority =
               location_store.read_authority (runtime::spot_authority_key (spot_id))
                 .result ()
@@ -1707,6 +1710,9 @@ void app_t::_apply_zlink_framework ()
                     return result_t<selected_instance_target_t>::success (
                       {source, *current, snapshot->allocation.stable_type});
                 }
+                return result_t<selected_instance_target_t>::failure (
+                  framework_error_kind_t::unavailable,
+                  "Ready Instance Spot owner is unavailable");
             }
             if (candidates.empty ())
                 return result_t<selected_instance_target_t>::failure (

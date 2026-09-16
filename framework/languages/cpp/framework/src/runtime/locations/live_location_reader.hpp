@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -69,12 +70,19 @@ class live_location_reader_t final
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {})
     {
-        auto result =
-          _store->list_mesh_nodes (std::move (mesh_name), std::move (page))
-            .result ()
-            .value ();
-        filter_live (result.items);
-        return completed (std::move (result));
+        try {
+            auto result =
+              _store->list_mesh_nodes (std::move (mesh_name), std::move (page))
+                .result ()
+                .value ();
+            filter_live (result.items);
+            return completed (std::move (result));
+        }
+        catch (const std::invalid_argument &error) {
+            return task_t<location_page_t<mesh_node_descriptor_t>> (
+              result_t<location_page_t<mesh_node_descriptor_t>>::failure (
+                framework_error_kind_t::internal_failure, error.what ()));
+        }
     }
 
     task_t<authority_read_result_t> read_authority (authority_key_t key)

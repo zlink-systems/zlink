@@ -91,22 +91,35 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     task_t<std::vector<mesh_node_descriptor_t>>
     list_live_mesh_nodes (std::string mesh_name)
     {
-        std::vector<mesh_node_descriptor_t> descriptors;
-        location_page_request_t page;
-        do {
-            auto current = _store->list_mesh_nodes (mesh_name, page).result ().value ();
-            for (auto &descriptor : current.items) {
-                if (descriptor.state == framework_runtime_state_t::stopped
-                    || descriptor.state == framework_runtime_state_t::error)
-                    continue;
-                if (_store->owner_admission_lifetime (
-                      location_owner_token_t{descriptor.owner_id,
-                                             descriptor.lease_generation}))
-                    descriptors.push_back (std::move (descriptor));
-            }
-            page.continuation_token = current.continuation_token;
-        } while (page.continuation_token);
-        return completed (std::move (descriptors));
+        try {
+            std::vector<mesh_node_descriptor_t> descriptors;
+            location_page_request_t page;
+            do {
+                auto current_result = _store->list_mesh_nodes (mesh_name, page).result ();
+                if (!current_result.has_value ()) {
+                    return task_t<std::vector<mesh_node_descriptor_t>> (
+                      detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
+                        current_result, "live MeshNode lookup failed"));
+                }
+                auto current = std::move (current_result).value ();
+                for (auto &descriptor : current.items) {
+                    if (descriptor.state == framework_runtime_state_t::stopped
+                        || descriptor.state == framework_runtime_state_t::error)
+                        continue;
+                    if (_store->owner_admission_lifetime (
+                          location_owner_token_t{descriptor.owner_id,
+                                                 descriptor.lease_generation}))
+                        descriptors.push_back (std::move (descriptor));
+                }
+                page.continuation_token = current.continuation_token;
+            } while (page.continuation_token);
+            return completed (std::move (descriptors));
+        }
+        catch (const std::invalid_argument &error) {
+            return task_t<std::vector<mesh_node_descriptor_t>> (
+              result_t<std::vector<mesh_node_descriptor_t>>::failure (
+                framework_error_kind_t::internal_failure, error.what ()));
+        }
     }
 
     task_t<std::optional<spot_address_t>>

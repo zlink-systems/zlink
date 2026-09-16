@@ -6,12 +6,14 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
 #include <zlink/framework.hpp>
@@ -71,6 +73,8 @@ using zlink::framework::runtime::location_auto_connect_host_service_t;
 using zlink::framework::runtime::location_runtime_t;
 using zlink::framework::runtime::store_location_runtime_query_t;
 using zlink::framework::runtime::store_location_resolvers_t;
+
+std::uint16_t bindable_loopback_port (std::uint16_t base_port);
 
 location_owner_token_t live_owner_token (
   zlink::framework::location_repository_t &store,
@@ -778,6 +782,17 @@ struct blocked_auto_connect_event_t
     int value{};
 };
 
+struct lease_target_request_t
+{
+    static constexpr const char *packet_name = "lease-target-request";
+    int value{};
+};
+
+struct lease_target_reply_t
+{
+    std::string node_rid;
+};
+
 void to_json (nlohmann::json &json, const auto_connect_request_t &value)
 {
     json = nlohmann::json{{"value", value.value}};
@@ -820,6 +835,26 @@ void from_json (
   blocked_auto_connect_event_t &value)
 {
     value.value = json.at ("value").get<int> ();
+}
+
+void to_json (nlohmann::json &json, const lease_target_request_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+
+void from_json (const nlohmann::json &json, lease_target_request_t &value)
+{
+    value.value = json.at ("value").get<int> ();
+}
+
+void to_json (nlohmann::json &json, const lease_target_reply_t &value)
+{
+    json = nlohmann::json{{"nodeRid", value.node_rid}};
+}
+
+void from_json (const nlohmann::json &json, lease_target_reply_t &value)
+{
+    value.node_rid = json.at ("nodeRid").get<std::string> ();
 }
 
 class auto_connect_request_handler_t
@@ -1106,6 +1141,266 @@ class local_user_spot_t final
   private:
     zlink::framework::spot_context_t _context;
 };
+
+class lease_target_instance_spot_t final : public zlink::framework::instance_spot_t
+{
+  public:
+    explicit lease_target_instance_spot_t (
+      zlink::framework::instance_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::instance_spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::instance_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ().add_handler<&lease_target_instance_spot_t::handle> ();
+    }
+
+    lease_target_reply_t handle (const lease_target_request_t &)
+    {
+        return {std::string (_context.node_rid ().value ())};
+    }
+
+  private:
+    zlink::framework::instance_spot_context_t _context;
+};
+
+class descriptor_owner_lease_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    descriptor_owner_lease_client_t (zlink::framework::app_t &app,
+                                     std::string user_spot_id,
+                                     std::string instance_spot_id,
+                                     std::shared_ptr<
+                                       zlink::framework::tests::owner_lease_time_store_t>
+                                       observed_store = {}) :
+        _app (&app),
+        _user_spot_id (std::move (user_spot_id)),
+        _instance_spot_id (std::move (instance_spot_id)),
+        _observed_store (std::move (observed_store))
+    {
+    }
+
+    zlink::framework::task_t<void> start (
+      zlink::framework::service_provider_t &services) override
+    {
+        if (_observed_store)
+            _observed_store->observe_owner_read_order (_user_spot_id, 0);
+        try {
+            auto user = services.get_required<zlink::framework::spot_manager_t> ()
+                          .get_or_create (
+                            zlink::framework::spot_id_t (_user_spot_id), "room")
+                          .in_mesh ("lease-target-mesh")
+                          .timeout (std::chrono::seconds (2))
+                          .async ()
+                          .result ();
+            if (user)
+                user_target = std::string (user.value ().spot.node_rid ().value ());
+            else
+                user_error = user.error_kind ();
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            user_error = error.kind ();
+        }
+        catch (const std::exception &error) {
+            user_exception = error.what ();
+        }
+        if (_observed_store)
+            user_owner_checked_before_authority =
+              _observed_store->owner_was_read_in_expected_order ();
+
+        if (_observed_store)
+            _observed_store->observe_owner_read_order (_instance_spot_id, 1);
+        try {
+            auto route_client = _app->advanced ().zlink ().route_client (
+              services.get_required<zlink::framework::serializer_registry_t> ());
+            auto reply = route_client
+                           .request_to_spot (
+                             _instance_spot_id, lease_target_request_t{7})
+                           .instance_spot ("cart")
+                           .in_mesh ("lease-target-mesh")
+                           .timeout (std::chrono::seconds (2))
+                           .async<lease_target_reply_t> ()
+                           .result ();
+            if (reply)
+                instance_target = reply.value ().node_rid;
+            else
+                instance_error = reply.error_kind ();
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            instance_error = error.kind ();
+        }
+        catch (const std::exception &error) {
+            instance_exception = error.what ();
+        }
+        if (_observed_store)
+            instance_owner_checked_before_authority =
+              _observed_store->owner_was_read_in_expected_order ();
+
+        _app->stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    std::optional<std::string> user_target;
+    std::optional<zlink::framework::framework_error_kind_t> user_error;
+    std::string user_exception;
+    std::optional<bool> user_owner_checked_before_authority;
+    std::optional<std::string> instance_target;
+    std::optional<zlink::framework::framework_error_kind_t> instance_error;
+    std::string instance_exception;
+    std::optional<bool> instance_owner_checked_before_authority;
+
+  private:
+    zlink::framework::app_t *_app;
+    std::string _user_spot_id;
+    std::string _instance_spot_id;
+    std::shared_ptr<zlink::framework::tests::owner_lease_time_store_t> _observed_store;
+};
+
+struct descriptor_owner_lease_result_t
+{
+    int app_result = -1;
+    std::optional<std::string> user_target;
+    std::optional<zlink::framework::framework_error_kind_t> user_error;
+    std::string user_exception;
+    std::optional<bool> user_owner_checked_before_authority;
+    std::optional<std::string> instance_target;
+    std::optional<zlink::framework::framework_error_kind_t> instance_error;
+    std::string instance_exception;
+    std::optional<bool> instance_owner_checked_before_authority;
+};
+
+std::string target_id_selected_from_range (std::string prefix,
+                                           std::uint64_t modulus,
+                                           std::uint64_t lower_bound,
+                                           std::uint64_t upper_bound)
+{
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        auto candidate = prefix + std::to_string (suffix);
+        const auto choice = std::hash<std::string>{}(candidate) % modulus;
+        if (choice >= lower_bound && choice < upper_bound)
+            return candidate;
+    }
+}
+
+descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
+  std::optional<zlink::framework::tests::owner_lease_time_store_t::lease_view_t> lease_view,
+  unsigned port_hint)
+{
+    using zlink::framework::runtime::provider_location_repository_t;
+    using zlink::framework::tests::owner_lease_time_store_t;
+
+    auto inner = std::make_shared<in_memory_location_store_t> ();
+    std::shared_ptr<zlink::framework::location_store_t> public_store = inner;
+    std::shared_ptr<owner_lease_time_store_t> observed_store;
+    if (lease_view) {
+        provider_location_repository_t seeder (*inner);
+        const auto claimed = seeder
+                               .claim_owner_lease (
+                                 "stale-target-owner", std::chrono::seconds (30))
+                               .result ()
+                               .value ();
+        const auto *owner = std::get_if<zlink::framework::owner_lease_claimed_t> (&claimed);
+        if (owner == nullptr)
+            throw std::runtime_error ("failed to seed stale target owner lease");
+        zlink::framework::mesh_node_descriptor_t descriptor{
+          .mesh_name = "lease-target-mesh",
+          .rid = zlink::routing_id_t::from ("aaa-stale-target"),
+          .lifecycle_generation = 1,
+          .descriptor_revision = 1,
+          .endpoint = "tcp://127.0.0.1:1",
+          .application_version = 1,
+          .object_capabilities = {
+            {zlink::framework::placement_object_kind_t::user_spot, "room",
+             zlink::framework::maintenance_policy_kind_t::disabled, false, 0},
+            {zlink::framework::placement_object_kind_t::instance_spot, "cart",
+             zlink::framework::maintenance_policy_kind_t::disabled, false, 0}},
+          .object_role = zlink::framework::object_role_t::server,
+          .placement_weight = 10000,
+          .capacity = {.spots = {.limit = 16},
+                       .spot_types = {
+                         {zlink::framework::placement_object_kind_t::user_spot, "room",
+                          {.limit = 16}},
+                         {zlink::framework::placement_object_kind_t::instance_spot, "cart",
+                          {.limit = 16}}}},
+          .activation_concurrency = {.limit = 16},
+          .state = zlink::framework::framework_runtime_state_t::serving,
+          .security_identity = "test",
+          .owner_id = owner->token.owner_id,
+          .lease_generation = owner->token.lease_generation};
+        const auto stored =
+          seeder.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+            .result ()
+            .value ();
+        if (stored.status != location_write_status_t::stored)
+            throw std::runtime_error ("failed to seed stale target descriptor");
+        observed_store = std::make_shared<owner_lease_time_store_t> (
+          *inner, owner->token.owner_id, *lease_view);
+        public_store = observed_store;
+    }
+
+    const auto user_spot_id = target_id_selected_from_range (
+      "lease-user-", 10001, 1, 10000);
+    const auto instance_spot_id = target_id_selected_from_range (
+      "lease-instance-", 2, 0, 1);
+    auto app = zlink::framework::app_t::create ();
+    auto relocation_store = std::make_shared<
+      zlink::framework::runtime::in_memory_relocation_store_t> ();
+    descriptor_owner_lease_client_t *client = nullptr;
+    const auto endpoint = std::string ("tcp://127.0.0.1:")
+                          + std::to_string (bindable_loopback_port (port_hint));
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (public_store);
+        options.add_relocation_store (relocation_store);
+        options.add_route_mesh ("lease-target-mesh")
+          .set_routing_id (zlink::routing_id_t::from ("zzz-live-target"))
+          .set_placement_weight (1)
+          .listen (endpoint)
+          .add_spot_factory<local_user_spot_t> (
+            "room", [] (zlink::framework::spot_context_t context) {
+                return std::make_shared<local_user_spot_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); })
+          .add_instance_spot_factory<lease_target_instance_spot_t> (
+            "cart", [] (zlink::framework::instance_spot_context_t context) {
+                return std::make_shared<lease_target_instance_spot_t> (
+                  std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); });
+    });
+    auto service = std::make_unique<descriptor_owner_lease_client_t> (
+      app, user_spot_id, instance_spot_id, observed_store);
+    client = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    descriptor_owner_lease_result_t result;
+    result.app_result = app.run (0, nullptr);
+    if (client != nullptr) {
+        result.user_target = std::move (client->user_target);
+        result.user_error = client->user_error;
+        result.user_exception = std::move (client->user_exception);
+        result.user_owner_checked_before_authority =
+          client->user_owner_checked_before_authority;
+        result.instance_target = std::move (client->instance_target);
+        result.instance_error = client->instance_error;
+        result.instance_exception = std::move (client->instance_exception);
+        result.instance_owner_checked_before_authority =
+          client->instance_owner_checked_before_authority;
+    }
+    return result;
+}
 
 class context_owned_user_spot_t final
     : public actor_free_user_spot_contract_t
@@ -2530,6 +2825,68 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_EQ (0, app.run (0, nullptr));
     ASSERT_NE (nullptr, client);
     EXPECT_TRUE (client->observed) << client->last_error;
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      ExpiredDescriptorOwnerIsSkippedForUserAndInstanceSpotTargets)
+{
+    using lease_view_t =
+      zlink::framework::tests::owner_lease_time_store_t::lease_view_t;
+    const auto result = run_descriptor_owner_lease_selection (
+      lease_view_t::expired, 29720);
+
+    EXPECT_EQ (0, result.app_result);
+    EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.user_target)
+      << result.user_exception;
+    EXPECT_FALSE (result.user_error.has_value ());
+    EXPECT_EQ (std::optional<bool> (true),
+               result.user_owner_checked_before_authority);
+    EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.instance_target)
+      << result.instance_exception;
+    EXPECT_FALSE (result.instance_error.has_value ());
+    EXPECT_EQ (std::optional<bool> (true),
+               result.instance_owner_checked_before_authority);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      LiveDescriptorOwnerRemainsEligibleForUserAndInstanceSpotTargets)
+{
+    const auto result = run_descriptor_owner_lease_selection (
+      std::nullopt, 29721);
+
+    EXPECT_EQ (0, result.app_result);
+    EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.user_target)
+      << result.user_exception;
+    EXPECT_FALSE (result.user_error.has_value ());
+    EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.instance_target)
+      << result.instance_exception;
+    EXPECT_FALSE (result.instance_error.has_value ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      MissingDescriptorOwnerExpiryFailsUserAndInstanceSpotTargetsInternally)
+{
+    using zlink::framework::framework_error_kind_t;
+    using lease_view_t =
+      zlink::framework::tests::owner_lease_time_store_t::lease_view_t;
+    const auto result = run_descriptor_owner_lease_selection (
+      lease_view_t::missing_expiry, 29722);
+
+    EXPECT_EQ (0, result.app_result);
+    EXPECT_FALSE (result.user_target.has_value ());
+    EXPECT_EQ (std::optional<framework_error_kind_t> (
+                 framework_error_kind_t::internal_failure),
+               result.user_error)
+      << result.user_exception;
+    EXPECT_EQ (std::optional<bool> (true),
+               result.user_owner_checked_before_authority);
+    EXPECT_FALSE (result.instance_target.has_value ());
+    EXPECT_EQ (std::optional<framework_error_kind_t> (
+                 framework_error_kind_t::internal_failure),
+               result.instance_error)
+      << result.instance_exception;
+    EXPECT_EQ (std::optional<bool> (true),
+               result.instance_owner_checked_before_authority);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,
