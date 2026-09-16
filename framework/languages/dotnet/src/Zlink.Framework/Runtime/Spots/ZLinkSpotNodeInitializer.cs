@@ -4,7 +4,8 @@ internal sealed class ZLinkSpotNodeInitializer(
     IServiceProvider services,
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkRegistration registration,
-    ZLinkLocationLifecycle? locationLifecycle)
+    ZLinkLocationLifecycle? locationLifecycle,
+    ZLinkOwnerLeaseTracker? leaseTracker)
 {
     public async ValueTask InitializeAsync(ZLinkFrameworkComponentState state)
     {
@@ -176,7 +177,10 @@ internal sealed class ZLinkSpotNodeInitializer(
                 await ResolveManualPeerRoutingIdsAsync(
                         spotNodeRegistration,
                         meshName,
-                        nodeRoutingId)
+                        nodeRoutingId,
+                        registration,
+                        locationLifecycle,
+                        leaseTracker)
                     .ConfigureAwait(false);
                 ConnectManualPeers(spotNodeRegistration, nodeRuntime);
             }
@@ -250,10 +254,13 @@ internal sealed class ZLinkSpotNodeInitializer(
             }));
     }
 
-    private async ValueTask ResolveManualPeerRoutingIdsAsync(
+    internal static async ValueTask ResolveManualPeerRoutingIdsAsync(
         ZLinkSpotNodeRegistration nodeRegistration,
         string meshName,
-        RoutingId localRoutingId)
+        RoutingId localRoutingId,
+        ZLinkFrameworkRegistration registration,
+        ZLinkLocationLifecycle? locationLifecycle,
+        ZLinkOwnerLeaseTracker? leaseTracker)
     {
         if (locationLifecycle is null
             || !nodeRegistration.ObjectRoleSelected
@@ -268,6 +275,9 @@ internal sealed class ZLinkSpotNodeInitializer(
             .Where(endpoint => !router.PeerRoutingIds.ContainsKey(endpoint))
             .ToHashSet(StringComparer.Ordinal);
         if (unresolved.Count == 0) return;
+        var leases = leaseTracker
+            ?? throw new InvalidOperationException(
+                "Manual object peer resolution requires owner lease tracking.");
 
         var timeout = nodeRegistration.DefaultRequestTimeout
                       ?? registration.DefaultRequestTimeout;
@@ -278,11 +288,20 @@ internal sealed class ZLinkSpotNodeInitializer(
                     meshName,
                     deadline.Token)
                 .ConfigureAwait(false);
-            foreach (var descriptor in descriptors)
+            foreach (var descriptor in descriptors.OrderBy(
+                         static candidate => candidate.Rid,
+                         ZLinkRoutingIdOrder.Instance))
             {
                 if (descriptor.Rid == localRoutingId
-                    || !unresolved.Remove(descriptor.Endpoint))
+                    || !unresolved.Contains(descriptor.Endpoint)
+                    || !await leases.IsOwnerTokenLiveAsync(
+                            new ZLinkLocationOwnerToken(
+                                descriptor.OwnerId,
+                                descriptor.LeaseGeneration),
+                            deadline.Token)
+                        .ConfigureAwait(false))
                     continue;
+                unresolved.Remove(descriptor.Endpoint);
                 router.PeerRoutingIds[descriptor.Endpoint] = descriptor.Rid;
             }
             if (unresolved.Count != 0)

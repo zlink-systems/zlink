@@ -137,6 +137,7 @@
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
         <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
+        <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
