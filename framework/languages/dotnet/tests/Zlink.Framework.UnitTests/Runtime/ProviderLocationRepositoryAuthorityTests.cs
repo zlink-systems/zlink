@@ -654,6 +654,51 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             replacement.Reservation.TargetDescriptor.Rid);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExpiredOwnerLeaseRecordWithMatchingGenerationReclaimsReservedAuthority(
+        bool userSpot)
+    {
+        var objectKind = userSpot
+            ? ZLinkPlacementObjectKind.UserSpot
+            : ZLinkPlacementObjectKind.Actor;
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var source = new ZLinkProviderLocationRepository(inner);
+        var sourceOwner = await ClaimAsync(source, "expired-record-source");
+        var targetOwner = await ClaimAsync(source, "expired-record-target");
+        var sourceDescriptor = Descriptor("source", sourceOwner);
+        var targetDescriptor = Descriptor("target", targetOwner);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await source.UpdateMeshNodeAsync(
+                sourceDescriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await source.UpdateMeshNodeAsync(
+                targetDescriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var key = $"expired-record:{objectKind}";
+        var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await source.ReserveAsync(
+                Reservation(key, sourceDescriptor, sourceOwner, objectKind)));
+        var repository = new ZLinkProviderLocationRepository(
+            new ExpiredOwnerLeaseReadLocationStore(
+                inner,
+                ZLinkProviderLocationRepository.OwnerKey(sourceOwner.OwnerId)));
+
+        var replacement = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation(key, targetDescriptor, targetOwner, objectKind)));
+
+        Assert.True(
+            replacement.Reservation.ObjectGeneration
+            > first.Reservation.ObjectGeneration);
+        Assert.Equal(targetOwner, replacement.Reservation.TargetOwner);
+    }
+
     [Fact]
     public async Task ConcurrentExpiredOwnerReclaimIssuesOneReplacementReservation()
     {
@@ -3169,6 +3214,35 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     new ZLinkStoreWriteRequest([condition], [mutation]),
                     cancellationToken));
         }
+    }
+
+    private sealed class ExpiredOwnerLeaseReadLocationStore(
+        IZLinkLocationStore inner,
+        ZLinkStoreKey ownerKey) : IZLinkLocationStore
+    {
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default)
+        {
+            var read = await inner.ReadAsync(key, cancellationToken)
+                .ConfigureAwait(false);
+            return key == ownerKey && read is ZLinkStoreReadResult.Found found
+                ? new ZLinkStoreReadResult.Found(found.Value with
+                {
+                    ExpiresAt = found.Value.StoreNow
+                })
+                : read;
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 
     private sealed class ExpireFirstSnapshotLocationStore(

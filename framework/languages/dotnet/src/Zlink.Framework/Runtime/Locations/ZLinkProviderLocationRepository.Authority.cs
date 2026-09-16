@@ -598,10 +598,18 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (!string.Equals(
                     owner.OwnerId,
                     current.Snapshot.OwnerId,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal)
+                || ownerFound.Value.ExpiresAt is null)
+            {
+                // A lease is always written with a positive TTL, so a missing
+                // expiry is a corrupt record. Reclaiming deletes authority
+                // state, so refuse rather than read the absence as expiry.
                 throw new InvalidDataException(
                     "The Location Store owner lease record is invalid.");
-            if (owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration)
+            }
+
+            if (owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
+                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow)
                 return StaleAuthorityReclaimResult.OwnerLive;
             staleOwnerCondition = new ZLinkStoreCondition.Version(
                 ownerKey,
