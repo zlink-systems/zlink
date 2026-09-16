@@ -262,10 +262,34 @@ case "$platform" in
     ;;
 esac
 
+# Core >= #397 archives ship a real `make install` CMake package
+# (lib/cmake/zlink/*.cmake) plus the static archive, on every platform.
+# Copy it as-is instead of re-deriving a shared-only config by hand. Older
+# archives (pre-#397, e.g. core/v1.1.0) have neither; the node step below
+# falls back to synthesizing a minimal shared-only config for those, as it
+# always has. The windows-* branch above already staged the archive's whole
+# lib/ tree (cp -a "$binary_prefix/lib/." "$stage/lib/"), so it already has
+# whatever CMake package and static .lib the archive carries; redoing the
+# copy here would nest lib/cmake/zlink inside itself.
+has_archive_config=0
+if [[ -f "$binary_prefix/lib/cmake/zlink/zlinkConfig.cmake" ]]; then
+  has_archive_config=1
+  if [[ "$platform" != windows-* ]]; then
+    mkdir -p "$stage/lib/cmake"
+    cp -a "$binary_prefix/lib/cmake/zlink" "$stage/lib/cmake/zlink"
+    for static_lib in "$binary_prefix"/lib/libzlink.a "$binary_prefix"/lib/libzlink*.lib; do
+      [[ -f "$static_lib" ]] || continue
+      mkdir -p "$stage/lib"
+      cp -a "$static_lib" "$stage/lib/"
+    done
+  fi
+fi
+
 PREFIX="$stage" VERSION="$version" PLATFORM="$platform" \
   SOURCE_SHA="$(read_release_value source_sha)" TAG="$release_tag" \
   CHECKSUMS_SHA="$actual_checksums_sha" RUNTIME_PATH="$runtime_path" \
-  RUNTIME_SONAME="$runtime_soname" node <<'NODE'
+  RUNTIME_SONAME="$runtime_soname" HAS_ARCHIVE_CONFIG="$has_archive_config" \
+  node <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -275,7 +299,11 @@ const version = process.env.VERSION;
 const runtimePath = process.env.RUNTIME_PATH;
 const files = [];
 
-if (process.env.PLATFORM.startsWith('linux-')) {
+if (process.env.PLATFORM.startsWith('linux-') && process.env.HAS_ARCHIVE_CONFIG !== '1') {
+  console.error(
+    `Core release ${version}/${process.env.PLATFORM} has no CMake package ` +
+    '(pre-#397 archive); synthesizing a shared-only zlinkConfig.cmake.'
+  );
   const cmakeDir = path.join(root, 'lib', 'cmake', 'zlink');
   fs.mkdirSync(cmakeDir, {recursive: true});
   fs.writeFileSync(path.join(cmakeDir, 'zlinkConfig.cmake'), `\

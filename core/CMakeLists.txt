@@ -1256,6 +1256,44 @@ else()
       target_link_libraries(objects PUBLIC OpenSSL::SSL OpenSSL::Crypto)
     endif()
     set_property(TARGET objects PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+    # libzlink-static below archives this target's already-compiled output
+    # ($<TARGET_OBJECTS:objects>) rather than recompiling ${sources} itself,
+    # so setting INTERPROCEDURAL_OPTIMIZATION on libzlink-static cannot
+    # change what those objects contain -- only what happens at its own
+    # (nonexistent, for a plain `ar` archive) link step. With LTO on,
+    # `objects` inherits CMake's IPO default, which passes
+    # -flto -fno-fat-lto-objects: a real ELF symbol table (nm/file/ar all
+    # read it as an ordinary object) but the actual code living only in
+    # .gnu.lto_* GIMPLE/bitcode sections, readable only by the exact
+    # toolchain major version that produced it. That breaks the
+    # distributed static archive (issue #397; CI run 34948757858
+    # reproduced it: a libzlink.a built under GCC 11.3 failed to link
+    # under GCC 13.1).
+    #
+    # -ffat-lto-objects (embedding real object code alongside the
+    # bytecode, so `objects` could keep serving both targets from one
+    # compile) was tried and does not work: GCC's LTO linker plugin reads
+    # .gnu.lto_* sections whenever they are present, real code alongside
+    # them or not, and still fails across toolchain versions (CI run
+    # 34967905036 reproduced the exact same fatal error against a fat
+    # archive that had passed a real-code-presence check). A distributed
+    # static archive must have no .gnu.lto_* sections at all, so
+    # libzlink-static always compiles ${sources} itself -- the same shape
+    # MinGW and the Xcode generator already use below, and already
+    # confirmed working (including on the AppleClang that made this
+    # necessary in the first place, run 34967905036's build jobs) --
+    # instead of archiving `objects`. That reintroduces the double build
+    # the comment above this block was written to avoid, but a static
+    # archive that only links on the exact toolchain that built it is
+    # worse than one that took longer to build, and that comment predates
+    # libzlink-static being a distributed artifact. There is no
+    # compiler-conditional path here on purpose: GCC, clang and MSVC all
+    # take the same route, so there is nothing left to detect.
+    set(ZLINK_STATIC_COMPILE_OWN_SOURCES FALSE)
+    if(BUILD_STATIC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+      set(ZLINK_STATIC_COMPILE_OWN_SOURCES TRUE)
+    endif()
   endif()
 
   if(BUILD_SHARED)
@@ -1315,12 +1353,19 @@ else()
       add_library(libzlink-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs} ${zlink-pkgconfig}
                                        ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
     else()
-      if (CMAKE_GENERATOR STREQUAL "Xcode")
+      # ZLINK_STATIC_COMPILE_OWN_SOURCES: see the comment where `objects`
+      # is created, above -- this is the no-fat-LTO fallback, compiling
+      # ${sources} itself exactly like the Xcode generator already does,
+      # rather than archiving a second OBJECT library that would miss
+      # every target_include_directories/target_compile_definitions call
+      # a few hundred lines down.
+      if(CMAKE_GENERATOR STREQUAL "Xcode" OR ZLINK_STATIC_COMPILE_OWN_SOURCES)
         add_library(libzlink-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs}
                                          ${zlink-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       else()
-        add_library(libzlink-static STATIC $<TARGET_OBJECTS:objects> ${public_headers} ${html-docs} ${readme-docs}
-                                         ${zlink-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+        add_library(libzlink-static STATIC $<TARGET_OBJECTS:objects> ${public_headers}
+                                         ${html-docs} ${readme-docs} ${zlink-pkgconfig}
+                                         ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
       endif()
     endif()
     if(CMAKE_SYSTEM_NAME MATCHES "QNX")
@@ -1333,6 +1378,15 @@ endif()
 
 if(BUILD_STATIC)
   target_compile_definitions(libzlink-static PUBLIC ZLINK_STATIC)
+  # LTO/IPO (enabled globally above via CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+  # would put GCC/clang LTO bytecode, or MSVC /GL IL, into libzlink.a
+  # instead of real object code. That archive only links on the exact
+  # toolchain major version that built it — the distributed static archive
+  # must link on whatever toolchain a downstream consumer has (issue #397).
+  # Same fix as test-core above: turn IPO off for this one target rather
+  # than globally, so the shared library (fully linked at build time, so
+  # no bytecode ever leaves it) keeps LTO.
+  set_target_properties(libzlink-static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 endif()
 
 list(APPEND target_outputs "")

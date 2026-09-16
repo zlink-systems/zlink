@@ -90,12 +90,11 @@ if [ "$RUN_TESTS" = "ON" ]; then
     BUILD_TESTS_FLAG="ON"
 fi
 
-# Unit tests in core/tests/unittest are wired when BUILD_STATIC is enabled.
-# Keep default packaging build shared-only, but include static lib for test runs.
-BUILD_STATIC_FLAG="OFF"
-if [ "$RUN_TESTS" = "ON" ]; then
-    BUILD_STATIC_FLAG="ON"
-fi
+# The static archive (libzlink.a) is always built: unit tests in
+# core/tests/unittest link against it, and the release archive ships it so
+# vcpkg's default static triplet can consume the install prefix instead of
+# building Core from source (issue #397).
+BUILD_STATIC_FLAG="ON"
 
 # Configure build
 cmake "$LIBZLINK_SRC_ABS" \
@@ -127,6 +126,16 @@ make -j$(nproc)
 echo ""
 echo "Step 4: Installing to output directory..."
 make install
+
+# Merge the full `make install` prefix (lib/cmake/zlink/*.cmake, libzlink.a,
+# lib/pkgconfig/libzlink.pc, the complete include/ tree) into the output
+# directory. This is additive: it sits alongside the flat libzlink.so /
+# libzlink.so.<abi> / include/*.h files the steps below produce, which
+# existing consumers (fetch-release.sh, node/java prebuild downloads,
+# framework CI) still read from the archive root.
+echo ""
+echo "Step 4b: Merging install prefix into output directory..."
+cp -a install/. "$REPO_ROOT/$OUTPUT_DIR/"
 
 # Copy the exact versioned .so to output.
 SO_FILE=$(find install/lib* -name "libzlink.so.${LIBZLINK_VERSION}" 2>/dev/null | head -n 1)
