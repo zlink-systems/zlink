@@ -137,6 +137,7 @@ class FrameworkField:
     field: str
     pattern: str
     expected: int = 1
+    required: bool = True
 
 
 def replace_version_group(match: re.Match[str], version: str) -> str:
@@ -196,6 +197,35 @@ FRAMEWORK_SCALAR_FIELDS = (
         "java",
         "zlink.frameworkVersion default",
         rf'(providers\.provider \{{ ")(?P<version>{SEMVER})(" \}})',
+    ),
+    FrameworkField(
+        "framework/languages/dotnet/quickstart/Directory.Packages.props",
+        "dotnet",
+        "Zlink.Framework quickstart PackageVersion fields",
+        rf'(<PackageVersion Include="Zlink\.Framework(?:\.AspNetCore)?" Version=")(?P<version>{SEMVER})(" />)',
+        2,
+    ),
+    FrameworkField(
+        "framework/languages/java/quickstart/gradle/libs.versions.toml",
+        "java",
+        "quickstart versions.zlinkFramework",
+        rf'(?m)^(zlinkFramework = ")(?P<version>{SEMVER})(")$',
+    ),
+    # Item #465's Java tutorial is developed independently of this tooling
+    # branch. Manage it as soon as that directory is present after integration.
+    FrameworkField(
+        "framework/languages/java/tutorial/gradle/libs.versions.toml",
+        "java",
+        "tutorial versions.zlinkFramework",
+        rf'(?m)^(zlinkFramework = ")(?P<version>{SEMVER})(")$',
+        required=False,
+    ),
+    FrameworkField(
+        "framework/languages/node/quickstart/package.json",
+        "node",
+        "quickstart framework and nestjs dependencies",
+        rf'("@zlink-systems/(?:framework|nestjs)"\s*:\s*")(?P<version>{SEMVER})(")',
+        2,
     ),
     FrameworkField(
         "framework/languages/cpp/vcpkg.json",
@@ -349,8 +379,81 @@ def update_framework_node_lock(source: str, version: str) -> str:
     return source[:start] + block + source[end:]
 
 
+def update_node_registry_package_block(
+    source: str, package_name: str, version: str
+) -> str:
+    marker = f'    "node_modules/{package_name}": {{'
+    start = source.find(marker)
+    if start < 0:
+        raise SyncError(f"Node quickstart lockfile has no {package_name} entry")
+    end = source.find('\n    },\n    "node_modules/', start)
+    if end < 0:
+        raise SyncError(
+            f"Node quickstart lockfile entry for {package_name} is not structurally bounded"
+        )
+    end += len("\n    },")
+    block = source[start:end]
+    original_block = block
+    block, version_count = re.subn(
+        rf'("version"\s*:\s*"){SEMVER}(")',
+        rf"\g<1>{version}\2",
+        block,
+        count=1,
+    )
+    artifact_name = package_name.rsplit("/", 1)[-1]
+    block, resolved_count = re.subn(
+        rf'("resolved"\s*:\s*"https://registry\.npmjs\.org/{re.escape(package_name)}/-/{re.escape(artifact_name)}-){SEMVER}(\.tgz")',
+        rf"\g<1>{version}\2",
+        block,
+        count=1,
+    )
+    if version_count != 1 or resolved_count != 1:
+        raise SyncError(
+            f"Node quickstart lockfile entry for {package_name} lacks version/resolved fields"
+        )
+    if block != original_block:
+        block = re.sub(
+            r'^\s*"integrity"\s*:\s*"[^"]+",\n',
+            "",
+            block,
+            flags=re.MULTILINE,
+        )
+    return source[:start] + block + source[end:]
+
+
+def update_node_quickstart_framework_lock(source: str, version: str) -> str:
+    pattern = node_internal_dependency_pattern()
+    source, count = re.subn(
+        pattern,
+        lambda match: replace_version_group(match, version),
+        source,
+    )
+    if count != 6:
+        raise SyncError(
+            "Node quickstart lockfile expected 6 Framework dependency pins, "
+            f"found {count}"
+        )
+    for package_name in (
+        "@zlink-systems/framework",
+        "@zlink-systems/http-client",
+        "@zlink-systems/nestjs",
+        "@zlink-systems/stream-wire",
+    ):
+        source = update_node_registry_package_block(source, package_name, version)
+    return source
+
+
+def update_node_quickstart_binding_lock(source: str, version: str) -> str:
+    source = update_framework_node_dependency(source, version, 1)
+    return update_node_registry_package_block(
+        source, "@zlink-systems/zlink", version
+    )
+
+
 def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
     for field in FRAMEWORK_SCALAR_FIELDS:
+        if not field.required and not (REPO_ROOT / field.relative).is_file():
+            continue
         version = versions[field.owner]
         sync.regex(
             field.relative,
@@ -396,6 +499,10 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
         rf'("node_modules/@zlink-systems/http-client"\s*:\s*{{\s*"version"\s*:\s*")(?P<version>{SEMVER})(")',
         lambda match, version=version: replace_version_group(match, version),
         1,
+    )
+    sync.transform(
+        "framework/languages/node/quickstart/package-lock.json",
+        lambda source: update_node_quickstart_framework_lock(source, version),
     )
     sync.regex(
         node_lock,
@@ -803,6 +910,10 @@ def synchronize(
     sync.transform(
         "framework/languages/node/package-lock.json",
         lambda source: update_framework_node_lock(source, binding_version),
+    )
+    sync.transform(
+        "framework/languages/node/quickstart/package-lock.json",
+        lambda source: update_node_quickstart_binding_lock(source, binding_version),
     )
     sync.regex(
         "framework/languages/node/test/contract/fixtures/node-public-contract.json",
