@@ -217,7 +217,7 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}\.cache\framework-cpp\vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}\.artifacts\windows
@@ -368,9 +368,14 @@ jobs:
           foreach ($target in $targets) {
             $exe = Join-Path $env:FRAMEWORK_CPP_BUILD_DIR "Release/$target.exe"
             if (-not (Test-Path $exe)) { throw "missing gtest binary: $exe" }
-            $cases = (& $exe --gtest_list_tests 2>&1 |
-              Select-String -Pattern "^  S").Count
+            # A case line is two spaces then the case name, so count any
+            # non-space there. "^  S" counted only names starting with S,
+            # which both failed binaries whose names start otherwise and let
+            # a binary holding one S case pass for the rest (#489).
+            $listing = @(& $exe --gtest_list_tests 2>&1)
+            $cases = ($listing | Select-String -Pattern "^  \S").Count
             if ($cases -lt 1) {
+              $listing | ForEach-Object { Write-Host "  | $_" }
               throw "$target registered no gtest case; the binary links a " +
                     "GoogleTest instance its registrations do not reach"
             }
