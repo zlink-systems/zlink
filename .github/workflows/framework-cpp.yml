@@ -349,6 +349,31 @@ jobs:
           }
           Write-Host "Registered Framework C++ unit/contract tests: $testCount"
 
+      - name: Assert gtest binaries register their cases
+        shell: pwsh
+        run: |
+          # ctest counts registered tests, not the cases a binary runs. A
+          # gtest binary can link, register nothing, exit 0 and be scored as
+          # a pass (#422), so ask each one what it actually holds.
+          $targets = @(
+            "test_cpp_framework_opaque_store_providers",
+            "test_cpp_framework_store_location_resolvers",
+            "test_cpp_framework_in_memory_location_store",
+            "test_cpp_framework_location_lifecycle",
+            "test_cpp_framework_location_runtime",
+            "test_cpp_framework_location_key_codec")
+          foreach ($target in $targets) {
+            $exe = Join-Path $env:FRAMEWORK_CPP_BUILD_DIR "Release/$target.exe"
+            if (-not (Test-Path $exe)) { throw "missing gtest binary: $exe" }
+            $cases = (& $exe --gtest_list_tests 2>&1 |
+              Select-String -Pattern "^  S").Count
+            if ($cases -lt 1) {
+              throw "$target registered no gtest case; the binary links a " +
+                    "GoogleTest instance its registrations do not reach"
+            }
+            Write-Host "$target : $cases cases"
+          }
+
       - name: Run Framework C++ unit and contract tests
         shell: pwsh
         run: |
