@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-tictactoe",
-  "version-string": "0.14.0",
+  "version-string": "0.15.0",
   "dependencies": [
     "zlink",
     "zlink-framework"
