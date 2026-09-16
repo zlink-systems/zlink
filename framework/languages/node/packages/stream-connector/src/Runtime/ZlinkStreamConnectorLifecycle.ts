@@ -15,11 +15,15 @@ import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import type { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import type { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
+import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
 import type { ZlinkStreamRuntimeMetrics } from './ZlinkStreamRuntimeMetrics';
 
 export class ZlinkStreamConnectorLifecycle {
   private receiveLoopAbort: AbortController | undefined;
+  private receiveLoopSleeping = false;
+  private receiveLoopWake: (() => void) | undefined;
+  private readonly receiveLoopSettled: Array<() => void> = [];
   private currentConnection: ZlinkStreamConnection | undefined;
   private connectionGeneration = 0;
   private currentState = ZlinkStreamConnectionState.Created;
@@ -38,6 +42,7 @@ export class ZlinkStreamConnectorLifecycle {
     private readonly pendingRequests: ZlinkStreamPendingRequests,
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher,
+    private readonly receivedMessages: ZlinkStreamReceivedMessages,
     private readonly events: ZlinkStreamConnectorEvents,
     private readonly metrics: ZlinkStreamRuntimeMetrics
   ) {}
@@ -150,16 +155,21 @@ export class ZlinkStreamConnectorLifecycle {
     if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
   }
 
+  /**
+   * Spec stream-connector 32 §7: `dispatch` runs the callbacks the receive loop
+   * queued, it does not drive the transport. Receiving is the receive loop's
+   * job in both dispatch modes, which is what lets a `Manual` consumer complete
+   * a `waitFor` without pumping, and what keeps this call from blocking on an
+   * idle connection. In `Manual` it first lets the loop settle whatever has
+   * already arrived, so a packet the transport is holding is delivered by this
+   * pump rather than the next one.
+   */
   async dispatch(signal?: AbortSignal): Promise<void> {
-    const connection = this.currentConnection;
-    const generation = this.connectionGeneration;
-    try {
-      await this.dispatchAvailable(connection, generation, signal);
-    } catch (cause) {
-      const error = toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Stream dispatch failed.');
-      await this.disconnectForTransportFailure(error, connection, generation);
-      throw new ZlinkStreamException(error);
+    throwIfAborted(signal);
+    if (this.options.dispatchMode !== ZlinkStreamDispatchMode.Immediate) {
+      await this.settleReceiveLoop();
     }
+    await this.receivedMessages.pump();
   }
 
   connectionForSend(): ZlinkStreamConnection {
@@ -239,8 +249,12 @@ export class ZlinkStreamConnectorLifecycle {
     }
   }
 
+  // Spec stream-connector 32 §7: the receive loop runs in both dispatch modes.
+  // `Manual` only changes what the loop does with a frame — it queues the
+  // registered callbacks instead of running them — never whether frames are
+  // read off the transport.
   private startReceiveLoop(): void {
-    if (this.options.dispatchMode !== ZlinkStreamDispatchMode.Immediate || this.currentConnection?.read === undefined) {
+    if (this.currentConnection?.read === undefined) {
       return;
     }
     this.stopReceiveLoop();
@@ -254,6 +268,8 @@ export class ZlinkStreamConnectorLifecycle {
   private stopReceiveLoop(): void {
     this.receiveLoopAbort?.abort();
     this.receiveLoopAbort = undefined;
+    this.receiveLoopSleeping = false;
+    this.releaseReceiveLoopSettled();
   }
 
   private async runReceiveLoop(
@@ -265,13 +281,59 @@ export class ZlinkStreamConnectorLifecycle {
       while (this.shouldContinueReceiveLoop(connection, generation, signal)) {
         const dispatched = await this.dispatchAvailable(connection, generation, signal);
         if (!dispatched && this.shouldContinueReceiveLoop(connection, generation, signal)) {
-          await delay(1, signal);
+          await this.sleepUntilWork(signal);
         }
       }
     } catch (cause) {
       if (signal.aborted) return;
       const error = toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Receive loop failed.');
       await this.disconnectForTransportFailure(error, connection, generation);
+    } finally {
+      this.receiveLoopSleeping = false;
+      this.releaseReceiveLoopSettled();
+    }
+  }
+
+  // A transport whose read resolves only when a frame arrives parks the loop
+  // inside that read; one that reports "nothing available" instead parks it
+  // here. Both are the loop waiting for new data, and `dispatch` treats them
+  // the same way.
+  private async sleepUntilWork(signal: AbortSignal): Promise<void> {
+    this.receiveLoopSleeping = true;
+    this.releaseReceiveLoopSettled();
+    try {
+      await new Promise<void>((resolve) => {
+        const finish = (): void => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          this.receiveLoopWake = undefined;
+          resolve();
+        };
+        const onAbort = (): void => finish();
+        const timer = setTimeout(finish, 1);
+        signal.addEventListener('abort', onAbort, { once: true });
+        this.receiveLoopWake = finish;
+      });
+    } finally {
+      this.receiveLoopSleeping = false;
+    }
+  }
+
+  // Returns once the loop has consumed everything the transport already had.
+  // A loop that is mid-batch, or parked inside a read that has not produced a
+  // frame, is already caught up, so only a sleeping loop is woken and awaited.
+  private async settleReceiveLoop(): Promise<void> {
+    if (this.receiveLoopAbort === undefined || !this.receiveLoopSleeping) {
+      return;
+    }
+    const settled = new Promise<void>((resolve) => { this.receiveLoopSettled.push(resolve); });
+    this.receiveLoopWake?.();
+    await settled;
+  }
+
+  private releaseReceiveLoopSettled(): void {
+    for (const resolve of this.receiveLoopSettled.splice(0)) {
+      resolve();
     }
   }
 

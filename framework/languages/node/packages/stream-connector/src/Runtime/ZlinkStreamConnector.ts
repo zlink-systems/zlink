@@ -7,6 +7,7 @@ import {
   ZlinkStreamConnector,
   ZlinkStreamConnectorOptions,
   ZlinkStreamDiagnosticsLevel,
+  ZlinkStreamDispatchMode,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
   ZlinkStreamErrorCode,
@@ -74,7 +75,10 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     const metrics = new ZlinkStreamRuntimeMetrics(this.options);
     const protocol = new ZlinkStreamFrameProtocol(this.options);
     this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
-    this.receivedMessages = new ZlinkStreamReceivedMessages(this.events);
+    this.receivedMessages = new ZlinkStreamReceivedMessages(
+      this.events,
+      this.options.dispatchMode === ZlinkStreamDispatchMode.Immediate
+    );
     this.receiveDispatcher = new ZlinkStreamReceiveDispatcher(
       protocol,
       this.pendingRequests,
@@ -90,6 +94,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.pendingRequests,
       this.frameSender,
       this.receiveDispatcher,
+      this.receivedMessages,
       this.events,
       metrics
     );
@@ -239,7 +244,14 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         finish(connectorError(ZlinkStreamErrorCode.RequestTimeout, 'Wait for stream message timed out.'));
       }, timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
-      disposable = this.receivedMessages.on(name, (message) => {
+      // Spec stream-connector 32 §7: a wait surface is not a registered
+      // callback. It observes the packets the receive queue has not delivered
+      // yet and consumes the one it matches, in both dispatch modes, so
+      // `Manual` completes this wait without a dispatch pump.
+      disposable = this.receivedMessages.observe(name, (message) => {
+        if (done) {
+          return false;
+        }
         try {
           const decoded = {
             name: message.name,
@@ -248,12 +260,14 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
             flowId: message.flowId,
             flowOrigin: message.flowOrigin
           };
-          if (predicate(decoded)) {
-            finish(undefined, decoded);
+          if (!predicate(decoded)) {
+            return false;
           }
+          finish(undefined, decoded);
         } catch (cause) {
           finish(cause);
         }
+        return true;
       });
     });
   }

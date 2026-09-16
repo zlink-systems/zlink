@@ -1283,10 +1283,90 @@ test('stream connector pong write failure disconnects instead of reporting a dec
     new Uint8Array()
   ));
 
-  await assert.rejects(() => instance.dispatch(), /pong write failed|Send failed/);
-  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
+  // The receive loop owns the transport in both dispatch modes, so the failed
+  // pong surfaces there as a disconnect and an error event, not as a dispatch
+  // rejection (spec stream-connector 32 section 7).
+  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
   assert.equal(connection.closed, true);
   assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.SendFailed]);
+});
+
+// Spec stream-connector 32 section 7: waitFor, expectNone and waitForSequence are
+// not registered callbacks. They observe and consume the packets the receive queue
+// has not delivered yet in both dispatch modes, so Manual -- the default -- needs
+// no dispatch pump to finish a wait. This scenario never calls dispatch().
+test('stream connector manual dispatch mode completes waitFor without a dispatch pump', async () => {
+  const connection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+  connection.pushFrame(sendFrame('ManualWait', 'waited'));
+
+  const message = await instance.waitFor('ManualWait').timeout(1000).submit();
+
+  assert.equal(new TextDecoder().decode(message.payload.payload), 'waited');
+});
+
+// The other half of the same clause: dispatch still owns the registered push
+// handlers. The receive loop advancing the transport in Manual must not run them.
+test('stream connector manual dispatch mode keeps registered handlers waiting for dispatch', async () => {
+  const connection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  const received = [];
+  instance.on('ManualPush', (message) => {
+    received.push(new TextDecoder().decode(message.payload.payload));
+  });
+
+  await instance.connect();
+  connection.pushFrame(sendFrame('ManualPush', 'queued'));
+  await waitFor(() => connection.inbound.length === 0, 1000);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(received, []);
+
+  await instance.dispatch();
+
+  assert.deepEqual(received, ['queued']);
+});
+
+// Immediate keeps running registered handlers straight off the receive path, and
+// its wait surfaces read the same queue. Neither needs a dispatch pump.
+test('stream connector immediate dispatch mode runs handlers and waits without a dispatch pump', async () => {
+  const connection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  const received = [];
+  instance.on('ImmediatePush', (message) => {
+    received.push(new TextDecoder().decode(message.payload.payload));
+  });
+
+  await instance.connect();
+  connection.pushFrame(sendFrame('ImmediatePush', 'pushed'));
+  await waitFor(() => received.length === 1, 1000);
+
+  assert.deepEqual(received, ['pushed']);
+
+  connection.pushFrame(sendFrame('ImmediateWait', 'waited'));
+  const message = await instance.waitFor('ImmediateWait').timeout(1000).submit();
+
+  assert.equal(new TextDecoder().decode(message.payload.payload), 'waited');
 });
 
 test('stream connector connect waits for an in-progress disconnect before reconnecting', async () => {
@@ -1308,75 +1388,78 @@ test('stream connector connect waits for an in-progress disconnect before reconn
     heartbeat: { enabled: false }
   });
   await instance.connect();
-  const failingDispatch = instance.dispatch();
+  // The receive loop owns the read in both dispatch modes, so its failure is
+  // what starts the disconnect this scenario reconnects across.
   await waitFor(() => closeStarted, 1000);
   const reconnect = instance.connect();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(connectCalls, 1);
   releaseClose();
-  await assert.rejects(failingDispatch, /old transport failed|Stream dispatch failed/);
   await reconnect;
   assert.equal(connectCalls, 2);
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Connected);
 });
 
-test('late dispatch failure from an old connection does not disconnect a replacement', async () => {
+test('late read failure from a replaced connection does not disconnect a replacement', async () => {
   const reads = [];
   const oldConnection = new MemoryConnection();
   oldConnection.read = () => new Promise((_resolve, reject) => reads.push(reject));
+  oldConnection.write = async () => { throw new Error('old heartbeat write failed'); };
   const newConnection = new MemoryConnection();
   let connectCalls = 0;
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
-    heartbeat: { enabled: false }
+    heartbeat: { intervalMs: 1, timeoutMs: 60000 }
   });
   await instance.connect();
-  const first = instance.dispatch();
-  const second = instance.dispatch();
-  await waitFor(() => reads.length === 2, 1000);
-  reads[0](new Error('first old read failed'));
-  await assert.rejects(first, /first old read failed|Stream dispatch failed/);
-  await instance.connect();
-  reads[1](new Error('late old read failed'));
-  await assert.rejects(second, /late old read failed|Stream dispatch failed/);
+  await waitFor(() => reads.length === 1, 1000);
+  // The heartbeat send fails on the old transport only, so the connector
+  // reconnects while the old connection still holds an unfinished read.
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    2000
+  );
+
+  reads[0](new Error('late old read failed'));
+  await new Promise((resolve) => setImmediate(resolve));
+
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Connected);
   assert.equal(newConnection.closed, false);
 });
 
-test('late successful dispatch from an old connection is discarded after reconnect', async () => {
+test('a frame that arrives late on a replaced connection is discarded after reconnect', async () => {
   const reads = [];
-  const oldConnection = new MemoryConnection();
-  oldConnection.read = () => new Promise((resolve, reject) => reads.push({ resolve, reject }));
   let connectCalls = 0;
+  const connection = new MemoryConnection();
+  connection.read = () => new Promise((resolve, reject) => reads.push({ resolve, reject }));
+  // Only the first session fails its heartbeat send, so the transport object is
+  // reused across the reconnect and the connection generation is the only thing
+  // that tells the stale frame apart from a current one.
+  connection.write = async () => {
+    if (connectCalls === 1) throw new Error('old heartbeat write failed');
+  };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { connectCalls++; return oldConnection; } },
+    transportFactory: { async connect() { connectCalls++; return connection; } },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
-    heartbeat: { enabled: false }
+    heartbeat: { intervalMs: 1, timeoutMs: 60000 }
   });
   const received = [];
   instance.on('OldMessage', (message) => received.push(message));
+
   await instance.connect();
-  const first = instance.dispatch();
-  const stale = instance.dispatch();
-  await waitFor(() => reads.length === 2, 1000);
-  reads[0].reject(new Error('disconnect old connection'));
-  await assert.rejects(first, /disconnect old connection|Stream dispatch failed/);
-  await instance.connect();
-  reads[1].resolve(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Send,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.None,
-      name: 'OldMessage',
-      metadata: connector.ZlinkStreamMetadataMap.empty
-    }),
-    new TextEncoder().encode('stale')
-  ));
-  await stale;
+  await waitFor(() => reads.length === 1, 1000);
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    2000
+  );
+
+  reads[0].resolve(sendFrame('OldMessage', 'stale'));
   await new Promise((resolve) => setImmediate(resolve));
+  await instance.dispatch();
+
   assert.deepEqual(received, []);
   assert.equal(connectCalls, 2);
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Connected);
