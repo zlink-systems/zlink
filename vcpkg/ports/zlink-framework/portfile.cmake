@@ -17,7 +17,7 @@ vcpkg_cmake_configure(
     OPTIONS
         -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
         -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.1.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.2.0
         -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.2.0
         # Without these two, ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_{CPP,CORE}_PREFIX
         # default to a repository-relative dev path (.artifacts/wsl/install/...)
