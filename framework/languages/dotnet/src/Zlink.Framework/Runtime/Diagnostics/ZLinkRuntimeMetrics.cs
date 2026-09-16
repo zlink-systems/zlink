@@ -145,8 +145,6 @@ internal static class ZLinkRuntimeMetrics
             "By");
     private static readonly Counter<long> InstanceSpotClaimConflicts =
         Meter.CreateCounter<long>("zlink.instance_spot.claim.conflicts", "{claim}");
-    private static readonly Counter<long> InstanceSpotTakeovers =
-        Meter.CreateCounter<long>("zlink.instance_spot.takeovers", "{takeover}");
 
     private static readonly Counter<long> LocationStoreErrors =
         Meter.CreateCounter<long>("zlink.location.store.errors", "{error}");
@@ -542,20 +540,6 @@ internal static class ZLinkRuntimeMetrics
             { "reason", reason }
         };
         SafeAdd(InstanceSpotClaimConflicts, 1, tags);
-    }
-
-    public static void RecordInstanceSpotTakeover(
-        string meshName,
-        string instanceSpotType,
-        string outcome)
-    {
-        var tags = new TagList
-        {
-            { "mesh_name", meshName },
-            { "instance_spot_type", instanceSpotType },
-            { "outcome", outcome }
-        };
-        SafeAdd(InstanceSpotTakeovers, 1, tags);
     }
 
     public static ZLinkHostMetricOperation StartHostRelocation(string mode) =>

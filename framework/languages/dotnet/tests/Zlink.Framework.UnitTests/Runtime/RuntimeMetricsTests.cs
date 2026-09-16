@@ -61,7 +61,6 @@ public sealed class RuntimeMetricsTests
             ["zlink.instance_spot.pending.messages"] = (typeof(ObservableGauge<>), "{message}"),
             ["zlink.instance_spot.pending.bytes"] = (typeof(ObservableGauge<>), "By"),
             ["zlink.instance_spot.claim.conflicts"] = (typeof(Counter<>), "{claim}"),
-            ["zlink.instance_spot.takeovers"] = (typeof(Counter<>), "{takeover}"),
             ["zlink.location.store.errors"] = (typeof(Counter<>), "{error}"),
             ["zlink.location.owner_lease.renew.failures"] = (typeof(Counter<>), "{failure}"),
             ["zlink.location.owner_lease.renew.lateness"] = (typeof(Histogram<>), "s"),

@@ -583,6 +583,10 @@ internal sealed partial class ZLinkProviderLocationRepository
             StoredAuthority current,
             CancellationToken cancellationToken)
     {
+        if (current.Snapshot.Allocation.State
+            == ZLinkPlacementAllocationState.Active)
+            return StaleAuthorityReclaimResult.NotReclaimable;
+
         var ownerKey = OwnerKey(current.Snapshot.OwnerId);
         var ownerRead = await provider.ReadAsync(ownerKey, cancellationToken)
             .ConfigureAwait(false);
@@ -628,14 +632,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 current.Snapshot.Payload.Span,
                 out _))
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        // Canonical relocation residue without a published manifest pointer:
-        // startup recovery only scans rows whose payload decodes as a
-        // published manifest, so no recovery path can ever see this row. A
-        // committed relocation whose target owner died before the deferred
-        // reconciliation normalized the payload would otherwise stay
-        // permanently unjoinable and unreclaimable. With the owner lease
-        // confirmed dead it is reclaimed exactly like a steady row.
-
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(
@@ -653,82 +649,46 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
         conditions.Add(capacity.Condition);
-        if (current.Snapshot.Allocation.State
-            == ZLinkPlacementAllocationState.Active)
-        {
-            ApplyCapacity(
-                nextCapacity,
-                current.Snapshot.Allocation,
-                activeDelta: -1);
-        }
-        else
-        {
-            if (current.Meta.ReservedCreation is not { } reservation)
-                return StaleAuthorityReclaimResult.RecoveryRequired;
-            var storedReservation = await ReadRecordAsync<ReservationRecord>(
-                    ReservationKey(reservation.ReservationId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (storedReservation is null
-                || storedReservation.Record.Status != ReservationStatus.Reserved
-                || storedReservation.Record.Key != current.Key
-                || storedReservation.Record.ObjectGeneration
-                != current.Snapshot.ObjectGeneration
-                || storedReservation.Record.AuthorityOwnerGeneration
-                != current.Snapshot.AuthorityOwnerGeneration)
-                return StaleAuthorityReclaimResult.RecoveryRequired;
-            conditions.Add(new ZLinkStoreCondition.Version(
+        if (current.Meta.ReservedCreation is not { } reservation)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
+        var storedReservation = await ReadRecordAsync<ReservationRecord>(
                 ReservationKey(reservation.ReservationId),
-                storedReservation.Version));
-            mutations.Add(new ZLinkStoreMutation.Put(
-                ReservationKey(reservation.ReservationId),
-                Encode(storedReservation.Record with
-                {
-                    Status = ReservationStatus.Aborted
-                }),
-                null));
-            ApplyCapacity(
-                nextCapacity,
-                current.Snapshot.Allocation,
-                pendingDelta: -1);
-        }
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (storedReservation is null
+            || storedReservation.Record.Status != ReservationStatus.Reserved
+            || storedReservation.Record.Key != current.Key
+            || storedReservation.Record.ObjectGeneration
+            != current.Snapshot.ObjectGeneration
+            || storedReservation.Record.AuthorityOwnerGeneration
+            != current.Snapshot.AuthorityOwnerGeneration)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
+        conditions.Add(new ZLinkStoreCondition.Version(
+            ReservationKey(reservation.ReservationId),
+            storedReservation.Version));
+        mutations.Add(new ZLinkStoreMutation.Put(
+            ReservationKey(reservation.ReservationId),
+            Encode(storedReservation.Record with
+            {
+                Status = ReservationStatus.Aborted
+            }),
+            null));
+        ApplyCapacity(
+            nextCapacity,
+            current.Snapshot.Allocation,
+            pendingDelta: -1);
         mutations.Add(new ZLinkStoreMutation.Put(
             capacity.Key,
             Encode(nextCapacity),
             null));
 
-        ZLinkStoreWriteResult result;
-        try
-        {
-            result = await provider.WriteAsync(
-                    new ZLinkStoreWriteRequest(conditions, mutations),
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            RecordInstanceSpotTakeover(current, "failed");
-            throw;
-        }
-        RecordInstanceSpotTakeover(
-            current,
-            result is ZLinkStoreWriteResult.Applied ? "claimed" : "lost");
+        var result = await provider.WriteAsync(
+                new ZLinkStoreWriteRequest(conditions, mutations),
+                cancellationToken)
+            .ConfigureAwait(false);
         return result is ZLinkStoreWriteResult.Applied
             ? StaleAuthorityReclaimResult.Reclaimed
             : StaleAuthorityReclaimResult.Conflict;
-    }
-
-    private static void RecordInstanceSpotTakeover(
-        StoredAuthority current,
-        string outcome)
-    {
-        if (current.Snapshot.Allocation.ObjectKind
-            != ZLinkPlacementObjectKind.InstanceSpot)
-            return;
-        ZLinkRuntimeMetrics.RecordInstanceSpotTakeover(
-            current.Snapshot.Allocation.Descriptor.MeshName,
-            current.Snapshot.Allocation.StableType,
-            outcome);
     }
 
     public ValueTask<ZLinkObjectCommitResult> CommitAsync(
@@ -5512,7 +5472,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         OwnerLive = 1,
         Reclaimed = 2,
         Conflict = 3,
-        RecoveryRequired = 4
+        RecoveryRequired = 4,
+        NotReclaimable = 5
     }
 
     private enum AggregateStatus
