@@ -28,7 +28,6 @@ export function validateFrameworkRegistration(
 ): void {
   validateListenerNetworkIdentity(
     'process network',
-    undefined,
     registration.network.bindHost,
     registration.network.advertiseHost
   );
@@ -226,7 +225,6 @@ function validateChannelCapabilities(
       requireEndpoint(`channel '${channelName}' server`, channel.server.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' server`,
-        channel.server.bind,
         channel.server.bindHost,
         channel.server.advertiseHost
       );
@@ -240,7 +238,6 @@ function validateChannelCapabilities(
       requireEndpoint(`channel '${channelName}' publisher`, channel.publisher.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' publisher`,
-        channel.publisher.bind,
         channel.publisher.bindHost,
         channel.publisher.advertiseHost
       );
@@ -326,7 +323,6 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
     if (spotNode.router !== undefined) {
       validateListenerNetworkIdentity(
         `SpotNode '${spotNodeName}' router`,
-        spotNode.router.bind,
         spotNode.router.bindHost,
         spotNode.router.advertiseHost
       );
@@ -437,11 +433,9 @@ function validateSpotNodeCapability(
 
 function validateListenerNetworkIdentity(
   capabilityName: string,
-  bindEndpoint: string | undefined,
   configuredBindHost: string | undefined,
   advertiseHost: string | undefined
 ): void {
-  const bindHost = configuredBindHost ?? tcpEndpointHost(bindEndpoint);
   if (configuredBindHost !== undefined) {
     requireName(`${capabilityName} bind host`, configuredBindHost);
   }
@@ -453,16 +447,6 @@ function validateListenerNetworkIdentity(
       );
     }
   }
-  if (bindHost !== undefined && isWildcardHost(bindHost) && advertiseHost === undefined) {
-    throw new ZLinkConfigurationException(
-      `${capabilityName} must define an advertise host when its bind host is a wildcard address.`
-    );
-  }
-}
-
-function tcpEndpointHost(endpoint: string | undefined): string | undefined {
-  const match = /^tcp:\/\/(\[[^\]]+\]|[^:]+):\d+$/.exec(endpoint ?? '');
-  return match?.[1];
 }
 
 function isWildcardHost(host: string): boolean {
@@ -569,7 +553,6 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
     requireEndpoint(`STREAM node '${streamNodeName}'`, streamNode.bind);
     validateListenerNetworkIdentity(
       `STREAM node '${streamNodeName}'`,
-      streamNode.bind,
       streamNode.bindHost,
       streamNode.advertiseHost
     );

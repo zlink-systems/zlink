@@ -16,7 +16,11 @@ import {
   ZLinkMessage
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkFrameworkRegistration } from '../configuration';
+import {
+  buildAdvertisedEndpoint,
+  ZLinkConfigurationException,
+  type ZLinkFrameworkRegistration
+} from '../configuration';
 import { ZLinkDispatchErrorReporter } from '../channels';
 import type {
   ZLinkBackendAdapterFactory,
@@ -178,6 +182,7 @@ export interface ZLinkStreamRuntimeManagerOptions {
 
 interface ZLinkStartedStreamNode {
   readonly meshName?: string;
+  readonly advertisedEndpoint: string;
   readonly runtime: ZLinkStreamSessionNodeRuntimeCore;
   readonly socket: ZLinkBackendStreamSocket;
   readonly monitor: ZLinkBackendSocketMonitor;
@@ -220,6 +225,17 @@ export class ZLinkStreamRuntimeManager {
         );
       }
       socket.bind(streamNode.bind!);
+      const boundEndpoint = socket.lastEndpoint ?? streamNode.bind!;
+      const advertisedEndpoint = buildAdvertisedEndpoint(
+        boundEndpoint,
+        streamNode.advertiseHost,
+        'tcp'
+      );
+      if (advertisedEndpoint === undefined) {
+        throw new ZLinkConfigurationException(
+          `STREAM node '${nodeName}' advertised host requires a TCP endpoint, received '${boundEndpoint}'.`
+        );
+      }
       const readablePoller = streamAdapter.createReadablePoller(socket);
       const nativeSessionRoutes = new Map<string, {
         readonly service: StreamSessionService;
@@ -288,6 +304,7 @@ export class ZLinkStreamRuntimeManager {
       runtime.start();
       this.nodes.set(nodeName, {
         meshName: applicationMeshName,
+        advertisedEndpoint,
         runtime,
         socket,
         monitor,
