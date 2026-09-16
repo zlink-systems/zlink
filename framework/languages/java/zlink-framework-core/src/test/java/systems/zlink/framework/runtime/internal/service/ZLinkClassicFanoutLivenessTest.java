@@ -13,7 +13,31 @@ import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkClassicFanoutLivenessTest {
     @Test
-    void exactBeaconIsInternalAndSamePrefixTopicRemainsApplicationData() {
+    void subscriberWithoutApplicationTopicsReceivesAllTopicsAndBeacon() {
+        assertEquals(
+            List.of("", "\u0001ZLF1"),
+            ZLinkClassicFanoutLiveness.subscriberTopics(List.of()));
+    }
+
+    @Test
+    void applicationTopicRestrictionKeepsBeaconAvailableForReadiness() {
+        assertEquals(
+            List.of("order", "\u0001ZLF1"),
+            ZLinkClassicFanoutLiveness.subscriberTopics(List.of("order")));
+
+        var liveness = new ZLinkClassicFanoutLiveness(0);
+        RoutingId publisher = RoutingId.from("fanout-a");
+        liveness.connect(publisher, "pipe-a", 0);
+        liveness.receive(
+            publisher,
+            "pipe-a",
+            ZLinkClassicFanoutLiveness.beaconRecord(),
+            1);
+        assertTrue(liveness.isReady(publisher));
+    }
+
+    @Test
+    void exactBeaconIsInternal() {
         var liveness = new ZLinkClassicFanoutLiveness(0);
         RoutingId publisher = RoutingId.from("fanout-a");
         liveness.connect(publisher, "pipe-a", 0);
@@ -30,10 +54,17 @@ final class ZLinkClassicFanoutLivenessTest {
             ZLinkClassicFanoutLiveness.ReceiveKind.BEACON,
             liveness.receive(publisher, "pipe-a", beacon, 1));
         assertTrue(liveness.isReady(publisher));
+    }
 
+    @Test
+    void beaconRecognitionUsesExactTopicRatherThanReservedPrefix() {
+        var liveness = new ZLinkClassicFanoutLiveness(0);
+        RoutingId publisher = RoutingId.from("fanout-a");
+        liveness.connect(publisher, "pipe-a", 0);
         byte[] samePrefix = new byte[] {
             0x01, 0x5a, 0x4c, 0x46, 0x31, 0x00};
         assertFalse(ZLinkClassicFanoutLiveness.isReservedTopic(samePrefix));
+        assertTrue(ZLinkClassicFanoutLiveness.startsWithReservedTopic(samePrefix));
         assertEquals(
             ZLinkClassicFanoutLiveness.ReceiveKind.APPLICATION,
             liveness.receive(

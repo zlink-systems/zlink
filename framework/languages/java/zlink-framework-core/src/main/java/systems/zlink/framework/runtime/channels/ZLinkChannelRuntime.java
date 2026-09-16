@@ -47,6 +47,7 @@ import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.errors.ZlinkCloseException;
@@ -144,6 +145,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkChannelDispatchReporter dispatchReporter;
     private final ZLinkChannelMessageDispatcher messageDispatcher;
     private final ZLinkChannelRouteDispatcher routeDispatcher;
+    private final Map<String, List<String>> fanoutApplicationTopics;
     private ZLinkFanoutLocationRuntime fanoutLocationRuntime;
     private ZLinkManualFanoutRuntime manualFanoutRuntime;
     private ZLinkClientServerLocationRuntime clientServerLocationRuntime;
@@ -545,6 +547,11 @@ public final class ZLinkChannelRuntime
                 backendFactory,
                 adapterOptions,
                 registration.channels());
+        this.fanoutApplicationTopics = registration.channels().stream()
+            .filter(channel -> channel.kind() == ChannelKind.FANOUT)
+            .collect(Collectors.toUnmodifiableMap(
+                ChannelRegistration::name,
+                ChannelRegistration::fanoutApplicationTopics));
         ZLinkScannedHandlerCatalog handlerCatalog =
             ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
         ZLinkChannelHandlerCatalog channelHandlers =
@@ -723,7 +730,8 @@ public final class ZLinkChannelRuntime
                 infrastructureExecutor,
                 configuration.options().pollingInterval(),
                 1000,
-                messageDispatcher::dispatchPublish);
+                messageDispatcher::dispatchPublish,
+                fanoutApplicationTopics);
         fanoutLocationRuntime = runtime;
         List<AutoConnectSurface> surfaces = autoConnectSurfaces();
         configuration.install(
@@ -778,7 +786,8 @@ public final class ZLinkChannelRuntime
             context,
             timeoutExecutor,
             infrastructureExecutor,
-            messageDispatcher::dispatchPublish);
+            messageDispatcher::dispatchPublish,
+            fanoutApplicationTopics);
         manualFanoutRuntime = runtime;
         for (ChannelRegistration channel : manualChannels) {
             channel.subscriberConnections().attach(
@@ -1059,6 +1068,7 @@ public final class ZLinkChannelRuntime
         rejectAfterRelocationReady("Channel publish");
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
+        requireApplicationFanoutTopic(encoded.packetName());
         return new PublishCall(
             callRuntime,
             requirePublisher(channelName),
@@ -1087,11 +1097,31 @@ public final class ZLinkChannelRuntime
     }
 
     static void requireApplicationFanoutTopic(String topic) {
-        Objects.requireNonNull(topic, "topic");
-        if (ZLinkClassicFanoutLiveness.isReservedTopic(
+        if (topic == null) {
+            throw new ZLinkConfigurationException("fanout topic is required");
+        }
+        requireWellFormedUnicodeTopic(topic);
+        if (ZLinkClassicFanoutLiveness.startsWithReservedTopic(
                 topic.getBytes(StandardCharsets.UTF_8))) {
             throw new ZLinkConfigurationException(
                 "fanout topic is reserved for transport liveness");
+        }
+    }
+
+    private static void requireWellFormedUnicodeTopic(String topic) {
+        for (int index = 0; index < topic.length(); index++) {
+            char value = topic.charAt(index);
+            if (Character.isHighSurrogate(value)) {
+                if (index + 1 >= topic.length()
+                    || !Character.isLowSurrogate(topic.charAt(index + 1))) {
+                    throw new ZLinkConfigurationException(
+                        "fanout topic must be valid Unicode");
+                }
+                index++;
+            } else if (Character.isLowSurrogate(value)) {
+                throw new ZLinkConfigurationException(
+                    "fanout topic must be valid Unicode");
+            }
         }
     }
 

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 
 final class ChannelNetworkDefaultsTest {
     @Test
@@ -39,12 +40,59 @@ final class ChannelNetworkDefaultsTest {
     }
 
     @Test
-    void applicationFanoutPublishRejectsOnlyTheExactReservedTopic() {
+    void publicFanoutTopicsRejectTheReservedPrefixAndAllowNeighbors() {
+        ChannelRegistration registration =
+            new ChannelRegistration("events", ChannelKind.FANOUT);
+        var builder = ChannelBuilders.fanout(registration);
+
         assertThrows(
             ZLinkConfigurationException.class,
             () -> ZLinkChannelRuntime.requireApplicationFanoutTopic("\u0001ZLF1"));
-        assertDoesNotThrow(
+        assertThrows(
+            ZLinkConfigurationException.class,
             () -> ZLinkChannelRuntime.requireApplicationFanoutTopic("\u0001ZLF1.more"));
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> builder.subscribe("\u0001ZLF1"));
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> builder.subscribe("\u0001ZLF1.more"));
+
+        assertDoesNotThrow(() ->
+            ZLinkChannelRuntime.requireApplicationFanoutTopic("\u0001ZLF"));
+        assertDoesNotThrow(() ->
+            ZLinkChannelRuntime.requireApplicationFanoutTopic("\u0001ZLF2"));
+        assertDoesNotThrow(() -> builder.subscribe("\u0001ZLF"));
+        assertDoesNotThrow(() -> builder.subscribe("\u0001ZLF2"));
+    }
+
+    @Test
+    void duplicateFanoutSubscriptionsFormAnIdempotentSet() {
+        ChannelRegistration registration =
+            new ChannelRegistration("events", ChannelKind.FANOUT);
+
+        ChannelBuilders.fanout(registration)
+            .subscribe("order")
+            .subscribe("order")
+            .subscribe("payment");
+
+        assertEquals(List.of("order", "payment"),
+            registration.fanoutApplicationTopics());
+        assertEquals(
+            List.of("order", "payment", "\u0001ZLF1"),
+            ZLinkClassicFanoutLiveness.subscriberTopics(
+                registration.fanoutApplicationTopics()));
+    }
+
+    @Test
+    void fanoutSubscriptionRequiresSubscriberCapabilityAtStartup() {
+        ChannelRegistration registration =
+            new ChannelRegistration("events", ChannelKind.FANOUT);
+        ChannelBuilders.fanout(registration).subscribe("order");
+
+        assertThrows(
+            ZLinkConfigurationException.class,
+            () -> registration.validate(false));
     }
 
     @Test

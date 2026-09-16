@@ -19,6 +19,8 @@ public interface FanoutChannelBuilder {
 
     FanoutChannelBuilder enableSubscriber();
 
+    FanoutChannelBuilder subscribe(String topic);
+
     FanoutChannelBuilder connect(String endpoint);
 
     ZLinkEndpointConnections subscriberConnections();
