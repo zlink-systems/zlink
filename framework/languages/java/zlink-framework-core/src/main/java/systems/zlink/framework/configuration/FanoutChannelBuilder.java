@@ -17,6 +17,8 @@ public interface FanoutChannelBuilder {
 
     FanoutChannelBuilder setRoutingIdPrefix(String prefix);
 
+    FanoutChannelBuilder setNoDrop(boolean noDrop);
+
     FanoutChannelBuilder enableSubscriber();
 
     FanoutChannelBuilder subscribe(String topic);

@@ -250,6 +250,12 @@ public final class ChannelBuilders {
         }
 
         @Override
+        public FanoutChannelBuilder setNoDrop(boolean noDrop) {
+            registration.setNoDrop(noDrop);
+            return this;
+        }
+
+        @Override
         public FanoutChannelBuilder enableSubscriber() {
             registration.enableAutomaticSubscriber();
             return this;

@@ -93,6 +93,7 @@ final class ZLinkChannelRuntimeConfigurator {
                         channel.routingIdPrefix() + "-" + UUID.randomUUID())
                     : channel.routingId();
             publisher.setRoutingId(publisherRoutingId);
+            applyFanoutPublisherSocketOptions(channel, publisher);
             for (String endpoint : channel.publisherBinds()) {
                 publisher.bind(endpoint);
             }
@@ -134,6 +135,12 @@ final class ZLinkChannelRuntimeConfigurator {
             handlers.routeSendHandlers(channel),
             handlers.routeRequestHandlers(channel));
         startRouteLoop.accept(channel.name(), router);
+    }
+
+    private static void applyFanoutPublisherSocketOptions(
+        ChannelRegistration channel,
+        ZLinkBackendPublisherSocket publisher) {
+        publisher.setNoDrop(channel.noDrop());
     }
 
     private static void applyServerSocketOptions(
