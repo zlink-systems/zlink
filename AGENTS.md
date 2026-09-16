@@ -31,6 +31,11 @@
   확장하며, 원인 변화 없이 같은 전체 gate를 반복하지 않는다.
 - lint, format, rename 같은 기계적 작업에는 사용할 수 있는 가장 가벼운 도구나 model을 사용한다.
 
+- 이 머신에 이미 있는 검증 자산(교차 툴체인 `g++-11`·`g++-13`, vcpkg Boost, emsdk,
+  Playwright Chromium)과 반복해서 밟은 함정은
+  [`doc/principal/dev/workspace-notes.ko.md`](./doc/principal/dev/workspace-notes.ko.md)에
+  있다. **로컬에서 재현할 수 있는 것을 CI 왕복으로 확인하지 않는다.**
+
 ### 2.1 Sub-agent model·추론 레벨
 
 **모델은 작업의 모호성·중대성으로 고르고, 추론 레벨은 작업 난이도로 고른다. 둘은 별개다.**
