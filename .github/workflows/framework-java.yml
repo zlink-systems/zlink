@@ -1,0 +1,132 @@
+name: Framework Java
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-java.yml"
+      - "VERSION"
+      - "bindings/java/**"
+      - "framework/languages/java/**"
+      - "framework/runtime/**"
+      - "scripts/local-package/build-windows.ps1"
+      - "scripts/local-package/core/**"
+      - "scripts/local-package/java/**"
+      - "scripts/local-package/sync-version.py"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-java.yml"
+      - "VERSION"
+      - "bindings/java/**"
+      - "framework/languages/java/**"
+      - "framework/runtime/**"
+      - "scripts/local-package/build-windows.ps1"
+      - "scripts/local-package/core/**"
+      - "scripts/local-package/java/**"
+      - "scripts/local-package/sync-version.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  framework-java:
+    name: ${{ matrix.target.name }} / Java 25
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            core_platform: linux-x64
+            local_package_root: .artifacts/wsl
+          - name: win-x64
+            runner: windows-latest
+            core_platform: windows-x64
+            local_package_root: .artifacts/windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+          cache-dependency-path: |
+            bindings/java/**/*.gradle*
+            bindings/java/gradle/wrapper/gradle-wrapper.properties
+            framework/languages/java/**/*.gradle.kts
+            framework/languages/java/gradle/libs.versions.toml
+            framework/languages/java/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Setup Node.js for Core package verification
+        if: startsWith(matrix.target.name, 'linux-')
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Fetch Core and build the checkout Java binding package on Linux
+        if: startsWith(matrix.target.name, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform "${{ matrix.target.core_platform }}" \
+            --cache-dir "${RUNNER_TEMP}/zlink-core-release")"
+          ZLINK_LOCAL_PACKAGE_ROOT="${GITHUB_WORKSPACE}/${{ matrix.target.local_package_root }}" \
+            bash scripts/local-package/java/build-wsl.sh \
+              --core-prefix "${core_prefix}"
+
+      - name: Fetch Core and build the checkout Java binding package on Windows
+        if: startsWith(matrix.target.name, 'win-')
+        shell: pwsh
+        run: |
+          $version = (Select-String -LiteralPath "VERSION" `
+            -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+          $cacheDir = Join-Path $env:RUNNER_TEMP "zlink-core-release"
+          $corePrefix = (& .\scripts\local-package\core\fetch-release.ps1 `
+            -Version $version `
+            -Platform "${{ matrix.target.core_platform }}" `
+            -CacheDir $cacheDir | Select-Object -Last 1).Trim()
+          if (-not (Test-Path -LiteralPath $corePrefix -PathType Container)) {
+            throw "Core release prefix was not created: $corePrefix"
+          }
+          .\scripts\local-package\java\build-windows.ps1 `
+            -CorePrefix $corePrefix
+
+      - name: Run Framework Java core tests
+        working-directory: framework/languages/java
+        shell: bash
+        env:
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
+        run: |
+          ./gradlew --no-daemon --max-workers=2 \
+            :zlink-framework-core:test \
+            -Pzlink.includeSamples=false
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-java-test-results-${{ matrix.target.name }}
+          path: framework/languages/java/*/build/test-results/**/*.xml
+          retention-days: 14
+          if-no-files-found: warn
