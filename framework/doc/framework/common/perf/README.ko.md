@@ -727,7 +727,7 @@ Actor의 응답은 public Channel send를 사용한다. BoundSession을 만들�
 ### 10.11 `pubsub-fanout-echo`
 
 Publisher 하나의 local publish 처리량과 Subscriber N개의 실제 수신율·지연을 묻는다.
-[Classic fanout][g-fanout]은 준비된 subscriber에 event를 보내는 별도 PUB/SUB 기능이며
+[Classic fanout][g-fanout]은 준비되고 topic subscription이 일치하는 subscriber에 event를 보내는 별도 PUB/SUB 기능이며
 완료·delivery 의미는 [소유 계약][fanout]을 참조한다.
 
 | 항목 | 측정 조건 |
@@ -753,7 +753,7 @@ Publisher 하나가 run 안에서 sequence를 단독 발급한다. Warmup과 mea
 Echo KOPS 대신 publish admission ops/sec와 subscriber delivery ops/sec를 기록한다.
 
 Packet name에 따른 typed handler 선택과 topic 범위는 [Framework API][api]를 참조한다.
-Classic fanout의 subscriber별 transport topic filter를 전제로 하지 않는다.
+측정 subscriber는 topic을 등록하지 않으므로 모든 topic을 받는다.
 [Config 3 PS-A2][fanout]는 packet name별 handler 선택을 검증한다.
 Late join·restart·reconnect는 이 steady 셀에 주입하지 않는다. 누락은 deliveryRatio로 남기며
 Framework 오류는 실제 public kind로 기록한다.

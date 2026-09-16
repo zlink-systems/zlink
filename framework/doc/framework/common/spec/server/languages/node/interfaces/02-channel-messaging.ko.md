@@ -88,7 +88,9 @@ export interface ZLinkFanoutChannelBuilder {
  setAdvertiseHost(advertiseHost: string): this;
  routingId(publisherRoutingId: RoutingId): this;
  setRoutingIdPrefix(prefix: string): this;
+ setNoDrop(noDrop?: boolean): this;
  enableSubscriber(): this;
+ subscribe(topic: string): this;
  connect(endpoint: string): this;
  subscriberConnections(): ZLinkEndpointConnections;
 }
@@ -139,9 +141,9 @@ fanout에 사용하지 않는다. Subscriber가 0개여도 publisher local queue
 선택한 실제 port가 들어간다. host가 시작되지 않았거나 해당 channel이 publisher로
 등록되지 않았으면 `ZLinkConfigurationException`으로 실패한다.
 
-Topic을 명시하는 overload에 내부 liveness용 byte `01 5A 4C 46 31`을 전달하면 transport를 시작하지
-않고 `ZLinkConfigurationException`을 발생시킨다. Topic을 생략한 overload는 typed event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을
-사용하므로 이 내부 topic을 만들지 않는다.
+Topic을 명시하는 overload에 전달하거나 `subscribe`에 등록하는 topic이
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 `ZLinkConfigurationException`을 발생시킨다. Topic을 생략한 overload는 typed event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을
+topic으로 사용하며 같은 규칙을 적용한다.
 
 Location store를 등록한 fanout publisher는 고정 Publisher RID와 자동 할당 중 하나를 startup 전에
 선택하고 전용 descriptor를 게시한다. Store가 없는 publisher는 listener endpoint를 수동으로 전달하는

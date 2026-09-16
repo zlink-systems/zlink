@@ -149,8 +149,8 @@ public interface IZLinkFanoutHandler<in TEvent>
 ```
 
 `IZLinkFanoutClient.Publish(...)`는 ChannelName과 typed event를 받고, 명시적인 topic이 필요한 호출은 [topic](../../../00-foundation/02-glossary.ko.md#topic)
-overload를 사용한다. Topic을 생략하면 Framework가 event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을 topic으로 사용한다. 예약된 topic은
-`ArgumentException`으로 거부한다. 반환한 전용 call의 `Async(...)`는 source-local publish admission이
+overload를 사용한다. Topic을 생략하면 Framework가 event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을 topic으로 사용한다. [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 topic은
+publish와 `Subscribe` 모두 `ArgumentException`으로 거부한다. 반환한 전용 call의 `Async(...)`는 source-local publish admission이
 완료되면 정상 완료한다. Subscriber 수와 수신
 완료는 반환하지 않는다. `IZLinkPublishCall`은 Logical Multicast 전용 call이며
 [classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout)에 사용하지 않는다.

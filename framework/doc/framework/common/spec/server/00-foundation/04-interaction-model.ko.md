@@ -26,7 +26,7 @@ Location Store가 global Spot이나 Actor를
 | Spot message | Caller가 global [Spot ID](02-glossary.ko.md#spot-id) — Spot을 식별하는 전역 논리 주소 — 를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) — Spot이 message를 받을 수 있는 상태 — [authority](02-glossary.ko.md#authority)의 [owner](02-glossary.ko.md#owner)를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
 | Actor message | Caller가 global Actor ID를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) authority의 owner를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
 | Object create·get-or-create | Caller가 global ID와 stable type을 지정하고 필요하면 placement intent를 추가한다. | 생성한 object를 가리키는 `ActorRef`·`SpotRef` 또는 typed creation 오류를 반환한다. |
-| classic fanout | Framework가 준비된 subscriber 집합을 대상으로 사용한다. | Local publisher queue가 수락하면 반환 데이터 없이 완료한다. |
+| classic fanout | Framework가 준비되고 topic이 일치하는 subscriber 집합을 대상으로 사용한다. | Local publisher queue가 수락하면 반환 데이터 없이 완료한다. |
 | STREAM | Caller가 session RID로 식별되는 연결을 사용한다. | One-way packet은 local queue 수락 뒤 반환 데이터 없이 완료하고 request는 reply를 반환한다. |
 
 Channel operation에서 Framework가 조건에 맞는 target 하나를 고르는 방식을 `select-one`이라
@@ -293,8 +293,9 @@ sequenceDiagram
 ## 6. Classic fanout
 
 [Classic fanout](02-glossary.ko.md#classic-fanout)은 MeshNode와 독립된 publisher/subscriber
-channel이다. 현재 연결과 [subscription](02-glossary.ko.md#subscription) 준비가 완료된
-subscriber에게만 새 event를 전달한다. Publisher는 연결 전 또는 연결 단절 중 event를 저장하지
+channel이다. 현재 연결이 준비되고 publish topic이 등록한 topic 중 하나와 일치하는 subscriber에게만
+새 event를 전달한다. Topic 등록과 일치 규칙은
+[Channel messaging §7](../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다. Publisher는 연결 전 또는 연결 단절 중 event를 저장하지
 않고, 다시 연결된 뒤 다시 보내지 않는다.
 
 - **Publisher call은 publisher socket send timeout까지 local admission을 기다리는 비동기
@@ -506,7 +507,7 @@ await spotPublisher
     .Publish("world-events", "zone.7", new WeatherChanged("rain"))
     .Async(cancellationToken);
 
-// Classic fanout: 독립 publisher transport에 현재 연결된 subscriber를 대상으로 한다.
+// Classic fanout: 독립 publisher transport에 현재 연결되고 topic이 일치하는 subscriber를 대상으로 한다.
 await fanout
     .Publish("telemetry", "server.health", new HealthSample(cpu, memory))
     .Async(cancellationToken);

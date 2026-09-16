@@ -148,8 +148,8 @@ socket.
 | fanout channel | Opens its own dedicated PUB/SUB socket |
 
 pub/sub also splits two ways. **Logical Multicast**, exchanged between Spots over a route
-mesh channel, uses the mesh socket as-is, and a **fanout channel** delivers to every
-connected subscriber over its own socket. The structural comparison of the three and how to
+mesh channel, uses the mesh socket as-is, and a **fanout channel** delivers over its own
+socket to the connected subscribers with a matching topic subscription. The structural comparison of the three and how to
 use them is covered by
 [05-channel-messaging §1](05-channel-messaging.en.md#1-channel-kinds).
 

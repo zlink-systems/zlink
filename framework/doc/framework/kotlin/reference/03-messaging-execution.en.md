@@ -87,7 +87,7 @@ fanoutClient.publish("lobby.events", "region.eu", PlayerJoined("player-1")).awai
 **Options.** The return type `ZLinkKotlinSubmissionCall` only has the `.await()` terminal.
 
 **Completion result.** Same completion rules as the Java reference's classic fanout `publish`.
-Specifying the reserved topic bytes (`01 5A 4C 46 31`) throws the Java runtime's
+Specifying a topic that Channel messaging §7 forbids throws the Java runtime's
 `ZLinkConfigurationException` as-is.
 
 **When to use.** Same as the `publish` (classic fanout) entry in the Java reference.

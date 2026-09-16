@@ -113,8 +113,8 @@ sequenceDiagram
   independently.
 
 [Classic fanout](02-glossary.en.md#classic-fanout) is an independent
-PUB/SUB capability that sends an event to a subscriber that is connected
-and has finished subscription setup.
+PUB/SUB capability that sends an event to a subscriber that is connected,
+has finished subscription setup, and whose registered topic prefix matches the publish topic.
 
 - **A publisher using automatic discovery publishes its actual endpoint
   to a dedicated location descriptor, and an automatic subscriber

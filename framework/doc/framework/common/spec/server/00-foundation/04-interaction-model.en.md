@@ -28,7 +28,7 @@ currently processes a global Spot or Actor is called
 | Spot message | The caller specifies a global [Spot ID](02-glossary.en.md#spot-id) — a globally unique logical address identifying a Spot — and the framework finds the [owner](02-glossary.en.md#owner) of the current [Ready](02-glossary.en.md#ready) — the state where a Spot can receive application messages — [authority](02-glossary.en.md#authority). | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
 | Actor message | The caller specifies a global Actor ID and the framework finds the current [Ready](02-glossary.en.md#ready) authority's owner. | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
 | Object create/get-or-create | The caller specifies a global ID and stable type, adding placement intent if needed. | Returns an `ActorRef`/`SpotRef` pointing at the created object, or a typed creation error. |
-| classic fanout | The framework uses the ready subscriber set as the target. | Completes with no return data once the local publisher queue accepts it. |
+| classic fanout | The framework uses the set of ready subscribers with a matching topic subscription as the target. | Completes with no return data once the local publisher queue accepts it. |
 | STREAM | The caller uses the connection identified by session RID. | A one-way packet completes with no return data after local queue acceptance; a request returns a reply. |
 
 The method by which the framework picks one matching target in a Channel operation
@@ -335,9 +335,10 @@ sequenceDiagram
 ## 6. Classic Fanout
 
 [Classic fanout](02-glossary.en.md#classic-fanout) is a publisher/subscriber
-channel independent of MeshNode. It only delivers a new event to a subscriber
-whose current connection and [subscription](02-glossary.en.md#subscription)
-are ready. The publisher doesn't store an event before connection or during a
+channel independent of MeshNode. It only delivers a new event to a subscriber whose current
+connection is ready and whose registered topics match the publish topic. Topic registration
+and matching are defined by
+[Channel messaging §7](../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic). The publisher doesn't store an event before connection or during a
 disconnection, and doesn't replay it after reconnecting.
 
 - **The publisher call provides only a single async terminator that waits for
@@ -569,7 +570,7 @@ await spotPublisher
     .Publish("world-events", "zone.7", new WeatherChanged("rain"))
     .Async(cancellationToken);
 
-// Classic fanout: targets subscribers currently connected on an independent publisher transport.
+// Classic fanout: targets subscribers currently connected on an independent publisher transport with a matching topic subscription.
 await fanout
     .Publish("telemetry", "server.health", new HealthSample(cpu, memory))
     .Async(cancellationToken);

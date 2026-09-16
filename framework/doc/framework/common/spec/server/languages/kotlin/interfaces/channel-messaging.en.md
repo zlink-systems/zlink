@@ -180,11 +180,11 @@ shutdown with `ShuttingDown`. Absence of target or session binding is
 `NotFound`. If cancellation is triggered first, it completes as coroutine
 cancellation.
 
-Passing the internal liveness-dedicated byte `01 5A 4C 46 31` to
-`publishToTopic(...)`, which takes a topic, raises the Java runtime's
-`ZLinkConfigurationException` without starting transport. The overload
+A topic passed to `publishToTopic(...)`, which takes a topic, or registered with the Java
+builder's `subscribe`, that [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises the Java runtime's
+`ZLinkConfigurationException`. The overload
 that omits [topic](../../../00-foundation/02-glossary.en.md#topic) uses the typed
-event's packet name, so it doesn't create this internal topic.
+event's packet name, and the same rule applies to it.
 
 The RouteMesh DSL doesn't change the Java builder's meaning — it only
 provides a receiver and lambda. It configures a per-[ChannelName](../../../00-foundation/02-glossary.en.md#channelname)

@@ -682,12 +682,10 @@ RID allocation을 설정한 publisher는 location store가 없으면 startup에�
 
 Fanout handler namespace는
 packet name으로 구분한다. Publisher가 정한 topic은 handler context와 관측 정보에 보존하지만
-handler 선택 key로 사용하지 않는다. Subscriber별 transport topic filter를 별도 public 설정으로
-제공하지 않는다.
+handler 선택 key로 사용하지 않는다. Subscriber의 topic 등록과 liveness 예약 topic의 사용 제한은
+[Channel messaging §7](../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
 
-Framework는 fanout liveness에 사용하는 고정된 topic byte `01 5A 4C 46 31`을 내부용으로 예약한다. Public
-fanout publish에 이 topic을 전달하면 호출 인자 오류다. 이 topic의 beacon은 handler와 application observer에
-전달하지 않는다. Beacon과 publisher별 ready 판정은
+Fanout liveness beacon과 publisher별 ready 판정은
 [Transport liveness](../02-channel-transport/05-transport-liveness.ko.md)가 소유한다.
 
 Manual subscriber builder가 등록한 endpoint 집합은 공통 endpoint 연결 handle로도 제공한다. Application은
@@ -702,18 +700,15 @@ payload를 nullable field로 섞지 않는다. 이 표면은 읽기 전용이며
 [Manual endpoint](02-glossary.ko.md#manual-endpoint) 연결 handle은 automatic snapshot이나
 event의 entry를 변경할 수 없다.
 
-Fanout publish 완료는 local publisher transport가 event를 받아들였다는 뜻이다. Subscriber 수신과 handler
-완료는 확인하지 않는다. 자세한 전달 계약은
-[Channel 메시징](../02-channel-transport/02-channel-messaging.ko.md#classic-fanout의-interface와-사용-예)이 소유한다.
+Fanout publish의 완료·전달 계약은
+[Interaction model §6](04-interaction-model.ko.md#6-classic-fanout)이 정한다. 이 절은 공통 입력과
+언어별 interface의 연결만 정의한다.
 
 Classic fanout publish의 공통 입력은 ChannelName, topic과 typed event다. 정확한 언어별 interface는
 topic을 명시하는 호출과 topic을 생략하는 typed 편의 호출을 함께 제공한다. 편의 호출은
 Framework가 결정한 packet name을 topic으로 사용하며, 명시적 topic 호출을 제거하거나 의미를
-바꾸지 않는다. Framework는 typed message 등록에서 packet name과 codec을 결정한다. 발행 호출은 publisher socket의
-유한한 send timeout까지 admission을 기다리는 비동기 terminator 하나만 제공한다. 정상 완료에는 public
-결과값이 없으며 remote·local target별 count를 집계하는 Logical Multicast publish result도 없다.
-Subscriber가 0이어도 local publisher queue가 event를 수락하면 정상 완료한다. Monitoring에는 subscriber
-수, 수신 또는 handler 완료 정보를 포함하지 않는다.
+바꾸지 않는다. Framework는 typed message 등록에서 packet name과 codec을 결정한다. Monitoring에는
+subscriber 수, 수신 또는 handler 완료 정보를 포함하지 않는다.
 
 ## 15. User·Instance Spot과 Actor factory 등록
 

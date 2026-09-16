@@ -738,7 +738,7 @@ no-bind premise. Remote source admission is not labeled local mailbox handoff.
 
 Asks for one Publisher's local publication throughput and N Subscribers' actual receipt ratio and
 latency. [Classic fanout][g-fanout] is the separate PUB/SUB facility sending events to prepared
-subscribers; completion and delivery refer to the [owning contract][fanout].
+subscribers with a matching topic subscription; completion and delivery refer to the [owning contract][fanout].
 
 | Item | Measurement condition |
 |---|---|
@@ -763,7 +763,7 @@ Section 15 intersects successful measured publications with each subscriber's un
 Report publish-admission ops/sec and subscriber-delivery ops/sec instead of echo KOPS.
 
 Packet-name typed handler selection and topic scope refer to the [Framework API][api].
-Do not assume per-subscriber transport topic filters for Classic fanout.
+The measured subscribers register no topic, so they receive every topic.
 [Config 3 PS-A2][fanout] verifies handler selection by packet name.
 Inject no late join, restart or reconnect into this steady cell. Record loss through deliveryRatio
 and Framework failures through their actual public kinds.

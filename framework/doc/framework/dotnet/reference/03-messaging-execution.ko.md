@@ -126,7 +126,7 @@ await fanoutClient
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| topic 인자 생략 | event의 packet name을 topic으로 사용 | 예약된 topic 이름을 쓰면 `ArgumentException`으로 완료한다 |
+| topic 인자 생략 | event의 packet name을 topic으로 사용 | topic이 Channel messaging §7에서 금지한 값이면 호출 시 `ArgumentException`으로 거부한다 |
 | `.Async(ct)` | 필수 terminal | source-local publish admission 완료까지만 기다린다 |
 
 **완료 결과.** 정상 완료는 발행 admission이 끝났다는 뜻이다. Subscriber 수나 수신 완료는 반환하지

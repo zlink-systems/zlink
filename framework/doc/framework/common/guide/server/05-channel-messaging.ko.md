@@ -10,7 +10,7 @@ channel messaging은 framework의 가장 기본 축이다. 다음 상호작용�
 
 - **request/response** — 보낸 뒤 응답을 기다리는 1:1 호출, 예: 가격 조회 (DEALER → ROUTER)
 - **one-way send** — 던지고 끝인 단방향 명령, 예: 캐시 무효화 통지 (DEALER → ROUTER)
-- **publish/subscribe** — 한 번 보내면 구독한 모두가 받는 이벤트 fan-out, 예: 도메인 이벤트
+- **publish/subscribe** — 한 번 보내면 topic이 일치하는 구독자가 받는 이벤트 fan-out, 예: 도메인 이벤트
   전파 (PUB / SUB)
 
 > 🔰 용어(channel·handler·client·codec 등)가 낯설면
@@ -429,26 +429,35 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
 Spot 밖에서 발행해야 하면 spot publisher client를 주입받아 같은 방식으로 보낸다.
 
 반대로 **fanout channel**(스펙에서는 **Classic fanout**)은 그 자체로 독립된 PUB/SUB
-소켓 쌍을 연다. Spot이나 MeshNode와 무관하게 발행자 하나가 연결된 구독자 전원에게
-전달한다.
+소켓 쌍을 연다. Spot이나 MeshNode와 무관하게 발행자 하나가 등록한 prefix와 publish topic이 일치하는 연결된
+구독자에게 전달한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout.html" title="Classic fanout — 발행자 하나가 연결된 구독자 전원에게" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout.html" title="Classic fanout — 발행자 하나가 등록한 prefix와 publish topic이 일치하는 연결된 구독자에게" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-publish-fanout.html" target="_blank">↗ 크게 보기</a></p>
 
-둘 다 **발행 완료가 전달을 보장하지는 않는다.** 발행 호출이 완료됐다는 것은 전송
-준비가 로컬에서 접수됐다는 의미이며, 구독자가 그 이벤트를 처리했다는 확인이 아니다.
-저장·재전송·ack도 제공하지 않는다.
+둘 다 **발행 완료가 전달을 보장하지는 않는다.** 두 방식의 완료·전달 보장은
+[Interaction model §5](../../../common/spec/server/00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와
+[§6](../../../common/spec/server/00-foundation/04-interaction-model.ko.md#6-classic-fanout)이 각각 정한다.
 
 차이는 **대상 범위**다. Logical Multicast는 그 mesh 안에서 같은 channel·topic을 구독한
-Spot으로 한정되고, Classic fanout은 mesh 구성과 무관하게 연결된 구독자 전체로 전달된다.
+Spot으로 한정되고, Classic fanout은 mesh 구성과 무관하게 등록한 prefix와 publish topic이 일치하는 연결된 구독자로 전달된다.
 
-**손실 규칙도 다르다.** fanout channel은 **손실을 허용하는 전달**이다. 어느 구독자의
+**손실 규칙도 다르다.** fanout channel은 기본값에서 **손실을 허용하는 전달**이다. 어느 구독자의
 수신이 늦어 발행자의 송신 queue가 상한에 닿으면 **그 구독자 몫을 버리고 발행은 성공으로
 끝난다.** 나머지 구독자는 영향을 받지 않고, 발행자는 느린 구독자 하나 때문에 멈추지
 않는다.
 
+발행자 설정 `NoDrop`을 켜면 이 상한 동작만 바뀐다. topic과 일치하는 구독자 pipe 가운데
+하나라도 publish record를 받을 준비가 되지 않은 동안, publisher transport는 record를 그 topic과 일치하는 어느
+pipe에도 제출하지 않는다. 따라서 느린 구독자 하나가 publish call의 완료를 늦출 수 있다. 정확한
+HWM admission 규칙은 [Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
+대기·완료, 연결 전·단절 중 event 처리와 오류 계약은
+[Interaction model §6](../../../common/spec/server/00-foundation/04-interaction-model.ko.md#6-classic-fanout)과
+[Framework 오류 모델 §4](../../../common/spec/server/00-foundation/07-framework-error-model.ko.md#4-send-완료와-실패)가
+정한다.
+
 Logical Multicast는 PUB/SUB 소켓을 쓰지 않고 mesh 연결로 각 node에 전달하므로 이 규칙의
-대상이 아니다. **손실을 허용할 수 없는 전달에는 fanout channel을 쓰지 않는다.**
+대상이 아니다. 두 방식의 선택은 위 Interaction model §5·§6의 전달 보장을 따른다.
 
 ## 2. handler 작성
 
@@ -1494,13 +1503,15 @@ Fanout handler는 독립 fanout channel builder에 등록하며 RouteMesh handle
     ```
 
 
-- topic은 선택이다. `Publish(channelName, message)`로 보내면 그 channel의 구독자 전체가
-  받고, `Publish(channelName, topic, message)`는 topic을 분류 라벨로 함께 싣는다.
+- topic은 선택이다. 생략하면 event의 packet name을 topic으로 사용한다. 두 overload 모두 그
+  topic과 등록한 prefix가 일치하는 구독자에게만 전달한다.
+- 구독 topic은 subscriber builder의 `Subscribe(topic)`로 제한하고, HWM admission은 publisher
+  builder의 `SetNoDrop()`으로 바꾼다. 생략하면 각각 모든 topic 수신, 손실 허용이다. 언어별 member
+  이름은 각 interface 문서가 정한다.
 - 구독자는 `AddFanoutChannel(name).Connect(endpoint)`로 publisher endpoint를
   연결한다.
-- Classic fanout handler는 등록한 typed event와 취소 신호만 받고 transport
-  topic을 handler context로 노출하지 않는다. 업무 분기가 필요하면 event type이나 등록한
-  handler를 나눈다.
+- Classic fanout handler는 packet name으로 선택한다. 업무 분기가 필요하면 event type이나
+  등록한 handler를 나눈다.
 - `Async(...)`/`Async<T>(...)`의 완료는 transport 위임까지만 보장한다 — remote handler
   완료나 구독자 수신은 보장하지 않는다([pub/sub의 두 갈래](#13-pubsub의-두-갈래)).
 - **pub/sub는 replay가 없다.** 구독자가 **아직 연결되기 전**에 publish 된 메시지나

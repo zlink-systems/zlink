@@ -522,7 +522,9 @@ public:
       zlink::routing_id_t publisher_routing_id);
     fanout_channel_builder_t &set_automatic_routing_id_prefix(
       std::string prefix);
+    fanout_channel_builder_t &set_no_drop(bool no_drop = true);
     fanout_channel_builder_t &enable_subscriber();
+    fanout_channel_builder_t &subscribe(std::string topic);
     fanout_channel_builder_t &connect(std::string endpoint);
     endpoint_connections_t subscriber_connections();
     fanout_channel_builder_t &add_handler_group(std::string group_name);
@@ -1022,8 +1024,8 @@ generation을 추가하지 않는다. Instance marker를 설정하지 않은 cal
 Public API는 transport 종류와 무관하게 channel name과 typed payload를 기준으로 유지한다.
 `publisher_t::publish(...)`는 typed event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을 topic으로 사용하는 편의 호출과 [topic](../../../00-foundation/02-glossary.ko.md#topic)을
 명시하는 호출을 함께 제공한다. 두 호출 모두 classic fanout에 사용하며 Framework가 codec을 결정한다.
-명시한 topic이 내부 liveness용 byte `01 5A 4C 46 31`이면 transport를 시작하지 않고
-`framework_exception_t`를 발생시킨다.
+두 `publish` overload가 사용하는 topic과 `subscribe`에 등록하는 topic이 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이
+금지한 값이면 `framework_exception_t`를 발생시킨다.
 `fanout_publish_call_t::async()`은 local publisher transport가 event를 수락하면 정상 완료한다.
 Subscriber 수와 수신 완료는 반환하지 않는다. `publish_call_t`는
 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast) 전용이다. Subscriber가 0개여도

@@ -167,9 +167,8 @@ ID로 접근할 수 있는 논리 instance인 local
 | Payload frame | `5A 46 01 01` |
 | Frame 수 | 정확히 2개 |
 
-Application은 이 topic 전체와 같은 값을 fanout topic으로 사용할 수 없다. 지정하면 호출
-인자 오류다. 같은 bytes로 시작하더라도 길이가 다르거나 나머지 bytes가 다르면 application
-topic으로 사용할 수 있다.
+이 topic으로 시작하는 application topic의 사용 제한과 subscriber의 topic 등록 규칙은
+[Channel messaging](02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
 
 Subscriber는 publisher별 socket에서 다음 입력 중 하나를 처음 받은 뒤 해당 publisher를
 ready로 표시한다.
@@ -181,11 +180,16 @@ ready로 표시한다.
 못하면 해당 publisher만 not-ready로 바꾸고 전용 socket을 닫는다. 현재 연결 설정에 따라
 새 socket으로 다시 연결한다.
 
-Beacon은 application record와 같은 PUB socket을 사용하므로 Classic fanout의 손실 규칙을
-함께 따른다. Subscriber의 수신 queue가 가득 찬 동안 발행된 beacon은 버려지고 나중에 다시
-도착하지 않는다. 따라서 host가 15초 넘게 포화 상태를 유지하면서 fanout application
-traffic이 계속 queue를 채우면 해당 publisher는 not-ready가 된다. 이 판정은 오탐이 아니다.
-그 시간 동안 subscriber는 application record를 처리하지 못하는 상태다.
+Beacon은 application record와 같은 PUB socket을 사용하므로 그 socket의 Classic fanout 손실
+규칙([Channel messaging](02-channel-messaging.ko.md))을 함께 따른다. 기본값에서는 subscriber의
+수신 queue가 가득 찬 동안 발행된 beacon은 버려지고 나중에 다시 도착하지 않는다. 따라서 host가
+15초 넘게 포화 상태를 유지하면서 fanout application traffic이 계속 queue를 채우면 해당
+publisher는 not-ready가 된다. 이 판정은 오탐이 아니다. 그 시간 동안 subscriber는 application
+record를 처리하지 못하는 상태다.
+
+Publisher가 `NoDrop`을 켠 socket에서는 beacon topic과 일치하는 pipe 하나라도 준비되지 않은
+주기의 beacon은 어느 subscriber에도 전달되지 않는다. 그 beacon을 포함해 15초 동안 beacon과
+application record를 모두 받지 못한 subscriber는 해당 publisher를 not-ready로 판정한다.
 
 반면 한 peer가 수신 단계를 독점해서 다른 peer의 확인 신호가 밀리는 것은 오탐이다.
 

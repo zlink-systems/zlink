@@ -244,7 +244,9 @@ public interface IZLinkFanoutChannelBuilder
     IZLinkFanoutChannelBuilder SetAdvertiseHost(string advertiseHost);
     IZLinkFanoutChannelBuilder SetRoutingId(RoutingId publisherRoutingId);
     IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
+    IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true);
     IZLinkFanoutChannelBuilder EnableSubscriber();
+    IZLinkFanoutChannelBuilder Subscribe(string topic);
     IZLinkFanoutChannelBuilder Connect(string endpoint);
     IZLinkEndpointConnections SubscriberConnections { get; }
     IZLinkFanoutChannelBuilder AddHandler<THandler, TEvent>(

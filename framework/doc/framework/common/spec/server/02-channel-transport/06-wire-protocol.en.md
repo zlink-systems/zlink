@@ -437,7 +437,7 @@ Payload: 5A 46 01 01
   switches only that publisher to not-ready once 15 seconds pass since the last valid
   receive.
 - An incorrect frame count or payload on the reserved topic is an immediate protocol error.
-- If a derived public topic happens to exactly match the reserved topic, that is rejected as an application argument or configuration error, before transport.
+- Public topic reservation is defined by [Channel messaging](02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
 ## 6. Typed Application Message JSON
 

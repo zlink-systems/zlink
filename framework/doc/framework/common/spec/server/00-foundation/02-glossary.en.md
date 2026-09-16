@@ -1166,15 +1166,18 @@ decides which RouteMesh participating nodes are considered remote target candida
 ### Topic
 
 A value selecting which local Spot subscription should receive a message within the
-same ChannelName. Each receiving node checks only its own subscriptions.
+same ChannelName. Each receiving node checks only its own subscriptions. In Classic fanout
+it is the value that selects the records a subscriber receives; its registration and
+matching rules are defined by
+[Channel messaging](../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
 | Item | Content |
 |---|---|
 | Shape | Subscription selector |
 | .NET notation | `string` |
 | Public composition | A single value passed separately from ChannelName. Doesn't include a Spot ID or remote node list. |
-| Creation/management | The application specifies the same value on subscription registration and publish calls. |
-| Lifetime | Kept for the duration of the registered subscription. Classic fanout's liveness topic can't be used as an application topic. |
+| Creation/management | In Logical Multicast, the application specifies the same value on subscription registration and publish calls. |
+| Lifetime | Kept for the duration of the registered subscription. |
 
 <a id="logical-multicast"></a>
 ### Logical Multicast

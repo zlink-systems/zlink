@@ -171,7 +171,8 @@ and a call that needs an explicit topic uses the
 [topic](../../../00-foundation/02-glossary.en.md#topic) overload. If topic is
 omitted, the framework uses the event's
 [packet name](../../../00-foundation/02-glossary.en.md#packet-name) as topic. A
-reserved topic is rejected with `ArgumentException`. The `Async(...)` of
+topic that [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids is rejected with `ArgumentException` by both
+publish and `Subscribe`. The `Async(...)` of
 the returned dedicated call completes normally once source-local publish
 admission finishes. It doesn't return subscriber count or receipt
 completion. `IZLinkPublishCall` is a Logical-Multicast-dedicated call and

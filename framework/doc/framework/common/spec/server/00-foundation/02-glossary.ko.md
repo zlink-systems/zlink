@@ -1103,15 +1103,17 @@ RouteMesh 참여 node를 remote target 후보로 볼지 결정한다.
 ### Topic
 
 같은 ChannelName 안에서 message를 받을 local Spot subscription을 고르는 값이다.
-각 수신 node는 자신의 subscription만 검사한다.
+각 수신 node는 자신의 subscription만 검사한다. Classic fanout에서는 subscriber가 받을
+record를 고르는 값이며, 그 등록과 일치 규칙은
+[Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
 
 | 항목 | 내용 |
 |---|---|
 | 형태 | Subscription selector |
 | .NET 표기 | `string` |
 | 공개 구성 | ChannelName과 별도로 전달하는 값 하나다. Spot ID나 remote node 목록을 포함하지 않는다. |
-| 생성·관리 | Application이 subscription 등록과 publish call에 같은 값을 지정한다. |
-| 수명 | 등록된 subscription 동안 유지된다. Classic fanout이 사용하는 liveness topic은 application topic으로 사용할 수 없다. |
+| 생성·관리 | Logical Multicast에서는 application이 subscription 등록과 publish call에 같은 값을 지정한다. |
+| 수명 | 등록된 subscription 동안 유지된다. |
 
 <a id="logical-multicast"></a>
 ### Logical Multicast

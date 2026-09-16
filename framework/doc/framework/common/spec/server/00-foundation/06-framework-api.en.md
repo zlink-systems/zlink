@@ -780,13 +780,11 @@ other distributed feature is used.
 
 The fanout handler namespace is distinguished by packet
 name. A topic the publisher set is preserved in handler context and observation information
-but isn't used as a handler-selection key. A per-subscriber transport topic filter isn't
-provided as a separate public setting.
+but isn't used as a handler-selection key. Subscriber topic registration and the restriction
+on using the liveness reserved topic are defined by
+[Channel messaging §7](../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
-Framework reserves the fixed topic bytes `01 5A 4C 46 31`, used for fanout liveness, for
-internal use. Passing this topic to a public fanout publish is a call-argument error. This
-topic's beacon isn't delivered to handlers or application observers. Beacon and
-per-publisher ready determination are owned by
+The fanout liveness beacon and per-publisher ready determination are owned by
 [Transport Liveness](../02-channel-transport/05-transport-liveness.en.md).
 
 The endpoint set a manual subscriber builder registers is also provided as a common
@@ -805,20 +803,16 @@ read-only and doesn't provide endpoint connect/disconnect operations. A
 registers directly through configuration — connection handle can't change an entry in the
 automatic snapshot or event.
 
-Fanout publish completion means the local publisher transport accepted the event. It doesn't
-confirm subscriber receipt or handler completion. The detailed delivery contract is owned by
-[Channel Messaging](../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
+The completion and delivery contract of fanout publish is defined by
+[Interaction model §6](04-interaction-model.en.md#6-classic-fanout). This section defines only
+the common inputs and their link to the per-language interfaces.
 
 Classic fanout publish's common inputs are ChannelName, topic, and typed event. Each
 language's per-language interface provides both a call that specifies topic and a typed convenience
 call that omits topic. The convenience call uses the framework-determined packet name as the
 topic, without removing or changing the meaning of the explicit-topic call. Framework
-determines packet name and codec at typed-message registration. The publish call provides
-only a single async terminator that waits for admission up to the publisher socket's finite
-send timeout. Normal completion has no public return value, and there's no Logical Multicast
-publish result aggregating per-remote/per-local target counts either. It completes normally
-even with 0 subscribers, as long as the local publisher queue accepts the event. Monitoring
-doesn't include subscriber count, receipt, or handler-completion information.
+determines packet name and codec at typed-message registration. Monitoring doesn't include
+subscriber count, receipt, or handler-completion information.
 
 ## 15. User/Instance Spot and Actor Factory Registration
 

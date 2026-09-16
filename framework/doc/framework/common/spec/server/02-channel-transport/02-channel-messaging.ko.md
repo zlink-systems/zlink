@@ -404,25 +404,62 @@ endpoint나 내부 route frame을 직접 만들지 않는다.
 
 ## 7. Classic fanout과의 경계(liveness beacon topic 예약)
 
-Classic fanout은 별도 PUB/SUB socket으로 연결과 subscription 준비가 모두 완료된 subscriber에게
-event를 전달하는 기능이다. RouteMesh ChannelName select-one이나 Spot Logical Multicast와
-대상 집합을 공유하지 않는다.
+[Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout)의 전달 대상·완료·연결 전후
+보장은 [Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)이
+정한다. Classic fanout은 RouteMesh ChannelName select-one이나 Spot Logical Multicast와 대상
+집합을 공유하지 않는다. 이 절은 HWM admission과 `NoDrop` 설정의 경계, subscriber의 topic
+등록, liveness beacon topic 예약만 정의한다.
 
-[Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout)은 다음 기능을 제공하지 않는다.
+Classic fanout의 기본 동작은 손실을 허용하는 전달이다. Subscriber의 수신이 늦어 publisher의
+송신 queue가 HWM에 도달하면 그 subscriber에게 보내는 message를 버리고 publish는 성공으로
+끝난다. 나머지 subscriber에 대한 전달은 영향을 받지 않는다. Publisher는 느린 subscriber 하나
+때문에 멈추지 않는다.
 
-- Message의 durable 저장
-- Subscriber 처리 acknowledgement
-- 나중에 message를 다시 보내는 replay
-- 손실 없는 전달
+`NoDrop`은 Classic fanout channel의 publisher role에 channel별로 적용하는 시작 시점 설정이며,
+이 HWM admission 하나만 바꾼다. Subscriber role이나 개별 publish call에는 적용하지 않는다.
+`true`이면, topic과 일치하는 subscriber pipe 가운데 하나라도 한 publish record를 받을 준비가
+되지 않았을 때 publisher transport는 그 record를 어느 일치 pipe에도 제출하지 않는다. 모든
+일치 pipe가 받을 수 있을 때만 record 전체를 제출한다. 따라서 느린 subscriber 하나가 publish
+call의 완료를 늦출 수 있다. 이 설정을 생략하면 `false`다. Publisher role이 없는 channel에
+설정하면 startup이 실패한다. 정확한 public 타입과 member 이름은 언어별 interface가 정의한다.
 
-Classic fanout은 손실을 허용하는 전달이다. Subscriber의 수신이 늦어 publisher의 송신 queue가
-HWM에 도달하면 그 subscriber에게 보내는 message를 버리고 publish는 성공으로 끝난다. 나머지
-subscriber에 대한 전달은 영향을 받지 않는다. Publisher는 느린 subscriber 하나 때문에 멈추지
-않는다.
+Publish의 대기·완료 계약과 연결 전·단절 중 event 처리 규칙은
+[Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)을 따르고,
+send timeout이 만료될 때의 오류는
+[Framework 오류 모델 §4](../00-foundation/07-framework-error-model.ko.md#4-send-완료와-실패)를
+따른다. `NoDrop`은 socket 단위 설정이므로 같은 PUB socket으로 보내는 liveness beacon에도
+적용된다. 그 결과는 [Transport liveness](05-transport-liveness.ko.md)가 정한다.
 
-손실을 허용할 수 없는 전달은 Classic fanout이 아니라 RouteMesh가 담당한다. Spot의
-[Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast)는 PUB/SUB socket을 쓰지 않고
+`NoDrop`을 켜도 [Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)이
+정한 전달 보장은 바뀌지 않는다. `NoDrop`은 HWM 때문에 일부 subscriber만 event를 잃는 동작을
+막을 뿐이다.
+
+Spot의 [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast)는 PUB/SUB socket을 쓰지 않고
 MeshNode 연결로 각 참여 node에 전달하므로 이 손실 규칙의 대상이 아니다.
+
+### Subscriber가 받는 topic
+
+Subscriber role은 시작 시점에 등록한 topic 집합으로 받을 record를 고른다. Builder의
+`Subscribe(topic)`을 호출할 때마다 topic 하나가 이 집합에 더해진다. 같은 값을 두 번
+등록해도 한 번 등록한 것과 같다. 수락된 등록이 하나도 없으면 빈 topic 하나를 등록한 것과
+같다. 시작 뒤에는 이 집합을 바꿀 수 없다. 거부된 `Subscribe` 호출은 집합을 바꾸지 않는다.
+Subscriber role이 없는 channel에 topic을 등록하면 startup이 실패한다. 정확한 public member
+이름은 언어별 interface가 정의한다.
+
+Record는 그 topic이 집합의 어느 한 값으로 시작할 때 subscriber에게 전달된다. Public topic은
+Unicode scalar value의 sequence다. UTF-16 문자열의 unpaired surrogate와 유효한 UTF-8이 아닌
+byte 열은 publish와 `Subscribe`에서 호출 인자 오류다. 비교는 이 sequence의 UTF-8 encoding byte를
+normalization 없이 그대로 견준다. 빈 topic은 모든 record와 일치한다. 예를 들어 `order`를 등록한 subscriber는
+`order`, `order.created`, `orders`를 받고 `payment`는 받지 않는다.
+
+Subscriber의 집합과 일치하는 record만 그 subscriber pipe의 대상이 되며, `NoDrop`과 HWM
+계산에서 일치 pipe를 정할 때도 같은 집합을 사용한다. Subscription은 전달
+여부만 정한다. 전달된 event의 handler 선택은 [Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)이 정한다.
+
+Framework는 application이 등록한 집합에 아래 liveness beacon topic을 항상 더한다. 따라서
+application topic을 제한해도 beacon은 계속 도착하며,
+[Transport liveness](05-transport-liveness.ko.md)의 연결 상태 판정은 subscription 설정과
+무관하게 같다.
 
 ### Framework의 연결 상태 확인용 topic은 사용할 수 없다
 
@@ -433,16 +470,18 @@ liveness 확인이라 한다.
 Publisher는 application event가 없어도 연결 상태를 확인할 수 있도록 내부 신호를 주기적으로
 보낸다. 이 신호를 liveness beacon이라 하며, topic으로 다섯 byte `01 5A 4C 46 31`을 사용한다.
 
-Application은 public publish API에서 이 값과 정확히 같은
-[topic](../00-foundation/02-glossary.ko.md#topic)을 사용할 수 없다. Framework의 내부 신호와 application
-event를 구분하기 위한 제한이다. 이 값을 지정하면 호출 인자 오류가 발생한다.
+Application은 public publish API와 `Subscribe`에서 이 값으로 시작하는
+[topic](../00-foundation/02-glossary.ko.md#topic)을 사용할 수 없다. Subscriber가 beacon을 받기 위해
+이 값을 등록하므로, 이 값으로 시작하는 application topic은 subscription 설정과 무관하게 모든
+subscriber에게 도착하기 때문이다. 이런 값을 지정하면 호출 시점에 호출 인자 오류가 발생하며, transport를 시작하거나 topic 집합을
+바꾸지 않는다.
 
-다음처럼 길이가 다르거나 byte 하나라도 다른 topic은 사용할 수 있다.
+다음처럼 이 값으로 시작하지 않는 topic은 사용할 수 있다.
 
 ```text
-01 5A 4C 46 31       사용 불가: 내부 신호의 topic과 정확히 같다.
-01 5A 4C 46          사용 가능: 길이가 다르다.
-01 5A 4C 46 31 00    사용 가능: byte가 하나 더 있다.
+01 5A 4C 46 31       사용 불가: beacon topic과 같다.
+01 5A 4C 46 31 00    사용 불가: beacon topic으로 시작한다.
+01 5A 4C 46          사용 가능: 더 짧아서 beacon topic으로 시작하지 않는다.
 01 5A 4C 46 32       사용 가능: 마지막 byte가 다르다.
 ```
 
@@ -504,6 +543,7 @@ fanout.EnablePublisher(); // 이 process에서 event를 발행할 PUB listener�
 
 fanout
     .EnableSubscriber()
+    .Subscribe("system.notice") // 이 값으로 시작하는 topic만 받는다. 생략하면 모든 topic을 받는다.
     .AddHandler<SystemNoticeHandler, SystemNotice>(
         packetName: "system.notice"); // 받은 event를 처리할 typed handler를 등록한다.
 
@@ -681,9 +721,17 @@ contract test 하나로 이어진다.
 
 - Node direct payload가 Spot callback이나 Actor handler에 들어가지 않는다.
 
+**Fanout subscription**
+
+- `Subscribe`를 호출하지 않은 subscriber는 모든 topic의 event를 받는다.
+- `order`를 등록한 subscriber는 `order.created`를 받고 `payment`를 받지 않는다.
+- 서로 다른 topic 여러 개를 등록한 subscriber는 그 합집합을 받고, 같은 topic의 중복 등록은
+  수신 결과를 바꾸지 않는다.
+- Application topic을 제한한 subscriber도 liveness beacon을 계속 받아 ready 상태를 유지한다.
+
 **Fanout liveness 경계**
 
-- Fanout liveness 전용 topic을 public publish가 거부한다.
+- Liveness beacon topic으로 시작하는 topic을 public publish와 `Subscribe`가 거부한다.
 - Liveness beacon을 application handler에 전달하지 않는다.
 - Classic fanout의 전용 publish call에는 application metadata setter를 제공하지 않는다.
 

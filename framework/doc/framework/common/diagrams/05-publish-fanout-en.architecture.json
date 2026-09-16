@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Classic fanout — one publisher to every connected subscriber",
+    "title": "Classic fanout — one publisher to the connected subscribers with a matching topic subscription",
     "subtitle": "an independent PUB/SUB socket · publisher → subscriber A · B · C",
     "output": "05-publish-fanout-en.html",
     "legend": {
@@ -73,7 +73,7 @@
       "dot": "cyan",
       "title": "fanout channel (Classic fanout)",
       "items": [
-        "Opens its own pair of PUB/SUB sockets — regardless of Spot or MeshNode, one publisher delivers to every connected subscriber."
+        "Opens its own pair of PUB/SUB sockets — regardless of Spot or MeshNode, one publisher delivers to the connected subscribers with a matching topic subscription."
       ]
     }
   ]
