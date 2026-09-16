@@ -5,6 +5,12 @@ namespace Zlink.Framework.UnitTests.Documentation;
 
 public sealed class RegressionTests
 {
+    private static readonly string[] ExcludedFileNames =
+    [
+        "public-symbol-delta-v11.ko.md",
+        "quickstart.ko.md"
+    ];
+
     private static readonly string[] DotNetContractDocuments =
     [
         "README.ko.md",
@@ -74,10 +80,9 @@ public sealed class RegressionTests
         var actualDocuments = Directory
             .EnumerateFiles(directory, "*.ko.md", SearchOption.AllDirectories)
             .Where(path => !excludedRoots.Any(root => IsUnderDirectory(path, root, false)))
-            .Where(path => !string.Equals(
-                Path.GetFileName(path),
-                "public-symbol-delta-v11.ko.md",
-                StringComparison.Ordinal))
+            // The quickstart is onboarding prose like the guide, not a contract
+            // document; it carries no regression-test section.
+            .Where(path => !ExcludedFileNames.Contains(Path.GetFileName(path), StringComparer.Ordinal))
             .Concat(GetDotNetContractDocs()
                 .Where(path => !string.Equals(
                     Path.GetFileName(path),
