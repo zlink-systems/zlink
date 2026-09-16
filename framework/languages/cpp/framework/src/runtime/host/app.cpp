@@ -2678,7 +2678,7 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
     return *this;
 }
 
-int app_t::run (int argc, char **argv)
+int app_t::run (int argc, char **argv) try
 {
     _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
@@ -2786,6 +2786,36 @@ int app_t::run (int argc, char **argv)
     _state->termination_teardown_changed.notify_all ();
     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
     return _state->stop_requested.load (std::memory_order_acquire) ? 0 : _state->exit_code;
+}
+catch (const std::exception &error) {
+    _state->runtime_state.store (framework_runtime_state_t::error,
+                                 std::memory_order_release);
+    const auto message = std::string ("zlink application failed: ") + error.what ();
+    std::cerr << message << '\n';
+    try {
+        _state->logging.create_logger ("zlink.framework.host").critical (message);
+    }
+    catch (const std::exception &logging_error) {
+        std::cerr << "zlink application failure logging failed: "
+                  << logging_error.what () << '\n';
+    }
+    return 1;
+}
+catch (...) {
+    _state->runtime_state.store (framework_runtime_state_t::error,
+                                 std::memory_order_release);
+    constexpr std::string_view message =
+      "zlink application failed with an unknown exception";
+    std::cerr << message << '\n';
+    try {
+        _state->logging.create_logger ("zlink.framework.host")
+          .critical (std::string (message));
+    }
+    catch (const std::exception &logging_error) {
+        std::cerr << "zlink application failure logging failed: "
+                  << logging_error.what () << '\n';
+    }
+    return 1;
 }
 
 namespace

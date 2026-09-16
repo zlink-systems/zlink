@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/diagnostics/mesh_trace.hpp"
+#include "runtime/diagnostics/diagnostic_event_sink.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -67,6 +69,35 @@ constexpr std::array inbound_surfaces{
 constexpr auto infrastructure_not_connected_retry_interval =
   std::chrono::milliseconds (75);
 using ::zlink::framework::detail::mesh_trace_enabled;
+
+const char *admission_rejection_reason (peer_admission_result_t result) noexcept
+{
+    switch (result) {
+        case peer_admission_result_t::mesh_mismatch:
+            return "mesh_mismatch";
+        case peer_admission_result_t::invalid_descriptor:
+            return "invalid_descriptor";
+        case peer_admission_result_t::stale_descriptor:
+            return "stale_descriptor";
+        default:
+            return "admission_rejected";
+    }
+}
+
+void log_admission_rejection (
+  const raw_mesh_node_options_t &options,
+  std::string reason,
+  std::string intent_endpoint,
+  std::string advertised_endpoint) noexcept
+{
+    detail::diagnostic_event_sink_t::log_if_configured (
+      detail::dispatch_options_access_t::logger (options.dispatch),
+      log_level_t::warn,
+      "RouteMesh peer admission rejected",
+      {{"reason", std::move (reason)},
+       {"intent_endpoint", std::move (intent_endpoint)},
+       {"advertised_endpoint", std::move (advertised_endpoint)}});
+}
 
 void trace_mesh_enabled (const std::string &message)
 {
@@ -3126,6 +3157,9 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 co_return raw_mesh_pump_result_t::no_data;
             }
             if (candidate.expected_descriptor_mismatch) {
+                log_admission_rejection (
+                  _options, "expected_route_mismatch",
+                  candidate.remote_endpoint, descriptor.advertised_endpoint);
                 const auto submitted = submit_header_only (
                   received->source_routing_id,
                   protocol::encode_reject (3));
@@ -3198,6 +3232,9 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }
             if (admission != peer_admission_result_t::admitted
                 && admission != peer_admission_result_t::duplicate_connection) {
+                log_admission_rejection (
+                  _options, admission_rejection_reason (admission),
+                  candidate.remote_endpoint, descriptor.advertised_endpoint);
                 const auto reason =
                   admission == peer_admission_result_t::mesh_mismatch ? 2u
                   : admission == peer_admission_result_t::stale_descriptor
