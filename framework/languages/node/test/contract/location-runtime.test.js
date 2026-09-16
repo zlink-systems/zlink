@@ -1710,6 +1710,131 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
 });
 
+test('production repository reclaims a Reserved authority after the Store reports its owner lease expired', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const source = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const expired = new OwnerLeaseReadOverride(inner, 'owner-expired', (storeNow) => storeNow);
+  const recovery = new internal.ZLinkLocationStoreRepository(expired, () => now);
+  const sourceOwner = await source.claimOwnerLease('owner-expired', 30_000);
+  const targetOwner = await source.claimOwnerLease('owner-recovery', 30_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') {
+    throw new Error('owner lease claim failed');
+  }
+  const sourceDescriptor = {
+    ...placementDescriptor('node-expired', 'Player', 100, 0, 0),
+    ownerId: sourceOwner.token.ownerId,
+    leaseGeneration: sourceOwner.token.leaseGeneration
+  };
+  const targetDescriptor = {
+    ...placementDescriptor('node-recovery', 'Player', 100, 0, 0),
+    ownerId: targetOwner.token.ownerId,
+    leaseGeneration: targetOwner.token.leaseGeneration
+  };
+  assert.equal(
+    (await source.updateMeshNode(sourceDescriptor, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  assert.equal(
+    (await source.updateMeshNode(targetDescriptor, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  const first = await source.reserve(authorityReserveRequest(
+    'expired-owner-authority',
+    sourceDescriptor,
+    sourceOwner.token
+  ));
+  assert.equal(first.kind, 'reserved');
+  if (first.kind !== 'reserved') throw new Error('initial reservation failed');
+
+  const replacement = await recovery.reserve(authorityReserveRequest(
+    'expired-owner-authority',
+    targetDescriptor,
+    targetOwner.token
+  ));
+  assert.equal(replacement.kind, 'reserved');
+  if (replacement.kind !== 'reserved') throw new Error('expired reservation was not reclaimed');
+  assert.ok(replacement.creating.objectGeneration > first.creating.objectGeneration);
+  assert.equal(replacement.creating.ownerId, targetOwner.token.ownerId);
+});
+
+test('production repository does not reclaim a live owner Reserved authority', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const sourceOwner = await repository.claimOwnerLease('owner-live-source', 30_000);
+  const targetOwner = await repository.claimOwnerLease('owner-live-target', 30_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') {
+    throw new Error('owner lease claim failed');
+  }
+  const sourceDescriptor = {
+    ...placementDescriptor('node-live-source', 'Player', 100, 0, 0),
+    ownerId: sourceOwner.token.ownerId,
+    leaseGeneration: sourceOwner.token.leaseGeneration
+  };
+  const targetDescriptor = {
+    ...placementDescriptor('node-live-target', 'Player', 100, 0, 0),
+    ownerId: targetOwner.token.ownerId,
+    leaseGeneration: targetOwner.token.leaseGeneration
+  };
+  await repository.updateMeshNode(sourceDescriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+  await repository.updateMeshNode(targetDescriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+  assert.equal((await repository.reserve(authorityReserveRequest(
+    'live-owner-authority',
+    sourceDescriptor,
+    sourceOwner.token
+  ))).kind, 'reserved');
+  assert.equal((await repository.reserve(authorityReserveRequest(
+    'live-owner-authority',
+    targetDescriptor,
+    targetOwner.token
+  ))).kind, 'conflict');
+});
+
+test('production repository rejects a Reserved authority whose owner lease omits expiry', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const source = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const corrupt = new OwnerLeaseReadOverride(inner, 'owner-corrupt', () => undefined);
+  const recovery = new internal.ZLinkLocationStoreRepository(corrupt, () => now);
+  const sourceOwner = await source.claimOwnerLease('owner-corrupt', 30_000);
+  const targetOwner = await source.claimOwnerLease('owner-corrupt-target', 30_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') {
+    throw new Error('owner lease claim failed');
+  }
+  const sourceDescriptor = {
+    ...placementDescriptor('node-corrupt-source', 'Player', 100, 0, 0),
+    ownerId: sourceOwner.token.ownerId,
+    leaseGeneration: sourceOwner.token.leaseGeneration
+  };
+  const targetDescriptor = {
+    ...placementDescriptor('node-corrupt-target', 'Player', 100, 0, 0),
+    ownerId: targetOwner.token.ownerId,
+    leaseGeneration: targetOwner.token.leaseGeneration
+  };
+  await source.updateMeshNode(sourceDescriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+  await source.updateMeshNode(targetDescriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+  assert.equal((await source.reserve(authorityReserveRequest(
+    'corrupt-owner-authority',
+    sourceDescriptor,
+    sourceOwner.token
+  ))).kind, 'reserved');
+  await assert.rejects(
+    recovery.reserve(authorityReserveRequest(
+      'corrupt-owner-authority',
+      targetDescriptor,
+      targetOwner.token
+    )),
+    /owner lease record is invalid/
+  );
+});
+
 test('production repository retries descriptor renew after same-owner lease heartbeat', async () => {
   const scenario = await descriptorConflictScenario('heartbeat');
 
@@ -2357,6 +2482,34 @@ class ReplyLossLocationStore {
   }
 }
 
+class OwnerLeaseReadOverride {
+  constructor(inner, ownerId, expiry) {
+    this.inner = inner;
+    this.ownerKey = `owner-lease\0${ownerId}`;
+    this.expiry = expiry;
+  }
+
+  async read(key, signal) {
+    const result = await this.inner.read(key, signal);
+    if (key.value !== this.ownerKey || result.kind !== 'found') return result;
+    return {
+      kind: 'found',
+      value: {
+        ...result.value,
+        expiresAt: this.expiry(result.value.storeNow)
+      }
+    };
+  }
+
+  scan(request, signal) {
+    return this.inner.scan(request, signal);
+  }
+
+  write(request, signal) {
+    return this.inner.write(request, signal);
+  }
+}
+
 test('production repository shares Spot Actor and route ownership through only opaque Store primitives', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
@@ -2474,6 +2627,26 @@ function runtimeFor(store, options = {}) {
     },
     clearTimer() {}
   });
+}
+
+function authorityReserveRequest(globalId, descriptor, owner) {
+  return {
+    key: { kind: 'actor', globalId },
+    intent: {
+      stableType: 'Player',
+      requestContentReference: `request:${globalId}`,
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 16n
+    },
+    target: {
+      meshName: descriptor.meshName,
+      nodeRid: descriptor.rid,
+      nodeLifecycleGeneration: descriptor.lifecycleGeneration,
+      owner
+    },
+    capacity: { actors: 1, spots: 0 },
+    creatingPayload: Buffer.from(globalId)
+  };
 }
 
 function rid(value) {
