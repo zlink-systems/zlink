@@ -889,6 +889,7 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override public void setChannelName(String channelName) { record("setChannelName." + channelName); }
         @Override public void setRoutingId(RoutingId routingId) { record("setRoutingId"); }
+        @Override public void setNoDrop(boolean noDrop) { record("setNoDrop." + noDrop); }
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) { record("publish." + topic + "." + firstPart(parts)); return true; }
     }
 
