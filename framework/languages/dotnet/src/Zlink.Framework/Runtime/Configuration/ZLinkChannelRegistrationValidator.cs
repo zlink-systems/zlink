@@ -9,6 +9,10 @@ internal static partial class ZLinkFrameworkRegistrationValidator
     {
         ValidateChannelShape(channel);
 
+        if (channel.PublisherNoDrop.HasValue && channel.Publisher is null)
+            throw new ZLinkConfigurationException(
+                $"fanout channel '{channel.ChannelName}' cannot configure NoDrop without publisher capability.");
+
         if (channel.Client is not null)
         {
             // A process-local Server is a complete peer source for the Client.

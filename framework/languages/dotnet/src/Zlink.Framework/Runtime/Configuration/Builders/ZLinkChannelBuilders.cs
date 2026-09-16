@@ -162,6 +162,12 @@ internal sealed class ZLinkFanoutChannelBuilder(ZLinkChannelRegistration registr
         return this;
     }
 
+    public IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true)
+    {
+        registration.PublisherNoDrop = noDrop;
+        return this;
+    }
+
     public IZLinkFanoutChannelBuilder EnableSubscriber()
     {
         var subscriber = Subscriber();

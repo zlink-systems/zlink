@@ -52,6 +52,8 @@ public interface IZLinkFanoutChannelBuilder
 
     IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
 
+    IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true);
+
     IZLinkFanoutChannelBuilder EnableSubscriber();
 
     IZLinkFanoutChannelBuilder Subscribe(string topic);

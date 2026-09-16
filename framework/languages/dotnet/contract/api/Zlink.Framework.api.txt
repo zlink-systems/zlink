@@ -290,6 +290,7 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder EnableSubscriber() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetAdvertiseHost(System.String advertiseHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetBindHost(System.String bindHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetNoDrop(System.Boolean noDrop = true [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetRoutingIdPrefix(System.String prefix [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetRoutingId(Systems.Zlink.RoutingId publisherRoutingId [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder Subscribe(System.String topic [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
