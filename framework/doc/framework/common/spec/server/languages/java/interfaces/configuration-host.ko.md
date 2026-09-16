@@ -135,7 +135,7 @@ public interface ZLinkFrameworkConfigurer {
 }
 
 public interface ZLinkMeshNodeBuilder {
- ZLinkMeshChannelBuilder channel(String channelName);
+ ZLinkMeshChannelBuilder channelName(String channelName);
  ZLinkMeshNodeBuilder listen(String endpoint);
  ZLinkMeshNodeBuilder listen();
  ZLinkMeshNodeBuilder listen(int port);
@@ -267,11 +267,11 @@ remote connector endpoint를 자동 게시하지 않는다.
 
 ```java
 clientOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .client(); // 이 node는 checkout 호출을 시작하지만 server 후보에는 포함되지 않는다.
 
 serverOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .server()
  .setWeight(100)
  .addRequestHandler(
@@ -655,7 +655,7 @@ public final class systems.zlink.framework.configuration.ZLinkLogLevel extends j
  public int value();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
- public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen();
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(int);

@@ -72,7 +72,7 @@ Specified on the builder that `add_route_mesh (name)` returns.
 | Option | What it sets | Default |
 | --- | --- | --- |
 | `listen (endpoint)` | The address other nodes connect to | Must be specified |
-| `set_bind_host` · `set_advertise_host` | Splitting the bind address from the advertised address | Same as the bind address |
+| `set_bind_host` · `set_advertise_host` | Splitting the bind address from the advertised address | The Network listener identity §2.1 default (loopback for a wildcard bind) |
 | `set_routing_id (...)` | This node's identifier | Auto-generated |
 | `set_object_role (...)` | Object role — whether spots/actors place here | Doesn't place |
 | `set_placement_weight (int)` | Selection weight for new object placement | 100 |

@@ -16,9 +16,9 @@ and the
 
 ---
 
-## `routeMesh { }` / `channel { }` (configuration time, DSL)
+## `routeMesh { }` / `channelName { }` (configuration time, DSL)
 
-A DSL that wraps `addRouteMesh(meshName)` and `mesh.channel(channelName)` in a receiver lambda.
+A DSL that wraps `addRouteMesh(meshName)` and `mesh.channelName(channelName)` in a receiver lambda.
 It does not change the Java builder's meaning.
 
 ```kotlin
@@ -27,7 +27,7 @@ options.routeMesh("play") {
     setRoutingIdPrefix("play")
     setPlacementWeight(100)
 
-    channel("play.api") {
+    channelName("play.api") {
         server()
             .setWeight(100)
             .addHandlerGroup("api")
@@ -36,7 +36,7 @@ options.routeMesh("play") {
 ```
 
 **Options.** Takes `configure: ZLinkMeshNodeBuilder.() -> Unit` (routeMesh) and
-`configure: ZLinkMeshChannelBuilder.() -> Unit = {}` (channel, defaulting to an empty lambda). The
+`configure: ZLinkMeshChannelBuilder.() -> Unit = {}` (channelName, defaulting to an empty lambda). The
 individual modifiers called inside are exactly the same as the `addRouteMesh`/RouteMesh Channel
 registration entries in the Java reference's document 02.
 

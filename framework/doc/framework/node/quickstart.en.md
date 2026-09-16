@@ -38,8 +38,8 @@ an object literal cannot be used. The reply type is not looked up by name and st
 ## 3. The handling side
 
 A handler is registered in two places — Nest's `providers` and `addRequestHandler` on
-`channel(...).server()`. When binding to `0.0.0.0`, `setAdvertiseHost` supplies the address
-to advertise; without it startup is rejected.
+`channel(...).server()`. When binding to `0.0.0.0` without `setAdvertiseHost`, `127.0.0.1` is advertised; set
+`setAdvertiseHost` to a reachable address when other hosts must connect.
 
 ```typescript title="Server/main.ts"
 --8<-- "framework/languages/node/quickstart/Server/main.ts"

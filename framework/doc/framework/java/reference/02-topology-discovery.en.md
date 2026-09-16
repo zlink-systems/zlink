@@ -39,7 +39,7 @@ ZLinkMeshNodeBuilder play = options.addRouteMesh("play")
 | `.configureRouterSocket()` | `ZLinkMeshNodeSocketConfig` default | This MeshNode's ROUTER socket HWM/buffer/timeout (`maxMessageSize` defaults to `16_777_216L`, etc.) |
 | `.configureSpotPublisher()` | `ZLinkSpotPublisherConfig` default | The Logical Multicast publisher socket's HWM/timeout/linger |
 | `.objects()` | — | Enters Object role registration. See the Object role registration entry |
-| `.channel(channelName)` | — | Enters this MeshNode's RouteMesh Channel role registration. See the RouteMesh Channel registration entry |
+| `.channelName(channelName)` | — | Enters this MeshNode's RouteMesh Channel role registration. See the RouteMesh Channel registration entry |
 | `.peerConnections()` | — | See the Manual peer connections entry |
 | `.addRouteSendHandler(handlerType, messageType)` | The packet name is determined from the message type | Registers a Node-direct one-way handler. The target `sendToNode` (messaging-execution category) calls |
 | `.addRouteRequestHandler(handlerType, requestType, replyType)` | The packet name is determined from the message type | Registers a Node-direct request handler. The target `requestToNode` calls |
@@ -94,15 +94,15 @@ the actor-relocation category for relocation-policy selection criteria.
 Registers logical ChannelName membership within the same MeshNode.
 
 ```java
-play.channel("play.api").server()
+play.channelName("play.api").server()
     .setWeight(100)
     .addHandlerGroup("api")
     .addRequestHandler(GetPlayerHandler.class, GetPlayer.class, Player.class);
 
-play.channel("play.events").client();
+play.channelName("play.events").client();
 ```
 
-**Options.** After `channel(channelName)`, call `.client()` or `.server()` exactly once.
+**Options.** After `channelName(channelName)`, call `.client()` or `.server()` exactly once.
 `.client()` only creates the send path and has no modifiers. Commonly used modifiers of
 `.server()` are as follows.
 

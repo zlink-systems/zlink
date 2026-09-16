@@ -14,9 +14,9 @@ Object role·factory 등록, Manual peer 연결, `useFilter`, 기타 host-wide �
 
 ---
 
-## `routeMesh { }` / `channel { }` (구성 시점, DSL)
+## `routeMesh { }` / `channelName { }` (구성 시점, DSL)
 
-`addRouteMesh(meshName)`과 `mesh.channel(channelName)`을 receiver lambda로 감싼 DSL이다. Java
+`addRouteMesh(meshName)`과 `mesh.channelName(channelName)`을 receiver lambda로 감싼 DSL이다. Java
 builder의 의미를 바꾸지 않는다.
 
 ```kotlin
@@ -25,7 +25,7 @@ options.routeMesh("play") {
     setRoutingIdPrefix("play")
     setPlacementWeight(100)
 
-    channel("play.api") {
+    channelName("play.api") {
         server()
             .setWeight(100)
             .addHandlerGroup("api")
@@ -34,7 +34,7 @@ options.routeMesh("play") {
 ```
 
 **옵션.** `configure: ZLinkMeshNodeBuilder.() -> Unit`(routeMesh)과
-`configure: ZLinkMeshChannelBuilder.() -> Unit = {}`(channel, 기본값은 빈 람다)를 받는다. 그 안에서
+`configure: ZLinkMeshChannelBuilder.() -> Unit = {}`(channelName, 기본값은 빈 람다)를 받는다. 그 안에서
 호출하는 개별 modifier는 Java 레퍼런스 02번 문서의 `addRouteMesh`/RouteMesh Channel 등록 항목과
 완전히 같다.
 

@@ -19,7 +19,7 @@
 | Category | 상태 | Kotlin 고유 진입점 |
 |---|---|---|
 | [Host lifecycle](01-host-lifecycle.ko.md) | 작성 완료 | `CompletionStage<T>.await()` 브리지 |
-| [Topology discovery](02-topology-discovery.ko.md) | 작성 완료 | `routeMesh { }`/`channel { }` DSL, `useCoroutineHandlers(...)` |
+| [Topology discovery](02-topology-discovery.ko.md) | 작성 완료 | `routeMesh { }`/`channelName { }` DSL, `useCoroutineHandlers(...)` |
 | [Messaging execution](03-messaging-execution.ko.md) | 작성 완료 | `ZLinkKotlinClient`/`ZLinkKotlinRouteClient`/`ZLinkKotlinFanoutClient`의 `await()`/`yield()` |
 | [Spot instance](04-spot-instance.ko.md) | 작성 완료 | `ZLinkSuspendingSpot`/`ZLinkSuspendingEntrySpot`/`ZLinkSuspendingInstanceSpot`, `ZLinkKotlinSpotManager` |
 | [Actor relocation](05-actor-relocation.ko.md) | 작성 완료 | `ZLinkSuspendingActor`/`ZLinkSuspendingActorFactory`, `ZLinkKotlinActorManager`/`ZLinkKotlinActorClient` |

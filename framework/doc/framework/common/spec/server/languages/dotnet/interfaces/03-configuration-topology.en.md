@@ -365,9 +365,8 @@ exclusion rule. After selection, the actual transport message is
 delivered from the Client DEALER to the Server ROUTER, without calling
 the handler directly.
 
-`ConfigureNetwork()`'s default BindHost is `127.0.0.1`, and if
-AdvertiseHost is omitted, a non-wildcard
-[BindHost](../../../00-foundation/02-glossary.en.md#bindhost) is used. An
+`ConfigureNetwork()`'s default BindHost is `127.0.0.1`, and if AdvertiseHost is omitted,
+the default of [Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.en.md#21-defaults) applies. An
 [automatic discovery](../../../00-foundation/02-glossary.en.md#automatic-discovery)
 listener binds to port `0` if the port on `Listen()`/`Bind()`/
 `EnablePublisher()` is omitted, or if the listener call itself is
