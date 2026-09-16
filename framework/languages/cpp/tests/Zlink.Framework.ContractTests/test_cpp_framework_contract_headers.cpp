@@ -4,6 +4,7 @@
 #include <zlink/framework/version.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/channels/channel.hpp>
+#include <zlink/framework/contracts/channels/detail/fanout_topic.hpp>
 #include <zlink/framework/contracts/channels/call.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/configuration/app.hpp>

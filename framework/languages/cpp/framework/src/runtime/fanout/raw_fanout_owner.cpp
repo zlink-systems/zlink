@@ -2,8 +2,10 @@
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
+#include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include <zlink/framework/contracts/channels/detail/fanout_topic.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -102,10 +104,12 @@ task_t<void> raw_fanout_publisher_t::publish (
   protocol::application_payload_t payload,
   std::chrono::milliseconds timeout)
 {
-    if (topic.empty () || topic == reserved_topic ()) {
-        throw std::invalid_argument (
-          "fanout application topic is empty or reserved");
+    if (topic.empty ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "fanout application topic is empty");
     }
+    detail::require_public_fanout_topic (topic);
     /* The record is the cross-language channel envelope. A Publish record
      * carries no correlation id in the shared dialect. */
     messaging::envelope_header_t header;
@@ -176,10 +180,7 @@ bool raw_fanout_publisher_t::tick (
 
 const std::string &raw_fanout_publisher_t::reserved_topic ()
 {
-    static const std::string value{
-      static_cast<char> (0x01), static_cast<char> (0x5a),
-      static_cast<char> (0x4c), static_cast<char> (0x46),
-      static_cast<char> (0x31)};
+    static const std::string value (detail::fanout_liveness_topic);
     return value;
 }
 
@@ -190,16 +191,22 @@ raw_fanout_publisher_t::beacon_payload ()
     return value;
 }
 
-raw_fanout_subscriber_t::raw_fanout_subscriber_t (zlink::poller_t *poller) :
-    raw_fanout_subscriber_t (std::make_shared<zlink::context_t> (), poller)
+raw_fanout_subscriber_t::raw_fanout_subscriber_t (
+  zlink::poller_t *poller,
+  std::vector<std::string> application_topics) :
+    raw_fanout_subscriber_t (
+      std::make_shared<zlink::context_t> (), poller,
+      std::move (application_topics))
 {
 }
 
 raw_fanout_subscriber_t::raw_fanout_subscriber_t (
   std::shared_ptr<zlink::context_t> context,
-  zlink::poller_t *poller) :
+  zlink::poller_t *poller,
+  std::vector<std::string> application_topics) :
     _context (
       context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+    _application_topics (std::move (application_topics)),
     _owned_poller (poller == nullptr
                      ? std::make_unique<zlink::poller_t> ()
                      : nullptr),
@@ -550,7 +557,7 @@ void raw_fanout_subscriber_t::reopen_locked (connection_t &connection)
     close_connection_locked (connection);
     auto socket = std::make_unique<zlink::sub_socket_t> (*_context);
     socket->options ().linger (std::chrono::milliseconds (0));
-    socket->set_subscription ("");
+    apply_fanout_subscriptions (*socket, _application_topics);
     socket->connect (connection.endpoint);
     _poller->add (*socket, zlink::poll_event_flag_t::pollin,
                   connection.poller_slot);
