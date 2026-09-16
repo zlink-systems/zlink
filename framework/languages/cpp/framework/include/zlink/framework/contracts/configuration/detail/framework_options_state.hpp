@@ -420,6 +420,7 @@ struct framework_options_state_t
     std::set<std::string> fanout_channels_with_subscriber;
     std::set<std::string> fanout_channels_with_automatic_subscriber;
     std::set<std::string> fanout_channels_with_manual_subscriber;
+    std::map<std::string, std::set<std::string>> fanout_subscription_topics;
     std::map<std::string, std::string> fanout_publisher_advertise_hosts;
     std::map<std::string, std::string>
       fanout_publisher_advertise_host_overrides;

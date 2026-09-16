@@ -891,6 +891,14 @@ class fanout_channel_builder_t
         return *this;
     }
 
+    fanout_channel_builder_t &subscribe (std::string topic)
+    {
+        detail::require_public_fanout_topic (topic);
+        _options->fanout_subscription_topics[_channel_name].insert (std::move (topic));
+        apply ();
+        return *this;
+    }
+
     fanout_channel_builder_t &connect (std::string endpoint)
     {
         detail::require_non_blank (endpoint, "fanout subscriber endpoint is required");
@@ -934,6 +942,14 @@ class fanout_channel_builder_t
           _options->subscriber_endpoint_connections[_channel_name].list_connections ();
         const auto subscriber_uses_discovery =
           _options->fanout_channels_with_automatic_subscriber.contains (channel_name);
+        const auto subscription_topics = [&] {
+            std::vector<std::string> result;
+            const auto found = _options->fanout_subscription_topics.find (channel_name);
+            if (found != _options->fanout_subscription_topics.end ()) {
+                result.assign (found->second.begin (), found->second.end ());
+            }
+            return result;
+        } ();
         if (subscriber_enabled) {
             _options->fanout_channels_with_subscriber.insert (channel_name);
         } else {
@@ -949,7 +965,7 @@ class fanout_channel_builder_t
           "fanout_channel:" + channel_name,
           [channel_name, options, publisher_endpoint, publisher_port, publisher_bind_host_override,
            subscriber_enabled, subscriber_endpoints, routing_id, automatic_routing_id_prefix,
-           subscriber_uses_discovery] (zlink_builder_t &zlink) {
+           subscriber_uses_discovery, subscription_topics] (zlink_builder_t &zlink) {
               auto channel = zlink.channel (channel_name);
               if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
                   /* Publisher discovery (Location
@@ -976,6 +992,7 @@ class fanout_channel_builder_t
               }
               if (subscriber_enabled) {
                   auto subscriber = channel.enable_subscriber ();
+                  channel.subscriber_subscriptions (subscription_topics);
                   if (!subscriber_uses_discovery) {
                       for (const auto &endpoint : subscriber_endpoints) {
                           subscriber.connect (endpoint);

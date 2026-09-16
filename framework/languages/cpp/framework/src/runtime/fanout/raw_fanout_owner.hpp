@@ -116,10 +116,13 @@ class raw_fanout_publisher_t
 class raw_fanout_subscriber_t
 {
   public:
-    explicit raw_fanout_subscriber_t (zlink::poller_t *poller = nullptr);
+    explicit raw_fanout_subscriber_t (
+      zlink::poller_t *poller = nullptr,
+      std::vector<std::string> application_topics = {});
     raw_fanout_subscriber_t (
       std::shared_ptr<zlink::context_t> context,
-      zlink::poller_t *poller = nullptr);
+      zlink::poller_t *poller = nullptr,
+      std::vector<std::string> application_topics = {});
     ~raw_fanout_subscriber_t () noexcept;
 
     bool connect_manual (std::vector<std::uint8_t> publisher_routing_id,
@@ -182,6 +185,7 @@ class raw_fanout_subscriber_t
 
     mutable std::mutex _mutex;
     std::shared_ptr<zlink::context_t> _context;
+    std::vector<std::string> _application_topics;
     std::unique_ptr<zlink::poller_t> _owned_poller;
     zlink::poller_t *_poller = nullptr;
     std::map<publisher_intent_key_t, connection_t> _connections;

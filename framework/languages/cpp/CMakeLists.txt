@@ -164,6 +164,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
+  framework/src/runtime/fanout/fanout_subscription.cpp
   framework/src/runtime/fanout/fanout_location_runtime.cpp
   framework/src/runtime/client_server/raw_client_server_owner.cpp
   framework/src/runtime/client_server/client_server_location_runtime.cpp
@@ -1951,6 +1952,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  add_zlink_framework_test(
+    test_cpp_framework_fanout_subscription
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_subscription.cpp
+    "framework-unit;framework-regression;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_fanout_subscription)
+  target_include_directories(test_cpp_framework_fanout_subscription PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  set_tests_properties(test_cpp_framework_fanout_subscription PROPERTIES
+    RESOURCE_LOCK zlink_cpp_heavy_runtime)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_channel_messaging)
   target_link_libraries(test_cpp_framework_channel_messaging PRIVATE
     zlink::framework_codec_protobuf)

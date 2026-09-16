@@ -1552,7 +1552,7 @@ void verify_manual_and_automatic_classic_fanout ()
     catch (const zlink::framework::framework_exception_t &error) {
         reserved_rejected =
           error.kind ()
-          == zlink::framework::framework_error_kind_t::internal_failure;
+          == zlink::framework::framework_error_kind_t::protocol_error;
     }
     assert (reserved_rejected);
 }
