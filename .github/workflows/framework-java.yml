@@ -14,6 +14,7 @@ on:
       - "scripts/local-package/core/**"
       - "scripts/local-package/java/**"
       - "scripts/local-package/sync-version.py"
+      - "scripts/ci/framework-java-test-results.ps1"
   pull_request:
     branches:
       - main
@@ -27,10 +28,14 @@ on:
       - "scripts/local-package/core/**"
       - "scripts/local-package/java/**"
       - "scripts/local-package/sync-version.py"
+      - "scripts/ci/framework-java-test-results.ps1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  FRAMEWORK_JAVA_MIN_TESTS: "1459"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -111,6 +116,12 @@ jobs:
           }
           .\scripts\local-package\java\build-windows.ps1 `
             -CorePrefix $corePrefix
+          $runtime = Join-Path $corePrefix "bin\zlink.dll"
+          if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
+            throw "Core runtime was not created: $runtime"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
       - name: Run Framework Java core tests
         working-directory: framework/languages/java
@@ -122,11 +133,56 @@ jobs:
             :zlink-framework-core:test \
             -Pzlink.includeSamples=false
 
-      - name: Upload test results on failure
-        if: failure()
+      - name: Verify and summarize executed tests
+        if: always()
+        shell: pwsh
+        run: |
+          .\scripts\ci\framework-java-test-results.ps1 `
+            -Mode summarize `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results/test" `
+            -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
+            -Platform "${{ matrix.target.name }}" `
+            -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
+
+      - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: framework-java-test-results-${{ matrix.target.name }}
-          path: framework/languages/java/*/build/test-results/**/*.xml
+          name: framework-java-results-${{ matrix.target.name }}
+          path: |
+            .artifacts/framework-java-results/${{ matrix.target.name }}/**
+            framework/languages/java/*/build/test-results/**/*.xml
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  framework-java-compare:
+    name: Compare Linux and Windows Java results
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: framework-java
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download platform test results
+        uses: actions/download-artifact@v7
+        with:
+          pattern: framework-java-results-*
+          path: .artifacts/framework-java-results/downloaded
+
+      - name: Compare failure counts
+        shell: pwsh
+        run: |
+          .\scripts\ci\framework-java-test-results.ps1 `
+            -Mode compare `
+            -InputPath ".artifacts/framework-java-results/downloaded" `
+            -OutputPath ".artifacts/framework-java-results/comparison.txt"
+
+      - name: Upload comparison result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-java-results-comparison
+          path: .artifacts/framework-java-results/comparison.txt
+          retention-days: 14
+          if-no-files-found: error
