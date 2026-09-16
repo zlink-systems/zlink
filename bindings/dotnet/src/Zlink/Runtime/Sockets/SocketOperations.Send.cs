@@ -147,7 +147,7 @@ internal sealed class PublisherPublishOperation : PublishOperation,
 {
     private readonly PublisherSocketBase _socket;
     private readonly string _topic;
-    private SendFlags _flags;
+    private SendFlags _flags = SendFlags.DontWait;
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
@@ -177,10 +177,9 @@ internal sealed class PublisherPublishOperation : PublishOperation,
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
         _submission.MarkSubmittedAfterValidation();
-        var flags = _flags | SendFlags.DontWait;
         var accepted = _parts.IsSingle
-            ? _socket.PublishCore(_topic, _parts.Single, flags)
-            : _socket.PublishCore(_topic, _parts.Parts, flags);
+            ? _socket.PublishCore(_topic, _parts.Single, _flags)
+            : _socket.PublishCore(_topic, _parts.Parts, _flags);
         if (!accepted)
             throw ZlinkException.CreateSubmitException((int)ErrorCode.EAgain);
     }

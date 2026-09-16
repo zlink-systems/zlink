@@ -6,36 +6,57 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class FanoutPublishAdmissionTests
 {
-    private const ulong RecordHwm = 65_536UL + 1_024UL;
+    private const ulong RecordHwm = 65_536UL + 16UL;
     private static readonly byte[] LargePayload = new byte[65_536];
 
     [Fact]
-    public void Publish_Succeeds_AfterQueueCapacityIsRestored()
+    public async Task Publish_Succeeds_AfterQueueCapacityIsRestored()
     {
         using var pair = new PublisherPair(TimeSpan.FromSeconds(5));
         pair.FillLocalQueue();
 
+        using var entered = new ManualResetEventSlim();
+        Task publish = Task.Run(() =>
+        {
+            using Message pending = Message.From(LargePayload);
+            entered.Set();
+            pair.Publisher.Publish(pair.Topic)
+                .Message(pending)
+                .Flags(SendFlags.None)
+                .Submit();
+        });
+
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+        await Task.Delay(50);
+        Assert.False(publish.IsCompleted,
+            $"publish completed before capacity was released: {publish.Status}; {publish.Exception}");
+
         using (var received = new TopicMessage())
             Assert.True(pair.Subscriber.Subscribe(received));
 
-        using Message pending = Message.From(LargePayload);
-        pair.Publisher.Publish(pair.Topic).Message(pending).Submit();
+        await publish.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
     public void Publish_SendTimeoutMapsToDeadlineExceeded()
     {
-        using var pair = new PublisherPair(TimeSpan.FromMilliseconds(25));
+        using var pair = new PublisherPair(TimeSpan.FromMilliseconds(100));
         pair.FillLocalQueue();
         using Message pending = Message.From(LargePayload);
 
+        var started = System.Diagnostics.Stopwatch.StartNew();
         var bindingFailure = Assert.Throws<ZlinkSubmitException>(() =>
-            pair.Publisher.Publish(pair.Topic).Message(pending).Submit());
+            pair.Publisher.Publish(pair.Topic)
+                .Message(pending)
+                .Flags(SendFlags.None)
+                .Submit());
+        started.Stop();
         var mapped = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateSubmitException(
                 bindingFailure, "Fanout publish"));
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
+        Assert.True(started.Elapsed >= TimeSpan.FromMilliseconds(50));
     }
 
     private sealed class PublisherPair : IDisposable

@@ -24,7 +24,12 @@ internal sealed class ZLinkPublishCall(
         var (publisher, envelopedMsg) = Build();
         try
         {
-            publisher.Publish(topic).Messages(envelopedMsg).Submit();
+            // Binding publish defaults to an immediate attempt; the Framework
+            // contract explicitly selects Core's send-timeout admission path.
+            publisher.Publish(topic)
+                .Messages(envelopedMsg)
+                .Flags(SendFlags.None)
+                .Submit();
         }
         catch (ZlinkSubmitException failure)
         {
