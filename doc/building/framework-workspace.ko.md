@@ -16,7 +16,7 @@ framework의 기본 빌드, CI, 배포는 **runtime library, unit test, `cross-l
 | 대상 | 위치 | 실행 방법 |
 |---|---|---|
 | 언어별 시나리오 e2e | `framework/languages/<lang>/e2e/<name>/` | 각 `run_e2e.sh` / `run_e2e.ps1` |
-| 7개 샘플(Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | `samples/run_samples.sh` / `.ps1`, 샘플별 `run_sample.sh` / `.ps1`, Node는 `npm run sample` |
+| 7개 샘플(Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | 샘플별 `run_sample.sh` / `.ps1` (한 번에 하나씩 실행한다), Node는 `npm run sample` |
 
 언어별로 "기본에서 빠진다"는 뜻은 다음과 같습니다.
 

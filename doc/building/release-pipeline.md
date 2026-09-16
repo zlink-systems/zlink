@@ -34,7 +34,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (trees `core/build-dev`, `core/build-release`). Direct CMake: [build guide](./build-guide.md), [CMake options](./cmake-options.md) | the platform jobs of `build.yml` build `core/` with CMake and archive `core/dist/<platform>/` | GitHub Release `core/vX.Y.Z` assets |
 | Core local prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (release archive → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev build → prefix) | every binding and framework job uses the same `fetch-release.sh` | `~/.cache/zlink/core/`; CI uses `.artifacts/core-release/` |
 | Bindings (7 languages) | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows: `build-windows.ps1`); per-language tests `bindings/<lang>/tests/run_tests.sh` | the "Build and test" step of each `bindings-release.yml` / `release-dotnet.yml` job | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/run_samples.sh`; scenario e2e `e2e/<name>/run_e2e.sh` (opt-in) | `framework-release.yml` only produces the source archive | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/<name>/run_sample.sh`; scenario e2e `e2e/<name>/run_e2e.sh` (opt-in) | `framework-release.yml` only produces the source archive | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (needs `ZLINK_LOCAL_PACKAGE_ROOT`); samples `samples/<name>/<name>.sln` | `framework-dotnet.yml` (verification), `release-dotnet.yml` target `framework` (pack and push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (`test` for tests); Central bundle via `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `npm ci && npm run build` in `framework/languages/node`; the http-client local tarball via `scripts/local-package/http-client/build-wsl.sh node`; gate `npm run verify:ci`, release gate `verify:release` | `framework-node.yml` (verification), `framework-release.yml` `release-node` (pack and publish) | npm |
@@ -130,7 +130,7 @@ uses only the published binding packages and Core release archives, and includes
 `cross-language` e2e (per-language scenario e2e is opt-in through each `run_e2e.sh`). The seven
 samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) are
 likewise outside the framework build, CI and releases; they are verified only by the local gate
-(`scripts/gate/framework-gate.sh`), each language's `samples/run_samples.sh`, and Node
+(`scripts/gate/framework-gate.sh`), each language's `samples/<name>/run_sample.sh`, and Node
 `npm run test:samples`.
 
 | Workflow | Scope | Matrix |
