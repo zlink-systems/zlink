@@ -219,9 +219,8 @@ dotnet run --no-build --project "${SCRIPT_DIR}/Client/Bingo.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
 
 grep -q "bingo=completed" "${LOG_DIR}/client.log"
-grep -q "stream-inbound sample=Bingo" "${LOG_DIR}/client.log"
-grep -Eq "stream-inbound sample=Bingo .* seq=[0-9]" "${LOG_DIR}/client.log"
-grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "${LOG_DIR}/client.log"
+grep -Eq "stream-message sample=Bingo .*kind=response.*name=AuthenticateRes" "${LOG_DIR}/client.log"
+grep -Eq "stream-message sample=Bingo .*kind=push.*name=BingoGameStartedNotify" "${LOG_DIR}/client.log"
 PLAY_LOGS=("${LOG_DIR}/play-a.log" "${LOG_DIR}/play-b.log")
 SESSION_LOGS=("${LOG_DIR}/session-a.log" "${LOG_DIR}/session-b.log")
 wait_log_count 1 "bingo-record fetched actor=player-1 wins=0 losses=0" "${PLAY_LOGS[@]}"

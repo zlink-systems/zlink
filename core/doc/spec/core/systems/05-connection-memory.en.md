@@ -2,7 +2,7 @@
 title: "Connection Memory"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/05-connection-memory/) | English
+[한국어](05-connection-memory.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Thread Safety](04-thread-safety.en.md) | [Next: Auto HWM](06-auto-hwm.en.md)

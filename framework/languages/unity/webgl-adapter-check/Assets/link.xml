@@ -1,0 +1,14 @@
+<!--
+  The verification entry point is a [RuntimeInitializeOnLoadMethod] in an
+  assembly nothing else references, so managed stripping is free to delete it and
+  the player would start into an empty scene with no error. Preserving this one
+  assembly keeps the entry point.
+
+  Systems.Zlink.Stream.Connector.WebGL is deliberately not listed. Its
+  [AOT.MonoPInvokeCallback] reverse callback is one of the four things this
+  project exists to check, and preserving the adapter would hide a stripping
+  fault in it.
+-->
+<linker>
+  <assembly fullname="Zlink.Verification.Runtime" preserve="all" />
+</linker>

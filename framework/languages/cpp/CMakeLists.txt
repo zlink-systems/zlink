@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.11.1 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.14.0 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
@@ -22,6 +22,25 @@ find_package(Threads REQUIRED)
 find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
+# The StreamConnector component is a standalone package: by default it
+# stages a private copy of the binding and Core package (headers, link
+# libraries, CMake configs) into its own install tree so a consumer who
+# installs *only* that component -- without the binding or Core installed
+# anywhere else on their CMAKE_PREFIX_PATH -- can still find_package() it.
+# That copy is redundant, and actively harmful, whenever the consumer's
+# build already has the binding and Core installed in the SAME prefix tree
+# this package installs into (e.g. a vcpkg triplet install, where zlink and
+# zlink-cpp are declared dependencies and are already sitting in
+# ${CURRENT_INSTALLED_DIR} before this package's own install step runs):
+# every one of those dependencies' installed headers -- not just the
+# binding's -- lives under that shared prefix's single "include/" tree, so
+# re-staging "the include directory" re-stages all of them, and vcpkg's
+# install step then refuses the package outright, reporting a file
+# conflict with whichever dependency happens to be listed first. Turn this
+# off wherever the binding and Core are already guaranteed to be
+# findable alongside this package.
+option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+  "Stage a private copy of the binding and Core package into the StreamConnector install tree for standalone consumption" ON)
 
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
@@ -65,7 +84,7 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACH
   "Root directory containing local package outputs")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.1.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.1.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.2.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
@@ -85,12 +104,18 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
 if(WIN32)
   set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/zlink.dll")
+  set(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/zlink.lib")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.dylib")
+  set(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
 else()
   set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so")
+  set(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
 endif()
 if(NOT TARGET zlink::cpp)
   list(PREPEND CMAKE_PREFIX_PATH
@@ -730,9 +755,71 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
 endif()
+# A found package's generated <Name>Targets.cmake computes its own
+# IMPORTED_LOCATION by walking a *fixed number* of parent directories up
+# from wherever the file is actually loaded from (see the generated
+# get_filename_component(_IMPORT_PREFIX ... PATH) chain) -- it does not
+# record its original prefix. That hop count is baked in at the depth the
+# package was originally installed at: two hops for a from-source/archive
+# install's "<prefix>/lib/cmake/<name>" (three path segments), one hop for
+# a vcpkg install's "<prefix>/share/<name>" after vcpkg_cmake_config_fixup
+# relocates it there (two path segments). Copying the directory to a
+# destination of a *different* depth silently breaks that arithmetic
+# without any configure-time error -- the resulting IMPORTED_LOCATION just
+# points at a path that does not exist (observed: an extra "lib" or
+# "debug/lib" segment). So the destination here must mirror the exact
+# depth (and names) <name>_DIR was actually found at, not a fixed
+# "lib/cmake/<name>".
+function(zlink_framework_cpp_stage_dependency_cmake_config found_dir)
+  get_filename_component(_zlink_fw_cfg_parent "${found_dir}" DIRECTORY)
+  get_filename_component(_zlink_fw_cfg_parent_name "${_zlink_fw_cfg_parent}" NAME)
+  if(_zlink_fw_cfg_parent_name STREQUAL "cmake")
+    # "<prefix>/<libdir>/cmake/<name>" (e.g. from-source/archive installs).
+    get_filename_component(_zlink_fw_cfg_grandparent "${_zlink_fw_cfg_parent}" DIRECTORY)
+    get_filename_component(_zlink_fw_cfg_grandparent_name "${_zlink_fw_cfg_grandparent}" NAME)
+    install(DIRECTORY "${found_dir}"
+      DESTINATION "${_zlink_fw_cfg_grandparent_name}/cmake"
+      COMPONENT StreamConnector)
+  else()
+    # "<prefix>/<libdir-or-share>/<name>" (e.g. vcpkg_cmake_config_fixup).
+    install(DIRECTORY "${found_dir}"
+      DESTINATION "${_zlink_fw_cfg_parent_name}"
+      COMPONENT StreamConnector)
+  endif()
+endfunction()
+# vcpkg's default triplet is dual-configuration: alongside the release tree
+# it installs at "<prefix>/<libdir>/...", it builds and installs a second,
+# parallel debug tree at "<prefix>/debug/<libdir>/...". The <name>Targets.cmake
+# staged verbatim by zlink_framework_cpp_stage_dependency_cmake_config above
+# is the very same config vcpkg generates, and vcpkg's generated config
+# unconditionally declares an IMPORTED_LOCATION_DEBUG next to
+# IMPORTED_LOCATION_RELEASE -- observed for both zlink (Core) and zlink_cpp:
+# "${_IMPORT_PREFIX}/debug/lib/libzlink.a" and
+# "${_IMPORT_PREFIX}/debug/lib/libzlink_cpp.a". Staging only the release
+# binary leaves that promise broken -- the same installed/config-promises
+# mismatch #384 fixed for the single-configuration case, just for the debug
+# configuration instead. A from-source/archive install never has a
+# "debug/" tree (one configuration is built and installed at a time), so
+# this must not hardcode "debug/lib" as something that always exists: it
+# mirrors whatever relative path the caller's own glob already found under
+# the dependency's prefix, checks for a "debug/" counterpart at that same
+# relative path, and quietly does nothing when there is none.
+function(zlink_framework_cpp_stage_debug_counterparts prefix found_files)
+  foreach(_zlink_fw_bin ${found_files})
+    file(RELATIVE_PATH _zlink_fw_bin_rel "${prefix}" "${_zlink_fw_bin}")
+    set(_zlink_fw_bin_debug "${prefix}/debug/${_zlink_fw_bin_rel}")
+    if(EXISTS "${_zlink_fw_bin_debug}")
+      get_filename_component(_zlink_fw_bin_rel_dir "${_zlink_fw_bin_rel}" DIRECTORY)
+      install(FILES "${_zlink_fw_bin_debug}"
+        DESTINATION "debug/${_zlink_fw_bin_rel_dir}"
+        COMPONENT StreamConnector)
+    endif()
+  endforeach()
+endfunction()
 # The stream connector and Unreal adapter are standalone packages: stage the
 # exact binding and Core package that their relative config imports reference.
-if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE
+    AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES)
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT StreamConnector
@@ -750,19 +837,25 @@ if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE
   install(FILES ${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}
     DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT StreamConnector)
-  install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/cmake/zlink_cpp"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
-    COMPONENT StreamConnector)
-  if(NOT EXISTS
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
+  zlink_framework_cpp_stage_debug_counterparts(
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}")
+  # zlink_cpp_DIR/zlink_DIR come from the find_package(zlink_cpp ...)/nested
+  # find_dependency(zlink ...) calls above: that is the same config-mode
+  # search CMake itself uses, so it resolves wherever each package's config
+  # actually landed, whatever the layout.
+  if(NOT zlink_cpp_DIR)
     message(FATAL_ERROR
-      "The installed Core package has no CMake config under "
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
+      "The installed zlink_cpp package has no findable CMake config "
+      "(find_package(zlink_cpp CONFIG) did not set zlink_cpp_DIR)")
   endif()
-  install(DIRECTORY
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
-    COMPONENT StreamConnector)
+  zlink_framework_cpp_stage_dependency_cmake_config("${zlink_cpp_DIR}")
+  if(NOT zlink_DIR)
+    message(FATAL_ERROR
+      "The installed Core package has no findable CMake config "
+      "(find_package(zlink CONFIG), pulled in transitively by zlink_cpp's "
+      "own find_dependency(zlink ...), did not set zlink_DIR)")
+  endif()
+  zlink_framework_cpp_stage_dependency_cmake_config("${zlink_DIR}")
   if(WIN32)
     file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.lib"
@@ -771,6 +864,8 @@ if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE
       install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
         COMPONENT StreamConnector)
+      zlink_framework_cpp_stage_debug_counterparts(
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}")
     endif()
   endif()
 endif()
@@ -818,35 +913,86 @@ if(TARGET zlink_unreal_stream_connector)
     COMPONENT StreamConnector
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
 endif()
-if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+# The copied Core CMake config (zlinkTargets*.cmake, staged above by
+# zlink_framework_cpp_stage_dependency_cmake_config) unconditionally
+# declares an imported target for whichever of the shared/static runtime
+# Core actually produced -- libzlink (shared) or libzlink-static. Gating
+# this whole block on the *shared* runtime's existence alone means a
+# static-only Core build (e.g. vcpkg's default Linux triplet, which forces
+# VCPKG_LIBRARY_LINKAGE=static and so never produces libzlink.so at all)
+# skips staging entirely and find_package(zlink_framework CONFIG) then
+# fails downstream with "... references the file .../libzlink.a but this
+# file does not exist." The gate must trigger on either artifact existing.
+# This block only exists to back the promise of the Core config copied
+# above, so it is gated by the same ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+# switch: when that staging is off, no copied config was installed to make
+# a promise in the first place, and re-staging Core's own already-installed
+# runtime file here would conflict with it exactly like the headers did.
+if(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+    AND ((ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+      OR (ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME}")))
   if(WIN32)
-    install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DESTINATION ${CMAKE_INSTALL_BINDIR}
-      COMPONENT StreamConnector)
-    get_filename_component(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}" DIRECTORY)
+    if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+      install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT StreamConnector)
+      zlink_framework_cpp_stage_debug_counterparts(
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+    endif()
     file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/../lib/*.lib"
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/*.lib")
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/*.lib")
     if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
       install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
         COMPONENT StreamConnector)
+      zlink_framework_cpp_stage_debug_counterparts(
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}")
     endif()
   elseif(UNIX AND NOT APPLE)
-    get_filename_component(
-      ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DIRECTORY)
+    # Copy whatever Core actually built: the shared runtime, the static
+    # archive, or both. The glob yields nothing for a pattern that has no
+    # match, so this stays correct for every Core build configuration
+    # (BUILD_SHARED/BUILD_STATIC in any combination).
     file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.so*")
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so*"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+    if(NOT ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES)
+      message(FATAL_ERROR
+        "Neither libzlink.so nor libzlink.a found under "
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib")
+    endif()
     install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
       COMPONENT StreamConnector)
+    # vcpkg's default triplet installs a parallel debug tree
+    # ("<prefix>/debug/lib/libzlink.a") next to the release one staged just
+    # above; the copied zlinkTargets.cmake declares IMPORTED_LOCATION_DEBUG
+    # for it unconditionally (see zlink_framework_cpp_stage_debug_counterparts).
+    zlink_framework_cpp_stage_debug_counterparts(
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}")
   else()
-    install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT StreamConnector)
+    if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+      install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT StreamConnector)
+      zlink_framework_cpp_stage_debug_counterparts(
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+    endif()
+    # Same promise/installed-files mismatch as the Linux branch above: the
+    # copied Core config can declare libzlink-static even though this
+    # install rule only ever staged the shared framework. Copy the static
+    # archive too when Core produced one -- and it may be the only artifact
+    # Core produced at all.
+    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+    if(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES)
+      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES}
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT StreamConnector)
+      zlink_framework_cpp_stage_debug_counterparts(
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES}")
+    endif()
   endif()
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)

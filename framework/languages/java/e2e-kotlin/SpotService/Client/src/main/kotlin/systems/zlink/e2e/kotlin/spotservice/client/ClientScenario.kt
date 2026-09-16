@@ -19,7 +19,6 @@ import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmC2Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmC3Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmC4Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD1Scenario
-import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD10Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD11Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD12Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD14Scenario
@@ -29,7 +28,6 @@ import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD5Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD6Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD7Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD8Scenario
-import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD9Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmD13Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmE1Scenario
 import systems.zlink.e2e.kotlin.spotservice.client.scenarios.SmE2Scenario
@@ -87,13 +85,11 @@ internal class ClientScenario(
                 SmB8Scenario.run()
                 SmD1Scenario.run(context)
                 SmD3Scenario.run(context)
-                SmD9Scenario.run(context)
                 SmD4Scenario.run()
                 SmD5Scenario.run()
                 SmD6Scenario.run()
                 SmD7Scenario.run()
                 SmD8Scenario.run()
-                SmD10Scenario.run()
                 SmD13Scenario.run()
                 SmD11Scenario.run(spots)
             }

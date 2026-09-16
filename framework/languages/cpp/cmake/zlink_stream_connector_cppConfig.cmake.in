@@ -1,20 +1,12 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
-find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG
-  PATHS "${CMAKE_CURRENT_LIST_DIR}/../zlink" NO_DEFAULT_PATH)
-if(NOT TARGET zlink::cpp)
-  include("${CMAKE_CURRENT_LIST_DIR}/../zlink_cpp/zlink_cppTargets.cmake")
-  if(TARGET libzlink)
-    set(_zlink_cpp_core_target libzlink)
-  elseif(TARGET libzlink-static)
-    set(_zlink_cpp_core_target libzlink-static)
-  else()
-    message(FATAL_ERROR "The bundled zlink package exports no supported Core target")
-  endif()
-  set_property(TARGET zlink::cpp APPEND PROPERTY
-    INTERFACE_LINK_LIBRARIES "${_zlink_cpp_core_target}")
-  unset(_zlink_cpp_core_target)
-endif()
+# See zlink_framework_cppConfig.cmake.in for why this does not hardcode a
+# "../zlink"/"../zlink_cpp" sibling path: the staged configs may sit at a
+# different relative depth (vcpkg's "share/<name>" vs. a from-source
+# install's "lib/cmake/<name>"), and find_dependency's normal CONFIG-mode
+# search already handles either.
+find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
+find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(nlohmann_json)
 find_dependency(Boost)

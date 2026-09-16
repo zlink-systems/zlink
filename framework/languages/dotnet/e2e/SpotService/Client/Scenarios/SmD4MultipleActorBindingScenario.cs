@@ -16,7 +16,6 @@ internal static class SmD4MultipleActorBindingScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
         var bound = await client.Request(new MultiBindReq("actor-sm-d4-x", "actor-sm-d4-y"))

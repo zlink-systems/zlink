@@ -415,7 +415,6 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
             RequestTimeout = TimeSpan.FromSeconds(20),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
 
     private sealed record TransportGateArmReq(string GateId, string Marker);

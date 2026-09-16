@@ -9,9 +9,9 @@ Unity 전용 connector package는 따로 두지 않는다. Unity도 일반 `.NET
 쓰고, Unity main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을 실행한다.
 
 > **WebGL 빌드는 이 문서의 대상이 아니다.** Unity WebGL은 브라우저 샌드박스에서 실행되므로
-> OS 소켓을 열 수 없고, `.NET` connector를 사용할 수 없다. WebGL은 TypeScript connector를
-> jslib interop으로 호출한다.
-> [Node/TypeScript connector 가이드](../../../node/guide/stream-connector/01-overview.ko.md)를 본다.
+> OS 소켓을 열 수 없고, `.NET` connector를 사용할 수 없다. WebGL은 `com.zlink.stream-connector.webgl`
+> UPM 어댑터를 통해 TypeScript connector를 jslib interop으로 호출하며, C# 표면은 이 문서와 같다.
+> [Unity WebGL 가이드](../../../node/guide/stream-connector/03-unity-webgl.ko.md)를 본다.
 
 ## 기본 원칙
 

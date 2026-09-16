@@ -2,7 +2,7 @@
 title: "Core source layout"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/07-core-source-layout/) | English
+[한국어](07-core-source-layout.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Auto HWM](06-auto-hwm.en.md) | [Next: POSD Module Structure](08-posd-module-structure.en.md)

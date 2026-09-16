@@ -1,9 +1,10 @@
 using Bingo.Shared.Contracts;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 
 namespace Bingo.Client;
 
-internal sealed class BingoClientScenario
+internal sealed class BingoClientScenario(ILogger logger)
 {
     // End-to-end client story:
     // 1. Connect player 1, authenticate, and create a waiting two-player bingo room.
@@ -24,6 +25,7 @@ internal sealed class BingoClientScenario
             .Async<AuthenticateRes>(cancellationToken);
 
         ZlinkStreamAssert.Ensure(client1Auth.ActorId == BingoSamplePlayers.Player1, "Assertion failed: client1Auth.ActorId == BingoSamplePlayers.Player1");
+        logger.LogInformation("stream-message sample=Bingo client=player1 kind=response name=AuthenticateRes");
 
         var client1MatchRes = await MatchAsync(
             client1,
@@ -94,6 +96,7 @@ internal sealed class BingoClientScenario
 
         var client1Started = await client1StartedTask;
         ZlinkStreamAssert.Ensure(client1Started.Payload.State.Status == BingoRoomStatuses.Running, "Assertion failed: client1Started.Payload.State.Status == BingoRoomStatuses.Running");
+        logger.LogInformation("stream-message sample=Bingo client=player1 kind=push name=BingoGameStartedNotify");
         var client2Started = await client2StartedTask;
         ZlinkStreamAssert.Ensure(client2Started.Payload.State.Status == BingoRoomStatuses.Running, "Assertion failed: client2Started.Payload.State.Status == BingoRoomStatuses.Running");
 

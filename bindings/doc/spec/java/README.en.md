@@ -53,7 +53,7 @@ operation/model grouping.
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
 | [Performance Policy](#performance-policy) | Hot-path constraints |
-| [Architecture requirements](#architecture-requirements-1) | Contract/runtime boundary requirements |
+| [Architecture requirements](#architecture-requirements_1) | Contract/runtime boundary requirements |
 | [Implementation Checklist](#implementation-checklist) | Checks before declaring alignment |
 | [Verification](#verification) | Required verification commands and structural searches |
 
@@ -681,7 +681,7 @@ contract types.
   transfer, caller left empty, `zlink_msg_move`), and `Message clone()` (independent deep
   copy). The existing `sharedCopyOf`/`moveInto`/`moveTo` are not public API (internal
   bridge/package-private), so no public deprecated aliases are added — only the internal
-  call paths are kept. See the [common Message ownership contract](../draft/message-ownership.ko.md)
+  call paths are kept. See the [common Message ownership contract](../message-ownership.ko.md)
   §"명시적 Copy / Move / Clone";
 - exposes Java-friendly factories such as `Message.from(...)`;
 - must not expose raw `wrapNative`, `wrapDirect`, native pointer, or borrowed

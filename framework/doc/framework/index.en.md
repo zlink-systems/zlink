@@ -460,8 +460,8 @@ explanation never drifts no matter which language you're reading.
 | | |
 | --- | --- |
 | Language-neutral meaning and the public contract | [Common Spec](common/README.en.md) |
-| The messaging engine underneath — socket patterns, transport, options | [Core Guide](https://zlink-systems.github.io/zlink/guide/01-overview/) · [Core Spec](https://zlink-systems.github.io/zlink/spec/core/) |
-| Using Core directly from a language — the C API binding | [Bindings Guide](https://zlink-systems.github.io/zlink/bindings/guide/) · [Bindings Spec](https://zlink-systems.github.io/zlink/bindings/spec/) |
+| The messaging engine underneath — socket patterns, transport, options | [Core Guide](../../../core/doc/guide/01-overview.en.md) · [Core Spec](../../../core/doc/spec/core/README.en.md) |
+| Using Core directly from a language — the C API binding | [Bindings Guide](../../../bindings/doc/guide/README.en.md) · [Bindings Spec](../../../bindings/doc/spec/README.en.md) |
 | Source and issues | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |
 
 Core is the messaging engine this framework sits on top of. You don't need to reference it

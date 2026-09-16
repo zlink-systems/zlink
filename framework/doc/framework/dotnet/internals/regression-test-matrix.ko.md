@@ -29,7 +29,7 @@
 | 항목 | 기준 |
 |------|------|
 | target framework | `net8.0`, `net10.0` |
-| runtime RID[^rid] | `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
+| runtime RID[^rid] | `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64` |
 | test mode | debug, release |
 
 현재 저장소의 기본 빌드(`ZLinkFrameworkTargetFrameworks` 기본값)는 `net8.0` 단일 TFM
@@ -49,10 +49,8 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 현재 계획 기준으로 반드시 통과해야 하는 플랫폼은 다음과 같다.
 
 - Windows x64
-- Windows ARM64
 - Linux x64
 - Linux ARM64
-- macOS x64
 - macOS ARM64
 
 ## 3.1 현재 gap closure 상태

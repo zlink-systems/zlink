@@ -101,7 +101,6 @@ function createStreamClient(endpoint: string) {
     codec: zlinkStreamJsonCodec,
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
-    maxReceivedMessages: 1024,
     waitTimeoutMs: 10000
   });
 }

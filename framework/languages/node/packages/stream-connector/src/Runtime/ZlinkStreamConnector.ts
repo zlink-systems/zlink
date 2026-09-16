@@ -12,7 +12,6 @@ import {
   ZlinkStreamErrorCode,
   ZlinkStreamExpectNoneCall,
   ZlinkStreamFlow,
-  ZlinkStreamInboundObservation,
   zlinkStreamJsonCodec,
   ZlinkStreamMessage,
   ZlinkStreamMessageKind,
@@ -35,7 +34,6 @@ import { ZlinkStreamDiagnosticsLevelCell } from './ZlinkStreamDiagnosticsLevelCe
 import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
 import { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
-import { ZlinkStreamInboundObservers } from './ZlinkStreamInboundObservers';
 import { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
 import { ZlinkStreamConnectorLifecycle } from './ZlinkStreamConnectorLifecycle';
@@ -55,7 +53,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   private readonly pendingRequests = new ZlinkStreamPendingRequests();
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
-  private readonly inboundObservers: ZlinkStreamInboundObservers;
   private readonly diagnosticsLevelCell: ZlinkStreamDiagnosticsLevelCell;
 
   readonly options: RequiredZlinkStreamConnectorOptions;
@@ -77,19 +74,10 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     const metrics = new ZlinkStreamRuntimeMetrics(this.options);
     const protocol = new ZlinkStreamFrameProtocol(this.options);
     this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
-    this.inboundObservers = new ZlinkStreamInboundObservers(
-      this.options.maxInboundObserverNotifications,
-      this.options.maxInboundObserverPayloadPreviewBytes,
-      this.events
-    );
-    this.receivedMessages = new ZlinkStreamReceivedMessages(
-      this.options.maxReceivedMessages,
-      this.events
-    );
+    this.receivedMessages = new ZlinkStreamReceivedMessages(this.events);
     this.receiveDispatcher = new ZlinkStreamReceiveDispatcher(
       protocol,
       this.pendingRequests,
-      this.inboundObservers,
       this.receivedMessages,
       this.frameSender,
       this.events,
@@ -183,15 +171,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall {
     const encoded = this.encodePayload(payload, messageType);
     return new ZlinkStreamRequestBuilder(this, this.resolveNameOrDefault(encoded), encoded);
-  }
-
-  observeInbound(
-    observer: (observation: ZlinkStreamInboundObservation, signal?: AbortSignal) => Promise<void> | void
-  ): Disposable {
-    if (this.lifecycle.state !== ZlinkStreamConnectionState.Created) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Inbound observers must be registered before connecting.');
-    }
-    return this.inboundObservers.add(observer);
   }
 
   on<TPayload = ZlinkStreamEncodedPayload>(

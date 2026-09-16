@@ -8,10 +8,7 @@
     <ZLinkSampleRepositoryDetected Condition="Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">true</ZLinkSampleRepositoryDetected>
     <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
     <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../VERSION'))</ZLinkSampleFrameworkVersionFile>
-    <ZLinkSampleBindingsVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../bindings/dotnet/VERSION'))</ZLinkSampleBindingsVersionFile>
     <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
-    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleBindingsVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleBindingsVersionFile)').Trim().Replace('ZLINK_BINDING_VERSION=', ''))</ZLinkBindingsPackageVersion>
-    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">1.1.0</ZLinkBindingsPackageVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,7 +20,6 @@
   </ItemGroup>
 
   <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">
-    <PackageVersion Include="Zlink" Version="$(ZLinkBindingsPackageVersion)" />
     <PackageVersion Include="Zlink.HttpClient" Version="$(ZLinkSampleFrameworkVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />

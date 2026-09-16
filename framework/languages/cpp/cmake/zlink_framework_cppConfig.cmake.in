@@ -1,20 +1,18 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
-find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG
-  PATHS "${CMAKE_CURRENT_LIST_DIR}/../zlink" NO_DEFAULT_PATH)
-if(NOT TARGET zlink::cpp)
-  include("${CMAKE_CURRENT_LIST_DIR}/../zlink_cpp/zlink_cppTargets.cmake")
-  if(TARGET libzlink)
-    set(_zlink_cpp_core_target libzlink)
-  elseif(TARGET libzlink-static)
-    set(_zlink_cpp_core_target libzlink-static)
-  else()
-    message(FATAL_ERROR "The bundled zlink package exports no supported Core target")
-  endif()
-  set_property(TARGET zlink::cpp APPEND PROPERTY
-    INTERFACE_LINK_LIBRARIES "${_zlink_cpp_core_target}")
-  unset(_zlink_cpp_core_target)
-endif()
+# zlink's and zlink_cpp's staged configs do not necessarily sit as siblings
+# of this file (lib/cmake/zlink_framework_cpp/../zlink) -- the framework's
+# own install() rules preserve whatever relative depth each dependency's
+# config was actually found at (a from-source/archive install's
+# "lib/cmake/<name>", or a vcpkg install's "share/<name>" after
+# vcpkg_cmake_config_fixup relocates it there). find_dependency's normal
+# CONFIG-mode search already checks every layout CMake recognizes under
+# each CMAKE_PREFIX_PATH entry, so let it look rather than hardcoding a
+# relative path that only matches one layout. zlink_cppConfig.cmake
+# already performs the equivalent zlink/Core lookup and Core-target link
+# for zlink::cpp itself, so there is nothing left to duplicate here.
+find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
+find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)
 find_dependency(nlohmann_json CONFIG)

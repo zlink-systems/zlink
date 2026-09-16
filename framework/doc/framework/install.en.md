@@ -7,19 +7,13 @@ Core is never built separately.
 
 | Item | Value |
 |---|---|
-| Published versions | framework 0.11, binding 0.17.6 |
-| Supported platforms | linux-x64, linux-arm64, macos-arm64, windows-x64, windows-arm64 (Intel Mac unsupported) |
+| Supported platforms | linux-x64, linux-arm64, macos-arm64, windows-x64 (Windows ARM64 and Intel Mac unsupported) |
 | Registries | nuget.org, Maven Central, npm, vcpkg/Conan plus GitHub Release |
 
 ## Framework packages
 
 The tabs below give the install commands and the host registration code per language. Writing
 and running the first handler is covered by each language's "Installation and first run" chapter.
-
-Start from the published packages only. The framework package installs the matching binding
-(which carries the Core engine), so Core is never built separately. Current versions are framework
-0.11 and binding 0.17.6. Supported platforms: linux-x64, linux-arm64, macos-arm64, windows-x64,
-windows-arm64.
 
 === "C#/.NET"
 
@@ -32,13 +26,20 @@ windows-arm64.
     ```csharp
     builder.Services.AddZLinkFramework(options =>
     {
+        // Discovers handler types.
         options.AddHandlersFromAssemblyOf<Program>();
+        // Which channel exposes a discovered handler is a separate registration.
         options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7101")
-            .Channel("greeting").Server();
+            .Channel("greeting").Server()
+            .AddRequestHandler<GreetingHandler, Hello, Greeting>();
     });
     ```
 
-    Continue with [Installation and first run](dotnet/guide/server/02-getting-started.en.md).
+    `AddZLinkFramework` registers the framework host with ASP.NET Core's DI and lifecycle.
+    `AddHandlersFromAssemblyOf` only discovers handler types. Which channel exposes one is a
+    separate registration on `Channel(...).Server()`.
+    The runtime needs .NET 8 or later. Continue with
+    [Installation and first run](dotnet/guide/server/02-getting-started.en.md).
 
 === "C++"
 
@@ -48,9 +49,29 @@ windows-arm64.
     target_link_libraries(app PRIVATE zlink::framework)
     ```
 
-    Core comes from the vcpkg/Conan recipes; the framework from the GitHub Release source archive
-    or the repository's vcpkg overlay port. IDEs open the project through the `CMakePresets.json`
-    presets (`vs2022`, `windows-ninja`, `linux-ninja`, `macos-ninja`). Continue with
+    There are three installation paths. `zlink` is not in the official vcpkg registry or
+    ConanCenter yet, so the first two use the overlay port and the recipes this repository
+    ships.
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink.git
+
+    # vcpkg
+    vcpkg install zlink zlink-cpp zlink-framework \
+      --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
+
+    # Conan
+    conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
+    ```
+
+    The third builds the GitHub Release source archives in order — `core/vX.Y.Z` →
+    `cpp/vX.Y.Z` → `framework-cpp/vA.B.C`. The [C++ Quickstart](cpp/quickstart.en.md) covers
+    all three end to end.
+
+    IDEs open the project through the `CMakePresets.json` presets (`vs2022`, `windows-ninja`,
+    `linux-ninja`, `macos-ninja`). Continue with
     [Installation and first run](cpp/guide/server/02-getting-started.en.md).
 
     **Third-party packages.** The installed configs never install a third-party library alongside
@@ -65,7 +86,7 @@ windows-arm64.
     | --- | --- | --- |
     | `lz4` | STREAM compression (`use_lz4()`) | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost` (asio, beast) | HTTP and transport | `-DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=OFF` to use the packaged copy |
+    | `boost` (asio, beast) | HTTP and transport | not optional. Core and the framework must resolve the **same Boost tree** |
     | `nlohmann_json` | default JSON serializer | not optional |
     | `opentelemetry-cpp` | observability | not optional |
     | `protobuf` | protobuf codec | |
@@ -85,7 +106,8 @@ windows-arm64.
     }
     ```
 
-    Spring Boot auto-configuration registers the host as a bean. Continue with
+    Spring Boot auto-configuration registers the host as a bean. The runtime needs JDK 25 or
+    later. Continue with
     [Installation and first run](java/guide/server/02-getting-started.en.md).
 
 === "Kotlin"
@@ -98,7 +120,8 @@ windows-arm64.
     }
     ```
 
-    Continue with [Installation and first run](kotlin/guide/server/02-getting-started.en.md).
+    The runtime needs the same JDK 25 or later as Java. Continue with
+    [Installation and first run](kotlin/guide/server/02-getting-started.en.md).
 
 === "Node/TypeScript"
 
@@ -107,18 +130,44 @@ windows-arm64.
     npm install @zlink-systems/nestjs      # DI and module registration
     ```
 
-    Without NestJS, install only the framework package and start the host yourself. Continue
-    with [Installation and first run](node/guide/server/02-getting-started.en.md).
+    Without NestJS, install only the framework package and start the host yourself. The runtime
+    needs Node.js 22 or later. Continue with
+    [Installation and first run](node/guide/server/02-getting-started.en.md).
+
+## Client stream connector
+
+A client that connects to STREAM uses a separate package from the server framework. Which one
+is decided by engine and build target, not by language.
+
+| Target | Package | Repository |
+|---|---|---|
+| .NET, Unity native, Godot C# | `Zlink.Stream.Connector` | nuget.org |
+| Java | `systems.zlink:zlink-stream-connector` | Maven Central |
+| C++, Unreal, Godot GDExtension, Axmol | `zlink-stream-connector` and friends | vcpkg, Conan, source |
+| Browser targets (web, Cocos web, Unity WebGL, Godot Web) | `@zlink-systems/stream-connector` | npm |
+| Unity WebGL adapter | `com.zlink.stream-connector.webgl` | UPM git URL or tarball |
+
+Unity WebGL runs in the browser sandbox, so it cannot use the `.NET` connector. The UPM adapter
+embeds the npm package's browser bundle and adds only the jslib and C# call boundary; its C#
+surface is the same as the native package. Install it from Package Manager with **Add package
+from git URL**.
+
+```
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.14.0
+```
+
+The steps and the manual checklist are in the
+[Unity WebGL guide](node/guide/stream-connector/03-unity-webgl.en.md).
 
 ## Bindings only
 
 To use the Core API through a language package without the framework, pick a language in the
-[Bindings guide](https://zlink.systems/bindings/guide/). Seven languages (C, C++, .NET, Java, Node.js,
+[Bindings guide](../../../bindings/doc/guide/README.en.md). Seven languages (C++, .NET, Java, Node.js,
 Python, Go, Rust) have an installation procedure and a five-minute example there.
 
 ## Building from the repository
 
 Building Core from source, or building local packages from the current source, is owned by the
-repository's [build guide](https://github.com/zlink-systems/zlink/blob/main/doc/building/build-guide.md)
-and [local package guide](https://github.com/zlink-systems/zlink/blob/main/scripts/local-package/README.ko.md).
+repository's [build guide](../../../doc/building/build-guide.md)
+and [local package guide](../../../scripts/local-package/README.md).
 Package consumers do not need either.

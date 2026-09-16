@@ -30,7 +30,6 @@ internal static class SmD3EntryAndUserSpotSessionRelayScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await entry.Connect.Async();
         await entry.Request(new AuthReq(entryActorId, "entry bind"))
@@ -55,7 +54,6 @@ internal static class SmD3EntryAndUserSpotSessionRelayScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await user.Connect.Async();
         await user.Request(new UserSpotAuthReq(userSpotRid, userActorId, "user bind"))

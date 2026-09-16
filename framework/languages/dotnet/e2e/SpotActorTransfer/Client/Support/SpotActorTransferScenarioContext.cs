@@ -951,7 +951,6 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
             RequestTimeout = TimeSpan.FromSeconds(10),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await stream.Connect.Async();
         var bound = await stream.Request(new BindActorSessionReq(

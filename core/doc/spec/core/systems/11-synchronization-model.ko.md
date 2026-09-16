@@ -2,7 +2,7 @@
 title: "Synchronization model"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/systems/11-synchronization-model/) | 한국어
+[English](11-synchronization-model.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [시스템 목차](README.ko.md) | [Core 스펙 목차](../README.ko.md) | [이전: Core hot path](10-hot-path.ko.md)

@@ -1508,8 +1508,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     public void ClientServerControlProtocol_AdmissionDecode_NormalizesAdvertisedEndpoint()
     {
         // The advertised endpoint is accepted from the wire (a peer,
-        // potentially another language or an older build). Per
-        // doc/plan/endpoint-notation-policy.ko.md §2.3, notation is
+        // potentially another language or an older build). Notation is
         // normalized once at the point it is accepted so downstream Ordinal
         // comparisons (e.g. against the client's expected endpoint from the
         // location store) cannot fail on notation alone.
@@ -1627,8 +1626,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task AutomaticClient_AdmitsDespiteLocationStoreEndpointNotationDifference()
     {
-        // Pin for doc/plan/endpoint-notation-policy.ko.md §2.3 row-intake
-        // normalization (ZLinkClientServerDiscovery.ClientLoop.ListAllAsync):
+        // Pin for row-intake normalization
+        // (ZLinkClientServerDiscovery.ClientLoop.ListAllAsync):
         // a Location Store row written with different (but equivalent)
         // endpoint notation than the server's own canonical value must still
         // be usable as a dial target and match the server's live wire

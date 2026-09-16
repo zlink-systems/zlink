@@ -9,7 +9,6 @@ that it was unchanged across the 0.17 line unless a section says otherwise.
 
 Release notes: the GitHub Release created by the `Build libzlink Core
 Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
-Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
@@ -34,8 +33,7 @@ unchanged from 1.0.0: same public C API, same `libzlink.vers`, same
 - The SONAME major is owned by `LIBZLINK_ABI_SOVERSION` in the root
   `VERSION` file. `core/CMakeLists.txt`, the Linux build script and the
   binding release workflow read it from there instead of deriving it
-  from the package version. See
-  `doc/building/release-prep/2026-09-14-core-abi-soversion.ko.md`.
+  from the package version. See `doc/building/versioning.ko.md`.
 
 ## [1.0.0] - 2026-09-14
 
@@ -79,8 +77,8 @@ compatibility with 0.17 is not preserved). Bindings restart at 0.18.0.
   `zlink_multipart_close` are unchanged; STREAM RAW receive is `zlink_recv` with
   one part and STREAM send uses count 1. The per-part state a record spread over
   several calls used to leave behind (the "first part to FINAL on one thread"
-  rule, `BUSY`, partial retry) no longer exists (Issue #63, PR #86; decisions
-  D63-1..D63-8 in `doc/plan/issue-63-worklog/decisions.ko.md`).
+  rule, `BUSY`, partial retry) no longer exists (Issue #63, PR #86;
+  decisions D63-1..D63-8).
 - Whole-message receive with a caller capacity smaller than the record's part
   count returns `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) without
   consuming the record and writes the required part count; retrying with enough
@@ -111,8 +109,7 @@ compatibility with 0.17 is not preserved). Bindings restart at 0.18.0.
   `hotpath_gate` result for this tag is recorded in Issue #102.
 - Bindings perf (multi routed, tcp) versus the 0.17.4 baseline improved in all
   four measured languages (cpp +8..+187 %, java +16..+240 %, dotnet
-  +27..+187 %, node +18..+284 %); see
-  `doc/plan/issue-63-worklog/perf-results.ko.md`.
+  +27..+187 %, node +18..+284 %).
 
 ## [0.17.5] - 2026-09-09
 

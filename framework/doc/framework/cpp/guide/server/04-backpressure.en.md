@@ -471,7 +471,7 @@ call form.
   [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md)
 - The socket configuration surface:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
-- The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- The byte-unit contract for a socket option: [the core guide's socket option](../../../../../../core/doc/guide/12-socket-options.en.md)
 - Next axis: [05-channel-messaging](05-channel-messaging.en.md)
 
 <script>

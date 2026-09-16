@@ -48,7 +48,6 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `bindings/c/perf/` | C 성능 벤치와 release 비교 gate | [`bindings/c/perf/README.md`](bindings/c/perf/README.md) |
 | `framework/` | 언어별 Framework(actor, DI, codec) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | 사용자 문서, 설계 원칙, 빌드, 계획 | [`doc/README.ko.md`](doc/README.ko.md) |
-| `doc/plan/` | 캠페인 계획과 판정 기록(공개 계약 아님) | §8 |
 | `doc/principal/` | 설계 원칙(`dev/`), 주석 원칙, 기술문서 작성 원칙·가이드(`documentation/`) | §3, §4 |
 | `scripts/local-package/` | Core·바인딩 로컬 패키징, 버전 동기화(`sync-version.py`) | `scripts/local-package/README.ko.md` |
 | `scripts/gate/` | 머신 로컬 통합 gate(bindings·framework·cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
@@ -80,10 +79,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   [레퍼런스](doc/principal/documentation/reference-writing-guide.ko.md), [E2E 시나리오](doc/principal/documentation/e2e-scenario-writing-guide.ko.md),
   [샘플](doc/principal/documentation/sample-writing-guide.ko.md), [다이어그램](doc/principal/documentation/diagram-authoring-guide.ko.md).
   원칙을 먼저 읽고, 쓰려는 종류의 가이드를 읽은 뒤 그 가이드의 완료 점검표로 마무리한다.
-- 문서 배치·소유·링크 규칙(한 사실은 한 문서만 소유, `doc/plan/**`은 공개 문서에서 링크하지 않음,
-  한/영 쌍 유지)은 [`doc/AGENTS.md`](doc/AGENTS.md)가 소유한다.
+- 문서 배치·소유·링크 규칙(한 사실은 한 문서만 소유, 한/영 쌍 유지)은
+  [`doc/AGENTS.md`](doc/AGENTS.md)가 소유한다.
 - 스펙(`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/**/spec/**`)과 계획·정책 문서는
-  감독자만 수정한다. 에이전트 job은 변경이 필요하면 BLOCKERS로 보고한다(§10).
+  감독자만 수정한다. 에이전트 job은 변경이 필요하면 BLOCKERS로 보고한다(§9).
 
 ## 5. 테스트 규칙
 
@@ -156,17 +155,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 벤치가 잘못 재고 있으면(포화 구간의 queue 깊이를 latency로 보고, 반올림이 gate보다 큰 경우)
   gate가 아니라 벤치를 고치고 baseline worktree에 같은 소스를 복사한다.
 
-## 8. 계획과 판정 기록
-
-- 캠페인은 `doc/plan/<campaign>.ko.md`(계획)와 `doc/plan/<campaign>-worklog/`(브리프, 요약,
-  드라이버, `decisions.ko.md`)로 남긴다. `doc/plan/**`은 임시 문서이며 공개 문서에서 링크하지
-  않는다([`doc/AGENTS.md`](doc/AGENTS.md)).
-- 판정은 `decisions.ko.md`에 `## D-NNN (일시, 누가) 제목` 형식으로 append한다. 두 머신이 같은
-  캠페인을 병렬로 진행하면 한쪽은 접두를 붙인다(예: `D-B54`). 병합할 때 번호를 다시 매기지 않는다.
-- 에이전트 job의 브리프(`briefs/*.prompt`)와 요약(`*-summary.md`)은 그대로 보관한다. 요약에는
-  변경 파일, 근거, gate 결과, BLOCKERS를 적는다.
-
-## 9. 브랜치·커밋·PR·릴리스
+## 8. 브랜치·커밋·PR·릴리스
 
 - **작업 진행 방식(2026-09-10부터)**: 모든 작업은 GitHub Issue로 등록하고, Issue마다 브랜치
   `<area>/<issue번호>-<slug>` + worktree에서 작업한 뒤 PR로 main에 넣는다. main은 PR로만 바뀐다
@@ -198,10 +187,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
 - 지원 플랫폼은 linux-x64·linux-arm64·macos-arm64·windows-x64 넷이다. Intel Mac은
   Core부터 지원하지 않으며 CI matrix·prebuild에 넣지 않는다.
-- 릴리스 뒤 baseline worktree를 새 태그로 갱신하고, 릴리스 준비 중 고친 워크플로우·절차는
-  `doc/building/release-prep/<날짜>-<주제>.ko.md`로 남긴다.
+- 릴리스 뒤 baseline worktree를 새 태그로 갱신한다.
 
-## 10. 에이전트 운영 관례
+## 9. 에이전트 운영 관례
 
 - 규칙 본문: [`AGENTS.md`](AGENTS.md)(전역), 디렉터리별 `AGENTS.md`(세부). 문서 작성은
   [`doc/AGENTS.md`](doc/AGENTS.md).

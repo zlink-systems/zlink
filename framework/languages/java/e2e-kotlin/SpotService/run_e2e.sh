@@ -778,7 +778,7 @@ scenario_modes() {
     SM-A6) echo "lifecycle-close" ;;
     SM-A7) echo "type-mismatch" ;;
     SM-A8) echo "worker" ;;
-    SM-B1|SM-B3|SM-B5|SM-B6|SM-B7|SM-B8|SM-D1|SM-D3|SM-D4|SM-D5|SM-D6|SM-D7|SM-D8|SM-D9|SM-D10|SM-D11|SM-D13) echo "actor-session" ;;
+    SM-B1|SM-B3|SM-B5|SM-B6|SM-B7|SM-B8|SM-D1|SM-D3|SM-D4|SM-D5|SM-D6|SM-D7|SM-D8|SM-D11|SM-D13) echo "actor-session" ;;
     SM-D12) echo "session-transfer" ;;
     SM-D14) echo "stream-tls" ;;
     SM-B2|SM-B4|SM-D2) echo "remote-actor-session" ;;

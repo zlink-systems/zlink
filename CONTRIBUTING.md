@@ -45,7 +45,6 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `bindings/c/perf/` | C benchmarks and the release comparison gate | [`bindings/c/perf/README.md`](bindings/c/perf/README.md) |
 | `framework/` | Per-language Framework (actors, DI, codecs) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | User docs, design principles, building, plans | [`doc/README.md`](doc/README.md) |
-| `doc/plan/` | Campaign plans and decision logs (not public contract) | §8 |
 | `doc/principal/` | Design principles (`dev/`), comment principles, technical-writing principles and guides (`documentation/`) | §3, §4 |
 | `scripts/local-package/` | Local Core/binding packaging and version sync (`sync-version.py`) | `scripts/local-package/README.ko.md` |
 | `scripts/gate/` | Machine-local integrated gates (bindings, framework, cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
@@ -79,10 +78,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   [sample](doc/principal/documentation/sample-writing-guide.ko.md), [diagram](doc/principal/documentation/diagram-authoring-guide.ko.md).
   Read the principles first, then the guide for the kind you are writing, and finish with that guide's
   completion checklist. (These guides are currently Korean-only.)
-- Placement, ownership and linking rules (one fact owned by one document, `doc/plan/**` never linked
-  from public documents, Korean/English pairs kept together) are owned by [`doc/AGENTS.md`](doc/AGENTS.md).
+- Placement, ownership and linking rules (one fact owned by one document, Korean/English pairs kept
+  together) are owned by [`doc/AGENTS.md`](doc/AGENTS.md).
 - Specs (`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/**/spec/**`) and plan/policy
-  documents are edited by the supervisor only; agent jobs report needed changes as BLOCKERS (§10).
+  documents are edited by the supervisor only; agent jobs report needed changes as BLOCKERS (§9).
 
 ## 5. Test rules
 
@@ -159,18 +158,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   interval, rounding coarser than the gate), fix the bench, not the gate, and copy the same
   sources into the baseline worktree.
 
-## 8. Plans and decision logs
-
-- A campaign lives in `doc/plan/<campaign>.ko.md` (plan) and `doc/plan/<campaign>-worklog/`
-  (briefs, summaries, drivers, `decisions.ko.md`). `doc/plan/**` is temporary and is never
-  linked from public documents ([`doc/AGENTS.md`](doc/AGENTS.md)).
-- Decisions are appended to `decisions.ko.md` as `## D-NNN (when, who) title`. When two
-  machines work the same campaign in parallel, one side prefixes its numbers (e.g. `D-B54`);
-  numbers are never reassigned on merge.
-- Agent job briefs (`briefs/*.prompt`) and summaries (`*-summary.md`) are kept verbatim. A
-  summary lists changed files, evidence, gate results and BLOCKERS.
-
-## 9. Branches, commits, PRs, releases
+## 8. Branches, commits, PRs, releases
 
 - **Workflow (from 2026-09-10)**: every piece of work is a GitHub Issue; each Issue gets a branch
   `<area>/<issue-number>-<slug>` plus a worktree and lands on main through a PR. main changes only
@@ -206,10 +194,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
 - Supported platforms are linux-x64, linux-arm64, macos-arm64 and windows-x64. Intel
   Mac is unsupported from Core up and never appears in CI matrices or prebuilds.
-- After a release, move the baseline worktree to the new tag, and record workflow or procedure fixes
-  made during release preparation under `doc/building/release-prep/<date>-<topic>.ko.md`.
+- After a release, move the baseline worktree to the new tag.
 
-## 10. Agent operating conventions
+## 9. Agent operating conventions
 
 - Rule text: [`AGENTS.md`](AGENTS.md) (global) and per-directory `AGENTS.md`. Documentation
   rules: [`doc/AGENTS.md`](doc/AGENTS.md).

@@ -16,7 +16,9 @@ enum
 
     //  Chunk granularity for session<->socket pipes (one pipepair per
     //  transport connection); inproc pipes keep message_pipe_granularity.
-    //  Sizing background: core/study/connection-memory-study.ko.md 6.2.
+    //  Kept well below that default because auto-HWM shrinks the effective
+    //  per-pipe budget to a fraction of it once connection counts are high,
+    //  so a 256-slot chunk is mostly unused, allocated memory per connection.
     session_pipe_granularity = 64,
 
     //  Commands in pipe per allocation event.

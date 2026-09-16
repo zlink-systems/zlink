@@ -1,8 +1,8 @@
 {
   "meta": {
     "arch_tag": "x64",
-    "build_dir": "/home/hep7/project/kairos/zlink/core/build/bin",
-    "libzmq_lib_dir": "/home/hep7/project/kairos/zlink/bindings/c/bench/with_zmq/libzmq/libzmq_dist/linux-x64/lib",
+    "build_dir": "/repo/core/build/bin",
+    "libzmq_lib_dir": "/repo/bindings/c/bench/with_zmq/libzmq/libzmq_dist/linux-x64/lib",
     "platform_tag": "linux",
     "updated_at_utc": "2026-02-22T16:10:57.404668+00:00"
   },

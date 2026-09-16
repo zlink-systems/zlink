@@ -205,7 +205,7 @@ wait_port "${play_b_router_host}" "${play_b_router_port}"
 # completion on framework-emitted lines: they change for framework reasons and break this runner
 # silently. This runner used to count ZLINK_FRAMEWORK_PEER_READY occurrences, which counted
 # duplicate re-admissions - a framework bug that has since been fixed, so the counts no longer
-# match. See doc/plan/spec-server-reorg/progress.ko.md §4.2.
+# match.
 
 wait_log_count 1 "bingo-ready kind=peer-route node=play-a peer=play-b" "${log_dir}/play-a.log"
 wait_log_count 1 "bingo-ready kind=peer-route node=play-b peer=play-a" "${log_dir}/play-b.log"

@@ -312,7 +312,6 @@ async Task AssertStateAddressRegressionAsync()
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 32
         });
     await connector.Connect.Async();
     var bound = await connector
@@ -685,7 +684,6 @@ async Task AssertAutomaticEndpointsAsync()
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 32
         });
     await connector.Connect.Async();
 }

@@ -45,8 +45,6 @@
 | `Client/Scenarios/SmD6Scenario.cs` | `Client/Scenarios/sm_d6_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D6 |
 | `Client/Scenarios/SmD7Scenario.cs` | `Client/Scenarios/sm_d7_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D7 |
 | `Client/Scenarios/SmD8Scenario.cs` | `Client/Scenarios/sm_d8_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D8 |
-| `Client/Scenarios/SmD9Scenario.cs` | `Client/Scenarios/sm_d9_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D9 |
-| `Client/Scenarios/SmD10Scenario.cs` | `Client/Scenarios/sm_d10_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D10 |
 | `Client/Scenarios/SmD11Scenario.cs` | `Client/Scenarios/sm_d11_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D11 |
 | `Client/Scenarios/SmD12Scenario.cs` | `Client/Scenarios/sm_d12_scenario.hpp`, `Client/main.cpp` | scenario | done | SM-D12 |
 | `Client/Scenarios/SmD13Scenario.cs` | `Client/Scenarios/sm_d13_scenario.hpp`, `run_e2e.sh`, `feature-map.ko.md` | scenario | done | `.NET`과 같은 heartbeat-enabled stream 유지 경로를 검증하고, 후속 actor request와 evidence를 focused run으로 확인했다. |
@@ -384,11 +382,11 @@
 - 2026-07-03 location store 전환 proof:
   - `cmake --build framework/languages/cpp/build-redis-vcpkg --target zlink_cpp_e2e_spot_service_play zlink_cpp_e2e_spot_service_session zlink_cpp_e2e_spot_service_gateway zlink_cpp_e2e_spot_service_multinode zlink_cpp_e2e_spot_service_multinode_requester zlink_cpp_e2e_spot_service_client -j2`
     - 결과: passed
-  - `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 260s framework/languages/cpp/e2e/SpotService/run_e2e.sh SM-C1`
+  - `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 260s framework/languages/cpp/e2e/SpotService/run_e2e.sh SM-C1`
     - 결과: passed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260703-194053-28429`
     - 비고: native route backend가 request timeout을 transport disconnect로 오인해 peer를 끊던 문제를 수정한 뒤, timeout 이후 정상 spot route request가 유지되는지 확인했다.
-  - `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/SpotService/run_e2e.sh all`
+  - `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 900s framework/languages/cpp/e2e/SpotService/run_e2e.sh all`
     - 결과: passed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260703-194121-30065`
     - 비고: child sweep 전체가 Redis `redis_location_store_t`와 key prefix 격리 상태에서 통과했다. parent와 각 child 출력은 `spot-service e2e result=passed`로 끝났다.
@@ -755,9 +753,6 @@
 - SM-G1 crash/recovery scenario 책임은 `Client/Scenarios/sm_g1_scenario.hpp` 파일로 분리했다.
   `.NET`처럼 `session-a`/`session-b`를 각각 `play-a`/`play-b`에 bind하고, `play-a` crash 뒤
   `play-b` survivor ping과 `play-b` recovery rebind evidence를 확인한다.
-- SM-D10 stream backpressure scenario는 C++ stream connector의 public bounded receive queue 정책에
-  맞춰 `Client/Scenarios/sm_d10_scenario.hpp`로 구현했고, 최신 focused runtime 검증에서
-  `logs/20260707-232826-3943806`로 통과했다.
 - SM-D12 stream session transfer scenario는 `Client/Scenarios/sm_d12_scenario.hpp`에서
   session-a 연결 종료 후 session-b가 같은 actor state를 이어받는 경로를 검증하며, 최신 focused
   runtime 검증에서 `logs/20260708-000758-4138303`로 통과했다.

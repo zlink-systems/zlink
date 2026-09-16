@@ -5,8 +5,8 @@ import java.util.Locale;
 /**
  * Deterministic, lossless endpoint-string normalization.
  *
- * <p>Implements {@code doc/plan/endpoint-notation-policy.ko.md} &sect;2.2-2.4
- * for Java: lowercase scheme, lowercase host, unify IPv6 literals to bracket
+ * <p>Applies the cross-language endpoint-notation contract for Java:
+ * lowercase scheme, lowercase host, unify IPv6 literals to bracket
  * notation (zone id preserved verbatim, case included), decimal ports with
  * leading zeros stripped, trailing slash removed from the path, and the
  * whole string trimmed of surrounding whitespace.

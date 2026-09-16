@@ -10,7 +10,7 @@
 %endif
 %define lib_name libzlink0
 Name:          zlink
-Version:       1.1.0
+Version:       1.2.0
 Release:       1%{?dist}
 Summary:       The Zlink messaging library
 Group:         Development/Libraries/C and C++
@@ -163,7 +163,7 @@ autoreconf -fi
 %{_mandir}/man7/zlink_*
 
 %changelog
-* Tue Feb 11 2026 zlink maintainers <ulalax@kairoscode.dev>
+* Tue Feb 11 2026 zlink maintainers <zlink@zlink.systems>
 - Fork from libzmq and rebrand as zlink
 - Switch to CMake-only build system
 - Add TLS/WSS transport support via Boost.Asio

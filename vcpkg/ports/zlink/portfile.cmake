@@ -1,8 +1,8 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO zlink-systems/zlink
-    REF core/v0.18.0
-    SHA512 fe7b4c3d83b348b4f9c27831d72910194bafac1f6c9c0f48d945b0a6b94711354b39ea2c1e5b2368efb8e5afd2b643975a6dc743022bfc2ff05773b5277cb878
+    REF core/v1.1.0
+    SHA512 b3a6ea5dc889c6741a479dcdbe4f2ac673f0fedde80af239bd40c0636aaa1342648cc7e29015569a62cc33261860f3791dbfe35931183b83a670e7b6a6941787
     HEAD_REF main
 )
 
@@ -14,9 +14,20 @@ else()
     set(ZLINK_BUILD_STATIC ON)
 endif()
 
+# One Boost tree per binary. Core compiles Boost.Asio and Beast into its own
+# objects from ZLINK_BOOST_INCLUDE_DIR (core/CMakeLists.txt), and zlink-framework
+# compiles the same headers out of vcpkg's boost-asio/boost-beast; both are
+# installed side by side here, so both must be the same checkout -- the rule
+# framework/languages/cpp/CMakeLists.txt already states for its own targets.
+# Without this, Core falls back to its vendored core/external/boost, whose
+# boost::asio symbols are weak and default-visible in a static libzlink.a (the
+# version script that hides them applies to the shared library only). The two
+# layouts then collapse onto one definition at link time and the consumer
+# crashes at run time, after building and linking cleanly.
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}/core"
     OPTIONS
+        -DZLINK_BOOST_INCLUDE_DIR=${CURRENT_INSTALLED_DIR}/include
         -DBUILD_SHARED=${ZLINK_BUILD_SHARED}
         -DBUILD_STATIC=${ZLINK_BUILD_STATIC}
         -DENABLE_LTO=OFF

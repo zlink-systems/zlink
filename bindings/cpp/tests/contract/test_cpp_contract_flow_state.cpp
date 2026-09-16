@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 /*
- * Focused contract test for the receive-flow-state binding parity
- * (doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md §5.1, §7.3, §8.1.1)
+ * Focused contract test for the receive-flow-state binding parity (see the
+ * receive-flow projection contract in bindings/doc/spec/README.en.md,
+ * "Receive-flow projection")
  * and the follow-up flow-state monitor parity (events + status metrics).
  *
  * Scope: enum ABI parity, DEALER/ROUTER success + idempotent repeat,

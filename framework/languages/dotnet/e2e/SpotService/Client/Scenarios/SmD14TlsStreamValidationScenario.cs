@@ -16,7 +16,6 @@ internal static class SmD14TlsStreamValidationScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024,
             SkipServerCertificateValidation = false
         });
         await ZlinkStreamAssert.ExpectFailureAsync(
@@ -30,7 +29,6 @@ internal static class SmD14TlsStreamValidationScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024,
             SkipServerCertificateValidation = true
         });
         await tls.Connect.Async();

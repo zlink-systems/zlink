@@ -83,7 +83,7 @@ suspend fun onApplicationTick() {
 ```
 
 `IMMEDIATE` mode는 별도의 dispatch 호출 없이 receive 경로에서 callback을 실행한다. handler가
-오래 실행되면 receive와 backpressure 전달이 함께 지연되므로 짧은 callback에만 사용한다.
+오래 실행되면 callback 처리와 후속 receive가 함께 지연되므로 짧은 callback에만 사용한다.
 
 ## 4. Server push 기다리기
 
@@ -125,7 +125,7 @@ connector.messages("MaintenanceNotice").collect { message ->
 ## 6. 운영 시 확인할 항목
 
 - `MANUAL` mode에서는 dispatch coroutine이나 application tick이 중단되지 않는지 확인한다.
-- payload 크기 제한과 수신 queue 상한은 Java connector options에서 설정한다.
+- payload 크기 제한은 Java connector options에서 설정한다.
 - 운영 TLS/WSS에서는 서버 인증서와 hostname 검증을 유지한다.
 - reconnect와 heartbeat 값을 바꿀 때는 장애 감지 시간과 재연결 부하를 함께 검토한다.
 - application scope가 끝날 때 Flow collection을 취소하고 connector 종료를 기다린다.

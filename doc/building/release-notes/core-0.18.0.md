@@ -11,12 +11,12 @@ Core 0.18.0 changes the public C ABI. SONAME compatibility with the 0.17 line is
 - A receive whose capacity is smaller than the record's part count returns `ZLINK_RECV_BUFFER_TOO_SMALL` (`ENOBUFS`) without consuming the record and writes the required part count; retrying with enough capacity receives that record exactly once.
 - CPack NSIS icon path fixed.
 
-Design and decisions: `doc/draft/core-whole-message-recv-api.ko.md` §7, `doc/plan/issue-63-worklog/decisions.ko.md` (D63-1..8). Issue #63, PR #86.
+Design and decisions: Issue #63, PR #86.
 
 ## Verification
 
 - Release-gate build (LTO): ctest 214/214, public-surface check PASS (99 functions, exports match), binding contract tests PASS for six languages.
-- Bindings perf (multi routed, tcp) improved over the 0.17.4 baseline in all four measured languages (cpp +8..+187 %, java +16..+240 %, dotnet +27..+187 %, node +18..+284 %); see `doc/plan/issue-63-worklog/perf-results.ko.md`.
+- Bindings perf (multi routed, tcp) improved over the 0.17.4 baseline in all four measured languages (cpp +8..+187 %, java +16..+240 %, dotnet +27..+187 %, node +18..+284 %).
 - The `hotpath_gate` result for this tag is recorded in Issue #102.
 
 ## Migration

@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "..\local-package\core\windows-x64-contract.ps1")
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
   $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 } else {
@@ -55,6 +56,7 @@ if (Test-Path -LiteralPath $opensslBin) {
 }
 $runtime = Join-Path $corePrefix "bin\zlink.dll"
 if (-not (Test-Path -LiteralPath $runtime)) { throw "Core install did not produce zlink.dll: $runtime" }
+Assert-ZlinkWindowsX64Image -Path $runtime
 $share = Join-Path $corePrefix "share\zlink"
 New-Item -ItemType Directory -Force -Path $share | Out-Null
 $provenancePath = Join-Path $share "core-package-provenance.json"
@@ -63,7 +65,7 @@ $files = @(Get-ChildItem -LiteralPath $corePrefix -Recurse -File |
     [ordered]@{ path = $_.FullName.Substring($corePrefix.Length + 1).Replace("\", "/"); sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 }) | Sort-Object path
 $provenanceJson = [ordered]@{
-  schema = 1; package = "zlink-core"; version = $version; abiMajor = 0
+  schema = 1; package = "zlink-core"; version = $version; platform = "windows-x64"; abiMajor = 0
   runtime = [ordered]@{ path = "bin/zlink.dll"; sha256 = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant(); soname = $null }
   source = [ordered]@{ revision = (& git -C $RepositoryRoot rev-parse HEAD).Trim(); dirty = [bool](& git -C $RepositoryRoot status --porcelain --untracked-files=no) }
   release = $null; files = $files

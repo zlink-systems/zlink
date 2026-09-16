@@ -31,7 +31,6 @@ final class ZLinkStreamConnectionLifecycle {
     private final ScheduledExecutorService timeouts;
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamPendingRequests pendingRequests;
-    private final ZLinkStreamInboundObserverDispatcher inboundObservers;
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
     private final Consumer<ZLinkStreamError> errorPublisher;
     private final Runnable disconnectedNotifier;
@@ -52,7 +51,6 @@ final class ZLinkStreamConnectionLifecycle {
         ScheduledExecutorService timeouts,
         ZLinkStreamDispatchQueue dispatchQueue,
         ZLinkStreamPendingRequests pendingRequests,
-        ZLinkStreamInboundObserverDispatcher inboundObservers,
         ZLinkStreamReceiveDispatcher receiveDispatcher,
         Consumer<ZLinkStreamError> errorPublisher,
         Runnable disconnectedNotifier,
@@ -62,7 +60,6 @@ final class ZLinkStreamConnectionLifecycle {
         this.timeouts = timeouts;
         this.dispatchQueue = dispatchQueue;
         this.pendingRequests = pendingRequests;
-        this.inboundObservers = inboundObservers;
         this.receiveDispatcher = receiveDispatcher;
         this.errorPublisher = errorPublisher;
         this.disconnectedNotifier = disconnectedNotifier;
@@ -108,7 +105,6 @@ final class ZLinkStreamConnectionLifecycle {
         closeQuietly(current);
         pendingRequests.failAll(new IOException("connector closed"));
         dispatchQueue.clear();
-        inboundObservers.close();
         transitionTo(ZLinkStreamConnectionState.CLOSED);
         if (wasConnected) {
             disconnectedNotifier.run();
@@ -148,11 +144,6 @@ final class ZLinkStreamConnectionLifecycle {
         return () -> stateHandlers.remove(handler);
     }
 
-    void requireCanRegisterInboundObserver() {
-        if (connectStarted) {
-            throw new IllegalStateException("inbound observers must be registered before connecting");
-        }
-    }
 
     private CompletionStage<Void> connectOnceStage() {
         return switch (configuration.transport().kind()) {

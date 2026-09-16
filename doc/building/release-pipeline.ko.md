@@ -11,7 +11,7 @@
 
 | 구성 요소 | 산출물 | 공개 채널 | 워크플로우 | 트리거 | 인증 |
 | --- | --- | --- | --- | --- | --- |
-| Core (`core/`) | 플랫폼별 native archive 5종, source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | `core/vX.Y.Z` 태그를 만든 뒤 그 ref로 `workflow_dispatch` | `GITHUB_TOKEN` |
+| Core (`core/`) | 4개 지원 플랫폼의 native archive(플랫폼마다 `.tar.gz`·`.zip`), source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | `core/vX.Y.Z` 태그를 만든 뒤 그 ref로 `workflow_dispatch` | `GITHUB_TOKEN` |
 | Core (Conan) | recipe | ConanCenter | 없음(PR) | `conan-io/conan-center-index`에 `recipes/zlink/` PR | GitHub 계정 |
 | Core (vcpkg) | port | microsoft/vcpkg | 없음(PR) | `microsoft/vcpkg`에 `ports/zlink/` + `versions/` PR | GitHub 계정 |
 | Binding C++ | source archive(`bindings/cpp` 전체 + root LICENSE; vcpkg port·Conan recipe가 설치된 Core package에 맞춰 빌드) | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
@@ -42,7 +42,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | 통합 게이트 | `scripts/gate/{rebuild-dev,framework-gate,bindings-gate,cross-language-e2e}.sh <tag>` ([설명](../../scripts/gate/README.md)) | CI 워크플로우가 같은 범위를 플랫폼 matrix로 수행 | `zlink-work/gates/<tag>/` |
 | 성능 측정 | `scripts/perf/perf-ticket.sh submit …` (티켓 큐, `perf-queue-runner.sh`) | CI에서는 하지 않음 | `.artifacts/perf-queue/`, `doc/perf/perf/` |
 | CI 보조 | `.github/actions/msvc-env`(Windows MSVC 환경), `scripts/ci/dotnet-test-retry.sh` | 워크플로우가 호출 | — |
-| 워크플로우 | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-node.yml`, `framework-dotnet.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
+| 워크플로우 | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-cpp.yml`, `framework-node.yml`, `framework-dotnet.yml`, `pr-verify.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
 
 ## 3. 배포 순서
 
@@ -62,9 +62,19 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 3. Framework: 대상 언어 VERSION을 갱신하고 `framework-<language>/vA.B.C` 태그를 push한다.
    C++·Node·JVM은 `framework-release.yml`, .NET은 `release-dotnet.yml`이 해당 언어 패키지만
    배포한다. 워크플로우는 pin한 binding 패키지가 레지스트리에서 실제로 제공될 때까지 기다린다.
-4. Conan·vcpkg: Release의 source tarball 해시로 `core/packaging/conan/conandata.yml`과
-   `vcpkg/ports/zlink/portfile.cmake`를 갱신하고 두 upstream 저장소에 PR을 낸다. 초안 본문은
-   `doc/building/pr-drafts/`에 있다.
+
+   > **태그는 한 번에 세 개까지만 push한다.** GitHub은 한 push에 태그가 셋을 넘으면
+   > workflow 이벤트를 만들지 않는다. 태그는 정상적으로 생기므로 겉보기에는 성공이고,
+   > `gh run list`를 보지 않으면 아무것도 돌지 않은 것을 모른다. 네 언어를 낼 때는
+   > 태그를 하나씩 push한다. 이미 셋을 넘겨 밀었다면 원격 태그를 지우고 다시 밀어야
+   > 이벤트가 생긴다(0.12.0에서 실제로 겪었다).
+
+4. Conan·vcpkg: **릴리스가 끝나면 `sync-recipes` job이 `release-check.sh --write`로
+   `conandata.yml`과 `portfile.cmake`를 갱신해 `main`으로 PR을 연다**(Issue #378).
+   사람이 할 일은 그 PR의 값을 확인하고 merge하는 것이다. 값은 릴리스 자산의 해시라
+   태그가 나온 뒤에만 계산할 수 있으므로 이 단계는 3번 뒤에 온다.
+   upstream 저장소(`microsoft/vcpkg`·`conan-io/conan-center-index`)에 PR을 내는 것은 여전히
+   사람이 한다. 초안 본문은 `doc/building/pr-drafts/`에 있다.
 
 dispatch 예시:
 
@@ -127,21 +137,32 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 8. CI(검증) 워크플로우
 
-배포와 별개로 `main` push·PR에서 도는 검증이다. framework CI는 공개된 binding 패키지와 Core 릴리스
-아카이브만 사용하며, e2e는 `cross-language`만 포함한다(언어별 시나리오 e2e는 각 `run_e2e.sh`로 opt-in).
-7개 샘플(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·TicTacToe·ZoneWorld)도 framework
-빌드·CI·배포에 포함하지 않는다. 샘플은 로컬 gate(`scripts/gate/framework-gate.sh`)와 각 언어의
-`samples/run_samples.sh`, Node `npm run test:samples`로만 검증한다.
+배포와 별개로 도는 검증이다. **모두 `workflow_dispatch` 전용이며 push·PR로 자동 실행되지 않는다.**
+돌리려면 `gh workflow run <파일> --ref <브랜치>`로 띄운다. framework CI는 공개된 binding 패키지와
+Core 릴리스 아카이브만 사용하며, e2e는 `cross-language`만 포함한다(언어별 시나리오 e2e는 각
+`run_e2e.sh`로 opt-in). 7개 샘플(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·
+TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다. 샘플은 로컬 gate
+(`scripts/gate/framework-gate.sh`)와 각 언어의 `samples/run_samples.sh`, Node
+`npm run test:samples`로만 검증한다.
 
 | 워크플로우 | 대상 | 매트릭스 |
 | --- | --- | --- |
-| `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 5 플랫폼 × Node 20/22 |
-| `framework-dotnet.yml` | .NET framework unit·contract·stream connector 테스트 | 5 RID × net8.0 Debug / net10.0 Release |
-| `build.yml` | Core 빌드·검증(릴리스 겸용) | 5 플랫폼 |
+| `framework-cpp.yml` | C++ framework unit·contract 테스트 | ubuntu-24.04 |
+| `framework-dotnet.yml` | .NET framework unit·contract·stream connector 테스트 | 4 RID(win-x64·linux-x64·linux-arm64·osx-arm64) × net8.0 Debug / net10.0 Release |
+| `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 플랫폼(win-x64·linux-x64·linux-arm64·darwin-arm64) × Node 20/22 |
+| `pr-verify.yml` | Core ctest와 binding smoke, Java framework unit·contract 테스트, Windows x64 정적 계약 | ubuntu-24.04, Windows 정적 계약만 windows-2022 |
+| `build.yml` | Core 빌드·검증(릴리스 겸용) | 4 플랫폼 |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 
-CI 워크플로우는 ref별 `concurrency`로 같은 브랜치의 새 push가 진행 중인 run을 취소한다(matrix job 누적과
-릴리스 runner 기아 방지). 릴리스 워크플로우는 취소하지 않는다.
+Windows에서 실제로 빌드·테스트가 도는 것은 `framework-dotnet.yml`과 `framework-node.yml` 둘이다.
+`framework-cpp.yml`은 ubuntu 전용이고, Java framework 테스트는 `pr-verify.yml`의 ubuntu job에서만
+돈다. `pr-verify.yml`의 windows-2022 job은 `bindings/tools/verify-windows-x64-contract.ps1`의
+정적 계약 검사(PowerShell AST 파싱, 버전 pin, x64 payload 경로, 샘플 runner 인벤토리)만 하고
+빌드·테스트는 하지 않는다. 이 공백은 [#367](https://github.com/zlink-systems/zlink/issues/367)이
+다룬다.
+
+CI 워크플로우는 ref별 `concurrency`로 같은 브랜치의 새 실행이 진행 중인 run을 취소한다(matrix job
+누적과 릴리스 runner 기아 방지). 릴리스 워크플로우는 취소하지 않는다.
 Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타임 없음)로 잡는다.
 공유 러너의 스케줄러 노이즈로 실패한 .NET 단위 테스트는 `scripts/ci/dotnet-test-retry.sh`가 실패
 테스트만 한 번 재실행한다(테스트 허용치는 바꾸지 않는다).
@@ -158,5 +179,4 @@ Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타�
 - [배포 계정과 secret](./release-accounts.ko.md)
 - [패키징 절차](./packaging.ko.md)
 - [릴리스 노트](./release-notes/)
-- [릴리스 준비 작업 기록](./release-prep/) — 2026-09-08·09의 워크플로우 수정 이력
 - [PR 초안](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

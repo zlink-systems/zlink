@@ -84,7 +84,7 @@ suspend fun onApplicationTick() {
 ```
 
 `IMMEDIATE` mode runs the callback directly on the receive path, with no separate dispatch call. If
-a handler runs long, both receive and backpressure delivery are delayed together, so use this only
+a handler runs long, the callback and the receives after it are delayed together, so use this only
 for a short callback.
 
 ## 4. Waiting For A Server Push
@@ -128,7 +128,7 @@ connector.messages("MaintenanceNotice").collect { message ->
 ## 6. Operational Checklist
 
 - In `MANUAL` mode, confirm the dispatch coroutine or application tick isn't interrupted.
-- The payload size limit and receive queue cap are set in the Java connector options.
+- The payload size limit is set in the Java connector options.
 - Keep server certificate and hostname verification on in production TLS/WSS.
 - When changing reconnect and heartbeat values, review failure-detection time and reconnect load
   together.

@@ -26,7 +26,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'dev.kairoscode.stream.JvmZlinkStreamLen32BeServer'
+    mainClass = 'systems.zlink.bench.stream.JvmZlinkStreamLen32BeServer'
 }
 
 java {

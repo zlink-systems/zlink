@@ -37,7 +37,7 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 |---|---|
 | [공개 계약 소스](#공개-계약-소스) | 네임스페이스, 계약/런타임 소스 위치, API reference 링크 |
 | [저장소 레이아웃](#저장소-레이아웃) | 정렬된 디렉터리 트리와 폴더 소유 경계 |
-| [API 변경 워크플로](#api-변경-워크플로) | 신규 매핑·리팩터 절차, 제거해야 할 단축 경로 |
+| [API 변경 워크플로](#api-변경-원칙) | 신규 매핑·리팩터 절차, 제거해야 할 단축 경로 |
 | [라이브러리 형태](#라이브러리-형태) | 인터페이스/구체 타입 분류, builder, `IDisposable`, RoutingId 헬퍼 |
 | [Contract / Runtime 배치 규칙](#contract--runtime-배치-규칙) | 공개 선언과 런타임 구현의 경계 |
 | [표준 인터페이스 규칙](#표준-인터페이스-규칙) | recv 시그니처, builder 시작 메서드, 이름 제약 |
@@ -450,7 +450,7 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
   `Message Clone()`(독립 버퍼 깊은 복사). .NET의 기존 `CopyTo(Span<byte>)`/
   `CopyTo(IBufferWriter<byte>)`는 payload를 호출자 버퍼에 채우는 span-fill 메서드로 Message
   deep copy(`Clone`)와 별개이므로 그대로 유지한다. 정의는
-  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  [Message ownership 공통 계약](../message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - pair, dealer, router, pub, sub, xpub, xsub, stream socket.
 - 공통 옵션, 타입화된 socket 옵션, TLS, bind/connect/disconnect, routing id,
   channel name, request/reply, publish/subscribe, 콜백 표면.

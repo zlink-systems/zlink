@@ -658,3 +658,57 @@ jobs:
           tag_name: rust/v${{ needs.resolve.outputs.rust_version }}
           name: rust binding v${{ needs.resolve.outputs.rust_version }}
           files: dist/rust/zlink-rust-${{ needs.resolve.outputs.rust_version }}.tar.gz
+
+  sync-recipes:
+    name: Sync vcpkg/Conan recipes (cpp binding)
+    runs-on: ubuntu-24.04
+    needs:
+      - resolve
+      - release-cpp
+    # Only the cpp binding ships a vcpkg port/Conan recipe, and only once its
+    # GitHub Release (the release asset the recipe hashes) actually exists.
+    if: needs.resolve.outputs.target == 'cpp' && needs.resolve.outputs.create_release == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # release-check.sh --write reuses validate_cpp()'s own target table
+      # (scripts/dev/release-check.sh), so this can never drift from what
+      # `release-check.sh bindings cpp <version>` checks.
+      - name: Write vcpkg port and Conan recipe metadata
+        run: |
+          bash scripts/dev/release-check.sh --write bindings cpp "${{ needs.resolve.outputs.cpp_version }}"
+
+      - name: Open a PR to main if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.cpp_version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- vcpkg/ports/zlink-cpp bindings/cpp/packaging/conan; then
+            echo "No recipe changes for bindings/cpp ${VERSION}; nothing to open a PR for."
+            exit 0
+          fi
+          branch="release-recipes/binding-cpp-v${VERSION}"
+          title="release: bindings/cpp ${VERSION} 레시피 갱신"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add vcpkg/ports/zlink-cpp bindings/cpp/packaging/conan
+          git commit -m "${title}"
+          git push --force origin "HEAD:${branch}"
+          if gh pr view "${branch}" --json state -q .state >/dev/null 2>&1; then
+            echo "A PR for ${branch} already exists; the branch was updated instead."
+          else
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "${title}" \
+              --body "cpp/v${VERSION} 릴리스 태그·자산에 맞춰 vcpkg port와 Conan recipe(버전·SHA512·sha256)를 scripts/dev/release-check.sh --write로 갱신했다."
+          fi

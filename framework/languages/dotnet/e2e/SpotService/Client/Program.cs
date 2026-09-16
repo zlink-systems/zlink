@@ -102,8 +102,6 @@ await (options.OperationGroup switch
         playA,
         playB,
         options.SessionAStreamEndpoint),
-    "sm-d9" => SmD9StreamInboundObserverScenario.RunAsync(options.SessionAStreamEndpoint),
-    "sm-d10" => SmD10BoundedSessionBackpressureScenario.RunAsync(options.SessionAStreamEndpoint, options.SessionBStreamEndpoint),
     "sm-d11" => SmD11StreamAndRouteRequestScenario.RunAsync(sessionA, options.SessionAStreamEndpoint),
     "sm-d12" => SmD12SessionReconnectMigrationScenario.RunAsync(
         playA,
@@ -138,7 +136,7 @@ await (options.OperationGroup switch
         sessionA,
         options.SessionAStreamEndpoint,
         options.SessionBStreamEndpoint),
-    "sm-d9-d11-d13" => RunD9D11D13Async(sessionA, options.SessionAStreamEndpoint),
+    "sm-d11-d13" => RunD11D13Async(sessionA, options.SessionAStreamEndpoint),
     "sm-c1-c2" => RunC1C2Async(playA, playB),
     "sm-q9" => MultiNodeSpotRoutingProbe.RunAsync(multiA, multiB),
     "sm-f3-f5" => RunF3F5Async(playA, playB, gateway),
@@ -448,9 +446,8 @@ static async Task RunA7A8C4Async(
     }
 }
 
-static async Task RunD9D11D13Async(ZLinkHttpClient sessionA, string sessionAStreamEndpoint)
+static async Task RunD11D13Async(ZLinkHttpClient sessionA, string sessionAStreamEndpoint)
 {
-    await SmD9StreamInboundObserverScenario.RunAsync(sessionAStreamEndpoint);
     await SmD11StreamAndRouteRequestScenario.RunAsync(sessionA, sessionAStreamEndpoint);
     await SmD13HeartbeatRequestScenario.RunAsync(sessionAStreamEndpoint);
 }

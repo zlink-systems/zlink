@@ -2,7 +2,7 @@
 title: "Context"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/01-context/) | English
+[한국어](01-context.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Core spec index](README.en.md) | [Previous: Public-contract governance](00-public-contract-governance.en.md) | [Next: Message](02-message.en.md)

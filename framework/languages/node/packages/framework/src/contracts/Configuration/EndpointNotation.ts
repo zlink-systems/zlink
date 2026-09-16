@@ -1,6 +1,7 @@
 /**
- * Deterministic endpoint-notation normalization (endpoint 표기 정책,
- * doc/plan/endpoint-notation-policy.ko.md).
+ * Deterministic endpoint-notation normalization (endpoint 표기 정책),
+ * applied identically across all four language bindings so endpoint
+ * strings compare equal.
  *
  * `new URL()` cannot represent this domain: it throws on bracketed IPv6
  * literals that carry a zone id (`tcp://[fe80::1%eth0]:80`, even with the
@@ -16,7 +17,7 @@
  * public connect/disconnect APIs). Everything downstream compares the
  * resulting strings with plain `===`.
  *
- * Rules (policy 2.2), applied only to authority-bearing schemes
+ * Rules, applied only to authority-bearing schemes
  * (`tcp`, `tls`, `ws`, `wss` -- schemes whose grammar after `scheme://` is
  * `host:port`):
  *  - scheme: lowercased
@@ -39,7 +40,7 @@
  * `normalizeEndpoint(normalizeEndpoint(x)) === normalizeEndpoint(x)`.
  *
  * DNS names are never resolved. `localhost` and `127.0.0.1` remain distinct
- * endpoints (policy 2.1).
+ * endpoints.
  */
 
 const SCHEME_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/(.*)$/s;

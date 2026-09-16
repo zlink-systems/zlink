@@ -1,11 +1,13 @@
 namespace Zlink.Framework.Runtime.Configuration;
 
 /// <summary>
-///     Deterministic, lossless string normalization for endpoint notation
-///     (doc/plan/endpoint-notation-policy.ko.md). For schemes that carry a
-///     real network authority (tcp/tls/ws/wss), normalizes scheme and host
-///     casing, IPv6 bracket notation (preserving zone id), decimal port
-///     without leading zeros, and trims one trailing path slash.
+///     Deterministic, lossless string normalization for endpoint notation,
+///     applied identically across all four language bindings so configured,
+///     advertised, and connected endpoint strings compare equal. For
+///     schemes that carry a real network authority (tcp/tls/ws/wss),
+///     normalizes scheme and host casing, IPv6 bracket notation (preserving
+///     zone id), decimal port without leading zeros, and trims one
+///     trailing path slash.
 ///     userInfo, path, query, and fragment are preserved verbatim. For every
 ///     other scheme (e.g. <c>ipc://</c>, whose remainder is a filesystem
 ///     path rather than a network authority), only the scheme is lowercased

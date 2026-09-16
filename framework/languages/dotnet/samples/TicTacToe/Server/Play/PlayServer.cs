@@ -62,8 +62,8 @@ internal sealed class PlayServer(SampleSettings settings)
                 // Spec 10.1 wants a fixed RID here so the expected peer can be named. .NET cannot
                 // yet: ZLinkSpotNodeInitializer.RequiresDescriptorClaim skips the object descriptor
                 // claim when a routing ID is explicit, so an object-role node with a fixed RID is
-                // never matched as a User Spot target. Tracked in
-                // doc/plan/spec-server-reorg/spec-gap.ko.md; revert to automatic RID until fixed.
+                // never matched as a User Spot target. This is a known spec deviation; revert to
+                // automatic RID once it is fixed.
             var mesh = options.AddRouteMesh(SampleNodes.Mesh)
                 .SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))
                 .Listen(settings.MeshEndpoint);

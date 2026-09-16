@@ -16,7 +16,7 @@ zlink provides bindings in several languages on top of a C core. Each guide cove
 **how to use zlink in that language** — installation, idiomatic examples, type
 mapping, language-specific conventions. The messaging **concepts themselves**
 (socket patterns, transport, services, routing IDs) are language-neutral and are
-covered once, in the [core guide](https://zlink-systems.github.io/zlink/guide/01-overview/);
+covered once, in the [core guide](../../../core/doc/guide/01-overview.en.md);
 each language guide links back to the core guide wherever a concept is needed.
 
 When working on a binding and explicitly using the current Core rather than a
@@ -26,8 +26,8 @@ release package, follow [building bindings against a local Core](local-core-runt
 
 - **You already know messaging / want to get moving fast** → go straight to your
   language's guide. Follow the core links inline whenever a concept is unclear.
-- **Messaging is new to you** → read the core [overview](https://zlink-systems.github.io/zlink/guide/01-overview/)
-  and [socket patterns](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
+- **Messaging is new to you** → read the core [overview](../../../core/doc/guide/01-overview.en.md)
+  and [socket patterns](../../../core/doc/guide/03-0-socket-patterns.en.md)
   first, then come to the language guide.
 
 ## Choosing A Language
@@ -51,7 +51,7 @@ release package, follow [building bindings against a local Core](local-core-runt
 > tabs also have separate Kotlin/JavaScript columns.
 
 > C is the core itself, so instead of a separate binding guide, see the
-> [core C API guide](https://zlink-systems.github.io/zlink/guide/02-core-api/).
+> [core C API guide](../../../core/doc/guide/02-core-api.en.md).
 
 ## Guide Structure (common to every language)
 

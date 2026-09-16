@@ -182,7 +182,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
-| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#아키텍처--계층-구조와-등록-지점) · [05](05-channel-messaging.en.md)·[06](06-spot.en.md)·[10](10-location.en.md) |
+| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#33-layering-and-registration-points) · [05](05-channel-messaging.en.md)·[06](06-spot.en.md)·[10](10-location.en.md) |
 | Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [06](06-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](09-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](08-actor-session.en.md) |
@@ -207,7 +207,7 @@ There's no need to rebuild from the socket for each one.
 - **④ Actor service** — an **Instance Spot** is cold-activated by entity ID and serially
   processes the state of an entity that several users access at the same time, with no Redis
   distributed lock. Continued in the
-  [guild service example](#하나의-엔티티에-대한-동시-접근).
+  [guild service example](#22-concurrent-access-to-one-entity).
 
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.

@@ -28,7 +28,6 @@ import systems.zlink.stream.connector.ZLinkStreamConnectionStateHandler
 import systems.zlink.stream.connector.ZLinkStreamDisconnectedHandler
 import systems.zlink.stream.connector.ZLinkStreamErrorHandler
 import systems.zlink.stream.connector.ZLinkStreamExpectNoneCall
-import systems.zlink.stream.connector.ZLinkStreamInboundObserver
 import systems.zlink.stream.connector.ZLinkStreamMessageHandler
 import systems.zlink.stream.connector.ZLinkStreamSequenceCall
 import systems.zlink.stream.connector.ZLinkStreamAssert
@@ -63,9 +62,6 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
         connectTimeout(),
         maxSendPayloadSize(),
         maxReceivePayloadSize(),
-        maxReceivedMessages(),
-        maxInboundObserverNotifications(),
-        maxInboundObserverPayloadPreviewBytes(),
         heartbeatEnabled(),
         heartbeatInterval(),
         heartbeatTimeout(),
@@ -107,9 +103,6 @@ class ZLinkKotlinStreamConnector(
 
     fun receivedCount(name: String): Int =
         inner.receivedCount(name)
-
-    fun observeInbound(observer: ZLinkStreamInboundObserver): AutoCloseable =
-        inner.observeInbound(observer)
 
     fun on(
         name: String,

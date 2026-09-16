@@ -236,6 +236,13 @@ FRAMEWORK_NODE_PACKAGE_REGISTRY = (
     ("framework/languages/node/packages/nestjs/package.json", "@zlink-systems/nestjs", 2),
     ("framework/languages/node/packages/stream-connector/package.json", "@zlink-systems/stream-connector", 1),
     ("framework/languages/node/packages/stream-wire/package.json", "@zlink-systems/stream-wire", 0),
+    # The Unity WebGL UPM adapter embeds the stream-connector browser bundle, so it
+    # releases with the Node framework version and carries no dependency pin.
+    (
+        "framework/languages/unity/com.zlink.stream-connector.webgl/package.json",
+        "com.zlink.stream-connector.webgl",
+        0,
+    ),
 )
 
 
@@ -772,16 +779,8 @@ def synchronize(
             rf"\g<1>{binding_version}",
             1,
         )
-    for relative in (
-        "framework/languages/dotnet/samples/Directory.Build.props",
-        "framework/languages/dotnet/samples/Directory.Packages.props",
-    ):
-        sync.regex(
-            relative,
-            rf"(<ZLinkBindingsPackageVersion Condition=\"'\$\(ZLinkBindingsPackageVersion\)' == ''\">){SEMVER}(</ZLinkBindingsPackageVersion>)",
-            rf"\g<1>{binding_version}\2",
-            1,
-        )
+    # 샘플은 binding 버전을 스스로 정하지 않는다. Zlink.Framework의 nuspec이 정하고
+    # 전이 의존으로 들어온다(#374). 그래서 여기서 맞출 필드가 없다.
     binding_version = bindings["java"]
     sync.regex(
         "framework/languages/java/gradle/libs.versions.toml",

@@ -285,20 +285,12 @@ public class SpotServiceScenarioContext {
     }
 
     protected ZLinkStreamConnector createStreamConnector(String endpoint) {
-        return createStreamConnector(endpoint, ZLinkStreamDispatchMode.IMMEDIATE, Integer.MAX_VALUE);
+        return createStreamConnector(endpoint, ZLinkStreamDispatchMode.IMMEDIATE, false);
     }
 
     protected ZLinkStreamConnector createStreamConnector(
         String endpoint,
         ZLinkStreamDispatchMode dispatchMode,
-        int maxReceivedMessages) {
-        return createStreamConnector(endpoint, dispatchMode, maxReceivedMessages, false);
-    }
-
-    protected ZLinkStreamConnector createStreamConnector(
-        String endpoint,
-        ZLinkStreamDispatchMode dispatchMode,
-        int maxReceivedMessages,
         boolean skipServerCertificateValidation) {
         return ZLinkStreamConnectorFactory.create(new ZLinkStreamConnectorOptions(
             URI.create(endpoint),
@@ -308,7 +300,6 @@ public class SpotServiceScenarioContext {
             Duration.ofSeconds(5),
             64 * 1024,
             64 * 1024,
-            maxReceivedMessages,
             true,
             Duration.ofSeconds(1),
             Duration.ofSeconds(5),

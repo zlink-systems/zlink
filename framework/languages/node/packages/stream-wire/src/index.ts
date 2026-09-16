@@ -36,6 +36,11 @@ export interface ZLinkStreamWireHeaderFlags {
   readonly hasFlowId: number;
 }
 
+// The functions below resolve this inside their bodies rather than in a parameter
+// default. The browser IIFE build of this package is committed into the Unity
+// WebGL adapter as an emscripten pre-js, and emscripten's dead-code pass does not
+// walk parameter default initializers: a binding whose only references are
+// defaults is deleted, and the player fails at runtime with "not defined".
 const defaultHeaderFlags: ZLinkStreamWireHeaderFlags = {
   hasRequestSeq: 0x01,
   hasMetadata: 0x02,
@@ -94,8 +99,9 @@ export function tryDecodeStreamWireFrame(frame: Uint8Array): ZLinkStreamWireFram
 
 export function encodeStreamWireHeader(
   header: ZLinkStreamWireHeader,
-  flags = defaultHeaderFlags
+  flagOverrides?: ZLinkStreamWireHeaderFlags
 ): Uint8Array {
+  const flags = flagOverrides ?? defaultHeaderFlags;
   const reply = isReplyKind(header.kind);
   const packetName = reply ? '' : header.name;
   if (!reply) validateStreamWirePacketName(packetName);
@@ -165,9 +171,10 @@ export function encodeStreamWireHeader(
 
 export function decodeStreamWireHeader(
   header: Uint8Array,
-  flags = defaultHeaderFlags,
+  flagOverrides?: ZLinkStreamWireHeaderFlags,
   includeFlow = true
 ): ZLinkStreamWireHeader {
+  const flags = flagOverrides ?? defaultHeaderFlags;
   let offset = 0;
   if (header.length < 5) {
     throw new Error('Stream header is incomplete.');
@@ -316,9 +323,9 @@ export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
 
 export function lz4UnpicklePayload(
   payload: Uint8Array,
-  maxDecompressedSize = defaultMaxDecompressedPayloadSize
+  maxDecompressedSize?: number
 ): Uint8Array {
-  return unpicklePayload(payload, maxDecompressedSize);
+  return unpicklePayload(payload, maxDecompressedSize ?? defaultMaxDecompressedPayloadSize);
 }
 
 export function utf8Encode(value: string): Uint8Array {

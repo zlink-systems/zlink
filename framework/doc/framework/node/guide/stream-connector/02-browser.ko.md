@@ -1,13 +1,12 @@
 # 02 — 브라우저
 
-[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md)
+[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Unity WebGL →](03-unity-webgl.ko.md)
 
 ---
 
 ## 연결과 codec
 
-package root에서 connector를 가져오고 필요한 payload codec을 생성 option에 넘긴다. inbound observer는
-연결을 시작하기 전에 등록해야 한다.
+package root에서 connector를 가져오고 필요한 payload codec을 생성 option에 넘긴다.
 
 ```ts
 import {
@@ -20,10 +19,6 @@ const client = zlinkStreamConnectorFactory.create({
   endpoint: 'wss://game.example.com/stream', // 운영 연결은 브라우저가 인증서를 검증하는 wss를 사용한다.
   codec: zlinkStreamMessagePackCodec,        // 업무 payload의 encode와 decode를 이 codec이 담당한다.
   dispatchMode: ZlinkStreamDispatchMode.Immediate
-});
-
-client.observeInbound((message) => {
-  console.log(message.name); // observer는 connect 전에 등록해야 첫 frame부터 관찰한다.
 });
 
 await client.connect(); // 플랫폼 WebSocket 연결이 준비될 때까지 기다린다.

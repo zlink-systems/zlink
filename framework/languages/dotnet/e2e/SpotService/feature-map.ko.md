@@ -45,8 +45,6 @@
 | SM-D6 | 구현 | bound session push targeting marker가 있다. |
 | SM-D7 | 구현 | stream auth and dispatch marker가 있다. |
 | SM-D8 | 구현 | stream 연결 종료 중 pending request 실패를 확인하고 새 session에서 reauth/rebind 후 messaging 재개 marker를 확인한다. |
-| SM-D9 | 구현 | stream inbound observer marker가 있다. |
-| SM-D10 | 구현 | 작은 MaxReceivedMessages session에 push를 몰아 bounded drop을 확인하고, 같은 session request와 다른 session push가 계속 정상 동작하는지 검증한다. |
 | SM-D11 | 구현 | 같은 run에서 stream actor request와 channel route request를 함께 수행하는 marker가 있다. |
 | SM-D12 | 구현 | session reconnect migration marker가 있다. |
 | SM-D13 | 구현 | heartbeat-enabled stream이 유지된 뒤 request가 성공하는 marker가 있다. |

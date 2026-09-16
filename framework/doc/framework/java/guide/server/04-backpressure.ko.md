@@ -433,7 +433,7 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-ob
   [runtime monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md) ·
   [runtime metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
-- socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
+- socket option의 byte 단위 계약: [core guide의 socket option](../../../../../../core/doc/guide/12-socket-options.ko.md)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)
 
 <script>

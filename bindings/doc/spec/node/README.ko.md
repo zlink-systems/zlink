@@ -45,7 +45,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 |---|---|
 | [공개 계약 소스](#공개-계약-소스) | export projection, 계약 소스 위치, 패키지 경계 |
 | [저장소 레이아웃](#저장소-레이아웃) | 정렬된 디렉터리 트리와 소문자 폴더 규칙 |
-| [API 변경 절차](#api-변경-절차) | 신규 매핑·리팩터 절차, 제거해야 할 단축 경로 |
+| [API 변경 절차](#api-변경-원칙) | 신규 매핑·리팩터 절차, 제거해야 할 단축 경로 |
 | [라이브러리 형태](#라이브러리-형태) | 인터페이스 우선 정의가 필요한 리소스·역할 목록 |
 | [Contract / Runtime 배치 규칙](#contract--runtime-배치-규칙) | 공개 선언과 런타임 구현의 경계 |
 | [계약 카테고리 맵](#계약-카테고리-맵) | 카테고리 → 폴더 매핑 |
@@ -678,7 +678,7 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
   `clone()`으로 이동한다. `copy`는 이제 **ref-share**다 — JS는 동일 시그니처를 반환 의미만
   달리해 공존시킬 수 없어 deprecated alias가 불가능하므로, 이는 **major 버전 breaking
   change**로 처리하고 마이그레이션(`copy`→`clone`)을 안내한다(조용한 변경 아님). 정의는
-  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  [Message ownership 공통 계약](../message-ownership.ko.md) §"명시적 Copy / Move / Clone".
   - **refcount 관찰 타이밍(Node 한정):** Node는 payload를 JS `Buffer`로 노출하며, 노출된
     `Buffer` view가 살아 있는 동안 native frame은 그 view가 GC/finalize될 때 정리된다(예전부터
     안전하게 이렇게 동작). 따라서 `copy()`로 공유한 두 핸들 중 하나를 `close()`해도, 버퍼 view가

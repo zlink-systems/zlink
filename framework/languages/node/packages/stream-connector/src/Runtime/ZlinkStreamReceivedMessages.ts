@@ -5,8 +5,8 @@ import {
   ZlinkStreamMessage
 } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
-import { subscription } from './ZlinkStreamSupport';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
+import { subscription } from './ZlinkStreamSupport';
 
 type EncodedMessageHandler = (
   message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
@@ -27,12 +27,8 @@ export class ZlinkStreamReceivedMessages {
   private queueHead = 0;
   private queuedCount = 0;
   private drainTask: Promise<void> | undefined;
-  private dropReportPending = false;
 
-  constructor(
-    private readonly capacity: number,
-    private readonly events: ZlinkStreamConnectorEvents
-  ) {}
+  constructor(private readonly events: ZlinkStreamConnectorEvents) {}
 
   on(name: string, handler: EncodedMessageHandler): Disposable {
     validateName(name);
@@ -54,10 +50,6 @@ export class ZlinkStreamReceivedMessages {
   }
 
   enqueue(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal): void {
-    if (this.queuedCount >= this.capacity) {
-      this.reportDropped(signal);
-      return;
-    }
     this.queue.push({ message, signal });
     this.queuedCount += 1;
     this.scheduleDrain();
@@ -132,20 +124,5 @@ export class ZlinkStreamReceivedMessages {
       this.queue.splice(0, this.queueHead);
       this.queueHead = 0;
     }
-  }
-
-  private reportDropped(signal?: AbortSignal): void {
-    if (this.dropReportPending) {
-      return;
-    }
-    this.dropReportPending = true;
-    queueMicrotask(() => {
-      void this.events.publishError({
-        code: ZlinkStreamErrorCode.ReceivedMessageDropped,
-        message: 'Received stream message was dropped because the received-message queue is full.'
-      }, signal).finally(() => {
-        this.dropReportPending = false;
-      }).catch(() => {});
-    });
   }
 }

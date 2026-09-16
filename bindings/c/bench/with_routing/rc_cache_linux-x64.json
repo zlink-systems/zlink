@@ -68,7 +68,7 @@
     "65536|throughput": 55599.59
   },
   "meta": {
-    "build_dir": "/home/hep7/project/kairos/zlink/core/build/bin",
+    "build_dir": "/repo/core/build/bin",
     "updated_at_utc": "2026-02-23T10:19:24.590623+00:00"
   }
 }

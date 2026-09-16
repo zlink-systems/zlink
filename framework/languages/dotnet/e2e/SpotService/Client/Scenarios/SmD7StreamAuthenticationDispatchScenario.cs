@@ -16,7 +16,6 @@ internal static class SmD7StreamAuthenticationDispatchScenario
             RequestTimeout = TimeSpan.FromSeconds(5),
             Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
         var authReply = await client.Request(new AuthReq("actor-sm-d7", "stream auth"))

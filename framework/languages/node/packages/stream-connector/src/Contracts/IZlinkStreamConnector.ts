@@ -11,7 +11,6 @@ import type {
   ZlinkStreamConnectionStateChanged,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
-  ZlinkStreamInboundObservation,
   ZlinkStreamMessage
 } from './ZlinkStreamModels';
 import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState, ZlinkStreamDiagnosticsLevel } from './ZlinkStreamEnums';
@@ -43,9 +42,6 @@ export interface ZlinkStreamConnector {
   dispatch(signal?: AbortSignal): Promise<void>;
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
-  observeInbound(
-    observer: (observation: ZlinkStreamInboundObservation, signal?: AbortSignal) => Promise<void> | void
-  ): Disposable;
   on<TPayload = ZlinkStreamEncodedPayload>(
     name: string,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,

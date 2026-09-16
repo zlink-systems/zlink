@@ -130,9 +130,20 @@ jobs:
       - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
+          # The workspace manifest pins http-client to a local tarball. Read the
+          # destination out of that pin instead of repeating it here — the two
+          # drifted apart once already (#187 moved the pin to .artifacts/node-install
+          # and this step kept packing into .artifacts/wsl, which broke the Node and
+          # Java releases at 0.12.0).
+          pin="$(node -p "require('./framework/languages/node/package.json').dependencies['@zlink-systems/http-client']")"
+          case "${pin}" in
+            file:*) ;;
+            *) echo "::error::http-client pin is not a local tarball: ${pin}" >&2; exit 1 ;;
+          esac
+          dest="$(cd framework/languages/node && mkdir -p "$(dirname "${pin#file:}")" \
+            && cd "$(dirname "${pin#file:}")" && pwd -P)"
+          npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
+          test -f "${dest}/$(basename "${pin#file:}")"
 
       - name: Build and pack
         working-directory: framework/languages/node
@@ -178,11 +189,50 @@ jobs:
             npm publish "./packages/${package_dir}" --provenance --access public
           done
 
+      # UPM cannot install from npm and never runs a Node build, so the Unity
+      # adapter ships off the same tag: `git URL ...#framework-node/vX.Y.Z` is the
+      # documented install and this tarball serves offline or vendored projects.
+      # Both serve the committed bundle, so the release must refuse to publish a
+      # tag whose committed bundle does not match the source it was built from.
+      # release-unity attaches the tarball; this job only produces it, because it
+      # holds the npm publishing credential and must not also hold repo write.
+      - name: Pack the Unity WebGL UPM package
+        working-directory: framework/languages/node
+        run: |
+          node scripts/sync-unity-webgl-package.mjs --check
+          npm pack ../unity/com.zlink.stream-connector.webgl \
+            --pack-destination ../../../dist/framework-node
+
       - uses: actions/upload-artifact@v6
         with:
           name: framework-node-${{ needs.resolve.outputs.node_version }}
           path: dist/framework-node/*.tgz
           if-no-files-found: error
+
+  # Separate from release-node on purpose. That job carries the npm Trusted
+  # Publishing credential (id-token: write); adding contents: write there would put
+  # repository write access in the same context as the publishing credential for
+  # the sake of one secondary asset. This job only downloads an artifact and
+  # attaches it, so contents: write is all it needs and it holds no npm credential.
+  release-unity:
+    if: github.event_name == 'push' && (needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all')
+    name: Attach the Unity WebGL UPM package to the release
+    runs-on: ubuntu-24.04
+    needs:
+      - resolve
+      - release-node
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: framework-node-${{ needs.resolve.outputs.node_version }}
+          path: dist/framework-node
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/framework-node/com.zlink.stream-connector.webgl-*.tgz
 
   release-java:
     if: needs.resolve.outputs.target == 'java' || needs.resolve.outputs.target == 'all'
@@ -225,9 +275,20 @@ jobs:
       - name: Build the Node workspace for the Java/Node interop tests
         shell: bash
         run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
+          # The workspace manifest pins http-client to a local tarball. Read the
+          # destination out of that pin instead of repeating it here — the two
+          # drifted apart once already (#187 moved the pin to .artifacts/node-install
+          # and this step kept packing into .artifacts/wsl, which broke the Node and
+          # Java releases at 0.12.0).
+          pin="$(node -p "require('./framework/languages/node/package.json').dependencies['@zlink-systems/http-client']")"
+          case "${pin}" in
+            file:*) ;;
+            *) echo "::error::http-client pin is not a local tarball: ${pin}" >&2; exit 1 ;;
+          esac
+          dest="$(cd framework/languages/node && mkdir -p "$(dirname "${pin#file:}")" \
+            && cd "$(dirname "${pin#file:}")" && pwd -P)"
+          npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
+          test -f "${dest}/$(basename "${pin#file:}")"
           cd framework/languages/node
           npm ci
           npm run build
@@ -315,6 +376,61 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ZLink Framework v${{ needs.resolve.outputs.cpp_version }}
           files: dist/framework-cpp/*
+
+  sync-recipes:
+    name: Sync vcpkg/Conan recipes (cpp framework)
+    runs-on: ubuntu-24.04
+    needs:
+      - resolve
+      - release-cpp
+    # Only the cpp framework ships a vcpkg port/Conan recipe, and release-cpp
+    # only creates the GitHub Release (the release asset the recipe hashes)
+    # on a tag push, never on a manual dispatch.
+    if: needs.resolve.outputs.target == 'cpp' && github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # release-check.sh --write reuses validate_cpp()'s own target table
+      # (scripts/dev/release-check.sh), so this can never drift from what
+      # `release-check.sh framework cpp <version>` checks.
+      - name: Write vcpkg port and Conan recipe metadata
+        run: |
+          bash scripts/dev/release-check.sh --write framework cpp "${{ needs.resolve.outputs.cpp_version }}"
+
+      - name: Open a PR to main if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.cpp_version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- vcpkg/ports/zlink-framework framework/languages/cpp/packaging/conan; then
+            echo "No recipe changes for framework/cpp ${VERSION}; nothing to open a PR for."
+            exit 0
+          fi
+          branch="release-recipes/framework-cpp-v${VERSION}"
+          title="release: framework/cpp ${VERSION} 레시피 갱신"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add vcpkg/ports/zlink-framework framework/languages/cpp/packaging/conan
+          git commit -m "${title}"
+          git push --force origin "HEAD:${branch}"
+          if gh pr view "${branch}" --json state -q .state >/dev/null 2>&1; then
+            echo "A PR for ${branch} already exists; the branch was updated instead."
+          else
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "${title}" \
+              --body "framework-cpp/v${VERSION} 릴리스 태그·자산에 맞춰 vcpkg port와 Conan recipe(버전·SHA512·sha256)를 scripts/dev/release-check.sh --write로 갱신했다."
+          fi
 
 # The .NET framework packages are intentionally not pushed here. nuget.org's
 # zlink-dotnet-release Trusted Publishing policy is bound to release-dotnet.yml.

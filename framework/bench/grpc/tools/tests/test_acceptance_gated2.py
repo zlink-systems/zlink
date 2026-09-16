@@ -1,10 +1,10 @@
 """Acceptance: Phase 0 raw output must reproduce the Phase 0 summary.
 
 Plan Phase 1 fixes the condition for adopting this aggregator -- feed it the
-``gated2`` material and the tables and judgements must be the ones in
-``doc/plan/fw-bench-worklog/bench-dotnet-summary.ko.md``. The expected values
-below are that document's sections 3.1, 3.2, 3.3, 3.4, 4, 5.1 and 5.2,
-transcribed so the check survives the plan document being archived.
+``gated2`` material and the tables and judgements must be the ones an
+internal bench worklog once recorded as sections 3.1, 3.2, 3.3, 3.4, 4, 5.1
+and 5.2. The expected values below are transcribed from that document so
+the check survives the worklog itself being archived and removed.
 
 One value is deliberately not the summary's. Section 3.4 gives the measured
 in-flight depth of ``zlink-framework-dotnet`` at 4096 as 98.6; that comes from

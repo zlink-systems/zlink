@@ -1,0 +1,473 @@
+name: Framework Unity WebGL
+
+# What this adds over Framework Node.
+#
+# framework-node.yml already links the UPM adapter's .jslib and .jspre plugins
+# with emcc and runs them in Chromium (test/browser/unity-webgl-emscripten.test.js),
+# which covers the link, the reverse function pointer and the heap marshalling.
+# Four things need Unity itself:
+#
+#   - IL2CPP codegen: does [AOT.MonoPInvokeCallback] survive C# -> WASM?
+#   - asmdef platform gating: is "includePlatforms": ["WebGL"] the assembly the
+#     player ends up with?
+#   - UPM import: does Unity read the package from a file: path, with this layout
+#     and without committed .meta files?
+#   - Unity's own plugin pipeline: does it pass both .jspre files to --pre-js and
+#     the .jslib to --js-library?
+#
+# Two players are built, at Unity's "Shorter Build Time" (BuildTimes, emcc -O1)
+# and "Runtime Speed" (RuntimeSpeed, emcc -O2) Code Optimization levels, and both
+# are run against a real STREAM server. The second one is expected to fail at
+# runtime: the Emscripten 3.1.38-unity that Unity 6000.0 bundles carries upstream
+# 3.1.38's JSDCE defect, which deletes destructuring declarations from --pre-js
+# content at -O2 and above. The expectation is asserted rather than assumed, so a
+# Unity release that fixes the fork turns this job red with a reason.
+
+on:
+#   # Enabled deliberately, not by default: an IL2CPP WebGL build takes tens of
+#   # minutes and the repository moved to explicit runs in #348.
+#   push:
+#     branches:
+#       - main
+#     paths:
+#       - ".github/workflows/framework-unity-webgl.yml"
+#       - "framework/languages/unity/**"
+#       - "framework/languages/node/test/browser/support/**"
+#       - "framework/languages/node/packages/stream-connector/**"
+#   pull_request:
+#     branches:
+#       - main
+#     paths:
+#       - ".github/workflows/framework-unity-webgl.yml"
+#       - "framework/languages/unity/**"
+#       - "framework/languages/node/test/browser/support/**"
+#       - "framework/languages/node/packages/stream-connector/**"
+  workflow_dispatch:
+    inputs:
+      unity_version:
+        description: >-
+          Unity Editor version. Blank uses the project's ProjectVersion.txt pin,
+          which is the only place the version is written down. Pin to a
+          6000.0-6000.4 release: those bundle Emscripten 3.1.38-unity, which is
+          what the adapter is verified against. Unity 6000.5 and later bundle
+          4.0.19-unity and change the answer.
+      optimizations:
+        description: >-
+          WasmCodeOptimization levels to build, comma separated. Blank uses the
+          build script's own default, which is both levels. Only a push event
+          reaches this workflow with the inputs unset, and that must still build
+          both, so no default is repeated here.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_PATH: framework/languages/unity/webgl-adapter-check
+
+jobs:
+  build-player:
+    name: WebGL player
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      licensed: ${{ steps.license.outputs.licensed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # A job-level `if` cannot read the secrets context, and a fork pull request
+      # gets no secrets at all. Deciding here keeps the skip visible: the job runs
+      # and says why it stopped instead of never appearing.
+      - name: Check for a Unity licence
+        id: license
+        shell: bash
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+        run: |
+          if [ -n "${UNITY_LICENSE}" ] && [ -n "${UNITY_EMAIL}" ]; then
+            echo "licensed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "licensed=false" >> "${GITHUB_OUTPUT}"
+          echo "::warning title=Unity WebGL check skipped::UNITY_LICENSE/UNITY_EMAIL are not readable from this run (a fork pull request never receives them), so no Unity build ran."
+          {
+            echo "## Unity WebGL adapter check: skipped"
+            echo
+            echo "No Unity licence was readable from this run, so neither player was built."
+            echo "Fork pull requests never receive repository secrets; run this workflow from"
+            echo "the repository with workflow_dispatch to get the result."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Cache the Unity Library folder
+        if: steps.license.outputs.licensed == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: unity-library-${{ inputs.unity_version }}-${{ hashFiles('framework/languages/unity/**/*.cs', 'framework/languages/unity/**/*.asmdef', 'framework/languages/unity/**/package.json', 'framework/languages/unity/**/manifest.json') }}
+          restore-keys: |
+            unity-library-${{ inputs.unity_version }}-
+
+      - name: Build the WebGL players
+        if: steps.license.outputs.licensed == 'true'
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          # "auto" reads the project's ProjectVersion.txt, so the pin lives in
+          # one file instead of being repeated here.
+          unityVersion: ${{ inputs.unity_version || 'auto' }}
+          targetPlatform: WebGL
+          projectPath: ${{ env.PROJECT_PATH }}
+          buildMethod: Zlink.Verification.Editor.ZlinkWebGlBuild.Build
+          # The project has no git history of its own and no version to stamp.
+          versioning: None
+          # Unity writes .meta files into a file: package and generates the empty
+          # scene during the build, so the tree is dirty by design.
+          allowDirtyBuild: true
+          # The flag is emitted only when there is a value for it. A push event
+          # leaves inputs empty, and "-zlinkOptimizations" with nothing after it
+          # is what built one level instead of two on the first run.
+          customParameters: -nographics -zlinkOutput Builds ${{ inputs.optimizations && format('-zlinkOptimizations {0}', inputs.optimizations) || '' }}
+
+      - name: Take ownership of what the container wrote
+        if: always() && steps.license.outputs.licensed == 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+
+      # Evidence for the UPM-import question. A file: package is mutable, so
+      # Unity writes .meta files into the adapter next to the sources. They are
+      # never committed; what matters is which ones Unity decided to create,
+      # because the plugin importer settings the adapter ships with are exactly
+      # what the .meta files would carry.
+      - name: Report what Unity wrote into the adapter package
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          {
+            echo "## Unity import"
+            echo
+            echo '```'
+            git status --porcelain --ignored framework/languages/unity/com.zlink.stream-connector.webgl || true
+            echo '```'
+            echo
+            echo "Generated plugin importer settings:"
+            echo '```'
+            for meta in framework/languages/unity/com.zlink.stream-connector.webgl/Plugins/WebGL/*.meta; do
+              [ -e "${meta}" ] || { echo "(no .meta files were generated)"; break; }
+              echo "--- ${meta}"
+              cat "${meta}"
+            done
+            echo '```'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Summarize the builds
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          summary="${PROJECT_PATH}/Builds/build-summary.json"
+          if [ ! -f "${summary}" ]; then
+            echo "::error title=No build summary::${summary} was not produced; the Editor did not reach the end of the build method."
+            exit 1
+          fi
+          {
+            echo "## Unity builds"
+            echo
+            echo '```json'
+            cat "${summary}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+      # The README's manual check - "the built framework.js contains
+      # ZlinkStreamWebGlRuntime and ZlinkStreamConnectorBundle" - asserted on the
+      # build output. The player run answers the same question better, by asking
+      # the running module, but it needs a working Node workspace and a browser.
+      # This needs neither, so "Unity linked the plugins" survives a driver that
+      # cannot run.
+      - name: Assert Unity linked the adapter plugins
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          status=0
+          rows=""
+          players=0
+          # The same grep over the committed plugins, so the expectation follows the
+          # bundle instead of being a number written down here.
+          expected=$(cat framework/languages/unity/com.zlink.stream-connector.webgl/Plugins/WebGL/*.jspre \
+            | grep -c -e 'message, signal' -e 'message,signal')
+          echo "committed message-drain lines: ${expected}"
+          for framework in "${PROJECT_PATH}"/Builds/*/Build/*.framework.js; do
+            [ -e "${framework}" ] || continue
+            players=$((players + 1))
+            level=$(basename "$(dirname "$(dirname "${framework}")")")
+            runtime=$(grep -c ZlinkStreamWebGlRuntime "${framework}" || true)
+            bundle=$(grep -c ZlinkStreamConnectorBundle "${framework}" || true)
+            # A symbol from inside the IIFE, not just its global name: it says the
+            # bundle body arrived, and it is the class the JSDCE defect breaks.
+            internals=$(grep -c ZlinkStreamReceivedMessages "${framework}" || true)
+            jslib=$(grep -c _ZlinkStreamPump "${framework}" || true)
+            # The committed plugin text has to reach the player unrewritten. Unity
+            # merges it in after emscripten has run, so the count matches the
+            # source; a Unity release that starts feeding .jspre content to the JS
+            # optimizer would drop it, and emscripten 3.1.38's dead-code pass
+            # deletes exactly this declaration.
+            drain=$(grep -c -e 'message, signal' -e 'message,signal' "${framework}" || true)
+            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} drain=${drain}/${expected}"
+            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${drain}/${expected} |"$'\n'
+            if [ "${drain}" -ne "${expected}" ]; then
+              echo "::error title=Plugin text rewritten::${level}: ${drain} of the connector's ${expected} message-drain lines survived into ${framework}. Something in the build now rewrites the .jspre content."
+              status=1
+            fi
+            for pair in "runtime:${runtime}" "bundle:${bundle}" "internals:${internals}" "jslib:${jslib}"; do
+              if [ "${pair#*:}" -eq 0 ]; then
+                echo "::error title=Plugin not linked::${level}: ${pair%%:*} is absent from ${framework}"
+                status=1
+              fi
+            done
+          done
+          if [ "${players}" -eq 0 ]; then
+            echo "::error title=No player to inspect::no Build/*.framework.js under ${PROJECT_PATH}/Builds"
+            status=1
+          fi
+          {
+            echo "## Plugin link (static)"
+            echo
+            echo "Symbol counts in each player's framework.js. The first four must all"
+            echo "be non-zero: that is Unity having passed both .jspre files to --pre-js"
+            echo "and the .jslib to --js-library. The last is how many lines of the"
+            echo "connector's message drain reached the player, against the"
+            echo "count in the committed .jspre - it must match, so plugin text that the"
+            echo "build starts rewriting is caught here."
+            echo
+            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | drain lines |'
+            echo '|---|---|---|---|---|---|'
+            printf '%s' "${rows}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${status}"
+
+      # The first two runs showed the .jspre content reaching the player
+      # untouched at every optimization level, while emscripten's own generated
+      # JavaScript beside it is whitespace-minified. That says the JS optimizer
+      # ran and did not see the plugin content, which is the opposite of what an
+      # upstream `emcc --pre-js -O2` does. Reading the link command settles why
+      # instead of leaving it to inference: Unity's Bee backend writes the
+      # emscripten arguments to response files under Library/Bee.
+      - name: Report the emscripten link arguments
+        if: always() && steps.license.outputs.licensed == 'true'
+        shell: bash
+        run: |
+          root="${PROJECT_PATH}/Library/Bee"
+          out="${RUNNER_TEMP}/emscripten-link"
+          mkdir -p "${out}"
+          if [ ! -d "${root}" ]; then
+            echo "::warning title=No Bee artifacts::${root} does not exist; the link arguments could not be read."
+            exit 0
+          fi
+          # -I skips binaries, -l lists names only, and the list goes to a file
+          # rather than through a pipe that could close early.
+          grep -rlIF -e '--pre-js' -e '--extern-pre-js' -e '--js-library' "${root}" \
+            > "${RUNNER_TEMP}/emscripten-link-files.txt" 2>/dev/null || true
+          echo "files naming a JS plugin flag: $(wc -l < "${RUNNER_TEMP}/emscripten-link-files.txt")"
+          {
+            echo "## emscripten link arguments"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+          while IFS= read -r file; do
+            [ -n "${file}" ] || continue
+            rel="${file#"${root}/"}"
+            cp "${file}" "${out}/$(printf '%s' "${rel}" | tr '/' '_')"
+            # A response file is one argument per line; a recorded command line is
+            # not. Splitting on whitespace reads both.
+            interesting=$(tr ' \t' '\n\n' < "${file}" \
+              | grep -E '^(-O[0-9sz]|--pre-js|--extern-pre-js|--post-js|--js-library|--closure|--minify|--emit-symbol-map|-g[0-9]?|-flto)' \
+              || true)
+            {
+              echo "### ${rel}"
+              echo '```'
+              printf '%s\n' "${interesting:-(no optimization or JS plugin flags in this file)}"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "--- ${rel}"
+            printf '%s\n' "${interesting}"
+          done < "${RUNNER_TEMP}/emscripten-link-files.txt"
+          # Names only, so the next iteration knows where to look even when the
+          # grep above finds nothing.
+          find "${root}" -name '*.rsp*' -o -name '*.json' > "${out}/bee-file-names.txt" 2>/dev/null || true
+
+      - name: Upload the emscripten link arguments
+        if: always() && steps.license.outputs.licensed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: unity-emscripten-link
+          path: ${{ runner.temp }}/emscripten-link
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the players
+        if: always() && steps.license.outputs.licensed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: unity-webgl-players
+          path: ${{ env.PROJECT_PATH }}/Builds
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the Editor log
+        if: always() && steps.license.outputs.licensed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: unity-editor-log
+          path: |
+            ${{ env.PROJECT_PATH }}/Logs
+            /home/runner/.config/unity3d/Editor.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  drive-player:
+    name: player against a STREAM server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: build-player
+    if: needs.build-player.outputs.licensed == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      # The server the player connects to is test/browser/support/stream-server.js,
+      # the same one the rest of the browser e2e uses, so the framework workspace
+      # has to be installed and built the way framework-node.yml does it.
+      - name: Prepare the Core release runtime
+        id: core
+        shell: bash
+        run: |
+          binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform linux-x64 \
+            --cache-dir .artifacts/core-release)
+          echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
+          echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build the checkout Node binding package
+        shell: bash
+        run: |
+          version="${{ steps.core.outputs.binding_version }}"
+          mkdir -p .artifacts/wsl/npm
+          (cd bindings/node && npm ci --ignore-scripts && npm run build)
+          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
+          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
+
+      - name: Build the local-package pin of @zlink-systems/http-client
+        shell: bash
+        run: |
+          bash scripts/local-package/http-client/build-wsl.sh node
+          # Listed to a file rather than piped into grep: grep -q exits on the
+          # first match, tar takes SIGPIPE, and pipefail turns a successful match
+          # into a failed step.
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
+          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
+
+      # Installed from the committed lockfile, so the workspace gets the released
+      # @zlink-systems/zlink and its linux-x64 prebuild.
+      #
+      # framework-node.yml repins this dependency to the checkout-built tarball
+      # because testing that tarball is what that workflow is for. Doing the same
+      # here breaks: the checkout tarball carries no prebuild, npm builds the addon
+      # with node-gyp into build/Release, and loading it from there runs
+      # prepareDevelopmentRuntimeLink, which reads <packageRoot>/../../VERSION -
+      # a path that only resolves in a source checkout, not under node_modules
+      # (bindings/node/src/zlink/runtime/native/native_load_paths.ts). This job
+      # needs a STREAM server that runs, not a binding under test, so it takes the
+      # published consumer path.
+      - name: Install and build the Node framework workspace
+        working-directory: framework/languages/node
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+          # The Unity player talks to a server this binding has to load. Failing
+          # here names the cause; failing later reads as "the STREAM server exited
+          # with 1" from inside the driver.
+          node -e "require('@zlink-systems/zlink'); console.log('native addon loads');"
+
+      - name: Cache Chromium
+        uses: actions/cache@v5
+        with:
+          path: framework/languages/node/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
+
+      - name: Install Chromium and Linux dependencies
+        working-directory: framework/languages/node
+        run: npm run browser:install:ci
+
+      - name: Download the players
+        uses: actions/download-artifact@v7
+        with:
+          name: unity-webgl-players
+          path: players
+
+      # -O1 and below is the level the adapter README tells consumers to build
+      # at, so this one is the gate.
+      - name: Run the BuildTimes player
+        working-directory: framework/languages/node
+        run: |
+          node test/browser/support/unity-player/drive-player.js \
+            --player "${GITHUB_WORKSPACE}/players/BuildTimes" \
+            --label BuildTimes \
+            --expect pass \
+            --outcome "${GITHUB_WORKSPACE}/players/BuildTimes.outcome.json"
+
+      # A release Code Optimization level is expected to work, not to fail.
+      # Unity links emcc against a .jspre placeholder and merges the real plugin
+      # text into the emitted framework.js in a later build step ("Merging
+      # JavaScript Code"), so emscripten's JS optimizer - JSDCE included - never
+      # sees this package. Unity's own emcc line is -O3 at every level; the
+      # setting moves the wasm side.
+      - name: Run the RuntimeSpeed player
+        id: release
+        working-directory: framework/languages/node
+        run: |
+          node test/browser/support/unity-player/drive-player.js \
+            --player "${GITHUB_WORKSPACE}/players/RuntimeSpeed" \
+            --label RuntimeSpeed \
+            --expect pass \
+            --outcome "${GITHUB_WORKSPACE}/players/RuntimeSpeed.outcome.json"
+
+      - name: Summarize the runs
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Player runs"
+            echo
+            for outcome in "${GITHUB_WORKSPACE}"/players/*.outcome.json; do
+              [ -e "${outcome}" ] || continue
+              echo "### $(basename "${outcome}" .outcome.json)"
+              echo '```json'
+              cat "${outcome}"
+              echo '```'
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the run outcomes
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: unity-webgl-outcomes
+          path: players/*.outcome.json
+          if-no-files-found: warn
+          retention-days: 7

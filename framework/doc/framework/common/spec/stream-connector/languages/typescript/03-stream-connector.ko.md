@@ -95,9 +95,6 @@ interface ZlinkStreamConnector {
   onConnectionStateChanged(
     handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
-  observeInbound(
-    observer: (observation: ZlinkStreamInboundObservation, signal?: AbortSignal) => Promise<void> | void
-  ): Disposable;
 }
 
 interface ZlinkStreamSendCall {
@@ -175,20 +172,6 @@ interface ZlinkStreamConnectionStateChanged {
   readonly error?: ZlinkStreamError;
 }
 
-interface ZlinkStreamInboundObservation {
-  readonly kind: ZlinkStreamMessageKind;
-  readonly name: string;
-  readonly codec: ZlinkStreamCodec;
-  readonly requestSeq?: bigint;
-  readonly flowId?: string;
-  readonly flowOrigin?: ZlinkFlowOrigin;
-  readonly metadata: ZlinkStreamMetadata;
-  readonly payloadLength: number;
-  readonly isCompressed: boolean;
-  readonly receivedAt: Date;
-  readonly payloadPreview: Uint8Array;
-}
-
 enum ZlinkStreamCodec { Raw = 0, Json = 1, MessagePack = 2, Protobuf = 3 }
 enum ZlinkStreamTransport { WebSocket = 'webSocket', WebSocketSecure = 'webSocketSecure' }
 enum ZlinkStreamCompression { None = 'none', Lz4 = 'lz4' }
@@ -209,8 +192,7 @@ enum ZlinkStreamErrorCode {
   FrameTooLarge = 'frameTooLarge', SendFailed = 'sendFailed',
   CompressionFailed = 'compressionFailed', DecompressionFailed = 'decompressionFailed',
   TlsValidationFailed = 'tlsValidationFailed',
-  UserCallbackFailed = 'userCallbackFailed', ObserverFailed = 'observerFailed',
-  ObserverDropped = 'observerDropped',
+  UserCallbackFailed = 'userCallbackFailed',
   RemoteError = 'remoteError'
 }
 
@@ -251,9 +233,6 @@ interface ZlinkStreamConnectorOptions {
   readonly reconnect?: ZlinkStreamReconnectOptions;
   readonly maxSendPayloadSize?: number;
   readonly maxReceivePayloadSize?: number;
-  readonly maxReceivedMessages?: number;
-  readonly maxInboundObserverNotifications?: number;
-  readonly maxInboundObserverPayloadPreviewBytes?: number;
   readonly dispatchMode?: ZlinkStreamDispatchMode;
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
@@ -319,9 +298,6 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly reconnect: Required<ZlinkStreamReconnectOptions>;
   readonly maxSendPayloadSize: number;
   readonly maxReceivePayloadSize: number;
-  readonly maxReceivedMessages: number;
-  readonly maxInboundObserverNotifications: number;
-  readonly maxInboundObserverPayloadPreviewBytes: number;
   readonly dispatchMode: ZlinkStreamDispatchMode;
   readonly compression: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
@@ -353,7 +329,7 @@ option의 기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이
 
 ### 4.1 테스트 대기 표면
 
-계약은 [공통 스펙 §10.2](../../32-stream-connector.ko.md)가 소유한다. TypeScript 표면은 다음과 같다.
+계약은 [공통 스펙 §10.1](../../32-stream-connector.ko.md)가 소유한다. TypeScript 표면은 다음과 같다.
 
 **push 관측 — connector 메서드**(`waitFor`와 같은 자리). 각각 builder를 반환한다.
 
@@ -370,23 +346,10 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 
 - **도메인 REST 폴링은 이 표면이 아니다.** 그건 HTTP client의 일이다.
 
-## 5. Inbound Observer와 수신 큐
+## 5. 수신 큐
 
-관찰 의미와 격리·overflow 규칙은 [공통 스펙 §10](../../32-stream-connector.ko.md)이 소유한다. 이
-문서는 TypeScript 표면만 고정한다.
-
-`observeInbound(...)`는 `Disposable`을 반환하며, **`connect(...)` 호출 전에만** 등록할 수 있다.
-연결이 시작된 뒤 등록하면 오류를 던진다.
-
-두 큐의 한도는 다음 option으로 조절한다. 기본값은
-[공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다.
-
-| option | 대상 큐 | overflow 시 error handler로 보고하는 코드 |
-|---|---|---|
-| `maxInboundObserverNotifications` | observer notification 큐 | `ZlinkStreamErrorCode.ObserverDropped` |
-
-observer callback 실패는 `ZlinkStreamErrorCode.ObserverFailed`로 보고한다.
-`maxInboundObserverPayloadPreviewBytes`는 observation에 담을 payload preview 길이를 정한다.
+수신 큐의 계약은 [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 소유한다.
+TypeScript 표면에는 수신 큐 관련 option이나 오류 코드가 없다.
 
 ## 6. 세션 종료 사유 (close reason)
 

@@ -107,7 +107,7 @@ annotation 의미인 packet kind/name override를 C++ handler 타입 metadata와
   - 의미: 정상 server, JSON-only peer, codec requester, invalid role, HTTP-only client runner가
     모두 통과했다. 출력은 `scenario RC-A1 passed`부터 `scenario RC-B5 passed`, RC-A6 invalid
     startup checks, `registration-codec e2e result=passed`를 포함한다.
-- 2026-07-03: `ZLINK_CPP_E2E_BUILD_DIR=/home/hep7/project/kairos/zlink/framework/languages/cpp/build-redis-vcpkg timeout 420s framework/languages/cpp/e2e/RegistrationCodec/run_e2e.sh`
+- 2026-07-03: `ZLINK_CPP_E2E_BUILD_DIR=framework/languages/cpp/build-redis-vcpkg timeout 420s framework/languages/cpp/e2e/RegistrationCodec/run_e2e.sh`
   - 결과: 통과
   - 로그: `logs/20260703-200739-24698`
   - 의미: location store 포팅 이후 현재 트리에서 정상 server, JSON-only peer, codec requester,

@@ -90,17 +90,6 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public void WithInboundObserverRegistersObserverAndReturnsConnector()
-    {
-        var connector = new RecordingConnector();
-
-        var returned = connector.WithInboundObserver((_, _) => ValueTask.CompletedTask);
-
-        Assert.Same(connector, returned);
-        Assert.Equal(1, connector.InboundObserverCount);
-    }
-
-    [Fact]
     public async Task MessagePackConnectorExtensionsDelegateBuilderAndDecodeReply()
     {
         var connector = new RecordingConnector(ZLinkMessagePackCodec.Default);
@@ -242,8 +231,6 @@ public sealed partial class StreamConnectorTests
             };
         }
 
-        public int InboundObserverCount { get; private set; }
-
         public RecordingSendCall SendCall { get; private set; } =
             new(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, Array.Empty<byte>()));
 
@@ -323,13 +310,6 @@ public sealed partial class StreamConnectorTests
                 Reply = NextReply,
                 CallbackPayloadResult = NextCallbackPayloadResult
             };
-        }
-
-        public IDisposable ObserveInbound(
-            Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer)
-        {
-            InboundObserverCount++;
-            return new Subscription(() => InboundObserverCount--);
         }
 
         public IDisposable On(

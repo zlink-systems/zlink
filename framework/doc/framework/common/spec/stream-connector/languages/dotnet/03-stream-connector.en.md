@@ -30,7 +30,7 @@ snapshot.
 This document doesn't repeat listing the
 [snapshot](../../../server/00-foundation/02-glossary.en.md#snapshot)'s member — it fixes the
 **surface structure and `.NET`-specific meaning.** The verification
-procedure is owned by [this document §15](#15-regression-test).
+procedure is owned by [this document §14](#14-regression-test).
 
 **The target it's responsible for is a native build** (desktop/server,
 Unity, Godot C#). Unity's native build uses the same
@@ -71,7 +71,6 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IZlinkStreamSequenceCall WaitForSequence(string name);
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
-    IDisposable ObserveInbound(Func<ZlinkStreamInboundObservation, CancellationToken, ValueTask> observer);
 
     event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
     event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>?           Disconnected;
@@ -203,7 +202,7 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 | Item | Contract |
 |---|---|
 | `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
-| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so backpressure applies as is |
+| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so the receives after it are delayed |
 | `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
 | Outbound send queue | An order-preserving queue **separate** from the dispatch bound. When it is full the send waits for room, and ends with `DeadlineExceeded` if the wait runs out of time. It is never rejected for want of room |
 
@@ -215,28 +214,16 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 
 ## 8. Receive Message History
 
-The unread receive history `WaitFor(...)` uses is bounded by
-`MaxReceivedMessages`. **This bound doesn't block processing of a
-control frame such as response and heartbeat.**
-
-A message of the name an `On(...)` handler is registered for also
-passes through the common receive message queue's admission. Once
-dispatch takes over a handler snapshot, it isn't kept in the unread
-history. A message of a name with no handler stays in the unread
-history and `WaitFor(...)` consumes it one at a time. So
-`MaxReceivedMessages` bounds both the pre-dispatch wait and the unread
-history together. Since the inbound observer is an observation path
-separate from this selection, it receives the frame snapshot in both
-cases.
-
-**When the queue is full the connector stops reading from the socket; no message is
-discarded**
-([Common Spec §10.1](../../32-stream-connector.en.md)).
+A message of the name an `On(...)` handler is registered for is not
+kept in the unread history once dispatch takes over a handler snapshot.
+A message of a name with no handler stays in the unread history and
+`WaitFor(...)` consumes it one at a time. Control frames such as
+response and heartbeat do not pass through this history.
 
 ### 8.1 Test Wait Surface
 
 The contract is owned by
-[Common Spec §10.2](../../32-stream-connector.en.md). The `.NET`
+[Common Spec §10](../../32-stream-connector.en.md). The `.NET`
 surface is below.
 
 **Push observation — connector method** (the same spot as §4's
@@ -285,21 +272,7 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 - **Domain REST polling (`GET /deliveries/{id}`, etc.) isn't this
   surface.** That's `ZLinkHttpClient`'s job.
 
-## 9. Inbound Observer
-
-Observation meaning and the isolation/overflow rule is owned by
-[Common Spec §10](../../32-stream-connector.en.md). The `.NET`
-surface's constraint is below.
-
-- `ObserveInbound(...)` is registered **only before connection
-  starts** and returns `IDisposable`.
-- **Don't call the connector's send/request/wait/dispatch from an
-  observer callback.**
-- **The observer can't drop/transform/reply to a frame.**
-- **`DisposeAsync()` ignores cancellation and waits until a running
-  observer finishes.**
-
-## 10. Transport And TLS
+## 9. Transport And TLS
 
 The scheme → transport mapping is owned by
 [Common Spec §3.1](../../32-stream-connector.en.md). `.NET` expresses
@@ -314,7 +287,7 @@ this as the `ZlinkStreamTransport` enum (`Tcp`, `Tls`, `WebSocket`,
   default.** `SkipServerCertificateValidation` defaults to `false` and
   is used **only for a test's self-signed certificate.**
 
-## 11. Close Reason
+## 10. Close Reason
 
 The value set and meaning is owned by
 [Common Spec §6.3](../../32-stream-connector.en.md#63-close-reason).
@@ -333,7 +306,7 @@ the reconnect condition is owned by
 `.NET` expresses that error as `ZlinkStreamErrorCode.FrameTooLarge`,
 and the close reason as `ZlinkStreamCloseReason.TransportError`.
 
-## 12. Flow
+## 11. Flow
 
 **A connector outbound operation generates a UUIDv7 `flow_id` once,
 with no separate public option.** A follow-up operation started inside
@@ -344,7 +317,7 @@ The wire representation is owned by
 [Common Spec §4.2](../../32-stream-connector.en.md) and
 [flow-correlation](../../../server/06-observability/04-flow-correlation.en.md).
 
-## 13. Metric
+## 12. Metric
 
 The connector metric follows
 [Stream Connector Common Contract §6.2](../../32-stream-connector.en.md#62-connector-reconnect-instrument)'s
@@ -354,16 +327,12 @@ provider, and the application and E2E read it with `MeterListener`.
 **A metric listener failure doesn't change the send/request result or
 connection state.**
 
-## 14. Options And Validation
+## 13. Options And Validation
 
 **The default value is owned by
 [Common Spec §6.1](../../32-stream-connector.en.md).** `.NET`
 expresses this as a property of `ZlinkStreamConnectorOptions`
 (+ `ZlinkStreamHeartbeatOptions`, `ZlinkStreamReconnectOptions`).
-
-The common contract's `MaxInboundObserverPayloadPreviewBytes` bounds
-the payload preview length in bytes, defaulting to 0. `.NET` projects
-this common option as a property of the same name.
 
 The common contract's diagnostics level
 ([common spec §13](../../32-stream-connector.en.md#13-diagnostics-level)) is projected as
@@ -418,7 +387,7 @@ affects work already under way, only the next processing point that starts after
 Every timeout and queue size option must be **positive**, and the
 preview length **can't be negative.**
 
-## 15. Regression Test
+## 14. Regression Test
 
 | Test Case | Verification Standard |
 |---------------|-----------|
@@ -438,10 +407,6 @@ preview length **can't be negative.**
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | The one-way terminal waits asynchronously up to bounded queue acceptance and completes with no result value. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | Preserves the wire send order of an earlier-accepted one-way send and a later request. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | Once a frame write starts, caller cancellation doesn't create a partial frame. |
-| `StreamConnectorTests.InboundObserverRegistrationIsRejectedAfterConnectAndStopsAfterDispose` | Fixes the observer registration time and deregistration meaning. |
-| `StreamConnectorTests.Dispose_Waits_For_Cancellation_Ignoring_Inbound_Observer` | Dispose waits for the observer to end, ignoring cancellation. |
-| `StreamConnectorTests.InboundObserverFailureReportsObserverFailedAndMessageStillDispatches` | Reports the observer failure while continuing to process the original message. |
-| `StreamConnectorTests.InboundObserverOverflowReportsObserverDroppedAndRequestStillCompletes` | Observer overflow doesn't block request completion. |
 | `StreamConnectorTests.OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic` | Generates the outbound flow once and fixes the header codec result. |
 | `StreamConnectorTests.HeaderProtocolEnforcesControlPacketContract` | Fixes a control packet's codec/flag/payload contract. |
 

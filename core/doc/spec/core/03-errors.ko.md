@@ -2,7 +2,7 @@
 title: "Errors"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/03-errors/) | 한국어
+[English](03-errors.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Message](02-message.ko.md) | [다음: Events](04-events.ko.md)
@@ -29,7 +29,7 @@ bindings 개발자다. 이 문서는 "공개 함수의 typed result와 thread-lo
 | submit 입력 message의 ownership과 [socket](glossary.ko.md#socket)별 세부 실패 조건 | [Socket 공통](socket/README.ko.md)과 각 socket 정식 문서 |
 | `zlink_socket_set_receive_flow_state()`의 함수 선언과 state enum | [Socket 공통](socket/README.ko.md) |
 | receive flow state 설정의 결과로 나타나는 동작 | [DEALER](socket/06-dealer.ko.md), [ROUTER](socket/07-router.ko.md) |
-| 언어 binding의 함수별 오류 타입 계층 | [Bindings 스펙](https://zlink-systems.github.io/zlink/ko/bindings/spec/README/) |
+| 언어 binding의 함수별 오류 타입 계층 | [Bindings 스펙](../../../../bindings/doc/spec/README.ko.md) |
 
 ## 2. Result와 errno의 기본 규칙
 
@@ -522,7 +522,7 @@ INVALID_ARGUMENT, INVALID_STATE, NOT_SUPPORTED, BACKPRESSURED)을 사용한다.
 언어 bindings는 이 8개 범주 구조를 함수별 8개 exception/error subclass(예: `SubmitException` /
 `BindException` / `RecvException` ...)로 그대로 물려받는다. method signature를 보면 어떤 실패
 범주가 발생할 수 있는지 알 수 있다. 정식 binding 규칙은
-[bindings/doc/spec/README.md](https://zlink-systems.github.io/zlink/ko/bindings/spec/README/)(Per-Function Error Type
+[bindings/doc/spec/README.md](../../../../bindings/doc/spec/README.ko.md)(Per-Function Error Type
 Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
 
 ### `zlink_errno()`의 범위

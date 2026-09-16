@@ -2,7 +2,7 @@
 title: "Socket — XSUB"
 ---
 
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/05-xsub/) | English
+[한국어](05-xsub.ko.md) | English
 
 <!-- zlink-nav:start -->
 [Socket Index](README.en.md) | [Previous: XPUB](04-xpub.en.md) | [Next: DEALER](06-dealer.en.md)

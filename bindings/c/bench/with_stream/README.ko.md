@@ -201,3 +201,8 @@ cat /proc/sys/net/ipv4/ip_local_port_range
 ## 현재 제한 사항
 
 - 출력 호환을 위해 `phase` 라벨은 유지하지만, 실제 수집은 단일 패스입니다.
+- `jvmzlink`·`jvmzlink-recv`·`jvmzlink-len32be` 스택은 현재 Java 바인딩으로 컴파일되지
+  않습니다. 예전 평면 패키지 배치를 기준으로 작성돼 지금은 없는 `RecvException`과
+  `StreamUInt32FramedPacketHandler`를 참조합니다. 현재 바인딩은 STREAM을
+  `systems.zlink.contracts.sockets.StreamSocket`·`StreamPacket`·`StreamRecvMode`로
+  제공합니다. 포팅은 남은 작업입니다. `jvmzmq`·`netty` 스택은 영향이 없습니다.

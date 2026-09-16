@@ -1,6 +1,8 @@
 site_name: ZLink
 site_url: https://zlink.systems/
-site_description: ZLink Framework — 실시간 메시징 서버 프레임워크
+# 기본 로케일(en)과 같은 값을 적는다. 로케일별 값은 아래 i18n languages의
+# site_description으로 덮어쓴다 — theme.language와 같은 규칙이다.
+site_description: ZLink Framework — a real-time TCP messaging layer for ASP.NET Core, Spring Boot, NestJS, and C++
 
 repo_url: https://github.com/zlink-systems/zlink
 repo_name: zlink-systems/zlink
@@ -55,6 +57,25 @@ extra_css:
 # 폰트와 간격 상수를 같이 조정한다. 자세한 이유는 hook 파일 머리말에.
 hooks:
   - hooks/mermaid_size.py
+  - hooks/repo_links.py
+
+# `mkdocs serve`는 docs_dir 안만 감시한다. 페이지가 `--8<--`로 끌어다 쓰는 파일은
+# docs_dir 밖의 실제 프로젝트이므로, 여기 적지 않으면 그 파일을 고쳐도 미리보기가
+# 옛 내용을 계속 낸다. 정식 build는 매번 새로 읽으므로 배포본에는 영향이 없다.
+#
+# 소스 디렉터리만 적는다. quickstart 최상위를 통째로 적으면 `build/`·`obj/`·
+# `node_modules/`까지 감시 대상이 되어, 그 프로젝트를 빌드하는 동안 재빌드가 끝없이 걸린다.
+watch:
+  - ../../framework/languages/dotnet/quickstart/Shared
+  - ../../framework/languages/dotnet/quickstart/Server
+  - ../../framework/languages/dotnet/quickstart/Client
+  - ../../framework/languages/node/quickstart/Shared
+  - ../../framework/languages/node/quickstart/Server
+  - ../../framework/languages/node/quickstart/Client
+  - ../../framework/languages/java/quickstart/gradle
+  - ../../framework/languages/cpp/quickstart/Shared
+  - ../../framework/languages/cpp/quickstart/Server
+  - ../../framework/languages/cpp/quickstart/Client
 
 plugins:
   - search
@@ -77,19 +98,31 @@ plugins:
         - locale: ko
           name: 한국어
           build: true
+          # 영어 홈의 <meta name="description">에 한국어가 나가지 않도록 로케일별로
+          # 덮어쓴다. site_description을 따로 적지 않으면 위 최상위 값(en 기준)을
+          # 그대로 물려받는다.
+          site_description: ZLink Framework — 실시간 메시징 서버 프레임워크
           # 번역표는 nav 라벨 문자열 전체를 키로 잡는 평면 map이다. 키는 nav에
           # 적힌 영어 그대로여야 하고, 여기 없는 라벨은 한국어 화면에서도 영어로
           # 남는다. 반대로 nav를 한국어로 적으면 영어 화면에서 한국어가 남는다 —
           # 실제로 그렇게 갈라져서 영어 전환이 반쪽만 되고 있었다.
           nav_translations:
-            # 최상위 구획. Framework · Bindings · Core가 같은 이름을 공유한다.
+            # 최상위 구획. Home · Install · Samples와 Framework · Bindings · Core가
+            # 같은 이름을 공유한다.
+            Home: 홈
             Install: 설치
+            Quickstart: 퀵스타트
+            Samples: 샘플
             Guide: 가이드
             Reference: 레퍼런스
             Spec: 스펙
             Internals: 내부 구조
             Overview: 개요
             API Reference: API 레퍼런스
+
+            # Samples 최상위 구획. 샘플 이름은 고유명사라 번역하지 않는다 —
+            # 번역표에 없는 라벨은 그대로 남으므로 여기 적을 것도 없다.
+            "Event sourcing": 이벤트 소싱
 
             # Framework 언어별 서버 가이드. 5개 언어가 같은 라벨을 공유한다.
             Guide home: 가이드 홈
@@ -105,14 +138,6 @@ plugins:
             "17. Where ZLink fits": "17. ZLink를 어디에 쓰나"
             "18. DI container": "18. DI 컨테이너"
             "21. Execution and configuration model": "21. 실행·구성 모델"
-
-            # Framework messaging bench.
-            Bench: 벤치
-            Bench specification: 벤치 규격
-            .NET bench: .NET 벤치
-            Node.js bench: Node.js 벤치
-            Java bench: Java 벤치
-            C++ bench: C++ 벤치
 
             # Framework 공통 스펙.
             Common spec: 공통 스펙
@@ -211,17 +236,19 @@ exclude_docs: |
   guide/EXAMPLES.en.md
   guide/STYLE.ko.md
   guide/STYLE.en.md
-  # 확정 전 초안.
-  spec/draft/
-  # 작업이 끝나면 사라지는 임시 문서다. nav에도 없다.
-  bindings/plan/
+  # 측정이 끝나지 않은 messaging bench다. 결과는 별도 보고서로 낸다.
+  common/bench/
+  # 독자용 시나리오가 아니라 언어별 문서를 새로 쓸지 판단하는 작성 규약이다.
+  common/sample/languages/
 
 nav:
+  - Home: index.md
   - Install: install.md
   - Framework:
       - Guide:
           - .NET:
               - "Guide home": dotnet/guide/server/README.md
+              - Quickstart: dotnet/quickstart.md
               - "1. Overview": dotnet/guide/server/01-overview.md
               - "2. Getting started": dotnet/guide/server/02-getting-started.md
               - "3. Core concepts": dotnet/guide/server/03-concepts.md
@@ -241,6 +268,7 @@ nav:
               - "17. Where ZLink fits": dotnet/guide/server/17-alternative.md
           - C++:
               - "Guide home": cpp/guide/server/README.md
+              - Quickstart: cpp/quickstart.md
               - "1. Overview": cpp/guide/server/01-overview.md
               - "2. Getting started": cpp/guide/server/02-getting-started.md
               - "3. Core concepts": cpp/guide/server/03-concepts.md
@@ -264,6 +292,7 @@ nav:
               - "21. Execution and configuration model": cpp/guide/server/21-execution-model.md
           - Java:
               - "Guide home": java/guide/server/README.md
+              - Quickstart: java/quickstart.md
               - "1. Overview": java/guide/server/01-overview.md
               - "2. Getting started": java/guide/server/02-getting-started.md
               - "3. Core concepts": java/guide/server/03-concepts.md
@@ -283,6 +312,7 @@ nav:
               - "17. Where ZLink fits": java/guide/server/17-alternative.md
           - Kotlin:
               - "Guide home": kotlin/guide/server/README.md
+              - Quickstart: kotlin/quickstart.md
               - "1. Overview": kotlin/guide/server/01-overview.md
               - "2. Getting started": kotlin/guide/server/02-getting-started.md
               - "3. Core concepts": kotlin/guide/server/03-concepts.md
@@ -301,6 +331,7 @@ nav:
               - "17. Where ZLink fits": kotlin/guide/server/17-alternative.md
           - Node.js:
               - "Guide home": node/guide/server/README.md
+              - Quickstart: node/quickstart.md
               - "1. Overview": node/guide/server/01-overview.md
               - "2. Getting started": node/guide/server/02-getting-started.md
               - "3. Core concepts": node/guide/server/03-concepts.md
@@ -430,12 +461,16 @@ nav:
               - "Runtime Metrics And Aggregation Rules": common/spec/server/06-observability/02-runtime-metrics.md
               - "Message Flow Tracing": common/spec/server/06-observability/03-message-flow-tracing.md
               - "Request Correlation And Business Flow Identification": common/spec/server/06-observability/04-flow-correlation.md
-      - Bench:
-          - "Bench specification": common/bench/with-grpc-local.md
-          - ".NET bench": bench/dotnet.md
-          - "Node.js bench": bench/node.md
-          - "Java bench": bench/java.md
-          - "C++ bench": bench/cpp.md
+      - Samples:
+          - Overview: common/sample/README.md
+          - Bingo: common/sample/bingo/README.md
+          - TicTacToe: common/sample/tictactoe/README.md
+          - SupportChat: common/sample/supportchat/README.md
+          - DeliveryDispatch: common/sample/deliverydispatch/README.md
+          - ShoppingMall: common/sample/event/shoppingmall.md
+          - GameQuest: common/sample/event/gamequest.md
+          - ZoneWorld: common/sample/zoneworld/README.md
+          - "Event sourcing": common/sample/event/README.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

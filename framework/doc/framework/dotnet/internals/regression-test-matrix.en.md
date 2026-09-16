@@ -29,7 +29,7 @@ Regression tests are split into the following three layers.
 | Item | Standard |
 |------|------|
 | target framework | `net8.0`, `net10.0` |
-| runtime RID[^rid] | `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
+| runtime RID[^rid] | `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64` |
 | test mode | debug, release |
 
 The repository's current default build (the `ZLinkFrameworkTargetFrameworks` default) is a single
@@ -48,10 +48,8 @@ In other words, `.NET` framework regression tests don't run just one representat
 done. Under the current plan, the platforms that must pass are:
 
 - Windows x64
-- Windows ARM64
 - Linux x64
 - Linux ARM64
-- macOS x64
 - macOS ARM64
 
 ## 3.1 Current Gap-Closure Status

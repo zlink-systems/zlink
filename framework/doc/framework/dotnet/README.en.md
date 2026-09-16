@@ -69,17 +69,15 @@ platform. Instead, the framework side follows the same native runtime range that
 `bindings/dotnet/runtimes/` and `.github/workflows/build.yml` in the repository already
 manage together.
 
-As of now, the six runtime RIDs[^rid] that must be supported are the following.
+As of now, the four runtime RIDs[^rid] that must be supported are the following.
 
 - `win-x64`
-- `win-arm64`
 - `linux-x64`
 - `linux-arm64`
-- `osx-x64`
 - `osx-arm64`
 
 So the `.NET` framework's regression tests and release gate[^release-gate] treat passing
-all six platforms above as their baseline condition.
+all four platforms above as their baseline condition.
 
 ## 1.2 Common Policy Application
 

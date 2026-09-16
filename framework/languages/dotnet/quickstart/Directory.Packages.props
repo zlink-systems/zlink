@@ -1,0 +1,16 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 계약과 runtime. Zlink(binding)는 여기서 고정하지 않는다 — Zlink.Framework
+         0.12.0의 .nuspec이 <dependency id="Zlink" version="1.1.0" />를 직접 지정하므로
+         전이 의존에 맡긴다. -->
+    <PackageVersion Include="Zlink.Framework" Version="0.12.0" />
+    <!-- DI·hosted service 등록(AddZLinkFramework). -->
+    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.12.0" />
+  </ItemGroup>
+
+</Project>

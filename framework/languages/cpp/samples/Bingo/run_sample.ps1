@@ -313,14 +313,11 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Bingo C++ client did not write completion marker."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
-        throw "Bingo C++ client did not write stream-inbound marker."
+    if (-not (Select-String -Path $clientLog -Pattern "stream-result sample=Bingo client=player1 operation=authenticate" -Quiet)) {
+        throw "Bingo C++ client did not write stream response handling evidence."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo .* seq=[0-9]" -Quiet)) {
-        throw "Bingo C++ client did not write sequenced stream-inbound response marker."
-    }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo .* name=.*Notify" -Quiet)) {
-        throw "Bingo C++ client did not write stream-inbound push marker."
+    if (-not (Select-String -Path $clientLog -Pattern "stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify" -Quiet)) {
+        throw "Bingo C++ client did not write stream push handler evidence."
     }
     $playLogs = @((Join-Path $LogDir "play-a.log"), (Join-Path $LogDir "play-b.log"))
     $sessionLogs = @((Join-Path $LogDir "session-a.log"), (Join-Path $LogDir "session-b.log"))

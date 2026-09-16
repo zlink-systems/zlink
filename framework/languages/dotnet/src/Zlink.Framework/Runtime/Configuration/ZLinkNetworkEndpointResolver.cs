@@ -22,13 +22,12 @@ internal static class ZLinkNetworkEndpointResolver
     {
         var endpoint = new Uri(boundEndpoint, UriKind.Absolute);
 
-        // Per doc/plan/endpoint-notation-policy.ko.md §2.2 every scheme is
-        // normalized identically (the previous tcp-only early return skipped
-        // normalization entirely for other schemes). AdvertiseHost
-        // substitution, however, only makes sense for a real network
-        // transport: an inproc/ipc endpoint's "host" segment is an opaque
-        // process-local identity, not something a remote peer dials, and
-        // overwriting it with BindHost/AdvertiseHost would corrupt it.
+        // Every scheme is normalized identically (the previous tcp-only
+        // early return skipped normalization entirely for other schemes).
+        // AdvertiseHost substitution, however, only makes sense for a real
+        // network transport: an inproc/ipc endpoint's "host" segment is an
+        // opaque process-local identity, not something a remote peer dials,
+        // and overwriting it with BindHost/AdvertiseHost would corrupt it.
         if (!ZLinkEndpointNotation.IsAuthorityScheme(endpoint.Scheme.ToLowerInvariant()))
             return ZLinkEndpointNotation.Normalize(boundEndpoint);
 

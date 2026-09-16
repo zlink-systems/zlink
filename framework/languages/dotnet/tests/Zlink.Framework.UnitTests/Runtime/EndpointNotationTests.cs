@@ -75,8 +75,8 @@ public sealed class EndpointNotationTests
         Assert.Equal(string.Empty, ZLinkEndpointNotation.Normalize("   "));
     }
 
-    // doc/plan/endpoint-notation-policy.ko.md §2.2: host/port/slash rules
-    // apply only to schemes with a real network authority (tcp/tls/ws/wss).
+    // Host/port/slash normalization rules apply only to schemes with a
+    // real network authority (tcp/tls/ws/wss).
     // A scheme like ipc:// is followed by a filesystem path, not an
     // authority -- only the scheme token is lowercased, every other byte
     // (path casing, slash count, trailing slash) is preserved exactly.

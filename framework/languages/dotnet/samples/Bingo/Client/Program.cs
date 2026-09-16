@@ -18,21 +18,18 @@ internal static class Program
             "client");
         var logger = loggerFactory.CreateLogger("Bingo.Client");
 
-        await using var client1 = CreateClient(streamAEndpoint, "player1", logger);
-        await using var client2 = CreateClient(streamBEndpoint, "player2", logger);
-        await using var observer = CreateClient(streamBEndpoint, "observer", logger);
+        await using var client1 = CreateClient(streamAEndpoint);
+        await using var client2 = CreateClient(streamBEndpoint);
+        await using var observer = CreateClient(streamBEndpoint);
 
-        await new BingoClientScenario().RunAsync(
+        await new BingoClientScenario(logger).RunAsync(
             client1,
             client2,
             observer);
         logger.LogInformation("bingo=completed");
     }
 
-    private static IZlinkStreamConnector CreateClient(
-        string streamEndpoint,
-        string clientName,
-        ILogger logger)
+    private static IZlinkStreamConnector CreateClient(string streamEndpoint)
     {
         return ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
             {
@@ -41,17 +38,6 @@ internal static class Program
                 RequestTimeout = SampleTimings.RequestTimeout,
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
                 PayloadCodec = ZLinkProtobufCodec.Default
-            })
-            .WithInboundObserver((observation, _) =>
-            {
-                logger.LogInformation(
-                    "stream-inbound sample=Bingo client={0} kind={1} name={2} seq={3} bytes={4}",
-                    clientName,
-                    observation.Kind,
-                    observation.Name,
-                    observation.RequestSeq?.ToString() ?? "-",
-                    observation.PayloadLength);
-                return ValueTask.CompletedTask;
             });
     }
 }

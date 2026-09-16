@@ -4,7 +4,6 @@
 
 - `framework/doc/framework/common/e2e/config-3-pubsub.ko.md`
 - `framework/languages/dotnet/e2e/PubSub/feature-map.ko.md`
-- `framework/doc/plan/framework-java-e2e-dotnet-porting-plan.ko.md`
 
 마지막 검증:
 

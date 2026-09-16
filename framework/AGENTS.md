@@ -108,7 +108,7 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
   §RID 중복 정책, `05-polling.ko.md`, `bindings/doc/spec/**`). Framework는 그 결과를 관찰하고 logical
   handshake·descriptor·liveness만 소유한다. 한 언어에서만 물리 상태기계(pair index, lane mask, 두 번째
   poller, 수동 reconnect)가 필요해 보이면 그 언어의 다른 root cause를 의심하고 cpp·node 구현과 먼저
-  대조한다(2026-09-05 리뷰: `doc/plan/c016-worklog/review-layer-ownership-audit.md`).
+  대조한다(2026-09-05 리뷰).
 
 ## 언어별 게이트·환경 주의
 
