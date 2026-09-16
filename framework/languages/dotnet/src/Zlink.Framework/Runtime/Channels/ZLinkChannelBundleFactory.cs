@@ -111,7 +111,9 @@ internal sealed class ZLinkChannelBundleFactory(
                 // destination and therefore is not written to the native socket.
             }
 
-            subscriber.SetSubscription(string.Empty);
+            ZLinkFanoutSubscriptionPolicy.Apply(
+                subscriber,
+                channel.Subscriber.Topics);
             bundle = new ZLinkChannelRuntimeBundle(
                 subscriber,
                 subscriber.Connect,

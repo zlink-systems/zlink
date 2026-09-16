@@ -54,6 +54,8 @@ public interface IZLinkFanoutChannelBuilder
 
     IZLinkFanoutChannelBuilder EnableSubscriber();
 
+    IZLinkFanoutChannelBuilder Subscribe(string topic);
+
     IZLinkFanoutChannelBuilder Connect(string endpoint);
 
     IZLinkEndpointConnections SubscriberConnections { get; }

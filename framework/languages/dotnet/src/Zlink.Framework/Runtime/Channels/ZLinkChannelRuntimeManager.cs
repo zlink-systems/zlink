@@ -104,6 +104,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                                 channelName,
                                 state.Context,
                                 channel.Subscriber.SocketConfig,
+                                channel.Subscriber.Topics,
                                 receiveLoop,
                                 fanoutRuntime,
                                 state.ErrorSink,
