@@ -175,6 +175,7 @@ export interface ZLinkChannelOptions {
   readonly publisher?: ZLinkPublisherCapabilityOptions;
   readonly routeMesh?: ZLinkRouteMeshChannelOptions;
   readonly publishHandlers?: readonly ZLinkChannelPublishHandlerRegistration[];
+  readonly subscriptions?: readonly string[];
   readonly requestHandlers?: readonly ZLinkChannelRequestHandlerRegistration[];
   readonly sendHandlers?: readonly ZLinkChannelSendHandlerRegistration[];
   readonly server?: {

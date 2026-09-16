@@ -942,8 +942,7 @@ export class ZLinkChannelSocketRegistry {
     }
     const subscriber = this.adapter.createSubscriberSocket(this.context);
     subscriber.setChannelName(channelName);
-    subscriber.setSubscription('');
-    subscriber.setSubscription(FANOUT_LIVENESS_TOPIC);
+    setFanoutSubscriptions(subscriber, channel.subscriptions);
     const monitor = this.monitoringAdapter.openSocketMonitor(subscriber);
     const connection: FanoutPublisherConnection = {
       channelName,
@@ -1778,6 +1777,16 @@ function sameClientServerDiscoveryDescriptor(
 
 function closeMessages(parts: readonly Message[]): void {
   for (const part of parts) part.close();
+}
+
+function setFanoutSubscriptions(
+  subscriber: ZLinkBackendSubscriberSocket,
+  applicationTopics: readonly string[] | undefined
+): void {
+  const topics = new Set(applicationTopics);
+  if (topics.size === 0) topics.add('');
+  topics.add(FANOUT_LIVENESS_TOPIC);
+  for (const topic of topics) subscriber.setSubscription(topic);
 }
 
 function deriveRoutingId(baseRoutingId: string, suffix: string): string {

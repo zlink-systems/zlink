@@ -38,6 +38,7 @@ import {
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
+import { requirePublicFanoutTopic } from './fanout-service-wire';
 import {
   requestToSpotHandle,
   sendToSpotHandle,
@@ -128,6 +129,7 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
     const topic = hasExplicitTopic
       ? topicOrEvent as string
       : resolveFrameworkPacketName(event, undefined, 'Fanout');
+    requirePublicFanoutTopic(topic);
     const packetName = resolveFrameworkPacketName(event, undefined, 'Fanout');
     return new DefaultZLinkFanoutPublishCall(
       () => this.requirePublisherChannel(channelName),

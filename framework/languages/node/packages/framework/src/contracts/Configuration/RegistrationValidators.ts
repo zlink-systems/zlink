@@ -20,6 +20,7 @@ import {
 import { validateTimerRegistration } from './TimerRegistrationValidator';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
+import { requirePublicFanoutTopic } from './FanoutTopic';
 
 export function validateFrameworkRegistration(
   registration: ZLinkFrameworkRegistration,
@@ -203,6 +204,14 @@ function validateChannelCapabilities(
   peerLocationConfigured: boolean
 ): void {
   for (const [channelName, channel] of Object.entries(channels ?? {})) {
+    for (const topic of channel.subscriptions ?? []) {
+      requirePublicFanoutTopic(topic);
+    }
+    if ((channel.subscriptions ?? []).length > 0 && channel.subscriber === undefined) {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' fanout subscriptions require a subscriber capability.`
+      );
+    }
     if (channel.server !== undefined) {
       requireEndpoint(`channel '${channelName}' server`, channel.server.bind);
       validateListenerNetworkIdentity(

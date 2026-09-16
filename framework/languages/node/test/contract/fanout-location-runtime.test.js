@@ -182,18 +182,19 @@ test('fanout publisher sends the exact reserved beacon every five seconds and pu
     published[0].payload,
     Buffer.from(fanoutWire.FANOUT_LIVENESS_PAYLOAD)
   );
-  assert.throws(
-    () => fanoutWire.requirePublicFanoutTopic(
-      fanoutWire.FANOUT_LIVENESS_TOPIC
-    ),
-    (error) => error instanceof ZLinkConfigurationException
-      && /reserved/.test(error.message)
-  );
-  assert.doesNotThrow(
-    () => fanoutWire.requirePublicFanoutTopic(
-      `${fanoutWire.FANOUT_LIVENESS_TOPIC}.application`
-    )
-  );
+  for (const topic of [
+    fanoutWire.FANOUT_LIVENESS_TOPIC,
+    `${fanoutWire.FANOUT_LIVENESS_TOPIC}.application`
+  ]) {
+    assert.throws(
+      () => fanoutWire.requirePublicFanoutTopic(topic),
+      (error) => error instanceof ZLinkConfigurationException
+        && /reserved/.test(error.message)
+    );
+  }
+  for (const topic of ['\x01ZLF', '\x01ZLF2']) {
+    assert.doesNotThrow(() => fanoutWire.requirePublicFanoutTopic(topic));
+  }
   await sockets.dispose();
 });
 
