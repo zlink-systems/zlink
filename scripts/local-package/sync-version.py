@@ -750,24 +750,6 @@ def synchronize(
         rf"\g<1>{core_version}",
         1,
     )
-    sync.regex(
-        "framework/languages/cpp/samples/sample-build-common.sh",
-        rf'(?m)^(\s*local cpp_version="){SEMVER}("\s*)$',
-        rf"\g<1>{binding_version}\2",
-        1,
-    )
-    sync.regex(
-        "framework/languages/cpp/samples/sample-build-common.sh",
-        rf'(?m)^(\s*local core_version="){SEMVER}("\s*)$',
-        rf"\g<1>{core_version}\2",
-        1,
-    )
-    sync.regex(
-        "framework/languages/cpp/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake",
-        rf"libzlink\.so\.{SEMVER}",
-        f"libzlink.so.{core_version}",
-        1,
-    )
     binding_version = bindings["dotnet"]
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
