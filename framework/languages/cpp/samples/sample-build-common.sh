@@ -10,7 +10,7 @@ zlink_cpp_sample_prepare_build() {
   # cannot silently select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
   local cpp_version="1.1.0"
-  local core_version="1.1.0"
+  local core_version="1.2.0"
   local dependency_prefix=""
   local toolchain_file=""
   local build_type="Release"

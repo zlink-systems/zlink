@@ -72,7 +72,7 @@ foreach(required_path IN ITEMS
     # distribution to a source archive that consumes LZ4 through Findlz4
     # (config first, system fallback) instead of copying the library. The
     # producer-specific-path check above is what guards that boundary.
-    "${consumer_install_prefix}/lib/libzlink.so.1.1.0")
+    "${consumer_install_prefix}/lib/libzlink.so.1.2.0")
   if(NOT EXISTS "${required_path}")
     message(FATAL_ERROR "stream connector component is missing: ${required_path}")
   endif()
