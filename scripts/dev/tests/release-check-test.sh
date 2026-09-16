@@ -486,6 +486,88 @@ assert_failure '--write node 거부 실패' 2 release_check_write --write bindin
 assert_failure '--write dotnet 거부 실패' 2 release_check_write --write framework dotnet 1.2.3
 pass '--write는 npm·NuGet·Maven 언어를 거부한다(vcpkg·Conan 레시피만 이 자동화의 대상)'
 
+# --- 혼합 형태(issue #419): vcpkg_from_github 소스 폴백 + 플랫폼별
+# vcpkg_download_distfile(SHA512가 리터럴이 아니라 if/elseif로 고르는 변수).
+# PR #413이 core port를 이 모양으로 만들었다; 여기서는 linux-x64/linux-arm64
+# 두 플랫폼만으로 같은 메커니즘을 확인한다.
+cat >"$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" <<'EOF'
+set(ZLINK_RELEASE_TAG "core/v1.2.2")
+set(ZLINK_RELEASE_VERSION "1.2.2")
+set(ZLINK_ARCHIVE_PLATFORM "")
+if(VCPKG_TARGET_IS_LINUX)
+    if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+        set(ZLINK_ARCHIVE_PLATFORM "linux-x64")
+        set(ZLINK_ARCHIVE_SHA512 "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
+    elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
+        set(ZLINK_ARCHIVE_PLATFORM "linux-arm64")
+        set(ZLINK_ARCHIVE_SHA512 "2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222")
+    endif()
+endif()
+if(ZLINK_ARCHIVE_PLATFORM)
+    vcpkg_download_distfile(ZLINK_ARCHIVE
+        URLS "https://github.com/zlink-systems/zlink/releases/download/${ZLINK_RELEASE_TAG}/libzlink-${ZLINK_ARCHIVE_PLATFORM}.tar.gz"
+        FILENAME "libzlink-${ZLINK_RELEASE_VERSION}-${ZLINK_ARCHIVE_PLATFORM}.tar.gz"
+        SHA512 "${ZLINK_ARCHIVE_SHA512}"
+    )
+else()
+    vcpkg_from_github(
+        OUT_SOURCE_PATH SOURCE_PATH
+        REPO zlink-systems/zlink
+        REF "${ZLINK_RELEASE_TAG}"
+        SHA512 3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333
+        HEAD_REF main
+    )
+endif()
+EOF
+sed -i 's/"version":"1.2.3"/"version":"1.2.2"/' "$TEST_ROOT/repo/vcpkg/ports/zlink/vcpkg.json"
+cat >"$TEST_ROOT/repo/core/packaging/conan/conandata.yml" <<'EOF'
+binaries:
+  "1.2.2":
+    linux-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.2/libzlink-linux-x64.tar.gz"
+      sha256: "4444444444444444444444444444444444444444444444444444444444444444"
+    linux-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.2/libzlink-linux-arm64.tar.gz"
+      sha256: "5555555555555555555555555555555555555555555555555555555555555555"
+
+sources:
+  "1.2.2":
+    url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.2/zlink-1.2.2-source.tar.gz"
+    sha256: "6666666666666666666666666666666666666666666666666666666666666666"
+EOF
+
+mkdir -p "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3"
+printf 'core linux-x64 archive fixture bytes\n' \
+    >"$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-x64.tar.gz"
+printf 'core linux-arm64 archive fixture bytes\n' \
+    >"$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-arm64.tar.gz"
+linux_x64_sha512=$(sha512sum "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-x64.tar.gz" | awk '{print $1}')
+linux_x64_sha256=$(sha256sum "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-x64.tar.gz" | awk '{print $1}')
+linux_arm64_sha512=$(sha512sum "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-arm64.tar.gz" | awk '{print $1}')
+linux_arm64_sha256=$(sha256sum "$HTTP_ROOT/zlink-systems/zlink/releases/download/core/v1.2.3/libzlink-linux-arm64.tar.gz" | awk '{print $1}')
+# core/v1.2.3의 GitHub 자동 아카이브·릴리스 소스 자산은 앞의 vcpkg_from_github
+# 테스트가 이미 만들어 두었다(archive/core/v1.2.3.tar.gz,
+# releases/download/core/v1.2.3/zlink-1.2.3-source.tar.gz).
+
+assert_success '혼합 형태(github+플랫폼별 distfile) 쓰기 실패' release_check_write --write core 1.2.3
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" '^set\(ZLINK_RELEASE_TAG "core/v1\.2\.3"\)$'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" '^set\(ZLINK_RELEASE_VERSION "1\.2\.3"\)$'
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" "SHA512 ${core_archive_sha512}\$"
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" "ZLINK_ARCHIVE_SHA512 \"${linux_x64_sha512}\"\\)\$"
+assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink/portfile.cmake" "ZLINK_ARCHIVE_SHA512 \"${linux_arm64_sha512}\"\\)\$"
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" '"1\.2\.3":'
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" "sha256: \"${linux_x64_sha256}\""
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" "sha256: \"${linux_arm64_sha256}\""
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" "sha256: \"${core_asset_sha256}\""
+# 이전 버전(1.2.2)의 binaries:/sources: 항목은 sources:가 다른 모든 버전에 대해
+# 그러듣이 과거 기록으로 남는다 -- 삭제 대상이 아니다.
+assert_file_contains "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" '"1\.2\.2":'
+
+assert_success '혼합 형태 재실행 무변경 확인 실패' release_check_write --write core 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '^변경 없음: vcpkg/ports/zlink/portfile\.cmake$'
+assert_file_contains "$TEST_ROOT/last.out" '^변경 없음: core/packaging/conan/conandata\.yml$'
+pass 'vcpkg_from_github 폴백과 플랫폼별 vcpkg_download_distfile(변수 SHA512)이 함께 있어도 거부하지 않고, 각자의 해시(GitHub 아카이브·플랫폼별 아카이브·릴리스 소스 자산)를 읽어 portfile의 여러 SHA512와 conandata.yml의 binaries:·sources: 항목을 모두 갱신하며 재실행은 무변경이다'
+
 kill "$HTTP_SERVER_PID" >/dev/null 2>&1 || true
 wait "$HTTP_SERVER_PID" 2>/dev/null || true
 HTTP_SERVER_PID=""
