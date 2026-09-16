@@ -533,3 +533,11 @@ function Assert-ZlinkSampleSourcePolicy {
         throw $Message
     }
 }
+
+# Every Java and Kotlin sample runner dot-sources this file, so pin the JDK
+# here rather than in each of the fourteen. The per-language batch runner used
+# to do it once for the whole set; with samples running one at a time (#405)
+# a runner that skipped it built with the toolchain JDK and launched its roles
+# with whatever java came first on PATH, and the roles died on
+# UnsupportedClassVersionError before signalling readiness.
+Set-ZlinkSampleJavaRuntime -SamplesRoot (Join-Path $PSScriptRoot '')
