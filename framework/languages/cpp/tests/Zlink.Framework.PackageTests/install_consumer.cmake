@@ -58,7 +58,10 @@ file(READ "${connector_targets_file}" connector_targets_text)
 foreach(required_text IN ITEMS
     "find_dependency(Threads)"
     "find_dependency(nlohmann_json CONFIG)"
-    "../zlink_cpp/zlink_cppTargets.cmake"
+    # zlink_cpp is found through CMake own CONFIG search, not a hardcoded
+    # relative include: the staged configs are not necessarily siblings of
+    # this one. See zlink_framework_cppConfig.cmake.in for why.
+    "find_dependency(zlink_cpp"
     "zlink_framework_cppTargets.cmake")
   string(FIND "${framework_config_text}" "${required_text}" required_pos)
   if(required_pos EQUAL -1)
@@ -91,7 +94,10 @@ endforeach()
 foreach(required_text IN ITEMS
     "find_dependency(Threads)"
     "find_dependency(nlohmann_json)"
-    "../zlink_cpp/zlink_cppTargets.cmake"
+    # zlink_cpp is found through CMake own CONFIG search, not a hardcoded
+    # relative include: the staged configs are not necessarily siblings of
+    # this one. See zlink_framework_cppConfig.cmake.in for why.
+    "find_dependency(zlink_cpp"
     "zlink_stream_connector_cppTargets.cmake")
   string(FIND "${connector_config_text}" "${required_text}" required_pos)
   if(required_pos EQUAL -1)
@@ -250,9 +256,15 @@ main ()
 }
 ]=])
 
+# execute_process expands its COMMAND list unquoted, so a list element that
+# itself contains ";" is flattened into separate arguments and all but the
+# first prefix path entry is lost. Escape the separators so CMAKE_PREFIX_PATH
+# arrives as one argument holding the whole list.
+string(REPLACE ";" "\;" consumer_prefix_path
+  "${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}")
 set(consumer_configure_command
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
-  "-DCMAKE_PREFIX_PATH=${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}")
+  "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}")
 if(NOT ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
   list(APPEND consumer_configure_command
     "-DCMAKE_BUILD_TYPE=${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")
