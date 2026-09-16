@@ -196,6 +196,18 @@ Claude로 대체했으면 그 사유를 결정 기록이나 작업 로그에 남
   트레이스 off일 때 무비용(hot path는 `if (Flow.Enabled(...))` 래핑, rare는 lazy/thunk로
   event·string·lambda를 게이트 뒤에서만 생성). ungated `Console`/string-concat 로깅을 남기지 않는다.
 
+### 4.2 검증 원칙
+
+[`doc/principal/dev/verification-principles.ko.md`](./doc/principal/dev/verification-principles.ko.md)를
+따른다. 두 줄로 요약하면:
+
+- **재현을 먼저 한다.** 결함을 자기 손으로 한 번 일으키지 못했으면 고쳤는지 알 수 없다.
+  재현 환경이 없으면 만드는 비용과 CI 왕복 비용을 비교한다 — 대개 만드는 쪽이 싸다.
+- **검사는 양방향으로 시험한다.** 나쁜 입력을 일부러 만들어 실제로 잡히는지까지 보고 두
+  출력을 함께 보고한다. 통과만 확인한 검사는 무엇을 잡는지 아무도 모른다.
+
+거짓 통과를 새로 겪으면 그 문서 §3에 한 줄을 더한다. 이 절은 늘리지 않는다.
+
 ## 5. 문서 보호
 
 다음 경로는 사용자가 해당 경로와 변경 범위를 명시적으로 승인한 경우에만 생성·수정·삭제·이동한다.
