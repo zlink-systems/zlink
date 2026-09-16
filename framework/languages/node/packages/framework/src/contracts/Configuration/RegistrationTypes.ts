@@ -170,6 +170,7 @@ export interface ZLinkFrameworkRegistrationOptions {
 export interface ZLinkChannelOptions {
   readonly routingId?: string;
   readonly routingIdPrefix?: string;
+  readonly noDrop?: boolean;
   readonly requestTimeoutMs?: number;
   readonly client?: ZLinkClientCapabilityOptions;
   readonly publisher?: ZLinkPublisherCapabilityOptions;
