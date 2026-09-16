@@ -77,18 +77,26 @@ class async_delay_timer_t
     }
 
   private:
+    /*
+     * The detached completion thread below reaches these two after it wakes,
+     * and a timer that is still pending when main returns wakes during static
+     * destruction. Function-local statics would be gone by then, and the
+     * thread would read a destroyed map. Both are therefore allocated once and
+     * never destroyed; the map holds only pending timers, each erased as it
+     * completes.
+     */
     static std::mutex &registry_mutex ()
     {
-        static std::mutex mutex;
-        return mutex;
+        static auto *const mutex = new std::mutex ();
+        return *mutex;
     }
 
     static std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> &
     registry ()
     {
-        static std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>>
-          registry;
-        return registry;
+        static auto *const registry =
+          new std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> ();
+        return *registry;
     }
 
     core_timer_drain_loop_t _timer;
