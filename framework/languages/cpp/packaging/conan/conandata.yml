@@ -1,5 +1,5 @@
 # Hash of the published framework release source unit; checksum bypass is not used.
 sources:
-  "0.15.0":
-    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.15.0/zlink-framework-cpp-0.15.0.tar.gz"
+  "0.16.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.16.0/zlink-framework-cpp-0.16.0.tar.gz"
     sha256: "d8f035092d64b7b041bb344db663179a76b0f97a6e39829fd665df424055f4b5"
