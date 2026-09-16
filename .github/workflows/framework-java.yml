@@ -1,34 +1,37 @@
 name: Framework Java
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/framework-java.yml"
-      - "VERSION"
-      - "bindings/java/**"
-      - "framework/languages/java/**"
-      - "framework/runtime/**"
-      - "scripts/local-package/build-windows.ps1"
-      - "scripts/local-package/core/**"
-      - "scripts/local-package/java/**"
-      - "scripts/local-package/sync-version.py"
-      - "scripts/ci/framework-java-test-results.ps1"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/framework-java.yml"
-      - "VERSION"
-      - "bindings/java/**"
-      - "framework/languages/java/**"
-      - "framework/runtime/**"
-      - "scripts/local-package/build-windows.ps1"
-      - "scripts/local-package/core/**"
-      - "scripts/local-package/java/**"
-      - "scripts/local-package/sync-version.py"
-      - "scripts/ci/framework-java-test-results.ps1"
+# Verification moved to local unit tests before merge; CI runs on request
+# (user decision 2026-09-17). Uncomment the blocks below to restore the
+# automatic triggers.
+#  push:
+#    branches:
+#      - main
+#    paths:
+#      - ".github/workflows/framework-java.yml"
+#      - "VERSION"
+#      - "bindings/java/**"
+#      - "framework/languages/java/**"
+#      - "framework/runtime/**"
+#      - "scripts/local-package/build-windows.ps1"
+#      - "scripts/local-package/core/**"
+#      - "scripts/local-package/java/**"
+#      - "scripts/local-package/sync-version.py"
+#      - "scripts/ci/framework-java-test-results.ps1"
+#  pull_request:
+#    branches:
+#      - main
+#    paths:
+#      - ".github/workflows/framework-java.yml"
+#      - "VERSION"
+#      - "bindings/java/**"
+#      - "framework/languages/java/**"
+#      - "framework/runtime/**"
+#      - "scripts/local-package/build-windows.ps1"
+#      - "scripts/local-package/core/**"
+#      - "scripts/local-package/java/**"
+#      - "scripts/local-package/sync-version.py"
+#      - "scripts/ci/framework-java-test-results.ps1"
   workflow_dispatch:
 
 permissions:
