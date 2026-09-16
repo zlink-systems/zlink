@@ -195,6 +195,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 SOURCE_RID,
                 sourceDescriptor.lifecycleGeneration(),
                 observed,
+                systems.zlink.framework.testing
+                    .ZLinkDescriptorLeaseTestFixture.resolver(observed),
                 coordinator,
                 sourceSpots.actorSessions(),
                 sourceAdapters,
@@ -207,6 +209,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 TARGET_RID,
                 targetDescriptor.lifecycleGeneration(),
                 observed,
+                systems.zlink.framework.testing
+                    .ZLinkDescriptorLeaseTestFixture.resolver(observed),
                 coordinator,
                 targetSpots.actorSessions(),
                 targetAdapters,

@@ -90,6 +90,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 nodeRegistration.routingId(),
                 source.lifecycleGeneration(),
                 repository,
+                systems.zlink.framework.testing
+                    .ZLinkDescriptorLeaseTestFixture.resolver(repository),
                 coordinator,
                 runtime.actorSessions(),
                 new ZLinkRelocationAdapterRegistry(
@@ -176,6 +178,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 nodeRegistration.routingId(),
                 source.lifecycleGeneration(),
                 repository,
+                systems.zlink.framework.testing
+                    .ZLinkDescriptorLeaseTestFixture.resolver(repository),
                 coordinator,
                 runtime.actorSessions(),
                 adapters,

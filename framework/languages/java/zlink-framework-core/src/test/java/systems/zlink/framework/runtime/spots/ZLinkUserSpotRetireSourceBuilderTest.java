@@ -214,6 +214,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     nodeRegistration.routingId(),
                     sourceGeneration,
                     repository,
+                    systems.zlink.framework.testing
+                        .ZLinkDescriptorLeaseTestFixture.resolver(repository),
                     coordinator,
                     runtime.spotLifecycle(),
                     runtime.actorSessions(),
@@ -310,6 +312,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     nodeRegistration.routingId(),
                     source.lifecycleGeneration(),
                     repository,
+                    systems.zlink.framework.testing
+                        .ZLinkDescriptorLeaseTestFixture.resolver(repository),
                     coordinator,
                     runtime.spotLifecycle(),
                     runtime.actorSessions(),
@@ -429,6 +433,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     nodeRegistration.routingId(),
                     source.lifecycleGeneration(),
                     repository,
+                    systems.zlink.framework.testing
+                        .ZLinkDescriptorLeaseTestFixture.resolver(repository),
                     coordinator,
                     runtime.spotLifecycle(),
                     runtime.actorSessions(),
