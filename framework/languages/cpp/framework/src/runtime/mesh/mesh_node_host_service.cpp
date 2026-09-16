@@ -21,6 +21,7 @@
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/locations/source_creation_cleanup.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -1297,26 +1298,28 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
     std::vector<mesh_node_descriptor_t> candidates;
-    location_page_request_t page;
-    do {
-        auto listed = _location_store->list_mesh_nodes (selected_mesh, page).result ().value ();
-        for (auto &descriptor : listed.items) {
-            const auto capable = std::any_of (
-              descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-              [&] (const object_capability_t &capability) {
-                  return capability.object_kind == placement_object_kind_t::user_spot
-                         && capability.stable_type == stable_type;
-              });
-            if (descriptor.state == framework_runtime_state_t::serving
-                && descriptor.object_role == object_role_t::server
-                && descriptor.placement_weight > 0
-                && placement_capacity_available (descriptor, placement_object_kind_t::user_spot,
-                                                 stable_type)
-                && capable)
-                candidates.push_back (std::move (descriptor));
-        }
-        page.continuation_token = std::move (listed.continuation_token);
-    } while (page.continuation_token);
+    auto listed = _services->get_required<store_location_resolvers_t> ()
+                    .list_live_mesh_nodes (selected_mesh)
+                    .result ();
+    if (!listed.has_value ())
+        return task_t<spot_create_result_t> (
+          detail::propagate_failure<spot_create_result_t> (
+            listed, "User Spot target lookup failed"));
+    for (auto &descriptor : listed.value ()) {
+        const auto capable = std::any_of (
+          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+          [&] (const object_capability_t &capability) {
+              return capability.object_kind == placement_object_kind_t::user_spot
+                     && capability.stable_type == stable_type;
+          });
+        if (descriptor.state == framework_runtime_state_t::serving
+            && descriptor.object_role == object_role_t::server
+            && descriptor.placement_weight > 0
+            && placement_capacity_available (descriptor, placement_object_kind_t::user_spot,
+                                             stable_type)
+            && capable)
+            candidates.push_back (std::move (descriptor));
+    }
     if (candidates.empty ())
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
           framework_error_kind_t::unavailable, "No eligible User Spot target is ready"));
