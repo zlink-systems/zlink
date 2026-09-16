@@ -10,8 +10,9 @@ internal static class ZLinkNetworkEndpointResolver
     {
         if (explicitEndpoint is not null)
             return ZLinkEndpointNotation.Normalize(explicitEndpoint);
+        var bindHost = listenerBindHost ?? network.BindHost;
         return ZLinkEndpointNotation.Normalize(
-            $"tcp://{listenerBindHost ?? network.BindHost}:{port.GetValueOrDefault()}");
+            $"tcp://{FormatAuthorityHost(bindHost)}:{port.GetValueOrDefault()}");
     }
 
     public static string Advertise(
@@ -33,11 +34,17 @@ internal static class ZLinkNetworkEndpointResolver
 
         var bindHost = listenerBindHost ?? network.BindHost;
         var advertiseHost = listenerAdvertiseHost
-            ?? network.AdvertiseHost
-            ?? (!IsWildcard(bindHost) ? bindHost : null);
-        if (advertiseHost is null)
+            ?? network.AdvertiseHost;
+        if (advertiseHost is not null && IsWildcard(advertiseHost))
             throw new ZLinkConfigurationException(
-                "AdvertiseHost is required when BindHost is a wildcard address.");
+                "AdvertiseHost must not be a wildcard address.");
+
+        advertiseHost ??= bindHost switch
+        {
+            "0.0.0.0" => "127.0.0.1",
+            "::" => "::1",
+            _ => bindHost
+        };
 
         var builder = new UriBuilder(endpoint) { Host = advertiseHost };
         return ZLinkEndpointNotation.Normalize(builder.Uri.ToString());
@@ -46,4 +53,9 @@ internal static class ZLinkNetworkEndpointResolver
     public static bool IsWildcard(string host) =>
         string.Equals(host, "0.0.0.0", StringComparison.Ordinal)
         || string.Equals(host, "::", StringComparison.Ordinal);
+
+    private static string FormatAuthorityHost(string host) =>
+        Uri.CheckHostName(host) == UriHostNameType.IPv6
+            ? $"[{host}]"
+            : host;
 }
