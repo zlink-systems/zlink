@@ -209,7 +209,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure);
+            return DirectSubmitFailure(failure, selectOne: true);
         }
         catch (ObjectDisposedException)
         {
@@ -236,7 +236,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZLinkRequestTerminalException terminal)
         {
-            throw ZLinkRequestFailureMapper.CreateCompletionException(
+            throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
                 $"Channel request to '{channelName}' failed with result '{terminal.Result}'.");
@@ -249,7 +249,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZlinkSubmitException failure)
         {
-            throw ZLinkRequestFailureMapper.CreateSubmitException(
+            throw ZLinkRequestFailureMapper.CreateChannelSubmitException(
                 failure, $"Channel request to '{channelName}'");
         }
         finally
@@ -314,14 +314,21 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
     }
 
+    //  selectOne marks the channel path, where NotFound means applying
+    //  eligibility and drain left no member to pick rather than a named target
+    //  being absent. The spec ends that as Unavailable
+    //  (06-framework-api "no eligible select-one member").
     private static ZLinkOneWaySubmitResult DirectSubmitFailure(
-        ZlinkSubmitException failure) =>
+        ZlinkSubmitException failure,
+        bool selectOne = false) =>
         failure.Result switch
         {
             ZlinkSubmitException.ErrorCode.NotConnected =>
                 new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.RouteNotConnected),
             ZlinkSubmitException.ErrorCode.NotFound =>
-                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TargetNotFound),
+                new ZLinkOneWaySubmitResult(selectOne
+                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                    : ZLinkOneWaySubmitStatus.TargetNotFound),
             ZlinkSubmitException.ErrorCode.Terminated =>
                 new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown),
             ZlinkSubmitException.ErrorCode.Backpressured =>

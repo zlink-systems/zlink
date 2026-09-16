@@ -1960,6 +1960,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
   add_zlink_framework_test(
+    test_cpp_framework_channel_no_eligible_member
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_no_eligible_member.cpp
+    "framework-unit;framework-regression;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_channel_no_eligible_member)
+  target_include_directories(test_cpp_framework_channel_no_eligible_member PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_fanout_subscription
     tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_subscription.cpp
     "framework-unit;framework-regression;channel;messaging")

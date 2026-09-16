@@ -241,7 +241,7 @@ framework_exception_t map_native_request_exception (const std::exception &error)
               detail::boundary_error_t::disconnected,
               "channel request target is not connected");
         }
-        return runtime::messaging::map_submit_result_exception (
+        return runtime::messaging::map_channel_submit_result_exception (
           submit_error->result (), submit_error->what ());
     }
     return framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
@@ -269,7 +269,7 @@ framework_exception_t map_native_send_exception (const std::exception &error)
               detail::boundary_error_t::disconnected,
               "channel send target is not connected");
         }
-        return runtime::messaging::map_submit_result_exception (
+        return runtime::messaging::map_channel_submit_result_exception (
           submit_error->result (), submit_error->what ());
     }
     return framework_exception_t (

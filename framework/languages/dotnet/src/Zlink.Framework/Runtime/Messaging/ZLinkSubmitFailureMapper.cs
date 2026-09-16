@@ -9,6 +9,16 @@ internal static class ZLinkSubmitFailureMapper
         SubmitResult result,
         string targetDescription)
     {
+        //  A select-one channel reports NotFound when applying eligibility and
+        //  drain left no member to pick. The send path and its connection are
+        //  still there, so the spec ends that as Unavailable
+        //  (06-framework-api "no eligible select-one member"). CreateException
+        //  below keeps NotFound for a named target that is absent.
+        if (result == SubmitResult.NotFound)
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{targetDescription} had no eligible member.",
+                ZLinkRetryAdvice.RetryAfterBackoff);
         return CreateException(result, targetDescription);
     }
 

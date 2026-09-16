@@ -139,6 +139,7 @@
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
         <Compile Include="Runtime/FanoutPublishAdmissionTests.cs"/>
+        <Compile Include="Runtime/ChannelNoEligibleMemberTests.cs"/>
         <Compile Include="Runtime/FanoutNoDropTests.cs"/>
         <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>

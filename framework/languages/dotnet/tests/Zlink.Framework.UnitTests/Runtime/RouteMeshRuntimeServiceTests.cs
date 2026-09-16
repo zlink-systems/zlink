@@ -157,11 +157,15 @@ public sealed class RouteMeshRuntimeServiceTests
                     new RouteProbe("local-only"))
                 .Async<RouteProbe>());
 
-        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+        //  A RouteMesh sender is not its own channel candidate, so the eligible
+        //  set is empty while the registration and the mesh are in place. That
+        //  ends as Unavailable
+        //  (06-framework-api "no eligible select-one member").
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
     }
 
     [Fact]
-    public async Task Remote_RouteMesh_Server_With_Zero_Weight_Is_NotFound()
+    public async Task Remote_RouteMesh_Server_With_Zero_Weight_Is_Unavailable()
     {
         var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
@@ -194,8 +198,12 @@ public sealed class RouteMeshRuntimeServiceTests
                     new RouteProbe("zero-weight"))
                 .Async<RouteProbe>());
 
-        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
-        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
+        //  The member is still registered and connected; only its weight took
+        //  it out of the eligible set, so the call ends as Unavailable and can
+        //  be retried once the weight rises again
+        //  (06-framework-api "no eligible select-one member").
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
     }
 
     [Fact]
