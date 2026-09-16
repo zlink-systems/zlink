@@ -154,6 +154,7 @@ jobs:
             framework/languages/java/*/build/test-results/**/*.xml
           retention-days: 14
           if-no-files-found: error
+          overwrite: true
 
   framework-java-compare:
     name: Compare Linux and Windows Java results
@@ -186,3 +187,4 @@ jobs:
           path: .artifacts/framework-java-results/comparison.txt
           retention-days: 14
           if-no-files-found: error
+          overwrite: true
