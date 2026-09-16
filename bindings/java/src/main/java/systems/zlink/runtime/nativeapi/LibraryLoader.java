@@ -15,15 +15,14 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 final class LibraryLoader {
     private static final String NATIVE_CACHE_ENV = "ZLINK_JAVA_NATIVE_CACHE";
-    private static final String[] WINDOWS_DEP_NAMES = new String[] {
-            "libcrypto-3-x64.dll",
-            "libssl-3-x64.dll"
-    };
+    private static final String WINDOWS_DEPENDENCY_INDEX = "dependencies.list";
     private static final Object LOCK = new Object();
     private static final List<Path> LOADED_LIBRARY_PATHS = new ArrayList<>();
     private static volatile SymbolLookup LOOKUP;
@@ -68,9 +67,12 @@ final class LibraryLoader {
         String libFile = libraryFileName(os);
         String resourcePath = resourcePath(os, arch, libFile);
         try {
-            Path extracted = extractNativeBundle(os, arch, resourcePath, libFile);
+            List<String> dependencies = "windows".equals(os)
+                    ? windowsDependencyNames(arch) : List.of();
+            Path extracted = extractNativeBundle(os, arch, resourcePath, libFile,
+                    dependencies);
             if ("windows".equals(os))
-                preloadWindowsDeps(extracted.getParent());
+                preloadWindowsDeps(extracted.getParent(), dependencies);
             System.load(extracted.toAbsolutePath().toString());
             rememberLoaded(extracted);
         } catch (IOException e) {
@@ -97,14 +99,15 @@ final class LibraryLoader {
     }
 
     private static Path extractNativeBundle(String os, String arch,
-            String resourcePath, String libFile) throws IOException {
+            String resourcePath, String libFile, List<String> dependencies)
+            throws IOException {
         try {
             ResourceDigest digest = digestResource(resourcePath);
             Path cacheDir = nativeCacheRoot().resolve(digest.sha256());
             Path extracted = placeCachedResource(resourcePath, libFile, cacheDir,
                     digest.size());
             if ("windows".equals(os))
-                extractWindowsDeps(arch, cacheDir);
+                extractWindowsDeps(arch, cacheDir, dependencies);
             return extracted;
         } catch (IOException | SecurityException | InvalidPathException
                  | ReadOnlyFileSystemException ignored) {
@@ -112,7 +115,7 @@ final class LibraryLoader {
             tempDir.toFile().deleteOnExit();
             Path extracted = copyTemporaryResource(resourcePath, libFile, tempDir);
             if ("windows".equals(os))
-                extractWindowsDeps(arch, tempDir);
+                extractWindowsDeps(arch, tempDir, dependencies);
             return extracted;
         }
     }
@@ -211,9 +214,30 @@ final class LibraryLoader {
         return Files.isRegularFile(path) && Files.size(path) == expectedSize;
     }
 
-    private static void extractWindowsDeps(String arch, Path directory)
+    private static List<String> windowsDependencyNames(String arch) throws IOException {
+        String resourcePath = resourcePath("windows", arch, WINDOWS_DEPENDENCY_INDEX);
+        Set<String> names = new LinkedHashSet<>();
+        try (InputStream in = openRequiredResource(resourcePath)) {
+            for (String line : new String(in.readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8).split("\\R")) {
+                String name = line.trim();
+                if (name.isEmpty())
+                    continue;
+                if (!name.toLowerCase().endsWith(".dll")
+                        || !Path.of(name).getFileName().toString().equals(name)) {
+                    throw new IOException(
+                            "invalid Windows native dependency name: " + name);
+                }
+                names.add(name);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    private static void extractWindowsDeps(String arch, Path directory,
+            List<String> dependencies)
             throws IOException {
-        for (String dep : WINDOWS_DEP_NAMES) {
+        for (String dep : dependencies) {
             String resourcePath = resourcePath("windows", arch, dep);
             try (InputStream in = LibraryLoader.class.getResourceAsStream(resourcePath)) {
                 if (in == null)
@@ -266,8 +290,8 @@ final class LibraryLoader {
         };
     }
 
-    private static void preloadWindowsDeps(Path localDir) {
-        for (String dep : WINDOWS_DEP_NAMES) {
+    private static void preloadWindowsDeps(Path localDir, List<String> dependencies) {
+        for (String dep : dependencies) {
             Path p = findWindowsDependency(localDir, dep);
             if (p != null) {
                 try {

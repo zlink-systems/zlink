@@ -140,7 +140,7 @@ public interface ZLinkFrameworkConfigurer {
 }
 
 public interface ZLinkMeshNodeBuilder {
- ZLinkMeshChannelBuilder channel(String channelName);
+ ZLinkMeshChannelBuilder channelName(String channelName);
  ZLinkMeshNodeBuilder listen(String endpoint);
  ZLinkMeshNodeBuilder listen();
  ZLinkMeshNodeBuilder listen(int port);
@@ -281,11 +281,11 @@ the example are illustrative values, not contract defaults.
 
 ```java
 clientOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .client(); // this node starts checkout calls but isn't included as a server candidate.
 
 serverOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .server()
  .setWeight(100)
  .addRequestHandler(
@@ -738,7 +738,7 @@ public final class systems.zlink.framework.configuration.ZLinkLogLevel extends j
  public int value();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
- public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen();
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(int);

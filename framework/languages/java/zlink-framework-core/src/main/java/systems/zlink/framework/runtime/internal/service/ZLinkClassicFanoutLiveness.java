@@ -1,9 +1,12 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -74,6 +77,30 @@ public final class ZLinkClassicFanoutLiveness {
 
     public static boolean isReservedTopic(byte[] topic) {
         return Arrays.equals(RESERVED_TOPIC, topic);
+    }
+
+    public static boolean startsWithReservedTopic(byte[] topic) {
+        Objects.requireNonNull(topic, "topic");
+        if (topic.length < RESERVED_TOPIC.length) {
+            return false;
+        }
+        for (int index = 0; index < RESERVED_TOPIC.length; index++) {
+            if (topic[index] != RESERVED_TOPIC[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static List<String> subscriberTopics(
+        Collection<String> applicationTopics) {
+        Objects.requireNonNull(applicationTopics, "applicationTopics");
+        LinkedHashSet<String> topics = new LinkedHashSet<>(applicationTopics);
+        if (topics.isEmpty()) {
+            topics.add("");
+        }
+        topics.add(new String(RESERVED_TOPIC, StandardCharsets.UTF_8));
+        return List.copyOf(topics);
     }
 
     public void connect(

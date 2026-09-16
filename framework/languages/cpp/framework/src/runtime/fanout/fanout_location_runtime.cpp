@@ -289,7 +289,8 @@ void fanout_location_runtime_t::start_subscriber (
     entry->channel_name = channel.name;
     entry->owner =
       std::make_unique<raw_fanout_subscriber_t> (
-        _channel_runtime.core_context (), _subscriber_poller.get ());
+        _channel_runtime.core_context (), _subscriber_poller.get (),
+        channel.subscriber.subscription_topics);
     _subscribers.emplace (
       channel.name, std::move (entry));
 }

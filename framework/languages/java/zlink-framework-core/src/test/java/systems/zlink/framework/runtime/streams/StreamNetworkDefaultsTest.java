@@ -27,6 +27,18 @@ final class StreamNetworkDefaultsTest {
     }
 
     @Test
+    void wildcardStreamBindWithoutAdvertiseHostUsesIpv6Loopback() {
+        StreamNodeRegistration registration = new StreamNodeRegistration("gateway");
+
+        StreamBuilders.streamNode(registration, "::", null).bind(0);
+
+        assertEquals("tcp://[::]:0", registration.bindEndpoint());
+        assertEquals(
+            "tcp://[::1]:43130",
+            registration.advertisedEndpoint("tcp://[::]:43130"));
+    }
+
+    @Test
     void streamSocketUsesFiniteDefaultAndRejectsNegativeLimit() {
         StreamNodeRegistration registration = new StreamNodeRegistration("gateway");
 

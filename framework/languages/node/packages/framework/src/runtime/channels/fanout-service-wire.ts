@@ -1,9 +1,12 @@
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkConfigurationException } from '../configuration';
+import {
+  FANOUT_LIVENESS_TOPIC,
+  requirePublicFanoutTopic
+} from '../../contracts/Configuration/FanoutTopic';
 import { tryDecodeChannelHeader } from './channel-envelope-inspection';
 import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
 
-export const FANOUT_LIVENESS_TOPIC = '\x01ZLF1';
+export { FANOUT_LIVENESS_TOPIC, requirePublicFanoutTopic };
 export const FANOUT_LIVENESS_PAYLOAD =
   Uint8Array.from([0x5a, 0x46, 0x01, 0x01]);
 
@@ -34,10 +37,4 @@ export function inspectFanoutInbound(
       value === FANOUT_LIVENESS_PAYLOAD[index])
     ? { kind: 'beacon' }
     : { kind: 'protocolError' };
-}
-
-export function requirePublicFanoutTopic(topic: string): void {
-  if (topic === FANOUT_LIVENESS_TOPIC) {
-    throw new ZLinkConfigurationException('Fanout topic is reserved for framework liveness.');
-  }
 }

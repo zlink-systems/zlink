@@ -263,6 +263,8 @@ behavior are defined only by the immutable byte value.
   (`Result == Backpressured`), and the retry policy belongs to the application.
   `TryPublish(topic)` is the separate surface that observes the same
   back-pressure as `false` instead of an exception.
+  With an explicit `.Flags(SendFlags.None)`, `Submit()` waits for local admission up to
+  `SendTimeout`; `.Flags(SendFlags.DontWait)` keeps the immediate back-pressure behavior.
 - A builder's start method takes only a target identity, topic, channel, routing id, or `ReplyToken`.
   Payload, request timeout, and terminal choice are handled at the builder stage.
 - A reply builder collects its payload and ends with `Submit()`.

@@ -111,7 +111,9 @@ internal sealed class ZLinkChannelBundleFactory(
                 // destination and therefore is not written to the native socket.
             }
 
-            subscriber.SetSubscription(string.Empty);
+            ZLinkFanoutSubscriptionPolicy.Apply(
+                subscriber,
+                channel.Subscriber.Topics);
             bundle = new ZLinkChannelRuntimeBundle(
                 subscriber,
                 subscriber.Connect,
@@ -143,17 +145,20 @@ internal sealed class ZLinkChannelBundleFactory(
         try
         {
             publisher = state.Context.CreatePublisherSocket();
-            ApplySocketConfig(publisher.Options, channel.Publisher!.SocketConfig);
-            var localRid = ResolvePublisherRid(channelName, channel.Publisher);
-            publisher.Bind(ResolvePublisherBindEndpoint(channel.Publisher));
+            ApplyPublisherSocketConfig(publisher.Options, channel);
+            var publisherRegistration = channel.Publisher
+                ?? throw new InvalidOperationException(
+                    "Publisher registration is required to create its socket.");
+            var localRid = ResolvePublisherRid(channelName, publisherRegistration);
+            publisher.Bind(ResolvePublisherBindEndpoint(publisherRegistration));
             var publisherIdentity = new ZLinkFanoutPublisherIdentity(
                 channelName,
                 localRid,
                 CreateLifecycleGeneration(),
                 ZLinkNetworkEndpointResolver.Advertise(
                     publisher.Options.LastEndpoint,
-                    channel.Publisher.AdvertiseHost,
-                    channel.Publisher.BindHost,
+                    publisherRegistration.AdvertiseHost,
+                    publisherRegistration.BindHost,
                     registration.NetworkOptions));
             bundle = new ZLinkChannelRuntimeBundle(
                 socket: publisher,
@@ -193,6 +198,14 @@ internal sealed class ZLinkChannelBundleFactory(
         IZLinkSocketConfig config)
     {
         ZLinkBackendSocketOptionsMapper.Apply(socket, config);
+    }
+
+    internal static void ApplyPublisherSocketConfig(
+        PubSocketOptions socket,
+        ZLinkChannelRegistration channel)
+    {
+        ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
+        socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
     }
 
     private static ulong CreateLifecycleGeneration()

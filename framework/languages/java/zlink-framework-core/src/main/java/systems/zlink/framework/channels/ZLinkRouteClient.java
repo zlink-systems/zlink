@@ -13,8 +13,9 @@ public interface ZLinkRouteClient {
         String channelName,
         Object request);
 
+    /** Sends a message to {@code target} in the named RouteMesh. */
     ZLinkSendCall sendToNode(
-        String channelName,
+        String meshName,
         RoutingId target,
         Object message);
 
@@ -22,8 +23,9 @@ public interface ZLinkRouteClient {
         String spotId,
         Object message);
 
+    /** Requests {@code target} in the named RouteMesh. */
     ZLinkRequestCall requestToNode(
-        String channelName,
+        String meshName,
         RoutingId target,
         Object message);
 

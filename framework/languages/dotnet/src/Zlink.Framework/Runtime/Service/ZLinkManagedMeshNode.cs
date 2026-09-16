@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Channels;
@@ -40,6 +41,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly TimeSpan _remoteUserSpotTerminalRetention;
     private readonly TimeSpan _inboundOperationShutdownTimeout;
     private readonly ZLinkDeadlineClock _deadlineClock;
+    private readonly ILogger<ZLinkManagedMeshNode>? _logger;
     private readonly TimeProvider _deadlineTimeProvider;
     private readonly ZLinkApplicationJobQueue? _applicationJobQueue;
     private readonly Func<ReplySubmitOperation, SubmitResult>?
@@ -188,7 +190,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<ReplySubmitOperation, SubmitResult>?
             nativeTerminalReplySubmitOverride = null,
         TaskScheduler? routedSubmitScheduler = null,
-        Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null)
+        Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null,
+        ILogger<ZLinkManagedMeshNode>? logger = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
@@ -214,6 +217,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _routedSubmitScheduler = new ConcurrentExclusiveSchedulerPair(
             routedSubmitScheduler ?? TaskScheduler.Default, maxConcurrencyLevel: 1);
         _decorateSocketMonitor = decorateSocketMonitor;
+        _logger = logger;
     }
 
     public RoutingId RoutingId => _routingId;
@@ -8200,6 +8204,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     admission))
             {
                 RejectPeerAdmissionUnderLock(peer);
+                _logger?.LogWarning(
+                    "Mesh peer admission rejected: reason={Reason} local={LocalRid} peer={PeerRid} intent_endpoint={IntentEndpoint} advertised_endpoint={AdvertisedEndpoint}",
+                    "route_mismatch",
+                    _routingId,
+                    sourceRid,
+                    hasExpectedRoute ? expectedRoute.Endpoint : peer.Endpoint,
+                    admission.AdvertisedEndpoint);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
                     + $"reason=route_mismatch expected_endpoint="
@@ -8649,6 +8660,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
                         _peersByIntent.Values,
                         value.RemoteAddr);
+                if (outboundCandidate is { ExpectedRid: null })
+                    outboundCandidate.PhysicalRoutingId = routingId;
                 // READY can be delivered after admission on the same connection.
                 // Admission owns the peer epoch; monitor delivery must preserve
                 // queued controls and the established liveness state.
@@ -10724,12 +10737,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ConnectPeerCore(Peer peer)
     {
         peer.State = MeshPeerState.Connecting;
-        peer.PhysicalRoutingId = peer.ExpectedRid
-            ?? RoutingId.From($"zlink-intent-{peer.Intent:x16}");
+        peer.PhysicalRoutingId = peer.ExpectedRid ?? default;
         lock (_socketGate)
         {
-            _socket!.Options.SetConnectRoutingId(peer.PhysicalRoutingId);
-            _socket.Connect(peer.Endpoint);
+            var socket = _socket!;
+            if (peer.ExpectedRid is { } expectedRid)
+                socket.Options.SetConnectRoutingId(expectedRid);
+            socket.Connect(peer.Endpoint);
         }
         peer.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
         ZLinkFrameworkDebugLog.SpotDiscovery(

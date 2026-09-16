@@ -19,6 +19,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
+    private readonly IReadOnlySet<string> _applicationTopics;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
     private readonly ZLinkFanoutRuntimeService _monitoring;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
@@ -44,6 +45,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         string channelName,
         IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
+        IReadOnlySet<string> applicationTopics,
         ZLinkChannelReceiveLoop receiveLoop,
         ZLinkFanoutRuntimeService monitoring,
         IZLinkRuntimeFailureReporter errorSink,
@@ -56,6 +58,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             nameof(channelName));
         _context = context;
         _socketConfig = socketConfig;
+        _applicationTopics = applicationTopics.ToHashSet(StringComparer.Ordinal);
         _receiveLoop = receiveLoop;
         _monitoring = monitoring;
         _ownsApplicationJobQueue = applicationJobQueue is null;
@@ -338,7 +341,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                 ZLinkChannelBundleFactory.ApplySocketConfig(
                     socket.Options,
                     owner._socketConfig);
-                socket.SetSubscription(string.Empty);
+                ZLinkFanoutSubscriptionPolicy.Apply(
+                    socket,
+                    owner._applicationTopics);
                 socket.Connect(await _lane.RunAsync(
                     () => _descriptor.Endpoint).ConfigureAwait(false));
                 await _lane.RunAsync(() =>

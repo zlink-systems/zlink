@@ -997,6 +997,14 @@ capability_builder_t channel_builder_t::enable_subscriber ()
     return builder;
 }
 
+channel_builder_t &
+channel_builder_t::subscriber_subscriptions (std::vector<std::string> topics)
+{
+    detail::select_capability (*_state, channel_capability_t::subscriber).subscription_topics =
+      std::move (topics);
+    return *this;
+}
+
 channel_builder_t &channel_builder_t::default_request_timeout (std::chrono::milliseconds timeout)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {

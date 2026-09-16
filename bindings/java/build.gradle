@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'systems.zlink'
-version = '1.1.0'
+version = '1.2.0'
 description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
@@ -101,6 +101,7 @@ def corePackagePrefix = configuredCorePackagePrefix != null
     : null
 def configuredCoreIncludeDir = System.getenv('ZLINK_CORE_INCLUDE_DIR')
 def configuredCoreLibDir = System.getenv('ZLINK_CORE_LIB_DIR')
+def configuredWindowsNativeJar = System.getenv('ZLINK_WINDOWS_NATIVE_JAR')
 def coreIncludeDir = coreSource == 'local' && configuredCoreIncludeDir != null
     && !configuredCoreIncludeDir.trim().isEmpty()
     ? new File(configuredCoreIncludeDir).absoluteFile
@@ -109,17 +110,25 @@ def coreLinkDir = coreSource == 'local' && configuredCoreLibDir != null
     && !configuredCoreLibDir.trim().isEmpty()
     ? new File(configuredCoreLibDir).absoluteFile
     : null
+def windowsNativeJar = configuredWindowsNativeJar != null
+    && !configuredWindowsNativeJar.trim().isEmpty()
+    ? new File(configuredWindowsNativeJar).absoluteFile
+    : null
 def generatedNativeResourcesDir = layout.buildDirectory.dir(
     'generated/zlink-native-resources/main')
-def nativeOutputDir = layout.buildDirectory.dir(
+def linuxNativeOutputDir = layout.buildDirectory.dir(
     'generated/zlink-native-resources/main/native/linux-x86_64')
+def windowsNativeOutputDir = layout.buildDirectory.dir(
+    'generated/zlink-native-resources/main/native/windows-x86_64')
+def windowsCorePackage = coreSource == 'release' && corePackagePrefix != null
+    && new File(corePackagePrefix, 'bin/zlink.dll').isFile()
 
 ['apiElements', 'runtimeElements'].each { configurationName ->
     configurations.named(configurationName) {
         attributes {
             attribute(Attribute.of('systems.zlink.core.version', String), '1.2.0')
             attribute(Attribute.of('systems.zlink.core.soname', String),
-                'libzlink.so.0')
+                windowsCorePackage ? 'zlink.dll' : 'libzlink.so.0')
             attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
                 approvedCorePackage?.provenanceSha256 ?: 'unverified')
             attribute(Attribute.of('systems.zlink.core.abi-major', Integer), 0)
@@ -145,7 +154,9 @@ dependencies {
 }
 
 tasks.register('prepareZlinkNativeResources') {
-    def outputDir = nativeOutputDir.get().asFile
+    def generatedRoot = generatedNativeResourcesDir.get().asFile
+    def linuxOutputDir = linuxNativeOutputDir.get().asFile
+    def windowsOutputDir = windowsNativeOutputDir.get().asFile
     if (coreSource == 'local') {
         if (coreIncludeDir != null) {
             inputs.dir(coreIncludeDir)
@@ -155,14 +166,18 @@ tasks.register('prepareZlinkNativeResources') {
         }
     } else if (corePackagePrefix != null) {
         inputs.dir(new File(corePackagePrefix, 'include'))
-        inputs.dir(new File(corePackagePrefix, 'lib'))
+        inputs.dir(new File(corePackagePrefix, windowsCorePackage ? 'bin' : 'lib'))
         inputs.file(new File(corePackagePrefix,
             'share/zlink/core-package-provenance.json'))
     }
-    outputs.files(new File(outputDir, 'libzlink.so'),
-        new File(generatedNativeResourcesDir.get().asFile,
-            'META-INF/zlink/core-package-provenance.json'))
+    if (windowsNativeJar != null) {
+        inputs.file(windowsNativeJar)
+    }
+    outputs.dir(generatedRoot)
     doLast {
+        project.delete(new File(generatedRoot, 'native'))
+        project.delete(new File(generatedRoot,
+            'META-INF/zlink/core-package-provenance.json'))
         if (coreSource == 'local') {
             if (coreIncludeDir == null || !coreIncludeDir.isAbsolute()
                 || coreLinkDir == null || !coreLinkDir.isAbsolute()) {
@@ -176,77 +191,113 @@ tasks.register('prepareZlinkNativeResources') {
                 throw new GradleException(
                     'Local Core is incomplete; build core/build before the Java binding')
             }
-            outputDir.mkdirs()
+            linuxOutputDir.mkdirs()
             copy {
                 from runtime
-                into outputDir
+                into linuxOutputDir
                 rename { 'libzlink.so' }
             }
             if (sonameRuntime.isFile()) {
                 copy {
                     from sonameRuntime
-                    into outputDir
+                    into linuxOutputDir
                     rename { 'libzlink.so.0' }
                 }
             }
-            return
-        }
-        if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
+        } else if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
                 'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 1.2.0 install prefix')
+        } else {
+            def includeDir = new File(corePackagePrefix, 'include')
+            def runtimeDir = new File(corePackagePrefix,
+                windowsCorePackage ? 'bin' : 'lib')
+            def runtime = new File(runtimeDir,
+                windowsCorePackage ? 'zlink.dll' : 'libzlink.so')
+            def sonameRuntime = new File(runtimeDir, 'libzlink.so.0')
+            def manifest = new File(corePackagePrefix,
+                'share/zlink/core-package-provenance.json')
+            if (!new File(includeDir, 'zlink.h').isFile()
+                || new File(includeDir, 'zlink/service').exists()
+                || !runtime.isFile() || (!windowsCorePackage && !sonameRuntime.isFile())
+                || !manifest.isFile()) {
+                throw new GradleException(
+                    'Core package is incomplete or contains the removed service surface')
+            }
+            def metadata = new groovy.json.JsonSlurper().parse(manifest)
+            def publishingPackage = gradle.taskGraph.allTasks.any {
+                it.name.startsWith('publish')
+            }
+            if (publishingPackage && approvedCorePackage == null) {
+                throw new GradleException(
+                    'ZLINK_CORE_PACKAGE_SUMMARY must identify the verified Core package')
+            }
+            def manifestSha256 = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(manifest.bytes).encodeHex().toString()
+            def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(runtime.bytes).encodeHex().toString()
+            def expectedSoname = windowsCorePackage ? 'zlink.dll' : 'libzlink.so.0'
+            if (metadata.version != '1.2.0') {
+                throw new GradleException('Core package must report version 1.2.0')
+            }
+            def approved = approvedCorePackage
+            if (approved != null && (approved.version != '1.2.0'
+                || approved.prefix != corePackagePrefix.canonicalPath
+                || approved.provenanceSha256 != manifestSha256
+                || approved.runtime.sha256 != runtimeSha256
+                || approved.runtime.soname != expectedSoname
+                || metadata.abiMajor != 0)) {
+                throw new GradleException(
+                    'Core package no longer matches its approved exact provenance')
+            }
+            if (windowsCorePackage) {
+                def dlls = fileTree(runtimeDir) { include '*.dll' }.files
+                    .sort { left, right -> left.name <=> right.name }
+                if (!dlls.any { it.name == 'zlink.dll' }) {
+                    throw new GradleException('Windows Core package is missing zlink.dll')
+                }
+                windowsOutputDir.mkdirs()
+                copy {
+                    from dlls
+                    into windowsOutputDir
+                }
+                new File(windowsOutputDir, 'dependencies.list').text = dlls
+                    .findAll { it.name != 'zlink.dll' }
+                    .collect { it.name }
+                    .join('\n') + '\n'
+            } else {
+                linuxOutputDir.mkdirs()
+                copy {
+                    from runtime
+                    into linuxOutputDir
+                    rename { 'libzlink.so' }
+                }
+                copy {
+                    from sonameRuntime
+                    into linuxOutputDir
+                    rename { 'libzlink.so.0' }
+                }
+            }
+            copy {
+                from manifest
+                into new File(generatedRoot, 'META-INF/zlink')
+            }
         }
-        def includeDir = new File(corePackagePrefix, 'include')
-        def linkDir = new File(corePackagePrefix, 'lib')
-        def runtime = new File(linkDir, 'libzlink.so')
-        def sonameRuntime = new File(linkDir, 'libzlink.so.0')
-        def manifest = new File(corePackagePrefix,
-            'share/zlink/core-package-provenance.json')
-        if (!new File(includeDir, 'zlink.h').isFile()
-            || new File(includeDir, 'zlink/service').exists()
-            || !runtime.isFile() || !sonameRuntime.isFile() || !manifest.isFile()) {
-            throw new GradleException(
-                'Core package is incomplete or contains the removed service surface')
-        }
-        def metadata = new groovy.json.JsonSlurper().parse(manifest)
-        def publishingPackage = gradle.taskGraph.allTasks.any {
-            it.name.startsWith('publish')
-        }
-        if (publishingPackage && approvedCorePackage == null) {
-            throw new GradleException(
-                'ZLINK_CORE_PACKAGE_SUMMARY must identify the verified Core package')
-        }
-        def manifestSha256 = java.security.MessageDigest.getInstance('SHA-256')
-            .digest(manifest.bytes).encodeHex().toString()
-        def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
-            .digest(runtime.bytes).encodeHex().toString()
-        if (metadata.version != '1.2.0') {
-            throw new GradleException('Core package must report version 1.2.0')
-        }
-        def approved = approvedCorePackage
-        if (approved != null && (approved.version != '1.2.0'
-            || approved.prefix != corePackagePrefix.canonicalPath
-            || approved.provenanceSha256 != manifestSha256
-            || approved.runtime.sha256 != runtimeSha256
-            || approved.runtime.soname != 'libzlink.so.0'
-            || metadata.abiMajor != 0)) {
-            throw new GradleException(
-                'Core package no longer matches its approved exact provenance')
-        }
-        outputDir.mkdirs()
-        copy {
-            from runtime
-            into outputDir
-            rename { 'libzlink.so' }
-        }
-        copy {
-            from sonameRuntime
-            into outputDir
-            rename { 'libzlink.so.0' }
-        }
-        copy {
-            from manifest
-            into new File(generatedNativeResourcesDir.get().asFile,
-                'META-INF/zlink')
+
+        if (windowsNativeJar != null) {
+            if (!windowsNativeJar.isFile()) {
+                throw new GradleException(
+                    "ZLINK_WINDOWS_NATIVE_JAR does not exist: ${windowsNativeJar}")
+            }
+            copy {
+                from zipTree(windowsNativeJar)
+                include 'native/windows-x86_64/**'
+                into generatedRoot
+            }
+            if (!new File(windowsOutputDir, 'zlink.dll').isFile()
+                || !new File(windowsOutputDir, 'dependencies.list').isFile()) {
+                throw new GradleException(
+                    'Windows native jar is missing zlink.dll or dependencies.list')
+            }
         }
     }
 }
@@ -331,7 +382,8 @@ publishing {
                 description = project.description
                 properties = [
                     'zlink.core.version': '1.2.0',
-                    'zlink.core.soname': 'libzlink.so.0',
+                    'zlink.core.soname': windowsCorePackage
+                        ? 'zlink.dll' : 'libzlink.so.0',
                     'zlink.core.abi-major': '0',
                     'zlink.core.provenance-sha256':
                         approvedCorePackage?.provenanceSha256 ?: 'unverified',

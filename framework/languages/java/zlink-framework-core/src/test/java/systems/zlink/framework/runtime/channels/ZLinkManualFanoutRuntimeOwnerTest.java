@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -34,6 +35,33 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapt
 
 final class ZLinkManualFanoutRuntimeOwnerTest {
     private static final String ENDPOINT = "tcp://127.0.0.1:7001";
+
+    @Test
+    void subscriberWithoutConfiguredTopicsUsesCatchAllAndBeacon()
+        throws Exception {
+        try (Fixture fixture = new Fixture(false, false, false)) {
+            fixture.runtime.start();
+            fixture.runtime.connections("events").connect(ENDPOINT);
+            ControlledSubscriber subscriber = fixture.awaitSubscriber();
+
+            assertEquals(List.of("", "\u0001ZLF1"), subscriber.subscriptions);
+            assertTrue(subscriber.accepts("order.created"));
+            assertTrue(subscriber.accepts("payment"));
+        }
+    }
+
+    @Test
+    void configuredTopicUsesCorePrefixFilteringWithoutCatchAll() throws Exception {
+        try (Fixture fixture = new Fixture(
+                 false, false, false, Map.of("events", List.of("order")))) {
+            fixture.runtime.start();
+            fixture.runtime.connections("events").connect(ENDPOINT);
+            ControlledSubscriber subscriber = fixture.awaitSubscriber();
+
+            assertTrue(subscriber.accepts("order.created"));
+            assertFalse(subscriber.accepts("payment"));
+        }
+    }
 
     @Test
     void connectionIsNotReceivableBeforeConnectCommit() throws Exception {
@@ -189,6 +217,14 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
             boolean blockConnect,
             boolean blockReceive,
             boolean blockMonitorRegistration) {
+            this(blockConnect, blockReceive, blockMonitorRegistration, Map.of());
+        }
+
+        private Fixture(
+            boolean blockConnect,
+            boolean blockReceive,
+            boolean blockMonitorRegistration,
+            Map<String, List<String>> applicationTopics) {
             backend = new Backend(
                 blockConnect, blockReceive, blockMonitorRegistration);
             runtime = new ZLinkManualFanoutRuntime(
@@ -197,7 +233,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
                 new Context(),
                 scheduler,
                 infrastructure,
-                (channel, message) -> message.parts().forEach(Message::close));
+                (channel, message) -> message.parts().forEach(Message::close),
+                applicationTopics);
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {
@@ -311,6 +348,7 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final List<String> events = new CopyOnWriteArrayList<>();
+        private final List<String> subscriptions = new CopyOnWriteArrayList<>();
 
         private ControlledSubscriber(
             boolean blockConnect,
@@ -322,7 +360,13 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         }
 
         @Override public void setChannelName(String channelName) { }
-        @Override public void setSubscription(String topic) { }
+        @Override public void setSubscription(String topic) {
+            subscriptions.add(topic);
+        }
+
+        private boolean accepts(String topic) {
+            return subscriptions.stream().anyMatch(topic::startsWith);
+        }
 
         @Override
         public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {

@@ -2289,7 +2289,7 @@ used.
 | Shape | Host/address configuration value |
 | .NET notation | `string` |
 | Public composition | A single host name or IP address resolvable from the remote side. |
-| Creation/management | Specified by the application, or the framework uses the same host as a non-wildcard BindHost. |
+| Creation/management | Specified by the application, or fixed by the framework to the default of [Network listener identity §2.1](../02-channel-transport/04-network-listener-identity.en.md#21-defaults). |
 | Lifetime | Fixed before the descriptor is published. A listener restart with a changed value uses a new lifecycle generation. |
 
 <a id="wildcard-address"></a>
@@ -2302,7 +2302,7 @@ network interfaces. Usable for local BindHost but not for AdvertiseHost.
 |---|---|
 | Shape | Special bind address value |
 | .NET notation | `string` |
-| Public composition | Matches IPv4 `0.0.0.0` or IPv6 `::` byte-for-byte. |
+| Public composition | IPv4 `0.0.0.0` or IPv6 `::`, including equivalent spellings of the same unspecified address. |
 | Lifetime | Usable only as local bind input; can't remain in the descriptor or a manual remote endpoint. |
 
 <a id="advertised-endpoint"></a>

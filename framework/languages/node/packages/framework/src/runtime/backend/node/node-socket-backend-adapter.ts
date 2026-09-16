@@ -33,6 +33,7 @@ export function wrapSocket<T extends { close(): void }>(
       sendHwm?: number;
       recvHwm?: number;
       sendTimeout?: number;
+      noDrop?: boolean;
       maxMsgSize?: bigint;
       lastEndpoint?: string;
     };
@@ -115,6 +116,12 @@ export function wrapSocket<T extends { close(): void }>(
     },
     set sendHighWaterMark(value: number) {
       requireSocketOptions(socket).sendHwm = value;
+    },
+    get noDrop(): boolean {
+      return socket.options?.noDrop ?? false;
+    },
+    set noDrop(value: boolean) {
+      requireSocketOptions(socket).noDrop = value;
     },
     get receiveHighWaterMark(): number {
       return Number(socket.options?.recvHwm ?? 0n);

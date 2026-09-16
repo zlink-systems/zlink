@@ -34,6 +34,7 @@ import systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig;
 import systems.zlink.framework.configuration.ZLinkActorFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -350,19 +351,15 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public String advertisedEndpoint(String actualEndpoint) {
-        if (advertiseHost == null || actualEndpoint == null
-            || !actualEndpoint.startsWith("tcp://")) {
-            return actualEndpoint;
-        }
-        int colon = actualEndpoint.lastIndexOf(':');
-        return colon < "tcp://".length()
-            ? actualEndpoint
-            : "tcp://" + advertiseHost + actualEndpoint.substring(colon);
+        return ZLinkListenerIdentity.advertisedEndpoint(
+            actualEndpoint, advertiseHost);
     }
 
     private void updateDefaultEndpoint() {
         if (listenPort != null) {
-            bindEndpoint = "tcp://" + bindHost + ":" + listenPort;
+            bindEndpoint = "tcp://"
+                + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                + ":" + listenPort;
         }
     }
 

@@ -13,6 +13,7 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/fanout/fanout_subscription.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/context.hpp>
@@ -414,7 +415,8 @@ class channel_host_service_t::subscriber_loop_t
         _subscriber (std::make_unique<zlink::sub_socket_t> (*_context))
     {
         detail::apply_common_channel_socket_options (*_subscriber, _capability);
-        _subscriber->set_subscription ("");
+        fanout::apply_fanout_subscriptions (
+          *_subscriber, _capability.subscription_topics);
         apply_runtime_connections ();
         const auto hardware_workers = static_cast<std::size_t> (
           std::max (1u, std::thread::hardware_concurrency ()));

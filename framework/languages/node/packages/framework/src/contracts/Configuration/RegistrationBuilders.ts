@@ -100,6 +100,7 @@ import {
   validateSessionReplacementCallbackTimeout
 } from './RegistrationBuilderPolicy';
 import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
+import { requirePublicFanoutTopic } from './FanoutTopic';
 
 export function createFrameworkOptions(
   configure: (options: ZLinkFrameworkOptions) => void
@@ -507,6 +508,11 @@ class DefaultFanoutChannelBuilder implements ZLinkFanoutChannelBuilder {
     return this;
   }
 
+  setNoDrop(noDrop = true): this {
+    this.channel.noDrop = noDrop;
+    return this;
+  }
+
   enableSubscriber(endpoint?: string): this {
     this.selectSubscriberMode(endpoint === undefined ? 'automatic' : 'manual');
     this.channel.subscriber ??= { manualConnections: [] };
@@ -515,6 +521,15 @@ class DefaultFanoutChannelBuilder implements ZLinkFanoutChannelBuilder {
       if (!this.channel.subscriber.manualConnections.includes(endpoint)) {
         this.channel.subscriber.manualConnections.push(endpoint);
       }
+    }
+    return this;
+  }
+
+  subscribe(topic: string): this {
+    requirePublicFanoutTopic(topic);
+    this.channel.subscriptions ??= [];
+    if (!this.channel.subscriptions.includes(topic)) {
+      this.channel.subscriptions.push(topic);
     }
     return this;
   }
@@ -1528,8 +1543,10 @@ type MutableLocationOptionValues = {
 interface MutableChannelOptions {
   routingId?: string;
   routingIdPrefix?: string;
+  noDrop?: boolean;
   publisher?: MutablePublisherCapabilityOptions;
   publishHandlers?: ZLinkChannelPublishHandlerRegistration[];
+  subscriptions?: string[];
   subscriber?: MutableClientCapabilityOptions;
   client?: MutableClientCapabilityOptions;
   server?: MutableServerCapabilityOptions;

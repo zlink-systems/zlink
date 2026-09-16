@@ -84,16 +84,4 @@ public sealed class NetworkEndpointResolverTests
         Assert.Equal("inproc://Some-Node-Identity", advertised);
     }
 
-    [Fact]
-    public void Advertise_ThrowsWhenWildcardBindHasNoAdvertiseHost()
-    {
-        var network = new ZLinkNetworkOptionsModel();
-
-        Assert.Throws<ZLinkConfigurationException>(() =>
-            ZLinkNetworkEndpointResolver.Advertise(
-                "tcp://0.0.0.0:7101",
-                listenerAdvertiseHost: null,
-                listenerBindHost: "0.0.0.0",
-                network));
-    }
 }

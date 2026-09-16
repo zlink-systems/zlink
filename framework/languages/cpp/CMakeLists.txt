@@ -82,7 +82,7 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
 list(APPEND CMAKE_MODULE_PATH "${ZLINK_FRAMEWORK_CPP_DIR}/cmake")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.1.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.2.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.2.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
@@ -164,6 +164,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
+  framework/src/runtime/fanout/fanout_subscription.cpp
   framework/src/runtime/fanout/fanout_location_runtime.cpp
   framework/src/runtime/client_server/raw_client_server_owner.cpp
   framework/src/runtime/client_server/client_server_location_runtime.cpp
@@ -1951,6 +1952,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  add_zlink_framework_test(
+    test_cpp_framework_fanout_subscription
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_subscription.cpp
+    "framework-unit;framework-regression;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_fanout_subscription)
+  target_include_directories(test_cpp_framework_fanout_subscription PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  set_tests_properties(test_cpp_framework_fanout_subscription PROPERTIES
+    RESOURCE_LOCK zlink_cpp_heavy_runtime)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_channel_messaging)
   target_link_libraries(test_cpp_framework_channel_messaging PRIVATE
     zlink::framework_codec_protobuf)

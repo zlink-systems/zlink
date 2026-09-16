@@ -220,6 +220,8 @@ internal sealed class ZLinkChannelRegistration
 
     public ZLinkChannelPublisherCapabilityRegistration? Publisher { get; set; }
 
+    public bool? PublisherNoDrop { get; set; }
+
     public ZLinkChannelSubscriberCapabilityRegistration? Subscriber { get; set; }
 
     public RoutingId RoutingId { get; set; }
@@ -287,6 +289,8 @@ internal sealed class ZLinkChannelSubscriberCapabilityRegistration
     public ZLinkPeerAcquisitionMode AcquisitionMode { get; set; } = ZLinkPeerAcquisitionMode.Manual;
 
     public ZLinkSocketConfig SocketConfig { get; } = new();
+
+    public HashSet<string> Topics { get; } = new(StringComparer.Ordinal);
 
     public ZLinkEndpointConnections ManualConnections { get; } = new();
 }

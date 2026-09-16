@@ -127,33 +127,45 @@ test('RouteMesh listener uses separate bind and advertised hosts with Core-resol
   assert.equal(router.port, 0);
 });
 
-test('Node listener rejects wildcard bind without a connectable advertise host', () => {
-  assert.throws(
-    () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
-      builder.addRouteMesh('game')
-        .setBindHost('0.0.0.0')
-        .listen();
-    })),
-    /must define an advertise host when its bind host is a wildcard address/
+test('every Node listener accepts an omitted advertise host with a wildcard bind', () => {
+  class NoticeHandler {}
+  class Session {}
+
+  const registration = framework.createFrameworkRegistration(
+    framework.createFrameworkOptions((builder) => {
+      const network = builder.configureNetwork();
+      network.bindHost = '0.0.0.0';
+      builder.addRouteMesh('game');
+      builder.addClientServerChannel('orders').server().addSendHandler(NoticeHandler);
+      builder.addFanoutChannel('events').enablePublisher();
+      builder.addStreamNode('gateway').bind().registerSession(Session);
+    })
   );
 
-  assert.throws(
-    () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
-      builder.addRouteMesh('game')
-        .listen('tcp://[::]:0');
-    })),
-    /must define an advertise host when its bind host is a wildcard address/
-  );
+  assert.equal(registration.spotNodes.get('game').router.advertiseHost, undefined);
+  assert.equal(registration.channels.get('orders').server.advertiseHost, undefined);
+  assert.equal(registration.channels.get('events').publisher.advertiseHost, undefined);
+  assert.equal(registration.streamNodes.get('gateway').advertiseHost, undefined);
 
-  assert.throws(
-    () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
-      builder.addRouteMesh('game')
-        .setBindHost('127.0.0.1')
-        .setAdvertiseHost('0.0.0.0')
-        .listen();
-    })),
-    /advertise host must identify a connectable host/
-  );
+  assert.doesNotThrow(() => framework.createFrameworkRegistration(
+    framework.createFrameworkOptions((builder) => {
+      builder.addRouteMesh('ipv6').listen('tcp://[::]:0');
+    })
+  ));
+});
+
+test('Node listener rejects an explicitly wildcard advertise host', () => {
+  for (const advertiseHost of ['0.0.0.0', '::']) {
+    assert.throws(
+      () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
+        builder.addRouteMesh('game')
+          .setBindHost('127.0.0.1')
+          .setAdvertiseHost(advertiseHost)
+          .listen();
+      })),
+      /advertise host must identify a connectable host/
+    );
+  }
 });
 
 test('RouteMesh Server membership does not require a local handler', () => {
@@ -240,18 +252,17 @@ test('RouteMesh channel registration rejects duplicate or mixed roles', () => {
   );
 });
 
-test('ClientServer listener applies the same wildcard advertise-host validation', () => {
+test('ClientServer listener accepts an omitted advertise host for a wildcard bind', () => {
   class NoticeHandler {}
 
-  assert.throws(
+  assert.doesNotThrow(
     () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
       builder.addClientServerChannel('orders')
         .server()
         .setBindHost('0.0.0.0')
         .listen(9401)
         .addSendHandler(NoticeHandler);
-    })),
-    /must define an advertise host when its bind host is a wildcard address/
+    }))
   );
 
   const registration = framework.createFrameworkRegistration(

@@ -4,6 +4,7 @@ import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkFanoutPublisherDescriptor
 } from '../../contracts';
+import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
 import {
   buildAdvertisedEndpoint,
@@ -942,8 +943,7 @@ export class ZLinkChannelSocketRegistry {
     }
     const subscriber = this.adapter.createSubscriberSocket(this.context);
     subscriber.setChannelName(channelName);
-    subscriber.setSubscription('');
-    subscriber.setSubscription(FANOUT_LIVENESS_TOPIC);
+    setFanoutSubscriptions(subscriber, channel.subscriptions);
     const monitor = this.monitoringAdapter.openSocketMonitor(subscriber);
     const connection: FanoutPublisherConnection = {
       channelName,
@@ -1166,6 +1166,8 @@ export class ZLinkChannelSocketRegistry {
       const payload = RuntimeMessage.from(FANOUT_LIVENESS_PAYLOAD);
       try {
         publisher.publish(FANOUT_LIVENESS_TOPIC, payload);
+      } catch (error) {
+        this.oneWayFailureSink?.(error);
       } finally {
         payload.close();
       }
@@ -1566,6 +1568,7 @@ export class ZLinkChannelSocketRegistry {
 
     const publisher = this.adapter.createPublisherSocket(this.context);
     publisher.setChannelName(channelName);
+    applyFanoutPublisherSocketOptions(publisher, channel);
     publisher.bind(channel.publisher.bind);
     this.publishers.set(channelName, publisher);
     this.fanoutPublisherNextBeacon.set(
@@ -1780,6 +1783,16 @@ function closeMessages(parts: readonly Message[]): void {
   for (const part of parts) part.close();
 }
 
+function setFanoutSubscriptions(
+  subscriber: ZLinkBackendSubscriberSocket,
+  applicationTopics: readonly string[] | undefined
+): void {
+  const topics = new Set(applicationTopics);
+  if (topics.size === 0) topics.add('');
+  topics.add(FANOUT_LIVENESS_TOPIC);
+  for (const topic of topics) subscriber.setSubscription(topic);
+}
+
 function deriveRoutingId(baseRoutingId: string, suffix: string): string {
   const derived = `${baseRoutingId}\0${suffix}`;
   if (Buffer.byteLength(derived, 'utf8') > 255) {
@@ -1788,6 +1801,13 @@ function deriveRoutingId(baseRoutingId: string, suffix: string): string {
     );
   }
   return derived;
+}
+
+function applyFanoutPublisherSocketOptions(
+  publisher: ZLinkBackendPublisherSocket,
+  channel: ZLinkChannelOptions
+): void {
+  publisher.noDrop = channel.noDrop ?? false;
 }
 
 function fanoutDiscoveryConnectionId(connectionId: string): string {

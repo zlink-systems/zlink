@@ -35,8 +35,8 @@ location store 없이 process 둘이 서로의 endpoint를 직접 지정해 requ
 ## 3. 처리하는 쪽
 
 handler는 두 곳에 등록한다 — Nest의 `providers`와 `channel(...).server()`의
-`addRequestHandler`. `0.0.0.0`으로 bind할 때는 `setAdvertiseHost`로 알릴 주소를 지정한다.
-지정하지 않으면 시작 시 거부된다.
+`addRequestHandler`. `0.0.0.0`으로 bind하고 `setAdvertiseHost`를 생략하면 `127.0.0.1`을 광고한다.
+다른 host에서 접속해야 하면 `setAdvertiseHost`로 접속 가능한 주소를 지정한다.
 
 ```typescript title="Server/main.ts"
 --8<-- "framework/languages/node/quickstart/Server/main.ts"

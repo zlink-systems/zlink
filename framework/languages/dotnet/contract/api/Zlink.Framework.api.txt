@@ -290,8 +290,10 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder EnableSubscriber() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetAdvertiseHost(System.String advertiseHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetBindHost(System.String bindHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetNoDrop(System.Boolean noDrop = true [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetRoutingIdPrefix(System.String prefix [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder SetRoutingId(Systems.Zlink.RoutingId publisherRoutingId [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder Subscribe(System.String topic [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkFanoutRuntime
     method abstract Zlink.Framework.Contracts.Configuration.ZLinkFanoutStatus GetStatus(System.String channelName [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract System.Collections.Generic.IAsyncEnumerable<Zlink.Framework.Contracts.Configuration.ZLinkObservedStatus<Zlink.Framework.Contracts.Configuration.ZLinkFanoutStatus>> ObserveAsync(System.String channelName [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

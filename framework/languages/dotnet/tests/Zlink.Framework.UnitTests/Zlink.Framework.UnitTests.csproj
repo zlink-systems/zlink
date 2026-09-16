@@ -110,12 +110,14 @@
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
+        <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
         <Compile Include="Runtime/EndpointNotationTests.cs"/>
         <Compile Include="Runtime/NetworkEndpointResolverTests.cs"/>
+        <Compile Include="Runtime/ListenerIdentityAndNodeDirectTests.cs"/>
         <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
         <Compile Include="Runtime/FlowCorrelationTests.cs"/>
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
@@ -137,6 +139,7 @@
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
         <Compile Include="Runtime/FanoutPublishAdmissionTests.cs"/>
+        <Compile Include="Runtime/FanoutNoDropTests.cs"/>
         <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>

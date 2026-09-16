@@ -336,8 +336,8 @@ Server와 같은 candidate 집합에 넣는다. [Ready](../../../00-foundation/0
 local 우선순위나 remote 제외 규칙을 두지 않는다. 선택 뒤에는 Client DEALER에서 Server ROUTER로 실제
 transport message를 전달하며 handler를 직접 호출하지 않는다.
 
-`ConfigureNetwork()`의 기본 BindHost는 `127.0.0.1`이고 AdvertiseHost를 생략하면 non-wildcard [BindHost](../../../00-foundation/02-glossary.ko.md#bindhost)를
-사용한다. [Automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery) listener는 `Listen()`·`Bind()`·`EnablePublisher()`의 port를 생략하거나
+`ConfigureNetwork()`의 기본 BindHost는 `127.0.0.1`이고 AdvertiseHost를 생략하면
+[Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의 기본값을 따른다. [Automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery) listener는 `Listen()`·`Bind()`·`EnablePublisher()`의 port를 생략하거나
 listener 호출 자체를 생략하면 port `0`으로 bind한다. Manual mode에서 endpoint를 다른 discovery source로
 얻지 못하면 listen port와 remote endpoint를 명시한다. Listener별 host 설정은 root 기본값보다 우선한다.
 

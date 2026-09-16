@@ -88,6 +88,10 @@ public final class ChannelRegistration {
         return subscriberConnections.listConnections();
     }
 
+    List<String> fanoutApplicationTopics() {
+        return List.copyOf(fanout.applicationTopics);
+    }
+
     List<ChannelPublishHandlerRegistration> publishHandlers() {
         return fanout.publishHandlers;
     }
@@ -191,6 +195,10 @@ public final class ChannelRegistration {
         return fanout.automaticSubscriberEnabled;
     }
 
+    boolean noDrop() {
+        return fanout.noDrop;
+    }
+
     /**
      * Reports registration-only topology that cannot prove continuity during
      * automatic host retirement. Connection state is deliberately ignored.
@@ -250,6 +258,16 @@ public final class ChannelRegistration {
     void enableAutomaticSubscriber() {
         fanout.subscriberEnabled = true;
         fanout.automaticSubscriberEnabled = true;
+    }
+
+    void addFanoutSubscription(String topic) {
+        ZLinkChannelRuntime.requireApplicationFanoutTopic(topic);
+        fanout.applicationTopics.add(topic);
+    }
+
+    void setNoDrop(boolean noDrop) {
+        fanout.noDrop = noDrop;
+        fanout.noDropConfigured = true;
     }
 
     void addServerBind(String endpoint) {
@@ -456,6 +474,15 @@ public final class ChannelRegistration {
     private void validateFanout(
         boolean locationAutoConnectEnabled,
         ZLinkScannedHandlerCatalog handlerCatalog) {
+        if (!fanout.applicationTopics.isEmpty()
+            && !fanout.subscriberEnabled) {
+            throw new ZLinkConfigurationException(
+                "fanout channel subscriptions require subscriber capability: " + name);
+        }
+        if (fanout.noDropConfigured && !fanout.publisherEnabled) {
+            throw new ZLinkConfigurationException(
+                "fanout channel NoDrop requires the publisher role: " + name);
+        }
         if (fanout.publisherEnabled && fanout.publisherBinds.isEmpty()) {
             throw new ZLinkConfigurationException(
                 "fanout channel publisher requires at least one bind endpoint: " + name);
@@ -643,10 +670,13 @@ public final class ChannelRegistration {
         private final List<String> publisherBinds = new ArrayList<>();
         private String advertiseHost;
         private final List<String> subscriberManualEndpoints = new ArrayList<>();
+        private final Set<String> applicationTopics = new LinkedHashSet<>();
         private final List<ChannelPublishHandlerRegistration> publishHandlers = new ArrayList<>();
         private boolean publisherEnabled;
         private boolean subscriberEnabled;
         private boolean automaticSubscriberEnabled;
+        private boolean noDrop;
+        private boolean noDropConfigured;
     }
 
     private static final class RouteMeshState {

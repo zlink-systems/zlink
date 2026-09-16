@@ -70,7 +70,7 @@ return app.run (argc, argv);
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `listen (endpoint)` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
-| `set_bind_host` · `set_advertise_host` | bind 주소와 광고 주소를 나눠 쓸 때 | bind 주소 그대로 |
+| `set_bind_host` · `set_advertise_host` | bind 주소와 광고 주소를 나눠 쓸 때 | Network listener identity §2.1의 기본값(wildcard bind는 loopback) |
 | `set_routing_id (...)` | 이 node의 식별자 | 자동 생성 |
 | `set_object_role (...)` | Object role — spot · actor 배치 여부 | 배치하지 않음 |
 | `set_placement_weight (int)` | 새 object 배치 선택 가중치 | 100 |

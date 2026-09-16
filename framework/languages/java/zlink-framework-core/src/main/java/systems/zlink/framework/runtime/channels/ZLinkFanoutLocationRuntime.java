@@ -78,6 +78,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler;
     private final Executor infrastructureExecutor;
+    private final Map<String, List<String>> applicationTopics;
     private ScheduledFuture<?> tickTask;
     private volatile boolean running;
     private volatile long nextReconcileNanos;
@@ -97,7 +98,8 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         Executor infrastructureExecutor,
         Duration pollingInterval,
         int pageSize,
-        BiConsumer<String, ZLinkBackendTopicMessage> dispatch) {
+        BiConsumer<String, ZLinkBackendTopicMessage> dispatch,
+        Map<String, List<String>> applicationTopics) {
         this.store = Objects.requireNonNull(store, "store");
         this.owner = Objects.requireNonNull(owner, "owner");
         this.backend = Objects.requireNonNull(backend, "backend");
@@ -111,6 +113,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             pollingInterval, "pollingInterval");
         this.pageSize = Math.max(1, Math.min(pageSize, 1000));
         this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
+        this.applicationTopics = Map.copyOf(applicationTopics);
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -492,7 +495,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         Connection connection = null;
         try {
             subscriber.setChannelName(descriptor.channelName());
-            subscriber.setSubscription("");
+            for (String topic : ZLinkClassicFanoutLiveness.subscriberTopics(
+                    applicationTopics.getOrDefault(
+                        descriptor.channelName(), List.of()))) {
+                subscriber.setSubscription(topic);
+            }
             monitor = monitoring.openSocketMonitor(subscriber);
             connection = new Connection(
                 descriptor,

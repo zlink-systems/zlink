@@ -85,8 +85,9 @@ Message types need `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`. The default JSON serial
 ## 3. The handling side
 
 `object_role` defaults to `server`, which requires a location store; this configuration sets
-it to `none`. A `routing_id` is required, and so is `advertise_host` when binding to a
-wildcard host.
+it to `none`. A `routing_id` is required. Omitting `advertise_host` on a wildcard bind host advertises the
+loopback of the same address family. In containers or multi-host deployments where remote
+processes cannot use that loopback, set `advertise_host` to a reachable address.
 
 ```cpp title="Server/main.cpp"
 --8<-- "framework/languages/cpp/quickstart/Server/main.cpp"

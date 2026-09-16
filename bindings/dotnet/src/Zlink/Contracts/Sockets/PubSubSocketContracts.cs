@@ -9,12 +9,13 @@ public interface IPublisherSocket : IConnectableSocket
 {
     /// <summary>
     ///     Begins publishing under <paramref name="topic" />. Publish is
-    ///     synchronous: PUB semantics are lossy, so the publisher never waits at
-    ///     the high-water mark and the terminal
+    ///     synchronous. By default PUB semantics are lossy and the publisher does
+    ///     not wait at the high-water mark, so the terminal
     ///     <see cref="PublishSubmitOperation.Submit" /> completes on the calling
     ///     thread. With <c>NODROP</c> a full subscriber surfaces immediately as
     ///     <see cref="ZlinkSubmitException" />; the retry policy belongs to the
-    ///     application.
+    ///     application. Set the operation flags to <see cref="SendFlags.None" />
+    ///     when the caller must wait for local admission.
     /// </summary>
     PublishOperation Publish(string topic);
 

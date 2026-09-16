@@ -28,6 +28,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import java.util.OptionalLong;
 import systems.zlink.contracts.core.Context;
@@ -60,6 +63,8 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
@@ -318,6 +323,107 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             String endpoint = node.status().localEndpoint();
             assertTrue(endpoint.startsWith("tcp://127.0.0.1:"));
             assertTrue(!endpoint.endsWith(":0"), endpoint);
+        }
+    }
+
+    @Test
+    void wildcardListenerAdvertisesLoopbackForExpectedRouteAndMessaging()
+        throws Exception {
+        RoutingId targetRid = RoutingId.from("jvm-wildcard-target");
+        RoutingId sourceRid = RoutingId.from("jvm-wildcard-source");
+        try (var context = Zlink.createContext();
+             var target = meshNode(context);
+             var source = meshNode(context)) {
+            target.setRoutingId(targetRid);
+            target.setBind("tcp://0.0.0.0:0");
+            target.addChannel("game");
+            target.setChannelWeight("game", 100);
+            source.setRoutingId(sourceRid);
+            source.setBind("tcp://127.0.0.1:0");
+            target.start();
+            source.start();
+
+            String connectEndpoint = ZLinkEndpointNotation.withHost(
+                target.status().localEndpoint(), "127.0.0.1");
+            source.connectPeer(connectEndpoint, targetRid);
+            awaitState(source, MeshPeerState.ADMITTED);
+
+            var received = new ConcurrentLinkedQueue<ZLinkMeshDispatchRecord>();
+            CountDownLatch dispatched = new CountDownLatch(2);
+            target.startDispatch(record -> {
+                received.add(record);
+                dispatched.countDown();
+            });
+            try (Message packet = Message.from("wildcard.test");
+                 Message payload = Message.from(new byte[] {1})) {
+                source.spotNode().sendToNode(
+                        targetRid, List.of(packet, payload))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+            try (Message packet = Message.from("wildcard.channel");
+                 Message payload = Message.from(new byte[] {2})) {
+                source.spotNode().sendToChannel(
+                        "game", List.of(packet, payload))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+
+            assertTrue(dispatched.await(2, TimeUnit.SECONDS));
+            assertEquals(
+                List.of(RecordKind.NODE_SEND, RecordKind.CHANNEL_SEND),
+                received.stream()
+                    .map(record -> record.receive().kind())
+                    .toList());
+            received.forEach(ZLinkMeshDispatchRecord::close);
+        }
+    }
+
+    @Test
+    void wildcardAdvertiseHostFailsListenerStartup() {
+        try (var context = Zlink.createContext();
+             var node = meshNode(context)) {
+            node.setRoutingId(RoutingId.from("jvm-wildcard-advertise"));
+            node.setBind("tcp://127.0.0.1:0");
+            node.setAdvertiseHost("0.0.0.0");
+
+            assertThrows(ZLinkConfigurationException.class, node::start);
+        }
+    }
+
+    @Test
+    void endpointOnlyAdmittedPeerIsANodeDirectTarget() throws Exception {
+        RoutingId targetRid = RoutingId.from("jvm-endpoint-only-target");
+        RoutingId sourceRid = RoutingId.from("jvm-endpoint-only-source");
+        String targetEndpoint =
+            "inproc://jvm-endpoint-only-target-" + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var target = meshNode(context);
+             var source = meshNode(context)) {
+            target.setRoutingId(targetRid);
+            target.setBind(targetEndpoint);
+            source.setRoutingId(sourceRid);
+            source.setBind(
+                "inproc://jvm-endpoint-only-source-" + System.nanoTime());
+            target.start();
+            source.start();
+
+            source.connectPeer(targetEndpoint);
+            awaitState(source, MeshPeerState.ADMITTED);
+            assertTrue(
+                source.spotNode().classifyNodeSendTarget(targetRid).isEmpty());
+
+            CompletableFuture<ZLinkMeshDispatchRecord> received =
+                new CompletableFuture<>();
+            target.startDispatch(received::complete);
+            try (Message packet = Message.from("endpoint-only.test");
+                 Message payload = Message.from(new byte[] {1})) {
+                source.spotNode().sendToNode(
+                        targetRid, List.of(packet, payload))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+            try (ZLinkMeshDispatchRecord record =
+                received.get(2, TimeUnit.SECONDS)) {
+                assertEquals(RecordKind.NODE_SEND, record.receive().kind());
+            }
         }
     }
 
@@ -642,6 +748,67 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 "unexpected-identity",
                 2,
                 incoming));
+    }
+
+    @Test
+    void expectedRouteMismatchLogsReasonAndBothEndpoints() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-log-mismatch-local");
+        RoutingId peerRid = RoutingId.from("jvm-log-mismatch-peer");
+        String localEndpoint =
+            "inproc://jvm-log-mismatch-local-" + System.nanoTime();
+        String peerEndpoint =
+            "inproc://jvm-log-mismatch-peer-" + System.nanoTime();
+        String expectedEndpoint =
+            "inproc://jvm-log-mismatch-expected-" + System.nanoTime();
+        ConcurrentLinkedQueue<String> warnings = new ConcurrentLinkedQueue<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                warnings.add(record.getMessage());
+            }
+
+            @Override public void flush() {
+            }
+
+            @Override public void close() {
+            }
+        };
+        Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
+        logger.addHandler(handler);
+        try (var context = Zlink.createContext();
+             var local = meshNode(context);
+             var peer = meshNode(context)) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+            local.observePeerAdmissionExpectation(
+                peerRid,
+                expectedEndpoint,
+                peer.status().lifecycleGeneration(),
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+
+            peer.connectPeer(localEndpoint, localRid);
+            long deadline =
+                System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            boolean observed = false;
+            while (!observed && System.nanoTime() < deadline) {
+                observed = warnings.stream().anyMatch(message ->
+                    message.contains("reason=expected-route-mismatch")
+                        && message.contains(
+                            "intentEndpoint=" + expectedEndpoint)
+                        && message.contains(
+                            "advertisedEndpoint=" + peerEndpoint));
+                if (!observed) {
+                    Thread.sleep(1);
+                }
+            }
+            assertTrue(observed);
+        } finally {
+            logger.removeHandler(handler);
+        }
     }
 
     @Test

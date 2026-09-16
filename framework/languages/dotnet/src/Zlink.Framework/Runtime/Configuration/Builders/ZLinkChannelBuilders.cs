@@ -162,10 +162,23 @@ internal sealed class ZLinkFanoutChannelBuilder(ZLinkChannelRegistration registr
         return this;
     }
 
+    public IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true)
+    {
+        registration.PublisherNoDrop = noDrop;
+        return this;
+    }
+
     public IZLinkFanoutChannelBuilder EnableSubscriber()
     {
         var subscriber = Subscriber();
         subscriber.AutomaticDiscoveryEnabled = true;
+        return this;
+    }
+
+    public IZLinkFanoutChannelBuilder Subscribe(string topic)
+    {
+        ZLinkFanoutLivenessProtocol.ValidateApplicationTopic(topic, nameof(topic));
+        Subscriber().Topics.Add(topic);
         return this;
     }
 

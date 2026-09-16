@@ -20,6 +20,7 @@ import {
 import { validateTimerRegistration } from './TimerRegistrationValidator';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
+import { requirePublicFanoutTopic } from './FanoutTopic';
 
 export function validateFrameworkRegistration(
   registration: ZLinkFrameworkRegistration,
@@ -27,7 +28,6 @@ export function validateFrameworkRegistration(
 ): void {
   validateListenerNetworkIdentity(
     'process network',
-    undefined,
     registration.network.bindHost,
     registration.network.advertiseHost
   );
@@ -203,11 +203,28 @@ function validateChannelCapabilities(
   peerLocationConfigured: boolean
 ): void {
   for (const [channelName, channel] of Object.entries(channels ?? {})) {
+    for (const topic of channel.subscriptions ?? []) {
+      requirePublicFanoutTopic(topic);
+    }
+    if ((channel.subscriptions ?? []).length > 0 && channel.subscriber === undefined) {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' fanout subscriptions require a subscriber capability.`
+      );
+    }
+    if (channel.noDrop !== undefined && typeof channel.noDrop !== 'boolean') {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' NoDrop must be a boolean.`
+      );
+    }
+    if (channel.noDrop !== undefined && channel.publisher === undefined) {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' NoDrop requires a publisher role.`
+      );
+    }
     if (channel.server !== undefined) {
       requireEndpoint(`channel '${channelName}' server`, channel.server.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' server`,
-        channel.server.bind,
         channel.server.bindHost,
         channel.server.advertiseHost
       );
@@ -221,7 +238,6 @@ function validateChannelCapabilities(
       requireEndpoint(`channel '${channelName}' publisher`, channel.publisher.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' publisher`,
-        channel.publisher.bind,
         channel.publisher.bindHost,
         channel.publisher.advertiseHost
       );
@@ -307,7 +323,6 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
     if (spotNode.router !== undefined) {
       validateListenerNetworkIdentity(
         `SpotNode '${spotNodeName}' router`,
-        spotNode.router.bind,
         spotNode.router.bindHost,
         spotNode.router.advertiseHost
       );
@@ -418,11 +433,9 @@ function validateSpotNodeCapability(
 
 function validateListenerNetworkIdentity(
   capabilityName: string,
-  bindEndpoint: string | undefined,
   configuredBindHost: string | undefined,
   advertiseHost: string | undefined
 ): void {
-  const bindHost = configuredBindHost ?? tcpEndpointHost(bindEndpoint);
   if (configuredBindHost !== undefined) {
     requireName(`${capabilityName} bind host`, configuredBindHost);
   }
@@ -434,16 +447,6 @@ function validateListenerNetworkIdentity(
       );
     }
   }
-  if (bindHost !== undefined && isWildcardHost(bindHost) && advertiseHost === undefined) {
-    throw new ZLinkConfigurationException(
-      `${capabilityName} must define an advertise host when its bind host is a wildcard address.`
-    );
-  }
-}
-
-function tcpEndpointHost(endpoint: string | undefined): string | undefined {
-  const match = /^tcp:\/\/(\[[^\]]+\]|[^:]+):\d+$/.exec(endpoint ?? '');
-  return match?.[1];
 }
 
 function isWildcardHost(host: string): boolean {
@@ -550,7 +553,6 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
     requireEndpoint(`STREAM node '${streamNodeName}'`, streamNode.bind);
     validateListenerNetworkIdentity(
       `STREAM node '${streamNodeName}'`,
-      streamNode.bind,
       streamNode.bindHost,
       streamNode.advertiseHost
     );

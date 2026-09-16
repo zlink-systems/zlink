@@ -95,7 +95,12 @@ test('normalizeEndpoint is idempotent for non-authority schemes too', () => {
 
 test('buildAdvertisedEndpoint replaces only the host and accepts an uppercase source scheme', () => {
   assert.equal(buildAdvertisedEndpoint('TCP://0.0.0.0:80', 'example.com'), 'tcp://example.com:80');
-  assert.equal(buildAdvertisedEndpoint('tcp://0.0.0.0:80', undefined), 'tcp://0.0.0.0:80');
+  assert.equal(buildAdvertisedEndpoint('tcp://host.internal:80', undefined), 'tcp://host.internal:80');
+});
+
+test('buildAdvertisedEndpoint defaults wildcard bind hosts to same-family loopback', () => {
+  assert.equal(buildAdvertisedEndpoint('tcp://0.0.0.0:80', undefined), 'tcp://127.0.0.1:80');
+  assert.equal(buildAdvertisedEndpoint('tcp://[::]:80', undefined), 'tcp://[::1]:80');
 });
 
 test('buildAdvertisedEndpoint honors a scheme restriction and rejects a non-matching bound endpoint', () => {

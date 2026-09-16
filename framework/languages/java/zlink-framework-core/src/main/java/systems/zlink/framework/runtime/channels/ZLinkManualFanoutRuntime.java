@@ -53,6 +53,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         new LinkedHashMap<>();
     private final ScheduledExecutorService scheduler;
     private final Executor infrastructureExecutor;
+    private final Map<String, List<String>> applicationTopics;
     private ScheduledFuture<?> tickTask;
     private volatile boolean running;
     private long lifecycleEpoch;
@@ -65,7 +66,8 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         ZLinkBackendContext context,
         ScheduledExecutorService scheduler,
         Executor infrastructureExecutor,
-        BiConsumer<String, ZLinkBackendTopicMessage> dispatch) {
+        BiConsumer<String, ZLinkBackendTopicMessage> dispatch,
+        Map<String, List<String>> applicationTopics) {
         this.backend = Objects.requireNonNull(backend, "backend");
         this.monitoring = monitoring;
         this.context = Objects.requireNonNull(context, "context");
@@ -73,6 +75,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         this.infrastructureExecutor = Objects.requireNonNull(
             infrastructureExecutor, "infrastructureExecutor");
         this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
+        this.applicationTopics = Map.copyOf(applicationTopics);
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -220,7 +223,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         Connection connection = null;
         try {
             subscriber.setChannelName(channelName);
-            subscriber.setSubscription("");
+            for (String topic : ZLinkClassicFanoutLiveness.subscriberTopics(
+                    applicationTopics.getOrDefault(channelName, List.of()))) {
+                subscriber.setSubscription(topic);
+            }
             monitor = monitoring == null
                 ? null
                 : monitoring.openSocketMonitor(subscriber);

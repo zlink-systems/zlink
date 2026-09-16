@@ -254,8 +254,6 @@ public sealed class FanoutAutomaticDiscoveryTests
         Assert.True(ZLinkFanoutLivenessProtocol.IsValidBeacon(
             ZLinkFanoutLivenessProtocol.Topic,
             [valid]));
-        Assert.False(ZLinkFanoutLivenessProtocol.IsReservedTopic(
-            ZLinkFanoutLivenessProtocol.Topic + "-application"));
         Assert.False(ZLinkFanoutLivenessProtocol.IsValidBeacon(
             ZLinkFanoutLivenessProtocol.Topic,
             [invalid]));
@@ -267,6 +265,19 @@ public sealed class FanoutAutomaticDiscoveryTests
             TimeSpan.FromSeconds(14.999)));
         Assert.True(ZLinkFanoutLivenessProtocol.IsInboundTimedOut(
             TimeSpan.FromSeconds(15)));
+    }
+
+    [Fact]
+    public void LivenessProtocol_ReservesTopicPrefixForApplicationUse()
+    {
+        Assert.True(ZLinkFanoutLivenessProtocol.IsReservedApplicationTopic(
+            ZLinkFanoutLivenessProtocol.Topic));
+        Assert.True(ZLinkFanoutLivenessProtocol.IsReservedApplicationTopic(
+            ZLinkFanoutLivenessProtocol.Topic + "\0"));
+        Assert.False(ZLinkFanoutLivenessProtocol.IsReservedApplicationTopic(
+            ZLinkFanoutLivenessProtocol.Topic[..^1]));
+        Assert.False(ZLinkFanoutLivenessProtocol.IsReservedApplicationTopic(
+            ZLinkFanoutLivenessProtocol.Topic[..^1] + "2"));
     }
 
     [Fact]
@@ -296,6 +307,7 @@ public sealed class FanoutAutomaticDiscoveryTests
             "events",
             context,
             new ZLinkSocketConfig(),
+            new HashSet<string>(StringComparer.Ordinal),
             new ZLinkChannelReceiveLoop(null!, null!),
             monitoring,
             failureSink,

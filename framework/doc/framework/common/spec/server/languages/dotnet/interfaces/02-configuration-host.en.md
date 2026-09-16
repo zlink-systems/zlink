@@ -152,7 +152,6 @@ The host validates the following conditions before network bind.
 - ChannelName's `Client()`/`Server()` role and process-local topology
  duplication
 - The location store needed for ClientServer automatic discovery
-- The connectable AdvertiseHost when using a wildcard BindHost
 - Duplicate handler key in the same owner namespace
 - Owner relationship of Spot, Actor, and STREAM factory
 - Duplicate Object role selection, Location Store registration for

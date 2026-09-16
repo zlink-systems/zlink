@@ -182,22 +182,23 @@ test('fanout publisher sends the exact reserved beacon every five seconds and pu
     published[0].payload,
     Buffer.from(fanoutWire.FANOUT_LIVENESS_PAYLOAD)
   );
-  assert.throws(
-    () => fanoutWire.requirePublicFanoutTopic(
-      fanoutWire.FANOUT_LIVENESS_TOPIC
-    ),
-    (error) => error instanceof ZLinkConfigurationException
-      && /reserved/.test(error.message)
-  );
-  assert.doesNotThrow(
-    () => fanoutWire.requirePublicFanoutTopic(
-      `${fanoutWire.FANOUT_LIVENESS_TOPIC}.application`
-    )
-  );
+  for (const topic of [
+    fanoutWire.FANOUT_LIVENESS_TOPIC,
+    `${fanoutWire.FANOUT_LIVENESS_TOPIC}.application`
+  ]) {
+    assert.throws(
+      () => fanoutWire.requirePublicFanoutTopic(topic),
+      (error) => error instanceof ZLinkConfigurationException
+        && /reserved/.test(error.message)
+    );
+  }
+  for (const topic of ['\x01ZLF', '\x01ZLF2']) {
+    assert.doesNotThrow(() => fanoutWire.requirePublicFanoutTopic(topic));
+  }
   await sockets.dispose();
 });
 
-test('fanout publisher descriptor combines advertise host with the actual bound port', async t => {
+test('fanout publisher descriptor defaults a wildcard bind to loopback with the actual port', async t => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const stores = locationStores(store);
   const locationRuntime = new internal.ZLinkLocationRuntime({
@@ -207,8 +208,7 @@ test('fanout publisher descriptor combines advertise host with the actual bound 
   await locationRuntime.start('publisher-node');
   const registration = internal.createFrameworkRegistration({
     network: {
-      bindHost: '0.0.0.0',
-      advertiseHost: 'events.internal'
+      bindHost: '0.0.0.0'
     },
     channels: {
       events: { routingId: 'publisher', publisher: {} }
@@ -246,7 +246,7 @@ test('fanout publisher descriptor combines advertise host with the actual bound 
   await runtime.start();
   const rows = await store.listFanoutPublishers('events');
   assert.equal(rows.items.length, 1);
-  assert.equal(rows.items[0].endpoint, 'tcp://events.internal:45123');
+  assert.equal(rows.items[0].endpoint, 'tcp://127.0.0.1:45123');
 });
 
 test('automatic fanout reconciles dedicated descriptors by publisher RID and lifecycle', async () => {

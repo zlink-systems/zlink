@@ -4,6 +4,7 @@
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/framework/contracts/channels/call.hpp>
+#include <zlink/framework/contracts/channels/detail/fanout_topic.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/configuration/services.hpp>
 #include <zlink/framework/contracts/detail/message_name.hpp>
@@ -70,6 +71,7 @@ struct channel_capability_snapshot_t
     std::vector<std::string> bind_endpoints;
     std::vector<std::string> connect_endpoints;
     bool no_drop = false;
+    std::vector<std::string> subscription_topics;
 };
 
 struct channel_snapshot_t
@@ -155,8 +157,10 @@ class channel_builder_t
 
   private:
     friend class zlink_builder_t;
+    friend class fanout_channel_builder_t;
     explicit channel_builder_t (std::shared_ptr<detail::channel_builder_state_t> state);
     capability_builder_t enable_capability (channel_capability_snapshot_t &target);
+    channel_builder_t &subscriber_subscriptions (std::vector<std::string> topics);
 
     std::shared_ptr<detail::channel_builder_state_t> _state;
 };
@@ -457,6 +461,7 @@ class message_bus_t
     template <typename TEvent>
     send_call_t publish (std::string channel_name, std::string topic, TEvent event)
     {
+        detail::require_public_fanout_topic (topic);
         auto preflight = _preflight;
         auto event_value = std::make_shared<TEvent> (std::move (event));
         return send_call_t (

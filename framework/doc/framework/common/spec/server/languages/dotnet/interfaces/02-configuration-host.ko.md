@@ -123,7 +123,6 @@ Host는 network bind 전에 다음 조건을 검증한다.
 - MeshNode의 [routing ID](../../../00-foundation/02-glossary.ko.md#routing-id)와 listener 설정. Server [membership](../../../00-foundation/02-glossary.ko.md#membership)은 0개일 수 있다
 - ChannelName의 `Client()`·`Server()` 역할과 process-local topology 중복
 - ClientServer automatic discovery에 필요한 location store
-- wildcard BindHost를 사용할 때 connect 가능한 AdvertiseHost
 - 같은 owner namespace의 handler key 중복
 - Spot, Actor와 STREAM factory의 owner 관계
 - Object role의 중복 선택, Client·Server role의 Location Store 등록과 None role의 [factory](../../../00-foundation/02-glossary.ko.md#factory) 부재
