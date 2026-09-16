@@ -84,7 +84,8 @@ ADL로 `to_json`/`from_json`을 찾으므로 bare struct는 직렬화되지 않�
 
 `object_role` 기본값이 `server`라 그대로 두면 location store를 요구한다. 이 구성에서는
 `none`으로 지정한다. `routing_id`는 필수다. Wildcard bind host에서 `advertise_host`를 생략하면 같은 address
-family의 loopback을 광고하므로, 다른 host에서 접속해야 할 때만 지정한다.
+family의 loopback을 광고한다. Container나 여러 host에서 remote process가 그 loopback으로 접속할
+수 없으면 접속 가능한 `advertise_host`를 지정한다.
 
 ```cpp title="Server/main.cpp"
 --8<-- "framework/languages/cpp/quickstart/Server/main.cpp"

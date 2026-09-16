@@ -147,7 +147,8 @@ Container나 여러 host에 배포할 때는 remote process가 실제로 연결�
 | Local BindHost | 허용한다. |
 | AdvertiseHost | 허용하지 않는다. Remote process가 어느 주소에 연결해야 하는지 알 수 없기 때문이다. |
 
-Wildcard는 `0.0.0.0`과 `::` 두 표기만이며, 그 밖의 표기는 일반 host로 다룬다. Wildcard
+Wildcard는 unspecified 주소 `0.0.0.0`과 `::`이며, `0:0:0:0:0:0:0:0`처럼 같은 주소를 뜻하는 동치
+표기도 wildcard로 다룬다. 그 밖의 값은 일반 host다. Wildcard
 BindHost에서 AdvertiseHost를 생략하면 §2.1의 기본값대로 loopback을 광고하므로, advertised
 endpoint와 discovery record에는 wildcard host가 남지 않는다.
 

@@ -281,11 +281,11 @@ the example are illustrative values, not contract defaults.
 
 ```java
 clientOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .client(); // this node starts checkout calls but isn't included as a server candidate.
 
 serverOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .server()
  .setWeight(100)
  .addRequestHandler(

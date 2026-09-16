@@ -102,7 +102,7 @@ play.channelName("play.api").server()
 play.channelName("play.events").client();
 ```
 
-**Options.** After `channel(channelName)`, call `.client()` or `.server()` exactly once.
+**Options.** After `channelName(channelName)`, call `.client()` or `.server()` exactly once.
 `.client()` only creates the send path and has no modifiers. Commonly used modifiers of
 `.server()` are as follows.
 

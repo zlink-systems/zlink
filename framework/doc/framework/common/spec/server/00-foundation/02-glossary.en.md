@@ -2302,7 +2302,7 @@ network interfaces. Usable for local BindHost but not for AdvertiseHost.
 |---|---|
 | Shape | Special bind address value |
 | .NET notation | `string` |
-| Public composition | Matches IPv4 `0.0.0.0` or IPv6 `::` byte-for-byte. |
+| Public composition | IPv4 `0.0.0.0` or IPv6 `::`, including equivalent spellings of the same unspecified address. |
 | Lifetime | Usable only as local bind input; can't remain in the descriptor or a manual remote endpoint. |
 
 <a id="advertised-endpoint"></a>

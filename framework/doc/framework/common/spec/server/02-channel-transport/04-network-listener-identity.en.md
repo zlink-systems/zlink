@@ -159,8 +159,8 @@ connections on multiple local network interfaces.
 | Local BindHost | Allowed. |
 | AdvertiseHost | Not allowed, because a remote process can't know which address to connect to. |
 
-Only the two spellings `0.0.0.0` and `::` are wildcards; any other spelling is treated as an
-ordinary host. When AdvertiseHost is omitted on a wildcard BindHost, the loopback default of
+The wildcards are the unspecified addresses `0.0.0.0` and `::`, including equivalent spellings
+of the same address such as `0:0:0:0:0:0:0:0`; any other value is an ordinary host. When AdvertiseHost is omitted on a wildcard BindHost, the loopback default of
 §2.1 is advertised, so no wildcard host remains in an advertised endpoint or a discovery
 record.
 

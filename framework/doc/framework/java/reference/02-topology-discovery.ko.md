@@ -97,7 +97,7 @@ play.channelName("play.api").server()
 play.channelName("play.events").client();
 ```
 
-**옵션.** `channel(channelName)` 뒤에는 `.client()` 또는 `.server()`를 정확히 한 번 호출한다.
+**옵션.** `channelName(channelName)` 뒤에는 `.client()` 또는 `.server()`를 정확히 한 번 호출한다.
 `.client()`는 송신 경로만 만들고 modifier가 없다. `.server()`에 자주 쓰는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |

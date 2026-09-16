@@ -2195,7 +2195,7 @@ Remote process가 listener에 실제로 연결할 때 사용하는 host 또는 �
 |---|---|
 | 형태 | Special bind address value |
 | .NET 표기 | `string` |
-| 공개 구성 | IPv4 `0.0.0.0` 또는 IPv6 `::`와 문자 그대로 일치하는 값이다. |
+| 공개 구성 | IPv4 `0.0.0.0` 또는 IPv6 `::`, 그리고 같은 unspecified 주소를 뜻하는 동치 표기다. |
 | 수명 | Local bind 입력에만 사용할 수 있고 descriptor·manual remote endpoint에는 남길 수 없다. |
 
 <a id="advertised-endpoint"></a>

@@ -267,11 +267,11 @@ remote connector endpoint를 자동 게시하지 않는다.
 
 ```java
 clientOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .client(); // 이 node는 checkout 호출을 시작하지만 server 후보에는 포함되지 않는다.
 
 serverOptions.addRouteMesh("orders")
- .channel("checkout")
+ .channelName("checkout")
  .server()
  .setWeight(100)
  .addRequestHandler(

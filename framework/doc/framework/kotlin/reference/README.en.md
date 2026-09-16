@@ -24,7 +24,7 @@ The exact signatures are owned by the
 | Category | Status | Kotlin-specific entry points |
 |---|---|---|
 | [Host lifecycle](01-host-lifecycle.en.md) | Drafted | `CompletionStage<T>.await()` bridge |
-| [Topology discovery](02-topology-discovery.en.md) | Drafted | `routeMesh { }`/`channel { }` DSL, `useCoroutineHandlers(...)` |
+| [Topology discovery](02-topology-discovery.en.md) | Drafted | `routeMesh { }`/`channelName { }` DSL, `useCoroutineHandlers(...)` |
 | [Messaging execution](03-messaging-execution.en.md) | Drafted | `ZLinkKotlinClient`/`ZLinkKotlinRouteClient`/`ZLinkKotlinFanoutClient`'s `await()`/`yield()` |
 | [Spot instance](04-spot-instance.en.md) | Drafted | `ZLinkSuspendingSpot`/`ZLinkSuspendingEntrySpot`/`ZLinkSuspendingInstanceSpot`, `ZLinkKotlinSpotManager` |
 | [Actor relocation](05-actor-relocation.en.md) | Drafted | `ZLinkSuspendingActor`/`ZLinkSuspendingActorFactory`, `ZLinkKotlinActorManager`/`ZLinkKotlinActorClient` |
