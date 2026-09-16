@@ -18,6 +18,7 @@ internal sealed class ZLinkSpotRuntimeManager(
     private readonly IZLinkMeshNodeLocationResolver? _locationResolver =
         services.GetService<IZLinkMeshNodeLocationResolver>()
         ?? services.GetService<ZLinkStoreLocationResolvers>();
+    private readonly ZLinkOwnerLeaseTracker? _leaseTracker = leaseTracker;
     private readonly ZLinkEntrySpotActorRouter _entrySpotActors = new(runtime);
     private long _nextPlacementSelection;
 
@@ -499,6 +500,16 @@ internal sealed class ZLinkSpotRuntimeManager(
     {
         while (true)
         {
+            if (_leaseTracker is null)
+                throw new ZLinkConfigurationException(
+                    "Remote User Spot creation requires the owner lease tracker.");
+            if (!await _leaseTracker.IsOwnerTokenLiveAsync(
+                    new ZLinkLocationOwnerToken(
+                        current.OwnerId,
+                        current.OwnerLeaseGeneration),
+                    cancellationToken)
+                .ConfigureAwait(false))
+                return null;
             if (current.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
                 || !string.Equals(
                     current.Allocation.StableType,
