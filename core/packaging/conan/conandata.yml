@@ -1,3 +1,21 @@
+# Platform builds published with the Core release tag. The recipe installs one
+# of these instead of building Core; `sources` below stays for every platform,
+# option and version that has no such build.
+binaries:
+  "1.2.0":
+    linux-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.0/libzlink-linux-x64.tar.gz"
+      sha256: "7d30cf3b5b888d3f72eef9f1ee498e43e2beab3a56fba713e2a8132676933c70"
+    linux-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.0/libzlink-linux-arm64.tar.gz"
+      sha256: "be5804cdfd86eda5c9bfe4b438223deb0695fcda0a0d7516a8d55f0a0a646b37"
+    macos-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.0/libzlink-macos-arm64.tar.gz"
+      sha256: "e4659c08482eabedb38c21d4e4308cb7442bb51bcb96f369f7b032983b4616d3"
+    windows-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.0/libzlink-windows-x64.tar.gz"
+      sha256: "acd5614c43ca431fbd528cbe726d36d86ce62ee5758be671ebfe3d34637d9046"
+
 sources:
   "1.2.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.2.0/zlink-1.2.0-source.tar.gz"

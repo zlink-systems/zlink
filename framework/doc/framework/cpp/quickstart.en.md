@@ -43,7 +43,7 @@ cmake -S . -B build \
 
 ```bash
 git clone https://github.com/zlink-systems/zlink.git
-conan create zlink/core/packaging/conan --version 1.1.0 --build=missing -s compiler.cppstd=gnu20
+conan create zlink/core/packaging/conan --build=missing -s compiler.cppstd=gnu20
 conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
 conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
 ```
