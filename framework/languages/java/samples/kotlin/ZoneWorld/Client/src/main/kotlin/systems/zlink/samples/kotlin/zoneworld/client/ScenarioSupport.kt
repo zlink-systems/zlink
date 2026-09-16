@@ -24,7 +24,7 @@ internal suspend fun connect(endpoint: String): ZLinkKotlinStreamConnector {
         ZLinkStreamConnectorOptions(
             URI.create(endpoint), ZLinkStreamDispatchMode.IMMEDIATE,
             REQUEST_TIMEOUT, REQUEST_TIMEOUT, 2, Duration.ofSeconds(5),
-            64 * 1024, 64 * 1024, Int.MAX_VALUE, 1024, 0, true,
+            64 * 1024, 64 * 1024, true,
             Duration.ofSeconds(1), Duration.ofSeconds(5), true,
             Duration.ofMillis(250), Duration.ofSeconds(5), 2.0, false,
             null, null, null, null,
