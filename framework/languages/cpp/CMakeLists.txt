@@ -1672,6 +1672,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_http_startup)
   target_link_libraries(test_cpp_framework_http_startup PRIVATE GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_listener_identity
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
+    "framework-unit;framework-contract;framework-regression;framework-zlink-channel")
+  target_link_libraries(test_cpp_framework_listener_identity PRIVATE GTest::gtest_main)
+  target_include_directories(test_cpp_framework_listener_identity PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_client_server_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")

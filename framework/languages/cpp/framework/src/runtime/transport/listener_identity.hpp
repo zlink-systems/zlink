@@ -146,6 +146,27 @@ inline bool is_wildcard_host (std::string_view host) noexcept
     return host == "0.0.0.0" || host == "*" || detail::is_zero_ipv6 (host);
 }
 
+/* Resolves the host that a remote process uses for a bound listener.  This is
+ * the single policy seam shared by every listener kind: an omitted advertise
+ * host preserves a concrete bind host and maps a wildcard bind to the
+ * loopback address in the same address family. */
+inline std::string advertised_host (
+  std::string_view bound_host,
+  const std::optional<std::string> &configured_advertise_host,
+  std::string_view listener_kind)
+{
+    if (configured_advertise_host) {
+        if (is_wildcard_host (*configured_advertise_host))
+            throw std::invalid_argument (
+              std::string (listener_kind)
+              + " advertise host must be a remotely reachable, non-wildcard host");
+        return *configured_advertise_host;
+    }
+    if (!is_wildcard_host (bound_host))
+        return std::string (bound_host);
+    return detail::is_zero_ipv6 (bound_host) ? "::1" : "127.0.0.1";
+}
+
 /* Resolves the endpoint that a remote process uses after a listener has bound.
  * The caller supplies the listener kind only for a useful configuration error;
  * endpoint parsing and IPv6 formatting remain in this one runtime seam. */
@@ -165,19 +186,8 @@ inline std::string advertised_tcp_endpoint (
 
     const auto bound_host = std::string_view (bound_endpoint).substr (
       6, port_separator - 6);
-    if (!advertise_host && is_wildcard_host (bound_host)) {
-        throw std::invalid_argument (
-          std::string (listener_kind) + " wildcard bind host requires an advertise host");
-    }
-    if (!advertise_host)
-        return normalize_endpoint (bound_endpoint);
-
-    const auto &configured_host = *advertise_host;
-    if (is_wildcard_host (configured_host))
-        throw std::invalid_argument (
-          std::string (listener_kind)
-          + " advertise host must be a remotely reachable, non-wildcard host");
-    const auto host = bracket_ipv6_host (configured_host);
+    const auto host = bracket_ipv6_host (
+      advertised_host (bound_host, advertise_host, listener_kind));
     return normalize_endpoint ("tcp://" + host + bound_endpoint.substr (port_separator));
 }
 

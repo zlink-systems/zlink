@@ -1,0 +1,560 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 3fab2a0482..98a9e75531 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -1671,6 +1671,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     "framework-unit;framework-contract;framework-host;framework-http;framework-regression")
+   zlink_framework_cpp_add_boost_headers(test_cpp_framework_http_startup)
+   target_link_libraries(test_cpp_framework_http_startup PRIVATE GTest::gtest_main)
++  add_zlink_framework_test(
++    test_cpp_framework_listener_identity
++    tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
++    "framework-unit;framework-contract;framework-regression;framework-zlink-channel")
++  target_link_libraries(test_cpp_framework_listener_identity PRIVATE GTest::gtest_main)
++  target_include_directories(test_cpp_framework_listener_identity PRIVATE
++    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+   add_zlink_framework_test(
+     test_cpp_framework_client_server_runtime
+     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index 2228674168..1a578e1648 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -2678,7 +2678,7 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
+     return *this;
+ }
+ 
+-int app_t::run (int argc, char **argv)
++int app_t::run (int argc, char **argv) try
+ {
+     _apply_zlink_framework ();
+     _state->config.load_cli (argc, argv);
+@@ -2787,6 +2787,36 @@ int app_t::run (int argc, char **argv)
+     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
+     return _state->stop_requested.load (std::memory_order_acquire) ? 0 : _state->exit_code;
+ }
++catch (const std::exception &error) {
++    _state->runtime_state.store (framework_runtime_state_t::error,
++                                 std::memory_order_release);
++    const auto message = std::string ("zlink application failed: ") + error.what ();
++    std::cerr << message << '\n';
++    try {
++        _state->logging.create_logger ("zlink.framework.host").critical (message);
++    }
++    catch (const std::exception &logging_error) {
++        std::cerr << "zlink application failure logging failed: "
++                  << logging_error.what () << '\n';
++    }
++    return 1;
++}
++catch (...) {
++    _state->runtime_state.store (framework_runtime_state_t::error,
++                                 std::memory_order_release);
++    constexpr std::string_view message =
++      "zlink application failed with an unknown exception";
++    std::cerr << message << '\n';
++    try {
++        _state->logging.create_logger ("zlink.framework.host")
++          .critical (std::string (message));
++    }
++    catch (const std::exception &logging_error) {
++        std::cerr << "zlink application failure logging failed: "
++                  << logging_error.what () << '\n';
++    }
++    return 1;
++}
+ 
+ namespace
+ {
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index ea53f900c2..684272e403 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+ 
+ #include "runtime/diagnostics/mesh_trace.hpp"
++#include "runtime/diagnostics/diagnostic_event_sink.hpp"
++#include "runtime/diagnostics/dispatch_options_access.hpp"
+ #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+ #include "runtime/messaging/envelope_codec.hpp"
+ 
+@@ -68,6 +70,35 @@ constexpr auto infrastructure_not_connected_retry_interval =
+   std::chrono::milliseconds (75);
+ using ::zlink::framework::detail::mesh_trace_enabled;
+ 
++const char *admission_rejection_reason (peer_admission_result_t result) noexcept
++{
++    switch (result) {
++        case peer_admission_result_t::mesh_mismatch:
++            return "mesh_mismatch";
++        case peer_admission_result_t::invalid_descriptor:
++            return "invalid_descriptor";
++        case peer_admission_result_t::stale_descriptor:
++            return "stale_descriptor";
++        default:
++            return "admission_rejected";
++    }
++}
++
++void log_admission_rejection (
++  const raw_mesh_node_options_t &options,
++  std::string reason,
++  std::string intent_endpoint,
++  std::string advertised_endpoint) noexcept
++{
++    detail::diagnostic_event_sink_t::log_if_configured (
++      detail::dispatch_options_access_t::logger (options.dispatch),
++      log_level_t::warn,
++      "RouteMesh peer admission rejected",
++      {{"reason", std::move (reason)},
++       {"intent_endpoint", std::move (intent_endpoint)},
++       {"advertised_endpoint", std::move (advertised_endpoint)}});
++}
++
+ void trace_mesh_enabled (const std::string &message)
+ {
+     std::cerr << "zlink mesh " << message << '\n';
+@@ -3126,6 +3157,9 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
+                 co_return raw_mesh_pump_result_t::no_data;
+             }
+             if (candidate.expected_descriptor_mismatch) {
++                log_admission_rejection (
++                  _options, "expected_route_mismatch",
++                  candidate.remote_endpoint, descriptor.advertised_endpoint);
+                 const auto submitted = submit_header_only (
+                   received->source_routing_id,
+                   protocol::encode_reject (3));
+@@ -3198,6 +3232,9 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
+             }
+             if (admission != peer_admission_result_t::admitted
+                 && admission != peer_admission_result_t::duplicate_connection) {
++                log_admission_rejection (
++                  _options, admission_rejection_reason (admission),
++                  candidate.remote_endpoint, descriptor.advertised_endpoint);
+                 const auto reason =
+                   admission == peer_admission_result_t::mesh_mismatch ? 2u
+                   : admission == peer_admission_result_t::stale_descriptor
+diff --git a/framework/languages/cpp/framework/src/runtime/streams/stream_host_service.cpp b/framework/languages/cpp/framework/src/runtime/streams/stream_host_service.cpp
+index 311a5c86fc..0fbdc983af 100644
+--- a/framework/languages/cpp/framework/src/runtime/streams/stream_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/streams/stream_host_service.cpp
+@@ -465,16 +465,14 @@ void validate_stream_listener_identity (
+   const std::optional<std::string> &advertise_host)
+ {
+     const auto endpoint = parse_stream_endpoint (stream);
+-    if (advertise_host && transport::is_wildcard_host (*advertise_host)) {
+-        throw framework_exception_t (
+-          framework_error_kind_t::protocol_error,
+-          "STREAM advertise host must be a remotely reachable, non-wildcard host: "
+-            + *advertise_host);
++    try {
++        (void) transport::advertised_host (
++          endpoint.host, advertise_host, "STREAM");
+     }
+-    if (transport::is_wildcard_host (endpoint.host) && !advertise_host) {
++    catch (const std::invalid_argument &error) {
+         throw framework_exception_t (
+           framework_error_kind_t::protocol_error,
+-          "STREAM wildcard bind host requires an advertise host: " + stream.name);
++          std::string (error.what ()) + ": " + stream.name);
+     }
+ }
+ 
+@@ -499,7 +497,8 @@ std::string stream_listener_advertised_endpoint (
+     if (bound_host.size () >= 2 && bound_host.front () == '['
+         && bound_host.back () == ']')
+         bound_host = bound_host.substr (1, bound_host.size () - 2);
+-    const auto host = advertise_host ? *advertise_host : bound_host;
++    const auto host = transport::advertised_host (
++      bound_host, advertise_host, "STREAM");
+     const auto formatted_host = transport::bracket_ipv6_host (host);
+     return transport::normalize_endpoint (scheme + formatted_host + ":" + port);
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/transport/listener_identity.hpp b/framework/languages/cpp/framework/src/runtime/transport/listener_identity.hpp
+index 25f71304c9..05bc6a00e3 100644
+--- a/framework/languages/cpp/framework/src/runtime/transport/listener_identity.hpp
++++ b/framework/languages/cpp/framework/src/runtime/transport/listener_identity.hpp
+@@ -146,6 +146,27 @@ inline bool is_wildcard_host (std::string_view host) noexcept
+     return host == "0.0.0.0" || host == "*" || detail::is_zero_ipv6 (host);
+ }
+ 
++/* Resolves the host that a remote process uses for a bound listener.  This is
++ * the single policy seam shared by every listener kind: an omitted advertise
++ * host preserves a concrete bind host and maps a wildcard bind to the
++ * loopback address in the same address family. */
++inline std::string advertised_host (
++  std::string_view bound_host,
++  const std::optional<std::string> &configured_advertise_host,
++  std::string_view listener_kind)
++{
++    if (configured_advertise_host) {
++        if (is_wildcard_host (*configured_advertise_host))
++            throw std::invalid_argument (
++              std::string (listener_kind)
++              + " advertise host must be a remotely reachable, non-wildcard host");
++        return *configured_advertise_host;
++    }
++    if (!is_wildcard_host (bound_host))
++        return std::string (bound_host);
++    return detail::is_zero_ipv6 (bound_host) ? "::1" : "127.0.0.1";
++}
++
+ /* Resolves the endpoint that a remote process uses after a listener has bound.
+  * The caller supplies the listener kind only for a useful configuration error;
+  * endpoint parsing and IPv6 formatting remain in this one runtime seam. */
+@@ -165,19 +186,8 @@ inline std::string advertised_tcp_endpoint (
+ 
+     const auto bound_host = std::string_view (bound_endpoint).substr (
+       6, port_separator - 6);
+-    if (!advertise_host && is_wildcard_host (bound_host)) {
+-        throw std::invalid_argument (
+-          std::string (listener_kind) + " wildcard bind host requires an advertise host");
+-    }
+-    if (!advertise_host)
+-        return normalize_endpoint (bound_endpoint);
+-
+-    const auto &configured_host = *advertise_host;
+-    if (is_wildcard_host (configured_host))
+-        throw std::invalid_argument (
+-          std::string (listener_kind)
+-          + " advertise host must be a remotely reachable, non-wildcard host");
+-    const auto host = bracket_ipv6_host (configured_host);
++    const auto host = bracket_ipv6_host (
++      advertised_host (bound_host, advertise_host, listener_kind));
+     return normalize_endpoint ("tcp://" + host + bound_endpoint.substr (port_separator));
+ }
+ 
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
+new file mode 100644
+index 0000000000..7135a859c8
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
+@@ -0,0 +1,327 @@
++/* SPDX-License-Identifier: FSL-1.1-ALv2 */
++
++#include "runtime/diagnostics/dispatch_options_access.hpp"
++#include "runtime/client_server/raw_client_server_owner.hpp"
++#include "runtime/mesh/raw_mesh_node_owner.hpp"
++#include "runtime/protocol/service_wire_codec.hpp"
++#include "runtime/transport/listener_identity.hpp"
++
++#include <zlink/framework.hpp>
++
++#include <gtest/gtest.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstdint>
++#include <map>
++#include <memory>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <utility>
++#include <vector>
++
++namespace
++{
++namespace framework = zlink::framework;
++namespace mesh = zlink::framework::runtime::mesh;
++namespace protocol = zlink::framework::runtime::protocol;
++namespace transport = zlink::framework::runtime::transport;
++using namespace std::chrono_literals;
++
++class no_op_stream_session_t final : public framework::packet_stream_session_t
++{
++  public:
++    framework::task_t<void> on_connected (framework::stream_t &) override { co_return; }
++
++    framework::task_t<void> on_disconnected (framework::stream_t &) override { co_return; }
++
++    framework::task_t<void> on_error (framework::stream_t &,
++                                      const framework::stream_error_t &) override
++    {
++        co_return;
++    }
++
++    framework::task_t<void> on_packet (framework::stream_t &,
++                                       const framework::session_message_context_t &,
++                                       const zlink::message_t &) override
++    {
++        co_return;
++    }
++};
++
++class listener_status_probe_t final : public framework::hosted_service_t
++{
++  public:
++    explicit listener_status_probe_t (framework::app_t &app) : _app (&app) {}
++
++    framework::task_t<void> start (framework::service_provider_t &services) override
++    {
++        auto &runtime = services.get_required<framework::framework_runtime_t> ();
++        fanout_endpoint =
++          runtime.listener_status (framework::listener_kind_t::fanout, "wildcard-fanout").endpoint;
++        stream_endpoint =
++          runtime.listener_status (framework::listener_kind_t::stream, "wildcard-stream").endpoint;
++        _app->stop ();
++        co_return;
++    }
++
++    void stop () noexcept override {}
++
++    std::string fanout_endpoint;
++    std::string stream_endpoint;
++
++  private:
++    framework::app_t *_app;
++};
++
++std::vector<std::uint8_t> bytes (std::string value)
++{
++    return {value.begin (), value.end ()};
++}
++
++mesh::raw_mesh_node_options_t
++mesh_options (std::string rid, std::string endpoint, framework::dispatch_options_t dispatch = {})
++{
++    return mesh::raw_mesh_node_options_t{
++      .descriptor = mesh::service_node_descriptor_t{.mesh_name = "listener-identity",
++                                                    .node_routing_id = bytes (std::move (rid)),
++                                                    .lifecycle_generation = 1,
++                                                    .descriptor_revision = 1,
++                                                    .advertised_endpoint = std::move (endpoint),
++                                                    .channels = {{"contract", 100}},
++                                                    .state = mesh::service_node_state_t::preparing},
++      .dispatch = std::move (dispatch)};
++}
++
++void pump (mesh::raw_mesh_node_owner_t &node)
++{
++    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
++    ASSERT_TRUE (node.drain_monitor_events (now).result ());
++    const auto pumped = node.pump_one (now).result ();
++    ASSERT_TRUE (pumped);
++    EXPECT_NE (pumped.value (), mesh::raw_mesh_pump_result_t::protocol_error);
++}
++
++bool wait_for_ready_pair (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_t &target)
++{
++    const auto source_rid = source.topology ().local_descriptor ().node_routing_id;
++    const auto target_rid = target.topology ().local_descriptor ().node_routing_id;
++    const auto deadline = std::chrono::steady_clock::now () + 2s;
++    while (std::chrono::steady_clock::now () < deadline) {
++        if (source.topology ().peer (target_rid) && target.topology ().peer (source_rid))
++            return true;
++        pump (source);
++        pump (target);
++        std::this_thread::sleep_for (1ms);
++    }
++    return false;
++}
++
++bool wait_for_application_messages (mesh::raw_mesh_node_owner_t &source,
++                                    mesh::raw_mesh_node_owner_t &target,
++                                    std::size_t count)
++{
++    const auto deadline = std::chrono::steady_clock::now () + 2s;
++    while (std::chrono::steady_clock::now () < deadline) {
++        if (target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
++            == count)
++            return true;
++        pump (source);
++        pump (target);
++        std::this_thread::sleep_for (1ms);
++    }
++    return false;
++}
++
++TEST (ListenerIdentity, OmittedAdvertiseHostMapsWildcardsToFamilyLoopback)
++{
++    for (const std::string_view listener : {"MeshNode", "ClientServer", "Fanout", "STREAM"}) {
++        EXPECT_EQ (
++          transport::advertised_tcp_endpoint ("tcp://0.0.0.0:7412", std::nullopt, listener),
++          "tcp://127.0.0.1:7412");
++        EXPECT_EQ (transport::advertised_tcp_endpoint ("tcp://[::]:7412", std::nullopt, listener),
++                   "tcp://[::1]:7412");
++    }
++}
++
++TEST (ListenerIdentity, ExplicitWildcardAdvertiseHostRemainsInvalid)
++{
++    EXPECT_THROW (transport::advertised_tcp_endpoint (
++                    "tcp://127.0.0.1:7412", std::optional<std::string> ("0.0.0.0"), "Fanout"),
++                  std::invalid_argument);
++    EXPECT_THROW (transport::advertised_tcp_endpoint ("tcp://[::1]:7412",
++                                                      std::optional<std::string> ("::"), "STREAM"),
++                  std::invalid_argument);
++}
++
++TEST (ListenerIdentity, WildcardClientServerPublishesLoopback)
++{
++    namespace client_server = framework::runtime::client_server;
++    client_server::raw_client_server_server_t server (
++      client_server::raw_client_server_server_options_t{
++        .descriptor =
++          protocol::client_server_server_admission_t{.channel_name = "listener-identity",
++                                                     .server_routing_id = bytes ("client-server"),
++                                                     .lifecycle_generation = 1,
++                                                     .descriptor_revision = 1,
++                                                     .weight = 100,
++                                                     .state = mesh::service_node_state_t::preparing,
++                                                     .security_identity = "test",
++                                                     .effective_max_message_bytes = 1024,
++                                                     .advertised_endpoint = "tcp://0.0.0.0:0"}});
++    server.start ();
++    EXPECT_TRUE (server.endpoint ().starts_with ("tcp://127.0.0.1:"));
++    server.close ();
++}
++
++TEST (ListenerIdentity, WildcardIpv6MeshPublishesIpv6Loopback)
++{
++    mesh::raw_mesh_node_owner_t node (mesh_options ("ipv6-target", "tcp://[::]:0"));
++    node.start ();
++    EXPECT_TRUE (node.endpoint ().starts_with ("tcp://[::1]:"));
++    node.close ();
++}
++
++TEST (ListenerIdentity, WildcardFanoutAndStreamPublishLoopback)
++{
++    auto app = framework::app_t::create ();
++    app.add_zlink_framework ([] (framework::zlink_framework_options_t &options) {
++        options.add_fanout_channel ("wildcard-fanout").enable_publisher ("tcp://0.0.0.0:0");
++        options.add_stream_node ("wildcard-stream")
++          .bind ("tcp://0.0.0.0:0")
++          .register_session<no_op_stream_session_t> ();
++    });
++    auto probe = std::make_unique<listener_status_probe_t> (app);
++    auto *probe_view = probe.get ();
++    app.add_hosted_service (std::move (probe));
++
++    EXPECT_EQ (app.run (0, nullptr), 0);
++    ASSERT_NE (probe_view, nullptr);
++    EXPECT_TRUE (probe_view->fanout_endpoint.starts_with ("tcp://127.0.0.1:"));
++    EXPECT_TRUE (probe_view->stream_endpoint.starts_with ("tcp://127.0.0.1:"));
++}
++
++TEST (ListenerIdentity, WildcardMeshAdvertisesLoopbackAndSupportsExpectedRidRouting)
++{
++    mesh::raw_mesh_node_owner_t source (mesh_options ("expected-source", "tcp://127.0.0.1:0"));
++    mesh::raw_mesh_node_owner_t target (mesh_options ("expected-target", "tcp://0.0.0.0:0"));
++    source.start ();
++    target.start ();
++
++    const auto target_descriptor = target.topology ().local_descriptor ();
++    ASSERT_TRUE (target_descriptor.advertised_endpoint.starts_with ("tcp://127.0.0.1:"));
++    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
++    ASSERT_TRUE (wait_for_ready_pair (source, target));
++
++    const protocol::application_payload_t payload{"ListenerIdentityProbe", "application/json",
++                                                  bytes ("payload")};
++    ASSERT_TRUE (
++      source.send_to_node (target_descriptor.node_routing_id, payload).result ().value ());
++    ASSERT_TRUE (source.send_to_channel ("contract", payload).result ().value ());
++    ASSERT_TRUE (wait_for_application_messages (source, target, 2));
++
++    const auto claimed =
++      target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
++    ASSERT_TRUE (claimed);
++    EXPECT_EQ (claimed->records.size (), 2u);
++    EXPECT_TRUE (target.mailbox ().release (*claimed));
++    source.close ();
++    target.close ();
++}
++
++TEST (ListenerIdentity, EndpointOnlyPeerBecomesNodeDirectTargetAfterHandshake)
++{
++    mesh::raw_mesh_node_owner_t source (mesh_options ("endpoint-source", "tcp://127.0.0.1:0"));
++    mesh::raw_mesh_node_owner_t target (mesh_options ("endpoint-target", "tcp://127.0.0.1:0"));
++    source.start ();
++    target.start ();
++
++    const auto target_descriptor = target.topology ().local_descriptor ();
++    ASSERT_TRUE (source.connect_peer (target.endpoint ()));
++    ASSERT_TRUE (wait_for_ready_pair (source, target));
++    const protocol::application_payload_t payload{"EndpointOnlyProbe", "application/json",
++                                                  bytes ("payload")};
++    ASSERT_TRUE (
++      source.send_to_node (target_descriptor.node_routing_id, payload).result ().value ());
++    ASSERT_TRUE (wait_for_application_messages (source, target, 1));
++    source.close ();
++    target.close ();
++}
++
++TEST (ListenerIdentity, ExpectedRouteMismatchWritesAdmissionWarning)
++{
++    framework::logging_builder_t logging;
++    framework::dispatch_options_t dispatch;
++    framework::detail::dispatch_options_access_t::set_logger (
++      dispatch, logging.create_logger ("listener-identity-test"));
++    mesh::raw_mesh_node_owner_t source (
++      mesh_options ("warning-source", "tcp://127.0.0.1:0", dispatch));
++    mesh::raw_mesh_node_owner_t target (mesh_options ("warning-target", "tcp://127.0.0.1:0"));
++    source.start ();
++    target.start ();
++
++    const auto intent_endpoint = target.endpoint ();
++    auto expected = target.topology ().local_descriptor ();
++    expected.advertised_endpoint = "tcp://127.0.0.1:1";
++    ASSERT_TRUE (source.connect_peer (intent_endpoint, expected));
++    const auto deadline = std::chrono::steady_clock::now () + 2s;
++    const auto has_rejection_warning = [&] {
++        const auto records = logging.captured_records ();
++        return std::any_of (records.begin (), records.end (),
++                            [] (const framework::log_record_t &record) {
++                                return record.level == framework::log_level_t::warn
++                                       && record.message == "RouteMesh peer admission rejected";
++                            });
++    };
++    while (!has_rejection_warning () && std::chrono::steady_clock::now () < deadline) {
++        pump (source);
++        pump (target);
++        std::this_thread::sleep_for (1ms);
++    }
++
++    const auto records = logging.captured_records ();
++    const auto found = std::find_if (
++      records.begin (), records.end (), [&] (const framework::log_record_t &record) {
++          if (record.level != framework::log_level_t::warn
++              || record.message != "RouteMesh peer admission rejected")
++              return false;
++          std::map<std::string, std::string> fields;
++          for (const auto &field : record.fields)
++              fields.emplace (field.key, field.value);
++          return fields["reason"] == "expected_route_mismatch"
++                 && fields["intent_endpoint"] == intent_endpoint
++                 && fields["advertised_endpoint"].starts_with ("tcp://127.0.0.1:");
++      });
++    EXPECT_NE (found, records.end ());
++    source.close ();
++    target.close ();
++}
++
++TEST (ListenerIdentity, StartupValidationFailureReturnsMessageInsteadOfEscapingRun)
++{
++    auto app = framework::app_t::create ();
++    app.add_zlink_framework ([] (framework::zlink_framework_options_t &options) {
++        options.add_fanout_channel ("invalid-advertise")
++          .enable_publisher ("tcp://127.0.0.1:0")
++          .set_advertise_host ("0.0.0.0");
++    });
++
++    testing::internal::CaptureStderr ();
++    const auto exit_code = app.run (0, nullptr);
++    const auto error_output = testing::internal::GetCapturedStderr ();
++    EXPECT_NE (exit_code, 0);
++    EXPECT_NE (error_output.find ("advertise host"), std::string::npos);
++    EXPECT_NE (error_output.find ("non-wildcard"), std::string::npos);
++    const auto records = app.logging ().captured_records ();
++    const auto found =
++      std::find_if (records.begin (), records.end (), [] (const framework::log_record_t &record) {
++          return record.level == framework::log_level_t::critical
++                 && record.message.find ("advertise host") != std::string::npos
++                 && record.message.find ("non-wildcard") != std::string::npos;
++      });
++    EXPECT_NE (found, records.end ());
++}
++
++} // namespace

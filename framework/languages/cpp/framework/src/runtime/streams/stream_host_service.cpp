@@ -465,16 +465,14 @@ void validate_stream_listener_identity (
   const std::optional<std::string> &advertise_host)
 {
     const auto endpoint = parse_stream_endpoint (stream);
-    if (advertise_host && transport::is_wildcard_host (*advertise_host)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "STREAM advertise host must be a remotely reachable, non-wildcard host: "
-            + *advertise_host);
+    try {
+        (void) transport::advertised_host (
+          endpoint.host, advertise_host, "STREAM");
     }
-    if (transport::is_wildcard_host (endpoint.host) && !advertise_host) {
+    catch (const std::invalid_argument &error) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
-          "STREAM wildcard bind host requires an advertise host: " + stream.name);
+          std::string (error.what ()) + ": " + stream.name);
     }
 }
 
@@ -499,7 +497,8 @@ std::string stream_listener_advertised_endpoint (
     if (bound_host.size () >= 2 && bound_host.front () == '['
         && bound_host.back () == ']')
         bound_host = bound_host.substr (1, bound_host.size () - 2);
-    const auto host = advertise_host ? *advertise_host : bound_host;
+    const auto host = transport::advertised_host (
+      bound_host, advertise_host, "STREAM");
     const auto formatted_host = transport::bracket_ipv6_host (host);
     return transport::normalize_endpoint (scheme + formatted_host + ":" + port);
 }
