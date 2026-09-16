@@ -366,6 +366,13 @@ client 하나를 선택한다. Index에 없는 이름은 `NotFound`로 끝내고
 ClientServer client를 검색하거나 relay하지 않는다. 등록된 송신 경로에 ready target pipe가 없으면
 `Unavailable`, [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면 `NotFound`를 사용한다.
 
+<a id="no-eligible-select-one-member"></a>
+[Select-one](02-glossary.ko.md#select-one) ChannelName에서 eligibility와 drain 조건을 적용한 뒤 남은
+member가 하나도 없으면 `Unavailable`이다. Request와 one-way send가 같은 kind로 끝난다.
+[Weight](02-glossary.ko.md#weight)가 `0`이거나 draining이어서 후보에서 빠진 경우가 여기에 해당하며,
+송신 경로와 connection은 그대로 있으므로 `NotFound`가 아니다. 후보 집합은 weight를 다시 높이거나
+drain이 끝나면 채워진다.
+
 Logical Multicast도 ChannelName을 같은 process-local route index에서 찾아 [owner](02-glossary.ko.md#owner) RouteMesh MeshNode를
 선택한다. 호출자는 MeshName이나 endpoint를 제공하지 않는다. 선택된 owner MeshName과 물리
 route는 runtime monitoring과 message-flow 관측에 남지만 application 호출 인자로 되돌리지 않는다.

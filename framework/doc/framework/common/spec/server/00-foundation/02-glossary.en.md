@@ -1671,7 +1671,9 @@ with `100`.
 selection, but doesn't cancel already-submitted work. Setting weight to `0` alone
 doesn't put the target into drain state or start a shutdown procedure. Raising weight
 back up while running lets a target satisfying other conditions become a candidate
-again.
+again. When this exclusion leaves a select-one ChannelName with no candidate at all,
+[Framework API](06-framework-api.en.md#no-eligible-select-one-member) decides the error
+kind.
 
 | Item | Content |
 |---|---|

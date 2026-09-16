@@ -419,6 +419,13 @@ path has no ready target pipe, it uses `Unavailable`; if the
 [ready target](02-glossary.en.md#ready-target) snapshot itself doesn't exist, it uses
 `NotFound`.
 
+<a id="no-eligible-select-one-member"></a>
+When applying eligibility and drain leaves a [select-one](02-glossary.en.md#select-one)
+ChannelName with no member at all, the result is `Unavailable`, and a request and a one-way
+send end with the same kind. A member dropped because its [weight](02-glossary.en.md#weight) is
+`0` or because it is draining falls here; the send path and the connection are still there, so
+it is not `NotFound`. The candidate set refills when the weight rises again or the drain ends.
+
 Logical Multicast also looks up ChannelName in the same process-local route index and
 selects the [owner](02-glossary.en.md#owner) RouteMesh MeshNode. The caller doesn't provide
 a MeshName or endpoint. The selected owner MeshName and physical route remain in runtime

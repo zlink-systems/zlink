@@ -1585,7 +1585,9 @@ Server가 Client에 새 업무 호출을 시작하지 못하는 규칙은
 `0`이면 새로운 select-one과 Logical Multicast remote target에서 제외하지만 이미
 제출한 작업을 취소하지 않는다. Weight를 `0`으로 바꾸는 것만으로 target이 drain
 상태가 되거나 종료 절차를 시작하지 않는다. 실행 중에 weight를 다시 높이면 다른
-조건을 만족하는 target은 선택 후보로 돌아올 수 있다.
+조건을 만족하는 target은 선택 후보로 돌아올 수 있다. 이 제외로 select-one
+ChannelName의 후보가 하나도 남지 않았을 때의 error kind는
+[Framework API](06-framework-api.ko.md#no-eligible-select-one-member)가 정한다.
 
 | 항목 | 내용 |
 |---|---|
