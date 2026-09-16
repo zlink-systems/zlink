@@ -399,14 +399,21 @@ def cpp_target():
     }
 
 
-def conan_source(relative, tag, asset):
+def conan_source(relative, tag, asset, section="sources"):
     source = text(relative)
+    # sources: and binaries: key their versions identically, so a whole-file
+    # search for the version key finds whichever section comes first. Scope
+    # the lookup the way write_conan_version_entry() already does.
+    bounds = conan_section_range(source, section)
+    if bounds is None:
+        error(f"{relative}: {section}: 헤더를 찾지 못함")
+        return
     match = re.search(
         rf'(?ms)^  "{re.escape(version)}":\s*\n(?P<body>(?:    .*(?:\n|$))*)',
-        source,
+        source[bounds[0]:bounds[1]],
     )
     if not match:
-        error(f"{relative}: {version} source 항목 누락")
+        error(f"{relative}: {section}: {version} 항목 누락")
         return
     body = match.group("body")
     url = re.search(r'^    url:\s*"([^"]+)"', body, re.MULTILINE)
