@@ -170,9 +170,15 @@ function Assert-JavaPackage([string]$Package, [string]$CoreBin) {
   try {
     $entries = @{}
     foreach ($entry in $archive.Entries) { $entries[$entry.FullName] = $entry }
-    $dlls = Get-ChildItem -LiteralPath $CoreBin -Filter *.dll -File | Sort-Object Name
-    foreach ($dll in $dlls) {
-      $entryName = "native/windows-x86_64/$($dll.Name)"
+    # Gradle writes dependencies.list in ordinal name order. Culture-aware
+    # Sort-Object orders "msvcp140_1.dll" before "msvcp140.dll" under pwsh
+    # (ICU), so the expected list is sorted the same way Gradle sorts it.
+    # The typed string array sorts in place on both PowerShell editions.
+    [string[]]$dllNames = @(Get-ChildItem -LiteralPath $CoreBin -Filter *.dll -File |
+      ForEach-Object Name)
+    [Array]::Sort($dllNames, [StringComparer]::Ordinal)
+    foreach ($dllName in $dllNames) {
+      $entryName = "native/windows-x86_64/$dllName"
       if (-not $entries.ContainsKey($entryName) -or $entries[$entryName].Length -eq 0) {
         throw "Java package is missing a non-empty Core DLL: $entryName"
       }
@@ -187,9 +193,11 @@ function Assert-JavaPackage([string]$Package, [string]$CoreBin) {
     } finally {
       $reader.Dispose()
     }
-    $expectedDependencies = @($dlls | Where-Object Name -ne "zlink.dll" | ForEach-Object Name)
+    $expectedDependencies = @($dllNames | Where-Object { $_ -ne "zlink.dll" })
     if ([string]::Join("`n", $actualDependencies) -ne [string]::Join("`n", $expectedDependencies)) {
-      throw "Java package Windows dependency index does not match the approved Core prefix"
+      throw ("Java package Windows dependency index does not match the approved Core prefix" +
+        " (index: " + [string]::Join(", ", $actualDependencies) +
+        "; prefix: " + [string]::Join(", ", $expectedDependencies) + ")")
     }
   } finally {
     $archive.Dispose()

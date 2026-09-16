@@ -46,7 +46,7 @@ function Write-Summary {
         throw "-MinimumTests must be at least 1"
     }
 
-    $xmlFiles = @(Get-ChildItem -LiteralPath $InputPath -Filter "*.xml" -File -Recurse -ErrorAction SilentlyContinue)
+    $xmlFiles = @(Get-ChildItem -LiteralPath $InputPath -Filter "*.xml" -File -Recurse -Force -ErrorAction SilentlyContinue)
     $testCount = 0
     $failureCount = 0
     $failedTests = [Collections.Generic.List[string]]::new()
@@ -92,7 +92,9 @@ function Write-Summary {
 }
 
 function Compare-Summaries {
-    $summaryFiles = @(Get-ChildItem -LiteralPath $InputPath -Filter "summary.json" -File -Recurse -ErrorAction SilentlyContinue)
+    # -Force: the downloaded artifacts keep their ".artifacts/..." path, and
+    # Linux pwsh treats a dot-directory as hidden and skips it otherwise.
+    $summaryFiles = @(Get-ChildItem -LiteralPath $InputPath -Filter "summary.json" -File -Recurse -Force -ErrorAction SilentlyContinue)
     $summaries = @{}
     foreach ($summaryFile in $summaryFiles) {
         $summary = Get-Content -LiteralPath $summaryFile.FullName -Raw | ConvertFrom-Json
