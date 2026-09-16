@@ -183,13 +183,12 @@ test('automatic ClientServer startup requires the minimal Location Store provide
   }), /Location Store must implement read, write, and scan/);
 });
 
-test('ClientServer socket identity advertises the concrete port returned after bind', async () => {
+test('ClientServer socket identity defaults a wildcard bind to loopback with the concrete port', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: {
       orders: {
         server: {
-          bind: 'tcp://0.0.0.0:0',
-          advertiseHost: 'orders.internal'
+          bind: 'tcp://0.0.0.0:0'
         },
         sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }]
       }
@@ -220,7 +219,7 @@ test('ClientServer socket identity advertises the concrete port returned after b
   );
 
   const identity = sockets.clientServerServerIdentity('orders');
-  assert.equal(identity.endpoint, 'tcp://orders.internal:49152');
+  assert.equal(identity.endpoint, 'tcp://127.0.0.1:49152');
   assert.equal(identity.serverRid, router.routingId);
   assert.ok(identity.lifecycleGeneration > 0n);
   await sockets.dispose();

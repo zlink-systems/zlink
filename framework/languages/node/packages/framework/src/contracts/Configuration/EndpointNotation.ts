@@ -184,7 +184,7 @@ export function parseEndpointHostPort(
   };
 }
 
-const ADVERTISE_SOURCE_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/(?:\[[^\]]+\]|[^:]+):(\d+)$/;
+const ADVERTISE_SOURCE_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/(\[[^\]]+\]|[^:]+):(\d+)$/;
 
 /**
  * Builds a normalized `scheme://advertiseHost:port` endpoint from a bound
@@ -198,16 +198,29 @@ const ADVERTISE_SOURCE_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/(?:\[[^\]]+\]|[
  * endpoint, or (when `restrictToScheme` is given) when its scheme doesn't
  * match after lowercasing -- callers translate that into their own
  * capability-specific `ZLinkConfigurationException` message. Returns
- * `boundEndpoint` normalized (unrestricted) when `advertiseHost` is
- * undefined -- the common case, and the actual bound endpoint that ends up
- * on the wire and in descriptors compared elsewhere.
+ * `boundEndpoint` normalized when `advertiseHost` is undefined, except that
+ * wildcard TCP hosts use the same-family loopback address. This keeps the
+ * bind-only default connectable without advertising a wildcard address.
  */
 export function buildAdvertisedEndpoint(
   boundEndpoint: string,
   advertiseHost: string | undefined,
   restrictToScheme?: string
 ): string | undefined {
-  if (advertiseHost === undefined) return normalizeEndpoint(boundEndpoint);
+  if (advertiseHost === undefined) {
+    const normalized = normalizeEndpoint(boundEndpoint);
+    const match = ADVERTISE_SOURCE_PATTERN.exec(normalized);
+    if (match === null) return normalized;
+    const boundHost = unbracketHost(match[2]);
+    const defaultHost = boundHost === '0.0.0.0'
+      ? '127.0.0.1'
+      : boundHost === '::'
+        ? '::1'
+        : undefined;
+    if (defaultHost === undefined) return normalized;
+    const host = defaultHost.includes(':') ? `[${defaultHost}]` : defaultHost;
+    return normalizeEndpoint(`${match[1].toLowerCase()}://${host}:${match[3]}`);
+  }
   const match = ADVERTISE_SOURCE_PATTERN.exec(boundEndpoint);
   if (match === null) return undefined;
   const scheme = match[1].toLowerCase();
@@ -215,7 +228,11 @@ export function buildAdvertisedEndpoint(
   const host = advertiseHost.includes(':') && !advertiseHost.startsWith('[')
     ? `[${advertiseHost}]`
     : advertiseHost;
-  return normalizeEndpoint(`${scheme}://${host}:${match[2]}`);
+  return normalizeEndpoint(`${scheme}://${host}:${match[3]}`);
+}
+
+function unbracketHost(host: string): string {
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
 function normalizeSuffix(suffix: string): string {
