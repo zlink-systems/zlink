@@ -2,12 +2,15 @@ package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
@@ -23,8 +26,114 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.testing.ZLinkDescriptorLeaseTestFixture;
+import systems.zlink.framework.testing.ZLinkDescriptorLeaseTestFixture.LeaseState;
 
 final class ZLinkFrameworkRuntimeManualPeerTest {
+    @Test
+    void manualPeerSkipsExpiredDescriptorAndConnectsTheLiveOwner() {
+        String endpoint = "inproc://shared-peer";
+        ZLinkMeshNodeDescriptor expired =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "expired-peer", endpoint, "expired-owner");
+        ZLinkMeshNodeDescriptor live =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "live-peer", endpoint, "live-owner");
+        RecordingMeshNode source = new RecordingMeshNode(
+            RoutingId.from("local-peer"));
+
+        ZLinkFrameworkRuntime.connectManualObjectPeers(
+                source,
+                List.of(new MeshNodeRegistration.Peer(endpoint, null)),
+                "mesh",
+                ZLinkDescriptorLeaseTestFixture.resolver(
+                    List.of(expired, live),
+                    Map.of(
+                        "expired-owner", LeaseState.EXPIRED,
+                        "live-owner", LeaseState.LIVE)))
+            .toCompletableFuture().join();
+
+        assertEquals(live.rid(), source.routingId);
+    }
+
+    @Test
+    void manualPeerKeepsLiveDescriptorEligible() {
+        String endpoint = "inproc://live-peer";
+        ZLinkMeshNodeDescriptor live =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "live-peer", endpoint, "live-owner");
+        RecordingMeshNode source = new RecordingMeshNode(
+            RoutingId.from("local-peer"));
+
+        ZLinkFrameworkRuntime.connectManualObjectPeers(
+                source,
+                List.of(new MeshNodeRegistration.Peer(endpoint, null)),
+                "mesh",
+                ZLinkDescriptorLeaseTestFixture.resolver(
+                    List.of(live),
+                    Map.of("live-owner", LeaseState.LIVE)))
+            .toCompletableFuture().join();
+
+        assertEquals(live.rid(), source.routingId);
+    }
+
+    @Test
+    void manualPeerRejectsWholeSnapshotWhenLeaseExpiryIsMissing() {
+        String endpoint = "inproc://corrupt-peer";
+        ZLinkMeshNodeDescriptor corrupt =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "corrupt-peer", endpoint, "corrupt-owner");
+        ZLinkMeshNodeDescriptor live =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "live-peer", endpoint, "live-owner");
+        RecordingMeshNode source = new RecordingMeshNode(
+            RoutingId.from("local-peer"));
+
+        CompletionException failure = assertThrows(
+            CompletionException.class,
+            () -> ZLinkFrameworkRuntime.connectManualObjectPeers(
+                    source,
+                    List.of(new MeshNodeRegistration.Peer(endpoint, null)),
+                    "mesh",
+                    ZLinkDescriptorLeaseTestFixture.resolver(
+                        List.of(live, corrupt),
+                        Map.of(
+                            "live-owner", LeaseState.LIVE,
+                            "corrupt-owner", LeaseState.MISSING_EXPIRY)))
+                .toCompletableFuture().join());
+
+        assertEquals(
+            "Location Store owner lease record is invalid",
+            failure.getCause().getMessage());
+        assertNull(source.routingId);
+    }
+
+    @Test
+    void manualPeerDeterministicallyChoosesTheLowestLiveRoutingId() {
+        String endpoint = "inproc://duplicate-live-peer";
+        ZLinkMeshNodeDescriptor later =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "z-peer", endpoint, "z-owner");
+        ZLinkMeshNodeDescriptor earlier =
+            ZLinkDescriptorLeaseTestFixture.descriptor(
+                "a-peer", endpoint, "a-owner");
+        RecordingMeshNode source = new RecordingMeshNode(
+            RoutingId.from("local-peer"));
+
+        ZLinkFrameworkRuntime.connectManualObjectPeers(
+                source,
+                List.of(new MeshNodeRegistration.Peer(endpoint, null)),
+                "mesh",
+                ZLinkDescriptorLeaseTestFixture.resolver(
+                    List.of(later, earlier),
+                    Map.of(
+                        "z-owner", LeaseState.LIVE,
+                        "a-owner", LeaseState.LIVE)))
+            .toCompletableFuture().join();
+
+        assertEquals(earlier.rid(), source.routingId);
+    }
+
     @Test
     void startupObjectPeerUsesDescriptorAdmissionFence() {
         RoutingId localRid = RoutingId.from("local-node");
