@@ -1325,16 +1325,6 @@ else()
         "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/libzlink.vers")
       set_property(TARGET libzlink APPEND PROPERTY
         LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/libzlink.vers")
-    elseif(APPLE)
-      # Mach-O has no ELF version script. Compile all unannotated symbols as
-      # hidden instead; the formal C API already carries ZLINK_EXPORT and
-      # therefore remains default-visible. Apply this to the object library
-      # as well as the direct-source Xcode target.
-      set_target_properties(
-        objects libzlink
-        PROPERTIES C_VISIBILITY_PRESET hidden
-                   CXX_VISIBILITY_PRESET hidden
-                   VISIBILITY_INLINES_HIDDEN YES)
     endif()
     if(ZLINK_BUILD_FRAMEWORK)
       set_target_properties(
@@ -1387,6 +1377,79 @@ if(BUILD_STATIC)
   # than globally, so the shared library (fully linked at build time, so
   # no bytecode ever leaves it) keeps LTO.
   set_target_properties(libzlink-static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
+
+if(APPLE AND (BUILD_SHARED OR BUILD_STATIC))
+  # Mach-O has no ELF version script. Compile all unannotated symbols as
+  # hidden instead; the formal C API already carries ZLINK_EXPORT and
+  # therefore remains default-visible. Every producer of Core object code
+  # needs it, not just the shared library: the OBJECT library one of the two
+  # library targets may archive, and libzlink-static itself, which compiles
+  # its own sources whenever LTO is on. Hidden visibility is also what the
+  # archive's post-build step below relies on -- ld64 converts private extern
+  # symbols to static ones during a relocatable link, which is how the
+  # archive's vendored Boost stops being visible to a consumer (issue #418).
+  set(zlink_hidden_visibility_targets "")
+  foreach(target IN ITEMS objects libzlink libzlink-static)
+    if(TARGET ${target})
+      list(APPEND zlink_hidden_visibility_targets ${target})
+    endif()
+  endforeach()
+  set_target_properties(
+    ${zlink_hidden_visibility_targets}
+    PROPERTIES C_VISIBILITY_PRESET hidden
+               CXX_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN YES)
+endif()
+
+# The shared library exports the 99 zlink_* entry points and nothing else, so
+# the Boost Core vendors can never reach a consumer's link. libzlink.a had no
+# equivalent filter: it carried ~2,400 Boost definitions as ordinary external
+# symbols, and a consumer that compiles its own Boost from different headers
+# collapses the two onto one definition. boost::asio::io_context is 16 bytes in
+# Boost 1.85 and 24 in 1.92, so whichever definition survives is then used with
+# the other side's layout and the first zlink_bind() segfaults inside
+# service_registry::do_use_service (issue #418). Give the archive the same
+# public surface the shared library has, read from the same version script.
+#
+# MSVC is left out deliberately: a static .lib has the same exposure (3,616
+# defined Boost symbols in the published 1.2.0 libzlink-v143-mt-s-1_2_0.lib)
+# but the MSVC toolchain has no way to localize a symbol -- link.exe has no
+# relocatable link, lib.exe has no visibility control, and there is no
+# objcopy. The vcpkg port keeps building Core from source for Windows static
+# triplets.
+if(BUILD_STATIC
+   AND NOT MSVC
+   AND NOT MINGW
+   AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
+  find_program(ZLINK_BASH_EXECUTABLE NAMES bash)
+  set(zlink_static_hide_tools ZLINK_BASH_EXECUTABLE CMAKE_AR CMAKE_RANLIB
+                              CMAKE_LINKER CMAKE_NM)
+  if(NOT APPLE)
+    list(APPEND zlink_static_hide_tools CMAKE_OBJCOPY)
+  endif()
+  foreach(tool IN LISTS zlink_static_hide_tools)
+    if(NOT ${tool})
+      message(
+        FATAL_ERROR
+          "${tool} is not available, so the public surface of libzlink.a cannot be "
+          "restricted to the zlink_* C ABI. A static archive that also exports "
+          "Core's vendored Boost crashes consumers that link their own Boost "
+          "(issue #418), so this is not something to ship without.")
+    endif()
+  endforeach()
+  add_custom_command(
+    TARGET libzlink-static
+    POST_BUILD
+    COMMAND
+      ${CMAKE_COMMAND} -E env "AR=${CMAKE_AR}" "RANLIB=${CMAKE_RANLIB}"
+      "LD=${CMAKE_LINKER}" "NM=${CMAKE_NM}" "OBJCOPY=${CMAKE_OBJCOPY}"
+      "${ZLINK_BASH_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/hide_static_archive_internals.sh"
+      "$<TARGET_FILE:libzlink-static>"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/libzlink.vers"
+    COMMENT "Restricting libzlink.a to the public zlink_* C ABI"
+    VERBATIM)
 endif()
 
 list(APPEND target_outputs "")

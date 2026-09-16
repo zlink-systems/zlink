@@ -68,13 +68,19 @@ class ZlinkConan(ConanFile):
     def _prebuilt_platform(self, settings=None, options=None):
         """The release archive to install, or None to build from source.
 
-        Only the shared library is taken prebuilt. Its version script exports
-        the zlink_* entry points and nothing else, so the Boost that Core was
-        built with cannot reach the consumer's link. The libzlink.a in the same
-        archive has no such filter -- it carries the default-visible boost::*
-        symbols of Core's own Boost tree, which collapse onto the consumer's
-        Boost at link time and crash at run time. A static Core is therefore
-        built here, against the Boost this build resolves.
+        Only the shared library is taken prebuilt out of the release this
+        recipe pins. Its version script exports the zlink_* entry points and
+        nothing else, so the Boost that Core was built with cannot reach the
+        consumer's link. The libzlink.a in the 1.2.0 archive has no such
+        filter -- it carries the default-visible boost::* symbols of Core's own
+        Boost tree, which collapse onto the consumer's Boost at link time and
+        crash at run time. A static Core is therefore built here, against the
+        Boost this build resolves.
+
+        Core 1.3.0 gives libzlink.a the same public surface as the shared
+        library on Linux and macOS (issue #418), so a later recipe pinned to
+        1.3.0 or newer can take the archive for those two as well. Windows
+        cannot: MSVC has no way to localize a symbol in a static .lib.
         """
         # package_id() may not read self.settings/self.options, so it passes
         # the ones on self.info instead.

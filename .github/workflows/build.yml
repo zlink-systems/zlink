@@ -431,6 +431,38 @@ jobs:
           fi
           echo "OK: no libzlink.a member carries a .gnu.lto_* section."
 
+      # The shared library's version script keeps Core's vendored Boost out of
+      # a consumer's reach; libzlink.a had no equivalent and carried ~2,400
+      # Boost definitions as ordinary external symbols. A consumer that
+      # compiles its own Boost from different headers collapses the two onto
+      # one definition, and since boost::asio::io_context is 16 bytes in Boost
+      # 1.85 and 24 in 1.92, the first zlink_bind() then segfaults inside
+      # service_registry::do_use_service (issue #418). core/CMakeLists.txt
+      # gives the archive the same public surface as the shared library with a
+      # post-build step; this checks the shipped file rather than trusting that
+      # step, reading the allowed names from the same core/src/libzlink.vers.
+      #
+      # Verified in both directions on linux-x64 before it was added, against
+      # real archives: the pre-fix archive built at 10b6597c57 -- rejected,
+      # "exports 5490 symbol(s) outside the public C ABI ... (of which 2425
+      # name boost)"; the archive this build produces -- "OK: libzlink.a
+      # exports 99 symbols, all of them the public C ABI". The same two
+      # archives were then linked into one binary each with a Boost 1.92
+      # consumer: the first segfaulted in zlink_bind with the issue's exact
+      # stack, the second completed a TCP round trip. Windows is deliberately
+      # not checked the same way: its static .lib has the same exposure (3,616
+      # defined Boost symbols in the published 1.2.0
+      # libzlink-v143-mt-s-1_2_0.lib) but MSVC has no way to localize a symbol
+      # in a static library -- link.exe has no relocatable link, lib.exe has no
+      # visibility control, and the toolchain has no objcopy. The vcpkg port
+      # keeps building Core from source for Windows static triplets.
+      - name: Verify static archive exports only the public C ABI
+        run: |
+          set -euo pipefail
+          bash core/tools/check_static_archive_exports.sh \
+            "core/dist/linux-x64/lib/libzlink.a" \
+            core/src/libzlink.vers
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -494,6 +526,16 @@ jobs:
             exit 1
           fi
           echo "OK: no libzlink.a member carries a .gnu.lto_* section."
+
+      # Same check as build-linux, same reason (issue #418): see the comment
+      # there for the failure it prevents and for the two directions it was
+      # verified in.
+      - name: Verify static archive exports only the public C ABI
+        run: |
+          set -euo pipefail
+          bash core/tools/check_static_archive_exports.sh \
+            "core/dist/linux-arm64/lib/libzlink.a" \
+            core/src/libzlink.vers
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -582,6 +624,16 @@ jobs:
             exit 1
           fi
           echo "OK: no libzlink.a member carries LLVM bitcode."
+
+      # Same check as build-linux, same reason (issue #418): see the comment
+      # there for the failure it prevents and for the two directions it was
+      # verified in.
+      - name: Verify static archive exports only the public C ABI
+        run: |
+          set -euo pipefail
+          bash core/tools/check_static_archive_exports.sh \
+            "core/dist/macos-arm64/lib/libzlink.a" \
+            core/src/libzlink.vers
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6

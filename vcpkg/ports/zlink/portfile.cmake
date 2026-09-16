@@ -11,16 +11,27 @@ set(ZLINK_RELEASE_VERSION "1.2.0")
 set(ZLINK_ARCHIVE_PLATFORM "")
 set(ZLINK_NO_ARCHIVE_REASON "the ${TARGET_TRIPLET} triplet has no prebuilt Core archive")
 if(NOT VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")
-    # Only the shared library is safe to take prebuilt. Its version script
-    # exports the 102 zlink_* entry points and nothing else, so the Boost that
-    # Core was built with cannot reach the consumer's link. The archive's
-    # libzlink.a has no such filter: it carries ~11,900 default-visible
-    # boost::* symbols compiled from Core's own Boost 1.85. Linked next to
-    # zlink-framework, which compiles vcpkg's Boost 1.92 from the same headers,
-    # 293 boost::asio COMDATs collapse onto one definition and the consumer
-    # segfaults inside service_registry::do_use_service on its first bind. So a
-    # static triplet keeps building Core from source, against the very Boost
-    # installed here -- that shared tree is what makes the collapse harmless.
+    # Only the shared library is safe to take prebuilt out of the release this
+    # port pins. Its version script exports the 99 zlink_* entry points and
+    # nothing else, so the Boost that Core was built with cannot reach the
+    # consumer's link. The libzlink.a in the 1.2.0 archive has no such filter:
+    # it carries ~2,400 boost::* definitions compiled from Core's own Boost
+    # 1.85. Linked next to zlink-framework, which compiles vcpkg's Boost 1.92
+    # from the same headers, the two collapse onto one definition and the
+    # consumer segfaults inside service_registry::do_use_service on its first
+    # bind. So a static triplet keeps building Core from source, against the
+    # very Boost installed here -- that shared tree is what makes the collapse
+    # harmless.
+    #
+    # Core 1.3.0 gives libzlink.a the same public surface as the shared library
+    # on Linux and macOS (issue #418), so this gate can be lifted for those two
+    # once ZLINK_RELEASE_TAG points at 1.3.0 or later. Lifting it is more than
+    # deleting these lines: the archive-installing branch below copies only the
+    # shared library and drops the libzlink-static target from the CMake
+    # package, and a static triplet needs the opposite. Windows stays here
+    # either way -- MSVC has no way to localize a symbol in a static .lib, so
+    # the archive's libzlink-v143-mt-s-<version>.lib still carries 3,616
+    # defined Boost symbols.
     set(ZLINK_NO_ARCHIVE_REASON "a ${VCPKG_LIBRARY_LINKAGE} Core must be built against the Boost installed here")
 elseif(VCPKG_TARGET_IS_LINUX)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
