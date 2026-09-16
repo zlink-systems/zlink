@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
@@ -6480,6 +6481,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     expectedSecurityIdentity,
                     expectedLifecycleGeneration,
                     descriptor)) {
+                LOGGER.warning(
+                    "RouteMesh peer admission rejected: reason="
+                        + "expected-route-mismatch mismatchFields="
+                        + expectedRouteMismatchFields(
+                            expectedEndpoint,
+                            expectedSecurityIdentity,
+                            expectedLifecycleGeneration,
+                            descriptor)
+                        + " intentEndpoint=" + expectedEndpoint
+                        + " advertisedEndpoint="
+                        + descriptor.advertisedEndpoint());
                 rejectedPeers.add(inbound.source());
                 trySendAdmissionControl(
                     inbound.source(),
@@ -7368,14 +7380,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     private String advertisedEndpoint(String actualEndpoint) {
-        if (advertiseHost == null || actualEndpoint == null) {
-            return actualEndpoint;
-        }
-        //  Write-time normalization (endpoint notation policy §2.3/§2.4):
-        //  IPv6-safe host substitution. The former lastIndexOf(':') split
-        //  broke on IPv6 literals, which carry more than one colon.
-        return ZLinkEndpointNotation.normalize(
-            ZLinkEndpointNotation.withHost(actualEndpoint, advertiseHost));
+        return ZLinkListenerIdentity.advertisedEndpoint(
+            actualEndpoint, advertiseHost);
     }
 
     private static boolean routeMeshConnectionNotRequired(

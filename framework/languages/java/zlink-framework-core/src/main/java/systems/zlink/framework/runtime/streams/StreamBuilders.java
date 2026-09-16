@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.streams;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkStreamSocketConfig;
@@ -77,7 +78,8 @@ public final class StreamBuilders {
         private void applyBind() {
             if (listenPort != null) {
                 registration.replaceBind(
-                    "tcp://" + bindHost + ":" + listenPort);
+                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                        + ":" + listenPort);
             }
         }
 

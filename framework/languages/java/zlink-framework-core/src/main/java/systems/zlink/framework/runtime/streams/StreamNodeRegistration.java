@@ -1,12 +1,11 @@
 package systems.zlink.framework.runtime.streams;
-import java.net.URI;
-import java.net.URISyntaxException;
 
 import java.util.List;
 import java.util.ArrayList;
 import systems.zlink.framework.configuration.ZLinkStreamSocketConfig;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.streams.ZLinkSession;
 
 public final class StreamNodeRegistration {
@@ -82,20 +81,8 @@ public final class StreamNodeRegistration {
     }
 
     public String advertisedEndpoint(String actualEndpoint) {
-        if (advertiseHost == null || actualEndpoint == null
-            || !actualEndpoint.startsWith("tcp://")) {
-            return actualEndpoint;
-        }
-        URI value = URI.create(actualEndpoint);
-        try {
-            return new URI(
-                value.getScheme(), value.getUserInfo(), advertiseHost,
-                value.getPort(), value.getPath(), value.getQuery(), value.getFragment())
-                .toString();
-        } catch (URISyntaxException invalid) {
-            throw new ZLinkConfigurationException(
-                "invalid stream advertise host: " + advertiseHost);
-        }
+        return ZLinkListenerIdentity.advertisedEndpoint(
+            actualEndpoint, advertiseHost);
     }
 
     void setTlsServer(

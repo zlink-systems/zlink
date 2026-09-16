@@ -1,5 +1,5 @@
 package systems.zlink.framework.runtime.channels;
-import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -1782,16 +1782,8 @@ final class ZLinkChannelSocketRegistry {
                 ? configuredEndpoint
                 : boundEndpoint;
         }
-        //  Write-time normalization (endpoint notation policy §2.3): built
-        //  with an IPv6-safe host substitution (never lastIndexOf(':')),
-        //  then normalized once here rather than at every comparison site.
-        //  The former java.net.URI 7-arg reconstruction threw for
-        //  otherwise-legal hosts (e.g. underscore-bearing Docker service
-        //  names) it treated as illegal reg-names.
-        if (advertiseHost != null && !advertiseHost.isBlank()) {
-            endpoint = ZLinkEndpointNotation.withHost(endpoint, advertiseHost);
-        }
-        return ZLinkEndpointNotation.normalize(endpoint);
+        return ZLinkListenerIdentity.advertisedEndpoint(
+            endpoint, advertiseHost);
     }
 
     private static String advertisedEndpoint(
@@ -1813,12 +1805,8 @@ final class ZLinkChannelSocketRegistry {
                 ? configuredEndpoint
                 : boundEndpoint;
         }
-        //  Write-time normalization (endpoint notation policy §2.3): see
-        //  the ClientServer advertisedEndpoint overload above.
-        if (advertiseHost != null && !advertiseHost.isBlank()) {
-            endpoint = ZLinkEndpointNotation.withHost(endpoint, advertiseHost);
-        }
-        return ZLinkEndpointNotation.normalize(endpoint);
+        return ZLinkListenerIdentity.advertisedEndpoint(
+            endpoint, advertiseHost);
     }
 
     private static void closeAll(

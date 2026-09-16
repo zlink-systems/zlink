@@ -87,6 +87,20 @@ final class DefaultZLinkFrameworkOptionsTest {
     }
 
     @Test
+    void wildcardMeshBindWithoutAdvertiseHostUsesIpv4Loopback() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureNetwork().setBindHost("0.0.0.0");
+
+        options.addRouteMesh("game").listen(0);
+
+        var mesh = options.registration().meshNodes().getFirst();
+        assertEquals("tcp://0.0.0.0:0", mesh.bindEndpoint());
+        assertEquals(
+            "tcp://127.0.0.1:43120",
+            mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
+    }
+
+    @Test
     void applicationVersionAndMaintenanceWaveAreHostWide() {
         DefaultZLinkFrameworkOptions options =
             new DefaultZLinkFrameworkOptions();
