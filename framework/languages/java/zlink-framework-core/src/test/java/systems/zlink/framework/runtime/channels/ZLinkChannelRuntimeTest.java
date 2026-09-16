@@ -39,6 +39,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -625,6 +626,12 @@ final class ZLinkChannelRuntimeTest {
                 .inMesh("placement")
                 .submit(TestReply.class).toCompletableFuture().join();
 
+            awaitCondition(() ->
+                metrics.durationCount("profile", "channel", "failed") == 1L
+                    && metrics.durationCount("fake-node", "node", "failed") == 1L
+                    && metrics.durationCount("fake-node", "spot", "completed") == 1L
+                    && metrics.durationCount(
+                        "placement", "instance_spot", "completed") == 1L);
             assertEquals(0L, metrics.inflight("profile", "channel"));
             assertEquals(1L, metrics.durationCount(
                 "profile", "channel", "failed"));
@@ -2580,5 +2587,15 @@ final class ZLinkChannelRuntimeTest {
         @Override public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) { return null; }
         @Override public String name() { return "fake-spot"; }
         @Override public void close() { requestReplyParts.forEach(Message::close); }
+    }
+
+    private static void awaitCondition(BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() - deadline >= 0L) {
+                throw new AssertionError("runtime state transition was not observed");
+            }
+            Thread.yield();
+        }
     }
 }

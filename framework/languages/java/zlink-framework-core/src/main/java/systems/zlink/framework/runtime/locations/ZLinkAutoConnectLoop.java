@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -14,7 +15,11 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     private final ZLinkAutoConnectReconciler reconciler;
     private final ZLinkLocationOptions options;
     private final ScheduledExecutorService executor;
+    private final Object lifecycleGate = new Object();
     private ScheduledFuture<?> task;
+    private CompletionStage<Void> inFlightTick =
+        CompletableFuture.completedFuture(null);
+    private CompletionStage<Void> termination;
     private volatile boolean running;
     private volatile long startupPollingUntilNanos;
 
@@ -31,24 +36,46 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     }
 
     CompletionStage<Void> start() {
-        running = true;
-        startupPollingUntilNanos = System.nanoTime()
-            + options.ownerLeaseRenewInterval().toNanos();
-        return tick().whenComplete((ignored, failure) -> {
-            if (running) {
-                scheduleNext();
-            }
-        });
+        synchronized (lifecycleGate) {
+            running = true;
+            startupPollingUntilNanos = System.nanoTime()
+                + options.ownerLeaseRenewInterval().toNanos();
+            inFlightTick = tick().whenComplete((ignored, failure) ->
+                scheduleNext());
+            return inFlightTick;
+        }
     }
 
     CompletionStage<Void> stop() {
-        running = false;
-        if (task != null) {
-            task.cancel(false);
-            task = null;
+        CompletableFuture<Void> stopping = new CompletableFuture<>();
+        CompletionStage<Void> settling;
+        synchronized (lifecycleGate) {
+            if (termination != null) {
+                return termination;
+            }
+            termination = stopping;
+            running = false;
+            if (task != null) {
+                task.cancel(false);
+                task = null;
+            }
+            executor.shutdownNow();
+            settling = inFlightTick;
         }
-        executor.shutdownNow();
-        return reconciler.shutdown();
+        settling.whenComplete((ignored, tickFailure) ->
+            reconciler.shutdown().whenComplete((shutdownIgnored, shutdownFailure) -> {
+                Throwable failure = tickFailure == null
+                    ? shutdownFailure : tickFailure;
+                if (tickFailure != null && shutdownFailure != null) {
+                    tickFailure.addSuppressed(shutdownFailure);
+                }
+                if (failure == null) {
+                    stopping.complete(null);
+                } else {
+                    stopping.completeExceptionally(failure);
+                }
+            }));
+        return stopping;
     }
 
     CompletionStage<Void> markDraining() {
@@ -60,23 +87,28 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     }
 
     private void tickOnLoop() {
-        if (!running) {
-            return;
-        }
-        tick().whenComplete((ignored, failure) -> {
-            // The reconciler records store failures as fail-static ticks.
-            if (running) {
-                scheduleNext();
+        synchronized (lifecycleGate) {
+            task = null;
+            if (!running) {
+                return;
             }
-        });
+            inFlightTick = tick().whenComplete((ignored, failure) ->
+                scheduleNext());
+        }
     }
 
     private void scheduleNext() {
-        long delayMillis = options.pollingInterval().toMillis();
-        if (System.nanoTime() < startupPollingUntilNanos) {
-            delayMillis = Math.min(delayMillis, STARTUP_POLLING_MILLIS);
+        synchronized (lifecycleGate) {
+            if (!running) {
+                return;
+            }
+            long delayMillis = options.pollingInterval().toMillis();
+            if (System.nanoTime() < startupPollingUntilNanos) {
+                delayMillis = Math.min(delayMillis, STARTUP_POLLING_MILLIS);
+            }
+            task = executor.schedule(
+                this::tickOnLoop, delayMillis, TimeUnit.MILLISECONDS);
         }
-        task = executor.schedule(this::tickOnLoop, delayMillis, TimeUnit.MILLISECONDS);
     }
 
     @Override
