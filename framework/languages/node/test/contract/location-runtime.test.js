@@ -676,6 +676,95 @@ test('location resolver filters exact actor capacity before weighted placement',
   assert.equal(String(await resolver.selectActorPlacement('play', 'Player', 'node-z')), 'node-a');
 });
 
+test('descriptor target selection excludes an expired owner and continues with the live owner', async () => {
+  let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
+  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const expired = await ownedPlacementDescriptor(store, 'owner-expired', 'node-expired', 100);
+  nowMs += 100;
+  const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
+  const resolvers = resolversFor(store);
+  resolvers.options.stores.locationStore = {
+    async listMeshNodes() {
+      return { items: [expired, live] };
+    }
+  };
+
+  assert.equal(
+    String(await resolvers.selectActorPlacement('play', 'Player', 'node-source')),
+    String(live.rid)
+  );
+  assert.equal(
+    String((await resolvers.resolveEntrySpotNode(expired.entrySpotId, ['play'])).nodeRid),
+    String(live.rid)
+  );
+});
+
+test('descriptor target selection preserves a live owner', async () => {
+  const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
+  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
+  const resolvers = resolversFor(store);
+  resolvers.options.stores.locationStore = {
+    async listMeshNodes() {
+      return { items: [live] };
+    }
+  };
+
+  assert.equal(
+    String(await resolvers.selectActorPlacement('play', 'Player', 'node-source')),
+    String(live.rid)
+  );
+  assert.equal(
+    String((await resolvers.resolveEntrySpotNode(live.entrySpotId, ['play'])).nodeRid),
+    String(live.rid)
+  );
+});
+
+test('descriptor target selection rejects a Found owner lease without expiry', async () => {
+  const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
+  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const descriptor = await ownedPlacementDescriptor(store, 'owner-corrupt', 'node-corrupt', 100);
+  const locationStore = {
+    async listMeshNodes() {
+      return { items: [descriptor] };
+    }
+  };
+  const corruptLeaseStore = {
+    async readOwnerLease(ownerId, signal) {
+      const found = await store.readOwnerLease(ownerId, signal);
+      assert.equal(found.kind, 'found');
+      return { ...found, leaseExpiresAt: undefined };
+    }
+  };
+
+  await assert.rejects(
+    () => {
+      const resolvers = resolversFor(store, undefined, corruptLeaseStore);
+      resolvers.options.stores.locationStore = locationStore;
+      return resolvers.selectActorPlacement('play', 'Player', 'node-source');
+    }
+  );
+  await assert.rejects(
+    () => {
+      const resolvers = resolversFor(store, undefined, corruptLeaseStore);
+      resolvers.options.stores.locationStore = locationStore;
+      return resolvers.resolveEntrySpotNode(descriptor.entrySpotId, ['play']);
+    }
+  );
+});
+
+async function ownedPlacementDescriptor(store, ownerId, nodeRid, leaseTtlMs) {
+  const claimed = await store.claimOwnerLease(ownerId, leaseTtlMs);
+  assert.equal(claimed.kind, 'claimed');
+  if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
+  return {
+    ...placementDescriptor(nodeRid, 'Player', 100, 0, 0),
+    entrySpotId: 'play-entry-00000000-0000-4000-8000-000000000441',
+    ownerId,
+    leaseGeneration: claimed.token.leaseGeneration
+  };
+}
+
 function placementDescriptor(nodeRid, stableType, placementWeight, active, reserved) {
   return {
     meshName: 'play',
@@ -2587,7 +2676,7 @@ async function lifecycleNode(store, ownerId, nodeRid, entryMeshName = 'play') {
   };
 }
 
-function resolversFor(store, events) {
+function resolversFor(store, events, ownerLeaseStore = store) {
   return new internal.ZLinkStoreLocationResolvers({
     stores: {
       locationStore: store,
@@ -2598,7 +2687,7 @@ function resolversFor(store, events) {
       routeStore: store,
       ownerLeaseStore: store
     },
-    leaseTracker: new internal.ZLinkOwnerLeaseTracker({ store }),
+    leaseTracker: new internal.ZLinkOwnerLeaseTracker({ store: ownerLeaseStore }),
     events,
     spotMeshNames: ['play']
   });

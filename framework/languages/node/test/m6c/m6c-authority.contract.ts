@@ -11,9 +11,15 @@ import type {
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
+  ZLinkFrameworkRuntimeState,
+  ZLinkObjectRole,
   ZLinkSpotCloseReason,
   ZLinkSpotCreateState
 } from '../../packages/framework/src/contracts';
+import {
+  ZLinkLocationWriteIntent,
+  ZLinkLocationWriteStatus
+} from '../../packages/framework/src/contracts/Locations/Writes';
 import {
   ZLinkInMemoryAuthorityStore
 } from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
@@ -40,6 +46,13 @@ import {
 import {
   encodeServiceUserSpotAuthorityPayload
 } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
+import {
+  ZLinkLiveRowFilter,
+  ZLinkOwnerLeaseTracker
+} from '../../packages/framework/src/runtime/locations/lease-tracker';
+import type {
+  ZLinkOwnerLeaseStore
+} from '../../packages/framework/src/runtime/locations/internal-store-contracts';
 
 test('owner lease uses exact claim read renew and release fencing', async () => {
   let now = 100;
@@ -68,6 +81,50 @@ test('owner lease uses exact claim read renew and release fencing', async () => 
   if (reclaimed.kind === 'claimed') {
     assert.ok(reclaimed.token.leaseGeneration > claimed.token.leaseGeneration);
   }
+});
+
+test('User Spot target selection excludes an expired descriptor owner and continues with the live owner', async () => {
+  let now = 100;
+  const store = new ZLinkInMemoryLocationStore(() => new Date(now));
+  await writeTargetDescriptor(store, 'owner-expired', 'node-expired', 50);
+  now += 50;
+  await writeTargetDescriptor(store, 'owner-live', 'node-live', 50);
+
+  const result = await createThroughLiveDescriptor(store, 'expired-owner-room');
+
+  assert.equal(String(result.spot.nodeRid), 'node-live');
+});
+
+test('User Spot target selection preserves a live descriptor owner', async () => {
+  const store = new ZLinkInMemoryLocationStore(() => new Date(100));
+  await writeTargetDescriptor(store, 'owner-live', 'node-live', 50);
+
+  const result = await createThroughLiveDescriptor(store, 'live-owner-room');
+
+  assert.equal(String(result.spot.nodeRid), 'node-live');
+});
+
+test('User Spot target selection maps a Found owner lease without expiry to InternalFailure', async () => {
+  const store = new ZLinkInMemoryLocationStore(() => new Date(100));
+  await writeTargetDescriptor(store, 'owner-corrupt', 'node-corrupt', 50);
+  const corruptLeaseStore = {
+    async readOwnerLease(ownerId: string, signal?: AbortSignal) {
+      const found = await store.readOwnerLease(ownerId, signal);
+      assert.equal(found.kind, 'found');
+      return { ...found, leaseExpiresAt: undefined };
+    }
+  };
+
+  await assert.rejects(
+    () => createThroughLiveDescriptor(
+      store,
+      'corrupt-owner-room',
+      corruptLeaseStore as unknown as ZLinkOwnerLeaseStore
+    ),
+    (error: unknown) => error instanceof ZLinkFrameworkException
+      && error.kind === ZLinkFrameworkErrorKind.InternalFailure
+      && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestFailed
+  );
 });
 
 test('generic reservation is the only Missing to Pending to Active path', async () => {
@@ -1240,6 +1297,86 @@ function authority(live: Set<string>): ZLinkInMemoryAuthorityStore {
       );
     }
   }, () => new Date(100));
+}
+
+async function writeTargetDescriptor(
+  store: ZLinkInMemoryLocationStore,
+  ownerId: string,
+  nodeRid: string,
+  leaseTtlMs: number
+) {
+  const claimed = await store.claimOwnerLease(ownerId, leaseTtlMs);
+  assert.equal(claimed.kind, 'claimed');
+  if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
+  const descriptor = {
+    meshName: 'mesh',
+    rid: nodeRid,
+    lifecycleGeneration: 1n,
+    descriptorRevision: 1n,
+    endpoint: `tcp://${nodeRid}`,
+    objectRole: ZLinkObjectRole.Server,
+    placementWeight: 100,
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 1 },
+      spots: { active: 0, reserved: 0, limit: 1 },
+      spotTypes: [{ objectKind: 'user_spot' as const, stableType: 'room', active: 0, reserved: 0, limit: 1 }]
+    },
+    activationConcurrency: { active: 0, limit: 1 },
+    channelWeights: {},
+    applicationVersion: 1n,
+    spotTypes: [],
+    objectCapabilities: [{
+      objectKind: 'user_spot' as const,
+      stableType: 'room',
+      policy: 'disabled' as const,
+      hasSnapshotAdapter: false,
+      limit: 0
+    }],
+    state: ZLinkFrameworkRuntimeState.Serving,
+    securityIdentity: nodeRid,
+    ownerId,
+    leaseGeneration: claimed.token.leaseGeneration,
+    updatedAt: new Date(100)
+  };
+  const stored = await store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NewClaim);
+  assert.equal(stored.status, ZLinkLocationWriteStatus.Stored);
+  return descriptor;
+}
+
+async function createThroughLiveDescriptor(
+  store: ZLinkInMemoryLocationStore,
+  spotId: string,
+  ownerLeaseStore: ZLinkOwnerLeaseStore = store
+) {
+  const liveRows = new ZLinkLiveRowFilter(new ZLinkOwnerLeaseTracker({ store: ownerLeaseStore }));
+  const coordinator = new ZLinkUserSpotCreationCoordinator({
+    store,
+    target: async () => {
+      const descriptors = await liveRows.filter(
+        (await store.listMeshNodes('mesh')).items,
+        descriptor => descriptor.ownerId
+      );
+      const descriptor = descriptors[0];
+      return descriptor === undefined ? undefined : {
+        meshName: descriptor.meshName,
+        nodeRid: descriptor.rid,
+        nodeGeneration: descriptor.lifecycleGeneration,
+        owner: owner(descriptor.ownerId, descriptor.leaseGeneration),
+        isLocal: true
+      };
+    }
+  });
+  return await coordinator.getOrCreate({
+    meshName: 'mesh',
+    spotId,
+    stableType: 'room',
+    requestPayload: Buffer.from('create'),
+    timeoutMs: 1_000
+  }, async selected => ({
+    spotId,
+    state: ZLinkSpotCreateState.Created,
+    target: selected
+  }));
 }
 
 function target(rid: string, ownerId: string): ZLinkObjectCreationTarget {
