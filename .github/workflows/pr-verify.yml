@@ -63,10 +63,16 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=200 origin "${BASE}"
-          changed="$(git diff --name-only "origin/${BASE}...HEAD")"
-          printf '변경 파일:\n%s\n' "${changed}"
+          changed_file="${RUNNER_TEMP}/pr-verify-changed.txt"
+          git diff --name-only "origin/${BASE}...HEAD" > "${changed_file}"
+          printf '변경 파일:\n'
+          cat "${changed_file}"
           emit() {
-            if printf '%s\n' "${changed}" | grep -qE "$2"; then
+            # 목록을 파일로 받아 grep이 직접 읽는다. printf | grep -q는 grep이 첫
+            # 매치에서 즉시 종료해 printf가 SIGPIPE로 죽고, pipefail이 그 종료코드를
+            # 파이프라인 상태로 채택해 매치가 있어도 이 if가 조용히 false로 흐른다
+            # (issue #403).
+            if grep -qE "$2" "${changed_file}"; then
               echo "$1=true" >> "${GITHUB_OUTPUT}"
             else
               echo "$1=false" >> "${GITHUB_OUTPUT}"
