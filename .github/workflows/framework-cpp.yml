@@ -214,7 +214,7 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}\.cache\framework-cpp\vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}\.artifacts\windows
