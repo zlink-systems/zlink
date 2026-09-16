@@ -215,7 +215,7 @@ def redirect_missing(text: str, lang_dir: str, suffix: str) -> str:
         #  `guide/server/../..`가 남아 읽기 어려우므로 정규화한다.
         resolved = (donor_dir / link).resolve().relative_to(FRAMEWORK)
         depth = len(target_dir.relative_to(FRAMEWORK).parts)
-        return m.group(0).replace(link, "../" * depth + str(resolved))
+        return m.group(0).replace(link, "../" * depth + resolved.as_posix())
 
     return STRINGS[suffix]["redirect_ext"].sub(repl, text)
 
