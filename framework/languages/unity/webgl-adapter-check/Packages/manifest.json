@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "com.zlink.stream-connector.webgl": "file:../../com.zlink.stream-connector.webgl"
+  }
+}

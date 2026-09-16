@@ -134,6 +134,31 @@ and running the first handler is covered by each language's "Installation and fi
     needs Node.js 22 or later. Continue with
     [Installation and first run](node/guide/server/02-getting-started.en.md).
 
+## Client stream connector
+
+A client that connects to STREAM uses a separate package from the server framework. Which one
+is decided by engine and build target, not by language.
+
+| Target | Package | Repository |
+|---|---|---|
+| .NET, Unity native, Godot C# | `Zlink.Stream.Connector` | nuget.org |
+| Java | `systems.zlink:zlink-stream-connector` | Maven Central |
+| C++, Unreal, Godot GDExtension, Axmol | `zlink-stream-connector` and friends | vcpkg, Conan, source |
+| Browser targets (web, Cocos web, Unity WebGL, Godot Web) | `@zlink-systems/stream-connector` | npm |
+| Unity WebGL adapter | `com.zlink.stream-connector.webgl` | UPM git URL or tarball |
+
+Unity WebGL runs in the browser sandbox, so it cannot use the `.NET` connector. The UPM adapter
+embeds the npm package's browser bundle and adds only the jslib and C# call boundary; its C#
+surface is the same as the native package. Install it from Package Manager with **Add package
+from git URL**.
+
+```
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.14.0
+```
+
+The steps and the manual checklist are in the
+[Unity WebGL guide](node/guide/stream-connector/03-unity-webgl.en.md).
+
 ## Bindings only
 
 To use the Core API through a language package without the framework, pick a language in the
