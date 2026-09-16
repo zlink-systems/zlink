@@ -156,6 +156,71 @@ public sealed class RelocationStartupRecoveryTests
                 == ZLinkPlacementObjectKind.InstanceSpot);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StartupScanFencesOnlyExpiredPendingCreation(
+        bool expired)
+    {
+        var storeNow = DateTimeOffset.UnixEpoch.AddHours(1);
+        var owner = new ZLinkLocationOwnerToken("abandoned-owner", 9);
+        var entry = new ZLinkAuthorityEntry(
+            new ZLinkAuthorityKey("zla1:s:4:abandoned-spot"),
+            new ZLinkAuthoritySnapshot(
+                "reservation-version",
+                new byte[] { 0x01 },
+                4,
+                7,
+                owner.OwnerId,
+                owner.LeaseGeneration,
+                new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Reserved,
+                    ZLinkPlacementObjectKind.UserSpot,
+                    "Game.Room",
+                    new ZLinkMeshNodeDescriptorKey(
+                        "mesh",
+                        RoutingId.From("abandoned-node")),
+                    2,
+                    new ZLinkCapacityVector(
+                        0,
+                        1,
+                        new ZLinkSpotTypeCapacityDelta(
+                            ZLinkPlacementObjectKind.UserSpot,
+                            "Game.Room",
+                            1))),
+                new ZLinkReservedObjectCreation(
+                    "abandoned-reservation",
+                    "inline:abandoned-spot",
+                    new byte[32],
+                    1),
+                storeNow));
+        var authority = new RecoveryAuthorityStore(
+            [entry],
+            new ZLinkOwnerLeaseReadResult.Found(
+                owner,
+                expired ? storeNow : storeNow.AddMinutes(1),
+                storeNow));
+
+        await new ZLinkRelocationStartupRecovery(
+                authority,
+                new InMemoryRelocationStore())
+            .RecoverAsync(static (_, _) => ValueTask.CompletedTask);
+
+        if (!expired)
+        {
+            Assert.Empty(authority.AbortedReservations);
+            return;
+        }
+
+        var aborted = Assert.Single(authority.AbortedReservations);
+        Assert.Equal(entry.Key, aborted.Key);
+        Assert.Equal(entry.Snapshot.StoreVersion, aborted.StoreVersion);
+        Assert.Equal(
+            entry.Snapshot.ReservedCreation!.ReservationId,
+            aborted.ReservationVersion);
+        Assert.Equal(owner, aborted.TargetOwner);
+    }
+
     [Fact]
     public async Task ExactReconciliationReadsOnlyStagedParticipantAuthorities()
     {
@@ -469,8 +534,10 @@ public sealed class RelocationStartupRecoveryTests
             DateTimeOffset.UnixEpoch));
 
     private sealed class RecoveryAuthorityStore(
-        IReadOnlyList<ZLinkAuthorityEntry> entries) : ZLinkLocationStoreTestDouble
+        IReadOnlyList<ZLinkAuthorityEntry> entries,
+        ZLinkOwnerLeaseReadResult? ownerLease = null) : ZLinkLocationStoreTestDouble
     {
+        internal List<ZLinkObjectReservation> AbortedReservations { get; } = [];
         internal List<ZLinkAuthorityKey> CompareExchangeCalls { get; } = [];
         internal List<ZLinkAuthorityKey> ReadCalls { get; } = [];
         internal IReadOnlyList<ZLinkAuthorityEntry> Entries => entries;
@@ -503,6 +570,22 @@ public sealed class RelocationStartupRecoveryTests
                             DateTimeOffset.UnixEpoch))
                     : new ZLinkAuthorityCompareExchangeResult.Conflict(
                         new ZLinkAuthorityReadResult.Found(entry.Snapshot)));
+        }
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default) =>
+            ownerLease is null
+                ? base.ReadOwnerLeaseAsync(ownerId, cancellationToken)
+                : ValueTask.FromResult(ownerLease);
+
+        public override ValueTask<ZLinkObjectAbortResult> AbortAsync(
+            ZLinkObjectReservation reservation,
+            CancellationToken cancellationToken = default)
+        {
+            AbortedReservations.Add(reservation);
+            return ValueTask.FromResult<ZLinkObjectAbortResult>(
+                new ZLinkObjectAbortResult.Aborted());
         }
 
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(

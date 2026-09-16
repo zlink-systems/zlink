@@ -206,10 +206,56 @@ internal sealed class ZLinkRelocationStartupRecovery(
 
             var page = ((ZLinkAuthorityScanResult.Page)scan).Value;
             foreach (var entry in page.Items)
+            {
+                await AbortExpiredPendingCreationAsync(entry, cancellationToken)
+                    .ConfigureAwait(false);
                 AddPublished(entry, linked, preparing);
+            }
             cursor = page.NextCursor;
             if (cursor is null) return;
         }
+    }
+
+    private async ValueTask AbortExpiredPendingCreationAsync(
+        ZLinkAuthorityEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = entry.Snapshot;
+        if (snapshot.Allocation.ObjectKind is not (
+                ZLinkPlacementObjectKind.Actor
+                or ZLinkPlacementObjectKind.UserSpot
+                or ZLinkPlacementObjectKind.InstanceSpot)
+            || snapshot.Allocation.State != ZLinkPlacementAllocationState.Reserved
+            || snapshot.ReservedCreation is not { } pending)
+            return;
+
+        var owner = await authorityStore.ReadOwnerLeaseAsync(
+                snapshot.OwnerId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (owner is ZLinkOwnerLeaseReadResult.Found found
+            && found.Token.LeaseGeneration == snapshot.OwnerLeaseGeneration
+            && found.LeaseExpiresAt > found.StoreNow)
+            return;
+
+        var reservation = new ZLinkObjectReservation(
+            entry.Key,
+            snapshot.StoreVersion,
+            snapshot.ObjectGeneration,
+            snapshot.AuthorityOwnerGeneration,
+            pending.ReservationId,
+            snapshot.Allocation.Descriptor,
+            snapshot.Allocation.DescriptorLifecycleGeneration,
+            new ZLinkLocationOwnerToken(
+                snapshot.OwnerId,
+                snapshot.OwnerLeaseGeneration));
+        var aborted = await authorityStore.AbortAsync(reservation, cancellationToken)
+            .ConfigureAwait(false);
+        if (aborted is ZLinkObjectAbortResult.GenerationExhausted)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DataLost,
+                $"Pending creation '{entry.Key.Value}' cannot be fenced after its owner lease ended.",
+                retryAdvice: ZLinkRetryAdvice.DoNotRetry);
     }
 
     private static void AddPublished(
