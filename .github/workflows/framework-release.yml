@@ -189,11 +189,50 @@ jobs:
             npm publish "./packages/${package_dir}" --provenance --access public
           done
 
+      # UPM cannot install from npm and never runs a Node build, so the Unity
+      # adapter ships off the same tag: `git URL ...#framework-node/vX.Y.Z` is the
+      # documented install and this tarball serves offline or vendored projects.
+      # Both serve the committed bundle, so the release must refuse to publish a
+      # tag whose committed bundle does not match the source it was built from.
+      # release-unity attaches the tarball; this job only produces it, because it
+      # holds the npm publishing credential and must not also hold repo write.
+      - name: Pack the Unity WebGL UPM package
+        working-directory: framework/languages/node
+        run: |
+          node scripts/sync-unity-webgl-package.mjs --check
+          npm pack ../unity/com.zlink.stream-connector.webgl \
+            --pack-destination ../../../dist/framework-node
+
       - uses: actions/upload-artifact@v6
         with:
           name: framework-node-${{ needs.resolve.outputs.node_version }}
           path: dist/framework-node/*.tgz
           if-no-files-found: error
+
+  # Separate from release-node on purpose. That job carries the npm Trusted
+  # Publishing credential (id-token: write); adding contents: write there would put
+  # repository write access in the same context as the publishing credential for
+  # the sake of one secondary asset. This job only downloads an artifact and
+  # attaches it, so contents: write is all it needs and it holds no npm credential.
+  release-unity:
+    if: github.event_name == 'push' && (needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all')
+    name: Attach the Unity WebGL UPM package to the release
+    runs-on: ubuntu-24.04
+    needs:
+      - resolve
+      - release-node
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: framework-node-${{ needs.resolve.outputs.node_version }}
+          path: dist/framework-node
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/framework-node/com.zlink.stream-connector.webgl-*.tgz
 
   release-java:
     if: needs.resolve.outputs.target == 'java' || needs.resolve.outputs.target == 'all'
