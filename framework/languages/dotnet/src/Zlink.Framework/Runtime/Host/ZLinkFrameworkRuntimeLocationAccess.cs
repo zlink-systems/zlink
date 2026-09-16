@@ -144,11 +144,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken)
     {
         var source = ResolveActorCreationSource(address.MeshName);
-        var store = Registration.Locations.ResolveStore()
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        "Instance Spot activation requires a Location Store.");
-        var descriptors = await store.ListAllMeshNodesAsync(
+        _ = Registration.Locations.ResolveStore()
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "Instance Spot activation requires a Location Store.");
+        var resolver = Services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+                           as IZLinkMeshNodeLocationResolver
+                       ?? Services.GetService(typeof(ZLinkStoreLocationResolvers))
+                           as ZLinkStoreLocationResolvers
+                       ?? throw new ZLinkConfigurationException(
+                           "Instance Spot activation requires the live MeshNode resolver.");
+        var descriptors = await resolver.ListLiveMeshNodesAsync(
                 address.MeshName,
                 cancellationToken)
             .ConfigureAwait(false);

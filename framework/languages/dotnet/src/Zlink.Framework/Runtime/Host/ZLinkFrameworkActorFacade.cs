@@ -150,15 +150,21 @@ internal sealed class ZLinkFrameworkActorFacade(
                        ?? throw new ZLinkFrameworkException(
                            ZLinkFrameworkErrorKind.NotFound,
                            $"Actor '{actor.Context.ActorId}' does not have an owner Mesh.");
-        var store = registration.Locations.ResolveStore()
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        "Actor Entry Spot Join requires a Location Store.");
+        _ = registration.Locations.ResolveStore()
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "Actor Entry Spot Join requires a Location Store.");
+        var resolver = services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+                           as IZLinkMeshNodeLocationResolver
+                       ?? services.GetService(typeof(ZLinkStoreLocationResolvers))
+                           as ZLinkStoreLocationResolvers
+                       ?? throw new ZLinkConfigurationException(
+                           "Actor Entry Spot Join requires the live MeshNode resolver.");
         var effectiveDeadline = absoluteDeadline
                                 ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
         var descriptors = await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
-                token => store.ListAllMeshNodesAsync(meshName, token),
+                token => resolver.ListLiveMeshNodesAsync(meshName, token),
                 ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
                 cancellationToken)
             .ConfigureAwait(false);

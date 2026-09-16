@@ -13,6 +13,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
     private readonly IZLinkMeshNodeLocationResolver? _locationResolver =
         runtime.Services.GetService<IZLinkMeshNodeLocationResolver>()
         ?? runtime.Services.GetService<ZLinkStoreLocationResolvers>();
+    private readonly ZLinkOwnerLeaseTracker? _leaseTracker =
+        runtime.Services.GetService<ZLinkOwnerLeaseTracker>();
 
     public IZLinkActorCreateCall Create(string actorId, string actorType) =>
         new ZLinkActorCreateCall(
@@ -54,7 +56,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
             || !await HasLiveOwnerAsync(
-                    store,
                     found.Snapshot,
                     cancellationToken)
                 .ConfigureAwait(false))
@@ -91,7 +92,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
             || !await HasLiveOwnerAsync(
-                    store,
                     found.Snapshot,
                     cancellationToken)
                 .ConfigureAwait(false))
@@ -574,7 +574,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         while (true)
         {
             if (!await HasLiveOwnerAsync(
-                    store,
                     current,
                     cancellationToken)
                 .ConfigureAwait(false))
@@ -612,20 +611,18 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         }
     }
 
-    private static async ValueTask<bool> HasLiveOwnerAsync(
-        IZLinkLocationRepository store,
+    private ValueTask<bool> HasLiveOwnerAsync(
         ZLinkAuthoritySnapshot snapshot,
         CancellationToken cancellationToken)
     {
-        var lease = await store.ReadOwnerLeaseAsync(
+        if (_leaseTracker is null)
+            throw new ZLinkConfigurationException(
+                "Actor location resolution requires the owner lease tracker.");
+        return _leaseTracker.IsOwnerTokenLiveAsync(
+            new ZLinkLocationOwnerToken(
                 snapshot.OwnerId,
-                cancellationToken)
-            .ConfigureAwait(false);
-        return lease is ZLinkOwnerLeaseReadResult.Found found
-               && found.Token == new ZLinkLocationOwnerToken(
-                   snapshot.OwnerId,
-                   snapshot.OwnerLeaseGeneration)
-               && found.LeaseExpiresAt > found.StoreNow;
+                snapshot.OwnerLeaseGeneration),
+            cancellationToken);
     }
 
     private ZLinkActorCreateResult DecodeRemoteResult(
