@@ -164,6 +164,88 @@ function Assert-NodePackage([string]$Package, [string]$WorkRoot, [string]$Versio
   }
 }
 
+function Assert-JavaPackage([string]$Package, [string]$CoreBin) {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $archive = [IO.Compression.ZipFile]::OpenRead($Package)
+  try {
+    $entries = @{}
+    foreach ($entry in $archive.Entries) { $entries[$entry.FullName] = $entry }
+    $dlls = Get-ChildItem -LiteralPath $CoreBin -Filter *.dll -File | Sort-Object Name
+    foreach ($dll in $dlls) {
+      $entryName = "native/windows-x86_64/$($dll.Name)"
+      if (-not $entries.ContainsKey($entryName) -or $entries[$entryName].Length -eq 0) {
+        throw "Java package is missing a non-empty Core DLL: $entryName"
+      }
+    }
+    $indexName = "native/windows-x86_64/dependencies.list"
+    if (-not $entries.ContainsKey($indexName)) {
+      throw "Java package is missing the Windows dependency index: $indexName"
+    }
+    $reader = New-Object IO.StreamReader($entries[$indexName].Open())
+    try {
+      $actualDependencies = @($reader.ReadToEnd() -split "`r?`n" | Where-Object { $_ })
+    } finally {
+      $reader.Dispose()
+    }
+    $expectedDependencies = @($dlls | Where-Object Name -ne "zlink.dll" | ForEach-Object Name)
+    if ([string]::Join("`n", $actualDependencies) -ne [string]::Join("`n", $expectedDependencies)) {
+      throw "Java package Windows dependency index does not match the approved Core prefix"
+    }
+  } finally {
+    $archive.Dispose()
+  }
+}
+
+function Test-JavaPackage([string]$MavenRepository, [string]$BindingVersion,
+                          [string]$CoreVersion) {
+  $stageRoot = Join-Path $artifactRoot "staging"
+  New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+  $work = Join-Path $stageRoot "java-consumer-$([Guid]::NewGuid().ToString('N'))"
+  $fixture = Join-Path $RepositoryRoot "scripts\local-package\java\fixtures\public-consumer"
+  Copy-Item -LiteralPath $fixture -Destination $work -Recurse
+  $parts = $CoreVersion.Split('.')
+  if ($parts.Count -ne 3) { throw "Invalid Core version for Java package smoke: $CoreVersion" }
+  $replacements = [ordered]@{
+    "@BINDING_VERSION@" = $BindingVersion
+    "@CORE_VERSION@" = $CoreVersion
+    "@CORE_MAJOR@" = $parts[0]
+    "@CORE_MINOR@" = $parts[1]
+    "@CORE_PATCH@" = $parts[2]
+  }
+  foreach ($path in @(
+      (Join-Path $work "build.gradle"),
+      (Join-Path $work "src\main\java\consumer\PublicConsumer.java"))) {
+    $content = Get-Content -LiteralPath $path -Raw
+    foreach ($replacement in $replacements.GetEnumerator()) {
+      $content = $content.Replace($replacement.Key, $replacement.Value)
+    }
+    [IO.File]::WriteAllText($path, $content, (New-Object Text.UTF8Encoding($false)))
+  }
+
+  $previousRepository = $env:ZLINK_LOCAL_MAVEN_REPOSITORY
+  $previousCache = $env:ZLINK_JAVA_NATIVE_CACHE
+  $previousLibraryPath = $env:ZLINK_LIBRARY_PATH
+  $previousRuntimeBin = $env:ZLINK_WINDOWS_RUNTIME_BIN
+  $previousOpenSslBin = $env:ZLINK_OPENSSL_BIN
+  try {
+    $env:ZLINK_LOCAL_MAVEN_REPOSITORY = $MavenRepository
+    $env:ZLINK_JAVA_NATIVE_CACHE = Join-Path $work "native-cache"
+    Remove-Item Env:ZLINK_LIBRARY_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:ZLINK_WINDOWS_RUNTIME_BIN -ErrorAction SilentlyContinue
+    Remove-Item Env:ZLINK_OPENSSL_BIN -ErrorAction SilentlyContinue
+    Invoke-Checked (Join-Path $RepositoryRoot "bindings\java\gradlew.bat") @(
+      "--no-daemon", "-p", $work, "run"
+    )
+  } finally {
+    $env:ZLINK_LOCAL_MAVEN_REPOSITORY = $previousRepository
+    $env:ZLINK_JAVA_NATIVE_CACHE = $previousCache
+    $env:ZLINK_LIBRARY_PATH = $previousLibraryPath
+    $env:ZLINK_WINDOWS_RUNTIME_BIN = $previousRuntimeBin
+    $env:ZLINK_OPENSSL_BIN = $previousOpenSslBin
+    Remove-ScopedDirectory -Path $work -ScopeRoot $stageRoot
+  }
+}
+
 foreach ($item in $Language) {
   $bindingVersion = Get-BindingVersion $item
   switch ($item) {
@@ -221,7 +303,6 @@ foreach ($item in $Language) {
         $env:MAVEN_REPOSITORY_URL = ([Uri]$maven).AbsoluteUri
         Invoke-Checked (Join-Path $RepositoryRoot "bindings\java\gradlew.bat") @(
           "--no-daemon",
-          "--init-script", (Join-Path $PSScriptRoot "java\windows-package.init.gradle"),
           "clean", "publishMavenJavaPublicationToReleaseRepoRepository"
         ) (Join-Path $RepositoryRoot "bindings\java")
       } finally {
@@ -232,6 +313,9 @@ foreach ($item in $Language) {
       }
       $jar = Join-Path $maven "systems\zlink\zlink\$bindingVersion\zlink-$bindingVersion.jar"
       if (-not (Test-Path -LiteralPath $jar)) { throw "Java binding package is missing: $jar" }
+      Assert-JavaPackage -Package $jar -CoreBin (Join-Path $CorePrefix "bin")
+      Test-JavaPackage -MavenRepository $maven -BindingVersion $bindingVersion `
+        -CoreVersion $coreVersion
     }
     "node" {
       $nodeRoot = Join-Path $RepositoryRoot "bindings\node"

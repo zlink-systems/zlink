@@ -30,6 +30,26 @@ repository's own source or local package cache.
   `settings.gradle.kts` only declares `mavenCentral()`.
 - No Redis, no other external dependency.
 
+### Windows native availability
+
+The Java binding releases available on Maven Central through
+`systems.zlink:zlink:1.1.0` contain only `native/linux-x86_64`. Those versions need the
+matching DLL explicitly on Windows. One reproducible source is the `Zlink` 1.1.0 NuGet
+package used by the .NET binding:
+
+```powershell
+Invoke-WebRequest `
+  https://api.nuget.org/v3-flatcontainer/zlink/1.1.0/zlink.1.1.0.nupkg `
+  -OutFile zlink.1.1.0.zip
+Expand-Archive zlink.1.1.0.zip -DestinationPath zlink.1.1.0
+$env:ZLINK_LIBRARY_PATH = (Resolve-Path `
+  .\zlink.1.1.0\runtimes\win-x64\native\zlink.dll).Path
+```
+
+Then run the Gradle commands below in the same PowerShell session. Java binding packages
+built by this checkout embed `native/windows-x86_64/zlink.dll` and the dependency DLLs
+from the verified Core package, so those artifacts do not need `ZLINK_LIBRARY_PATH`.
+
 ## Layout
 
 - `java/Shared`, `java/Server`, `java/Client` — the Java copy.
