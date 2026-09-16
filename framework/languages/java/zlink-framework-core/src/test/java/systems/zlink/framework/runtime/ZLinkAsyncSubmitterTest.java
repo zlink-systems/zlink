@@ -429,6 +429,7 @@ final class ZLinkChannelSubmissionContractTest {
         @Override public void bind(String endpoint) { }
         @Override public void setChannelName(String channelName) { }
         @Override public void setRoutingId(RoutingId routingId) { }
+        @Override public void setNoDrop(boolean noDrop) { }
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) {
             record(topic, flags);
             return true;
