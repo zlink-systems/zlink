@@ -98,6 +98,7 @@ internal sealed class FanoutProbeHandler(
 {
     public ValueTask HandleAsync(
         FanoutProbeEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -144,6 +144,7 @@ public interface IZLinkFanoutHandler<in TEvent>
 {
     ValueTask HandleAsync(
         TEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken);
 }
 ```

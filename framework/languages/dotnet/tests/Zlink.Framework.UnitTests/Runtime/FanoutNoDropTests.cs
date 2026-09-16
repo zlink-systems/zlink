@@ -136,6 +136,7 @@ public sealed class FanoutNoDropTests
     {
         public ValueTask HandleAsync(
             TestFanoutEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();

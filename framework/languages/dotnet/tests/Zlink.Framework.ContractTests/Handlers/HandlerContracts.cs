@@ -21,7 +21,10 @@ public sealed class HandlerContracts
 
         await sendHandler.HandleAsync(new PlayerJoined("alice"), null!, CancellationToken.None);
         var reply = await requestHandler.HandleAsync(new Authenticate("alice"), null!, CancellationToken.None);
-        await publishHandler.HandleAsync(new RoomEvent("started"), CancellationToken.None);
+        await publishHandler.HandleAsync(
+            new RoomEvent("started"),
+            null!,
+            CancellationToken.None);
 
         await filter.InvokeAsync(
             null!,
@@ -116,6 +119,7 @@ public sealed class HandlerContracts
 
         public ValueTask HandleAsync(
             RoomEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
             WasCalled = true;

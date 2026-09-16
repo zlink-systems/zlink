@@ -1,5 +1,6 @@
 using PubSub.Server.Subscriber.Configuration;
 using PubSub.Shared;
+using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Handlers;
 
 namespace PubSub.Server.Subscriber.Handlers;
@@ -9,6 +10,7 @@ internal sealed class EventMsgHandler(EvidenceStore evidence, HandlerDelayOption
 {
     public async ValueTask HandleAsync(
         PublishedValueEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         var topic = message.Value == "ignored"

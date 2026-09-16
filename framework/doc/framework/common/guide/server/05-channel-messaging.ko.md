@@ -604,9 +604,10 @@ handler는 인터페이스를 구현하고, 결과를 반환값으로 돌려준�
     {
         public ValueTask HandleAsync(
             CacheRefreshedEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
-            // Classic fanout handler는 등록한 event type의 payload만 받는다.
+            // context는 ChannelName·topic·packet name·metadata snapshot을 담는다.
             return ValueTask.CompletedTask;
         }
     }
@@ -2560,7 +2561,7 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
         : IZLinkFanoutHandler<UserCacheRefreshedEvent>
     {
         public ValueTask HandleAsync(
-            UserCacheRefreshedEvent message, CancellationToken ct)
+            UserCacheRefreshedEvent message, ZLinkPublishMessageContext context, CancellationToken ct)
             => ValueTask.CompletedTask;
     }
     ```

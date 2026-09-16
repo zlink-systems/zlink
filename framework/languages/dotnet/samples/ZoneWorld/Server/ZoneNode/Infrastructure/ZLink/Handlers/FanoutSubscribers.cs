@@ -26,6 +26,7 @@ internal sealed class WorldAnnounceSubscriber(
 {
     public async ValueTask HandleAsync(
         WorldAnnounceEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         var zones = census.ZoneIds;
@@ -72,6 +73,7 @@ internal sealed class BroadcastProbeSubscriber(
 {
     public ValueTask HandleAsync(
         WorldAnnounceEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         logger.LogInformation(
@@ -96,6 +98,7 @@ internal sealed class NodeMaintenanceChangedSubscriber(
 {
     public ValueTask HandleAsync(
         NodeMaintenanceChangedEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         maintenance.Apply(message.NodeId, message.Enabled);

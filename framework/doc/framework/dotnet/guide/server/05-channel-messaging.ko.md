@@ -327,9 +327,10 @@ public sealed class CacheRefreshedEventHandler
 {
     public ValueTask HandleAsync(
         CacheRefreshedEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
-        // Classic fanout handler는 등록한 event type의 payload만 받는다.
+        // context는 ChannelName·topic·packet name·metadata snapshot을 담는다.
         return ValueTask.CompletedTask;
     }
 }
@@ -1011,7 +1012,7 @@ public sealed class UserCacheRefreshedEventHandler
     : IZLinkFanoutHandler<UserCacheRefreshedEvent>
 {
     public ValueTask HandleAsync(
-        UserCacheRefreshedEvent message, CancellationToken ct)
+        UserCacheRefreshedEvent message, ZLinkPublishMessageContext context, CancellationToken ct)
         => ValueTask.CompletedTask;
 }
 ```

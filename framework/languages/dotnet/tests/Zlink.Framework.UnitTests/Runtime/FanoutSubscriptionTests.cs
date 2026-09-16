@@ -9,6 +9,56 @@ namespace Zlink.Framework.UnitTests;
 public sealed class FanoutSubscriptionTests
 {
     [Fact]
+    public async Task HandlerContext_PreservesChannelTopicAndPacketName_WithoutUsingTopicForSelection()
+    {
+        var probe = new FanoutSubscriptionProbe("implicit");
+        using var host = CreateHost(probe, static _ => { });
+
+        await host.StartAsync();
+        try
+        {
+            await WaitUntilReadyAsync(
+                host.Services.GetRequiredService<IZLinkFanoutRuntime>(),
+                "events");
+            var client = host.Services.GetRequiredService<IZLinkFanoutClient>();
+
+            await client.Publish(
+                    "events",
+                    "custom.topic",
+                    new FanoutSubscriptionEvent("explicit"))
+                .Async();
+            await client.Publish(
+                    "events",
+                    new FanoutSubscriptionEvent("implicit"))
+                .Async();
+            await probe.TerminalReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Collection(
+                probe.Deliveries,
+                explicitDelivery =>
+                {
+                    Assert.Equal("explicit", explicitDelivery.Value);
+                    Assert.Equal("events", explicitDelivery.ChannelName);
+                    Assert.Equal("custom.topic", explicitDelivery.Topic);
+                    Assert.Equal(nameof(FanoutSubscriptionEvent), explicitDelivery.PacketName);
+                    Assert.Empty(explicitDelivery.Metadata);
+                },
+                implicitDelivery =>
+                {
+                    Assert.Equal("implicit", implicitDelivery.Value);
+                    Assert.Equal("events", implicitDelivery.ChannelName);
+                    Assert.Equal(nameof(FanoutSubscriptionEvent), implicitDelivery.Topic);
+                    Assert.Equal(nameof(FanoutSubscriptionEvent), implicitDelivery.PacketName);
+                    Assert.Empty(implicitDelivery.Metadata);
+                });
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task Subscriber_WithoutTopics_ReceivesEveryApplicationTopic()
     {
         var probe = new FanoutSubscriptionProbe("inventory.changed");
@@ -272,10 +322,11 @@ public sealed class FanoutSubscriptionTests
     {
         public ValueTask HandleAsync(
             FanoutSubscriptionEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            probe.Record(message.Value);
+            probe.Record(message.Value, context);
             return ValueTask.CompletedTask;
         }
     }
@@ -289,11 +340,28 @@ public sealed class FanoutSubscriptionTests
 
         public IReadOnlyList<string> Values => _values.ToArray();
 
-        public void Record(string value)
+        public IReadOnlyList<FanoutDelivery> Deliveries => _deliveries.ToArray();
+
+        private readonly ConcurrentQueue<FanoutDelivery> _deliveries = new();
+
+        public void Record(string value, ZLinkPublishMessageContext context)
         {
             _values.Enqueue(value);
+            _deliveries.Enqueue(new FanoutDelivery(
+                value,
+                context.ChannelName,
+                context.Topic,
+                context.PacketName,
+                context.Metadata.Values));
             if (string.Equals(value, terminalValue, StringComparison.Ordinal))
                 TerminalReceived.TrySetResult();
         }
     }
+
+    private sealed record FanoutDelivery(
+        string Value,
+        string? ChannelName,
+        string Topic,
+        string PacketName,
+        IReadOnlyDictionary<string, string> Metadata);
 }

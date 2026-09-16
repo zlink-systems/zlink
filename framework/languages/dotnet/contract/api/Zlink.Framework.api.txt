@@ -894,7 +894,7 @@ assembly Zlink.Framework
     field const Zlink.Framework.Contracts.Dispatch.ZLinkUnhandledDispatchAction Throw = 3 [nullability=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Handlers.IZLinkFanoutHandler<TEvent>
     generic TEvent variance=in nullable=nullable
-    method abstract System.Threading.Tasks.ValueTask HandleAsync(TEvent? message [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask HandleAsync(TEvent? message [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Channels.ZLinkPublishMessageContext context [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Handlers.IZLinkHandlerFilter
     method abstract System.Threading.Tasks.ValueTask InvokeAsync(Zlink.Framework.Contracts.Handlers.IZLinkHandlerFilterContext context [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Handlers.ZLinkHandlerFilterNext next [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Handlers.IZLinkHandlerFilterContext : Zlink.Framework.Contracts.Handlers.IZLinkMessageContext

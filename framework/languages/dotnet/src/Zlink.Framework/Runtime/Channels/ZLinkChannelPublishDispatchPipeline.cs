@@ -61,12 +61,17 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
         }
 
         Dictionary<Type, object?>? decodedMessages = null;
+        var metadata = header.Metadata is { Count: > 0 }
+            ? new ZLinkMessageMetadata(new Dictionary<string, string>(
+                header.Metadata,
+                StringComparer.Ordinal))
+            : ZLinkMessageMetadata.Empty;
         var context = new ZLinkPublishMessageContext(
             meshName,
             scope.ChannelName,
             scope.PacketName!,
             scope.ContentType,
-            metadata: null,
+            metadata,
             header.CorrelationId,
             topicMessage.Topic,
             header.Source);
