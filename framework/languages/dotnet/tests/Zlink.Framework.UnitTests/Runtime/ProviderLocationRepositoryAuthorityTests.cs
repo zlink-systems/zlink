@@ -599,7 +599,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ExpiredOwnerAuthorityIsReclaimedWithNewObjectGeneration(
+    public async Task ExpiredOwnerActiveAuthorityIsPreservedWithOriginalObjectGeneration(
         bool userSpot)
     {
         var objectKind = userSpot
@@ -629,29 +629,30 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             objectKind);
         var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(firstRequest));
-        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+        var committed = Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await repository.CommitAsync(
                 first.Reservation,
-                new byte[] { 0x25 }));
+                new byte[] { 0x25 })).Snapshot;
         Assert.Equal(
             ZLinkOwnerLeaseReleaseResult.Released,
             await repository.ReleaseOwnerLeaseAsync(sourceOwner));
 
-        var replacement = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+        var existing = Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
             await repository.ReserveAsync(
                 Reservation(
                     key,
                     targetDescriptor,
                     targetOwner,
-                    objectKind)));
+                    objectKind))).Current;
+        var observed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(firstRequest.Key)).Snapshot;
 
-        Assert.True(
-            replacement.Reservation.ObjectGeneration
-            > first.Reservation.ObjectGeneration);
-        Assert.Equal(targetOwner, replacement.Reservation.TargetOwner);
-        Assert.Equal(
-            targetDescriptor.Rid,
-            replacement.Reservation.TargetDescriptor.Rid);
+        Assert.Equal(committed.StoreVersion, existing.StoreVersion);
+        Assert.Equal(committed.ObjectGeneration, existing.ObjectGeneration);
+        Assert.Equal(committed.StoreVersion, observed.StoreVersion);
+        Assert.Equal(committed.ObjectGeneration, observed.ObjectGeneration);
+        Assert.Equal(sourceOwner.OwnerId, observed.OwnerId);
+        Assert.Equal(sourceDescriptor.Rid, observed.Allocation.Descriptor.Rid);
     }
 
     [Theory]
@@ -700,7 +701,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public async Task ConcurrentExpiredOwnerReclaimIssuesOneReplacementReservation()
+    public async Task ConcurrentExpiredOwnerReservationsPreserveActiveAuthority()
     {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var firstRepository = new ZLinkProviderLocationRepository(provider);
@@ -723,10 +724,10 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var firstRequest = Reservation(key, sourceDescriptor, sourceOwner);
         var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await firstRepository.ReserveAsync(firstRequest));
-        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+        var committed = Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await firstRepository.CommitAsync(
                 first.Reservation,
-                new byte[] { 0x26 }));
+                new byte[] { 0x26 })).Snapshot;
         Assert.Equal(
             ZLinkOwnerLeaseReleaseResult.Released,
             await firstRepository.ReleaseOwnerLeaseAsync(sourceOwner));
@@ -739,21 +740,19 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             firstRepository.ReserveAsync(replacementRequest).AsTask(),
             secondRepository.ReserveAsync(replacementRequest).AsTask());
 
-        var replacement = Assert.Single(
-            results.OfType<ZLinkObjectReserveResult.Reserved>());
-        Assert.True(
-            replacement.Reservation.ObjectGeneration
-            > first.Reservation.ObjectGeneration);
-        Assert.Single(
-            results.Where(result =>
-                result is ZLinkObjectReserveResult.Conflict(
-                    ZLinkAuthorityReadResult.Found)));
-        Assert.IsType<ZLinkObjectReserveResult.PlacementCapacityExhausted>(
-            await firstRepository.ReserveAsync(
-                Reservation(
-                    "actor:capacity-after-reclaim",
-                    targetDescriptor,
-                    targetOwner)));
+        Assert.All(results, result =>
+        {
+            var existing = Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
+                result).Current;
+            Assert.Equal(committed.StoreVersion, existing.StoreVersion);
+            Assert.Equal(committed.ObjectGeneration, existing.ObjectGeneration);
+        });
+        var observed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await firstRepository.ReadAuthorityAsync(firstRequest.Key)).Snapshot;
+        Assert.Equal(committed.StoreVersion, observed.StoreVersion);
+        Assert.Equal(committed.ObjectGeneration, observed.ObjectGeneration);
+        Assert.Equal(sourceOwner.OwnerId, observed.OwnerId);
+        Assert.Equal(sourceDescriptor.Rid, observed.Allocation.Descriptor.Rid);
     }
 
     [Fact]

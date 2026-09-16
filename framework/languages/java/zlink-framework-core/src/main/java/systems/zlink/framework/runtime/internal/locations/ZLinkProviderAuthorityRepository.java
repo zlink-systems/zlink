@@ -401,7 +401,7 @@ final class ZLinkProviderAuthorityRepository {
                         case RECLAIMED -> reserve(request, cancellation);
                         case CONFLICT, RECOVERY_REQUIRED -> completed(
                             new ZLinkObjectConflict(current));
-                        case OWNER_LIVE -> completed(
+                        case OWNER_LIVE, NOT_RECLAIMABLE -> completed(
                             current.allocation().stableType().equals(
                                 request.stableType())
                                 && current.allocation().state()
@@ -514,6 +514,11 @@ final class ZLinkProviderAuthorityRepository {
         AuthorityRecord current,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
             cancellation) {
+        if (current.allocation().state()
+            == ZLinkPlacementAllocationState.ACTIVE) {
+            return completed(StaleAuthorityReclaim.NOT_RECLAIMABLE);
+        }
+
         ZLinkStoreKey staleOwnerKey = ownerKey(current.ownerId());
         return provider.read(staleOwnerKey, cancellation).thenCompose(ownerRead -> {
             ZLinkStoreCondition ownerCondition;
@@ -548,24 +553,14 @@ final class ZLinkProviderAuthorityRepository {
                     CapacitySnapshot stored = capacity.orElse(null);
                     CapacityRecord next = stored == null
                         ? null
-                        : current.allocation().state()
-                            == ZLinkPlacementAllocationState.ACTIVE
-                            ? stored.record().adjustActive(
-                                current.allocation().capacityBundle(), -1)
-                            : stored.record().adjustPending(
-                                current.allocation().capacityBundle(), -1);
+                        : stored.record().adjustPending(
+                            current.allocation().capacityBundle(), -1);
                     if (next == null) {
-                        // Node replacement removes the dead owner's descriptor
-                        // and capacity rows, so by the time the orphan is
-                        // reclaimed the counter is either gone or has been
-                        // recreated from zero by the replacement. Either way it
-                        // no longer accounts for this allocation and there is
-                        // nothing to give back - a decrement would just
-                        // underflow. The exact stale authority version plus the
-                        // owner-lease condition (missing, or pinned to the
-                        // version whose generation already disagrees) still
-                        // fence the delete, so a resurrected owner loses the
-                        // race instead of the row leaking.
+                        // The expired reservation's capacity row may be gone or
+                        // recreated from zero, so it no longer accounts for the
+                        // pending allocation and cannot be decremented. The
+                        // exact authority version and owner-lease condition
+                        // still fence deletion against an owner resurrection.
                         return deleteOrphanAuthority(
                             authorityKey,
                             authority,
@@ -3038,7 +3033,8 @@ final class ZLinkProviderAuthorityRepository {
         OWNER_LIVE,
         RECLAIMED,
         CONFLICT,
-        RECOVERY_REQUIRED
+        RECOVERY_REQUIRED,
+        NOT_RECLAIMABLE
     }
 
     private record CapacityPlan(

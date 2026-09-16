@@ -221,7 +221,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void replacementReclaimsAuthorityOwnedByExpiredPreviousNode()
+    void replacementPreservesActiveAuthorityOwnedByExpiredPreviousNode()
         throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
@@ -267,26 +267,21 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture().get().status());
 
-        var replacementReservation = assertInstanceOf(
-            ZLinkObjectReserved.class,
+        assertPreservedActiveAuthority(
+            repository,
+            authorityKey,
+            oldReservation,
             repository.reserve(
                     capacityRequest(
                         authorityKey,
                         replacementDescriptor,
                         replacementOwner),
                     () -> false)
-                .toCompletableFuture().get()).reservation();
-
-        assertTrue(
-            replacementReservation.objectGeneration()
-                > oldReservation.objectGeneration());
-        assertEquals(
-            replacementOwner,
-            replacementReservation.targetOwner());
+                .toCompletableFuture().get());
     }
 
     @Test
-    void replacementReclaimsStaleAuthorityAfterOldCapacityRowWasRemoved()
+    void replacementPreservesActiveAuthorityAfterOldCapacityRowWasRemoved()
         throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
@@ -346,26 +341,21 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture().get().status());
 
-        var replacementReservation = assertInstanceOf(
-            ZLinkObjectReserved.class,
+        assertPreservedActiveAuthority(
+            repository,
+            authorityKey,
+            oldReservation,
             repository.reserve(
                     capacityRequest(
                         authorityKey,
                         replacementDescriptor,
                         replacementOwner),
                     () -> false)
-                .toCompletableFuture().get()).reservation();
-
-        assertTrue(
-            replacementReservation.objectGeneration()
-                > oldReservation.objectGeneration());
-        assertEquals(
-            replacementOwner,
-            replacementReservation.targetOwner());
+                .toCompletableFuture().get());
     }
 
     @Test
-    void replacementReclaimsStaleAuthorityWhenCapacityRowNoLongerAccountsForIt()
+    void replacementPreservesActiveAuthorityWhenCapacityRowNoLongerAccountsForIt()
         throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
@@ -401,21 +391,17 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture().get().status());
 
-        var replacementReservation = assertInstanceOf(
-            ZLinkObjectReserved.class,
+        assertPreservedActiveAuthority(
+            repository,
+            authorityKey,
+            oldReservation,
             repository.reserve(
                     capacityRequest(
                         authorityKey,
                         replacementDescriptor,
                         replacementOwner),
                     () -> false)
-                .toCompletableFuture().get()).reservation();
-
-        assertTrue(
-            replacementReservation.objectGeneration()
-                > oldReservation.objectGeneration());
-        assertEquals(
-            replacementOwner, replacementReservation.targetOwner());
+                .toCompletableFuture().get());
     }
 
     @Test
@@ -1124,6 +1110,31 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     reservation, new byte[] {2}, null, () -> false)
                 .toCompletableFuture().get());
         return reservation;
+    }
+
+    private static void assertPreservedActiveAuthority(
+        ZLinkProviderAuthorityRepository repository,
+        String authorityKey,
+        ZLinkObjectReservation original,
+        ZLinkObjectReserveResult result) throws Exception {
+        var existing = assertInstanceOf(
+            ZLinkObjectAlreadyExists.class,
+            result).current();
+        assertEquals(original.objectGeneration(), existing.objectGeneration());
+        assertEquals(original.targetOwner().ownerId(), existing.ownerId());
+        assertEquals(
+            original.targetOwner().leaseGeneration(),
+            existing.ownerLeaseGeneration());
+        assertEquals(
+            original.targetDescriptor(),
+            existing.allocation().descriptor());
+
+        var observed = assertInstanceOf(
+            ZLinkAuthoritySnapshot.class,
+            repository.read(authorityKey, () -> false)
+                .toCompletableFuture().get());
+        assertEquals(existing.storeVersion(), observed.storeVersion());
+        assertEquals(existing.objectGeneration(), observed.objectGeneration());
     }
 
     private static void zeroCapacityRow(
