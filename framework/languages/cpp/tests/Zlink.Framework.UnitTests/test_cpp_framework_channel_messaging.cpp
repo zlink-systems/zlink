@@ -3559,6 +3559,15 @@ int main ()
     }
     release_delayed_backend.set_value ();
     auto delayed_reply = delayed_task.result ();
+    /* complete() publishes the result and then schedules the observers, so
+     * result() can return before the observer ran. Wait for the observation
+     * instead of reading it in the same breath. */
+    const auto delayed_observed_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!delayed_completed.load ()
+           && std::chrono::steady_clock::now () < delayed_observed_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
     if (!delayed_reply || delayed_reply.value ().value != 451 || !delayed_completed.load ()) {
         return 65;
     }
