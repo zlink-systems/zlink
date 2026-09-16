@@ -2,6 +2,7 @@
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
+#include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -34,10 +35,12 @@ std::atomic<std::uintptr_t> next_fanout_poller_slot{1};
 
 raw_fanout_publisher_t::raw_fanout_publisher_t (
   std::string endpoint,
-  std::shared_ptr<zlink::context_t> context) :
+  std::shared_ptr<zlink::context_t> context,
+  bool no_drop) :
     _configured_endpoint (std::move (endpoint)),
     _context (
-      context ? std::move (context) : std::make_shared<zlink::context_t> ())
+      context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+    _no_drop (no_drop)
 {
     if (_configured_endpoint.empty ()) {
         throw std::invalid_argument ("fanout publisher endpoint is required");
@@ -60,6 +63,7 @@ void raw_fanout_publisher_t::start ()
     }
     auto socket = std::make_unique<zlink::pub_socket_t> (*_context);
     socket->options ().linger (std::chrono::milliseconds (0));
+    detail::apply_fanout_publisher_socket_options (*socket, _no_drop);
     socket->bind (_configured_endpoint);
     _endpoint = socket->options ().last_endpoint ();
     _next_beacon =

@@ -928,6 +928,14 @@ capability_builder_t &capability_builder_t::service_weight (int value)
     return *this;
 }
 
+capability_builder_t &capability_builder_t::set_no_drop (bool no_drop)
+{
+    auto &snapshot = capability_snapshot (*_state);
+    snapshot.enabled = true;
+    snapshot.no_drop = no_drop;
+    return *this;
+}
+
 channel_capability_snapshot_t capability_builder_t::snapshot () const
 {
     return capability_snapshot (*_state);

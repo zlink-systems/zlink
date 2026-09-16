@@ -70,6 +70,7 @@ struct channel_capability_snapshot_t
     int service_weight = 100;
     std::vector<std::string> bind_endpoints;
     std::vector<std::string> connect_endpoints;
+    bool no_drop = false;
     std::vector<std::string> subscription_topics;
 };
 
@@ -125,7 +126,9 @@ class capability_builder_t
 
   private:
     friend class channel_builder_t;
+    friend class fanout_channel_builder_t;
     explicit capability_builder_t (std::shared_ptr<detail::capability_builder_state_t> state);
+    capability_builder_t &set_no_drop (bool no_drop);
 
     std::shared_ptr<detail::capability_builder_state_t> _state;
 };

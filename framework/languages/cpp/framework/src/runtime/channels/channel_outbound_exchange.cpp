@@ -877,6 +877,7 @@ class channel_native_publisher_t
         _socket (*_context)
     {
         apply_common_channel_socket_options (_socket, publisher);
+        apply_fanout_publisher_socket_options (_socket, publisher.no_drop);
         std::string listener_endpoint;
         for (const auto &endpoint : publisher.bind_endpoints) {
             _socket.bind (endpoint);

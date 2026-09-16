@@ -26,4 +26,10 @@ void apply_weighted_channel_socket_options (SocketT &socket,
     }
 }
 
+template <typename SocketT>
+void apply_fanout_publisher_socket_options (SocketT &socket, bool no_drop)
+{
+    socket.options ().no_drop (no_drop);
+}
+
 } // namespace zlink::framework::detail

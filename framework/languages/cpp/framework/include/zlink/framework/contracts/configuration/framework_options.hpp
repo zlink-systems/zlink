@@ -883,6 +883,15 @@ class fanout_channel_builder_t
         return *this;
     }
 
+    fanout_channel_builder_t &set_no_drop (bool no_drop = true)
+    {
+        _no_drop = no_drop;
+        _options->fanout_channels_with_no_drop_configuration.insert (
+          _channel_name);
+        apply ();
+        return *this;
+    }
+
     fanout_channel_builder_t &enable_subscriber ()
     {
         _subscriber_enabled = true;
@@ -937,6 +946,7 @@ class fanout_channel_builder_t
         const auto publisher_bind_host_override = _publisher_bind_host_override;
         const auto routing_id = _routing_id;
         const auto automatic_routing_id_prefix = _automatic_routing_id_prefix;
+        const auto no_drop = _no_drop;
         const auto subscriber_enabled = _subscriber_enabled;
         const auto subscriber_endpoints =
           _options->subscriber_endpoint_connections[_channel_name].list_connections ();
@@ -965,6 +975,7 @@ class fanout_channel_builder_t
           "fanout_channel:" + channel_name,
           [channel_name, options, publisher_endpoint, publisher_port, publisher_bind_host_override,
            subscriber_enabled, subscriber_endpoints, routing_id, automatic_routing_id_prefix,
+           no_drop,
            subscriber_uses_discovery, subscription_topics] (zlink_builder_t &zlink) {
               auto channel = zlink.channel (channel_name);
               if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
@@ -977,6 +988,7 @@ class fanout_channel_builder_t
                                              * store requirement. */
                   auto publisher = channel.enable_publisher (
                     routing_id.has_value () || automatic_routing_id_prefix.has_value ());
+                  publisher.set_no_drop (no_drop);
                   if (routing_id) {
                       publisher.set_routing_id (*routing_id);
                   } else if (automatic_routing_id_prefix) {
@@ -1011,6 +1023,7 @@ class fanout_channel_builder_t
     std::optional<std::string> _publisher_advertise_host_override;
     std::optional<zlink::routing_id_t> _routing_id;
     std::optional<std::string> _automatic_routing_id_prefix;
+    bool _no_drop = false;
     bool _subscriber_enabled = false;
 };
 
