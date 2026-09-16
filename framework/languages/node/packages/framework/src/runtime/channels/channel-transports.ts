@@ -1120,12 +1120,21 @@ function mapMeshSubmissionError(error: unknown, operation: string): Error {
   );
 }
 
-function meshRequestFailure(meshName: string, result: number, nativeErrno: number): ZLinkFrameworkException {
+export function meshRequestFailure(meshName: string, result: number, nativeErrno: number): ZLinkFrameworkException {
   const canonical = isCanonicalWireReplyTerminal(result, nativeErrno);
   const wireKind = canonical
     ? internalFrameworkErrorKindFromWireReply(result, nativeErrno)
     : undefined;
-  const kind: ZLinkFrameworkInternalErrorKindType = !canonical
+  // NotFound without an errno is the selection itself coming back empty: the
+  // send path and its connection are there, and applying eligibility and drain
+  // left no member to pick. The spec names that Unavailable, not NotFound, and
+  // not the protocol error a non-canonical pair would otherwise produce
+  // (06-framework-api "no eligible select-one member"). A named target that
+  // does not exist arrives with an errno and still ends as NotFound.
+  const noEligibleMember = result === RequestResult.NotFound && nativeErrno === 0;
+  const kind: ZLinkFrameworkInternalErrorKindType = noEligibleMember
+    ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
+    : !canonical
     ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
     : result === RequestResult.NotFound
       ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound

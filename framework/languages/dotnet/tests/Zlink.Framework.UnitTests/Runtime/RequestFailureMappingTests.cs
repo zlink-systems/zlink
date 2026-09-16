@@ -98,27 +98,31 @@ public sealed class RequestFailureMappingTests
         Assert.IsType<ZlinkRequestException>(error.InnerException);
     }
 
+    //  06-framework-api "no eligible select-one member": a channel reports
+    //  NotFound when eligibility and drain left nothing to pick, while the send
+    //  path and its connection are still there. That ends as Unavailable, and a
+    //  request and a one-way send agree.
     [Fact]
-    public void ChannelCompletion_Preserves_Native_NotFound()
+    public void ChannelCompletion_Maps_Native_NotFound_To_Unavailable()
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 RequestResult.NotFound,
                 "channel request"));
 
-        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.IsType<ZlinkRequestException>(error.InnerException);
     }
 
     [Fact]
-    public void ChannelSubmit_Preserves_Native_NotFound()
+    public void ChannelSubmit_Maps_Native_NotFound_To_Unavailable()
     {
         var error = ZLinkSubmitFailureMapper.CreateChannelException(
             SubmitResult.NotFound,
             "channel 'game.api'");
 
-        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
-        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
     }
 
     [Fact]

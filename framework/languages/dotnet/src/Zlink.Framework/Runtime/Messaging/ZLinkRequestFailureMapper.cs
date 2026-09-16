@@ -8,7 +8,37 @@ internal static class ZLinkRequestFailureMapper
         RequestResult result,
         string operationName)
     {
+        //  A select-one channel reports NotFound when applying eligibility and
+        //  drain left no member to pick. The send path and its connection are
+        //  still there, so the spec names that Unavailable rather than NotFound
+        //  (06-framework-api "no eligible select-one member"). NotFound stays
+        //  for a named target, which the node-direct mapper below still covers.
+        if (result == RequestResult.NotFound)
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{operationName} failed because the channel had no eligible member.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                CreateRequestException(result));
         return CreateCompletionException(result, operationName);
+    }
+
+    //  Terminal replies carry a fine failure code. A recognised code is the
+    //  peer naming its own reason and keeps its kind, except a target-not-found
+    //  code on a channel: a select-one call names no target, so "not found"
+    //  there is the empty eligible set the coarse rule above already covers.
+    public static Exception CreateChannelCompletionException(
+        RequestResult result,
+        int failureErrno,
+        string operationName)
+    {
+        if ((ServiceWireConstants.FrameworkErrorCode)failureErrno
+            != ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound
+            && ClassifyFineFailure(failureErrno) is { } kind)
+            return new ZLinkFrameworkException(
+                kind,
+                operationName,
+                innerException: CreateRequestException(result));
+        return CreateChannelCompletionException(result, operationName);
     }
 
     //  Ownership-aware remote-reply mapper. A remote request reply may carry a
@@ -140,6 +170,25 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.InternalFailure,
                 $"{operationName} failed with result '{result}'.")
         };
+    }
+
+    //  Channel selection raises NotFound when applying eligibility and drain
+    //  left no member to pick. The send path and its connection are still
+    //  there, so the spec ends that as Unavailable
+    //  (06-framework-api "no eligible select-one member"). Node-direct callers
+    //  keep CreateSubmitException, where NotFound still means a named target is
+    //  absent.
+    public static Exception CreateChannelSubmitException(
+        ZlinkSubmitException error,
+        string operationName)
+    {
+        if (error.Result == ZlinkSubmitException.ErrorCode.NotFound)
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{operationName} failed because the channel had no eligible member.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                error);
+        return CreateSubmitException(error, operationName);
     }
 
     public static Exception CreateSubmitException(

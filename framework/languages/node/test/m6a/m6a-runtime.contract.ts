@@ -8,6 +8,12 @@ import {
   ServiceWireCommand
 } from '../../../../runtime/protocol/generated/node/service_wire_constants';
 import {
+  meshRequestFailure
+} from "../../packages/framework/src/runtime/channels/channel-transports";
+import {
+  ZLinkFrameworkErrorKind
+} from "../../packages/framework/src/contracts/Errors/ZLinkFrameworkException";
+import {
   RawServiceMeshRuntime,
   type RawServiceMeshRuntimeOptions
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
@@ -2141,3 +2147,15 @@ async function awaitWithin<T>(
     if (timeout !== undefined) clearTimeout(timeout);
   }
 }
+
+test('a channel request with no eligible member ends as unavailable, not a protocol error', () => {
+  // 102 NotFound with errno 0 is the selection coming back empty: eligibility
+  // and drain left no member to pick, while the send path and its connection
+  // are still there. 06-framework-api names that Unavailable. A named target
+  // that does not exist arrives with an errno and stays NotFound.
+  const empty = meshRequestFailure('game', 102, 0);
+  assert.equal(empty.kind, ZLinkFrameworkErrorKind.Unavailable);
+
+  const namedMissing = meshRequestFailure('game', 102, 14);
+  assert.equal(namedMissing.kind, ZLinkFrameworkErrorKind.NotFound);
+});

@@ -122,7 +122,12 @@ public sealed class MeshOutboundPayloadOwnershipTests
                 if (request) await client.RequestToChannel(Channel, payload).Async<BytesValue>();
                 else await client.SendToChannel(Channel, payload).Async();
             });
-            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            //  A channel with nothing to select ends as Unavailable, not
+            //  NotFound: the send path is registered and its connection is
+            //  there, only the eligible set is empty
+            //  (06-framework-api "no eligible select-one member"). The payload
+            //  ownership this test guards is unchanged either way.
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
             Assert.Equal(1, Assert.Single(tracking.Owners).RefCount);
         }
         finally { await source.StopAsync(); }

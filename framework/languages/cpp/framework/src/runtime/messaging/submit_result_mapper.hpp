@@ -74,6 +74,23 @@ map_submit_result_exception (zlink::submit_result_t result, std::string message)
       framework_error_kind_t::internal_failure, std::move (message));
 }
 
+/* Select-one channel variant. A channel reports not_found when applying
+ * eligibility and drain left no member to pick: the send path and its
+ * connection are still there, so the spec ends that as unavailable rather than
+ * not_found, and a request and a one-way send agree
+ * (06-framework-api "no eligible select-one member"). Node-direct callers keep
+ * map_submit_result_exception, where not_found still means a named target is
+ * absent. */
+inline framework_exception_t
+map_channel_submit_result_exception (zlink::submit_result_t result, std::string message)
+{
+    if (result == zlink::submit_result_t::not_found) {
+        return detail::make_boundary_exception (
+          detail::boundary_error_t::disconnected, std::move (message));
+    }
+    return map_submit_result_exception (result, std::move (message));
+}
+
 inline framework_exception_t
 map_request_result_exception (zlink::request_result_t result, std::string message)
 {
