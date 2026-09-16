@@ -123,15 +123,16 @@ public interface PublishSubmitOperation
 
     /// <summary>
     ///     Sets the flags applied at submit time, replacing any previously set
-    ///     flags.
+    ///     flags. The default is <see cref="SendFlags.DontWait" />; pass
+    ///     <see cref="SendFlags.None" /> to wait for local admission.
     /// </summary>
     PublishSubmitOperation Flags(SendFlags flags);
 
     /// <summary>
-    ///     Publishes the accumulated parts on the calling thread. The publisher
-    ///     never waits at the high-water mark. Failures — including the
-    ///     immediate back-pressure a <c>NODROP</c> publisher surfaces — throw
-    ///     <see cref="ZlinkSubmitException" />.
+    ///     Publishes the accumulated parts on the calling thread. By default the
+    ///     publisher does not wait at the high-water mark. When flags are set to
+    ///     <see cref="SendFlags.None" />, the call waits for local admission.
+    ///     Failures throw <see cref="ZlinkSubmitException" />.
     /// </summary>
     void Submit();
 }

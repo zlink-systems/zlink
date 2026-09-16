@@ -302,6 +302,8 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   `ZlinkSubmitException`(`Result == Backpressured`)으로 표면화되고, 재시도
   정책은 어플리케이션이 소유한다. `TryPublish(topic)`는 같은 backpressure를
   예외 없이 `false`로 관찰하는 별도 표면이다.
+  `.Flags(SendFlags.None)`을 명시하면 `Submit()`은 `SendTimeout`까지 local admission을
+  기다리고, `.Flags(SendFlags.DontWait)`은 즉시 backpressure 동작을 유지한다.
 - builder의 시작 메서드는 target identity, topic, channel, routing id,
   `ReplyToken`만 받는다. Payload, request timeout과 terminal 선택은 builder
   단계에서 처리한다.
