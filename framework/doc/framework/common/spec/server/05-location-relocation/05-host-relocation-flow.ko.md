@@ -694,7 +694,7 @@ Instance Spot의 `Close`와 relocation은 같은 authority commit에서 순서�
 모든 unit이 source dispatch에서 분리되고 relay-ready reply를 보낸 각 target에 대한 one-way
 cutover submit 시도가 성공 또는 실패의 terminal result에 도달하면 host는 `Relocated`로
 전환하고 `Relocated/None`을 반환한다. 이 결과는 target Location Store CAS 완료 확인이
-아니다. Descriptor lease, listener, peer connection과 raw transport resource는 이때 정리하지
+아니다. Descriptor 게시, owner lease, listener, peer connection과 raw transport resource는 이때 정리하지
 않는다.
 
 | 완료 지점 | 관찰 주체 | 의미 |
@@ -811,7 +811,7 @@ status 표면은 [Runtime monitoring](../06-observability/01-runtime-monitoring.
 허용되지만, 이 절 첫 문단대로 남은 Message Follow route와 재전송 사본이 함께 사라진다 — 아직
 이전 route를 캐시에 둔 sender의 request는 `Unavailable`로 끝날 수 있다.
 
-`Draining` 동안 descriptor와 owner lease를 계속 갱신한다. 이미 수락한 request, relocation과
+`Draining` 동안 descriptor 게시와 owner lease 갱신을 계속한다. 이미 수락한 request, relocation과
 session route 변경이 끝나기 전에 owner 권한을 잃지 않도록 모든 작업이 끝난 뒤 lease 사용을
 종료한다. 정리 순서는 다음과 같다.
 
