@@ -220,6 +220,8 @@ internal sealed class ZLinkChannelRegistration
 
     public ZLinkChannelPublisherCapabilityRegistration? Publisher { get; set; }
 
+    public bool? PublisherNoDrop { get; set; }
+
     public ZLinkChannelSubscriberCapabilityRegistration? Subscriber { get; set; }
 
     public RoutingId RoutingId { get; set; }
