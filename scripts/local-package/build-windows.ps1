@@ -194,7 +194,9 @@ function Assert-JavaPackage([string]$Package, [string]$CoreBin) {
     }
     $expectedDependencies = @($dlls | Where-Object Name -ne "zlink.dll" | ForEach-Object Name)
     if ([string]::Join("`n", $actualDependencies) -ne [string]::Join("`n", $expectedDependencies)) {
-      throw "Java package Windows dependency index does not match the approved Core prefix"
+      throw ("Java package Windows dependency index does not match the approved Core prefix" +
+        " (index: " + [string]::Join(", ", $actualDependencies) +
+        "; prefix: " + [string]::Join(", ", $expectedDependencies) + ")")
     }
   } finally {
     $archive.Dispose()
