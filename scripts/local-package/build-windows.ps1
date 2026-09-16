@@ -170,7 +170,12 @@ function Assert-JavaPackage([string]$Package, [string]$CoreBin) {
   try {
     $entries = @{}
     foreach ($entry in $archive.Entries) { $entries[$entry.FullName] = $entry }
-    $dlls = Get-ChildItem -LiteralPath $CoreBin -Filter *.dll -File | Sort-Object Name
+    # Gradle writes dependencies.list in ordinal name order. Culture-aware
+    # Sort-Object orders "msvcp140_1.dll" before "msvcp140.dll" under pwsh
+    # (ICU), so the expected list is sorted the same way Gradle sorts it.
+    $dlls = @(Get-ChildItem -LiteralPath $CoreBin -Filter *.dll -File)
+    [Array]::Sort($dlls, [Comparison[IO.FileInfo]] {
+      param($left, $right) [string]::CompareOrdinal($left.Name, $right.Name) })
     foreach ($dll in $dlls) {
       $entryName = "native/windows-x86_64/$($dll.Name)"
       if (-not $entries.ContainsKey($entryName) -or $entries[$entryName].Length -eq 0) {
