@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,13 +13,21 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -28,6 +37,54 @@ import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 final class ZLinkChannelSubmissionFailureTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final RoutingId TARGET = RoutingId.from("submission-failure-target");
+
+    @Test
+    void fanoutPublishWaitsForLocalQueueCapacityAndThenSucceeds() throws Exception {
+        CountDownLatch publishEntered = new CountDownLatch(1);
+        CountDownLatch queueCapacity = new CountDownLatch(1);
+        ZLinkBackendPublisherSocket publisher = publisherThatWaitsForCapacity(
+            publishEntered, queueCapacity);
+
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var caller = Executors.newSingleThreadExecutor();
+             Message payload = Message.from("fanout-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+            try {
+                CompletableFuture<Void> completion = CompletableFuture.runAsync(() ->
+                    new PublishCall(runtime, publisher, "events", payload)
+                        .submit().toCompletableFuture().join(), caller);
+
+                assertTrue(publishEntered.await(5, TimeUnit.SECONDS));
+                queueCapacity.countDown();
+                completion.join();
+            } finally {
+                queueCapacity.countDown();
+                close(runtime, List.of());
+            }
+        }
+    }
+
+    @Test
+    void fanoutPublishMapsLocalQueueDeadlineToDeadlineExceeded() {
+        ZLinkBackendPublisherSocket publisher = publisherThatThrows(
+            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             Message payload = Message.from("fanout-timeout")) {
+            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+            try {
+                CompletionException failure = assertThrows(CompletionException.class, () ->
+                    new PublishCall(runtime, publisher, "events", payload)
+                        .submit().toCompletableFuture().join());
+
+                ZLinkFrameworkException mapped = assertInstanceOf(
+                    ZLinkFrameworkException.class, failure.getCause());
+                assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, mapped.kind());
+            } finally {
+                close(runtime, List.of());
+            }
+        }
+    }
 
     @Test
     void routeRequestClosesPayloadWhenTheBackendRejectsSynchronously() {
@@ -271,6 +328,39 @@ final class ZLinkChannelSubmissionFailureTest {
             (proxy, method, arguments) -> {
                 if (method.getName().equals("request")) {
                     attempts.incrementAndGet();
+                    throw failure;
+                }
+                return defaultValue(method.getReturnType());
+            });
+    }
+
+    private static ZLinkBackendPublisherSocket publisherThatWaitsForCapacity(
+        CountDownLatch publishEntered,
+        CountDownLatch queueCapacity) {
+        return (ZLinkBackendPublisherSocket) Proxy.newProxyInstance(
+            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkBackendPublisherSocket.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("publish")) {
+                    publishEntered.countDown();
+                    if (arguments[2] == SendFlags.DONT_WAIT) {
+                        return false;
+                    }
+                    if (!queueCapacity.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("queue capacity was not released");
+                    }
+                    return true;
+                }
+                return defaultValue(method.getReturnType());
+            });
+    }
+
+    private static ZLinkBackendPublisherSocket publisherThatThrows(Throwable failure) {
+        return (ZLinkBackendPublisherSocket) Proxy.newProxyInstance(
+            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkBackendPublisherSocket.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("publish")) {
                     throw failure;
                 }
                 return defaultValue(method.getReturnType());

@@ -1,5 +1,6 @@
 import { loadBinding } from '../node-backend-adapter';
-import { ZLinkBackendResultError } from '../runtime-values';
+import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
+import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;
@@ -80,7 +81,17 @@ export function submitBindingPublish(
     }
     current!.submit();
   } catch (error) {
-    throw translateBindingResultError(error);
+    const translated = translateBindingResultError(error);
+    if (translated instanceof ZLinkBackendResultError
+        && translated.operation === 'submit'
+        && (translated.result === SubmitResult.Backpressured
+          || translated.result === SubmitResult.NotAdmitted)) {
+      requireOneWayCompletion(
+        { status: ZLinkSubmitStatus.Backpressured },
+        'Classic fanout publish'
+      );
+    }
+    throw translated;
   }
 }
 
