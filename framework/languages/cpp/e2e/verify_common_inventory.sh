@@ -28,24 +28,21 @@ CONFIGS=(
 )
 
 extract_common_ids() {
-  rg '^#### ' "$1" | rg --pcre2 -o "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" | sort -u || true
+  grep -h '^#### ' "$1" | grep -oP "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" | sort -u || true
 }
 
 extract_feature_ids() {
-  rg --pcre2 -o "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" "$1" | sort -u || true
+  grep -ohP "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" "$1" | sort -u || true
 }
 
 extract_source_ids() {
   local config_dir="$1"
-  rg --pcre2 -o "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" \
-    --no-filename \
-    --glob '!*.md' \
-    --glob '!*.json' \
-    --glob '!*.log' \
-    --glob '!logs/**' \
-    --glob '!build/**' \
-    --glob '!artifacts/**' \
-    "$config_dir" | sort -u || true
+  find "$config_dir" -type f \
+    -not -name '*.md' -not -name '*.json' -not -name '*.log' \
+    -not -path '*/logs/*' -not -path '*/build/*' -not -path '*/artifacts/*' \
+    -print0 \
+    | xargs -0 -r grep -ohP "(?<![A-Z0-9-])${ID_PATTERN}(?![A-Z0-9-])" \
+    | sort -u || true
 }
 
 extract_feature_status() {
