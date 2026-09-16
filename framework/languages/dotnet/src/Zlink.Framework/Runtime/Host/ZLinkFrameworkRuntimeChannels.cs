@@ -212,6 +212,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         string meshName,
         RoutingId targetNodeRid)
     {
+        var livePeer = nodeRuntime.ClassifyLiveRouterTarget(targetNodeRid);
+        if (livePeer != ZLinkRouteMeshTargetClassification.Unknown)
+            return livePeer;
+
         var classification = _topologyQuery?.ClassifyRouteMeshTarget(
                 meshName,
                 targetNodeRid)

@@ -1,4 +1,5 @@
 using Systems.Zlink;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Adapters;
@@ -11,11 +12,14 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
     : IZLinkBackendRuntimeContext
 {
     private readonly IContext _context;
+    private readonly ILogger<ZLinkManagedMeshNode>? _meshNodeLogger;
     private ZLinkApplicationJobQueue? _applicationJobQueue;
     private int _disposed;
 
-    public ZLinkDotNetBackendRuntimeContext()
+    public ZLinkDotNetBackendRuntimeContext(
+        ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null)
     {
+        _meshNodeLogger = meshNodeLogger;
         _context = Systems.Zlink.Zlink.CreateContext();
         try
         {
@@ -97,7 +101,8 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
             new ZLinkManagedMeshNode(
                 _context,
                 meshName,
-                applicationJobQueue: _applicationJobQueue),
+                applicationJobQueue: _applicationJobQueue,
+                logger: _meshNodeLogger),
             _applicationJobQueue);
     }
 
@@ -119,7 +124,8 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
         var node = new ZLinkManagedMeshNode(
             _context,
             standaloneMeshName,
-            applicationJobQueue: _applicationJobQueue);
+            applicationJobQueue: _applicationJobQueue,
+            logger: _meshNodeLogger);
         var completions = new ZLinkMeshCompletionTable();
         var completionPump = new ZLinkMeshDispatchPump(
             node,

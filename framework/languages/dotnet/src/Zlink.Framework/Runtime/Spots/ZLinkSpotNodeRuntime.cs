@@ -446,15 +446,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             } router)
             return ZLinkRouteMeshTargetClassification.Unknown;
 
-        var peer = Node.MeshPeers().FirstOrDefault(candidate =>
-            candidate.RoutingId == targetNodeRid);
-        if (peer is not null)
-        {
-            if (peer.ObjectRole == ZLinkMeshNodeObjectRole.Client)
-                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
-            if (peer.State == MeshPeerState.Admitted)
-                return ZLinkRouteMeshTargetClassification.ReadyEligible;
-        }
+        var livePeer = ClassifyLiveRouterTarget(targetNodeRid);
+        if (livePeer != ZLinkRouteMeshTargetClassification.Unknown)
+            return livePeer;
 
         var matchingEndpoints = router.PeerRoutingIds
             .Where(pair => pair.Value == targetNodeRid)
@@ -471,6 +465,20 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             matchingEndpoints.Contains(endpoint, StringComparer.Ordinal))
                 ? ZLinkRouteMeshTargetClassification.RequiredNotConnected
                 : ZLinkRouteMeshTargetClassification.Unknown;
+    }
+
+    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(
+        RoutingId targetNodeRid)
+    {
+        var peer = Node.MeshPeers().FirstOrDefault(candidate =>
+            candidate.RoutingId == targetNodeRid);
+        if (peer is null)
+            return ZLinkRouteMeshTargetClassification.Unknown;
+        if (peer.ObjectRole == ZLinkMeshNodeObjectRole.Client)
+            return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
+        return peer.State == MeshPeerState.Admitted
+            ? ZLinkRouteMeshTargetClassification.ReadyEligible
+            : ZLinkRouteMeshTargetClassification.Unknown;
     }
 
     public IReadOnlyCollection<ZLinkSpotActivation> Spots => _spots.Spots;

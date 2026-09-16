@@ -352,6 +352,41 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Automatic_Route_Target_Uses_Handshake_Admitted_Peer_Missing_From_Snapshot()
+    {
+        var node = new CapturingSpotNode();
+        var targetRid = RoutingId.From("handshake-admitted-node");
+        node.AdmittedMeshPeers.Add(new MeshNodePeer(
+            1,
+            MeshPeerSource.Manual,
+            MeshPeerState.Admitted,
+            targetRid,
+            1,
+            1,
+            "tcp://127.0.0.1:7101",
+            0,
+            0,
+            1));
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            topology: new TestRouteMeshTopology(
+                ZLinkRouteMeshTargetClassification.Unknown,
+                CompleteSnapshot: Array.Empty<ZLinkRouteMeshPeerIdentity>()),
+            includeActorFactory: false);
+        try
+        {
+            runtime.EnsureKnownRouteMeshPeer(
+                "entry",
+                targetRid,
+                "packet 'GetNodeStatus'");
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task SpotNode_Initializer_Applies_Router_Send_Config()
     {
         var services = new ServiceCollection().BuildServiceProvider();
