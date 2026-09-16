@@ -223,7 +223,8 @@ void fanout_location_runtime_t::start_publisher (
         throw std::invalid_argument (
           "discovery fanout publisher requires one routing id and one bind endpoint");
     auto raw = std::make_shared<raw_fanout_publisher_t> (
-      channel.publisher.bind_endpoints.front (), _channel_runtime.core_context ());
+      channel.publisher.bind_endpoints.front (), _channel_runtime.core_context (),
+      channel.publisher.no_drop);
     raw->start ();
     std::optional<std::string> advertise_host;
     if (const auto found = _publisher_advertise_hosts.find (channel.name);

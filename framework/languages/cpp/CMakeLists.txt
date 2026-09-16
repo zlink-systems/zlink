@@ -1961,6 +1961,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_fanout_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_fanout_no_drop
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_no_drop.cpp
+    "framework-unit;framework-regression;channel;backpressure")
+  target_link_libraries(test_cpp_framework_fanout_no_drop PRIVATE
+    GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_channel_reply_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_reply_admission.cpp
     "framework-unit;framework-regression;channel;reply;admission")

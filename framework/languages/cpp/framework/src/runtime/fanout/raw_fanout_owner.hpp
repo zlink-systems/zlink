@@ -84,7 +84,8 @@ class raw_fanout_publisher_t
   public:
     explicit raw_fanout_publisher_t (
       std::string endpoint,
-      std::shared_ptr<zlink::context_t> context = {});
+      std::shared_ptr<zlink::context_t> context = {},
+      bool no_drop = false);
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
@@ -107,6 +108,7 @@ class raw_fanout_publisher_t
     std::string _configured_endpoint;
     mutable std::mutex _mutex;
     std::shared_ptr<zlink::context_t> _context;
+    bool _no_drop = false;
     std::unique_ptr<zlink::pub_socket_t> _socket;
     std::string _endpoint;
     std::chrono::steady_clock::time_point _next_beacon{};

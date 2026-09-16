@@ -190,6 +190,13 @@ inline void validate_framework_options (const framework_options_state_t &options
               "fanout channel '" + channel_name
                 + "' cannot combine automatic discovery with manual subscriber endpoints");
         }
+        if (options.fanout_channels_with_no_drop_configuration.contains (channel_name)
+            && !options.fanout_channels_with_publisher.contains (channel_name)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "fanout channel '" + channel_name
+                + "' cannot configure NoDrop without a publisher capability");
+        }
     }
     for (const auto &channel_name : options.route_mesh_channels) {
         if (!options.route_mesh_channels_with_bind.contains (channel_name)
