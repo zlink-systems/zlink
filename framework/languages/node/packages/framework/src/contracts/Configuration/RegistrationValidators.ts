@@ -212,6 +212,16 @@ function validateChannelCapabilities(
         `Channel '${channelName}' fanout subscriptions require a subscriber capability.`
       );
     }
+    if (channel.noDrop !== undefined && typeof channel.noDrop !== 'boolean') {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' NoDrop must be a boolean.`
+      );
+    }
+    if (channel.noDrop !== undefined && channel.publisher === undefined) {
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' NoDrop requires a publisher role.`
+      );
+    }
     if (channel.server !== undefined) {
       requireEndpoint(`channel '${channelName}' server`, channel.server.bind);
       validateListenerNetworkIdentity(

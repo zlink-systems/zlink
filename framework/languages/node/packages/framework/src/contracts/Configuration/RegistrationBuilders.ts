@@ -508,6 +508,11 @@ class DefaultFanoutChannelBuilder implements ZLinkFanoutChannelBuilder {
     return this;
   }
 
+  setNoDrop(noDrop = true): this {
+    this.channel.noDrop = noDrop;
+    return this;
+  }
+
   enableSubscriber(endpoint?: string): this {
     this.selectSubscriberMode(endpoint === undefined ? 'automatic' : 'manual');
     this.channel.subscriber ??= { manualConnections: [] };
@@ -1538,6 +1543,7 @@ type MutableLocationOptionValues = {
 interface MutableChannelOptions {
   routingId?: string;
   routingIdPrefix?: string;
+  noDrop?: boolean;
   publisher?: MutablePublisherCapabilityOptions;
   publishHandlers?: ZLinkChannelPublishHandlerRegistration[];
   subscriptions?: string[];

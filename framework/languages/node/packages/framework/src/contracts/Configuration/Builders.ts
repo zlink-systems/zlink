@@ -184,6 +184,7 @@ export interface ZLinkFanoutChannelBuilder {
   setAdvertiseHost(advertiseHost: string): this;
   routingId(routingId: string): this;
   setRoutingIdPrefix(prefix: string): this;
+  setNoDrop(noDrop?: boolean): this;
   enableSubscriber(): this;
   subscribe(topic: string): this;
   connect(endpoint: string): this;

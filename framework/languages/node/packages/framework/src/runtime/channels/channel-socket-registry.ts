@@ -4,6 +4,7 @@ import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkFanoutPublisherDescriptor
 } from '../../contracts';
+import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
 import {
   buildAdvertisedEndpoint,
@@ -1165,6 +1166,8 @@ export class ZLinkChannelSocketRegistry {
       const payload = RuntimeMessage.from(FANOUT_LIVENESS_PAYLOAD);
       try {
         publisher.publish(FANOUT_LIVENESS_TOPIC, payload);
+      } catch (error) {
+        this.oneWayFailureSink?.(error);
       } finally {
         payload.close();
       }
@@ -1565,6 +1568,7 @@ export class ZLinkChannelSocketRegistry {
 
     const publisher = this.adapter.createPublisherSocket(this.context);
     publisher.setChannelName(channelName);
+    applyFanoutPublisherSocketOptions(publisher, channel);
     publisher.bind(channel.publisher.bind);
     this.publishers.set(channelName, publisher);
     this.fanoutPublisherNextBeacon.set(
@@ -1797,6 +1801,13 @@ function deriveRoutingId(baseRoutingId: string, suffix: string): string {
     );
   }
   return derived;
+}
+
+function applyFanoutPublisherSocketOptions(
+  publisher: ZLinkBackendPublisherSocket,
+  channel: ZLinkChannelOptions
+): void {
+  publisher.noDrop = channel.noDrop ?? false;
 }
 
 function fanoutDiscoveryConnectionId(connectionId: string): string {
