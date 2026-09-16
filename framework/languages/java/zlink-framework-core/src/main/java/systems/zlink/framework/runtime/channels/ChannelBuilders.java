@@ -256,6 +256,12 @@ public final class ChannelBuilders {
         }
 
         @Override
+        public FanoutChannelBuilder subscribe(String topic) {
+            registration.addFanoutSubscription(topic);
+            return this;
+        }
+
+        @Override
         public FanoutChannelBuilder connect(String endpoint) {
             registration.enableSubscriber();
             registration.addSubscriberManualEndpoint(endpoint);

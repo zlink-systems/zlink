@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -55,6 +56,22 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
 final class ZLinkFanoutLocationRuntimeTest {
+    @Test
+    void automaticSubscriberUsesApplicationTopicsAndLivenessBeacon()
+        throws Exception {
+        TestStore store = new TestStore();
+        store.rows = List.of(descriptor());
+        try (Fixture fixture = new Fixture(
+                 store, false, Map.of("events", List.of("order")))) {
+            fixture.start();
+
+            ControlledSubscriber subscriber = fixture.awaitSubscriber();
+            assertEquals(
+                List.of("order", "\u0001ZLF1"),
+                subscriber.subscriptions);
+        }
+    }
+
     @Test
     void monitorAndStopJoinTheAdmittedSubscriberReceive() throws Exception {
         TestStore store = new TestStore();
@@ -261,6 +278,13 @@ final class ZLinkFanoutLocationRuntimeTest {
         private Fixture(
             ZLinkLocationRepository store,
             boolean blockConnect) {
+            this(store, blockConnect, Map.of());
+        }
+
+        private Fixture(
+            ZLinkLocationRepository store,
+            boolean blockConnect,
+            Map<String, List<String>> applicationTopics) {
             runtime = new ZLinkFanoutLocationRuntime(
                 store,
                 () -> new ZLinkLocationOwnerToken("owner", 3),
@@ -274,7 +298,8 @@ final class ZLinkFanoutLocationRuntimeTest {
                 100,
                 (channel, message) ->
                     message.parts().forEach(
-                        Message::close));
+                        Message::close),
+                applicationTopics);
         }
 
         private void start() {
@@ -475,6 +500,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final List<String> events = new CopyOnWriteArrayList<>();
+        private final List<String> subscriptions = new CopyOnWriteArrayList<>();
         private final CompletableFuture<Void> readinessObserved =
             new CompletableFuture<>();
 
@@ -493,6 +519,7 @@ final class ZLinkFanoutLocationRuntimeTest {
 
         @Override
         public void setSubscription(String topic) {
+            subscriptions.add(topic);
         }
 
         @Override
