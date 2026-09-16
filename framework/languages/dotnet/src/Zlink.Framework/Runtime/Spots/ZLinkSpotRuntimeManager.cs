@@ -9,7 +9,8 @@ internal sealed class ZLinkSpotRuntimeManager(
     IServiceProvider services,
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkRegistration registration,
-    ZLinkLocationLifecycle? locationLifecycle)
+    ZLinkLocationLifecycle? locationLifecycle,
+    ZLinkOwnerLeaseTracker? leaseTracker)
 {
     private readonly ZLinkFrameworkRegistration _frameworkRegistration = registration;
     private readonly IZLinkLocationRepository? _locationStore =
@@ -24,7 +25,8 @@ internal sealed class ZLinkSpotRuntimeManager(
         services,
         runtime,
         registration,
-        locationLifecycle);
+        locationLifecycle,
+        leaseTracker);
 
     public ZLinkEntrySpotActorRouter EntrySpotActors => _entrySpotActors;
 
