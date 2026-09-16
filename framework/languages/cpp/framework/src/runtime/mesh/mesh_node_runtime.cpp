@@ -4330,7 +4330,7 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
     }).get ();
     if (publisher)
         publisher (channel_weights, weight, descriptor.descriptor_revision);
-    native_node ().transport ().topology ().publish_local (std::move (descriptor));
+    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
     _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
 }
 
@@ -4367,7 +4367,7 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
     }).get ();
     if (publisher)
         publisher (channel_weights, placement_weight, descriptor.descriptor_revision);
-    native_node ().transport ().topology ().publish_local (std::move (descriptor));
+    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
     _state->lane.run ([&] { _state->channels.at (channel_name).weight = weight; }).get ();
 }
 

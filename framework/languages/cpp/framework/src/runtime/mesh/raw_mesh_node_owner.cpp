@@ -738,12 +738,29 @@ task_t<void> raw_mesh_node_owner_t::publish_draining ()
         }
         return std::pair{std::move (descriptor), _topology.peers ()};
     }).get ();
-    for (const auto &peer : publication.second) {
+    send_descriptor_update (publication.first, publication.second);
+    co_return;
+}
+
+void raw_mesh_node_owner_t::publish_descriptor_update (
+  service_node_descriptor_t descriptor)
+{
+    const auto publication = _lane.run ([this, descriptor = std::move (descriptor)] () mutable {
+        _topology.publish_local (descriptor);
+        return std::pair{std::move (descriptor), _topology.peers ()};
+    }).get ();
+    send_descriptor_update (publication.first, publication.second);
+}
+
+void raw_mesh_node_owner_t::send_descriptor_update (
+  const service_node_descriptor_t &descriptor,
+  const std::vector<admitted_peer_t> &peers)
+{
+    for (const auto &peer : peers) {
         (void) submit_header_only (
           peer.descriptor.node_routing_id,
-          protocol::encode_route_mesh_admission (protocol::command::update, publication.first));
+          protocol::encode_route_mesh_admission (protocol::command::update, descriptor));
     }
-    co_return;
 }
 
 void raw_mesh_node_owner_t::close () noexcept

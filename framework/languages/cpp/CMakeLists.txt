@@ -1994,6 +1994,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_route_mesh_weight_update
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
+    "framework-unit;framework-regression;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_route_mesh_weight_update)
+  target_include_directories(test_cpp_framework_route_mesh_weight_update PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_application_job_queue
     tests/Zlink.Framework.UnitTests/test_cpp_framework_application_job_queue.cpp
     "framework-unit;framework-regression;execution;admission")

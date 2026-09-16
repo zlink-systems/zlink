@@ -184,6 +184,7 @@ class raw_mesh_node_owner_t
     std::string endpoint () const;
     zlink::context_t &context ();
     service_topology_registry_t &topology () noexcept;
+    void publish_descriptor_update (service_node_descriptor_t descriptor);
     task_t<void> publish_draining ();
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
@@ -496,6 +497,8 @@ class raw_mesh_node_owner_t
     send_start_state_t submit_header_only (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header);
+    void send_descriptor_update (const service_node_descriptor_t &descriptor,
+                                 const std::vector<admitted_peer_t> &peers);
     task_t<bool> request_with_header (
       std::vector<std::uint8_t> target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
