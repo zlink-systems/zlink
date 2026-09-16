@@ -1,0 +1,438 @@
+// Drives com.zlink.stream-connector.webgl inside a real Unity WebGL player.
+//
+// This is not a sample. It exists to answer four questions that only a Unity
+// build can answer, and it adds nothing beyond what they need:
+//
+//   1. IL2CPP codegen - does the [AOT.MonoPInvokeCallback] reverse call survive
+//      the C# -> WASM translation? Every event the connector delivers arrives
+//      through it, so a connect that completes already proves it.
+//   2. asmdef platform gating - is the assembly that got compiled into the
+//      player the WebGL-only one? Reported as `adapterAssembly`.
+//   3. UPM import - Unity read the package at all, or this assembly would not
+//      compile.
+//   4. .jspre / .jslib linking - reported as `linkedPlugins`, asked of the
+//      running player rather than of the built file.
+//
+// The entry point is a [RuntimeInitializeOnLoadMethod] so the build needs no
+// authored scene and no serialized component reference. That matters because
+// this assembly is WebGL-only: the Editor cannot see the type, so an Editor
+// script could not add it to a scene.
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using Systems.Zlink.Stream.Connector.Contracts;
+using UnityEngine;
+
+namespace Zlink.Verification
+{
+    public sealed class ZlinkWebGlAdapterCheck : MonoBehaviour
+    {
+        private const string PushPacket = "EchoPush";
+        private const string RequestPacket = "EchoReq";
+        private const float StepTimeoutSeconds = 30f;
+
+        // Frames to let a signalled continuation run in before calling it absent.
+        private const int ProbeSettleFrames = 10;
+
+        private readonly List<string> _steps = new List<string>();
+        private readonly List<string> _pushes = new List<string>();
+
+        private IZlinkStreamConnector _connector;
+        private IDisposable _subscription;
+        private bool _pumping;
+        private bool _dispatchInFlight;
+        private string _pumpError;
+
+        // Liveness counters, published from Update every frame. A stalled run has
+        // to say which of its moving parts stopped, because the alternative is a
+        // Unity build per hypothesis:
+        //   frames rising, yields flat -> Task.Yield continuations are not being
+        //     resumed, so the connector's own frame loop cannot advance.
+        //   both rising, stage stuck   -> the loop runs and the call never
+        //     completes, which is the reverse callback's job.
+        private int _frames;
+        private int _yields;
+        private string _stage = "starting";
+        private bool _finished;
+
+        // Continuation-scheduling probe. The adapter awaits its own frame loop with
+        // ConfigureAwait(false) at every call site, which asks for the continuation
+        // to run without the captured context. On a single-threaded WebGL player
+        // there is no other place for it to run, so these two say whether that is
+        // where the chain dies: both completions are signalled from Update, on the
+        // Unity main thread, and differ only in ConfigureAwait.
+        private TaskCompletionSource<bool> _captured;
+        private TaskCompletionSource<bool> _uncaptured;
+        private bool _capturedResumed;
+        private bool _uncapturedResumed;
+        private int _probeSignalFrame;
+        private int _connectPolls;
+
+        [DllImport("__Internal")]
+        private static extern void ZlinkVerificationReport(string json);
+
+        [DllImport("__Internal")]
+        private static extern int ZlinkVerificationLinkedPlugins();
+
+        [DllImport("__Internal")]
+        private static extern void ZlinkVerificationHeartbeat(string json);
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void Bootstrap()
+        {
+            var host = new GameObject("ZlinkWebGlAdapterCheck");
+            DontDestroyOnLoad(host);
+            host.AddComponent<ZlinkWebGlAdapterCheck>();
+        }
+
+        private async void Start()
+        {
+            YieldWatchdog();
+            ContinuationProbe();
+            try
+            {
+                await RunAsync();
+            }
+            catch (Exception error)
+            {
+                Fail(error.ToString());
+            }
+        }
+
+        // The README's pump: Dispatch from Update on the main thread. Guarded
+        // against overlap because Dispatch is awaited across frames, and a second
+        // one started from the next Update would drain the same queue.
+        private void Update()
+        {
+            _frames += 1;
+            // Signalled from the main thread, after both awaits are already parked,
+            // so neither completion can run inline on the awaiting stack. Frame 2 and
+            // not frame 30: the scenario finishes in single-digit frames, and a probe
+            // that is still unsignalled when the run ends measures nothing while
+            // reading like a negative result.
+            if (_frames == 2 && _captured != null)
+            {
+                _probeSignalFrame = _frames;
+                _captured.TrySetResult(true);
+                _uncaptured.TrySetResult(true);
+            }
+
+            ZlinkVerificationHeartbeat(
+                "{\"frames\":" + _frames +
+                ",\"yields\":" + _yields +
+                ",\"stage\":" + Quote(_stage) +
+                ",\"state\":" + (_connector == null ? "null" : ((int)_connector.State).ToString()) +
+                ",\"pending\":" + (_connector == null ? "null" : _connector.PendingDispatchCount.ToString()) +
+                ",\"pushes\":" + _pushes.Count +
+                ",\"connectPolls\":" + _connectPolls +
+                ",\"capturedContinuation\":" + Quote(ProbeState(_capturedResumed)) +
+                ",\"uncapturedContinuation\":" + Quote(ProbeState(_uncapturedResumed)) + "}");
+
+            if (!_pumping || _dispatchInFlight || _connector == null) return;
+            _dispatchInFlight = true;
+            PumpOnce();
+        }
+
+        // Its only job is to say whether an awaited continuation ever resumes.
+        // It is the control for the connector's own DriveAsync loop, which uses
+        // the same Task.Yield to advance once per frame.
+        private async void YieldWatchdog()
+        {
+            while (!_finished)
+            {
+                _yields += 1;
+                await Task.Yield();
+            }
+        }
+
+        /// <summary>
+        ///     "pending" until the probe has been signalled and given frames to run in,
+        ///     so an unfinished measurement can never be read as a resumption that did
+        ///     not happen.
+        /// </summary>
+        private string ProbeState(bool resumed)
+        {
+            if (resumed) return "resumed";
+            if (_probeSignalFrame == 0 || _frames < _probeSignalFrame + ProbeSettleFrames) return "pending";
+            return "not-resumed";
+        }
+
+        private async void ContinuationProbe()
+        {
+            _captured = new TaskCompletionSource<bool>();
+            _uncaptured = new TaskCompletionSource<bool>();
+            Resume();
+            await _captured.Task;
+            _capturedResumed = true;
+        }
+
+        private async void Resume()
+        {
+            await _uncaptured.Task.ConfigureAwait(false);
+            _uncapturedResumed = true;
+        }
+
+        private async void PumpOnce()
+        {
+            try
+            {
+                await _connector.Dispatch.Async();
+            }
+            catch (Exception error)
+            {
+                if (_pumpError == null) _pumpError = error.ToString();
+            }
+            finally
+            {
+                _dispatchInFlight = false;
+            }
+        }
+
+        private async Task RunAsync()
+        {
+            var endpoint = QueryValue(Application.absoluteURL, "endpoint");
+            if (string.IsNullOrEmpty(endpoint))
+            {
+                Fail("no ?endpoint= in " + Application.absoluteURL);
+                return;
+            }
+
+            _connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(endpoint),
+                DispatchMode = ZlinkStreamDispatchMode.Manual,
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+            });
+            Step("created state=" + _connector.State);
+
+            // Polled rather than awaited directly: if the task completes and the
+            // await does not resume, the fault is in continuation scheduling; if it
+            // never completes, the fault is upstream of that.
+            _stage = "connect";
+            var connect = _connector.Connect.Async();
+            var connectDeadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
+            while (!connect.IsCompleted && Time.realtimeSinceStartup < connectDeadline)
+            {
+                _connectPolls += 1;
+                await Task.Yield();
+            }
+
+            if (!connect.IsCompleted)
+            {
+                Fail("Connect did not complete in " + StepTimeoutSeconds + "s");
+                return;
+            }
+
+            _stage = "connect-completed";
+            await connect;
+            Step("connected isConnected=" + _connector.IsConnected + " state=" + _connector.State);
+
+            _stage = "request";
+            var reply = await _connector
+                .Request(Encode("unity-request"))
+                .PacketName(RequestPacket)
+                .Timeout(TimeSpan.FromSeconds(StepTimeoutSeconds))
+                .Async();
+            var replyText = Decode(reply);
+            Step("replied " + replyText);
+            if (replyText.IndexOf("unity-request", StringComparison.Ordinal) < 0)
+            {
+                Fail("reply did not carry the request value: " + replyText);
+                return;
+            }
+
+            // The server answers every EchoReq with a push as well as a reply, so
+            // one EchoPush is already outstanding here. Spec 32 section 10 keeps it
+            // in the received-message queue until a handler or a wait surface takes
+            // it, and section 7 gives the wait surfaces the job of consuming the
+            // queue without running a registered callback. Take it that way first,
+            // exactly as test/browser/unity-webgl-emscripten.test.js does, so the
+            // handler below has one message to receive and not two.
+            _stage = "wait-for";
+            var observed = await _connector.WaitFor(PushPacket)
+                .Timeout(TimeSpan.FromSeconds(StepTimeoutSeconds))
+                .Async();
+            var observedText = Decode(observed.Payload);
+            Step("observed " + observedText);
+            if (observedText.IndexOf("unity-request", StringComparison.Ordinal) < 0)
+            {
+                Fail("the wait surface took the wrong push: " + observedText);
+                return;
+            }
+
+            _subscription = _connector.On(PushPacket, (message, _) =>
+            {
+                _pushes.Add(Decode(message.Payload));
+                return default;
+            });
+            if (_pushes.Count != 0)
+            {
+                Fail("registering a handler ran it: " + _pushes[0]);
+                return;
+            }
+
+            _pumping = true;
+
+            _stage = "send";
+            await _connector.Send(Encode("unity-send")).PacketName(RequestPacket).Async();
+            Step("sent");
+            _stage = "await-push";
+
+            var deadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
+            while (_pushes.Count == 0 && _pumpError == null && Time.realtimeSinceStartup < deadline)
+            {
+                await Task.Yield();
+            }
+
+            _pumping = false;
+            if (_pumpError != null)
+            {
+                Fail("Dispatch from Update failed: " + _pumpError);
+                return;
+            }
+
+            if (_pushes.Count == 0)
+            {
+                Fail("no push reached the handler within " + StepTimeoutSeconds + "s");
+                return;
+            }
+
+            Step("dispatched " + _pushes[0]);
+            if (_pushes[0].IndexOf("unity-send", StringComparison.Ordinal) < 0)
+            {
+                Fail("the handler saw the wrong push: " + _pushes[0]);
+                return;
+            }
+
+            _subscription.Dispose();
+            _stage = "close";
+            await _connector.Close.Async();
+            Step("closed state=" + _connector.State);
+
+            if (_connector.State != ZlinkStreamConnectionState.Closed)
+            {
+                Fail("close left the connector in " + _connector.State);
+                return;
+            }
+
+            // The probe is the reason the package forbids ConfigureAwait(false); a
+            // report that goes out before it settles says "pending" and proves
+            // nothing. The scenario is faster than the probe, so wait for it.
+            _stage = "probe";
+            var probeDeadline = Time.realtimeSinceStartup + StepTimeoutSeconds;
+            while ((ProbeState(_capturedResumed) == "pending" || ProbeState(_uncapturedResumed) == "pending")
+                   && Time.realtimeSinceStartup < probeDeadline)
+            {
+                await Task.Yield();
+            }
+
+            _stage = "done";
+            Report(true, null);
+        }
+
+        private static ZlinkStreamEncodedPayload Encode(string value)
+        {
+            var json = "{\"value\":\"" + value + "\"}";
+            return new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Json, Encoding.UTF8.GetBytes(json));
+        }
+
+        private static string Decode(ZlinkStreamEncodedPayload payload)
+        {
+            return Encoding.UTF8.GetString(payload.Payload.ToArray());
+        }
+
+        private void Step(string text)
+        {
+            _steps.Add(text);
+            Debug.Log("ZLINK-VERIFY step: " + text);
+        }
+
+        private void Fail(string reason)
+        {
+            Report(false, reason);
+        }
+
+        private void Report(bool ok, string reason)
+        {
+            _finished = true;
+            var linked = 0;
+            try
+            {
+                linked = ZlinkVerificationLinkedPlugins();
+            }
+            catch (Exception error)
+            {
+                reason = (reason ?? string.Empty) + " | linked-plugins probe failed: " + error.Message;
+            }
+
+            var json = new StringBuilder();
+            json.Append("{\"ok\":").Append(ok ? "true" : "false");
+            json.Append(",\"unityVersion\":").Append(Quote(Application.unityVersion));
+            json.Append(",\"adapterAssembly\":")
+                .Append(Quote(typeof(ZlinkStreamConnectorFactory).Assembly.GetName().Name));
+            json.Append(",\"linkedPlugins\":{\"runtime\":").Append((linked & 1) != 0 ? "true" : "false")
+                .Append(",\"bundle\":").Append((linked & 2) != 0 ? "true" : "false").Append('}');
+            json.Append(",\"stage\":").Append(Quote(_stage));
+            json.Append(",\"frames\":").Append(_frames).Append(",\"yields\":").Append(_yields);
+            json.Append(",\"connectPolls\":").Append(_connectPolls);
+            json.Append(",\"capturedContinuation\":").Append(Quote(ProbeState(_capturedResumed)));
+            json.Append(",\"uncapturedContinuation\":").Append(Quote(ProbeState(_uncapturedResumed)));
+            json.Append(",\"steps\":[");
+            for (var index = 0; index < _steps.Count; index += 1)
+            {
+                if (index > 0) json.Append(',');
+                json.Append(Quote(_steps[index]));
+            }
+
+            json.Append("],\"reason\":").Append(reason == null ? "null" : Quote(reason));
+            json.Append('}');
+            ZlinkVerificationReport(json.ToString());
+        }
+
+        private static string Quote(string value)
+        {
+            var text = new StringBuilder("\"");
+            foreach (var character in value)
+            {
+                switch (character)
+                {
+                    case '"': text.Append("\\\""); break;
+                    case '\\': text.Append("\\\\"); break;
+                    case '\n': text.Append("\\n"); break;
+                    case '\r': text.Append("\\r"); break;
+                    case '\t': text.Append("\\t"); break;
+                    default:
+                        if (character < ' ') text.Append("\\u").Append(((int)character).ToString("x4"));
+                        else text.Append(character);
+                        break;
+                }
+            }
+
+            return text.Append('"').ToString();
+        }
+
+        private static string QueryValue(string url, string key)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            var start = url.IndexOf('?');
+            if (start < 0) return null;
+
+            var query = url.Substring(start + 1);
+            var fragment = query.IndexOf('#');
+            if (fragment >= 0) query = query.Substring(0, fragment);
+
+            foreach (var pair in query.Split('&'))
+            {
+                var separator = pair.IndexOf('=');
+                if (separator <= 0) continue;
+                if (!string.Equals(pair.Substring(0, separator), key, StringComparison.Ordinal)) continue;
+                return Uri.UnescapeDataString(pair.Substring(separator + 1));
+            }
+
+            return null;
+        }
+    }
+}
