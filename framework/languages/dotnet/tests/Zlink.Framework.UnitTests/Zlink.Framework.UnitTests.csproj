@@ -110,6 +110,7 @@
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
+        <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>

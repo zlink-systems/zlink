@@ -288,6 +288,8 @@ internal sealed class ZLinkChannelSubscriberCapabilityRegistration
 
     public ZLinkSocketConfig SocketConfig { get; } = new();
 
+    public HashSet<string> Topics { get; } = new(StringComparer.Ordinal);
+
     public ZLinkEndpointConnections ManualConnections { get; } = new();
 }
 

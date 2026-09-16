@@ -169,6 +169,13 @@ internal sealed class ZLinkFanoutChannelBuilder(ZLinkChannelRegistration registr
         return this;
     }
 
+    public IZLinkFanoutChannelBuilder Subscribe(string topic)
+    {
+        ZLinkFanoutLivenessProtocol.ValidateApplicationTopic(topic, nameof(topic));
+        Subscriber().Topics.Add(topic);
+        return this;
+    }
+
     public IZLinkFanoutChannelBuilder Connect(string endpoint)
     {
         var subscriber = Subscriber();
