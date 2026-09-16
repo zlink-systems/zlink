@@ -1526,22 +1526,18 @@ int main ()
     ok &= require_exists (root / "samples/TicTacToe/Client/Configuration/sample_topology.hpp");
     ok &= require_exists (root / "samples/TicTacToe/run_sample.sh");
     ok &= require_exists (root / "samples/TicTacToe/run_sample.ps1");
-    ok &= require_exists (root / "samples/run_samples.sh");
-    ok &= require_exists (root / "samples/run_samples.ps1");
-    const auto sample_shell_aggregate = root / "samples/run_samples.sh";
-    const auto sample_powershell_aggregate = root / "samples/run_samples.ps1";
+    // Every sample is driven by its own runner; there is no per-language
+    // aggregate. A batch runner let one stalled sample hold the whole run
+    // and hid interference between samples (#405).
+    ok &= require_absent (root / "samples/run_samples.sh",
+                          "samples run one at a time through their own runner");
+    ok &= require_absent (root / "samples/run_samples.ps1",
+                          "samples run one at a time through their own runner");
     for (const auto &runner : {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat",
                                "GameQuest", "ShoppingMall", "ZoneWorld"}) {
-        ok &= file_contains (sample_shell_aggregate, std::string (runner) + "/run_sample.sh");
-        ok &= file_contains (sample_powershell_aggregate,
-                             std::string ("\"") + runner + '"');
+        ok &= require_exists (root / "samples" / runner / "run_sample.sh");
+        ok &= require_exists (root / "samples" / runner / "run_sample.ps1");
     }
-    ok &= file_contains (sample_powershell_aggregate, "$Name/run_sample.ps1");
-    ok &= file_does_not_contain (sample_shell_aggregate, "MAX_ATTEMPTS",
-                                 "the C++ sample aggregate must not retry a bind failure");
-    ok &= file_does_not_contain (
-      sample_shell_aggregate, "BIND_RETRY_PATTERN",
-      "the C++ sample aggregate must not classify bind failure as retryable");
     ok &= require_exists (root / "samples/TicTacToe/Shared/Contracts/messages.hpp");
     ok &= require_absent (root / "samples/TicTacToe/Shared" / "Configuration",
                           "TicTacToe Shared must contain message contracts only");

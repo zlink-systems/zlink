@@ -7,6 +7,8 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace
 {
@@ -75,7 +77,9 @@ int main ()
               return mesh;
           }, service_lifetime_t::singleton);
         auto services = registrations.build_provider ();
-        route_readiness_service_t route ("dispatch", "delivery-couriers");
+        route_readiness_service_t route (
+          "dispatch", "delivery-couriers",
+          std::vector<std::string>{"courier-node-1", "courier-node-2"});
         actor_route_readiness_service_t first (
           "delivery-couriers", "courier-node-1", "courier-node-1");
         actor_route_readiness_service_t second (

@@ -715,8 +715,12 @@ endif()
 
 set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
   ${CMAKE_PREFIX_PATH})
+# Every dependency the installed package config resolves with
+# find_dependency must be reachable from the consumer prefix path.
 foreach(dependency_dir IN ITEMS
-    "${redis++_DIR}" "${hiredis_DIR}" "${libuv_DIR}")
+    "${redis++_DIR}" "${hiredis_DIR}" "${libuv_DIR}"
+    "${opentelemetry-cpp_DIR}" "${nlohmann_json_DIR}" "${Protobuf_DIR}"
+    "${protobuf_DIR}")
   if(dependency_dir)
     list(APPEND ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
       "${dependency_dir}")
@@ -1460,6 +1464,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_enable_coverage(${target_name})
   endfunction()
 
+  # For targets whose TEST macros supply every case and that define no main of
+  # their own. See tests/support/zlink_test_main.cpp for why a packaged
+  # gtest_main or gmock_main cannot be borrowed here.
+  function(target_use_zlink_gtest_main target_name)
+    target_sources(${target_name} PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/zlink_test_main.cpp)
+  endfunction()
+
   function(add_zlink_framework_test target_name source_file labels)
     add_executable(${target_name} ${source_file})
     target_link_libraries(${target_name} PRIVATE zlink::framework)
@@ -1823,6 +1835,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_key_codec.cpp)
   target_compile_features(test_cpp_framework_location_key_codec PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_location_key_codec)
+  target_use_zlink_gtest_main(test_cpp_framework_location_key_codec)
   target_link_libraries(test_cpp_framework_location_key_codec PRIVATE
     zlink::framework
     GTest::gtest_main)
@@ -1838,6 +1851,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_in_memory_location_store.cpp)
   target_compile_features(test_cpp_framework_in_memory_location_store PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_in_memory_location_store)
+  target_use_zlink_gtest_main(test_cpp_framework_in_memory_location_store)
   target_link_libraries(test_cpp_framework_in_memory_location_store PRIVATE
     zlink::framework
     GTest::gtest_main)
@@ -1854,6 +1868,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_providers.cpp)
   target_compile_features(test_cpp_framework_opaque_store_providers PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_opaque_store_providers)
+  target_use_zlink_gtest_main(test_cpp_framework_opaque_store_providers)
   target_link_libraries(test_cpp_framework_opaque_store_providers PRIVATE
     zlink::framework
     GTest::gtest_main)
@@ -1878,6 +1893,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)
   target_compile_features(test_cpp_framework_location_runtime PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_location_runtime)
+  target_use_zlink_gtest_main(test_cpp_framework_location_runtime)
   target_link_libraries(test_cpp_framework_location_runtime PRIVATE
     zlink::framework
     GTest::gtest_main)
@@ -1893,6 +1909,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_lifecycle.cpp)
   target_compile_features(test_cpp_framework_location_lifecycle PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_location_lifecycle)
+  target_use_zlink_gtest_main(test_cpp_framework_location_lifecycle)
   target_link_libraries(test_cpp_framework_location_lifecycle PRIVATE
     zlink::framework
     GTest::gtest_main)
@@ -1908,6 +1925,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_store_location_resolvers.cpp)
   target_compile_features(test_cpp_framework_store_location_resolvers PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_store_location_resolvers)
+  target_use_zlink_gtest_main(test_cpp_framework_store_location_resolvers)
   target_link_libraries(test_cpp_framework_store_location_resolvers PRIVATE
     zlink::framework
     GTest::gtest_main)
