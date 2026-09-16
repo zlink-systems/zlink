@@ -1422,6 +1422,23 @@ if(BUILD_STATIC
    AND NOT MSVC
    AND NOT MINGW
    AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
+  # GCC gives function-local and template statics STB_GNU_UNIQUE binding, and
+  # objcopy refuses to localize that binding -- it will only weaken it, which
+  # then localizes on a second pass. Whether that two-step actually lands turned
+  # out to depend on the binutils version: it works on 2.42 and leaves 276 Boost
+  # guard variables behind on 2.38 (ubuntu-22.04, which builds the release
+  # archives). Emitting ordinary weak symbols instead removes the class the
+  # workaround exists for, so the rewrite no longer depends on which binutils
+  # runs it. Nothing is lost: STB_GNU_UNIQUE exists to unify those statics
+  # across shared objects, and the archive hides them from the consumer either
+  # way.
+  foreach(target IN ITEMS objects libzlink-static)
+    if(TARGET ${target})
+      target_compile_options(${target} PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
+    endif()
+  endforeach()
+
   find_program(ZLINK_BASH_EXECUTABLE NAMES bash)
   set(zlink_static_hide_tools ZLINK_BASH_EXECUTABLE CMAKE_AR CMAKE_RANLIB
                               CMAKE_LINKER CMAKE_NM)
