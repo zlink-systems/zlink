@@ -141,9 +141,8 @@ class service_collection_t
 
     template <typename T> service_collection_t &add_singleton (std::unique_ptr<T> instance)
     {
-        auto shared = std::shared_ptr<T> (std::move (instance));
-        return add_descriptor (std::type_index (typeid (T)), service_lifetime_t::singleton,
-                               [shared] (service_provider_t &) { return shared; });
+        return add_singleton_instance (std::type_index (typeid (T)),
+                                       std::shared_ptr<T> (std::move (instance)));
     }
 
     template <typename T> service_collection_t &add_scoped ()
@@ -231,6 +230,8 @@ class service_collection_t
 
     service_collection_t &
     add_descriptor (std::type_index type, service_lifetime_t lifetime, service_factory_t factory);
+    service_collection_t &
+    add_singleton_instance (std::type_index type, std::shared_ptr<void> instance);
 
     std::shared_ptr<detail::service_registry_t> _registry;
 };

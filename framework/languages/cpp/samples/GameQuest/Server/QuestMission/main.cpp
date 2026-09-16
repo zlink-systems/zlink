@@ -405,7 +405,9 @@ int main (int argc, char **argv)
          * 같은 RouteMesh를 사용하므로 별도 spot router와 ChannelName을 만들지 않는다. */
     auto gamequest = options.add_route_mesh ("gamequest");
     gamequest
-      .set_routing_id (zlink::routing_id_t::from ("gamequest-" + topology.mission_name + "-spot"))
+      .set_routing_id (zlink::routing_id_t::from (
+        topology.mission_name == "mission-b" ? sample_names_t::mission_b_rid
+                                             : sample_names_t::mission_a_rid))
       .listen (topology.selected_mission_spot_route_endpoint ());
     /* GameApi owns the outbound peer connections for this RouteMesh. A
          * RouteMesh connection carries traffic in both directions, so the

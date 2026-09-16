@@ -15,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -389,9 +390,11 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         private final boolean blockRegistration;
         private final LinkedBlockingQueue<ZLinkBackendSocketMonitorEvent> events =
             new LinkedBlockingQueue<>();
+        private final Semaphore readable = new Semaphore(0);
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CountDownLatch registrationEntered = new CountDownLatch(1);
         private final CountDownLatch releaseRegistration = new CountDownLatch(1);
+        private volatile boolean closed;
 
         private Monitor(boolean blockRegistration) {
             this.blockRegistration = blockRegistration;
@@ -400,22 +403,30 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         private void emit(String event) {
             events.add(new ZLinkBackendSocketMonitorEvent(
                 event, Optional.empty(), "", ""));
+            readable.release();
         }
 
-        @Override public ZLinkBackendSocketMonitorEvent recv() {
+        @Override public boolean waitForReadable(Duration timeout) {
             registrationEntered.countDown();
             if (blockRegistration) {
                 awaitUninterruptibly(releaseRegistration);
             }
             try {
-                return events.take();
+                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                    && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("monitor receive interrupted", interrupted);
+                return false;
             }
         }
+        @Override public ZLinkBackendSocketMonitorEvent recvDontWait() { return events.poll(); }
+        @Override public boolean isClosed() { return closed; }
         @Override public String name() { return "manual-monitor"; }
-        @Override public void close() { closeCalls.incrementAndGet(); }
+        @Override public void close() {
+            closed = true;
+            readable.release();
+            closeCalls.incrementAndGet();
+        }
     }
 
     private static final class Context implements ZLinkBackendContext {

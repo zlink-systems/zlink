@@ -2036,17 +2036,35 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
 
 TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
 {
-    const auto runner = read_file (cpp_language_root () / "samples/ZoneWorld/run_sample.sh");
+    const auto sample_root = cpp_language_root () / "samples/ZoneWorld";
+    const auto manifest = read_file (sample_root / "sample-manifest.env");
     for (const char *required :
-         {"EXPECTED_IDS=(", "ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5",
+         {"ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5",
           "ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8", "ZW-C1 ZW-C2 ZW-C3 ZW-C4",
           "ZW-D1 ZW-D2", "ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6", "ZW-F1 ZW-F2 ZW-F3 ZW-F4",
-          "ZW-G1 ZW-G2 ZW-G3 ZW-G4 ZW-G5", "record_verdict", "all_passed=true",
+          "ZW-G1 ZW-G2 ZW-G3 ZW-G4 ZW-G5"}) {
+        EXPECT_NE (manifest.find (required), std::string::npos) << required;
+    }
+
+    const auto shell_runner = read_file (sample_root / "run_sample.sh");
+    for (const char *required :
+         {"sample-manifest.env", "record_verdict", "all_passed=true",
           "[[ \"$verdict\" == PASS ]] || all_passed=false", "if [[ \"$all_passed\" == true ]]",
+          "scenario ZW-E5 restore armed", "scenario ZW-E5 replacement waiting",
           "zoneworld=completed",
           "curl --max-time 30 -fsS -X POST -H 'content-type: application/json' -d '{}'",
           "PASS ZoneWorld.Cpp", "zoneworld sample result=passed"}) {
-        EXPECT_NE (runner.find (required), std::string::npos) << required;
+        EXPECT_NE (shell_runner.find (required), std::string::npos) << required;
+    }
+
+    const auto powershell_runner = read_file (sample_root / "run_sample.ps1");
+    for (const char *required :
+         {"sample-manifest.env", "Record-Verdict", "$allPassed = $true",
+          "if ($verdict -ne \"PASS\") { $allPassed = $false }", "if (-not $allPassed)",
+          "scenario ZW-E5 restore armed", "scenario ZW-E5 replacement waiting",
+          "zoneworld=completed", "Invoke-WebRequest", "PASS ZoneWorld.Cpp",
+          "zoneworld sample result=passed"}) {
+        EXPECT_NE (powershell_runner.find (required), std::string::npos) << required;
     }
 }
 

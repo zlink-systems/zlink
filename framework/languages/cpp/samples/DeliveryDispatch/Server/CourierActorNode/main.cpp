@@ -167,6 +167,8 @@ int main (int argc, char **argv)
         sample_names_t::courier_actor_type)
       .disable_relocation ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      instance_name, sample_names_t::courier_actor_discovery));
+      instance_name, sample_names_t::courier_actor_discovery,
+      std::vector<std::string>{sample_names_t::courier_session_route_node,
+                               sample_names_t::dispatch_route_node}));
     return app.run (argc, argv);
 }

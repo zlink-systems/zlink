@@ -41,8 +41,7 @@ final class ZLinkActorBoundSessionSenderTest {
             });
         ZLinkActorBoundSessionSender sender = new ZLinkActorBoundSessionSender(
             Duration.ofSeconds(1),
-            () -> false,
-            ignored -> { });
+            () -> false);
 
         CompletionStage<Void> submitted = sender.send(
             node,
@@ -93,8 +92,7 @@ final class ZLinkActorBoundSessionSenderTest {
             });
         ZLinkActorBoundSessionSender sender = new ZLinkActorBoundSessionSender(
             Duration.ofSeconds(1),
-            closing::get,
-            ignored -> { });
+            closing::get);
 
         CompletionStage<Void> submitted = sender.send(
             node,
@@ -144,8 +142,7 @@ final class ZLinkActorBoundSessionSenderTest {
             });
         ZLinkActorBoundSessionSender sender = new ZLinkActorBoundSessionSender(
             Duration.ofSeconds(1),
-            () -> false,
-            ignored -> { });
+            () -> false);
 
         sender.send(
                 node,

@@ -30,9 +30,11 @@ inline app_t &api_server_host_factory_t::configure (app_t &app, const sample_top
     app.logging ().use_console ().set_level ("info");
     add_bingo_api_server (app, topology);
     app.add_hosted_service (std::make_unique<route_mesh_readiness_service_t> (
-      "api-" + topology.api_node, sample_names_t::matchmaking_mesh, "matchmaking"));
+      "api-" + topology.api_node, sample_names_t::matchmaking_mesh, "matchmaking",
+      std::vector<std::string>{sample_names_t::matchmaking_rid}));
     app.add_hosted_service (std::make_unique<route_mesh_readiness_service_t> (
-      "api-" + topology.api_node, sample_names_t::room_spot_mesh, "room"));
+      "api-" + topology.api_node, sample_names_t::room_spot_mesh, "room",
+      std::vector<std::string>{sample_names_t::play_a_rid, sample_names_t::play_b_rid}));
     return app;
 }
 

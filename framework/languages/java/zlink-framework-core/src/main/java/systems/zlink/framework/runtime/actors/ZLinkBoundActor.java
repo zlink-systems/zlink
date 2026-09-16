@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.actors;
 import java.util.Objects;
-import java.util.logging.Logger;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -46,11 +45,6 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 final class ZLinkBoundActor implements ZLinkSessionActor {
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkBoundActor.class.getName());
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-
     private final ZLinkBackendStreamSocket stream;
     private final RoutingId sessionRid;
     private volatile ZLinkBackendActorRef ref;
@@ -185,19 +179,17 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                         message,
                         new TimeoutException(message));
                 }))
-            .thenRun(() -> relocationTrace("route-ready", targetActor))
-            .thenCompose(ignored -> stream.relocateBoundActor(
-                    sessionRid,
-                    ref.actorId(),
-                    bindingGeneration,
-                    targetActor,
-                    timeout))
             // Specs 44/52 make command 44 one-way: target restoration already
             // installed the bound-Session context before publishing the route
             // update. Waiting for another Actor-mailbox request here can
             // deadlock behind the application turn whose relocation is being
             // completed and lets the Session seal deadline win.
-            .thenRun(() -> relocationTrace("bind-complete", targetActor));
+            .thenCompose(ignored -> stream.relocateBoundActor(
+                    sessionRid,
+                    ref.actorId(),
+                    bindingGeneration,
+                    targetActor,
+                    timeout));
     }
 
     void commitPreparedNativeActorRoute(ZLinkBackendActorRef targetActor) {
@@ -213,17 +205,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 bindingGeneration,
                 sourceActor,
                 timeout);
-    }
-
-    private static void relocationTrace(
-        String stage,
-        ZLinkBackendActorRef targetActor) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] relocation " + stage
-                + " actor=" + targetActor.actorId()
-                + " target=" + targetActor.nodeRid()
-                + " generation=" + targetActor.generation());
-        }
     }
 
     void setUnbindListener(Runnable unbindListener) {

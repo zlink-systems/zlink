@@ -1060,8 +1060,37 @@ class provider_location_repository_t final : public location_repository_t
             }
             if (!lock_request.mutations.empty ()
                 && !std::holds_alternative<store_write_applied_t> (
-                  write (std::move (lock_request))))
-                return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
+                  write (std::move (lock_request)))) {
+                bool adopted = true;
+                for (std::size_t index = 0; index < page.participants.size (); ++index) {
+                    const auto participant_index = participant_offset + index;
+                    const auto &participant = request.participants[participant_index];
+                    const auto raced_lock = read (key_aggregate_lock (participant.key.value));
+                    const auto *raced_found = std::get_if<store_found_t> (&raced_lock);
+                    const auto raced = raced_found
+                      ? decode_aggregate_lock (raced_found->value.bytes)
+                      : std::nullopt;
+                    if (!raced || raced->aggregate_id.value != request.aggregate_id.value
+                        || raced->aggregate_generation != request.aggregate_generation
+                        || raced->authority_key != participant.key.value
+                        || raced->expected_store_version != participant.expected_store_version) {
+                        adopted = false;
+                        break;
+                    }
+                }
+                if (!adopted) {
+                    const auto raced_aggregate = read (row_key);
+                    const auto *raced_found = std::get_if<store_found_t> (&raced_aggregate);
+                    if (raced_found) {
+                        const auto raced = parse_json (raced_found->value.bytes);
+                        const auto status = raced.value ("status", "");
+                        if (aggregate_record_matches_request (raced, request, *inventory_tree)
+                            && (status == "preparing" || status == "prepared"))
+                            return prepare_aggregate (std::move (request), cancellation);
+                    }
+                    return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
+                }
+            }
 
             participant_offset += page.participants.size ();
         }

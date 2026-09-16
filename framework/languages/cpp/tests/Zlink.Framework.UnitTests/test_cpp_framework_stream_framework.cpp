@@ -8,38 +8,40 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include "loopback_tcp_endpoint.hpp"
+
+#include <boost/asio/error.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/write.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <arpa/inet.h>
-#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <future>
 #include <limits>
-#include <netinet/in.h>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <poll.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
 #include <thread>
-#include <unistd.h>
+#include <utility>
 #include <vector>
 
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
 #include <boost/asio/connect.hpp>
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
 #endif
 
 namespace
 {
+using zlink::framework::tests::reserve_loopback_tcp_port;
 
 class sample_session_t final : public zlink::framework::packet_stream_session_t
 {
@@ -708,45 +710,39 @@ class rejected_connected_session_t final : public zlink::framework::packet_strea
     bool _manager_was_attached = false;
 };
 
-std::uint16_t reserve_loopback_port ()
+struct native_tcp_client_t
 {
-    const int socket_fd = ::socket (AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
-        throw std::runtime_error ("failed to reserve STREAM test port");
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::socket socket{io};
+};
+
+using native_tcp_client_ptr_t = std::unique_ptr<native_tcp_client_t>;
+
+native_tcp_client_ptr_t connect_loopback (std::uint16_t port)
+{
+    auto client = std::make_unique<native_tcp_client_t> ();
+    boost::system::error_code error;
+    client->socket.connect (
+      {boost::asio::ip::address_v4::loopback (), port}, error);
+    if (error) {
+        return nullptr;
     }
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    address.sin_port = 0;
-    if (::bind (socket_fd, reinterpret_cast<sockaddr *> (&address), sizeof (address)) != 0) {
-        ::close (socket_fd);
-        throw std::runtime_error ("failed to bind STREAM test port");
-    }
-    socklen_t size = sizeof (address);
-    if (::getsockname (socket_fd, reinterpret_cast<sockaddr *> (&address), &size) != 0) {
-        ::close (socket_fd);
-        throw std::runtime_error ("failed to inspect STREAM test port");
-    }
-    const auto port = ntohs (address.sin_port);
-    ::close (socket_fd);
-    return port;
+    return client;
 }
 
-int connect_loopback (std::uint16_t port)
+void close_native_client (native_tcp_client_ptr_t &client,
+                          bool shutdown_first = false)
 {
-    const int socket_fd = ::socket (AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
-        return -1;
+    if (!client) {
+        return;
     }
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    address.sin_port = htons (port);
-    if (::connect (socket_fd, reinterpret_cast<sockaddr *> (&address), sizeof (address)) != 0) {
-        ::close (socket_fd);
-        return -1;
+    boost::system::error_code ignored;
+    if (shutdown_first) {
+        client->socket.shutdown (
+          boost::asio::ip::tcp::socket::shutdown_both, ignored);
     }
-    return socket_fd;
+    client->socket.close (ignored);
+    client.reset ();
 }
 
 std::vector<std::uint8_t> make_native_stream_frame (
@@ -773,34 +769,26 @@ std::vector<std::uint8_t> make_native_stream_frame (
     return frame;
 }
 
-void send_native_bytes (int socket_fd,
+void send_native_bytes (const native_tcp_client_ptr_t &client,
                         const std::vector<std::uint8_t> &bytes,
                         std::size_t offset,
                         std::size_t length)
 {
-    if (offset > bytes.size () || length > bytes.size () - offset) {
+    if (!client || offset > bytes.size () || length > bytes.size () - offset) {
         throw std::runtime_error ("invalid STREAM fairness frame range");
     }
-    const auto end = offset + length;
-    while (offset < end) {
-        const auto sent = ::send (socket_fd, bytes.data () + offset, end - offset,
-                                  MSG_NOSIGNAL);
-        if (sent < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            throw std::runtime_error ("failed to send STREAM fairness frame");
-        }
-        if (sent == 0) {
-            throw std::runtime_error ("STREAM fairness frame send made no progress");
-        }
-        offset += static_cast<std::size_t> (sent);
+    boost::system::error_code error;
+    const auto sent = boost::asio::write (
+      client->socket, boost::asio::buffer (bytes.data () + offset, length), error);
+    if (error || sent != length) {
+        throw std::runtime_error ("failed to send STREAM fairness frame");
     }
 }
 
-void send_native_bytes (int socket_fd, const std::vector<std::uint8_t> &bytes)
+void send_native_bytes (const native_tcp_client_ptr_t &client,
+                        const std::vector<std::uint8_t> &bytes)
 {
-    send_native_bytes (socket_fd, bytes, 0, bytes.size ());
+    send_native_bytes (client, bytes, 0, bytes.size ());
 }
 
 /* Core error-frame close regression support: a session that only counts its
@@ -899,40 +887,41 @@ class core_error_close_session_t final
  * deadline passes before EOF (the self-deadlock symptom: the host never
  * disconnects the peer). */
 std::optional<std::vector<std::uint8_t>>
-read_until_peer_close (int socket_fd, std::chrono::seconds timeout)
+read_until_peer_close (const native_tcp_client_ptr_t &socket_fd,
+                       std::chrono::seconds timeout)
 {
+    if (!socket_fd) {
+        return std::nullopt;
+    }
     std::vector<std::uint8_t> collected;
+    boost::system::error_code error;
+    socket_fd->socket.non_blocking (true, error);
+    if (error) {
+        return std::nullopt;
+    }
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     for (;;) {
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-          deadline - std::chrono::steady_clock::now ());
-        if (remaining.count () <= 0) {
-            return std::nullopt;
-        }
-        pollfd waited{socket_fd, POLLIN, 0};
-        const int ready = ::poll (&waited, 1, static_cast<int> (remaining.count ()));
-        if (ready < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return std::nullopt;
-        }
-        if (ready == 0) {
+        if (std::chrono::steady_clock::now () >= deadline) {
             return std::nullopt;
         }
         std::array<std::uint8_t, 4096> chunk{};
-        const auto received = ::recv (socket_fd, chunk.data (), chunk.size (), 0);
-        if (received < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
+        const auto received = socket_fd->socket.read_some (
+          boost::asio::buffer (chunk), error);
+        if (!error) {
+            collected.insert (collected.end (), chunk.data (),
+                              chunk.data () + received);
+            continue;
+        }
+        if (error == boost::asio::error::eof
+            || error == boost::asio::error::connection_reset) {
             return collected;
         }
-        if (received == 0) {
+        if (error != boost::asio::error::would_block
+            && error != boost::asio::error::try_again) {
             return collected;
         }
-        collected.insert (collected.end (), chunk.data (),
-                          chunk.data () + received);
+        error.clear ();
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
 }
 
@@ -1677,7 +1666,7 @@ int main ()
     }
 
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
-    const auto mutual_tls_port = reserve_loopback_port ();
+    const auto mutual_tls_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t mutual_tls_services;
     zlink::framework::handler_registry_t mutual_tls_handlers;
     zlink::framework::serializer_registry_t mutual_tls_serializers;
@@ -1828,7 +1817,7 @@ int main ()
         return 28;
     }
 
-    const auto transport_port = reserve_loopback_port ();
+    const auto transport_port = reserve_loopback_tcp_port ();
     const auto transport_endpoint =
       "tcp://127.0.0.1:" + std::to_string (transport_port);
     zlink::framework::service_collection_t transport_services;
@@ -1861,30 +1850,29 @@ int main ()
       std::chrono::milliseconds{30'000});
     transport_host.start (transport_provider);
 
-    const int graceful_client = connect_loopback (transport_port);
-    if (graceful_client < 0 || !transport_session.wait_connected (1)
+    auto graceful_client = connect_loopback (transport_port);
+    if (!graceful_client || !transport_session.wait_connected (1)
         || !transport_session.identity_available ()
         || transport_session.last_local ().find (":") == std::string::npos
         || transport_session.last_remote ().find (":") == std::string::npos) {
         transport_host.stop ();
         return 29;
     }
-    ::shutdown (graceful_client, SHUT_RDWR);
-    ::close (graceful_client);
+    close_native_client (graceful_client, true);
     if (!transport_session.wait_disconnected (1) || transport_session.errors () != 0) {
         transport_host.stop ();
         return 30;
     }
 
-    const int failed_client = connect_loopback (transport_port);
-    if (failed_client < 0 || !transport_session.wait_connected (2)) {
+    auto failed_client = connect_loopback (transport_port);
+    if (!failed_client || !transport_session.wait_connected (2)) {
         transport_host.stop ();
         return 31;
     }
-    linger reset_on_close{1, 0};
-    (void) ::setsockopt (failed_client, SOL_SOCKET, SO_LINGER, &reset_on_close,
-                         sizeof (reset_on_close));
-    ::close (failed_client);
+    boost::system::error_code ignored;
+    failed_client->socket.set_option (
+      boost::asio::socket_base::linger (true, 0), ignored);
+    close_native_client (failed_client);
     const bool transport_failure_reported = transport_session.wait_errors (1);
     const bool transport_disconnect_reported = transport_session.wait_disconnected (2);
     if (!transport_failure_reported || !transport_disconnect_reported
@@ -1938,54 +1926,46 @@ int main ()
       "fairness-probe");
     const auto fairness_frame = make_native_stream_frame (
       transport_runtime, fairness_header, zlink::message_t::from (std::string ("fairness")));
-    const int partial_client = connect_loopback (transport_port);
-    if (partial_client < 0 || !transport_session.wait_connected (4)) {
-        if (partial_client >= 0) {
-            ::close (partial_client);
-        }
+    auto partial_client = connect_loopback (transport_port);
+    if (!partial_client || !transport_session.wait_connected (4)) {
+        close_native_client (partial_client);
         transport_host.stop ();
         return 39;
     }
     send_native_bytes (partial_client, fairness_frame, 0, 1);
     /* Leave only the first byte at the listener. The second client must not
      * wait for the rest of this frame before it can be dispatched. */
-    const int ready_client = connect_loopback (transport_port);
-    if (ready_client < 0 || !transport_session.wait_connected (5)) {
-        ::close (partial_client);
-        if (ready_client >= 0) {
-            ::close (ready_client);
-        }
+    auto ready_client = connect_loopback (transport_port);
+    if (!ready_client || !transport_session.wait_connected (5)) {
+        close_native_client (partial_client);
+        close_native_client (ready_client);
         transport_host.stop ();
         return 40;
     }
     send_native_bytes (ready_client, fairness_frame);
     if (!transport_session.wait_packets (2)) {
-        ::close (partial_client);
-        ::close (ready_client);
+        close_native_client (partial_client);
+        close_native_client (ready_client);
         transport_host.stop ();
         return 41;
     }
     send_native_bytes (partial_client, fairness_frame, 1, fairness_frame.size () - 1);
     if (!transport_session.wait_packets (3)) {
-        ::close (partial_client);
-        ::close (ready_client);
+        close_native_client (partial_client);
+        close_native_client (ready_client);
         transport_host.stop ();
         return 42;
     }
-    ::shutdown (partial_client, SHUT_RDWR);
-    ::close (partial_client);
-    ::shutdown (ready_client, SHUT_RDWR);
-    ::close (ready_client);
+    close_native_client (partial_client, true);
+    close_native_client (ready_client, true);
 
     /* The receive batch is limited to 64 frames. Keep 65 complete frames in
      * one user-space read so the final frame has no new kernel readability
      * event to wake the scheduler; the buffered-ready handoff must schedule
      * it again without another client write. */
-    const int buffered_client = connect_loopback (transport_port);
-    if (buffered_client < 0 || !transport_session.wait_connected (6)) {
-        if (buffered_client >= 0) {
-            ::close (buffered_client);
-        }
+    auto buffered_client = connect_loopback (transport_port);
+    if (!buffered_client || !transport_session.wait_connected (6)) {
+        close_native_client (buffered_client);
         transport_host.stop ();
         return 43;
     }
@@ -1998,16 +1978,15 @@ int main ()
     }
     send_native_bytes (buffered_client, buffered_frames);
     if (!transport_session.wait_packets (68)) {
-        ::close (buffered_client);
+        close_native_client (buffered_client);
         transport_host.stop ();
         return 44;
     }
-    ::shutdown (buffered_client, SHUT_RDWR);
-    ::close (buffered_client);
+    close_native_client (buffered_client, true);
 
     transport_host.stop ();
 
-    const auto limited_port = reserve_loopback_port ();
+    const auto limited_port = reserve_loopback_tcp_port ();
     const auto limited_endpoint =
       "tcp://127.0.0.1:" + std::to_string (limited_port);
     zlink::framework::zlink_builder_t limited_zlink;
@@ -2031,11 +2010,9 @@ int main ()
           -> zlink::framework::packet_stream_session_t & { return limited_session; }}},
       std::chrono::milliseconds{30'000});
     limited_host.start (transport_provider);
-    const int limited_client = connect_loopback (limited_port);
-    if (limited_client < 0 || !limited_session.wait_connected (1)) {
-        if (limited_client >= 0) {
-            ::close (limited_client);
-        }
+    auto limited_client = connect_loopback (limited_port);
+    if (!limited_client || !limited_session.wait_connected (1)) {
+        close_native_client (limited_client);
         limited_host.stop ();
         return 47;
     }
@@ -2049,14 +2026,13 @@ int main ()
       limited_runtime, limited_header, zlink::message_t::from (std::string (512, 'x')));
     send_native_bytes (limited_client, limited_frame);
     const bool limited_disconnected = limited_session.wait_disconnected (1);
-    ::shutdown (limited_client, SHUT_RDWR);
-    ::close (limited_client);
+    close_native_client (limited_client, true);
     limited_host.stop ();
     if (!limited_disconnected || limited_session.packets () != 0) {
         return 48;
     }
 
-    const auto rejected_port = reserve_loopback_port ();
+    const auto rejected_port = reserve_loopback_tcp_port ();
     const auto rejected_endpoint =
       "tcp://127.0.0.1:" + std::to_string (rejected_port);
     zlink::framework::zlink_builder_t rejected_zlink;
@@ -2075,23 +2051,21 @@ int main ()
           -> zlink::framework::packet_stream_session_t & { return rejected_session; }}},
       std::chrono::milliseconds{30'000});
     rejected_host.start (transport_provider);
-    const int rejected_client = connect_loopback (rejected_port);
-    if (rejected_client < 0 || !rejected_session.wait_until_actor_manager_is_detached ()) {
-        if (rejected_client >= 0) {
-            ::close (rejected_client);
-        }
+    auto rejected_client = connect_loopback (rejected_port);
+    if (!rejected_client || !rejected_session.wait_until_actor_manager_is_detached ()) {
+        close_native_client (rejected_client);
         rejected_host.stop ();
         return 37;
     }
-    ::close (rejected_client);
+    close_native_client (rejected_client);
     rejected_host.stop ();
 
     /* A Core STREAM listener owns a poller that is stopped from the host
      * lifecycle thread. Closing the Core socket is not itself a portable
      * cross-thread poller wake-up, so stop must still join the listener within
      * the bounded poll interval. */
-    const auto core_mesh_port = reserve_loopback_port ();
-    const auto core_stream_port = reserve_loopback_port ();
+    const auto core_mesh_port = reserve_loopback_tcp_port ();
+    const auto core_stream_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t core_services;
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
@@ -2245,8 +2219,8 @@ int main ()
      * protocol close ends the stream, and (c) keep the session close
      * idempotent when the deferred error_reply_failed close and the
      * protocol_error close target the same peer. */
-    const auto error_close_mesh_port = reserve_loopback_port ();
-    const auto error_close_stream_port = reserve_loopback_port ();
+    const auto error_close_mesh_port = reserve_loopback_tcp_port ();
+    const auto error_close_stream_port = reserve_loopback_tcp_port ();
     zlink::framework::service_collection_t error_close_services;
     zlink::framework::handler_registry_t error_close_handlers;
     zlink::framework::serializer_registry_t error_close_serializers;
@@ -2333,14 +2307,14 @@ int main ()
     /* (b) error -> close wire order: the error frame is submitted to the
      * Core socket lane before the close, so it must reach the peer before
      * the stream ends. */
-    const int error_order_client = connect_loopback (error_close_stream_port);
-    if (error_order_client < 0) {
+    auto error_order_client = connect_loopback (error_close_stream_port);
+    if (!error_order_client) {
         return fail_error_close (311);
     }
     send_native_bytes (error_order_client, make_bad_compressed_frame (7));
     const auto ordered_bytes =
       read_until_peer_close (error_order_client, std::chrono::seconds (5));
-    ::close (error_order_client);
+    close_native_client (error_order_client);
     if (!ordered_bytes) {
         return fail_error_close (312);
     }
@@ -2356,14 +2330,14 @@ int main ()
      * complete without self-deadlocking on the session gate. */
     zlink::framework::runtime::stream_host_core_test_faults ()
       .fail_core_error_frame_send.store (true, std::memory_order_release);
-    const int error_fault_client = connect_loopback (error_close_stream_port);
-    if (error_fault_client < 0) {
+    auto error_fault_client = connect_loopback (error_close_stream_port);
+    if (!error_fault_client) {
         return fail_error_close (315);
     }
     send_native_bytes (error_fault_client, make_bad_compressed_frame (8));
     const auto faulted_bytes =
       read_until_peer_close (error_fault_client, std::chrono::seconds (5));
-    ::close (error_fault_client);
+    close_native_client (error_fault_client);
     zlink::framework::runtime::stream_host_core_test_faults ()
       .fail_core_error_frame_send.store (false, std::memory_order_release);
     if (!faulted_bytes) {

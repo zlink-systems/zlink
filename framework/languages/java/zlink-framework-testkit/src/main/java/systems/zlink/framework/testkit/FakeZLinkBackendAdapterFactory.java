@@ -1669,11 +1669,33 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
     }
 
     private static final class FakeSocketMonitor extends FakeBackendObject implements ZLinkBackendSocketMonitor {
+        private final Semaphore readable = new Semaphore(0);
+        private volatile boolean closed;
+
         FakeSocketMonitor(List<String> calls) {
             super(calls, "socketMonitor");
         }
 
-        @Override public ZLinkBackendSocketMonitorEvent recv() { return null; }
+        @Override
+        public boolean waitForReadable(Duration timeout) {
+            try {
+                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                    && !closed;
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        @Override public ZLinkBackendSocketMonitorEvent recvDontWait() { return null; }
+        @Override public boolean isClosed() { return closed; }
+
+        @Override
+        public void close() {
+            closed = true;
+            readable.release();
+            super.close();
+        }
     }
 
     private static String firstPart(List<Message> parts) {

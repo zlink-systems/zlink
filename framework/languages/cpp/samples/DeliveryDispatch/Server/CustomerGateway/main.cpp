@@ -275,6 +275,7 @@ int main (int argc, char **argv)
       .bind (topology.customer_stream_endpoint)
       .register_session<customer_gateway_session_t> ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::customer_gateway_node, sample_names_t::customer_actor_discovery));
+      sample_names_t::customer_gateway_node, sample_names_t::customer_actor_discovery,
+      std::vector<std::string>{sample_names_t::tracking_route_node}));
     return app.run (argc, argv);
 }

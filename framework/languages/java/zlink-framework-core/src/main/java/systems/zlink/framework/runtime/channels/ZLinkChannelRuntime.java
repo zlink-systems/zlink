@@ -118,9 +118,6 @@ public final class ZLinkChannelRuntime
         "__zlink.routed_spot.egress.send";
     private static final String SPOT_ROUTE_BRIDGE_REQUEST_PACKET_NAME =
         "__zlink.routed_spot.egress.request";
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkChannelSocketRegistry sockets;
@@ -1405,19 +1402,12 @@ public final class ZLinkChannelRuntime
         ZLinkServiceOperationRegistry operations,
         UUID operationId) {
         Objects.requireNonNull(timeout, "timeout");
-        trace(STREAM_TRACE ? "spot-route request-start router=" + routerChannelId
-            + " targetNode=" + targetNodeRid
-            + " targetSpot=" + targetSpotId
-            + " parts=" + describeTraceParts(spotParts) : null);
         return sockets.submitToSpot(
             routerChannelId, targetNodeRid, spotRouteBridgeOwner, timeout, defaultRequestTimeout,
             (bridge, effectiveTimeout) -> {
                 spotRouteBridgeDrainer.start();
                 return operations.submit(operationId, effectiveTimeout, () -> {
                     CompletableFuture<List<Message>> result = new CompletableFuture<>();
-                    trace(STREAM_TRACE ? "spot-route request-path=route-bridge router=" + routerChannelId
-                        + " targetNode=" + targetNodeRid
-                        + " targetSpot=" + targetSpotId : null);
                     ZLinkSpotRouteBridgeDispatcher.submitRequest(
                         bridge, routerChannelId, targetNodeRid, targetSpotId,
                         copyMessages(spotParts), effectiveTimeout, result);
@@ -1425,9 +1415,6 @@ public final class ZLinkChannelRuntime
                 }, Message::closeAll);
             },
             (node, effectiveTimeout) -> {
-                trace(STREAM_TRACE ? "spot-route request-path=spot-router-node router=" + routerChannelId
-                    + " targetNode=" + targetNodeRid
-                    + " targetSpot=" + targetSpotId : null);
                 return ZLinkSpotRouterNodeDispatcher.request(
                     routerChannelId, node, targetNodeRid, targetSpotId,
                     targetSpotGeneration, authorityOwnerGeneration, ownerLeaseGeneration,
@@ -1435,43 +1422,6 @@ public final class ZLinkChannelRuntime
             });
     }
 
-
-    static void trace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] " + message);
-        }
-    }
-
-    static boolean traceEnabled() {
-        return STREAM_TRACE;
-    }
-
-    static String describeTraceParts(List<Message> parts) {
-        List<String> descriptions = new ArrayList<>();
-        for (int i = 0; i < parts.size(); i++) {
-            byte[] bytes = parts.get(i).toByteArray();
-            descriptions.add(i + ":" + bytes.length + ":" + traceText(bytes));
-        }
-        return descriptions.toString();
-    }
-
-    private static String traceText(byte[] bytes) {
-        if (bytes.length == 0 || bytes.length > 512) {
-            return "";
-        }
-        String text = new String(bytes, StandardCharsets.UTF_8);
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (Character.isISOControl(ch) && !Character.isWhitespace(ch)) {
-                return "";
-            }
-        }
-        return text;
-    }
-
-    static long elapsedMillis(long startedNanos) {
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
-    }
 
     @Override
     public void close() {

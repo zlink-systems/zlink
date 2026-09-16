@@ -40,21 +40,12 @@ final class ZLinkSpotRouterNodeDispatcher {
             targetSpotGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-            "spot-route node-send-submit router=" + routerChannelId
-                + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId : null);
         entrySpot.sendToSpot(
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
                 spotParts)
             .whenComplete((ignored, failure) -> {
-                ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-                    "spot-route node-send-result router=" + routerChannelId
-                        + " targetNode=" + targetNodeRid
-                        + " targetSpot=" + targetSpotId
-                        + " result=" + traceResult(failure) : null);
                 if (failure == null) {
                     result.complete(null);
                 } else {
@@ -77,9 +68,6 @@ final class ZLinkSpotRouterNodeDispatcher {
         ZLinkServiceOperationRegistry operations,
         UUID operationId) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
-        long requestStartedNanos = ZLinkChannelRuntime.traceEnabled()
-            ? System.nanoTime()
-            : 0L;
         var entrySpot = node.entrySpot();
         rememberAuthority(
             entrySpot,
@@ -88,10 +76,6 @@ final class ZLinkSpotRouterNodeDispatcher {
             targetSpotGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-            "spot-route node-request-submit router=" + routerChannelId
-                + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId : null);
         entrySpot.requestToSpot(
                 targetNodeRid,
                 targetSpotId,
@@ -102,15 +86,8 @@ final class ZLinkSpotRouterNodeDispatcher {
                 operations,
                 operationId)
             .whenComplete((reply, failure) -> {
-                ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-                    "spot-route node-request-result router=" + routerChannelId
-                        + " targetNode=" + targetNodeRid
-                        + " targetSpot=" + targetSpotId
-                        + " elapsedMs="
-                        + ZLinkChannelRuntime.elapsedMillis(requestStartedNanos)
-                        + " result=" + requestTraceResult(reply, failure) : null);
                 if (failure == null) {
-                    completeReply(reply, result, requestStartedNanos);
+                    completeReply(reply, result);
                 } else {
                     result.completeExceptionally(classifyTransportFailure(failure));
                 }
@@ -135,34 +112,6 @@ final class ZLinkSpotRouterNodeDispatcher {
                 authorityOwnerGeneration,
                 ownerLeaseGeneration);
         }
-    }
-
-    private static String traceResult(Throwable failure) {
-        if (failure == null) {
-            return "accepted";
-        }
-        Throwable current = failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-                || current instanceof java.util.concurrent.ExecutionException)
-            && current.getCause() != null) {
-            current = current.getCause();
-        }
-        if (current instanceof ZlinkRequestException request) {
-            return "rejected requestResult=" + request.getResult()
-                + " nativeErrno=" + request.getNativeErrno();
-        }
-        return "failed error=" + current.getClass().getSimpleName()
-            + ":" + String.valueOf(current.getMessage());
-    }
-
-    private static String requestTraceResult(
-        ZLinkBackendReceived reply,
-        Throwable failure) {
-        if (failure != null) {
-            return traceResult(failure);
-        }
-        return "completed backendResult=" + reply.result()
-            + " failureCode=" + reply.failureCode();
     }
 
     /**
@@ -198,17 +147,8 @@ final class ZLinkSpotRouterNodeDispatcher {
 
     private static void completeReply(
         ZLinkBackendReceived reply,
-        CompletableFuture<List<Message>> result,
-        long requestStartedNanos) {
+        CompletableFuture<List<Message>> result) {
         try {
-            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ? "spot-route node-reply"
-                + " elapsedMs=" + ZLinkChannelRuntime.elapsedMillis(requestStartedNanos)
-                + " result=" + reply.result()
-                + " origin=spot-node-callback"
-                + " sourceRid=" + reply.routingId().map(Object::toString).orElse(null)
-                + " sourceSpot=" + reply.spotId().map(Object::toString).orElse(null)
-                + " requestSeq=" + reply.requestSeq().map(Object::toString).orElse(null)
-                + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()) : null);
             if (reply.result() != ZLinkBackendRequestResult.OK) {
                 //  A backend request terminal is framework-generated; carry
                 //  the origin marker so a NotFound terminal stays usable as

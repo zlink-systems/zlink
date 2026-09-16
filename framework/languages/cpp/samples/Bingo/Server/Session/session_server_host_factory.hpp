@@ -55,7 +55,8 @@ class session_server_host_factory_t
           .bind (topology.selected_stream_endpoint ())
           .register_session<bingo_session_t> ();
         app.add_hosted_service (std::make_unique<route_mesh_readiness_service_t> (
-          "session-" + topology.session_node, sample_names_t::room_spot_mesh, "room"));
+          "session-" + topology.session_node, sample_names_t::room_spot_mesh, "room",
+          std::vector<std::string>{sample_names_t::play_a_rid, sample_names_t::play_b_rid}));
         return app;
     }
 };

@@ -100,11 +100,12 @@ if ($syntaxFailures.Count -ne 0) {
 $sampleContracts = @(
     [PSCustomObject]@{ Language = "cpp"; Root = "framework/languages/cpp/samples"; ShellExpected = 7; PowerShellExpected = 7 },
     [PSCustomObject]@{ Language = "dotnet"; Root = "framework/languages/dotnet/samples"; ShellExpected = 7; PowerShellExpected = 7 },
-    [PSCustomObject]@{ Language = "java"; Root = "framework/languages/java/samples/java"; ShellExpected = 7; PowerShellExpected = 6 },
-    [PSCustomObject]@{ Language = "kotlin"; Root = "framework/languages/java/samples/kotlin"; ShellExpected = 7; PowerShellExpected = 6 },
+    [PSCustomObject]@{ Language = "java"; Root = "framework/languages/java/samples/java"; ShellExpected = 7; PowerShellExpected = 7 },
+    [PSCustomObject]@{ Language = "kotlin"; Root = "framework/languages/java/samples/kotlin"; ShellExpected = 7; PowerShellExpected = 7 },
     [PSCustomObject]@{ Language = "node"; Root = "framework/languages/node/samples"; ShellExpected = 7; PowerShellExpected = 7 }
 )
 
+$totalWindowsRunners = 0
 foreach ($contract in $sampleContracts) {
     $sampleRoot = Join-Path $RepositoryRoot $contract.Root
     $shellRunners = @(Get-ChildItem -LiteralPath $sampleRoot -Recurse -File -Filter "run_sample.sh")
@@ -112,6 +113,7 @@ foreach ($contract in $sampleContracts) {
     if ($shellRunners.Count -ne $contract.ShellExpected -or $powerShellRunners.Count -ne $contract.PowerShellExpected) {
         throw "$($contract.Language) sample inventory changed; expected shell=$($contract.ShellExpected), Windows=$($contract.PowerShellExpected), found shell=$($shellRunners.Count), Windows=$($powerShellRunners.Count)"
     }
+    $totalWindowsRunners += $powerShellRunners.Count
     foreach ($powerShellRunner in $powerShellRunners) {
         if (-not (Test-Path -LiteralPath (Join-Path $powerShellRunner.DirectoryName "run_sample.sh") -PathType Leaf)) {
             throw "Shell sample runner is missing beside $(Get-RepositoryRelativePath -Path $powerShellRunner.FullName)"
@@ -168,4 +170,4 @@ Assert-SourceMatch -RelativePath "scripts/local-package/build-windows.ps1" `
     -Pattern ([regex]::Escape('zlink-systems-zlink-$bindingVersion.tgz')) `
     -Message "Node package output must be versioned"
 
-Write-Output "Windows x64 static contract passed: $($parseFiles.Count) PowerShell files, 33 Windows sample runners, C++/$cppVersion .NET/$dotnetVersion Java/$javaVersion Node/${nodeVersion}."
+Write-Output "Windows x64 static contract passed: $($parseFiles.Count) PowerShell files, $totalWindowsRunners Windows sample runners, C++/$cppVersion .NET/$dotnetVersion Java/$javaVersion Node/${nodeVersion}."

@@ -3,6 +3,9 @@
 
 #include <zlink/framework.hpp>
 
+#include "sample_names.hpp"
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -105,7 +108,14 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
                                  const std::string &mesh_name,
                                  const framework::mesh_node_snapshot_t &snapshot)
     {
-        if (!snapshot.is_ready || state->reported.exchange (true, std::memory_order_acq_rel))
+        const auto support_peer_ready = std::any_of (
+          snapshot.peers.begin (), snapshot.peers.end (),
+          [] (const framework::mesh_peer_snapshot_t &peer) {
+              return peer.node_rid.to_string () == sample_names_t::support_node_routing_id
+                     && peer.state == framework::peer_state_t::ready;
+          });
+        if (!support_peer_ready
+            || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
         std::cout << "supportchat-ready kind=spot-route node=" << node_name
                   << " mesh=" << mesh_name << std::endl;

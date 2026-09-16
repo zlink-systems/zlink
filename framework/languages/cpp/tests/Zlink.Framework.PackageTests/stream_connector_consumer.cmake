@@ -11,6 +11,17 @@ endif()
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG is required")
 endif()
+foreach(required_variable IN ITEMS
+    ZLINK_FRAMEWORK_CPP_UNREAL_LIBRARY_PATH
+    ZLINK_FRAMEWORK_CPP_STREAM_LIBRARY_PATH
+    ZLINK_FRAMEWORK_CPP_BINDING_LIBRARY_PATH
+    ZLINK_FRAMEWORK_CPP_CORE_RUNTIME_PATH
+    ZLINK_FRAMEWORK_CPP_FRAMEWORK_LIBRARY_PATH
+    ZLINK_FRAMEWORK_CPP_HTTP_CLIENT_LIBRARY_PATH)
+  if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
+    message(FATAL_ERROR "${required_variable} is required")
+  endif()
+endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef consumer_run_id)
 set(consumer_run_dir
@@ -59,24 +70,31 @@ if(connector_targets_text MATCHES "ZLINK_LZ4_LIBRARY"
   message(FATAL_ERROR
     "stream connector export contains a producer-specific LZ4 path")
 endif()
-if(EXISTS "${consumer_install_prefix}/lib/libzlink_framework.a"
-    OR EXISTS "${consumer_install_prefix}/lib/libzlink_http_client.a")
+if(EXISTS "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_FRAMEWORK_LIBRARY_PATH}"
+    OR EXISTS "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_HTTP_CLIENT_LIBRARY_PATH}")
   message(FATAL_ERROR
     "stream connector component contains unrelated framework artifacts")
 endif()
 foreach(required_path IN ITEMS
-    "${consumer_install_prefix}/lib/libzlink_unreal_stream_connector.a"
-    "${consumer_install_prefix}/lib/libzlink_stream_connector.a"
-    "${consumer_install_prefix}/lib/libzlink_cpp.a"
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_UNREAL_LIBRARY_PATH}"
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_STREAM_LIBRARY_PATH}"
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARY_PATH}"
     # LZ4 is not staged here on purpose: 6ba3fd6df5 moved the public C++
     # distribution to a source archive that consumes LZ4 through Findlz4
     # (config first, system fallback) instead of copying the library. The
     # producer-specific-path check above is what guards that boundary.
-    "${consumer_install_prefix}/lib/libzlink.so.1.2.0")
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_RUNTIME_PATH}")
   if(NOT EXISTS "${required_path}")
     message(FATAL_ERROR "stream connector component is missing: ${required_path}")
   endif()
 endforeach()
+if(DEFINED ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH
+    AND NOT EXISTS
+      "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH}")
+  message(FATAL_ERROR
+    "stream connector component is missing: "
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH}")
+endif()
 
 file(WRITE "${consumer_source_dir}/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.20)

@@ -66,7 +66,6 @@ flow_log_dir="$(pwd)/logs"
 config_dir="build/sample-config"
 readonly log_wait_attempts=300
 readonly log_wait_interval=0.1
-export ZLINK_JAVA_STREAM_TRACE="${ZLINK_JAVA_STREAM_TRACE:-1}"
 mkdir -p "${log_dir}" "${flow_log_dir}" "${config_dir}"
 rm -f "${log_dir}"/*.log
 rm -f "${flow_log_dir}"/*.log "${config_dir}"/*.properties

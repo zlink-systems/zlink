@@ -101,7 +101,7 @@ start() {
     ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[$name.log]="$(next_line "$LOG_DIR/$name.log")"
     ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS+=" $name.log"
   fi
-  ZLINK_JAVA_STREAM_TRACE=1 "$@" >>"$LOG_DIR/$name.log" 2>&1 &
+  "$@" >>"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!"); node_pid[$name]=$!; echo "    started $name pid=$!"
 }
 forget_pid() { local target=$1 kept=() pid; for pid in "${pids[@]:-}"; do [[ "$pid" == "$target" ]] || kept+=("$pid"); done; pids=("${kept[@]:-}"); }
@@ -155,7 +155,7 @@ client_config() {
   {
     echo "sample.gateway-endpoint=tcp://127.0.0.1:${gateway_stream}"
     echo "sample.ops-endpoint=tcp://127.0.0.1:${ops_stream}"
-    echo "sample.scenarios=$id"; echo "sample.stream-trace=true"
+    echo "sample.scenarios=$id"; echo "sample.stream-trace=$( [[ "${ZLINK_JAVA_STREAM_TRACE:-}" == "1" ]] && echo true || echo false )"
     echo "sample.fault-arm-file=$RUN_DIR/b8-block-command-44"
   } >"$path"; chmod 0600 "$path"; echo "$path"
 }
@@ -276,11 +276,18 @@ run_with_stop ZW-C3 KILL
 
 if selected ZW-E5; then
   run_client ZW-E5-arm || fail ZW-E5-arm "could not store maintenance"
-  kill_node zone-node-2 KILL
-  if start_zone zone-node-2 zone-node-crash-replacement; then
-    run_client ZW-E5 || fail ZW-E5 "maintenance not restored"
+  first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-E5 & client_pid=$!
+  if ! wait_log_while_running client 'scenario ZW-E5 restore armed' "$first" "$client_pid" 900; then
+    wait "$client_pid" || true; fail ZW-E5 "client did not arm restart observation"
   else
-    fail ZW-E5 "replacement did not reach topology ready"
+    kill_node zone-node-2 KILL
+    if ! wait_log_while_running client 'scenario ZW-E5 replacement waiting' "$first" "$client_pid" 900; then
+      wait "$client_pid" || true; fail ZW-E5 "client did not observe the stopped node"
+    elif start_zone zone-node-2 zone-node-crash-replacement; then
+      wait "$client_pid" || fail ZW-E5 "maintenance not restored"
+    else
+      fail ZW-E5 "replacement did not reach topology ready"
+    fi
   fi
 fi
 

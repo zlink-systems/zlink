@@ -2,6 +2,7 @@ package systems.zlink.framework.spring;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -34,12 +35,15 @@ final class MonitorRecvProbe {
                 return (ZLinkMonitoringBackendAdapter) socket -> {
                     ZLinkBackendSocketMonitor monitor = monitoring.openSocketMonitor(socket);
                     return new ZLinkBackendSocketMonitor() {
-                        @Override public ZLinkBackendSocketMonitorEvent recv() {
-                            ZLinkBackendSocketMonitorEvent event = monitor.recv();
-                            calls.add("socketMonitor.recv");
+                        @Override public boolean waitForReadable(Duration timeout) {
+                            calls.add("socketMonitor.waitForReadable");
                             received.complete(null);
-                            return event;
+                            return monitor.waitForReadable(timeout);
                         }
+                        @Override public ZLinkBackendSocketMonitorEvent recvDontWait() {
+                            return monitor.recvDontWait();
+                        }
+                        @Override public boolean isClosed() { return monitor.isClosed(); }
                         @Override public String name() { return monitor.name(); }
                         @Override public void close() {
                             monitor.close();

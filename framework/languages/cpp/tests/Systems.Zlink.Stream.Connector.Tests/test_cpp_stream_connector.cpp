@@ -1436,7 +1436,9 @@ int main ()
                                          "ok");
                     inbound.send ().message (reply).submit ();
                 }
-                ++handled;
+                if (frame->header.kind != zlink::stream_connector::message_kind_t::control) {
+                    ++handled;
+                }
             }
             inbound.close ();
         }
@@ -3931,18 +3933,28 @@ int main ()
     reserved_reconnect_acceptor.set_option (boost::asio::socket_base::reuse_address (true));
     reserved_reconnect_acceptor.bind ({boost::asio::ip::make_address ("127.0.0.1"), 0});
     const auto reconnect_success_port = reserved_reconnect_acceptor.local_endpoint ().port ();
-    reserved_reconnect_acceptor.close ();
     const auto reconnect_success_endpoint =
       std::string ("tcp://127.0.0.1:") + std::to_string (reconnect_success_port);
     std::atomic_bool reconnect_success_send_seen{false};
+    zlink::stream_connector::connector_options_t reconnect_success_options;
+    reconnect_success_options.endpoint = reconnect_success_endpoint;
+    reconnect_success_options.reconnect.initial_delay = std::chrono::milliseconds (10);
+    reconnect_success_options.reconnect.max_delay = std::chrono::milliseconds (10);
+    reconnect_success_options.reconnect.max_attempts = 4;
+    auto reconnect_success_connector =
+      zlink::stream_connector::connector_factory_t::create (reconnect_success_options);
+    std::atomic_bool reconnect_success_connect_finished{false};
     joining_thread_t reconnect_success_server_thread (
-      [&reconnect_success_io, reconnect_success_port, &reconnect_success_send_seen] {
-          callback_latch_t retry_delay_latch;
-          retry_delay_latch.wait_for (std::chrono::milliseconds (5));
-          boost::asio::ip::tcp::acceptor acceptor (reconnect_success_io);
-          acceptor.open (boost::asio::ip::tcp::v4 ());
-          acceptor.set_option (boost::asio::socket_base::reuse_address (true));
-          acceptor.bind ({boost::asio::ip::make_address ("127.0.0.1"), reconnect_success_port});
+      [acceptor = std::move (reserved_reconnect_acceptor), &reconnect_success_connector,
+       &reconnect_success_connect_finished, &reconnect_success_send_seen] () mutable {
+          while (!reconnect_success_connect_finished
+                 && reconnect_success_connector.state ()
+                      != zlink::stream_connector::connection_state_t::reconnecting) {
+              std::this_thread::yield ();
+          }
+          if (reconnect_success_connect_finished) {
+              return;
+          }
           acceptor.listen ();
           boost::asio::ip::tcp::socket socket (acceptor.get_executor ());
           acceptor.accept (socket);
@@ -3959,13 +3971,6 @@ int main ()
                 && frame->header.name == login_request_t::packet_name;
           }
       });
-    zlink::stream_connector::connector_options_t reconnect_success_options;
-    reconnect_success_options.endpoint = reconnect_success_endpoint;
-    reconnect_success_options.reconnect.initial_delay = std::chrono::milliseconds (10);
-    reconnect_success_options.reconnect.max_delay = std::chrono::milliseconds (10);
-    reconnect_success_options.reconnect.max_attempts = 4;
-    auto reconnect_success_connector =
-      zlink::stream_connector::connector_factory_t::create (reconnect_success_options);
     auto reconnect_success_states =
       std::make_shared<std::vector<zlink::stream_connector::connection_state_t>> ();
     reconnect_success_connector.on_connection_state_changed (
@@ -3974,6 +3979,7 @@ int main ()
           reconnect_success_states->push_back (state.current);
       });
     const auto reconnect_success_result = reconnect_success_connector.connect ();
+    reconnect_success_connect_finished = true;
     if (!reconnect_success_result || !reconnect_success_connector.dispatch ()
         || std::find (reconnect_success_states->begin (), reconnect_success_states->end (),
                    zlink::stream_connector::connection_state_t::reconnecting)

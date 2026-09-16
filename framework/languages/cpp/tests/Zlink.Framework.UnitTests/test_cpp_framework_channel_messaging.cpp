@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+
 #include <zlink/codecs/protobuf.hpp>
 
+#include "loopback_tcp_endpoint.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
@@ -61,11 +63,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace
 {
@@ -722,32 +719,6 @@ std::string unique_inproc_endpoint (const char *base)
     std::ostringstream stream;
     stream << "inproc://" << (base ? base : "framework-channel") << "-"
            << counter.fetch_add (1, std::memory_order_relaxed);
-    return stream.str ();
-}
-
-std::string unique_tcp_endpoint ()
-{
-    const int fd = ::socket (AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        throw std::runtime_error ("failed to create TCP probe socket");
-    }
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    address.sin_port = 0;
-    if (::bind (fd, reinterpret_cast<sockaddr *> (&address), sizeof (address)) != 0) {
-        ::close (fd);
-        throw std::runtime_error ("failed to bind TCP probe socket");
-    }
-    socklen_t length = sizeof (address);
-    if (::getsockname (fd, reinterpret_cast<sockaddr *> (&address), &length) != 0) {
-        ::close (fd);
-        throw std::runtime_error ("failed to read TCP probe socket port");
-    }
-    const auto port = ntohs (address.sin_port);
-    ::close (fd);
-    std::ostringstream stream;
-    stream << "tcp://127.0.0.1:" << port;
     return stream.str ();
 }
 
@@ -1810,7 +1781,8 @@ int main ()
     const auto framework_core_context =
       std::make_shared<zlink::context_t> ();
     zlink::framework::zlink_builder_t native_bus_builder;
-    const auto native_bus_endpoint = unique_tcp_endpoint ();
+    const auto native_bus_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     native_bus_builder.channel ("native-bus").enable_client ().connect (native_bus_endpoint);
     auto native_bus_runtime =
       zlink::framework::detail::channel_runtime_t::from (
@@ -1898,7 +1870,8 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t hosted_builder;
-    const auto hosted_endpoint = unique_tcp_endpoint ();
+    const auto hosted_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     const auto hosted_server_rid = zlink::routing_id_t::from (std::string ("hosted-server"));
     auto hosted_channel = hosted_builder.channel ("hosted");
     hosted_channel.enable_server ().set_routing_id (hosted_server_rid).bind (hosted_endpoint);
@@ -2014,7 +1987,8 @@ int main ()
     }
     hosted_service.stop ();
 
-    const auto manual_hosted_endpoint = unique_tcp_endpoint ();
+    const auto manual_hosted_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
 
     zlink::framework::zlink_builder_t manual_server_builder;
     manual_server_builder.channel ("hosted-manual")
@@ -2091,7 +2065,8 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t nested_hosted_builder;
-    const auto nested_hosted_endpoint = unique_tcp_endpoint ();
+    const auto nested_hosted_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     auto nested_hosted_channel = nested_hosted_builder.channel ("hosted-nested");
     nested_hosted_channel.enable_server ().bind (nested_hosted_endpoint);
     nested_hosted_channel.enable_client ().connect (nested_hosted_endpoint);
@@ -2126,7 +2101,8 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t scoped_hosted_builder;
-    const auto scoped_hosted_endpoint = unique_tcp_endpoint ();
+    const auto scoped_hosted_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     auto scoped_hosted_channel = scoped_hosted_builder.channel ("hosted-scoped");
     scoped_hosted_channel.enable_server ().bind (scoped_hosted_endpoint);
     scoped_hosted_channel.enable_client ().connect (scoped_hosted_endpoint);

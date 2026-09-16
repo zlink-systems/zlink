@@ -48,6 +48,118 @@ function Optimize-ZlinkSampleWindowsLaunchers {
         }
 }
 
+function Set-ZlinkSampleJavaRuntime {
+    param([Parameter(Mandatory = $true)][string]$SamplesRoot)
+
+    $baselinePath = Join-Path $SamplesRoot "gradle/zlink-jvm-baseline.settings.gradle.kts"
+    $baselineText = [System.IO.File]::ReadAllText($baselinePath)
+    $versionMatch = [regex]::Match(
+        $baselineText,
+        '(?m)^val zlinkJavaLanguageVersion = ([0-9]+)$')
+    if (-not $versionMatch.Success) {
+        throw "Java language version was not found in $baselinePath"
+    }
+    $requiredVersion = $versionMatch.Groups[1].Value
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($env:JAVA_HOME) {
+        $candidates.Add($env:JAVA_HOME)
+    }
+    $gradleProperties = Join-Path $env:USERPROFILE ".gradle/gradle.properties"
+    if (Test-Path -LiteralPath $gradleProperties -PathType Leaf) {
+        $installationLine = Select-String -LiteralPath $gradleProperties `
+            -Pattern '^org\.gradle\.java\.installations\.paths=(.+)$' |
+            Select-Object -First 1
+        if ($installationLine) {
+            foreach ($candidate in $installationLine.Matches[0].Groups[1].Value.Split(',')) {
+                $candidates.Add($candidate.Trim().Replace('\\', '\'))
+            }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $releasePath = Join-Path $candidate "release"
+        if (-not (Test-Path -LiteralPath $releasePath -PathType Leaf)) {
+            continue
+        }
+        $releaseText = [System.IO.File]::ReadAllText($releasePath)
+        $releasePattern = '(?m)^JAVA_VERSION="' +
+            [regex]::Escape($requiredVersion) + '(?:\.|\")'
+        if ($releaseText -match $releasePattern) {
+            $env:JAVA_HOME = [System.IO.Path]::GetFullPath($candidate)
+            $env:PATH = "$(Join-Path $env:JAVA_HOME 'bin');$env:PATH"
+            return
+        }
+    }
+    throw "JDK $requiredVersion was not found in JAVA_HOME or Gradle installations.paths"
+}
+
+function Invoke-ZlinkSampleExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OutputPath
+    )
+
+    $errorPath = "$OutputPath.err.log"
+    $argumentLine = ($Arguments | ForEach-Object {
+        ConvertTo-ZlinkSampleProcessArgument $_
+    }) -join " "
+    $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
+        -WorkingDirectory (Get-Location).Path -NoNewWindow `
+        -RedirectStandardOutput $OutputPath -RedirectStandardError $errorPath `
+        -PassThru
+    [void]$process.Handle
+    try {
+        $process.WaitForExit()
+        $exitCode = [int]$process.ExitCode
+    } finally {
+        Stop-ZlinkSampleProcessTree -Process $process
+        $process.Dispose()
+    }
+    if ($exitCode -ne 0) {
+        throw "Sample command failed (exit=$exitCode): $Executable $argumentLine"
+    }
+}
+
+function Stop-ZlinkSampleProcessTree {
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+
+    [void]$Process.Handle
+    if ($Process.HasExited) { return }
+    if (-not $IsWindows) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    $processId = $Process.Id
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "taskkill.exe"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = "/PID $processId /T /F"
+
+    $taskkill = [System.Diagnostics.Process]::new()
+    $taskkill.StartInfo = $startInfo
+    try {
+        if (-not $taskkill.Start()) { throw "Failed to start taskkill.exe." }
+        $stdout = $taskkill.StandardOutput.ReadToEndAsync()
+        $stderr = $taskkill.StandardError.ReadToEndAsync()
+        if (-not $taskkill.WaitForExit(5000)) {
+            $taskkill.Kill()
+            throw "taskkill.exe timed out while terminating process $processId."
+        }
+        if ($taskkill.ExitCode -ne 0 -and
+            $null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            throw "taskkill.exe failed for process $processId`: $($stderr.GetAwaiter().GetResult().Trim()) $($stdout.GetAwaiter().GetResult().Trim())"
+        }
+    } finally {
+        $taskkill.Dispose()
+    }
+}
+
 function Get-ZlinkSamplePortPool {
     param(
         [Parameter(Mandatory = $true)]
@@ -188,8 +300,17 @@ function Invoke-ZlinkSampleGradleBuild {
             Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath
             $temporarySettingsPath = $settingsTargetPath
         }
-        & $GradleExecutable @Arguments
-        if ($LASTEXITCODE -ne 0) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell wraps legitimate Gradle stderr warnings as
+            # NativeCommandError records. The native exit code remains the verdict.
+            $ErrorActionPreference = "Continue"
+            & $GradleExecutable @Arguments
+            $gradleExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($gradleExitCode -ne 0) {
             throw "Gradle build failed: $($Arguments -join ' ')"
         }
         if ($Arguments -match ':installDist$') {
@@ -383,5 +504,32 @@ function Remove-ZlinkSampleRedis {
     param([string]$ContainerId)
     if ($ContainerId -match '^[0-9a-f]{12,64}$') {
         Invoke-ZlinkDockerCommand -Arguments @("rm", "-fv", $ContainerId) -AllowFailure | Out-Null
+    }
+}
+
+function Assert-ZlinkSampleSourcePolicy {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Extension,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    # Matches the shell runners' rg scan: case-sensitive, and every source file is
+    # read through an extended-length path so the scan never silently skips one.
+    $regex = [regex]::new($Pattern)
+    $offenders = @()
+    foreach ($file in Get-ChildItem -LiteralPath $Path -Recurse -File) {
+        if ($Extension -notcontains $file.Extension) { continue }
+        $lineNumber = 0
+        $extendedPath = '\\?\' + [IO.Path]::GetFullPath($file.FullName)
+        foreach ($line in [IO.File]::ReadLines($extendedPath)) {
+            $lineNumber++
+            if ($regex.IsMatch($line)) { $offenders += "$($file.FullName):${lineNumber}:$line" }
+        }
+    }
+    if ($offenders.Count -gt 0) {
+        $offenders | ForEach-Object { [Console]::Error.WriteLine($_) }
+        throw $Message
     }
 }

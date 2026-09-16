@@ -543,7 +543,9 @@ int main (int argc, char **argv)
       .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     app.add_hosted_service (std::make_unique<offer_deadline_sweeper_t> ());
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::dispatch_node, sample_names_t::courier_actor_discovery));
+      sample_names_t::dispatch_node, sample_names_t::courier_actor_discovery,
+      std::vector<std::string>{sample_names_t::courier_actor_instance_1,
+                               sample_names_t::courier_actor_instance_2}));
     app.add_hosted_service (std::make_unique<actor_route_readiness_service_t> (
       sample_names_t::courier_actor_discovery, sample_names_t::courier_actor_instance_1,
       sample_names_t::courier_actor_instance_1));

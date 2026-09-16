@@ -198,11 +198,6 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                 : dispatchFlow.flowId();
             requestHeadersByFlow.put(dispatchKey, header);
         }
-        ZLinkStreamRuntime.trace(ZLinkStreamRuntime.traceEnabled() ? "stream-node dispatch-start node=" + streamNodeName
-            + " routingId=" + routingId
-            + " name=" + header.packetName()
-            + " requestSeq=" + header.requestSequence().orElse(null)
-            + " correlation=" + header.correlationId().orElse(null) : null);
         ZLinkSessionDispatchContext dispatch = new ZLinkSessionDispatchContext(
             header.name(),
             header.metadata(),

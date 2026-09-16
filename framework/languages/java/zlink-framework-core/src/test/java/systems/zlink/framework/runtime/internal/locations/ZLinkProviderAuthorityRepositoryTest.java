@@ -754,6 +754,65 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void aggregatePrepareAdoptsPeerMarkerAfterAuthorityCounterCasConflict()
+        throws ReflectiveOperationException {
+        String authorityContractKey = ZLinkAuthorityKeyCodec.actor(
+            "authority-counter-race");
+        var delegate = new ZLinkInMemoryProviderLocationStore();
+        var store = new CounterContentionStore(delegate);
+        var owner = (ZLinkOwnerLeaseClaimed) new ZLinkProviderOwnerLeaseRepository(
+                store)
+            .claim("owner-a", Duration.ofHours(1))
+            .toCompletableFuture()
+            .join();
+        ZLinkStoreKey authority = authorityKey(authorityContractKey);
+        var seeded = (systems.zlink.framework.locationprovider
+                .ZLinkStoreWriteApplied) delegate.write(
+                    new ZLinkStoreWriteRequest(
+                        List.of(),
+                        List.of(new ZLinkStorePut(
+                            authority,
+                            encodedAuthorityRecord(),
+                            null))),
+                    () -> false)
+            .toCompletableFuture()
+            .join();
+        var participant = new ZLinkAggregateParticipant(
+            authorityContractKey,
+            1,
+            1,
+            seeded.putVersions().get(authority).value(),
+            ZLinkAuthorityGenerationTransition.NEW_OWNER,
+            new byte[] {11},
+            new byte[] {12});
+        var request = new ZLinkAggregatePrepareRequest(
+            new UUID(0, 12),
+            1,
+            List.of(participant),
+            new byte[32],
+            new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
+            1,
+            ZLinkPlacementCapacityBundle.actor(1),
+            owner.token());
+
+        var result = new ZLinkProviderAuthorityRepository(store)
+            .prepareAggregate(request, () -> false)
+            .toCompletableFuture()
+            .join();
+
+        assertTrue(store.publishedPeerMarker,
+            "test store did not publish the contended marker write");
+        assertTrue(result instanceof ZLinkAggregatePrepared
+                || result instanceof ZLinkAggregateAlreadyPrepared,
+            () -> "marker CAS contention did not converge: " + result);
+        var aggregate = (ZLinkStoreReadFound) delegate.read(
+                aggregateKey(request), () -> false)
+            .toCompletableFuture()
+            .join();
+        assertEquals((byte) 1, stateOf(aggregate.value().bytes()));
+    }
+
+    @Test
     void aggregateCommitRetriesAConditionalWriteConflict()
         throws ReflectiveOperationException {
         var delegate = new ZLinkInMemoryProviderLocationStore();
@@ -1260,6 +1319,48 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .ZLinkStoreWriteConflict(Instant.now()));
             }
             return delegate.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+            ZLinkStoreScanRequest request,
+            ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
+    }
+
+    private static final class CounterContentionStore
+        implements ZLinkLocationStore {
+        private final ZLinkLocationStore delegate;
+        private boolean publishedPeerMarker;
+
+        private CounterContentionStore(ZLinkLocationStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+            ZLinkStoreKey key,
+            ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+            ZLinkStoreWriteRequest request,
+            ZLinkStoreCancellation cancellation) {
+            boolean reservesAuthorityOwnerGeneration = !publishedPeerMarker
+                && request.mutations().stream()
+                    .anyMatch(mutation -> mutation instanceof ZLinkStorePut put
+                        && put.key().value().equals(
+                            "zlink:v11:authority-owner-counter"));
+            if (!reservesAuthorityOwnerGeneration) {
+                return delegate.write(request, cancellation);
+            }
+            publishedPeerMarker = true;
+            return delegate.write(request, cancellation)
+                .thenApply(ignored -> new systems.zlink.framework.locationprovider
+                    .ZLinkStoreWriteConflict(Instant.now()));
         }
 
         @Override

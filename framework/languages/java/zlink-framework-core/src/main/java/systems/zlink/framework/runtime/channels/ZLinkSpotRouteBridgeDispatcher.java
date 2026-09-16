@@ -67,12 +67,6 @@ final class ZLinkSpotRouteBridgeDispatcher {
                         return;
                     }
                     try {
-                        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-                            "spot-route bridge-reply router=" + routerChannelId
-                                + " targetNode=" + targetNodeRid
-                                + " targetSpot=" + targetSpotId
-                                + " parts="
-                                + ZLinkChannelRuntime.describeTraceParts(reply) : null);
                         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply)) {
                             //  Keep the reply metadata: the framework-origin
                             //  marker distinguishes a framework NotFound

@@ -20,6 +20,7 @@ import java.util.concurrent.Delayed;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -237,8 +238,21 @@ final class ZLinkClientServerReadyWaitTest {
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
             ZLinkMonitoringBackendAdapter monitoring = socket -> new ZLinkBackendSocketMonitor() {
+                private final Semaphore readable = new Semaphore(1);
                 private boolean emitted;
-                @Override public ZLinkBackendSocketMonitorEvent recv() {
+
+                private volatile boolean closed;
+
+                @Override public boolean waitForReadable(Duration timeout) {
+                    try {
+                        return readable.tryAcquire(
+                            timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+                @Override public ZLinkBackendSocketMonitorEvent recvDontWait() {
                     if (emitted) {
                         admissionListening.countDown();
                         return null;
@@ -246,8 +260,12 @@ final class ZLinkClientServerReadyWaitTest {
                     emitted = true;
                     return new ZLinkBackendSocketMonitorEvent("CONNECTION_READY", Optional.empty(), "", "");
                 }
+                @Override public boolean isClosed() { return closed; }
                 @Override public String name() { return "ready-wait-monitor"; }
-                @Override public void close() { }
+                @Override public void close() {
+                    closed = true;
+                    readable.release();
+                }
             };
             ZLinkBackendAdapterProvider provider = (ZLinkBackendAdapterProvider) Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[] {ZLinkBackendAdapterProvider.class},

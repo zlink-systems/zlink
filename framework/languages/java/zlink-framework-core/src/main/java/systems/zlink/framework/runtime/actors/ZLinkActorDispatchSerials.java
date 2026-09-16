@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.actors;
 import java.util.Objects;
-import java.util.logging.Logger;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -23,10 +22,6 @@ import systems.zlink.framework.runtime.internal.relocation
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
 final class ZLinkActorDispatchSerials {
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkActorDispatchSerials.class.getName());
     private final Object runtimeScope;
     private final Function<String, Object> incarnationResolver;
     private final ZLinkActorDispatchTarget legacyTarget;
@@ -203,11 +198,8 @@ final class ZLinkActorDispatchSerials {
                 activeActorIds.add(turn.actorId);
                 return null;
             });
-            streamTrace(STREAM_TRACE ? "turn-start actor=" + turn.actorId : null);
             return runTurn(turn.actorId, operation)
                 .whenComplete((ignored, error) -> {
-                    streamTrace(STREAM_TRACE ? "turn-complete actor=" + turn.actorId
-                        + " error=" + (error == null ? "none" : error) : null);
                     inStateLane(() -> {
                         activeActorIds.remove(turn.actorId);
                         return null;
@@ -255,11 +247,8 @@ final class ZLinkActorDispatchSerials {
                 activeActorIds.add(turn.actorId);
                 return null;
             });
-            streamTrace(STREAM_TRACE ? "turn-start actor=" + turn.actorId : null);
             return runTurn(turn.actorId, operation)
                 .whenComplete((ignored, error) -> {
-                    streamTrace(STREAM_TRACE ? "turn-complete actor=" + turn.actorId
-                        + " error=" + (error == null ? "none" : error) : null);
                     inStateLane(() -> {
                         activeActorIds.remove(turn.actorId);
                         return null;
@@ -428,7 +417,6 @@ final class ZLinkActorDispatchSerials {
     <T> CompletionStage<T> runTurn(
         String actorId,
         Supplier<CompletionStage<T>> operation) {
-        streamTrace(STREAM_TRACE ? "run-turn-enter actor=" + actorId : null);
         try (systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.Scope ignored =
                  systems.zlink.framework.runtime.internal.handlers
@@ -441,20 +429,13 @@ final class ZLinkActorDispatchSerials {
                          "actor incarnation"),
                      actorId)) {
             CompletionStage<T> handler = operation.get();
-            streamTrace(STREAM_TRACE ? "run-turn-operation-return actor=" + actorId
-                + " done=" + handler.toCompletableFuture().isDone() : null);
             CompletableFuture<T> completed = new CompletableFuture<>();
             joins.finish(handler, null).whenComplete((nothing, error) -> {
-                streamTrace(STREAM_TRACE ? "run-turn-join-finish actor=" + actorId
-                    + " error=" + (error == null ? "none" : error) : null);
                 if (error != null) {
                     completed.completeExceptionally(error);
                     return;
                 }
                 handler.whenComplete((value, handlerError) -> {
-                    streamTrace(STREAM_TRACE ? "run-turn-handler-finish actor=" + actorId
-                        + " error=" + (handlerError == null
-                            ? "none" : handlerError) : null);
                     if (handlerError != null) {
                         completed.completeExceptionally(handlerError);
                     } else {
@@ -465,12 +446,6 @@ final class ZLinkActorDispatchSerials {
             return completed;
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
-        }
-    }
-
-    private static void streamTrace(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning("[zlink-java-stream-trace] actor-dispatch " + message);
         }
     }
 

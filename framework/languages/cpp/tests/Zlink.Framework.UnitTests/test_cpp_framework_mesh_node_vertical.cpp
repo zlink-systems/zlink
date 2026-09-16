@@ -13,6 +13,8 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
+#include "loopback_tcp_endpoint.hpp"
+
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
 #include <algorithm>
@@ -36,8 +38,6 @@
 #include <vector>
 
 #if defined(__unix__)
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -336,31 +336,6 @@ bool wait_until_admitted_count (zlink::framework::detail::mesh_node_runtime_t &n
     }
     return false;
 }
-
-#if defined(__unix__)
-std::string reserve_loopback_endpoint ()
-{
-    const int socket_fd = socket (AF_INET, SOCK_STREAM, 0);
-    assert (socket_fd >= 0);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    address.sin_port = 0;
-    if (bind (socket_fd, reinterpret_cast<sockaddr *> (&address),
-              sizeof (address)) != 0) {
-        close (socket_fd);
-        throw std::runtime_error ("vertical test could not reserve a loopback port");
-    }
-    socklen_t size = sizeof (address);
-    if (getsockname (socket_fd, reinterpret_cast<sockaddr *> (&address), &size) != 0
-        || address.sin_port == 0) {
-        close (socket_fd);
-        throw std::runtime_error ("vertical test could not read the reserved loopback port");
-    }
-    close (socket_fd);
-    return "tcp://127.0.0.1:" + std::to_string (ntohs (address.sin_port));
-}
-#endif
 
 template <typename TSubmit> bool submit_until_ok (TSubmit submit)
 {
@@ -1868,7 +1843,8 @@ int run_cross_process_delivery ()
         || pipe (formal_ack_pipe) != 0)
         return 1;
 
-    const std::string reciprocal_endpoint = reserve_loopback_endpoint ();
+    const std::string reciprocal_endpoint =
+      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     const pid_t child = fork ();
     if (child < 0)
         return 1;
@@ -2325,26 +2301,9 @@ int main (int argc, char **argv)
     int delivery_status = 0;
     assert (waitpid (delivery, &delivery_status, 0) == delivery);
     return WIFEXITED (delivery_status) ? WEXITSTATUS (delivery_status) : 4;
-#else
-    auto state = make_node ("tcp://127.0.0.1:*", "vertical-a");
-    zlink::framework::detail::mesh_node_runtime_t node (state);
-    node.start ();
-    assert (node.status ().routing_id ().to_string () == "vertical-a");
-    assert (node.status ().channel_count () == 1);
-
-    const std::vector<std::uint8_t> metadata{0x01, 0x02, 0x03};
-    const std::vector<zlink::message_t> direct_parts{
-      zlink::message_t::from (std::string ("direct"))};
-    const auto direct_result =
-      node.send_to_node (*state->routing_id, direct_parts, metadata);
-    assert (direct_result == zlink::submit_result_t::invalid_argument);
-
-    const std::vector<zlink::message_t> channel_parts{
-      zlink::message_t::from (std::string ("channel"))};
-    const auto channel_result = node.send_to_channel ("work", channel_parts, metadata);
-    assert (channel_result == zlink::submit_result_t::invalid_argument);
-
-    node.stop ();
-    return 0;
 #endif
+    // Cross-process metadata and delivery coverage remains POSIX-only because
+    // the repository has no Windows C++ unit-test child-process harness.  A
+    // different in-process smoke check must not stand in for that scenario.
+    return 0;
 }

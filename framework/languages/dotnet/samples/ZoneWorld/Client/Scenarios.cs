@@ -1448,11 +1448,7 @@ public static class Scenarios
     private static async ValueTask E5Arm(ClientOptions options, CancellationToken ct)
     {
         await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
-        var observed = await ops.WatchNodesAsync(ct);
-        var targetNodeId = observed.Nodes
-            .Where(node => node.Registered && node.Connected)
-            .OrderBy(node => node.NodeId, StringComparer.Ordinal)
-            .Last().NodeId;
+        var targetNodeId = NodeIds.East;
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == targetNodeId && message.Payload.Maintenance)
             .Timeout(OpsStatusObservationTimeout)
@@ -1480,26 +1476,26 @@ public static class Scenarios
     private static async ValueTask E5MaintenanceRestored(ClientOptions options, CancellationToken ct)
     {
         await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
-        var observed = await ops.WatchNodesAsync(ct);
-        var targetNodeId = observed.Nodes
-            .Where(node => node.Registered)
-            .OrderBy(node => node.NodeId, StringComparer.Ordinal)
-            .Last().NodeId;
+        var targetNodeId = NodeIds.East;
         try
         {
-            //  Ops answers a diagnostics request it cannot route with
-            //  NodeUnavailable and Maintenance=false. A node that just
-            //  restarted can still be between transport connections, so that
-            //  answer says nothing about the stored desired state - poll until
-            //  Ops can reach the node before judging the restore.
+            // Status payloads have no incarnation token, so accept ready only after this
+            // connection observes the old node leave.
+            var targetStopped = ops.Connector.WaitFor<NodeStatusNotify>()
+                .Where(message => message.Payload.NodeId == targetNodeId
+                                  && !message.Payload.Connected)
+                .Timeout(TimeSpan.FromSeconds(20))
+                .Async(ct);
+            Console.WriteLine("scenario ZW-E5 restore armed");
+            await targetStopped;
+            var replacementReady = ops.Connector.WaitFor<NodeStatusNotify>()
+                .Where(message => message.Payload.NodeId == targetNodeId
+                                  && message.Payload.Registered && message.Payload.Connected)
+                .Timeout(TimeSpan.FromSeconds(20))
+                .Async(ct);
+            Console.WriteLine("scenario ZW-E5 replacement waiting");
+            await replacementReady;
             var diagnostics = await ops.DiagnoseAsync(targetNodeId, ct);
-            var reachableBy = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(20);
-            while (diagnostics.Error is not null
-                && DateTimeOffset.UtcNow < reachableBy)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
-                diagnostics = await ops.DiagnoseAsync(targetNodeId, ct);
-            }
             ZlinkStreamAssert.Ensure(
                 diagnostics.Error is null,
                 "Ops can reach the restarted node to read its maintenance state");

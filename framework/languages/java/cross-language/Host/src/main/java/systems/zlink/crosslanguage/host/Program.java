@@ -672,50 +672,53 @@ public final class Program {
 
     @Bean(name = "spotRouteClientRunner")
     ApplicationRunner spotRouteClientRunner(
-        HostArgs args, EventSink sink, ZLinkRouteClient client) {
+        HostArgs args,
+        EventSink sink,
+        ZLinkRouteClient client,
+        ZLinkRouteMeshRuntime meshRuntime) {
         return applicationArguments -> {
             if (!"spot-route-client".equals(args.mode())) {
                 return;
             }
-            runSpotRouteClientScenario(args, sink, client);
+            Thread worker = new Thread(
+                () -> runSpotRouteClientScenario(args, sink, client, meshRuntime),
+                "spot-route-client");
+            worker.setDaemon(true);
+            worker.start();
         };
     }
 
     private static void runSpotRouteClientScenario(
-        HostArgs args, EventSink sink, ZLinkRouteClient client) {
+        HostArgs args,
+        EventSink sink,
+        ZLinkRouteClient client,
+        ZLinkRouteMeshRuntime meshRuntime) {
         String channel = args.require("channel-name");
         RoutingId target = RoutingId.from(args.require("peer-rid"));
         String value = args.option("value", "java-spot-route");
-        Duration deadline = Duration.ofSeconds(15);
-        long deadlineNanos = System.nanoTime() + deadline.toNanos();
-        TestHostSpotRouteReply reply = null;
-        while (true) {
-            try {
-                reply = client
-                    .requestToNode(channel, target, new TestHostSpotRouteRequest(value))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(TestHostSpotRouteReply.class)
-                    .toCompletableFuture()
-                    .get(7, TimeUnit.SECONDS);
-                break;
-            } catch (ExecutionException | TimeoutException error) {
-                ZLinkFrameworkException framework = unwrap(error);
-                boolean retryable = framework != null
-                    && (framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
-                        || framework.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
-                        || framework.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED);
-                if (retryable && System.nanoTime() < deadlineNanos) {
-                    sleepQuietly(50);
-                    continue;
-                }
-                sink.append("spot-route-error|"
-                    + (framework != null ? framework.kind().toString().toLowerCase() : "unknown")
-                    + "|" + describe(error));
-                return;
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
+        while (meshRuntime.snapshot(channel).readyPeerCount() == 0) {
+            sleepQuietly(50);
+            if (Thread.currentThread().isInterrupted()) {
                 return;
             }
+        }
+        TestHostSpotRouteReply reply;
+        try {
+            reply = client
+                .requestToNode(channel, target, new TestHostSpotRouteRequest(value))
+                .timeout(Duration.ofSeconds(5))
+                .submit(TestHostSpotRouteReply.class)
+                .toCompletableFuture()
+                .get(7, TimeUnit.SECONDS);
+        } catch (ExecutionException | TimeoutException error) {
+            ZLinkFrameworkException framework = unwrap(error);
+            sink.append("spot-route-error|"
+                + (framework != null ? framework.kind().toString().toLowerCase() : "unknown")
+                + "|" + describe(error));
+            return;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
         }
         sink.append("spot-route-reply|" + reply.value());
 

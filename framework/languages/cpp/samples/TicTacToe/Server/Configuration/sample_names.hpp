@@ -13,6 +13,8 @@ struct sample_names_t
     static constexpr const char *match_spot = "tictactoe.game";
     static constexpr const char *spot_node = "tictactoe.game.node";
     static constexpr const char *game_spot_node = "tictactoe";
+    static constexpr const char *play_a_rid = "tictactoe-play-a";
+    static constexpr const char *play_b_rid = "tictactoe-play-b";
     static constexpr const char *player_milestone_topic = "tictactoe.player.milestone";
     static constexpr int required_level = 3;
     static constexpr const char *x_actor_id = "player-x";

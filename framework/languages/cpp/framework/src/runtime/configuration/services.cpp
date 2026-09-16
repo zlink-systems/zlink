@@ -13,7 +13,83 @@ struct service_descriptor_t
 {
     service_lifetime_t lifetime;
     service_collection_t::service_factory_t factory;
-    std::shared_ptr<void> singleton_instance;
+};
+
+class service_instance_store_t
+{
+  public:
+    ~service_instance_store_t () { clear (); }
+
+    std::shared_ptr<void> find (std::type_index type) const
+    {
+        return find_in (instances_by_type, type);
+    }
+
+    std::shared_ptr<void> cache (std::type_index type, std::shared_ptr<void> instance)
+    {
+        return cache_in (instances_by_type, type, std::move (instance));
+    }
+
+    std::shared_ptr<void> find_framework_dependency (std::type_index type) const
+    {
+        return find_in (framework_dependencies_by_type, type);
+    }
+
+    std::shared_ptr<void> cache_framework_dependency (std::type_index type,
+                                                       std::shared_ptr<void> instance)
+    {
+        return cache_in (framework_dependencies_by_type, type, std::move (instance));
+    }
+
+    std::shared_ptr<void> track (std::shared_ptr<void> instance)
+    {
+        instances.push_back (std::move (instance));
+        return instances.back ();
+    }
+
+    void clear () noexcept
+    {
+        instances_by_type.clear ();
+        framework_dependencies_by_type.clear ();
+        while (!instances.empty ()) {
+            instances.pop_back ();
+        }
+    }
+
+  private:
+    using instance_index_t = std::unordered_map<std::type_index, std::size_t>;
+
+    std::shared_ptr<void> find_in (const instance_index_t &index,
+                                   std::type_index type) const
+    {
+        const auto found = index.find (type);
+        return found == index.end () ? nullptr : instances[found->second];
+    }
+
+    std::shared_ptr<void> cache_in (instance_index_t &index,
+                                    std::type_index type,
+                                    std::shared_ptr<void> instance)
+    {
+        const auto found = index.find (type);
+        if (found != index.end ()) {
+            return instances[found->second];
+        }
+
+        const auto instance_index = instances.size ();
+        instances.push_back (std::move (instance));
+        try {
+            index.emplace (type, instance_index);
+        }
+        catch (...) {
+            instances.pop_back ();
+            throw;
+        }
+        return instances.back ();
+    }
+
+    instance_index_t instances_by_type;
+    instance_index_t framework_dependencies_by_type;
+    std::vector<std::shared_ptr<void>> instances;
 };
 
 class service_registry_t
@@ -25,6 +101,18 @@ class service_registry_t
         if (!inserted) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "duplicate service registration");
+        }
+    }
+
+    void add_singleton_instance (std::type_index type, std::shared_ptr<void> instance)
+    {
+        add (type, service_descriptor_t{service_lifetime_t::singleton, {}});
+        try {
+            instances.cache (type, std::move (instance));
+        }
+        catch (...) {
+            descriptors.erase (type);
+            throw;
         }
     }
 
@@ -45,6 +133,7 @@ class service_registry_t
     }
 
     std::unordered_map<std::type_index, service_descriptor_t> descriptors;
+    service_instance_store_t instances;
 };
 
 class service_scope_state_t
@@ -58,9 +147,7 @@ class service_scope_state_t
     bool scoped_context;
     service_scope_kind_t kind;
     bool closed = false;
-    std::unordered_map<std::type_index, std::shared_ptr<void>> scoped_instances;
-    std::unordered_map<std::type_index, std::shared_ptr<void>> framework_dependencies;
-    std::vector<std::shared_ptr<void>> transient_instances;
+    service_instance_store_t instances;
 };
 
 } // namespace zlink::framework::detail
@@ -114,9 +201,7 @@ void service_provider_t::close () noexcept
 {
     if (_scope) {
         _scope->closed = true;
-        _scope->scoped_instances.clear ();
-        _scope->framework_dependencies.clear ();
-        _scope->transient_instances.clear ();
+        _scope->instances.clear ();
     }
 }
 
@@ -135,27 +220,22 @@ std::shared_ptr<void> service_provider_t::resolve (std::type_index type)
     auto &descriptor = _registry->required (type);
     switch (descriptor.lifetime) {
         case service_lifetime_t::singleton:
-            if (!descriptor.singleton_instance) {
-                descriptor.singleton_instance = descriptor.factory (*this);
+            if (auto instance = _registry->instances.find (type)) {
+                return instance;
             }
-            return descriptor.singleton_instance;
+            return _registry->instances.cache (type, descriptor.factory (*this));
         case service_lifetime_t::scoped: {
             if (!_scope->scoped_context) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "scoped service requires a service scope");
             }
-            const auto found = _scope->scoped_instances.find (type);
-            if (found != _scope->scoped_instances.end ()) {
-                return found->second;
+            if (auto instance = _scope->instances.find (type)) {
+                return instance;
             }
-            auto instance = descriptor.factory (*this);
-            _scope->scoped_instances.emplace (type, instance);
-            return instance;
+            return _scope->instances.cache (type, descriptor.factory (*this));
         }
         case service_lifetime_t::transient: {
-            auto instance = descriptor.factory (*this);
-            _scope->transient_instances.push_back (instance);
-            return instance;
+            return _scope->instances.track (descriptor.factory (*this));
         }
     }
 
@@ -181,8 +261,7 @@ std::shared_ptr<void> service_provider_t::cached_framework_dependency (std::type
         throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
                                                "service provider is closed");
     }
-    const auto found = _scope->framework_dependencies.find (type);
-    return found == _scope->framework_dependencies.end () ? nullptr : found->second;
+    return _scope->instances.find_framework_dependency (type);
 }
 
 std::shared_ptr<void>
@@ -193,9 +272,7 @@ service_provider_t::cache_framework_dependency (std::type_index type,
         throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
                                                "service provider is closed");
     }
-    const auto [found, _] =
-      _scope->framework_dependencies.emplace (type, std::move (instance));
-    return found->second;
+    return _scope->instances.cache_framework_dependency (type, std::move (instance));
 }
 
 detail::service_scope_t::service_scope_t (service_provider_t provider) :
@@ -237,7 +314,15 @@ service_collection_t &service_collection_t::add_descriptor (std::type_index type
                                                             service_lifetime_t lifetime,
                                                             service_factory_t factory)
 {
-    _registry->add (type, detail::service_descriptor_t{lifetime, std::move (factory), nullptr});
+    _registry->add (type, detail::service_descriptor_t{lifetime, std::move (factory)});
+    return *this;
+}
+
+service_collection_t &
+service_collection_t::add_singleton_instance (std::type_index type,
+                                               std::shared_ptr<void> instance)
+{
+    _registry->add_singleton_instance (type, std::move (instance));
     return *this;
 }
 

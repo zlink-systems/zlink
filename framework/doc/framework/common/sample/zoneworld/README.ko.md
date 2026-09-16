@@ -722,6 +722,27 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
 실제로 cpp 구현이 그 상태였다.
 
+**ZW-E5의 판정 연결은 ZoneNode 정지를 시작하기 전에 연다.** 순서는 다음으로 고정한다.
+
+1. 판정 연결이 대상 NodeId의 `Connected=false`를 관측한다. ZW-C2와 같은 runtime event다.
+   `Registered=false`는 §2.2의 15초 report TTL 전환이므로(ZW-C3) 이 판정에 쓰지 않는다.
+2. runner가 이전 process의 종료를 확인한 뒤 replacement를 시작한다.
+3. **같은 연결이** `Registered=true`이고 `Connected=true`인 status를 관측한다.
+4. 그 뒤에 `NodeDiagnosticsReq`를 **한 번** 보내 maintenance 복원을 판정한다.
+
+status 스냅샷은 준비 증거가 아니다. 스냅샷은 이전 incarnation을 가리킬 수 있고, status payload에는
+incarnation을 구분할 표시가 없다. 그래서 2의 process 종료 확인이 순서의 일부다 — 그것이 없으면
+`Connected=false → Connected=true`가 같은 process의 연결 재수립일 수도 있다.
+
+**준비를 기다리며 진단이나 조회를 반복하지 않는다.** 반복은 이전 incarnation의 응답을 새
+incarnation의 것으로 오인할 수 있고, 관측 대신 시간에 판정을 맡긴다.
+
+ZW-G3·ZW-G4의 incarnation 판정은 각 시나리오가 이미 정한 **새 RID·새 object와 Unavailable 경계**
+증거를 따른다(§9.3·§11.2). 그쪽에 status 전이를 더하지 않는다 — 이미 더 강한 증거가 있다.
+
+이 값을 비워 두어 다섯 구현이 서로 다른 준비 판정을 썼다 — 순서 관측, 스냅샷 short-circuit,
+진단 반복이 섞였고, 뒤의 둘은 이전 incarnation을 보고 통과할 수 있다.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

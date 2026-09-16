@@ -8,7 +8,6 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiFunction;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -86,7 +85,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -170,14 +168,11 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 public final class ZLinkSpotRuntime
     extends ZLinkSpotContextHost
     implements ZLinkSpotManager, AutoCloseable {
-    private static final Logger LOGGER = Logger.getLogger(ZLinkSpotRuntime.class.getName());
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
 
     private static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
         "zlink.framework.actor.bound_session.bind";
 
-    private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration frameworkRegistration;
@@ -508,8 +503,7 @@ public final class ZLinkSpotRuntime
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
         this.boundSessionSender = new ZLinkActorBoundSessionSender(
             defaultRequestTimeout,
-            this::isClosing,
-            ZLinkSpotRuntime::traceActorSession);
+            this::isClosing);
         Map<String, ZLinkInternalSpotNode> routeBridgeNodesByName = new HashMap<>();
         Set<Class<? extends ZLinkSpot<?>>> initializedSpotTypes = new HashSet<>();
         Map<Class<? extends ZLinkSpot<?>>,
@@ -1287,16 +1281,6 @@ public final class ZLinkSpotRuntime
                 if (candidates.isEmpty()) {
                     UserSpotPlacementVerdict verdict = userSpotPlacementVerdict(
                         nodes, stableType, source, excludedTargets);
-                    if (STREAM_TRACE) {
-                        tracePlacement(STREAM_TRACE ?
-                            "user-spot-create stableType=" + stableType
-                            + " verdict=" + verdict
-                            + " attempt=" + refreshAttempt
-                            + " nodes=" + nodes.stream()
-                                .map(node -> node.rid() + "/" + node.state()
-                                    + "/w" + node.placementWeight())
-                                .toList() : null);
-                    }
                     if (verdict == UserSpotPlacementVerdict.TERMINAL) {
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
@@ -2434,11 +2418,6 @@ public final class ZLinkSpotRuntime
                     .ZLinkMeshNodeDescriptor> readyCandidates =
                     preferConnectedInstanceTargets(candidates, connectedTargets);
                 if (readyCandidates.size() != candidates.size()) {
-                    traceInstanceLifecycle(STREAM_TRACE ?
-                        "target-selection mesh=" + meshName
-                            + " stableType=" + stableType
-                            + " candidates=" + candidates.size()
-                            + " connected=" + readyCandidates.size() : null);
                     candidates = readyCandidates;
                 }
                 long total = candidates.stream()
@@ -3110,14 +3089,6 @@ public final class ZLinkSpotRuntime
         String replyFailureMessage) {
         var actorFlow = ZLinkFlowContext.current();
         boolean noBindRequest = isNoBindActorRequest(packetHeader, headerPart);
-        traceActorSession(STREAM_TRACE ? "dispatch-actor-packet"
-            + " actor=" + actor.context().actorId()
-            + " packet=" + packetHeader.packetName()
-            + " requestSeq=" + packetHeader.requestSeq().map(Object::toString).orElse(null)
-            + " sourceNode=" + headerPart.sourceNodeRid()
-            + " sourceSession=" + headerPart.sourceSessionRid()
-            + " noBind=" + noBindRequest
-            + " hasBound=" + actorSessions.hasBoundSession(actor) : null);
         boolean actorIsRequest = handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST;
         String actorPacketName = packetHeader.packetName();
         String actorId = actor.context().actorId();
@@ -3846,29 +3817,6 @@ public final class ZLinkSpotRuntime
         return fallback;
     }
 
-    private String handlerCandidates(String packetName) {
-        List<SpotActorPacketHandlerRegistration> handlers =
-            actorHandlers.handlers(packetName);
-        if (handlers == null || handlers.isEmpty()) {
-            return "none";
-        }
-        return handlers.stream()
-            .map(ZLinkSpotRuntime::handlerSummary)
-            .toList()
-            .toString();
-    }
-
-    private static String handlerSummary(
-        SpotActorPacketHandlerRegistration handler) {
-        return handler == null
-            ? "none"
-            : handler.handlerType().getName()
-                + ":" + handler.kind()
-                + ":spot=" + (handler.spotType() == null
-                    ? "null" : handler.spotType().getName())
-                + ":actor=" + handler.actorType().getName();
-    }
-
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActorPacket(
         SpotActorPacketHandlerRegistration registration,
         Object spotSurface,
@@ -4173,10 +4121,6 @@ public final class ZLinkSpotRuntime
         long objectGeneration) {
         ZLinkInstanceSpotActivation activation =
             instanceSpotActivations.get(spotId);
-        traceInstanceLifecycle(STREAM_TRACE ?
-            "close-request spot=" + spotId
-                + " generation=" + objectGeneration
-                + " activation=" + (activation != null) : null);
         if (activation == null
             || activation.context.objectGeneration() != objectGeneration) {
             return CompletableFuture.completedFuture(false);
@@ -4263,7 +4207,6 @@ public final class ZLinkSpotRuntime
     CompletionStage<Boolean> completeInstanceSpotClose(
         ZLinkInstanceSpotActivation activation) {
         String spotId = activation.context.spotId();
-        traceInstanceLifecycle(STREAM_TRACE ? "close-authority-start spot=" + spotId : null);
         // A Missing authority record is permission for a new cold activation.
         // Retire the local generation before publishing that permission so a
         // request racing explicit close cannot reuse this sealed activation.
@@ -4271,9 +4214,6 @@ public final class ZLinkSpotRuntime
         activation.closeResources();
         return releaseInstanceSpotAuthority(activation)
             .thenApply(closed -> {
-                traceInstanceLifecycle(STREAM_TRACE ?
-                    "close-authority-result spot=" + spotId
-                        + " closed=" + closed : null);
                 ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(
                     activation.context.meshName());
                 if (routeNode != null) {
@@ -4303,9 +4243,6 @@ public final class ZLinkSpotRuntime
         String key = systems.zlink.framework.runtime.locations
             .ZLinkAuthorityKeyCodec.spot(activation.context.spotId());
         return store.read(key, () -> false).thenCompose(read -> {
-            traceInstanceLifecycle(STREAM_TRACE ?
-                "close-authority-read spot=" + activation.context.spotId()
-                    + " result=" + read.getClass().getSimpleName() : null);
             if (read instanceof systems.zlink.framework.runtime.internal.locations
                     .ZLinkAuthorityMissing) {
                 return CompletableFuture.completedFuture(true);
@@ -4352,29 +4289,11 @@ public final class ZLinkSpotRuntime
                         .ZLinkAuthorityDelete(),
                     () -> false)
                 .thenApply(result -> {
-                    traceInstanceLifecycle(STREAM_TRACE ?
-                        "close-authority-cas spot="
-                            + activation.context.spotId()
-                            + " result=" + result.getClass().getSimpleName() : null);
                     return result instanceof
                         systems.zlink.framework.runtime.internal.locations
                             .ZLinkAuthorityDeleted;
                 });
         });
-    }
-
-    private static void tracePlacement(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning(
-                "[zlink-java-stream-trace] placement " + message);
-        }
-    }
-
-    private static void traceInstanceLifecycle(String message) {
-        if (STREAM_TRACE) {
-            LOGGER.warning(
-                "[zlink-java-stream-trace] instance-lifecycle " + message);
-        }
     }
 
     Optional<ZLinkUserSpotRelocationBarrier.Seal>
@@ -4543,13 +4462,6 @@ public final class ZLinkSpotRuntime
             failureMessage);
     }
 
-    private static void traceActorSession(String message) {
-        if (!STREAM_TRACE) {
-            return;
-        }
-        LOGGER.warning("[zlink-java-stream-trace] actor-session " + message);
-    }
-
     static ActorMessageRead readActorMessage(
         List<ZLinkBackendActorReceived> actorMessages,
         int index,
@@ -4698,12 +4610,6 @@ public final class ZLinkSpotRuntime
         ZLinkBackendActorReceived headerPart,
         ZLinkBackendActorReceived bodyPart,
         boolean pendingHeader) {
-        traceActorSession(STREAM_TRACE ? "resolve-actor-packet"
-            + " actor=" + actor.context().actorId()
-            + " spot=" + dispatchLine.spotId()
-            + " packet=" + packetHeader.packetName()
-            + " request=" + packetHeader.requestSeq().isPresent()
-            + " moving=" + actorSessions.isMoving(actor) : null);
         SpotActorPacketHandlerRegistration handler =
             resolveActorPacketHandler(
                 packetHeader.packetName(),
@@ -4711,13 +4617,6 @@ public final class ZLinkSpotRuntime
                 packetHeader.requestSeq().isPresent()
                     ? ZLinkScannedHandlerKind.ACTOR_REQUEST
                     : ZLinkScannedHandlerKind.ACTOR_SEND);
-        traceActorSession(STREAM_TRACE ? "resolve-result"
-            + " actor=" + actor.context().actorId()
-            + " packet=" + packetHeader.packetName()
-            + " spotSurface=" + (spotSurface == null
-                ? "null" : spotSurface.getClass().getName())
-            + " selected=" + handlerSummary(handler)
-            + " candidates=" + handlerCandidates(packetHeader.packetName()) : null);
         if (handler == null) {
             boolean request = packetHeader.requestSeq().isPresent();
             reportSpotActorHandlerMissing(
@@ -4819,13 +4718,6 @@ public final class ZLinkSpotRuntime
                   headerCopy,
                   payloadCopy);
         queued.whenComplete((ignored, error) -> {
-            if (error != null) {
-                if (STREAM_TRACE) {
-                    LOGGER.log(Level.WARNING,
-                        "[zlink-java-stream-trace] actor-session enqueue-local-failed actor="
-                            + actor.context().actorId(), error);
-                }
-            }
             release.run();
         });
         return queued;
@@ -4981,13 +4873,6 @@ public final class ZLinkSpotRuntime
         ActorPacketFrames.Header packetHeader,
         ZLinkBackendActorReceived headerPart,
         Optional<Message> reply) {
-        if (STREAM_TRACE) {
-            Logger.getLogger(
-                    ZLinkSpotRuntime.class.getName())
-                .warning("[zlink-java-stream-trace] captured reply"
-                    + " present=" + reply.isPresent()
-                    + " actor=" + actor.context().actorId());
-        }
         if (reply.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -5357,62 +5242,6 @@ public final class ZLinkSpotRuntime
 
     static boolean isProbeFrame(List<Message> parts) {
         return parts.isEmpty() || parts.get(0).size() == 0;
-    }
-
-    static void traceSpotRouteInbound(
-        String phase,
-        ZLinkBackendSpot backendSpot,
-        ZLinkBackendReceived received) {
-        if (!STREAM_TRACE) {
-            return;
-        }
-        LOGGER.fine("[zlink-java-stream-trace] spot-route " + phase
-            + " localSpot=" + backendSpot.spotId()
-            + " sourceRid=" + received.routingId().map(Object::toString).orElse(null)
-            + " sourceSpot=" + received.spotId().map(Object::toString).orElse(null)
-            + " requestSeq=" + received.requestSeq().map(Object::toString).orElse(null)
-            + " result=" + received.result()
-            + " parts=" + describeTraceParts(received.parts()));
-    }
-
-    static void traceSpotRouteDispatch(
-        String phase,
-        ZLinkBackendSpot backendSpot,
-        ZLinkBackendReceived received,
-        ParsedPacket packet) {
-        if (!STREAM_TRACE) {
-            return;
-        }
-        LOGGER.fine("[zlink-java-stream-trace] spot-route " + phase
-            + " localSpot=" + backendSpot.spotId()
-            + " sourceRid=" + received.routingId().map(Object::toString).orElse(null)
-            + " sourceSpot=" + received.spotId().map(Object::toString).orElse(null)
-            + " requestSeq=" + received.requestSeq().map(Object::toString).orElse(null)
-            + " packet=" + packet.packetName()
-            + " payloadBytes=" + packet.payload().size());
-    }
-
-    private static String describeTraceParts(List<Message> parts) {
-        List<String> descriptions = new ArrayList<>();
-        for (int i = 0; i < parts.size(); i++) {
-            byte[] bytes = parts.get(i).toByteArray();
-            descriptions.add(i + ":" + bytes.length + ":" + traceText(bytes));
-        }
-        return descriptions.toString();
-    }
-
-    private static String traceText(byte[] bytes) {
-        if (bytes.length == 0 || bytes.length > 512) {
-            return "";
-        }
-        String text = new String(bytes, StandardCharsets.UTF_8);
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (Character.isISOControl(ch) && !Character.isWhitespace(ch)) {
-                return "";
-            }
-        }
-        return text;
     }
 
 

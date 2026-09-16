@@ -18,6 +18,9 @@ struct sample_names_t
     static constexpr const char *room_spot = "bingo.room";
     static constexpr const char *room_spot_mesh = "bingo.play";
     static constexpr const char *matchmaking_mesh = "bingo.matchmaking";
+    static constexpr const char *matchmaking_rid = "bingo-matchmaking";
+    static constexpr const char *play_a_rid = "bingo-play-a";
+    static constexpr const char *play_b_rid = "bingo-play-b";
     static constexpr const char *matchmaker_spot = "bingo.matchmaker";
     static constexpr const char *reward_topic = "bingo.room.reward";
     static constexpr const char *player_joined_packet = "PlayerJoinedNotify";

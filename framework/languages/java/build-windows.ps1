@@ -26,10 +26,19 @@ function Invoke-GradleBuild {
         [Parameter(Mandatory = $true)][string[]]$Tasks
     )
 
-    & (Join-Path $JavaRoot "gradlew.bat") `
-        --no-daemon --no-parallel --max-workers=2 `
-        -p $ProjectDirectory @Tasks
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell wraps legitimate Gradle stderr warnings as
+        # NativeCommandError records. The native exit code remains the verdict.
+        $ErrorActionPreference = "Continue"
+        & (Join-Path $JavaRoot "gradlew.bat") `
+            --no-daemon --no-parallel --max-workers=2 `
+            -p $ProjectDirectory @Tasks
+        $gradleExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($gradleExitCode -ne 0) {
         throw "Gradle build failed in $ProjectDirectory"
     }
 }

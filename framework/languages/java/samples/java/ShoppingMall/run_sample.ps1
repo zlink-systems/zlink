@@ -27,40 +27,11 @@ function Print-Logs {
     }
 }
 
-function Get-ChildProcessIds {
-    param([int]$ParentId)
-    if ($IsWindows) {
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" | ForEach-Object {
-            [int]$_.ProcessId
-            Get-ChildProcessIds -ParentId ([int]$_.ProcessId)
-        }
-    } else {
-        & pgrep -P $ParentId 2>$null | ForEach-Object {
-            if ($_ -match '^\d+$') {
-                [int]$_
-                Get-ChildProcessIds -ParentId ([int]$_)
-            }
-        }
-    }
-}
-
-function Stop-TrackedProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    $children = @(Get-ChildProcessIds -ParentId $Process.Id)
-    [array]::Reverse($children)
-    foreach ($childId in $children) {
-        Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        Stop-TrackedProcessTree -Process $Processes[$i]
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i]
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -245,10 +216,6 @@ try {
 
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-a.log" -ConfigPath $workflowAConfig
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-b.log" -ConfigPath $workflowBConfig
-    Wait-Port $workflowAChannel.Host $workflowAChannel.Port
-    Wait-Port $workflowBChannel.Host $workflowBChannel.Port
-    Wait-Port $workflowASpot.Host $workflowASpot.Port
-    Wait-Port $workflowBSpot.Host $workflowBSpot.Port
     Wait-Port $workflowARouter.Host $workflowARouter.Port
     Wait-Port $workflowBRouter.Host $workflowBRouter.Port
     Wait-Port $workflowAHttp.Host $workflowAHttp.Port
@@ -266,10 +233,8 @@ try {
     Wait-LogCount (Join-Path $LogDir "api-b.log") "shoppingmall-ready kind=object-route node=api-b target=workflow-a" 1
     Wait-LogCount (Join-Path $LogDir "api-b.log") "shoppingmall-ready kind=object-route node=api-b target=workflow-b" 1
     $clientLog = Join-Path $LogDir "client.log"
-    & (App-Bin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Client run failed."
-    }
+    Invoke-ZlinkSampleExecutable -Executable (App-Bin "Client" "Client") `
+        -Arguments @("--config", $clientConfig) -OutputPath $clientLog
     Get-Content -Path $clientLog
 
     if (-not (Select-String -Path $clientLog -Pattern "^shoppingmall=completed$" -Quiet)) {

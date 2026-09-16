@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+source "$SCRIPT_DIR/sample-manifest.env"
 CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$CPP_ROOT/samples/sample-build-common.sh"
 B8_CHILD=0
@@ -362,15 +363,7 @@ fi
 
 # Canonical §11.2 verdict ledger. A phase marker is emitted only when every
 # constituent scenario passed; zoneworld=completed is the AND of this table.
-EXPECTED_IDS=(
-  ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5
-  ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8
-  ZW-C1 ZW-C2 ZW-C3 ZW-C4
-  ZW-D1 ZW-D2
-  ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6
-  ZW-F1 ZW-F2 ZW-F3 ZW-F4
-  ZW-G1 ZW-G2 ZW-G3 ZW-G4 ZW-G5
-)
+read -r -a EXPECTED_IDS <<<"$ZONEWORLD_SCENARIOS"
 declare -A VERDICT DETAIL
 record_verdict() {
   local id="$1" verdict="$2" detail="${3:-}"
@@ -444,19 +437,28 @@ if wait_for_log_after client-transition "scenario ZW-B4-C3 armed node=" 1 600; t
 fi
 
 E5_STATUS=1
-E5_NODE="${transition_node:-zone-node-2}"
+E5_NODE="zone-node-2"
 set +e
 run_client_lane e5-arm --scenario E5-arm --target-node-id "$E5_NODE"
 e5_arm_status=$?
 set -e
 if [[ "$e5_arm_status" -eq 0 ]]; then
-  stop_role "$E5_NODE" KILL
-  start_zone_node "$E5_NODE" "$E5_NODE-replacement"
-  sleep 2
+  start_role client-e5 "$BIN_DIR/sample_cpp_framework_zoneworld_client" \
+    --game-endpoint "$GAME_STREAM" --ops-endpoint "$OPS_STREAM" \
+    --scenario E5 --target-node-id "$E5_NODE"
+  e5_pid="${ROLE_PID[client-e5]}"
+  if wait_for_log_after client-e5 "scenario ZW-E5 restore armed" 1 600; then
+    stop_role "$E5_NODE" KILL
+    if wait_for_log_after client-e5 "scenario ZW-E5 replacement waiting" 1 600; then
+      start_zone_node "$E5_NODE" "$E5_NODE-replacement"
+    fi
+  fi
   set +e
-  run_client_lane e5 --scenario E5 --target-node-id "$E5_NODE"
+  wait "$e5_pid"
   e5_restore_status=$?
   set -e
+  remove_owned_pid "$e5_pid"
+  unset "ROLE_PID[client-e5]"
   if [[ "$e5_restore_status" -eq 0 ]] \
      && grep -Fq "scenario ZW-E5 passed" "$LOG_DIR/client-e5.log"; then
     E5_STATUS=0

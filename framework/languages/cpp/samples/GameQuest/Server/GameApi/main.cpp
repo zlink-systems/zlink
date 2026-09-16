@@ -470,7 +470,8 @@ int main (int argc, char **argv)
     app.add_hosted_service (
       std::make_unique<sample_readiness_service_t> ("stream", topology.api_name));
     app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
-      "gamequest", topology.api_name));
+      "gamequest", topology.api_name,
+      std::vector<std::string>{sample_names_t::mission_a_rid, sample_names_t::mission_b_rid}));
     options.http ()
       .listen (topology.selected_api_http_url ())
       .map_health ("/health")

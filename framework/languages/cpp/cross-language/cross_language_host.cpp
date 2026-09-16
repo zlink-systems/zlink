@@ -725,32 +725,32 @@ constexpr const char *cross_lang_user_spot_type = "cross-lang-relocation-user-sp
  * direction. */
 const nlohmann::json *find_field (const nlohmann::json &json,
                                   const char *camel,
-                                  const char *pascal)
+                                  const char *pascal_case)
 {
     if (json.contains (camel)) {
         return &json.at (camel);
     }
-    if (json.contains (pascal)) {
-        return &json.at (pascal);
+    if (json.contains (pascal_case)) {
+        return &json.at (pascal_case);
     }
     return nullptr;
 }
 
-std::string read_string (const nlohmann::json &json, const char *camel, const char *pascal)
+std::string read_string (const nlohmann::json &json, const char *camel, const char *pascal_case)
 {
-    const auto *field = find_field (json, camel, pascal);
+    const auto *field = find_field (json, camel, pascal_case);
     return field == nullptr || field->is_null () ? std::string () : field->get<std::string> ();
 }
 
-int read_int (const nlohmann::json &json, const char *camel, const char *pascal)
+int read_int (const nlohmann::json &json, const char *camel, const char *pascal_case)
 {
-    const auto *field = find_field (json, camel, pascal);
+    const auto *field = find_field (json, camel, pascal_case);
     return field == nullptr || field->is_null () ? 0 : field->get<int> ();
 }
 
-bool read_bool (const nlohmann::json &json, const char *camel, const char *pascal)
+bool read_bool (const nlohmann::json &json, const char *camel, const char *pascal_case)
 {
-    const auto *field = find_field (json, camel, pascal);
+    const auto *field = find_field (json, camel, pascal_case);
     return field != nullptr && !field->is_null () && field->get<bool> ();
 }
 

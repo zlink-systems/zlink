@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $SampleDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $SampleDir
 $RunDir = Join-Path ([IO.Path]::GetTempPath()) ("zlink-supportchat-" + [Guid]::NewGuid().ToString("N"))
 $LogDir = Join-Path $RunDir "logs"
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -66,7 +67,7 @@ function Cleanup([int]$Status) {
         }
     }
     foreach ($process in $Processes) {
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir
@@ -134,8 +135,8 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat-actors" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --stream-endpoint $sessionStreamEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "SupportChat client scenario failed." }
+    Invoke-ZlinkSampleExecutable -Executable (Get-AppBin "Client" "Client") `
+        -Arguments @("--stream-endpoint", $sessionStreamEndpoint) -OutputPath $clientLog
 
     Wait-LogCount @($clientLog) "supportchat=completed" 1
     Wait-LogCount @($clientLog) "supportchat-closed-typing-ignore=verified" 1

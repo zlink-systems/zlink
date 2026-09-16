@@ -102,7 +102,7 @@ class matchmaking_server_host_factory_t
           std::move (reservations));
 
         auto mesh = options.add_route_mesh (sample_names_t::matchmaking_mesh);
-        mesh.set_routing_id (zlink::routing_id_t::from ("bingo-matchmaking"))
+        mesh.set_routing_id (zlink::routing_id_t::from (sample_names_t::matchmaking_rid))
           .listen (topology.matchmaking_route_endpoint);
         mesh.channel (sample_names_t::matchmaking_mesh).server ();
         mesh.objects ()

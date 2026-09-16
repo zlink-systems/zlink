@@ -1025,17 +1025,22 @@ final class ZLinkClientServerM6ARuntimeTest {
         immediateReadyMonitoringAdapter() {
         java.util.concurrent.atomic.AtomicBoolean delivered =
             new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean closed =
+            new java.util.concurrent.atomic.AtomicBoolean();
         return socket -> (ZLinkBackendSocketMonitor)
             Proxy.newProxyInstance(
                 ZLinkBackendSocketMonitor.class.getClassLoader(),
                 new Class<?>[] {ZLinkBackendSocketMonitor.class},
                 (proxy, method, arguments) -> switch (method.getName()) {
                     case "name" -> "monitor";
-                    case "recv" -> delivered.compareAndSet(false, true)
+                    case "waitForReadable" ->
+                        !closed.get() && !delivered.get();
+                    case "recvDontWait" -> delivered.compareAndSet(false, true)
                         ? new ZLinkBackendSocketMonitorEvent(
                             "CONNECTION_READY", Optional.empty(), "", "")
                         : null;
-                    case "close" -> null;
+                    case "isClosed" -> closed.get();
+                    case "close" -> { closed.set(true); yield null; }
                     default -> throw new UnsupportedOperationException(
                         method.getName());
                 });

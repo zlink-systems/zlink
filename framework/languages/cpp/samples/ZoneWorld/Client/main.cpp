@@ -480,7 +480,7 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     co_return true;
 }
 
-se::task_t<bool> run_announce (se::coroutine_connector_t &ops, const std::string &scenario)
+se::task_t<bool> run_announce (se::coroutine_connector_t &ops, std::string scenario)
 {
     co_await ops.connect ().async ();
     const auto announced = co_await ops.request (announce_world_req_t{"third subscriber"})
@@ -602,14 +602,24 @@ se::task_t<bool> run_e5_restore (se::coroutine_connector_t &ops, const std::stri
 {
     require (!target_node_id.empty (), "E5 restore requires --target-node-id");
     co_await ops.connect ().async ();
-    node_diagnostics_res_t diagnostics;
-    for (int attempt = 0; attempt != 200; ++attempt) {
-        diagnostics = co_await ops.request (node_diagnostics_req_t{target_node_id})
-                        .async<node_diagnostics_res_t> ();
-        if (!diagnostics.error)
-            break;
-        std::this_thread::sleep_for (std::chrono::milliseconds (100));
-    }
+    (void) co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
+    auto stopped_wait = ops.wait_for<node_status_notify_t> ()
+                          .where ([target_node_id] (const auto &node) {
+                              return node.node_id == target_node_id && !node.connected;
+                          })
+                          .async ();
+    std::cout << "scenario ZW-E5 restore armed" << std::endl;
+    (void) co_await stopped_wait;
+    auto replacement_wait = ops.wait_for<node_status_notify_t> ()
+                              .where ([target_node_id] (const auto &node) {
+                                  return node.node_id == target_node_id && node.registered
+                                         && node.connected;
+                              })
+                              .async ();
+    std::cout << "scenario ZW-E5 replacement waiting" << std::endl;
+    (void) co_await replacement_wait;
+    const auto diagnostics = co_await ops.request (node_diagnostics_req_t{target_node_id})
+                               .async<node_diagnostics_res_t> ();
     require (!diagnostics.error && diagnostics.maintenance,
              "restarted ZoneNode did not restore maintenance from Redis");
     const auto reset = co_await ops.request (set_maintenance_req_t{target_node_id, false})

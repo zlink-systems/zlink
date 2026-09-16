@@ -10,7 +10,6 @@ $ConfigDir = Join-Path ([IO.Path]::GetTempPath()) ("zlink-bingo-" + [Guid]::NewG
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 $env:BINGO_LOG_DIR = if ($env:BINGO_LOG_DIR) { $env:BINGO_LOG_DIR } else { Join-Path $SampleDir "logs" }
-$env:ZLINK_JAVA_STREAM_TRACE = if ($env:ZLINK_JAVA_STREAM_TRACE) { $env:ZLINK_JAVA_STREAM_TRACE } else { "1" }
 New-Item -ItemType Directory -Force -Path $env:BINGO_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:BINGO_LOG_DIR "*.log")
 
@@ -32,9 +31,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -233,17 +230,15 @@ sample.session-node=a
     Wait-LogCount @((Join-Path $LogDir "session-b.log")) "bingo-ready kind=mesh-route node=session-b mesh=room" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Client run failed."
-    }
+    Invoke-ZlinkSampleExecutable -Executable (Get-AppBin "Client" "Client") `
+        -Arguments @("--config", $clientConfig) -OutputPath $clientLog
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Client completion marker was not found."
     }
     if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
         throw "Client inbound stream evidence was not found."
     }
-    if (-not (Select-String -Path (Join-Path $env:BINGO_LOG_DIR "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
+    if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "Message flow evidence was not found."
     }
 

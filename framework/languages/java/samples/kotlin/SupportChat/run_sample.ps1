@@ -27,19 +27,7 @@ function Cleanup {
         }
     }
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
-        }
-    }
-    foreach ($process in $Processes) {
-        try {
-            $process.WaitForExit(2000) | Out-Null
-        } catch {
-        }
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i]
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -102,6 +90,7 @@ function Wait-LogAtLeast {
 
 function Start-Role {
     param([string]$Name, [string]$Binary, [string]$ConfigPath)
+    if ($IsWindows) { $Binary = "$Binary.bat" }
     $logPath = Join-Path $LogDir "$Name.log"
     $errPath = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
@@ -169,11 +158,11 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Join-Path $SampleDir "Client/build/install/Client/bin/Client") `
-        --stream-endpoint $StreamEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "SupportChat client failed."
-    }
+    $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
+    if ($IsWindows) { $clientBin = "$clientBin.bat" }
+    Invoke-ZlinkSampleExecutable `
+        -Executable $clientBin `
+        -Arguments @("--stream-endpoint", $StreamEndpoint) -OutputPath $clientLog
     Wait-LogCount @($clientLog) "supportchat=completed" 1
     Wait-LogCount @($clientLog) "supportchat-closed-typing-ignore=verified" 1
 

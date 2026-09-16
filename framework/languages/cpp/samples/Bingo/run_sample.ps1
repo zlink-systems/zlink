@@ -7,8 +7,9 @@ $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Jo
 $BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 $LogDir = Join-Path $ScriptDir "build/sample-logs"
+$ConfigDir = Join-Path $LogDir "config"
 
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 
 function Find-Binary([string]$Name) {
@@ -155,11 +156,68 @@ function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $logPath = Join-Path $LogDir "$Name.log"
     $errorLogPath = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -NoNewWindow -PassThru
+    [void]$process.Handle
     $Processes.Add($process)
 }
 
+function Write-RoleConfig(
+    [string]$Name,
+    [string]$ApiNode,
+    [string]$PlayNode,
+    [string]$SessionNode,
+    [string]$SessionSpotEndpoint,
+    [string]$SessionRouterEndpoint,
+    [string]$StreamEndpoint) {
+    $topology = @{
+        apiChannelEndpoint = $apiAChannelEndpoint
+        apiAChannelEndpoint = $apiAChannelEndpoint
+        apiBChannelEndpoint = $apiBChannelEndpoint
+        playChannelEndpoint = $playAChannelEndpoint
+        playAChannelEndpoint = $playAChannelEndpoint
+        playBChannelEndpoint = $playBChannelEndpoint
+        playARouteEndpoint = $playARouteEndpoint
+        playBRouteEndpoint = $playBRouteEndpoint
+        apiAPlayRouteEndpoint = $apiAPlayRouteEndpoint
+        apiBPlayRouteEndpoint = $apiBPlayRouteEndpoint
+        apiAMatchmakingRouteEndpoint = $apiAMatchmakingRouteEndpoint
+        apiBMatchmakingRouteEndpoint = $apiBMatchmakingRouteEndpoint
+        matchmakingRouteEndpoint = $matchmakingRouteEndpoint
+        sessionAPlayRouteEndpoint = $sessionAPlayRouteEndpoint
+        sessionBPlayRouteEndpoint = $sessionBPlayRouteEndpoint
+        playASpotEndpoint = $playASpotEndpoint
+        playBSpotEndpoint = $playBSpotEndpoint
+        playASpotRouterEndpoint = $playASpotRouterEndpoint
+        playBSpotRouterEndpoint = $playBSpotRouterEndpoint
+        sessionSpotEndpoint = $sessionASpotEndpoint
+        sessionRouterEndpoint = $sessionARouterEndpoint
+        sessionAStreamEndpoint = $sessionAStreamEndpoint
+        sessionBStreamEndpoint = $sessionBStreamEndpoint
+        logDir = $LogDir
+        redisEndpoint = $redisEndpoint
+        redisKeyPrefix = $RedisKeyPrefix
+    }
+    if ($ApiNode) { $topology.apiNode = $ApiNode }
+    if ($PlayNode) { $topology.playNode = $PlayNode }
+    if ($SessionNode) { $topology.sessionNode = $SessionNode }
+    if ($SessionSpotEndpoint) { $topology.sessionSpotEndpoint = $SessionSpotEndpoint }
+    if ($SessionRouterEndpoint) { $topology.sessionRouterEndpoint = $SessionRouterEndpoint }
+    if ($StreamEndpoint) { $topology.streamEndpoint = $StreamEndpoint }
+
+    $configuration = @{ sample = @{ host = @{ keepRunning = $true }; topology = $topology } }
+    $configuration | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $ConfigDir "$Name.json") -Encoding utf8
+}
+
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
-    & $FilePath @Arguments
+    # The verdict is the exit code. Under ErrorActionPreference Stop a native
+    # command writing progress to stderr would terminate the runner before the
+    # exit code is ever read, so the call itself must not raise.
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments
+    } finally {
+        $ErrorActionPreference = $previous
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "$FilePath failed with exit code $LASTEXITCODE"
     }
@@ -204,69 +262,37 @@ try {
     $redisEndpoint = $redis.Endpoint
     Wait-Endpoint "redis" "tcp://$redisEndpoint"
 
-    $topologyArgs = @(
-        "--sample.topology.apiChannelEndpoint=$apiAChannelEndpoint",
-        "--sample.topology.apiAChannelEndpoint=$apiAChannelEndpoint",
-        "--sample.topology.apiBChannelEndpoint=$apiBChannelEndpoint",
-        "--sample.topology.playChannelEndpoint=$playAChannelEndpoint",
-        "--sample.topology.playAChannelEndpoint=$playAChannelEndpoint",
-        "--sample.topology.playBChannelEndpoint=$playBChannelEndpoint",
-        "--sample.topology.playARouteEndpoint=$playARouteEndpoint",
-        "--sample.topology.playBRouteEndpoint=$playBRouteEndpoint",
-        "--sample.topology.apiAPlayRouteEndpoint=$apiAPlayRouteEndpoint",
-        "--sample.topology.apiBPlayRouteEndpoint=$apiBPlayRouteEndpoint",
-        "--sample.topology.apiAMatchmakingRouteEndpoint=$apiAMatchmakingRouteEndpoint",
-        "--sample.topology.apiBMatchmakingRouteEndpoint=$apiBMatchmakingRouteEndpoint",
-        "--sample.topology.matchmakingRouteEndpoint=$matchmakingRouteEndpoint",
-        "--sample.topology.sessionAPlayRouteEndpoint=$sessionAPlayRouteEndpoint",
-        "--sample.topology.sessionBPlayRouteEndpoint=$sessionBPlayRouteEndpoint",
-        "--sample.topology.playASpotEndpoint=$playASpotEndpoint",
-        "--sample.topology.playBSpotEndpoint=$playBSpotEndpoint",
-        "--sample.topology.playASpotRouterEndpoint=$playASpotRouterEndpoint",
-        "--sample.topology.playBSpotRouterEndpoint=$playBSpotRouterEndpoint",
-        "--sample.topology.sessionSpotEndpoint=$sessionASpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
-        "--sample.topology.sessionAStreamEndpoint=$sessionAStreamEndpoint",
-        "--sample.topology.sessionBStreamEndpoint=$sessionBStreamEndpoint",
-        "--sample.topology.logDir=$LogDir",
-        "--sample.topology.redisEndpoint=$redisEndpoint",
-        "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
-    )
-    $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
+    Write-RoleConfig "matchmaking"
+    Write-RoleConfig "api-a" -ApiNode "a"
+    Write-RoleConfig "api-b" -ApiNode "b"
+    Write-RoleConfig "session-a" -SessionNode "a" -SessionSpotEndpoint $sessionASpotEndpoint -SessionRouterEndpoint $sessionARouterEndpoint -StreamEndpoint $sessionAStreamEndpoint
+    Write-RoleConfig "session-b" -SessionNode "b" -SessionSpotEndpoint $sessionBSpotEndpoint -SessionRouterEndpoint $sessionBRouterEndpoint -StreamEndpoint $sessionBStreamEndpoint
+    Write-RoleConfig "play-a" -PlayNode "a"
+    Write-RoleConfig "play-b" -PlayNode "b"
 
-    Start-Server "matchmaking" $MatchmakingBin $serverArgs
+    Start-Server "matchmaking" $MatchmakingBin @("--config=$(Join-Path $ConfigDir 'matchmaking.json')")
     Wait-Endpoint "matchmaking" $matchmakingRouteEndpoint
 
-    Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
+    Start-Server "api-a" $ApiBin @("--config=$(Join-Path $ConfigDir 'api-a.json')")
     Wait-Endpoint "api-a" $apiAChannelEndpoint
     Wait-Endpoint "api-a-play-route" $apiAPlayRouteEndpoint
     Wait-Endpoint "api-a-matchmaking-route" $apiAMatchmakingRouteEndpoint
-    Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
+    Start-Server "api-b" $ApiBin @("--config=$(Join-Path $ConfigDir 'api-b.json')")
     Wait-Endpoint "api-b" $apiBChannelEndpoint
     Wait-Endpoint "api-b-play-route" $apiBPlayRouteEndpoint
     Wait-Endpoint "api-b-matchmaking-route" $apiBMatchmakingRouteEndpoint
 
-    Start-Server "session-a" $SessionBin ($serverArgs + @(
-        "--sample.topology.sessionNode=a",
-        "--sample.topology.sessionSpotEndpoint=$sessionASpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
-        "--sample.topology.streamEndpoint=$sessionAStreamEndpoint"
-    ))
+    Start-Server "session-a" $SessionBin @("--config=$(Join-Path $ConfigDir 'session-a.json')")
     Wait-Endpoint "session-a-stream" $sessionAStreamEndpoint
     Wait-Endpoint "session-a-play-route" $sessionAPlayRouteEndpoint
 
-    Start-Server "session-b" $SessionBin ($serverArgs + @(
-        "--sample.topology.sessionNode=b",
-        "--sample.topology.sessionSpotEndpoint=$sessionBSpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionBRouterEndpoint",
-        "--sample.topology.streamEndpoint=$sessionBStreamEndpoint"
-    ))
+    Start-Server "session-b" $SessionBin @("--config=$(Join-Path $ConfigDir 'session-b.json')")
     Wait-Endpoint "session-b-stream" $sessionBStreamEndpoint
     Wait-Endpoint "session-b-play-route" $sessionBPlayRouteEndpoint
 
-    Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
+    Start-Server "play-a" $PlayBin @("--config=$(Join-Path $ConfigDir 'play-a.json')")
     Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
-    Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
+    Start-Server "play-b" $PlayBin @("--config=$(Join-Path $ConfigDir 'play-b.json')")
     Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
 
     Wait-Log "play-a peer route readiness" (Join-Path $LogDir "play-a.log") "bingo-ready kind=peer-route node=play-a peer=play-b"

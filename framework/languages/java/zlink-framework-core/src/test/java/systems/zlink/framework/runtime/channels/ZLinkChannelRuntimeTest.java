@@ -35,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1856,16 +1857,34 @@ final class ZLinkChannelRuntimeTest {
         public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
             ZLinkBackendAdapterOptions options) {
             return socket -> new ZLinkBackendSocketMonitor() {
+                private final Semaphore readable = new Semaphore(1);
                 private boolean emitted;
+                private volatile boolean closed;
 
                 @Override
-                public synchronized ZLinkBackendSocketMonitorEvent recv() {
+                public boolean waitForReadable(Duration timeout) {
+                    try {
+                        return readable.tryAcquire(
+                            timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+
+                @Override
+                public synchronized ZLinkBackendSocketMonitorEvent recvDontWait() {
                     if (emitted) {
-                        throw new IllegalStateException("monitor closed");
+                        return null;
                     }
                     emitted = true;
                     return new ZLinkBackendSocketMonitorEvent(
                         "CONNECTION_READY", Optional.empty(), "", "");
+                }
+
+                @Override
+                public boolean isClosed() {
+                    return closed;
                 }
 
                 @Override
@@ -1875,6 +1894,8 @@ final class ZLinkChannelRuntimeTest {
 
                 @Override
                 public void close() {
+                    closed = true;
+                    readable.release();
                 }
             };
         }

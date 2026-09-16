@@ -163,6 +163,14 @@ public:
 - **`singleton`은 처음 resolve할 때 만들고 host 수명 동안 재사용한다.**
 - **`scoped`는 그 scope에서 처음 resolve할 때 만들고 scope 안에서 재사용한다.**
 - **Framework가 scope를 닫으면 그 scope의 `scoped`·`transient` 인스턴스를 함께 정리한다.**
+- **컨테이너가 소유한 인스턴스는 각 수명 소유자가 종료될 때, 컨테이너가 소유권을 획득한 순서의
+  역순으로 해제한다.** scope-owned `scoped`·`transient`는 scope를 닫을 때, `singleton`은 host를
+  정리할 때 해제한다.
+
+컨테이너가 resolve한 의존 대상은 dependent보다 먼저 소유되므로, 소유 역순 하나면 dependent가
+의존 대상보다 먼저 해제된다. 등록 순서나 의존 그래프를 따로 계산하지 않는다. 기준은 객체가
+만들어진 시각이 아니라 **컨테이너가 소유권을 획득한 순서**다 — 컨테이너 밖에서 미리 만들어
+넘긴 인스턴스도 넘긴 시점으로 같은 순서에 들어간다.
 
 **닫힌 provider는 다시 사용할 수 없다.** 이후의 resolve는 전부 실패한다.
 

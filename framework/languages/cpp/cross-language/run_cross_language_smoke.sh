@@ -12,25 +12,121 @@ CPP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${CPP_ROOT}/../../.." && pwd)"
 
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${CPP_ROOT}/build-redis-vcpkg}"
-CPP_HOST="${BUILD_DIR}/zlink_cpp_cross_language_host"
+IS_WINDOWS_NATIVE=0
+case "$(uname -s 2>/dev/null || true)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS_NATIVE=1 ;;
+esac
+
+resolve_executable() {
+  local fallback="$1"
+  local candidate extension resolved
+
+  if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
+    for candidate in "$@"; do
+      if [[ "${candidate}" != */* ]] \
+        && resolved="$(command -v "${candidate}" 2>/dev/null)"; then
+        printf '%s\n' "${resolved}"
+        return 0
+      fi
+      if [[ -x "${candidate}" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+      for extension in .exe .bat; do
+        if [[ -f "${candidate}${extension}" ]]; then
+          printf '%s\n' "${candidate}${extension}"
+          return 0
+        fi
+      done
+    done
+  else
+    for candidate in "$@"; do
+      if [[ "${candidate}" != */* ]] \
+        && resolved="$(command -v "${candidate}" 2>/dev/null)"; then
+        printf '%s\n' "${resolved}"
+        return 0
+      fi
+      if [[ -x "${candidate}" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+    done
+  fi
+
+  printf '%s\n' "${fallback}"
+}
+
+PYTHON_CANDIDATES=(python3 python)
+if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
+  PYTHON_CANDIDATES=(py python python3)
+  if [[ -n "${LOCALAPPDATA:-}" ]] && command -v cygpath >/dev/null 2>&1; then
+    WINDOWS_LOCAL_APP_DATA="$(cygpath -u "${LOCALAPPDATA}")"
+    PYTHON_CANDIDATES+=(
+      "${WINDOWS_LOCAL_APP_DATA}/Programs/Python/Launcher/py"
+      "${WINDOWS_LOCAL_APP_DATA}"/Programs/Python/Python*/python
+    )
+  fi
+fi
+PYTHON_EXECUTABLE="$(resolve_executable "${PYTHON_CANDIDATES[@]}")"
+PYTHON_BIN=("${PYTHON_EXECUTABLE}")
+case "${PYTHON_EXECUTABLE##*/}" in
+  py|py.exe) PYTHON_BIN+=( -3 ) ;;
+esac
+
+CPP_HOST="$(resolve_executable \
+  "${BUILD_DIR}/zlink_cpp_cross_language_host" \
+  "${BUILD_DIR}/Release/zlink_cpp_cross_language_host")"
 DOTNET_TEST_HOST="${REPO_ROOT}/framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj"
 NODE_PEER_HOST="${SCRIPT_DIR}/node_peer_host.js"
 NODE_USER_SPOT_JOIN_HOST="${REPO_ROOT}/framework/languages/node/cross-language/user_spot_join_host.js"
 JAVA_CROSS_LANGUAGE_ROOT="${REPO_ROOT}/framework/languages/java/cross-language"
-JAVA_HOST="${JAVA_CROSS_LANGUAGE_ROOT}/Host/build/install/zlink-cross-language-host/bin/zlink-cross-language-host"
+JAVA_HOST="$(resolve_executable \
+  "${JAVA_CROSS_LANGUAGE_ROOT}/Host/build/install/zlink-cross-language-host/bin/zlink-cross-language-host")"
+
+if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
+  CORE_VERSION="$(sed -n 's/^LIBZLINK_VERSION=//p' "${REPO_ROOT}/VERSION")"
+  if [[ -n "${ZLINK_CORE_PACKAGE_PREFIX:-}" ]]; then
+    CORE_PACKAGE_PREFIX="${ZLINK_CORE_PACKAGE_PREFIX}"
+  else
+    LOCAL_PACKAGE_ROOT="${ZLINK_LOCAL_PACKAGE_ROOT:-${REPO_ROOT}/.artifacts/windows}"
+    LOCAL_CORE_PREFIX="${LOCAL_PACKAGE_ROOT}/install/zlink-core/${CORE_VERSION}"
+    if [[ -f "${LOCAL_CORE_PREFIX}/bin/zlink.dll" ]]; then
+      CORE_PACKAGE_PREFIX="${LOCAL_CORE_PREFIX}"
+    elif [[ -n "${WINDOWS_LOCAL_APP_DATA:-}" ]]; then
+      CORE_PACKAGE_PREFIX="${WINDOWS_LOCAL_APP_DATA}/zlink/core/${CORE_VERSION}/windows-x64"
+    else
+      CORE_PACKAGE_PREFIX="${LOCAL_CORE_PREFIX}"
+    fi
+  fi
+  CPP_HOST_DIR="$(cygpath -u "$(dirname "${CPP_HOST}")")"
+  CORE_PACKAGE_PREFIX="$(cygpath -u "${CORE_PACKAGE_PREFIX}")"
+  PATH="${CPP_HOST_DIR}:${CORE_PACKAGE_PREFIX}/bin:${PATH}"
+  export PATH
+fi
 
 RUN_DIR="$(mktemp -d)"
 PIDS=()
+REDIS_CONTAINERS=()
 RESULTS=()
 
-cleanup() {
-  local code=$?
+stop_all() {
+  local container pid
+  for container in "${REDIS_CONTAINERS[@]:-}"; do
+    docker rm -f "${container}" >/dev/null 2>&1 || true
+  done
+  REDIS_CONTAINERS=()
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
   for pid in "${PIDS[@]:-}"; do
     wait "$pid" >/dev/null 2>&1 || true
   done
+  PIDS=()
+}
+
+cleanup() {
+  local code=$?
+  stop_all
   if [[ "${ZLINK_CPP_CROSS_KEEP_RUN_DIR:-}" == "1" ]]; then
     echo "runDir=${RUN_DIR}"
   else
@@ -63,7 +159,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
 fi
 
 free_port() {
-  python3 - <<'PY'
+  "${PYTHON_BIN[@]}" - <<'PY'
 import socket
 sock = socket.socket()
 sock.bind(("127.0.0.1", 0))
@@ -75,12 +171,22 @@ PY
 start_redis() {
   local name="$1"
   local port="$2"
-  redis-server --port "${port}" --bind 127.0.0.1 --save '' --appendonly no \
-    --daemonize no >"${RUN_DIR}/${name}.log" 2>&1 &
-  PIDS+=("$!")
+  local container=""
+  if command -v redis-server >/dev/null 2>&1 \
+    && command -v redis-cli >/dev/null 2>&1; then
+    redis-server --port "${port}" --bind 127.0.0.1 --save '' --appendonly no \
+      --daemonize no >"${RUN_DIR}/${name}.log" 2>&1 &
+    PIDS+=("$!")
+  else
+    container="zlink-cross-${name}-${BASHPID}-${RANDOM}"
+    docker run --rm --name "${container}" -p "127.0.0.1:${port}:6379" \
+      redis:7-alpine >"${RUN_DIR}/${name}.log" 2>&1 &
+    PIDS+=("$!")
+    REDIS_CONTAINERS+=("${container}")
+  fi
   local deadline=$((SECONDS + 20))
   while ((SECONDS < deadline)); do
-    if python3 - "${port}" <<'PY' >/dev/null 2>&1
+    if "${PYTHON_BIN[@]}" - "${port}" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 sock = socket.socket()
@@ -92,7 +198,11 @@ sock.close()
 sys.exit(0 if reply.startswith(b"+PONG") else 1)
 PY
     then
-      redis-cli -p "${port}" FLUSHALL >/dev/null
+      if [[ -n "${container}" ]]; then
+        docker exec "${container}" redis-cli FLUSHALL >/dev/null
+      else
+        redis-cli -p "${port}" FLUSHALL >/dev/null
+      fi
       return 0
     fi
     sleep 0.1
@@ -197,16 +307,6 @@ wait_for_canonical_actor_join() {
   echo "timed out waiting for canonical actorJoin(28) in ${file}" >&2
   [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
   return 1
-}
-
-stop_all() {
-  for pid in "${PIDS[@]:-}"; do
-    kill "$pid" >/dev/null 2>&1 || true
-  done
-  for pid in "${PIDS[@]:-}"; do
-    wait "$pid" >/dev/null 2>&1 || true
-  done
-  PIDS=()
 }
 
 # --- messaging: C++ client -> .NET channel server -----------------------------
