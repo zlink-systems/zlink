@@ -387,6 +387,59 @@ class aggregate_lock_contention_store_t final : public location_store_t
     bool peer_marker_published = false;
 };
 
+class owner_lease_time_store_t final : public location_store_t
+{
+  public:
+    enum class lease_view_t
+    {
+        expired,
+        live,
+        missing_expiry
+    };
+
+    owner_lease_time_store_t (in_memory_location_store_t &inner,
+                              std::string owner_id,
+                              lease_view_t lease_view) :
+        _inner (&inner),
+        _owner_key (std::string ("owner-lease") + '\0' + std::move (owner_id)),
+        _lease_view (lease_view)
+    {
+    }
+
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        const auto inject_owner_time = key.value == _owner_key;
+        auto result = _inner->read (std::move (key)).result ().value ();
+        if (inject_owner_time) {
+            if (auto *found = std::get_if<store_found_t> (&result)) {
+                if (_lease_view == lease_view_t::missing_expiry)
+                    found->value.expires_at.reset ();
+                else
+                    found->value.expires_at =
+                      found->value.store_now
+                      + (_lease_view == lease_view_t::live ? 1min : 0min);
+            }
+        }
+        return task_t<store_read_result_t> (
+          result_t<store_read_result_t>::success (std::move (result)));
+    }
+
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        return _inner->write (std::move (request));
+    }
+
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return _inner->scan (std::move (request));
+    }
+
+  private:
+    in_memory_location_store_t *_inner;
+    std::string _owner_key;
+    lease_view_t _lease_view;
+};
+
 class post_commit_failure_relocation_store_t final :
     public relocation_store_t
 {
@@ -608,6 +661,172 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsLeaseAndDescript
     ASSERT_EQ (page.items.size (), 1u);
     EXPECT_EQ (page.items.front ().rid.to_string (), descriptor.rid.to_string ());
     EXPECT_EQ (page.items.front ().owner_id, "owner-a");
+}
+
+TEST (CppFrameworkOpaqueLocationStore, ExpiredOwnerLeaseReclaimsReservedAuthority)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t source (provider);
+    const auto source_claim = source.claim_owner_lease ("expired-source", 30s).result ().value ();
+    const auto target_claim = source.claim_owner_lease ("expired-target", 30s).result ().value ();
+    const auto *source_owner = std::get_if<owner_lease_claimed_t> (&source_claim);
+    const auto *target_owner = std::get_if<owner_lease_claimed_t> (&target_claim);
+    ASSERT_NE (source_owner, nullptr);
+    ASSERT_NE (target_owner, nullptr);
+
+    const auto descriptor = [] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t value;
+        value.mesh_name = "expired-mesh";
+        value.rid = zlink::routing_id_t::from (rid);
+        value.lifecycle_generation = 1;
+        value.descriptor_revision = 1;
+        value.endpoint = "tcp://127.0.0.1:7001";
+        value.owner_id = owner.owner_id;
+        value.lease_generation = owner.lease_generation;
+        value.object_role = object_role_t::server;
+        value.state = framework_runtime_state_t::serving;
+        value.object_capabilities = {
+          {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0},
+          {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::recreate, false, 0}};
+        value.capacity.actors.limit = 1;
+        value.capacity.spots.limit = 1;
+        value.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "room", {0, 0, 1}});
+        return value;
+    };
+    const auto source_descriptor = descriptor ("expired-source-node", source_owner->token);
+    const auto target_descriptor = descriptor ("expired-target-node", target_owner->token);
+    ASSERT_EQ (source.update_mesh_node (source_descriptor, location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+    ASSERT_EQ (source.update_mesh_node (target_descriptor, location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+
+    owner_lease_time_store_t expired (
+      provider, source_owner->token.owner_id, owner_lease_time_store_t::lease_view_t::expired);
+    provider_location_repository_t replacement (expired);
+    for (const auto kind : {placement_object_kind_t::actor,
+                            placement_object_kind_t::user_spot}) {
+        const auto stable_type = kind == placement_object_kind_t::actor ? "player" : "room";
+        object_reserve_request_t request;
+        request.key = {kind, kind == placement_object_kind_t::actor ? "expired-actor" : "expired-spot"};
+        request.intent.stable_type = stable_type;
+        request.target = {"expired-mesh", node_rid_t::from_string ("expired-source-node"), 1,
+                          source_owner->token};
+        request.creating_payload = bytes ("creating");
+        request.capacity_bundle = kind == placement_object_kind_t::actor
+          ? placement_capacity_bundle_t{.actor_slots = 1}
+          : placement_capacity_bundle_t{
+              .spot_slots = 1,
+              .spot_type = spot_type_capacity_delta_t{kind, stable_type, 1}};
+        const auto original = source.reserve (request).result ().value ();
+        ASSERT_NE (std::get_if<object_reserved_t> (&original), nullptr);
+
+        request.target = {"expired-mesh", node_rid_t::from_string ("expired-target-node"), 1,
+                          target_owner->token};
+        const auto reserved = replacement.reserve (request).result ().value ();
+        const auto *reclaimed = std::get_if<object_reserved_t> (&reserved);
+        ASSERT_NE (reclaimed, nullptr);
+        EXPECT_EQ (reclaimed->creating.owner.owner_id, target_owner->token.owner_id);
+        EXPECT_GT (reclaimed->creating.object_generation, 1u);
+    }
+}
+
+TEST (CppFrameworkOpaqueLocationStore, LiveOwnerLeaseProtectsReservedAuthority)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t source (provider);
+    const auto source_claim = source.claim_owner_lease ("live-source", 30s).result ().value ();
+    const auto target_claim = source.claim_owner_lease ("live-target", 30s).result ().value ();
+    const auto *source_owner = std::get_if<owner_lease_claimed_t> (&source_claim);
+    const auto *target_owner = std::get_if<owner_lease_claimed_t> (&target_claim);
+    ASSERT_NE (source_owner, nullptr);
+    ASSERT_NE (target_owner, nullptr);
+
+    const auto publish = [&] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "live-mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.object_capabilities.push_back (
+          {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+        descriptor.capacity.actors.limit = 1;
+        ASSERT_EQ (source.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ().value ().status,
+                   location_write_status_t::stored);
+    };
+    publish ("live-source-node", source_owner->token);
+    publish ("live-target-node", target_owner->token);
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "live-actor"};
+    request.intent.stable_type = "player";
+    request.target = {"live-mesh", node_rid_t::from_string ("live-source-node"), 1,
+                      source_owner->token};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+    const auto first = source.reserve (request).result ().value ();
+    const auto *original = std::get_if<object_reserved_t> (&first);
+    ASSERT_NE (original, nullptr);
+
+    owner_lease_time_store_t live (
+      provider, source_owner->token.owner_id, owner_lease_time_store_t::lease_view_t::live);
+    provider_location_repository_t replacement (live);
+    request.target = {"live-mesh", node_rid_t::from_string ("live-target-node"), 1,
+                      target_owner->token};
+    EXPECT_TRUE (std::holds_alternative<object_reserve_conflict_t> (
+      replacement.reserve (request).result ().value ()));
+    const auto current = std::get<authority_snapshot_t> (
+      replacement.read_authority (actor_authority_key ("live-actor")).result ().value ());
+    EXPECT_EQ (current.store_version, original->creating.store_version);
+    EXPECT_EQ (current.owner.owner_id, source_owner->token.owner_id);
+}
+
+TEST (CppFrameworkOpaqueLocationStore, MissingOwnerLeaseExpiryFailsClosedDuringReclaim)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t source (provider);
+    const auto claim = source.claim_owner_lease ("corrupt-owner", 30s).result ().value ();
+    const auto *owner = std::get_if<owner_lease_claimed_t> (&claim);
+    ASSERT_NE (owner, nullptr);
+
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "corrupt-mesh";
+    descriptor.rid = zlink::routing_id_t::from ("corrupt-node");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner->token.owner_id;
+    descriptor.lease_generation = owner->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+    descriptor.capacity.actors.limit = 1;
+    ASSERT_EQ (source.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "corrupt-actor"};
+    request.intent.stable_type = "player";
+    request.target = {"corrupt-mesh", node_rid_t::from_string ("corrupt-node"), 1, owner->token};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+    const auto reserved = source.reserve (request).result ().value ();
+    ASSERT_NE (std::get_if<object_reserved_t> (&reserved), nullptr);
+
+    owner_lease_time_store_t corrupt (
+      provider, owner->token.owner_id, owner_lease_time_store_t::lease_view_t::missing_expiry);
+    provider_location_repository_t reopened (corrupt);
+    EXPECT_THROW ((void) reopened.reserve (request), std::invalid_argument);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThroughProvider)

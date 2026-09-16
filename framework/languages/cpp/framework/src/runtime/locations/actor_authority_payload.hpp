@@ -46,6 +46,7 @@ struct actor_authority_payload_t
     std::string mesh_name;
     node_rid_t node_rid;
     std::uint64_t node_generation = 0;
+    bool has_relocation_state = false;
 };
 
 struct actor_authority_projection_t
@@ -279,11 +280,14 @@ inline bool read_optional_text8 (reader_t &reader, bool *present = nullptr)
  * in particular, a source-only Preparing/Captured slot has no target fence. */
 inline bool read_actor_authority_relocation_state (
   reader_t &body_reader,
-  std::optional<std::uint64_t> root_aggregate_generation = std::nullopt)
+  std::optional<std::uint64_t> root_aggregate_generation = std::nullopt,
+  bool *has_relocation_state = nullptr)
 {
     const auto has_relocation = body_reader.u8 ();
     if (has_relocation > 1)
         return false;
+    if (has_relocation_state)
+        *has_relocation_state = has_relocation != 0;
     const auto state = body_reader.take (body_reader.u32be ());
     if (has_relocation == 0)
         return state.empty ();
@@ -629,8 +633,10 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
             return std::nullopt;
         const auto node_rid_bytes = body_reader.take (node_rid_size);
         const auto node_generation = body_reader.u64be ();
+        bool has_relocation_state = false;
         if (owner_lease_generation == 0 || node_generation == 0
-            || !actor_authority_detail::read_actor_authority_relocation_state (body_reader)
+            || !actor_authority_detail::read_actor_authority_relocation_state (
+              body_reader, std::nullopt, &has_relocation_state)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;
@@ -640,7 +646,8 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
         return actor_authority_payload_t{
           state, stable_type, actor_id, spot_id, spot_generation, spot_kind,
           owner_id, owner_lease_generation, mesh_name,
-          node_rid_t::from_string (std::move (node_rid)), node_generation};
+          node_rid_t::from_string (std::move (node_rid)), node_generation,
+          has_relocation_state};
     }
     catch (...) {
         return std::nullopt;

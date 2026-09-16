@@ -3,6 +3,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -86,14 +87,12 @@ class provider_location_repository_t final : public location_repository_t
     {
         auto result = read (key_owner (owner_id));
         const auto *found = std::get_if<store_found_t> (&result);
-        if (!found || !found->value.expires_at)
+        if (!found)
             return completed (owner_lease_read_result_t{owner_lease_missing_t{}});
-        const auto record = parse_canonical_record (found->value.bytes, "owner lease");
-        return completed (owner_lease_read_result_t{
-          owner_lease_found_t{{record.at ("ownerId").get<std::string> (),
-                               parse_i64_field (record.at ("leaseGeneration"))},
-                              *found->value.expires_at,
-                              found->value.store_now}});
+        auto lease = decode_owner_lease (*found);
+        if (lease.token.owner_id != owner_id)
+            throw std::invalid_argument ("Location Store owner lease record is invalid");
+        return completed (owner_lease_read_result_t{std::move (lease)});
     }
 
     task_t<owner_lease_renew_result_t>
@@ -511,7 +510,8 @@ class provider_location_repository_t final : public location_repository_t
     {
         constexpr unsigned max_cas_retries = 3;
         for (unsigned attempt = 0; ; ++attempt) {
-            auto result = reserve_once (request, cancellation).result ();
+            bool retry_reclaim = false;
+            auto result = reserve_once (request, cancellation, &retry_reclaim).result ();
             if (!result)
                 return task_t<object_reserve_result_t> (std::move (result));
 
@@ -521,27 +521,38 @@ class provider_location_repository_t final : public location_repository_t
               conflict
               && std::holds_alternative<authority_missing_t> (
                 conflict->current);
-            if (!authority_missing || attempt >= max_cas_retries)
+            if ((!authority_missing && !retry_reclaim) || attempt >= max_cas_retries)
                 return task_t<object_reserve_result_t> (std::move (result));
 
-            // Re-read the target and owner before retrying. A valid target
-            // with a live owner indicates that the missing authority was a
-            // competing conditional write, not a placement candidate that
-            // should be discarded by the caller.
-            const auto target = read_target_descriptor (request.target);
-            if (!target
-                || !target_accepts (target->descriptor, request.key.kind,
-                                     request.intent.stable_type)
-                || !owner_is_live (request.target.owner))
-                return task_t<object_reserve_result_t> (std::move (result));
+            if (authority_missing) {
+                // Re-read the target and owner before retrying. A valid target
+                // with a live owner indicates that the missing authority was a
+                // competing conditional write, not a placement candidate that
+                // should be discarded by the caller.
+                const auto target = read_target_descriptor (request.target);
+                if (!target
+                    || !target_accepts (target->descriptor, request.key.kind,
+                                         request.intent.stable_type)
+                    || !owner_is_live (request.target.owner))
+                    return task_t<object_reserve_result_t> (std::move (result));
+            }
             std::this_thread::yield ();
         }
     }
 
   private:
+    enum class stale_authority_reclaim_result_t
+    {
+        owner_live,
+        reclaimed,
+        conflict,
+        recovery_required
+    };
+
     task_t<object_reserve_result_t> reserve_once (
       object_reserve_request_t request,
-      std::stop_token cancellation = {})
+      std::stop_token cancellation,
+      bool *retry_reclaim)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
@@ -566,6 +577,14 @@ class provider_location_repository_t final : public location_repository_t
             if (current.allocation.state == placement_allocation_state_t::active)
                 return completed (
                   object_reserve_result_t{object_already_exists_t{std::move (current)}});
+            const auto reclaim = try_reclaim_reserved_authority (
+              request.key, authority_key, *found, current);
+            if (reclaim == stale_authority_reclaim_result_t::reclaimed
+                || reclaim == stale_authority_reclaim_result_t::conflict) {
+                *retry_reclaim = true;
+                return completed (object_reserve_result_t{object_reserve_conflict_t{
+                  read_authority_value (object_key (request.key))}});
+            }
             return completed (
               object_reserve_result_t{object_reserve_conflict_t{std::move (current)}});
         }
@@ -671,6 +690,72 @@ class provider_location_repository_t final : public location_repository_t
         fence.expected_store_version = creating.store_version;
         return completed (
           object_reserve_result_t{object_reserved_t{std::move (fence), std::move (creating)}});
+    }
+
+    stale_authority_reclaim_result_t try_reclaim_reserved_authority (
+      const object_creation_key_t &key,
+      const store_key_t &authority_key,
+      const store_found_t &stored_authority,
+      const authority_snapshot_t &current)
+    {
+        const auto owner_key = key_owner (current.owner.owner_id);
+        auto owner = read (owner_key);
+        auto stale_owner_condition = missing_condition (owner_key);
+        if (const auto *found = std::get_if<store_found_t> (&owner)) {
+            const auto lease = decode_owner_lease (*found);
+            if (lease.token.owner_id != current.owner.owner_id)
+                throw std::invalid_argument ("Location Store owner lease record is invalid");
+            if (lease.token.lease_generation == current.owner.lease_generation
+                && lease.lease_expires_at > lease.store_now)
+                return stale_authority_reclaim_result_t::owner_live;
+            stale_owner_condition = version_condition (owner_key, found->value.version);
+        }
+
+        // Relocation authority is recovered by its own protocol. Reserve may
+        // reclaim only a steady pending creation whose owner lease ended.
+        const auto actor = decode_direct_actor_authority_payload (current.payload);
+        if (actor && actor->has_relocation_state)
+            return stale_authority_reclaim_result_t::recovery_required;
+        if (!current.pending_creation)
+            return stale_authority_reclaim_result_t::recovery_required;
+
+        const auto reservation_key = key_reservation (key);
+        auto reservation = read (reservation_key);
+        const auto *stored_reservation = std::get_if<store_found_t> (&reservation);
+        if (!stored_reservation)
+            return stale_authority_reclaim_result_t::recovery_required;
+        auto reservation_record = parse_json (stored_reservation->value.bytes);
+        if (reservation_record.at ("status").get<std::string> () != "prepared")
+            return stale_authority_reclaim_result_t::recovery_required;
+        const object_reservation_fence_t current_fence{
+          current.pending_creation->reservation_id,
+          current.store_version,
+          current.object_generation,
+          current.authority_owner_generation,
+          current.allocation.target,
+          current.allocation.capacity_bundle};
+        if (!same_fence (decode_fence (reservation_record.at ("fence")), current_fence))
+            return stale_authority_reclaim_result_t::recovery_required;
+
+        const auto target = read_target_descriptor (current.allocation.target, false, false);
+        if (!target)
+            return stale_authority_reclaim_result_t::recovery_required;
+        auto capacity = read_capacity (current.allocation.target, *target);
+        if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle, -1, 0))
+            return stale_authority_reclaim_result_t::recovery_required;
+
+        reservation_record["status"] = "aborted";
+        const auto written = write (
+          {{version_condition (authority_key, stored_authority.value.version),
+            std::move (stale_owner_condition),
+            version_condition (reservation_key, stored_reservation->value.version),
+            capacity.condition},
+           {store_delete_t{authority_key},
+            store_put_t{reservation_key, to_bytes (reservation_record.dump ()), std::nullopt},
+            store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}});
+        return std::holds_alternative<store_write_applied_t> (written)
+                 ? stale_authority_reclaim_result_t::reclaimed
+                 : stale_authority_reclaim_result_t::conflict;
     }
 
   public:
@@ -2221,6 +2306,17 @@ class provider_location_repository_t final : public location_repository_t
           parse_canonical_record (value, "owner lease").at ("leaseGeneration"));
     }
 
+    static owner_lease_found_t decode_owner_lease (const store_found_t &found)
+    {
+        if (!found.value.expires_at)
+            throw std::invalid_argument ("Location Store owner lease record is invalid");
+        const auto record = parse_canonical_record (found.value.bytes, "owner lease");
+        return {{record.at ("ownerId").get<std::string> (),
+                 parse_i64_field (record.at ("leaseGeneration"))},
+                *found.value.expires_at,
+                found.value.store_now};
+    }
+
     static std::string segment (std::string_view value)
     {
         return std::to_string (value.size ()) + ":" + std::string (value) + ":";
@@ -2691,7 +2787,13 @@ class provider_location_repository_t final : public location_repository_t
     {
         auto current = read (key_owner (owner.owner_id));
         const auto *found = std::get_if<store_found_t> (&current);
-        if (!found || owner_generation (found->value.bytes) != owner.lease_generation)
+        if (!found)
+            return std::nullopt;
+        const auto lease = decode_owner_lease (*found);
+        if (lease.token.owner_id != owner.owner_id)
+            throw std::invalid_argument ("Location Store owner lease record is invalid");
+        if (lease.token.lease_generation != owner.lease_generation
+            || lease.lease_expires_at <= lease.store_now)
             return std::nullopt;
         return *found;
     }
