@@ -56,7 +56,7 @@ final class ZLinkChannelSubmissionContractTest {
     }
 
     @Test
-    void oneWaySubmitUsesOneNonBlockingAdmissionAttempt() {
+    void fanoutPublishWaitsForLocalAdmissionUntilTheSocketDeadline() {
         RecordingPublishBackend backend = new RecordingPublishBackend();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         { var channel = options.addFanoutChannel("events").enablePublisher("inproc://events"); };
@@ -69,7 +69,7 @@ final class ZLinkChannelSubmissionContractTest {
             assertEquals(
                 0,
                 OneWayTestStatus.status(submission));
-            assertEquals(SendFlags.DONT_WAIT, backend.flags);
+            assertEquals(SendFlags.NONE, backend.flags);
         }
     }
 

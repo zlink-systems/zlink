@@ -927,6 +927,11 @@ class channel_native_publisher_t
                   .message (body)
                   .submit ();
             }
+            catch (const std::exception &error) {
+                if (override_timeout)
+                    _socket.options ().send_timeout (configured_timeout);
+                throw map_native_send_exception (error);
+            }
             catch (...) {
                 if (override_timeout)
                     _socket.options ().send_timeout (configured_timeout);
@@ -1670,9 +1675,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             }
             catch (const framework_exception_t &) { throw; }
             catch (const std::exception &error) {
-                throw framework_exception_t (
-                  framework_error_kind_t::internal_failure,
-                  error.what ());
+                throw map_native_send_exception (error);
             }
         }
         try {
@@ -1716,8 +1719,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
         }
         catch (const framework_exception_t &) { throw; }
         catch (const std::exception &error) {
-            throw framework_exception_t (
-              framework_error_kind_t::internal_failure, error.what ());
+            throw map_native_send_exception (error);
         }
         catch (...) {
             throw framework_exception_t (

@@ -14,6 +14,7 @@ const {
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   isPollerInterruptedError,
+  submitBindingPublish,
   submitBindingRequest,
   submitBindingSyncSend,
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
@@ -165,6 +166,43 @@ test('binding synchronous send uses the flag-free finalized terminal', () => {
   assert.equal(submitBindingSyncSend(operation, Buffer.from('blocking')), undefined);
   assert.equal(submitBindingSyncSend(operation, Buffer.from('nonblocking')), undefined);
   assert.deepEqual(submittedParts.map((part) => part.toString()), ['blocking', 'nonblocking']);
+});
+
+test('classic fanout publish completes after the binding admits the queued record', () => {
+  const calls = [];
+  const submit = {
+    message(part) {
+      calls.push(`part:${Buffer.from(part).toString()}`);
+      return this;
+    },
+    submit() {
+      calls.push('admitted');
+    }
+  };
+  const operation = {
+    message(part) {
+      calls.push(`topic:${Buffer.from(part).toString()}`);
+      return submit;
+    }
+  };
+
+  assert.equal(submitBindingPublish(operation, [Buffer.from('header'), Buffer.from('body')]), undefined);
+  assert.deepEqual(calls, ['topic:header', 'part:body', 'admitted']);
+});
+
+test('classic fanout local queue deadline is a Framework DeadlineExceeded error', () => {
+  const submit = {
+    message() { return this; },
+    submit() {
+      throw new zlink.SubmitError(zlink.SubmitResult.Backpressured, 11);
+    }
+  };
+  const operation = { message() { return submit; } };
+
+  assert.throws(
+    () => submitBindingPublish(operation, Buffer.from('event')),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
 });
 
 test('backend DONTWAIT Spot send awaits managed binding admission', async () => {
