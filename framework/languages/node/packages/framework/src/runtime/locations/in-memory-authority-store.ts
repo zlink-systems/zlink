@@ -273,7 +273,15 @@ export class ZLinkInMemoryAuthorityStore {
       if (current.snapshot.allocation.state === 'active') {
         return { kind: 'alreadyExists', current: this.snapshot(current.snapshot) };
       }
-      return { kind: 'conflict', current: this.read(key) };
+      // An unfinished creation whose owner lease ended is cancellable.
+      // Reclaim it so the key does not stay blocked forever.
+      if (this.isOwnerLive(current.snapshot) || current.creation === undefined) {
+        return { kind: 'conflict', current: this.read(key) };
+      }
+      this.adjustCapacity(this.pendingCapacity, current.snapshot.allocation, -1);
+      this.rows.delete(key);
+      this.creationTerminals.set(current.creation.reservationId, 'aborted');
+      this.scanRevision++;
     }
     const target = creationTarget(request);
     if (!this.validation.isTargetLive(target.descriptor, target.lifecycleGeneration, target.owner)) {

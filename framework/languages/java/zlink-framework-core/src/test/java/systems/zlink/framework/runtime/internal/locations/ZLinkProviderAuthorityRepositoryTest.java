@@ -37,6 +37,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreValue;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
@@ -111,6 +112,112 @@ final class ZLinkProviderAuthorityRepositoryTest {
             ZLinkObjectReserved.class,
             repository.reserve(second, () -> false)
                 .toCompletableFuture().get());
+    }
+
+    @Test
+    void expiredOwnerLeaseWithMatchingGenerationReclaimsReservedAuthority()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var staleOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "expired-reservation-owner", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var replacementOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "replacement-reservation-owner", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var staleDescriptor = capacityDescriptor(
+            staleOwner, "mesh", RoutingId.from("expired-reservation-node"));
+        var replacementDescriptor = capacityDescriptor(
+            replacementOwner,
+            "mesh",
+            RoutingId.from("replacement-reservation-node"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    staleDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        String authorityKey = ZLinkAuthorityKeyCodec.actor(
+            "expired-reservation");
+        var reserved = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            new ZLinkProviderAuthorityRepository(provider, descriptors)
+                .reserve(
+                    capacityRequest(authorityKey, staleDescriptor, staleOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+
+        var replacement = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            new ZLinkProviderAuthorityRepository(
+                    new OwnerLeaseExpiryStore(provider, staleOwner.ownerId(), true),
+                    descriptors)
+                .reserve(
+                    capacityRequest(
+                        authorityKey, replacementDescriptor, replacementOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+
+        assertTrue(
+            replacement.objectGeneration() > reserved.objectGeneration());
+        assertEquals(replacementOwner, replacement.targetOwner());
+    }
+
+    @Test
+    void liveOwnerLeaseWithMatchingGenerationProtectsReservedAuthority()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var liveOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "live-reservation-owner", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var otherOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "other-reservation-owner", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var liveDescriptor = capacityDescriptor(
+            liveOwner, "mesh", RoutingId.from("live-reservation-node"));
+        var otherDescriptor = capacityDescriptor(
+            otherOwner, "mesh", RoutingId.from("other-reservation-node"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    liveDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    otherDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        String authorityKey = ZLinkAuthorityKeyCodec.actor("live-reservation");
+        assertInstanceOf(
+            ZLinkObjectReserved.class,
+            new ZLinkProviderAuthorityRepository(provider, descriptors)
+                .reserve(
+                    capacityRequest(authorityKey, liveDescriptor, liveOwner),
+                    () -> false)
+                .toCompletableFuture().get());
+
+        var conflict = assertInstanceOf(
+            ZLinkObjectConflict.class,
+            new ZLinkProviderAuthorityRepository(
+                    new OwnerLeaseExpiryStore(provider, liveOwner.ownerId(), false),
+                    descriptors)
+                .reserve(
+                    capacityRequest(authorityKey, otherDescriptor, otherOwner),
+                    () -> false)
+                .toCompletableFuture().get());
+        var existing = assertInstanceOf(
+            ZLinkAuthoritySnapshot.class, conflict.current());
+
+        assertEquals(liveOwner.ownerId(), existing.ownerId());
+        assertEquals(
+            liveOwner.leaseGeneration(), existing.ownerLeaseGeneration());
     }
 
     @Test
@@ -1262,6 +1369,56 @@ final class ZLinkProviderAuthorityRepositoryTest {
         }
         throw new IllegalStateException(
             "shared relocation fixture was not found");
+    }
+
+    private static final class OwnerLeaseExpiryStore
+        implements ZLinkLocationStore {
+        private final ZLinkLocationStore delegate;
+        private final ZLinkStoreKey ownerKey;
+        private final boolean expired;
+
+        private OwnerLeaseExpiryStore(
+            ZLinkLocationStore delegate,
+            String ownerId,
+            boolean expired) {
+            this.delegate = delegate;
+            this.ownerKey = ZLinkOwnerLeaseRecordCodec.key(ownerId);
+            this.expired = expired;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+            ZLinkStoreKey key,
+            ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation).thenApply(read -> {
+                if (!key.equals(ownerKey)
+                    || !(read instanceof ZLinkStoreReadFound found)) {
+                    return read;
+                }
+                var value = found.value();
+                return new ZLinkStoreReadFound(new ZLinkStoreValue(
+                    value.bytes(),
+                    value.version(),
+                    expired
+                        ? value.storeNow()
+                        : value.storeNow().plus(Duration.ofMinutes(1)),
+                    value.storeNow()));
+            });
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+            ZLinkStoreWriteRequest request,
+            ZLinkStoreCancellation cancellation) {
+            return delegate.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+            ZLinkStoreScanRequest request,
+            ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
     }
 
     private static final class FailingParticipantStore

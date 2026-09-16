@@ -518,8 +518,19 @@ final class ZLinkProviderAuthorityRepository {
         return provider.read(staleOwnerKey, cancellation).thenCompose(ownerRead -> {
             ZLinkStoreCondition ownerCondition;
             if (ownerRead instanceof ZLinkStoreReadFound ownerFound) {
-                if (ownerGeneration(ownerFound.value().bytes())
-                    == current.ownerLeaseGeneration()) {
+                var owner = ZLinkOwnerLeaseRecordCodec.decode(
+                    ownerFound.value().bytes());
+                if (!owner.ownerId().equals(current.ownerId())
+                    || ownerFound.value().expiresAt() == null) {
+                    // Lease writers always apply a positive TTL. Reclaiming
+                    // deletes authority, so a missing expiry is corruption,
+                    // not evidence that the owner has died.
+                    throw new IllegalStateException(
+                        "Location Store owner lease record is invalid");
+                }
+                if (owner.leaseGeneration() == current.ownerLeaseGeneration()
+                    && ownerFound.value().expiresAt().isAfter(
+                        ownerFound.value().storeNow())) {
                     return completed(StaleAuthorityReclaim.OWNER_LIVE);
                 }
                 ownerCondition = new ZLinkStoreVersionCondition(

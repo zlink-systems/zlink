@@ -101,6 +101,34 @@ test('generic reservation is the only Missing to Pending to Active path', async 
   assert.equal(committed.ready.pendingCreation, undefined);
 });
 
+test('in-memory authority reclaims only a Reserved creation whose owner is no longer live', async () => {
+  const live = new Set([
+    'mesh:node-a:1:owner-a:1',
+    'mesh:node-b:2:owner-b:2'
+  ]);
+  const store = authority(live);
+  const first = await store.reserve(reserveRequest('expired-owner', target('node-a', 'owner-a')));
+  assert.equal(first.kind, 'reserved');
+  if (first.kind !== 'reserved') return;
+
+  live.delete('mesh:node-a:1:owner-a:1');
+  const replacement = await store.reserve(
+    reserveRequest('expired-owner', target('node-b', 'owner-b'))
+  );
+  assert.equal(replacement.kind, 'reserved');
+  if (replacement.kind !== 'reserved') return;
+  assert.ok(replacement.creating.objectGeneration > first.creating.objectGeneration);
+
+  const protectedLive = await store.reserve(
+    reserveRequest('live-owner', target('node-b', 'owner-b'))
+  );
+  assert.equal(protectedLive.kind, 'reserved');
+  assert.equal(
+    (await store.reserve(reserveRequest('live-owner', target('node-a', 'owner-a')))).kind,
+    'conflict'
+  );
+});
+
 test('creation abort cleans pending capacity without requiring a live target', async () => {
   const live = new Set(['mesh:node-a:1:owner-a:1']);
   const store = authority(live);

@@ -1082,9 +1082,62 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         ) {
           return { kind: 'typeMismatch', current: snapshot };
         }
-        return snapshot.allocation.state === 'active'
-          ? { kind: 'alreadyExists', current: snapshot }
-          : { kind: 'conflict', current: snapshot };
+        if (snapshot.allocation.state === 'active') {
+          return { kind: 'alreadyExists', current: snapshot };
+        }
+        if (record.aggregate !== undefined
+          || isCanonicalAuthorityPayload(record.snapshot.payload)) {
+          // A relocation record carries its own recovery protocol. Reserve
+          // may reclaim only an unfinished plain creation.
+          return { kind: 'conflict', current: snapshot };
+        }
+        // The row is Reserved by another owner. An unfinished creation
+        // whose owner lease ended is cancellable, so reclaim it and retry
+        // instead of blocking the key forever.
+        const staleOwnerKey = ownerKey(snapshot.ownerId);
+        const staleCapacityKey = capacityKey(
+          snapshot.allocation.descriptor.meshName,
+          String(snapshot.allocation.descriptor.rid)
+        );
+        const [staleOwnerRead, staleCapacityRead] = await Promise.all([
+          this.provider.read(staleOwnerKey, signal),
+          this.provider.read(staleCapacityKey, signal)
+        ]);
+        if (staleOwnerRead.kind === 'found'
+          && staleOwnerRead.value.expiresAt === undefined) {
+          // A lease is always written with a positive TTL, so a missing
+          // expiry is a corrupt record. Reclaiming deletes authority state,
+          // so refuse rather than read the absence as expiry.
+          throw new Error('Location Store owner lease record is invalid.');
+        }
+        if (sameLiveOwner(staleOwnerRead, record.snapshot)) {
+          return { kind: 'conflict', current: snapshot };
+        }
+        const staleCapacity = staleCapacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(staleCapacityRead.value.bytes);
+        await this.provider.write({
+          conditions: [
+            { kind: 'version', key: rowKey, expected: current.value.version },
+            versionCondition(staleOwnerKey, staleOwnerRead),
+            conditionFor(staleCapacityKey, staleCapacityRead)
+          ],
+          mutations: [
+            { kind: 'delete', key: rowKey },
+            {
+              kind: 'put',
+              key: staleCapacityKey,
+              bytes: encodeJson({
+                active: staleCapacity.active,
+                pending: subtractCapacity(
+                  staleCapacity.pending,
+                  record.snapshot.allocation.capacity
+                )
+              } satisfies CapacityRecord)
+            }
+          ]
+        }, signal);
+        continue;
       }
       const descriptor = liveTargetDescriptor(
         descriptorRead,
@@ -1291,6 +1344,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(leaseKey, signal),
         this.provider.read(capacityRowKey, signal)
       ]);
+      if (leaseRead.kind === 'found' && leaseRead.value.expiresAt === undefined) {
+        // A lease is always written with a positive TTL, so a missing expiry
+        // is a corrupt record. Abort deletes authority state, so refuse
+        // rather than read the absence as expiry.
+        throw new Error('Location Store owner lease record is invalid.');
+      }
       if (!sameLiveOwner(leaseRead, record.snapshot)) return { kind: 'stale' };
       const capacity = capacityRead.kind === 'missing'
         ? emptyCapacityRecord()
@@ -3877,6 +3936,17 @@ function sameCreationTarget(
       === target.nodeLifecycleGeneration
     && snapshot.ownerId === target.owner.ownerId
     && snapshot.ownerLeaseGeneration === target.owner.leaseGeneration;
+}
+
+const CANONICAL_AUTHORITY_MAGIC = Buffer.from('ZLAU');
+
+function isCanonicalAuthorityPayload(payload: Uint8Array): boolean {
+  return payload.byteLength >= CANONICAL_AUTHORITY_MAGIC.byteLength
+    && Buffer.from(
+      payload.buffer,
+      payload.byteOffset,
+      CANONICAL_AUTHORITY_MAGIC.byteLength
+    ).equals(CANONICAL_AUTHORITY_MAGIC);
 }
 
 function sameLiveOwner(
