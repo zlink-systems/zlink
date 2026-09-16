@@ -500,7 +500,8 @@ fanout publisher가 각각 자신의 descriptor를 게시하며 현재 host 실�
 
 Framework가 Store에서 이 정보를 읽어 필요한 connection을 자동으로 구성하는 기능을
 [automatic discovery](../00-foundation/02-glossary.ko.md#automatic-discovery)라고 한다. Framework는
-descriptor 페이지를 읽은 뒤 해당 host의 owner lease가 아직 유효한지 직접 확인한다.
+descriptor 페이지를 읽은 뒤 그 host를 대상으로 삼기 전에 owner lease가 살아 있는지
+확인한다. 판정 기준은 §4.1이 정한다.
 
 | Descriptor 항목 | 계약 |
 |---|---|
@@ -529,6 +530,79 @@ Descriptor가 있다는 사실만으로 message를 보낼 수 있는 것은 아�
 Liveness beacon은 publisher가 연결 상태를 확인하려고 보내는 전용 record이며 application
 message가 아니다.
 
+### 4.1 대상 descriptor의 owner lease 검증
+
+Host가 정상 종료할 때 자신이 게시한 descriptor를 직접 지운다. Process가 그 전에 멈추면
+descriptor를 지울 주체가 없고 기록은 Store에 남는다 — descriptor의 수명은 §11이 정한다.
+
+Node의 routing ID는 host process마다 새로 만든다. 그래서 같은 설정으로 다시 시작한 host는
+새 routing ID로 자신의 descriptor를 추가하며, 멈춘 host의 descriptor는 같은 endpoint를
+가리킨 채 남는다. Store에는 한 endpoint를 가리키는 descriptor가 둘이 된다. **이 절은 그런
+descriptor를 대상으로 삼지 않는 판정만 소유한다.**
+
+**Framework는 Store에서 읽은 descriptor를 대상으로 삼기 전에 그 descriptor를 게시한 host의
+owner lease가 살아 있는지 확인한다.** 이 규칙은 Store descriptor로 연결 상대나 operation
+대상을 정하는 **모든 경로**에 적용한다. 아래 표는 그중 자주 쓰이는 경로와 확인하지 않았을
+때의 결과를 보이는 것이며, 여기 없는 경로를 규칙에서 빼지 않는다.
+
+| 대상 선택 | 확인하지 않으면 생기는 결과 |
+|---|---|
+| Automatic discovery의 connection 구성 | 멈춘 host의 routing ID로 연결을 맺고, 그리로 보낸 message가 모두 전달되지 않는다. |
+| 새 Actor·Spot의 배치 후보 | 멈춘 host를 골라 object를 만들 수 없고, 한 번도 사용하지 않은 ID까지 실패한다. |
+| Instance Spot **cold activation**의 target | 멈춘 host를 골라 activation이 전달되지 않는다. |
+| Relocation의 **최초** 이동 target 선택 | 멈춘 host로 옮기려다 실패하고, source의 상태 정리가 함께 막힌다. |
+| RouteMesh·ClientServer의 select-one target | 멈춘 host를 골라 request가 전달되지 않는다. |
+| 수동 object peer endpoint를 Store descriptor와 결합하는 경로 | 멈춘 host의 routing ID를 connection intent에 넣는다. |
+
+Framework는 descriptor를 후보 집합이나 connection intent에 반영할 때, descriptor가 기록한
+owner ID로 owner lease를 **exact read**한다. 그 read는 lease record의 bytes와 version,
+만료 시각과 `StoreNow`를 함께 돌려준다. **Framework는 그 read가 돌려준 두 시각을 비교하고,
+§5 방식으로 local deadline을 계산한다.** Descriptor 페이지를 읽을 때의 시각과 비교하지
+않는다 — 두 읽기는 서로 다른 시점을 관측하므로 같은 lease를 구현마다 다르게 판정한다.
+
+같은 descriptor revision과 같은 owner token(owner ID와 lease generation)을 사용하는
+select-one은 Store를 다시 읽지 않는다. 그 deadline을 지나지 않은 ready target만 후보로
+사용한다. **Store를 읽지 않으므로 select-one은 손상된 read 결과를 만나지 않는다** — 손상
+판정은 후보 집합을 만들 때 이미 끝나 있다.
+
+Lease가 살아 있다는 판정은 다음 세 조건을 모두 만족하는 것이다.
+
+1. Lease record의 owner ID가 descriptor가 기록한 owner ID와 같다.
+2. Lease record의 lease generation이 descriptor가 기록한 lease generation과 같다.
+3. Read가 돌려준 만료 시각이 같은 read의 `StoreNow`보다 뒤다.
+
+Store의 시각을 기준으로 하는 이유는 host마다 지역 시계가 어긋나기 때문이다. 지역 시계로
+비교하면 같은 lease를 host마다 다르게 판정한다.
+
+**세 조건 중 하나라도 어긋나면 그 descriptor를 후보에서 제외한다.** Owner lease read가
+`Missing`을 돌려준 경우도 제외한다. 제외는 그 descriptor 하나에만 적용하며, 남은 후보로
+대상 선택을 계속한다.
+
+**Owner lease exact read가 만료 시각이 없는 `Found`를 돌려주면 만료가 아니라 손상으로
+판정한다.** Lease는 언제나 양수 TTL과 함께 기록하므로 만료 시각이 없는 read 결과는 정상
+경로에서 만들어지지 않는다. 없는 값을 만료로 해석하면 유효한 host의 descriptor를 후보에서
+잘못 제외하고, 손상을 조용히 지나치면 그 다음 판정도 같은 record 위에서 이루어진다.
+
+**한 번의 대상 선택이 읽은 descriptor 전부를 검증하기 전에는 target 선택, reservation과
+connection intent 변경을 적용하지 않는다.** 여기서 "전부"는 그 operation이 후보로 고려한
+descriptor를 말한다 — 후보에서 이미 제외된 것과 읽지 않은 것은 포함하지 않는다. 만료 시각이 없는 `Found`를 하나라도 받으면
+다음과 같이 끝낸다.
+
+| 호출 형태 | 처리 |
+|---|---|
+| Application 호출이 기다리는 create·activation·relocation | `InternalFailure`로 끝낸다. 남은 후보로 계속하지 않는다. |
+| Background로 도는 discovery reconciliation과 수동 peer 결합 | 그 snapshot의 변경을 하나도 적용하지 않는다. 이미 맺은 connection은 그대로 둔다. |
+
+§4.1 첫 표의 대상 선택 경로는 **대상 후보에서 죽은 host를 빼는 규칙**을 따른다. 남은 후보가 message를 받을 수
+있는 상태인지는 앞 절의 ready 판정으로 따로 확인한다.
+
+이 규칙은 **descriptor를 후보 집합이나 connection intent에 처음 넣는 단계에만** 적용한다. 이미 정해진 owner나 확정한 target을
+lease 만료를 근거로 교체하지 않는다 — 선택 후의 장애 처리는
+[장애와 failover 정책](06-failure-failover-policy.ko.md)이 소유한다. Store 장애 유예 중
+connection intent를 어떻게 유지하는지는 §10이 소유한다. 그 유예 동안에도 **마지막 owner
+lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택에 사용하지 않는다** —
+select-one의 후보 갱신도 여기에 포함한다.
+
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
 count와 limit, 지원하는 Spot stable type과 Entry Spot ID가 있다.
 
@@ -550,7 +624,7 @@ Actor type별 limit은 없다. Location Store에 기록한 현재 사용량과 �
 Actor를 배치하거나 Entry Spot으로 보낼 때는 target descriptor, host 실행 세대와 Entry Spot
 ID를 함께 고정한다. SpotId 문자열을 분석하여 이 관계를 계산하지 않는다.
 
-Framework는 owner lease, `Serving` 상태와 남은 수용 공간을 확인한다. Location Store에서
+Framework는 §4.1이 정한 owner lease 생존, `Serving` 상태와 남은 수용 공간을 확인한다. Location Store에서
 현재 사용량과 다른 작업이 확보한 양을 한 번에 검사한 뒤 weight 비율로 target을 고른다.
 Weight 0으로 바뀌어도 이미 Ready인 object나 완료된 reservation을 취소하지 않는다.
 
@@ -960,7 +1034,7 @@ host 실행 세대, owner 정보와 필요한 공간을 모두 고정한다.
 | 확인 결과 | 처리 |
 |---|---|
 | 현재 owner와 사용 중인 공간이 요청과 같음 | Target 검사를 계속한다. |
-| Source descriptor나 owner lease가 만료됨 | Relocation을 자동으로 이어받지 않는다. 남은 staging record와 payload는 정리 대상으로 둔다. |
+| Source descriptor가 없거나 그 owner lease가 만료됨 | Relocation을 자동으로 이어받지 않는다. 남은 staging record와 payload는 정리 대상으로 둔다. |
 | Target host 실행 세대, owner lease, 제공 type과 남은 공간이 모두 유효함 | Target 공간을 같은 Store 요청에서 확보한다. |
 | 같은 Reservation ID와 같은 내용 | 앞서 발급한 값을 다시 반환한다. |
 | 같은 ID의 내용이 다르거나 target이 만료됨 | `Conflict`이며 아무것도 변경하지 않는다. |
@@ -1239,9 +1313,13 @@ Actor·Spot의 현재 위치 record는 명시적인 `Delete`로만 제거한다.
 object의 위치 record를 삭제하지 않는다.
 
 **Owner cleanup sweep(`removeAllByOwner`)은 authority row만 회수한다** — shutdown하는 host의
-owner id와 lease generation이 일치하는 row만 대상이다. **Descriptor는 절대 회수하지
-않는다.** Descriptor는 오직 자신의 lease 만료와 `TAKEOVER`로만 회수되며, owner sweep으로는
-회수되지 않는다. 두 정리 경로는 서로 독립적이며 서로 다른 lifetime으로 동작한다.
+owner id와 lease generation이 일치하는 row만 대상이다. Descriptor는 host가 정상 종료할 때
+자신이 직접 삭제한다. **Descriptor에는 만료를 걸지 않는다.** Replacement lifecycle은 새
+routing ID로 새 descriptor를 게시하므로 이전 descriptor를 대체하거나 삭제하지 않는다 —
+descriptor key에 routing ID가 들어가기 때문이다. 따라서 host가 정상 종료 전에 멈추면 그
+descriptor를 지울 주체가 없다. Owner lease는 갱신이 끊겨 만료되지만 descriptor는 Store에
+그대로 남는다. 남은 descriptor를 대상으로 삼지 않는 규칙은 §4.1이 정한다. 두 정리 경로는
+서로 독립적이며 서로 다른 lifetime으로 동작한다.
 
 Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, Store callback, 재연결
 작업과 observer는 Framework가 소유한 runtime resource보다 오래 남지 않아야 한다.
@@ -1287,8 +1365,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 
 **Relocation 공간과 단계**
 
-- Source descriptor가 만료돼도 Location Store의 정확한 owner와 사용 중인 공간으로 복구할 수
-  있다. 만료된 target은 Store를 변경하지 않고 거부한다.
+- Source descriptor가 없거나 그 owner lease가 만료돼도 Location Store의 정확한 owner와 사용
+  중인 공간으로 복구할 수 있다. Owner lease가 만료된 target은 Store를 변경하지 않고 거부한다.
 - User Spot 전체 이동에서 owner를 바꿀 때는 새 owner가 사용할 공간만 확보하고, 완료 정보를
   지울 때는 owner, generation, membership과 공간을 유지한다. 잘못된 조합은 Store를 변경하지
   않는다.
@@ -1325,6 +1403,13 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - Store 장애 유예 시간에는 새 discovery connection만 막히고 owner deadline은 연장되지
   않는다. Relocation CAS는 같은 key·version·fence로 Restore 유효시간까지 재시도되고, 만료되면
   target object와 queue가 제거되며 Session update가 전송되지 않는다.
+- Owner lease exact read가 `Missing`을 돌려주거나, owner ID·lease generation이 descriptor와
+  다르거나, 같은 read의 `StoreNow` 기준으로 owner lease가 만료된 descriptor는 automatic discovery, 새
+  object 배치, Instance Spot cold activation, relocation의 최초 target 선택, select-one
+  target 선택과 수동 object peer 결합에서 후보로 사용되지 않는다.
+- Owner lease exact read가 만료 시각 없는 `Found`를 돌려주면 application 호출이 기다리는
+  대상 선택은 `InternalFailure`로 끝나고, background discovery reconciliation과 수동 object peer 결합은 그 snapshot의
+  connection intent 변경을 하나도 적용하지 않는다.
 - MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
   descriptor와 authority record는 언어별 구현이 같은 logical key preimage로 같은 Redis
   key를 만들고, 같은 canonical JSON value를 만든다. Authority의 `objectGeneration`은 Store

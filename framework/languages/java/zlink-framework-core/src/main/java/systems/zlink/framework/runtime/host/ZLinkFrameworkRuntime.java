@@ -472,6 +472,7 @@ public final class ZLinkFrameworkRuntime
                     this.registration.meshNodes(),
                     this.meshNodes.nodesByName(),
                     locationStore,
+                    this.storeLocationResolvers,
                     this.locationStores.authorityStore(),
                     this.registration.locations().options(),
                     relocationAdapters,
@@ -559,10 +560,7 @@ public final class ZLinkFrameworkRuntime
 
     private CompletionStage<Void>
         connectManualObjectPeers() {
-        if (locationStores == null
-            || !(locationStores.unifiedStore()
-                instanceof systems.zlink.framework.runtime.internal.locations
-                    .ZLinkLocationRepository store)) {
+        if (storeLocationResolvers == null) {
             return CompletableFuture.completedFuture(null);
         }
         var tasks = new ArrayList<
@@ -579,21 +577,28 @@ public final class ZLinkFrameworkRuntime
             if (unresolved.isEmpty()) {
                 continue;
             }
-            tasks.add(store.listMeshNodes(
+            tasks.add(connectManualObjectPeers(
+                    source,
+                    unresolved,
                     registration.meshName(),
-                    new systems.zlink.framework.locations
-                        .ZLinkPageRequest(1000, null))
-                        .thenAccept(page -> {
-                            for (var peer : unresolved) {
-                                connectManualObjectPeer(
-                                    source,
-                                    peer,
-                                    page.items());
-                            }
-                        }).toCompletableFuture());
+                    storeLocationResolvers)
+                .toCompletableFuture());
         }
         return CompletableFuture.allOf(
             tasks.toArray(CompletableFuture[]::new));
+    }
+
+    static CompletionStage<Void> connectManualObjectPeers(
+        ZLinkInternalMeshNode source,
+        List<MeshNodeRegistration.Peer> unresolved,
+        String meshName,
+        ZLinkStoreLocationResolvers locationResolvers) {
+        return locationResolvers.listLiveMeshNodes(meshName)
+            .thenAccept(descriptors -> {
+                for (var peer : unresolved) {
+                    connectManualObjectPeer(source, peer, descriptors);
+                }
+            });
     }
 
     static boolean connectManualObjectPeer(
@@ -607,7 +612,7 @@ public final class ZLinkFrameworkRuntime
         return descriptors.stream()
             .filter(target -> target.endpoint().equals(peer.endpoint()))
             .filter(target -> !target.rid().equals(source.status().routingId()))
-            .findFirst()
+            .min(Comparator.comparing(target -> target.rid().toHex()))
             .map(target -> {
                 try {
                     source.replacePeerConnection(
@@ -1241,7 +1246,7 @@ public final class ZLinkFrameworkRuntime
         for (var registration : this.registration.meshNodes()) {
             result = result.thenCompose(ignored ->
                 withinRelocationDeadline(
-                    storeLocationResolvers.listMeshNodes(
+                    storeLocationResolvers.listLiveMeshNodes(
                         registration.meshName()),
                     deadline).thenAccept(nodes -> {
                         boolean found = nodes.stream().anyMatch(node ->

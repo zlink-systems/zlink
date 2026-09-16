@@ -310,8 +310,12 @@ Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resol
 1. global Spot ID의 current authority를 조회한다.
 2. Ready authority가 있으면 저장된 kind와 stable type을 사용해 current owner로 전송한다.
 3. authority가 Missing이고 Instance intent가 없으면 `NotFound`로 끝낸다.
-4. authority가 Missing이고 Instance intent가 있으면 eligible Object Mesh를 선택한다. `InMesh`를
-   생략했고 후보가 0개이면 `NotConfigured`, 둘 이상이면 `InvalidOperation`이다.
+4. authority가 Missing이고 Instance intent가 있으면 eligible Object Mesh를 선택한다. 이
+   단계부터 후보 계산에 사용하는 descriptor는 owner lease가 살아 있는 것으로 한정한다 —
+   판정 기준은
+   [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)이
+   정한다. `InMesh`를 생략했고 후보가 0개이면 `NotConfigured`, 둘 이상이면
+   `InvalidOperation`이다.
 5. stable type을 명시하면 해당 capability를 가진 serving node만 후보로 사용한다. 해당 type을
    제공하는 node가 없으면 `NotFound`다.
 6. stable type을 생략하면 선택한 Mesh의 serving descriptor에 등록된 distinct Instance type을

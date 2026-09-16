@@ -40,7 +40,11 @@ merged_name=${merged_name%.*}.o
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-"$ar_tool" t "$archive" > "$work/members"
+# A macOS archive carries its symbol index as a member named "__.SYMDEF" (or
+# "__.SYMDEF SORTED"). It is not an object file: ar extracts it, ld refuses it
+# with "unknown-unsupported file format", and ranlib rebuilds it for the archive
+# this script writes. Drop it here rather than feeding it to the merge.
+"$ar_tool" t "$archive" | grep -v '^__\.SYMDEF' > "$work/members"
 if [ ! -s "$work/members" ]; then
     echo "$archive has no members" >&2
     exit 2
@@ -68,11 +72,17 @@ done < "$work/members"
 case "$(uname -s)" in
 Darwin)
     # ld64 turns private extern symbols into static ones during a relocatable
-    # link unless -keep_private_externs is passed, so the merge below is the
-    # whole hiding step. What is private extern is decided at compile time:
-    # core/CMakeLists.txt builds the archive's objects with hidden visibility,
-    # which leaves only the ZLINK_EXPORT-annotated C API default-visible.
-    "$ld_tool" -r -o "$work/$merged_name" "${objects[@]}"
+    # link unless -keep_private_externs is passed, so this merge is the hiding
+    # step. Compile-time hidden visibility alone does not decide what is private
+    # extern here: template and inline statics get vague (weak/coalesced)
+    # linkage and stay external through it -- a first attempt left 104 of them,
+    # Boost.Asio service ids and openssl_init guards among them. Name the public
+    # surface instead and let everything outside it become non-external, from
+    # the same version script the ELF path and the shared library use. Mach-O
+    # prefixes C symbols with an underscore, hence the prefix argument.
+    "$here/static_archive_public_symbols.sh" "$version_script" _ > "$work/keep"
+    "$ld_tool" -r -exported_symbols_list "$work/keep" \
+        -o "$work/$merged_name" "${objects[@]}"
     ;;
 *)
     # ELF hidden visibility would not do here: it only controls what a shared
@@ -101,19 +111,25 @@ Darwin)
     }
 
     localize
-    # objcopy will not localize an STB_GNU_UNIQUE symbol -- GCC emits those for
-    # function-local and template statics, and about 275 of Core's Boost
-    # symbols are one. It will weaken such a symbol, and a weakened symbol
-    # localizes on the next pass. Deciding what to weaken from what the first
-    # pass actually left behind, rather than from nm's type letters, keeps this
-    # working if another binding class turns out to be as stubborn.
-    survivors > "$work/weaken"
-    if [ -s "$work/weaken" ]; then
+    # The build compiles these sources with -fno-gnu-unique (see core/CMakeLists.txt),
+    # so the STB_GNU_UNIQUE binding objcopy refuses to localize should not appear
+    # at all. Keep the weaken-then-localize fallback anyway, for a toolchain that
+    # produces some other binding the first pass will not take, and repeat it
+    # while it keeps making progress rather than exactly once: one round was
+    # enough on binutils 2.42 and left 276 symbols behind on 2.38. Stop when a
+    # round removes nothing, so a binding neither pass can move fails the check
+    # below instead of looping.
+    remaining=$(survivors | wc -l)
+    while [ "$remaining" -gt 0 ]; do
+        survivors > "$work/weaken"
         "$objcopy_tool" --weaken-symbols="$work/weaken" \
             "$work/$merged_name" "$work/weakened.o"
         mv "$work/weakened.o" "$work/$merged_name"
         localize
-    fi
+        still=$(survivors | wc -l)
+        [ "$still" -lt "$remaining" ] || break
+        remaining=$still
+    done
     ;;
 esac
 

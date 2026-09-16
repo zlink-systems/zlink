@@ -548,8 +548,8 @@ includes the current host-run combination.
 The feature that lets the Framework read this information from the Store and
 automatically configure the necessary connections is called
 [automatic discovery](../00-foundation/02-glossary.en.md#automatic-discovery). After reading a
-descriptor page, the Framework directly checks whether that host's owner lease is still
-valid.
+descriptor page, the Framework checks whether the owner lease is live before targeting
+that host. Section 4.1 defines the criteria.
 
 | Descriptor item | Contract |
 |---|---|
@@ -580,6 +580,93 @@ record or a well-formed
 is a dedicated record the publisher sends to check connection state — it isn't an
 application message.
 
+### 4.1 Validating a Target Descriptor's Owner Lease
+
+When a host shuts down normally, it deletes the descriptors it published. If the process
+stops before doing so, no entity remains to delete the descriptors, and the records
+remain in the Store — §11 defines the descriptor lifetime.
+
+A node's routing ID is newly generated for each host process. Therefore, a host restarted
+with the same configuration adds its own descriptor under a new routing ID, while the
+stopped host's descriptor remains and continues to point to the same endpoint. The Store
+then has two descriptors pointing to one endpoint. **This section owns only the decision
+not to target such descriptors.**
+
+**Before targeting a descriptor read from the Store, the Framework verifies that the
+owner lease of the host that published the descriptor is live.** This rule applies to
+**every path** that uses Store descriptors to determine a connection peer or operation
+target. The table below shows frequently used paths and what happens if they don't
+perform the check; paths not listed here aren't exempt from the rule.
+
+| Target selection | Result without the check |
+|---|---|
+| Configuring an automatic-discovery connection | Connects to the stopped host's routing ID, and every message sent there fails to be delivered. |
+| Placement candidates for a new Actor or Spot | Selects a stopped host and can't create the object, causing even an ID that has never been used to fail. |
+| The target of Instance Spot **cold activation** | Selects a stopped host, so activation isn't delivered. |
+| The **initial** relocation target selection | Attempts to relocate to a stopped host and also blocks cleanup of the source state. |
+| A RouteMesh or ClientServer select-one target | Selects a stopped host, so the request isn't delivered. |
+| A path that combines a manually configured object-peer endpoint with a Store descriptor | Puts the stopped host's routing ID into the connection intent. |
+
+When incorporating a descriptor into a candidate set or connection intent, the
+Framework performs an **exact read** of the owner lease using the owner ID recorded in
+the descriptor. That read returns the lease record's bytes and version, expiration time,
+and `StoreNow` together. **The Framework compares the two times returned by that read and
+computes the local deadline as defined in §5.** It doesn't compare against the time when
+the descriptor page was read — the two reads observe different points in time, causing
+implementations to judge the same lease differently.
+
+A select-one operation using the same descriptor revision and the same owner token
+(owner ID and lease generation) doesn't read the Store again. It only uses ready targets
+whose deadline hasn't passed as candidates. **Because it doesn't read the Store,
+select-one doesn't encounter a corrupted read result** — corruption has already been
+checked when the candidate set is built.
+
+An owner lease is live only when all three conditions below hold.
+
+1. The owner ID in the lease record matches the owner ID recorded in the descriptor.
+2. The lease generation in the lease record matches the lease generation recorded in
+   the descriptor.
+3. The expiration time returned by the read is later than the `StoreNow` from the same
+   read.
+
+Store time is used because hosts' local clocks can differ. Comparing local clocks causes
+different hosts to judge the same lease differently.
+
+**If any of the three conditions doesn't hold, the Framework excludes that descriptor
+from the candidates.** It also excludes the descriptor when the owner-lease read returns
+`Missing`. The exclusion applies only to that descriptor, and target selection continues
+with the remaining candidates.
+
+**If the exact owner-lease read returns `Found` without an expiration time, the Framework
+treats it as corruption, not expiration.** A lease is always written with a positive TTL,
+so a read result without an expiration time can't arise on the normal path. Treating the
+missing value as expiration wrongly excludes a valid host's descriptor, while silently
+passing over the corruption makes subsequent decisions against the same record.
+
+**The Framework doesn't apply target selection, reservations, or connection-intent
+changes until a single target-selection operation has validated every descriptor it
+read.** Here, "every" means the descriptors that operation considered as candidates — it
+doesn't include descriptors already excluded from the candidates or descriptors it
+didn't read. If even one read returns `Found` without an expiration time, processing ends
+as follows.
+
+| Call form | Handling |
+|---|---|
+| Create, activation, or relocation awaited by an application call | Ends with `InternalFailure`; it doesn't continue with the remaining candidates. |
+| Background discovery reconciliation or manual peer combination | Applies none of that snapshot's changes; existing connections remain in place. |
+
+The target-selection paths in the first table of §4.1 implement the rule that removes
+stopped hosts from target candidates. Whether each remaining candidate can receive
+messages is checked separately by the ready determination in the preceding section.
+
+This rule applies **only to the stage that first adds a descriptor to a candidate set or
+connection intent**. It doesn't replace an already selected owner or a confirmed target
+because the lease expired — post-selection failure handling is owned by the
+[failure and failover policy](06-failure-failover-policy.en.md). Section 10 owns how
+connection intent is maintained during `StoreFailureGrace`. Even during that grace
+period, a descriptor whose expiration time from the last owner-lease read has passed
+isn't used for new target selection — this includes refreshing select-one candidates.
+
 An Object Server descriptor has the `Server` role, node-wide placement weight, per-node
 Actor/Spot count and limit, supported Spot stable types, and Entry Spot ID.
 
@@ -604,8 +691,9 @@ When placing an Actor or sending it to an Entry Spot, the target descriptor, hos
 generation, and Entry Spot ID are fixed together. This relationship isn't computed by
 parsing the SpotId string.
 
-The Framework checks owner lease, `Serving` state, and remaining capacity. It checks
-current usage and the amount other operations secured in the Location Store all at once,
+The Framework checks the owner-lease liveness defined in §4.1, `Serving` state, and
+remaining capacity. It checks current usage and the amount other operations secured in
+the Location Store all at once,
 then picks a target by weight ratio. Even if weight changes to 0, an already-Ready object
 or a completed reservation isn't canceled.
 
@@ -1049,10 +1137,10 @@ source's and target's host run generation, owner information, and needed capacit
 | Check result | Handling |
 |---|---|
 | Current owner and space in use match the request | Continue target checking. |
-| Source descriptor or owner lease has expired | Doesn't automatically take over the relocation. Leaves remaining staging records and payload for cleanup. |
+| Source descriptor is missing or its owner lease has expired | Doesn't automatically take over the relocation. Leaves remaining staging records and payload for cleanup. |
 | Target host run generation, owner lease, offered type, and remaining space are all valid | Secures target space in the same Store request. |
 | Same Reservation ID, same content | Returns the previously issued value. |
-| Same ID with different content, or target expired | `Conflict` and nothing changes. |
+| Same ID with different content, or the target's owner lease has expired | `Conflict` and nothing changes. |
 
 Securing space alone doesn't change the owner or allow new work on the source. Space
 isn't returned merely because time passed. Only after the running source and target
@@ -1360,10 +1448,14 @@ An Actor/Spot's current location record is only removed by an explicit `Delete`.
 record isn't deleted merely because the host descriptor disappeared.
 
 **The owner-cleanup sweep (`removeAllByOwner`) reclaims authority rows only** — the rows
-matching the shutting-down host's owner id and lease generation. **It never reclaims
-descriptors.** A descriptor is reclaimed only through its own lease expiry and
-`TAKEOVER`, never by the owner sweep; the two cleanup paths are independent and run on
-different lifetimes.
+matching the shutting-down host's owner id and lease generation. A host deletes its own
+descriptors when it shuts down normally. **Descriptors don't expire.** The replacement
+lifecycle publishes a new descriptor under a new routing ID, so it doesn't replace or
+delete the previous descriptor — the routing ID is part of the descriptor key. Therefore,
+if a host stops before a normal shutdown, no entity remains to delete that descriptor.
+The owner lease expires after renewals stop, but the descriptor remains in the Store.
+Section 4.1 defines the rule that prevents targeting the remaining descriptor. The two
+cleanup paths are independent and operate with different lifetimes.
 
 If the deadline passes, a `ForceStopped` result completes exactly once. Timers, Store
 callbacks, reconnection work, and observers must not outlive the runtime resources the
@@ -1419,9 +1511,9 @@ against the store record golden fixture. Each item maps to one test.
 
 **Relocation Space And Stages**
 
-- Even if the source descriptor expires, recovery is possible using the Location Store's
-  current owner and space in use. An expired target is rejected without changing the
-  Store.
+- Even if the source descriptor is missing or its owner lease has expired, recovery is
+  possible using the Location Store's current owner and space in use. A target whose
+  owner lease has expired is rejected without changing the Store.
 - When changing owner for a whole User Spot move, only the space the new owner will use
   is secured; when clearing completion info, owner, generation, membership, and space
   are kept. An invalid combination doesn't change the Store.
@@ -1463,6 +1555,15 @@ against the store record golden fixture. Each item maps to one test.
   the owner deadline isn't extended. Relocation CAS retries with the same key, version,
   and fence until Restore validity expires; on expiry, the target object and queue are
   removed and no Session update is sent.
+- A descriptor isn't used as a candidate for automatic discovery, new-object placement,
+  Instance Spot cold activation, initial relocation target selection, select-one target
+  selection, or manual object-peer combination when its exact owner-lease read returns
+  `Missing`, the lease record's owner ID or lease generation differs from the descriptor,
+  or the owner lease has expired relative to the `StoreNow` from the same read.
+- If an exact owner-lease read returns `Found` without an expiration time, target
+  selection awaited by an application call ends with `InternalFailure`, and background
+  discovery reconciliation and manual object-peer combination apply none of that
+  snapshot's connection-intent changes.
 - Per-language implementations of the MeshNode descriptor, owner lease, ClientServer
   server descriptor, fanout publisher descriptor, and authority record build the same
   Redis key from the same logical key preimage, and produce the same canonical JSON

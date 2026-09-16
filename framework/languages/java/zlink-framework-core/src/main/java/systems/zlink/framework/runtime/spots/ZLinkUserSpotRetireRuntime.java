@@ -20,6 +20,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -68,6 +69,7 @@ public final class ZLinkUserSpotRetireRuntime {
         List<MeshNodeRegistration> registrations,
         Map<String, ZLinkInternalMeshNode> nodes,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkLocationRepository authorities,
         ZLinkLocationOptions options,
         ZLinkRelocationAdapterRegistry adapters,
@@ -76,6 +78,7 @@ public final class ZLinkUserSpotRetireRuntime {
         Duration sessionRelocationSealTimeout) {
         this.spots = Objects.requireNonNull(spots, "spots");
         this.actors = Objects.requireNonNull(actors, "actors");
+        Objects.requireNonNull(locationResolvers, "locationResolvers");
         if (applicationVersion < 0) {
             throw new IllegalArgumentException(
                 "applicationVersion must not be negative");
@@ -205,6 +208,7 @@ public final class ZLinkUserSpotRetireRuntime {
                     node.status().routingId(),
                     node.status().lifecycleGeneration(),
                     locations,
+                    locationResolvers,
                     coordinator,
                     spots.spotLifecycle(),
                     spots.actorSessions(),
@@ -225,6 +229,7 @@ public final class ZLinkUserSpotRetireRuntime {
                         node.status().routingId(),
                         node.status().lifecycleGeneration(),
                         locations,
+                        locationResolvers,
                         coordinator,
                         spots.actorSessions(),
                         adapters,

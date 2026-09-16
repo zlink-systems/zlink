@@ -368,7 +368,10 @@ performs resolve and activation in the following order.
 3. If authority is Missing and there is no Instance intent, ends with
    `NotFound`.
 4. If authority is Missing and there is Instance intent, selects an
-   eligible Object Mesh. If `InMesh` is omitted and there are 0 candidates,
+   eligible Object Mesh. Starting at this step, only descriptors with a live owner lease
+   are used to compute candidates —
+   [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)
+   defines the criteria. If `InMesh` is omitted and there are 0 candidates,
    `NotConfigured`; with two or more, `InvalidOperation`.
 5. If stable type is specified, only uses serving nodes with that
    capability as candidates. If no node provides that type, `NotFound`.

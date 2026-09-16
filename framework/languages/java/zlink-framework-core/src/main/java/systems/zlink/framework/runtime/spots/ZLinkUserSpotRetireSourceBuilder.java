@@ -37,6 +37,7 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations
     .ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.internal.configuration
     .ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration
@@ -50,12 +51,12 @@ import systems.zlink.framework.spots.ZLinkSpot;
  * live runtime objects and exact Location authority snapshots.
  */
 final class ZLinkUserSpotRetireSourceBuilder {
-    private static final int PAGE_SIZE = 1000;
     private static final int MAX_DESCRIPTORS = 65_536;
     private final String meshName;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     private final ZLinkLocationRepository locations;
+    private final ZLinkStoreLocationResolvers locationResolvers;
     private final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkSpotLifecycle spots;
     private final ZLinkSpotRuntime relocationReplies;
@@ -77,6 +78,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotLifecycle spots,
         ZLinkActorSessionCoordinator actors,
@@ -90,6 +92,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             localNodeRid,
             localNodeGeneration,
             locations,
+            locationResolvers,
             coordinator,
             spots,
             actors,
@@ -104,6 +107,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotLifecycle spots,
         ZLinkActorSessionCoordinator actors,
@@ -118,6 +122,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             localNodeRid,
             localNodeGeneration,
             locations,
+            locationResolvers,
             coordinator,
             spots,
             actors,
@@ -134,6 +139,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotLifecycle spots,
         ZLinkActorSessionCoordinator actors,
@@ -147,6 +153,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             localNodeRid,
             localNodeGeneration,
             locations,
+            locationResolvers,
             coordinator,
             spots,
             actors,
@@ -163,6 +170,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotLifecycle spots,
         ZLinkActorSessionCoordinator actors,
@@ -184,6 +192,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
             localNodeRid, "localNodeRid");
         this.localNodeGeneration = localNodeGeneration;
         this.locations = Objects.requireNonNull(locations, "locations");
+        this.locationResolvers = Objects.requireNonNull(
+            locationResolvers, "locationResolvers");
         this.coordinator = Objects.requireNonNull(coordinator, "coordinator");
         this.spots = Objects.requireNonNull(spots, "spots");
         this.relocationReplies = relocationReplies;
@@ -864,35 +874,26 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptors(
         ZLinkStoreCancellation cancellation) {
-        List<ZLinkMeshNodeDescriptor> result = new ArrayList<>();
-        return listDescriptorPage(null, result, cancellation);
+        return listDescriptors(locationResolvers, meshName, cancellation);
     }
 
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptorPage(
-        String cursor,
-        List<ZLinkMeshNodeDescriptor> result,
+    static CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptors(
+        ZLinkStoreLocationResolvers locationResolvers,
+        String meshName,
         ZLinkStoreCancellation cancellation) {
         if (cancellation.isCancellationRequested()) {
             return cancelled();
         }
-        return locations.listMeshNodes(
-                meshName,
-                new ZLinkPageRequest(PAGE_SIZE, cursor))
-            .thenCompose(page -> {
-                result.addAll(page.items());
-                if (result.size() > MAX_DESCRIPTORS) {
+        return locationResolvers.listLiveMeshNodes(meshName)
+            .thenCompose(descriptors -> {
+                if (cancellation.isCancellationRequested()) {
+                    return cancelled();
+                }
+                if (descriptors.size() > MAX_DESCRIPTORS) {
                     return failed(new IllegalStateException(
                         "MeshNode descriptor inventory exceeds its bound"));
                 }
-                String next = page.continuationToken();
-                if (next == null || next.isBlank()) {
-                    return CompletableFuture.completedFuture(List.copyOf(result));
-                }
-                if (next.equals(cursor)) {
-                    return failed(new IllegalStateException(
-                        "MeshNode descriptor cursor did not advance"));
-                }
-                return listDescriptorPage(next, result, cancellation);
+                return CompletableFuture.completedFuture(descriptors);
             });
     }
 

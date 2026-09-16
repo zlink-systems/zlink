@@ -768,8 +768,8 @@ a late `Close` is a moving result and isn't automatically resubmitted.
 Once every unit is detached from source dispatch and the one-way cutover submit attempt
 for each target that sent a relay-ready reply reaches a success or failure terminal, the
 host transitions to `Relocated` and returns `Relocated/None`. This result is not
-confirmation that target Location Store CAS completed. Descriptor lease, listener, peer
-connection, and raw transport resources aren't cleaned up at this point.
+confirmation that target Location Store CAS completed. Descriptor publication, the owner lease,
+listener, peer connection, and raw transport resources aren't cleaned up at this point.
 
 | Completion point | Observer | Meaning |
 |---|---|---|
@@ -904,7 +904,7 @@ paragraph of this section says, the remaining Message Follow routes and retransm
 copies disappear with it — a request from a sender that still caches the previous route
 can end with `Unavailable`.
 
-Descriptor and owner lease keep renewing during `Draining`. To avoid losing owner
+Descriptor publication and owner lease renewal continue during `Draining`. To avoid losing owner
 eligibility before already-accepted requests, relocation, and session route changes
 finish, lease use ends only after all work finishes. The cleanup order is as follows.
 

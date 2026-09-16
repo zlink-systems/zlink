@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.time.Duration;
 import java.util.Map;
@@ -35,6 +34,7 @@ import systems.zlink.framework.runtime.internal.relocation
     .ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.internal.configuration
     .ZLinkObjectFactoryRegistration.RelocatableActorFactory;
@@ -46,13 +46,13 @@ import systems.zlink.framework.runtime.internal.configuration
  * the live Actor and its exact authority row.
  */
 final class ZLinkStandaloneActorRelocationSourceBuilder {
-    private static final int PAGE_SIZE = 1000;
     private static final int MAX_DESCRIPTORS = 65_536;
 
     private final String meshName;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     private final ZLinkLocationRepository locations;
+    private final ZLinkStoreLocationResolvers locationResolvers;
     private final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkActorSessionCoordinator actors;
     private final ZLinkRelocationAdapterRegistry adapters;
@@ -71,6 +71,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkActorSessionCoordinator actors,
         ZLinkRelocationAdapterRegistry adapters,
@@ -83,6 +84,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             localNodeRid,
             localNodeGeneration,
             locations,
+            locationResolvers,
             coordinator,
             actors,
             adapters,
@@ -97,6 +99,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         RoutingId localNodeRid,
         long localNodeGeneration,
         ZLinkLocationRepository locations,
+        ZLinkStoreLocationResolvers locationResolvers,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkActorSessionCoordinator actors,
         ZLinkRelocationAdapterRegistry adapters,
@@ -125,6 +128,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
         this.localNodeGeneration = localNodeGeneration;
         this.locations = Objects.requireNonNull(locations, "locations");
+        this.locationResolvers = Objects.requireNonNull(
+            locationResolvers, "locationResolvers");
         this.coordinator = Objects.requireNonNull(coordinator, "coordinator");
         this.actors = Objects.requireNonNull(actors, "actors");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
@@ -570,35 +575,26 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
 
     private CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptors(
         ZLinkStoreCancellation cancellation) {
-        return listDescriptorPage(null, new ArrayList<>(), cancellation);
+        return listDescriptors(locationResolvers, meshName, cancellation);
     }
 
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptorPage(
-        String cursor,
-        List<ZLinkMeshNodeDescriptor> result,
+    static CompletionStage<List<ZLinkMeshNodeDescriptor>> listDescriptors(
+        ZLinkStoreLocationResolvers locationResolvers,
+        String meshName,
         ZLinkStoreCancellation cancellation) {
         if (cancellation.isCancellationRequested()) {
             return cancelled();
         }
-        return locations.listMeshNodes(
-                meshName,
-                new ZLinkPageRequest(PAGE_SIZE, cursor))
-            .thenCompose(page -> {
-                result.addAll(page.items());
-                if (result.size() > MAX_DESCRIPTORS) {
+        return locationResolvers.listLiveMeshNodes(meshName)
+            .thenCompose(descriptors -> {
+                if (cancellation.isCancellationRequested()) {
+                    return cancelled();
+                }
+                if (descriptors.size() > MAX_DESCRIPTORS) {
                     return failed(new IllegalStateException(
                         "MeshNode descriptor inventory exceeds its bound"));
                 }
-                String next = page.continuationToken();
-                if (next == null || next.isBlank()) {
-                    return CompletableFuture.completedFuture(
-                        List.copyOf(result));
-                }
-                if (next.equals(cursor)) {
-                    return failed(new IllegalStateException(
-                        "MeshNode descriptor cursor did not advance"));
-                }
-                return listDescriptorPage(next, result, cancellation);
+                return CompletableFuture.completedFuture(descriptors);
             });
     }
 

@@ -8197,10 +8197,11 @@ public sealed partial class EntrySpotActorDispatchTests
         DispatchProbe? dispatchProbe = null,
         bool includeEntryChannelMembership = false,
         bool includeImmediateIngressHandlers = false,
-        bool includeEntrySpotActivation = true)
+        bool includeEntrySpotActivation = true,
+        ManualTimeProvider? locationTimeProvider = null)
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
-        var locationTime = new ManualTimeProvider();
+        var locationTime = locationTimeProvider ?? new ManualTimeProvider();
         var locationProvider = new ZLinkInMemoryProviderLocationStore(locationTime);
         var runtimeLocationProvider =
             locationStoreWrapper?.Invoke(locationProvider) ?? locationProvider;
@@ -8214,12 +8215,13 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             PollingInterval = TimeSpan.Zero
         };
+        var leaseTracker = new ZLinkOwnerLeaseTracker(
+            runtimeLocationStore,
+            locationOptions,
+            locationTime);
         var locationResolvers = new ZLinkStoreLocationResolvers(
             runtimeLocationStore,
-            new ZLinkOwnerLeaseTracker(
-                runtimeLocationStore,
-                locationOptions,
-                locationTime),
+            leaseTracker,
             new ZLinkObservedLocationGenerations(),
             options: locationOptions);
         var locationRuntime = new ZLinkLocationRuntime(
@@ -8241,7 +8243,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 topology ?? KnownRouteMeshTopology.Instance)
             .AddSingleton(locationRuntime)
             .AddSingleton(locationLifecycle)
+            .AddSingleton(leaseTracker)
             .AddSingleton(locationResolvers)
+            .AddSingleton<IZLinkMeshNodeLocationResolver>(locationResolvers)
             .AddSingleton(new ZLinkLocationAddressResolvers(
                 locationResolvers,
                 new ZLinkSpotHandleRegistry()))
@@ -10478,6 +10482,13 @@ public sealed partial class EntrySpotActorDispatchTests
             InitializationEvents.Enqueue("user-spot-target");
         }
 
+        public void SetInstanceSpotActivationTarget(
+            IInstanceSpotActivationTarget target)
+        {
+            _ = target;
+            InitializationEvents.Enqueue("instance-spot-target");
+        }
+
         public void SetLocalOwnerLeaseGeneration(ulong ownerLeaseGeneration) =>
             LocalOwnerLeaseGeneration = ownerLeaseGeneration;
 
@@ -10942,6 +10953,7 @@ public sealed partial class EntrySpotActorDispatchTests
             ActorJoinEntrySpotCallback callback,
             TimeSpan? timeout)
         {
+            LastActorJoinTargetNodeRid = destNodeRid;
             if (DeferEntrySpotJoinCallback)
             {
                 DeferredEntrySpotJoinCallback = callback;
