@@ -463,17 +463,37 @@ def download(url):
 
 
 def detect_archive_kind(portfile_source, portfile):
+    # A port's fallback-to-source-build (vcpkg_from_github) and its per-platform
+    # prebuilt archives (vcpkg_download_distfile with one SHA512 per platform
+    # behind an if/elseif chain, chosen by triplet -- PR #413's shape for this
+    # port) legitimately coexist: each owns an unambiguous hash of its own, so
+    # their mere co-occurrence is not what makes a port unreadable. What is
+    # still unreadable is a vcpkg_from_github next to a vcpkg_download_distfile
+    # whose SHA512 is itself a literal -- both would then be asking for the
+    # hash of "the one archive" and nothing here says which literal belongs to
+    # which, so that combination still refuses to guess.
     has_github = bool(re.search(r"(?m)^\s*vcpkg_from_github\(", portfile_source))
-    has_distfile = bool(re.search(r"(?m)^\s*vcpkg_download_distfile\(", portfile_source))
-    if has_github and not has_distfile:
-        return "github"
-    if has_distfile and not has_github:
-        return "distfile"
-    error(
-        f"{portfile}: vcpkg_from_github/vcpkg_download_distfile 형태를 판정할 수 "
-        "없음(SHA512가 무엇의 해시인지 정할 수 없어 계산을 거부함)"
-    )
-    return None
+    distfile_call = re.search(r"vcpkg_download_distfile\([^)]*\)", portfile_source, re.DOTALL)
+    distfile_shape = None
+    if distfile_call:
+        call_text = distfile_call.group(0)
+        if re.search(r"SHA512\s+[0-9a-fA-F]+\b", call_text):
+            distfile_shape = "literal"
+        elif re.search(r'SHA512\s+"?\$\{\w+\}"?', call_text):
+            distfile_shape = "platform"
+        else:
+            error(f"{portfile}: vcpkg_download_distfile()의 SHA512 형태를 알아볼 수 없음")
+            return None
+    if has_github and distfile_shape == "literal":
+        error(
+            f"{portfile}: vcpkg_from_github/vcpkg_download_distfile 형태를 판정할 수 "
+            "없음(SHA512가 무엇의 해시인지 정할 수 없어 계산을 거부함)"
+        )
+        return None
+    if not has_github and distfile_shape is None:
+        error(f"{portfile}: vcpkg_from_github도 vcpkg_download_distfile도 찾지 못함")
+        return None
+    return {"github": has_github, "distfile": distfile_shape}
 
 
 def write_text_if_changed(relative, new_source):
@@ -512,16 +532,124 @@ def template_regex(template):
     return re.compile(re.escape(prefix) + r"[0-9]+\.[0-9]+\.[0-9]+" + re.escape(suffix))
 
 
+def replace_call_sha512(source, call_name, new_hash, portfile):
+    """Replace the literal SHA512 hex value inside this file's one
+    call_name(...) call, without touching any other SHA512-looking text
+    elsewhere in the file (there may be several, e.g. one per platform)."""
+    match = re.search(rf"{call_name}\([^)]*\)", source, re.DOTALL)
+    if match is None:
+        error(f"{portfile}: {call_name}() 호출을 찾지 못함")
+        return None
+    call_text, count = re.subn(
+        r"(?m)^(\s*SHA512\s+)[0-9a-fA-F]+(\s*)$",
+        rf"\g<1>{new_hash}\g<2>",
+        match.group(0),
+        count=1,
+    )
+    if count == 0:
+        error(f"{portfile}: {call_name}()의 SHA512 필드를 찾지 못함")
+        return None
+    return source[: match.start()] + call_text + source[match.end() :]
+
+
+def portfile_platform_archives(portfile_source, tag, portfile):
+    """What vcpkg_download_distfile()'s if/elseif chain currently downloads:
+    one archive per platform, named by substituting that platform into the
+    same URL template vcpkg itself will use. Returns an ordered
+    {platform: url} map (file order, i.e. the if/elseif chain's order), read
+    from the chain itself rather than a fixed platform list -- another port
+    with this shape, or a chain that grows a fifth platform, needs no change
+    here. Returns None on error (nothing this specific to the file's own
+    shape could be found)."""
+    distfile_call = re.search(r"vcpkg_download_distfile\([^)]*\)", portfile_source, re.DOTALL)
+    call_text = distfile_call.group(0)
+    sha_var_match = re.search(r'SHA512\s+"?\$\{(\w+)\}"?', call_text)
+    url_match = re.search(r'URLS\s+"([^"]+)"', call_text)
+    if sha_var_match is None or url_match is None:
+        error(f"{portfile}: vcpkg_download_distfile()에서 SHA512/URLS를 읽지 못함")
+        return None
+    sha_var = sha_var_match.group(1)
+    filename_template = url_match.group(1).rsplit("/", 1)[-1]
+
+    pairs = re.findall(
+        rf'set\((\w+)\s+"([a-z0-9][a-z0-9-]*)"\)\s*\n\s*'
+        rf'set\({re.escape(sha_var)}\s+"[0-9a-fA-F]+"\)',
+        portfile_source,
+    )
+    if not pairs:
+        error(f"{portfile}: {sha_var}과 짝을 이루는 플랫폼 set() 쌍을 찾지 못함")
+        return None
+
+    archives = {}
+    for platform_var, platform in pairs:
+        filename = filename_template.replace("${" + platform_var + "}", platform)
+        archives[platform] = (
+            platform_var,
+            sha_var,
+            f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{tag}/{filename}",
+        )
+    return archives
+
+
+def write_platform_archive_hash(source, platform_var, platform, sha_var, new_hash, portfile):
+    pattern = re.compile(
+        rf'(set\({re.escape(platform_var)}\s+"{re.escape(platform)}"\)\s*\n\s*'
+        rf'set\({re.escape(sha_var)}\s+")[0-9a-fA-F]+(")'
+    )
+    new_source, count = pattern.subn(rf"\g<1>{new_hash}\g<2>", source, count=1)
+    if count == 0:
+        error(f"{portfile}: {platform} 플랫폼의 SHA512 set()을 갱신하지 못함")
+        return None
+    return new_source
+
+
+def conan_section_range(conandata_source, section):
+    """Byte range of the top-level `section:` block: its header line through
+    the last line indented (or blank) under it. None if the header is absent."""
+    header = re.search(rf"(?m)^{re.escape(section)}:\s*\n", conandata_source)
+    if header is None:
+        return None
+    body = re.compile(r"(?:(?!^\S).*\n?)*", re.MULTILINE)
+    body_match = body.match(conandata_source, header.end())
+    return header.start(), body_match.end()
+
+
+def write_conan_version_entry(conandata, section, version, body_lines):
+    """Add or replace this version's entry under the top-level `section:` key,
+    scoped strictly to that section -- `sources:` and `binaries:` both key
+    their versions the same way, and a naive whole-file search for
+    '  "{version}":' would find whichever section happens to come first."""
+    conandata_source = text(conandata)
+    if not conandata_source:
+        return
+    bounds = conan_section_range(conandata_source, section)
+    if bounds is None:
+        error(f"{conandata}: {section}: 헤더를 찾지 못함")
+        return
+    start, end = bounds
+    section_text = conandata_source[start:end]
+    new_entry = f'  "{version}":\n' + "".join(body_lines)
+    # A blank line ends the entry too, not just the next version key or a
+    # column-0 line -- otherwise the last entry in a section swallows the
+    # blank line that separates this section from the next one, and
+    # regenerating that entry's body loses it.
+    entry_re = re.compile(rf'(?m)^  "{re.escape(version)}":\n(?:(?!^  "|^\s*$).*\n?)*')
+    if entry_re.search(section_text):
+        new_section_text = entry_re.sub(new_entry, section_text, count=1)
+    else:
+        new_section_text, header_count = re.subn(
+            rf"(?m)^{re.escape(section)}:\s*\n", f"{section}:\n" + new_entry, section_text, count=1
+        )
+        if header_count == 0:
+            error(f"{conandata}: {section}: 헤더를 찾지 못함")
+            return
+    write_text_if_changed(conandata, conandata_source[:start] + new_section_text + conandata_source[end:])
+
+
 def write_cpp():
     t = cpp_target()
     if t is None:
         return
-
-    asset_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
-    asset_bytes = download(asset_url)
-    if asset_bytes is None:
-        return
-    asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
 
     portfile_source = text(t["portfile"])
     if not portfile_source:
@@ -530,14 +658,49 @@ def write_cpp():
     if kind is None:
         return
 
-    if kind == "github":
+    # The generic release-source archive backs conandata.yml's `sources:`
+    # entry in every case -- it is what a static triplet (or any platform
+    # with no prebuilt archive) still builds Core from, whether or not this
+    # port also has platform archives.
+    asset_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
+    asset_bytes = download(asset_url)
+    if asset_bytes is None:
+        return
+    asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
+
+    github_sha512 = None
+    if kind["github"]:
         source_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/archive/{t['tag']}.tar.gz"
         source_bytes = download(source_url)
         if source_bytes is None:
             return
-        vcpkg_sha512 = hashlib.sha512(source_bytes).hexdigest()
-    else:
-        vcpkg_sha512 = hashlib.sha512(asset_bytes).hexdigest()
+        github_sha512 = hashlib.sha512(source_bytes).hexdigest()
+
+    distfile_sha512 = None
+    if kind["distfile"] == "literal":
+        distfile_sha512 = hashlib.sha512(asset_bytes).hexdigest()
+
+    platform_archives = None
+    platform_hashes = None
+    if kind["distfile"] == "platform":
+        platform_archives = portfile_platform_archives(portfile_source, t["tag"], t["portfile"])
+        if platform_archives is None:
+            return
+        platform_hashes = {}
+        for platform, (platform_var, sha_var, url) in platform_archives.items():
+            archive_bytes = download(url)
+            if archive_bytes is None:
+                return
+            platform_hashes[platform] = (
+                platform_var,
+                sha_var,
+                url,
+                hashlib.sha512(archive_bytes).hexdigest(),
+                hashlib.sha256(archive_bytes).hexdigest(),
+            )
+
+    # Every byte needed is downloaded and hashed above; nothing below fails
+    # partway through writing a file with only some of a release's values.
 
     # vcpkg.json: version
     regex_replace_file(
@@ -547,37 +710,48 @@ def write_cpp():
         "version",
     )
 
-    # portfile.cmake: tag, asset (no-op where already ${VERSION}-templated) and SHA512
+    # portfile.cmake: tag, asset and release-version literals (each a no-op
+    # where already ${VERSION}-templated), then whichever SHA512 field(s)
+    # this port's shape has.
     new_portfile = template_regex(t["tag_template"]).sub(t["tag"], portfile_source)
     new_portfile = template_regex(t["asset_template"]).sub(t["asset"], new_portfile)
-    new_portfile, sha_count = re.subn(
-        r"(?m)^(\s*SHA512\s+)[0-9a-fA-F]+(\s*)$",
-        rf"\g<1>{vcpkg_sha512}\g<2>",
+    new_portfile = re.sub(
+        r'(set\(ZLINK_RELEASE_VERSION\s+")[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?("\))',
+        rf"\g<1>{version}\g<2>",
         new_portfile,
-        count=1,
     )
-    if sha_count == 0:
-        error(f"{t['portfile']}: SHA512 필드를 찾지 못함")
-    else:
-        write_text_if_changed(t["portfile"], new_portfile)
-
-    # conandata.yml: add or replace this version's source entry
-    url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
-    new_entry = f'  "{version}":\n    url: "{url}"\n    sha256: "{asset_sha256}"\n'
-    conandata_source = text(t["conandata"])
-    if conandata_source:
-        existing = re.compile(rf'(?ms)^  "{re.escape(version)}":\s*\n(?:    .*(?:\n|$))*')
-        if existing.search(conandata_source):
-            new_conandata = existing.sub(new_entry, conandata_source, count=1)
-        else:
-            new_conandata, header_count = re.subn(
-                r"(?m)^sources:\s*\n", "sources:\n" + new_entry, conandata_source, count=1
+    if github_sha512 is not None:
+        new_portfile = replace_call_sha512(new_portfile, "vcpkg_from_github", github_sha512, t["portfile"])
+        if new_portfile is None:
+            return
+    if distfile_sha512 is not None:
+        new_portfile = replace_call_sha512(
+            new_portfile, "vcpkg_download_distfile", distfile_sha512, t["portfile"]
+        )
+        if new_portfile is None:
+            return
+    if platform_hashes is not None:
+        for platform, (platform_var, sha_var, _url, sha512, _sha256) in platform_hashes.items():
+            new_portfile = write_platform_archive_hash(
+                new_portfile, platform_var, platform, sha_var, sha512, t["portfile"]
             )
-            if header_count == 0:
-                error(f"{t['conandata']}: sources: 헤더를 찾지 못함")
-                new_conandata = None
-        if new_conandata is not None:
-            write_text_if_changed(t["conandata"], new_conandata)
+            if new_portfile is None:
+                return
+    write_text_if_changed(t["portfile"], new_portfile)
+
+    # conandata.yml: the generic source entry always, plus one binaries:
+    # entry per platform when this port has platform archives.
+    write_conan_version_entry(
+        t["conandata"], "sources", version,
+        [f'    url: "{asset_url}"\n', f'    sha256: "{asset_sha256}"\n'],
+    )
+    if platform_hashes is not None:
+        body_lines = []
+        for platform, (_platform_var, _sha_var, url, _sha512, sha256) in platform_hashes.items():
+            body_lines.append(f"    {platform}:\n")
+            body_lines.append(f'      url: "{url}"\n')
+            body_lines.append(f'      sha256: "{sha256}"\n')
+        write_conan_version_entry(t["conandata"], "binaries", version, body_lines)
 
     # conanfile.py: version (bindings/framework only; core has no conanfile.py)
     if t["conanfile"]:
