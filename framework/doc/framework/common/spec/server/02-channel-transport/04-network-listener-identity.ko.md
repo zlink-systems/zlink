@@ -127,8 +127,13 @@ endpoint를 바꾸지 않는다.
 
 Process 기본 BindHost는 `127.0.0.1`이다.
 
-AdvertiseHost를 생략했을 때 [BindHost](../00-foundation/02-glossary.ko.md#bindhost)가 wildcard가 아니면 같은 host를 remote 접속
-주소로 사용한다. 이 기본값은 한 host에서 실행하는 local 환경을 위한 것이다.
+AdvertiseHost를 생략하면 wildcard가 아닌 [BindHost](../00-foundation/02-glossary.ko.md#bindhost)를
+remote 접속 주소로 사용한다. BindHost가 wildcard이면 같은 address family의 loopback을
+사용한다 — `0.0.0.0`은 `127.0.0.1`, `::`은 `::1`이다. Effective BindHost는 listener override,
+process 기본값 순으로 정하고, effective AdvertiseHost는 listener override, process
+AdvertiseHost, effective BindHost에서 계산한 이 기본값 순으로 정한다. IPv6 advertised host는
+endpoint에서 대괄호로 감싼다(예: `tcp://[::1]:7400`). 이 기본값은 한 host에서 실행하는 local
+환경을 위한 것이다.
 Container나 여러 host에 배포할 때는 remote process가 실제로 연결할 수 있는
 [AdvertiseHost](../00-foundation/02-glossary.ko.md#advertisehost)를 지정해야 한다.
 
@@ -142,11 +147,9 @@ Container나 여러 host에 배포할 때는 remote process가 실제로 연결�
 | Local BindHost | 허용한다. |
 | AdvertiseHost | 허용하지 않는다. Remote process가 어느 주소에 연결해야 하는지 알 수 없기 때문이다. |
 
-BindHost가 wildcard이면 AdvertiseHost를 반드시 지정해야 한다.
-
-- **Remote에서 연결할 주소를 확정할 수 없으면 endpoint나 discovery record를 게시하기
-  전에 startup이 실패한다.** Wildcard BindHost만으로는 remote가 접속할 단일 주소를
-  결정할 수 없기 때문이다.
+Wildcard는 `0.0.0.0`과 `::` 두 표기만이며, 그 밖의 표기는 일반 host로 다룬다. Wildcard
+BindHost에서 AdvertiseHost를 생략하면 §2.1의 기본값대로 loopback을 광고하므로, advertised
+endpoint와 discovery record에는 wildcard host가 남지 않는다.
 
 ## 3. Port를 확정하는 방법
 
@@ -191,8 +194,8 @@ host가 시작되어 listener bind가 완료된 뒤에만 성공한다. 반환�
 입력한 port가 아니라 operating system이 실제로 선택한 bound port다.
 
 조회 결과의 endpoint는 `AdvertiseHost`와 실제 bound port를 결합한 advertised
-endpoint다. `AdvertiseHost`를 지정하지 않았으면 listener의 bind endpoint를
-사용한다. 이 결과는 현재 process의 publisher listener를 확인하기 위한 값이며,
+endpoint다. `AdvertiseHost`를 지정하지 않았으면 §2.1에서 확정한 advertised host와 실제 bound
+port를 결합한다. 이 결과는 현재 process의 publisher listener를 확인하기 위한 값이며,
 remote publisher descriptor의 내부 generation이나 discovery 상태를 공개하지
 않는다.
 

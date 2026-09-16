@@ -18,7 +18,7 @@ and the
 
 ## `routeMesh { }` / `channel { }` (configuration time, DSL)
 
-A DSL that wraps `addRouteMesh(meshName)` and `mesh.channel(channelName)` in a receiver lambda.
+A DSL that wraps `addRouteMesh(meshName)` and `mesh.channelName(channelName)` in a receiver lambda.
 It does not change the Java builder's meaning.
 
 ```kotlin
@@ -27,7 +27,7 @@ options.routeMesh("play") {
     setRoutingIdPrefix("play")
     setPlacementWeight(100)
 
-    channel("play.api") {
+    channelName("play.api") {
         server()
             .setWeight(100)
             .addHandlerGroup("api")

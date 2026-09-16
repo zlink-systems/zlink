@@ -194,7 +194,7 @@ The Kotlin runtime directly uses Java's `ZLinkRouteMeshRuntimeOptions`.
 `channel(meshName, channelName)` selects a target Mesh and ChannelName,
 while `mesh(meshName)` selects the placement option. `channel(channelName)`
 selects a ChannelName registered on exactly one Mesh. The Kotlin DSL's
-`routeMesh` and `channel` don't add a new overload to this runtime option.
+`routeMesh` and `channelName` don't add a new overload to this runtime option.
 So these three methods must be confirmed with the same name, arguments,
 and return type in both the Java per-language interface and the Kotlin package
 consumer.
@@ -218,7 +218,7 @@ fun ZLinkFrameworkOptions.routeMesh(
  configure: ZLinkMeshNodeBuilder.() -> Unit,
 ): ZLinkMeshNodeBuilder
 
-fun ZLinkMeshNodeBuilder.channel(
+fun ZLinkMeshNodeBuilder.channelName(
  channelName: String,
  configure: ZLinkMeshChannelBuilder.() -> Unit = {},
 ): ZLinkMeshChannelBuilder
@@ -248,8 +248,8 @@ public final class systems.zlink.framework.kotlin.ZLinkMessageExtensionsKt {
 }
 public final class systems.zlink.framework.kotlin.ZLinkRouteMeshExtensionsKt {
  public static final systems.zlink.framework.configuration.ZLinkMeshNodeBuilder routeMesh(systems.zlink.framework.configuration.ZLinkFrameworkOptions, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, kotlin.Unit>);
- public static final systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshChannelBuilder, kotlin.Unit>);
- public static systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel$default(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1, int, java.lang.Object);
+ public static final systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshChannelBuilder, kotlin.Unit>);
+ public static systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName$default(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1, int, java.lang.Object);
  public static final void connect(systems.zlink.framework.configuration.ZLinkMeshPeerConnections, systems.zlink.contracts.core.RoutingId, java.lang.String);
 }
 public final class systems.zlink.framework.kotlin.ZLinkSuspendingHandlersKt {

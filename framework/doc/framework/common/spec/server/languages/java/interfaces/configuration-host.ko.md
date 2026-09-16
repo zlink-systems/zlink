@@ -135,7 +135,7 @@ public interface ZLinkFrameworkConfigurer {
 }
 
 public interface ZLinkMeshNodeBuilder {
- ZLinkMeshChannelBuilder channel(String channelName);
+ ZLinkMeshChannelBuilder channelName(String channelName);
  ZLinkMeshNodeBuilder listen(String endpoint);
  ZLinkMeshNodeBuilder listen();
  ZLinkMeshNodeBuilder listen(int port);
@@ -655,7 +655,7 @@ public final class systems.zlink.framework.configuration.ZLinkLogLevel extends j
  public int value();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
- public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channel(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen();
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder listen(int);

@@ -2182,7 +2182,7 @@ Remote process가 listener에 실제로 연결할 때 사용하는 host 또는 �
 | 형태 | Host/address configuration value |
 | .NET 표기 | `string` |
 | 공개 구성 | Remote에서 해석할 수 있는 host 이름 또는 IP address 하나다. |
-| 생성·관리 | Application이 지정하거나 non-wildcard BindHost에서 Framework가 같은 host를 사용한다. |
+| 생성·관리 | Application이 지정하거나 Framework가 [Network listener identity §2.1](../02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의 기본값으로 확정한다. |
 | 수명 | Descriptor를 게시하기 전에 확정한다. 값이 바뀐 listener 재시작은 새 lifecycle generation을 사용한다. |
 
 <a id="wildcard-address"></a>

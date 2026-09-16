@@ -37,7 +37,7 @@ ZLinkMeshNodeBuilder play = options.addRouteMesh("play")
 | `.configureRouterSocket()` | `ZLinkMeshNodeSocketConfig` 기본값 | 이 MeshNode ROUTER 소켓의 HWM·buffer·timeout(`maxMessageSize` 기본 `16_777_216L` 등) |
 | `.configureSpotPublisher()` | `ZLinkSpotPublisherConfig` 기본값 | Logical Multicast publisher socket의 HWM·timeout·linger |
 | `.objects()` | — | Object role 등록으로 진입. Object role 등록 항목을 참고 |
-| `.channel(channelName)` | — | 이 MeshNode의 RouteMesh Channel role 등록으로 진입. RouteMesh Channel 등록 항목을 참고 |
+| `.channelName(channelName)` | — | 이 MeshNode의 RouteMesh Channel role 등록으로 진입. RouteMesh Channel 등록 항목을 참고 |
 | `.peerConnections()` | — | Manual peer 연결 항목을 참고 |
 | `.addRouteSendHandler(handlerType, messageType)` | packet name은 메시지 타입에서 결정 | Node direct one-way handler 등록. `sendToNode`(messaging-execution category)가 호출하는 대상 |
 | `.addRouteRequestHandler(handlerType, requestType, replyType)` | packet name은 메시지 타입에서 결정 | Node direct request handler 등록. `requestToNode`가 호출하는 대상 |
@@ -89,12 +89,12 @@ Actor·Spot을 메시징 대상으로만 참조(Client)할 때 각각의 role을
 같은 MeshNode 안에서 논리 ChannelName membership을 등록한다.
 
 ```java
-play.channel("play.api").server()
+play.channelName("play.api").server()
     .setWeight(100)
     .addHandlerGroup("api")
     .addRequestHandler(GetPlayerHandler.class, GetPlayer.class, Player.class);
 
-play.channel("play.events").client();
+play.channelName("play.events").client();
 ```
 
 **옵션.** `channel(channelName)` 뒤에는 `.client()` 또는 `.server()`를 정확히 한 번 호출한다.

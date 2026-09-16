@@ -129,7 +129,7 @@ Spot direct operation은 global SpotId만 address로 받고 Spot 전용 fluent c
 사용하므로 type이나 Mesh를 다시 요구하지 않는다. 세부 member와 [cold activation](../../../00-foundation/02-glossary.ko.md#cold-activation) 선택 규칙은
 [Java Spot 인터페이스](spots.ko.md)가 소유한다.
 
-`channel(channelName)`이 반환하는 [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh) builder에서는 `client()` 또는 `server()`를 정확히 한 번
+`channelName(channelName)`이 반환하는 [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh) builder에서는 `client()` 또는 `server()`를 정확히 한 번
 선택한다. `addClientServerChannel(channelName)`의 builder에서는 두 역할 중 하나 또는 둘 다 등록할 수
 있지만 각 역할은 최대 한 번만 등록한다. 같은 ChannelName의 Client와 Server는 하나의 ClientServer
 topology를 공유하지만 `(ChannelName, Role)` key의 별도 registration이다. 같은 역할의 중복 등록은 startup

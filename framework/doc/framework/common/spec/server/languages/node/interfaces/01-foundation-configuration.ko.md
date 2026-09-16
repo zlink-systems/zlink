@@ -422,8 +422,8 @@ Spot type과 stateful object capability collection은 각각 최대 1024개다. 
 bind 전에 한 번에 검증한다. Bound를 넘으면
 startup을 실패시키며 collection을 truncate·split하거나 [descriptor](../../../00-foundation/02-glossary.ko.md#descriptor) 일부를 게시하지 않는다.
 
-`configureNetwork()`의 기본 BindHost는 `127.0.0.1`이다. AdvertiseHost를 생략하면 wildcard가
-아닌 [BindHost](../../../00-foundation/02-glossary.ko.md#bindhost)를 사용하고, wildcard BindHost에서는 [AdvertiseHost](../../../00-foundation/02-glossary.ko.md#advertisehost)를 반드시 명시한다.
+`configureNetwork()`의 기본 BindHost는 `127.0.0.1`이다. AdvertiseHost를 생략하면
+[Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의 기본값을 따른다.
 Automatic discovery listener의 port를 생략하거나 listener 호출을 생략하면 port `0`을
 사용한다. Listener별 host 설정은 root 기본값보다 우선한다.
 

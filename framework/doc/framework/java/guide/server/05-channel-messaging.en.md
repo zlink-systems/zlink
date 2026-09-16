@@ -250,7 +250,7 @@ delivery.** If one subscriber falls behind and the publisher's send queue hits i
 **that subscriber's share is discarded and the publish still succeeds.** Other subscribers
 aren't affected, and the publisher doesn't stall over one slow subscriber.
 
-Turning on the publisher setting `NoDrop` changes only that cap behavior. While even one
+Turning on the publisher setting `noDrop` changes only that cap behavior. While even one
 subscriber pipe matching the topic isn't ready to accept a publish record, the publisher
 transport submits the record to none of the pipes matching that topic. One slow subscriber
 can therefore delay completion of the publish call. The exact HWM admission rule is defined by

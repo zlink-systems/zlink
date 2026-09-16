@@ -413,8 +413,8 @@ RouteMesh Channel Server, ClientServer Server와 node-wide placement weight는 �
 `0..10000`, 기본값은 `100`이다. 범위 밖 값은 startup 설정과 runtime 변경에서 configuration error다.
 Weighted selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다.
 
-Root BindHost 기본값은 `127.0.0.1`이다. AdvertiseHost를 생략하면 wildcard가 아닌 [BindHost](../../../00-foundation/02-glossary.ko.md#bindhost)를
-사용하고, wildcard BindHost에서는 [AdvertiseHost](../../../00-foundation/02-glossary.ko.md#advertisehost)를 반드시 명시한다. Automatic discovery
+Root BindHost 기본값은 `127.0.0.1`이다. AdvertiseHost를 생략하면
+[Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의 기본값을 따른다. Automatic discovery
 listener의 port를 생략하거나 listener 호출을 생략하면 port `0`을 사용한다.
 Listener별 host 설정은 root 기본값보다 우선한다.
 

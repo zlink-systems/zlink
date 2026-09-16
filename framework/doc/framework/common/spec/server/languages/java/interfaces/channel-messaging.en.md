@@ -148,7 +148,7 @@ type or Mesh again. The detailed members and
 rules are owned by the [Java Spot Interface](spots.en.md).
 
 On the [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh) builder
-`channel(channelName)` returns, select exactly one of `client()` or
+`channelName(channelName)` returns, select exactly one of `client()` or
 `server()`. The builder of `addClientServerChannel(channelName)` can
 register one or both of the two roles, but each role at most once.
 Client and Server of the same ChannelName share one ClientServer

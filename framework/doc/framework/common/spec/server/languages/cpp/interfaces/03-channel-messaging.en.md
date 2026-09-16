@@ -427,11 +427,8 @@ outside the range is a configuration error in both startup config and
 runtime change. Weighted selection computes the sum of candidate
 weight using at least a 64-bit integer.
 
-Root BindHost's default is `127.0.0.1`. If AdvertiseHost is omitted, a
-non-wildcard [BindHost](../../../00-foundation/02-glossary.en.md#bindhost) is
-used, and for a wildcard BindHost,
-[AdvertiseHost](../../../00-foundation/02-glossary.en.md#advertisehost) must be
-specified. If the automatic discovery listener's port is omitted, or
+Root BindHost's default is `127.0.0.1`. If AdvertiseHost is omitted, the default of
+[Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.en.md#21-defaults) applies. If the automatic discovery listener's port is omitted, or
 the listener call itself is omitted, port `0` is used.
 A per-listener host setting takes priority over the root default.
 

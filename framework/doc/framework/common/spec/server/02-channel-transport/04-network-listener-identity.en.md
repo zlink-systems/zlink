@@ -136,9 +136,14 @@ STREAM listener.
 
 The process-default BindHost is `127.0.0.1`.
 
-If AdvertiseHost is omitted and [BindHost](../00-foundation/02-glossary.en.md#bindhost)
-isn't a wildcard, the same host is used as the remote connection address.
-This default is meant for a local environment running on one host. When
+If AdvertiseHost is omitted, a non-wildcard
+[BindHost](../00-foundation/02-glossary.en.md#bindhost) is used as the remote connection
+address. If BindHost is a wildcard, the loopback address of the same address family is
+used — `127.0.0.1` for `0.0.0.0`, `::1` for `::`. The effective BindHost is the listener
+override, then the process default; the effective AdvertiseHost is the listener override,
+then the process AdvertiseHost, then this default computed from the effective BindHost. An
+IPv6 advertised host is bracketed in the endpoint (for example `tcp://[::1]:7400`). This
+default is meant for a local environment running on one host. When
 deploying to containers or multiple hosts, an
 [AdvertiseHost](../00-foundation/02-glossary.en.md#advertisehost) a remote process can
 actually connect to must be specified.
@@ -154,12 +159,10 @@ connections on multiple local network interfaces.
 | Local BindHost | Allowed. |
 | AdvertiseHost | Not allowed, because a remote process can't know which address to connect to. |
 
-If BindHost is a wildcard, AdvertiseHost must be specified.
-
-- **If the address that remote processes connect to can't be confirmed, startup
-  fails before publishing the endpoint or discovery record.** A wildcard
-  BindHost alone can't determine the single address that a remote process
-  will connect to.
+Only the two spellings `0.0.0.0` and `::` are wildcards; any other spelling is treated as an
+ordinary host. When AdvertiseHost is omitted on a wildcard BindHost, the loopback default of
+§2.1 is advertised, so no wildcard host remains in an advertised endpoint or a discovery
+record.
 
 ## 3. How the Port Is Finalized
 
@@ -212,7 +215,7 @@ system actually chose.
 
 The endpoint in the query result is the advertised endpoint combining
 `AdvertiseHost` and the actual bound port. If `AdvertiseHost` wasn't
-specified, the listener's bind endpoint is used. This result is a value
+specified, the advertised host determined by §2.1 is combined with the actual bound port. This result is a value
 for confirming the current process's publisher listener, and doesn't
 expose the internal generation or discovery state of a remote publisher
 descriptor.
