@@ -17,7 +17,7 @@ through their dedicated run scripts.
 | Target | Location | How to run |
 |---|---|---|
 | Per-language scenario e2e | `framework/languages/<lang>/e2e/<name>/` | each `run_e2e.sh` / `run_e2e.ps1` |
-| The seven samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | `samples/run_samples.sh` / `.ps1`, per-sample `run_sample.sh` / `.ps1`, Node `npm run sample` |
+| The seven samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | per-sample `run_sample.sh` / `.ps1` (one sample per run), Node `npm run sample` |
 
 Per language, "excluded from the default" means the following.
 

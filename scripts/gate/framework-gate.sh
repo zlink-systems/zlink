@@ -3,10 +3,25 @@
 # node npm test (incl. M6A), java core/contract tests, dotnet sample-regression + unit tests.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"; cd "$Z"; require_quiet || exit 2
 unset ZLINK_LIBRARY_PATH; : > "$LOGS/results.txt"
-TMPDIR=/dev/shm/zlink-tmp-gate run cpp-samples framework/languages/cpp bash samples/run_samples.sh
-TMPDIR=/dev/shm/zlink-tmp-java run java-samples framework/languages/java bash samples/run_samples.sh
-TMPDIR=/dev/shm/zlink-tmp-node run node-samples framework/languages/node bash samples/run_samples.sh
-( dotnet_env; run dotnet-samples framework/languages/dotnet bash samples/run_samples.sh )
+# One sample per invocation. A batch runner let a stalled sample hold the
+# whole language's run and made interference between samples indistinguishable
+# from a defect in any one of them (#405).
+SAMPLES="Bingo DeliveryDispatch GameQuest ShoppingMall SupportChat TicTacToe ZoneWorld"
+for s in $SAMPLES; do
+  TMPDIR=/dev/shm/zlink-tmp-gate run "cpp-sample-$s" framework/languages/cpp bash "samples/$s/run_sample.sh"
+done
+for s in $SAMPLES; do
+  TMPDIR=/dev/shm/zlink-tmp-java run "java-sample-$s" framework/languages/java bash "samples/java/$s/run_sample.sh"
+  TMPDIR=/dev/shm/zlink-tmp-java run "kotlin-sample-$s" framework/languages/java bash "samples/kotlin/$s/run_sample.sh"
+done
+# Node names its TypeScript samples with a .Ts suffix; ZoneWorld has none.
+for s in $SAMPLES; do
+  d="$s.Ts"; [ -d "framework/languages/node/samples/$d" ] || d="$s"
+  TMPDIR=/dev/shm/zlink-tmp-node run "node-sample-$s" framework/languages/node bash "samples/$d/run_sample.sh"
+done
+for s in $SAMPLES; do
+  ( dotnet_env; run "dotnet-sample-$s" framework/languages/dotnet bash "samples/$s/run_sample.sh" )
+done
 ( dotnet_env; run dotnet-zoneworld-2 framework/languages/dotnet bash samples/ZoneWorld/run_sample.sh )
 TMPDIR=/dev/shm/zlink-tmp-node run node-npmtest framework/languages/node npm test
 TMPDIR=/dev/shm/zlink-tmp-node run node-sample-tests framework/languages/node npm run test:samples

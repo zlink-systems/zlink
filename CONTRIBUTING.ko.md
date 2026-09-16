@@ -126,7 +126,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   10 미만에서 시작한다(타이밍 assert가 부하에 민감하다). 부하로 깨진 테스트는 단독 재실행으로
   판정하고 허용치를 넓히지 않는다.
 - framework의 기본 빌드·솔루션·CI는 `cross-language` e2e만 포함한다. 언어별 시나리오 e2e
-  (`framework/languages/<lang>/e2e/*`)와 7개 샘플(`samples/*`)은 각 `run_e2e.sh`·`run_samples.sh`·
+  (`framework/languages/<lang>/e2e/*`)와 7개 샘플(`samples/*`)은 각 `run_e2e.sh`·샘플별 `run_sample.sh`·
   Node `npm run test:samples`로만 돌리며 CI 솔루션 필터(`Zlink.Framework.ci.slnf`)·CMake 기본 타깃·Gradle
   루트 빌드·CI·배포에 넣지 않는다. 언어별 구성, 샘플 두 모드, bindings 참조 스위치, C++ preset은
   [`doc/building/framework-workspace.ko.md`](doc/building/framework-workspace.ko.md)가 소유한다.
