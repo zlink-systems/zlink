@@ -4,17 +4,38 @@ name: Framework C++ Verify
 # is kept separate. The workflow-level filter prevents unrelated PRs from
 # allocating a runner at all.
 on:
-#   pull_request:
-#     branches:
-#       - main
-#     paths:
-#       - ".github/workflows/framework-cpp.yml"
-#       - ".github/workflows/framework-cpp-system-toolchain.cmake"
-#       - "VERSION"
-#       - "core/**"
-#       - "bindings/cpp/**"
-#       - "framework/languages/cpp/**"
-#       - "framework/runtime/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-cpp.yml"
+      - ".github/workflows/framework-cpp-system-toolchain.cmake"
+      - ".github/actions/msvc-env/**"
+      - "VERSION"
+      - "core/**"
+      - "bindings/cpp/**"
+      - "framework/languages/cpp/**"
+      - "framework/runtime/**"
+      - "scripts/local-package/build-windows.ps1"
+      - "scripts/local-package/core/**"
+      - "scripts/local-package/cpp/**"
+      - "scripts/local-package/sync-version.py"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-cpp.yml"
+      - ".github/workflows/framework-cpp-system-toolchain.cmake"
+      - ".github/actions/msvc-env/**"
+      - "VERSION"
+      - "core/**"
+      - "bindings/cpp/**"
+      - "framework/languages/cpp/**"
+      - "framework/runtime/**"
+      - "scripts/local-package/build-windows.ps1"
+      - "scripts/local-package/core/**"
+      - "scripts/local-package/cpp/**"
+      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
 
 permissions:
@@ -190,3 +211,163 @@ jobs:
           # shells out to rg, which is why ripgrep is installed above.
           ctest --preset linux-ninja-release \
             -L 'framework-unit|framework-contract'
+
+  framework-cpp-windows:
+    name: win-x64 / Framework C++ unit and contract tests
+    runs-on: windows-latest
+    env:
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}\.cache\framework-cpp\vcpkg-installed
+      ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}\.artifacts\windows
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Setup MSVC environment
+        uses: ./.github/actions/msvc-env
+        with:
+          arch: x64
+
+      - name: Resolve the runner vcpkg
+        id: vcpkg
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if ([string]::IsNullOrWhiteSpace($vcpkgRoot)) {
+            $vcpkgCommand = Get-Command vcpkg.exe -ErrorAction Stop
+            $vcpkgRoot = Split-Path -Parent $vcpkgCommand.Source
+          }
+          $vcpkg = Join-Path $vcpkgRoot "vcpkg.exe"
+          $toolchain = Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"
+          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) {
+            throw "vcpkg.exe was not found at $vcpkg"
+          }
+          if (-not (Test-Path -LiteralPath $toolchain -PathType Leaf)) {
+            throw "vcpkg toolchain was not found at $toolchain"
+          }
+          $revision = (& git -C $vcpkgRoot rev-parse HEAD 2>$null)
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($revision)) {
+            $revision = (Get-FileHash -LiteralPath $vcpkg -Algorithm SHA256).Hash.ToLowerInvariant()
+          } else {
+            $revision = $revision.Trim()
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "VCPKG_ROOT=$vcpkgRoot"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "revision=$revision"
+
+      - name: Cache Framework C++ dependencies
+        id: vcpkg-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLED_DIR }}
+          key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json') }}-v1
+
+      - name: Install Framework C++ dependencies
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
+            --x-manifest-root="framework/languages/cpp" `
+            --x-install-root="$env:VCPKG_INSTALLED_DIR" `
+            --triplet=x64-windows `
+            --clean-after-build
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg install failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Ensure ripgrep is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rg.exe -ErrorAction SilentlyContinue)) {
+            choco install ripgrep --no-progress -y
+            if ($LASTEXITCODE -ne 0) {
+              throw "ripgrep installation failed with exit code $LASTEXITCODE"
+            }
+          }
+
+      - name: Fetch the Core release package
+        id: core
+        shell: pwsh
+        run: |
+          $version = (Select-String -LiteralPath "VERSION" `
+            -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+          $cacheDir = Join-Path $env:RUNNER_TEMP "zlink-core-release"
+          $corePrefix = (& .\scripts\local-package\core\fetch-release.ps1 `
+            -Version $version `
+            -Platform windows-x64 `
+            -CacheDir $cacheDir | Select-Object -Last 1).Trim()
+          if (-not (Test-Path -LiteralPath $corePrefix -PathType Container)) {
+            throw "Core release prefix was not created: $corePrefix"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_CORE_PACKAGE_PREFIX=$corePrefix"
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "prefix=$corePrefix"
+
+      - name: Build the checkout C++ binding package
+        shell: pwsh
+        run: |
+          .\scripts\local-package\cpp\build-windows.ps1 `
+            -CorePrefix "${{ steps.core.outputs.prefix }}"
+
+      - name: Configure and build Framework C++ tests
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:RUNNER_TEMP "framework-cpp-windows-build"
+          .\framework\languages\cpp\build-windows.ps1 `
+            -BuildDir $buildDir `
+            -LocalPackageRoot $env:ZLINK_LOCAL_PACKAGE_ROOT `
+            -CorePackagePrefix "${{ steps.core.outputs.prefix }}" `
+            -VcpkgInstalledDir $env:VCPKG_INSTALLED_DIR `
+            -Configuration Release `
+            -Parallel 2 `
+            -IncludeTests
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FRAMEWORK_CPP_BUILD_DIR=$buildDir"
+
+      - name: Verify Framework C++ tests are registered
+        shell: pwsh
+        run: |
+          $listing = @(& ctest `
+            --test-dir $env:FRAMEWORK_CPP_BUILD_DIR `
+            -C Release `
+            -N `
+            -L "framework-unit|framework-contract")
+          $exitCode = $LASTEXITCODE
+          $listing | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            throw "ctest discovery failed with exit code $exitCode"
+          }
+          $summary = $listing | Select-String -Pattern "Total Tests:\s*(\d+)" | Select-Object -Last 1
+          if ($null -eq $summary) {
+            throw "ctest discovery did not report a test count"
+          }
+          $testCount = [int]$summary.Matches[0].Groups[1].Value
+          if ($testCount -lt 1) {
+            throw "ctest discovered no Framework C++ unit or contract tests"
+          }
+          Write-Host "Registered Framework C++ unit/contract tests: $testCount"
+
+      - name: Run Framework C++ unit and contract tests
+        shell: pwsh
+        run: |
+          ctest `
+            --test-dir $env:FRAMEWORK_CPP_BUILD_DIR `
+            -C Release `
+            --output-on-failure `
+            -L "framework-unit|framework-contract"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Framework C++ tests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-cpp-test-results-win-x64
+          path: |
+            ${{ runner.temp }}/framework-cpp-windows-build/Testing/**
+            ${{ github.workspace }}/.artifacts/windows/logs/**
+          retention-days: 14
+          if-no-files-found: warn
