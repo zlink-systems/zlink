@@ -29,7 +29,7 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
   lookup (DEALER → ROUTER)
 - **one-way send** — a fire-and-forget one-way command, e.g. a cache-invalidation
   notification (DEALER → ROUTER)
-- **publish/subscribe** — an event fan-out where every subscriber receives the message, e.g.
+- **publish/subscribe** — an event fan-out where the subscribers with a matching topic subscription receive the message, e.g.
   propagating a domain event (PUB / SUB)
 
 > 🔰 If terms like channel/handler/client/codec are unfamiliar, read the concept
@@ -231,27 +231,39 @@ same way.
 
 Conversely, a **fanout channel** (called **Classic fanout** in the spec) opens an
 independent pair of PUB/SUB sockets by itself. Regardless of Spot or MeshNode, one
-publisher delivers to every connected subscriber.
+publisher delivers to the connected subscribers with a matching topic subscription.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout-en.html" title="Classic fanout — one publisher to every connected subscriber" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout-en.html" title="Classic fanout — one publisher to the connected subscribers with a matching topic subscription" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-publish-fanout-en.html" target="_blank">↗ View larger</a></p>
 
-For both, **publish completing doesn't guarantee delivery.** A publish call completing
-means the send was locally accepted for transport, not confirmation that a subscriber
-processed the event. Neither provides storage, retransmission, or ack.
+For both, **publish completing doesn't guarantee delivery.** The completion and delivery
+guarantees of the two are defined separately by
+[Interaction model §5](../../../common/spec/server/00-foundation/04-interaction-model.en.md#5-spot-logical-multicast) and
+[§6](../../../common/spec/server/00-foundation/04-interaction-model.en.md#6-classic-fanout).
 
 The difference is **target scope.** Logical Multicast is limited to Spots that subscribed
-to the same channel/topic within that mesh, while Classic fanout delivers to every
-connected subscriber regardless of mesh composition.
+to the same channel/topic within that mesh, while Classic fanout delivers to the
+connected subscribers with a matching topic subscription, regardless of mesh composition.
 
-**The loss rule also differs.** A fanout channel provides **loss-tolerant delivery.** If one
-subscriber falls behind and the publisher's send queue hits its cap, **that subscriber's
-share is discarded and the publish still succeeds.** Other
-subscribers aren't affected, and the publisher doesn't stall over one slow subscriber.
+**The loss rule also differs.** By default a fanout channel provides **loss-tolerant
+delivery.** If one subscriber falls behind and the publisher's send queue hits its cap,
+**that subscriber's share is discarded and the publish still succeeds.** Other subscribers
+aren't affected, and the publisher doesn't stall over one slow subscriber.
+
+Turning on the publisher setting `NoDrop` changes only that cap behavior. While even one
+subscriber pipe matching the topic isn't ready to accept a publish record, the publisher
+transport submits the record to none of the pipes matching that topic. One slow subscriber
+can therefore delay completion of the publish call. The exact HWM admission rule is defined by
+[Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic). The waiting and completion contract, the
+handling of events before a connection or during a disconnection, and the error contract are
+defined by
+[Interaction model §6](../../../common/spec/server/00-foundation/04-interaction-model.en.md#6-classic-fanout)
+and
+[Framework error model §4](../../../common/spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
 Logical Multicast doesn't use a PUB/SUB socket — it delivers to each node over the mesh
-connection, so this rule doesn't apply to it. **Don't use a fanout channel for delivery
-that can't tolerate loss.**
+connection, so this rule doesn't apply to it. Choosing between the two follows the delivery
+guarantees of Interaction model §5 and §6 above.
 
 ## 2. Writing a Handler
 
@@ -568,14 +580,16 @@ public final class ProfileService {
 }
 ```
 
-- The topic is optional. Sending with `Publish(channelName, message)` reaches every
-  subscriber of that channel; `Publish(channelName, topic, message)` carries the topic
-  along as a classification label.
+- The topic is optional. When omitted, the event's packet name is used as the topic. Both
+  overloads deliver only to subscribers whose registered prefix matches that topic.
+- Restrict the subscribed topics with the subscriber builder's `Subscribe(topic)`, and change HWM
+  admission with the publisher builder's `setNoDrop()`. Omitted, they mean every topic is
+  received and loss is tolerated, respectively. Each interface document defines the member name
+  of its language.
 - A subscriber connects to the publisher endpoint with
   `AddFanoutChannel(name).Connect(endpoint)`.
-- A Classic fanout handler only receives the registered typed event and a cancellation
-  signal -- it doesn't expose the transport topic in the handler context. If you need
-  business branching, split it by event type or by registered handler.
+- A Classic fanout handler is selected by packet name. If you need business branching,
+  split it by event type or by registered handler.
 - Completion of `Async(...)`/`Async<T>(...)` only guarantees delegation to transport -- it
   doesn't guarantee the remote handler completed or that a subscriber received it (see
   [Two Branches of Pub/Sub](#13-two-branches-of-pubsub)).

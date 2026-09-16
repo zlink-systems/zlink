@@ -577,7 +577,9 @@ public:
  zlink::routing_id_t publisher_routing_id);
  fanout_channel_builder_t &set_automatic_routing_id_prefix(
  std::string prefix);
+ fanout_channel_builder_t &set_no_drop(bool no_drop = true);
  fanout_channel_builder_t &enable_subscriber();
+ fanout_channel_builder_t &subscribe(std::string topic);
  fanout_channel_builder_t &connect(std::string endpoint);
  endpoint_connections_t subscriber_connections();
  fanout_channel_builder_t &add_handler_group(std::string group_name);
@@ -1156,8 +1158,8 @@ both a convenience call that uses the typed event's
 a call that specifies the
 [topic](../../../00-foundation/02-glossary.en.md#topic) explicitly. Both calls
 are used for classic fanout, and the Framework decides the codec. If
-the specified topic is the internal liveness byte `01 5A 4C 46 31`,
-it doesn't start transport and raises `framework_exception_t`.
+the topic used by either `publish` overload, or a topic registered with `subscribe`, is one that
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids, it raises `framework_exception_t`.
 `fanout_publish_call_t::async()` completes normally once the local
 publisher transport accepts the event. It doesn't return subscriber
 count or receive completion. `publish_call_t` is

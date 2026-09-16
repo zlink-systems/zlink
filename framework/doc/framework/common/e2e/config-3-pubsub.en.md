@@ -4,7 +4,7 @@
 
 # Config 3 — Classic Fanout Publish And Subscribers
 
-Classic fanout delivers an event sent by one publisher to every subscriber that is currently ready.
+Classic fanout delivers an event sent by one publisher to every currently ready subscriber with a matching topic subscription.
 Publish completion is not subscriber-receipt confirmation, and events are not replayed for a
 subscriber that connected late or was disconnected while the event went out. In automatic mode, a
 subscriber does not take an endpoint as input — it finds the publisher of the same ChannelName
@@ -59,7 +59,9 @@ Priority: `P0`
 
 When a publisher fans an event out to multiple subscribers, each ready subscriber must be able to
 receive it. Classic fanout does not guarantee identical ordering or lossless delivery across
-subscribers, so this scenario does not judge cross-subscriber ordering.
+subscribers, so this scenario does not judge cross-subscriber ordering. Unless a scenario says
+otherwise, the subscriber registers no application topic, so the default empty prefix matches every
+topic.
 
 **Verification question:** Do three ready subscribers each observe the marker of a published event?
 
@@ -432,21 +434,22 @@ continue delivering events?
 
 Priority: `P0`
 
-The framework distinguishes the exact topic it uses for fanout liveness from Application events. The
-exact reserved value is rejected, but a longer topic sharing the same prefix must not also be
-forbidden.
+The framework forbids, for Application events, any topic that starts with the reserved topic it uses
+for fanout liveness. A topic shorter than the reserved value, and one of the same length whose last
+byte alone differs, can be used.
 
-**Verification question:** Is the exact reserved topic an argument error, while a topic with a longer
-prefix is delivered normally?
+**Verification question:** Are the reserved topic and a topic starting with it argument errors, while a
+shorter topic and a topic of the same length whose only differing byte is the last one are delivered normally?
 
 - Starting condition: The publisher and subscriber are ready, and the subscriber has registered a
   typed event handler.
-- Procedure: The public publish API is used once with the exact reserved topic. It is followed by a
-  normal event published with a topic that appends a byte to the same prefix.
-- Verification: The first call ends with a public argument error before transport admission, and the
-  handler does not run. The second event is processed once by the handler. No private beacon frame is
+- Procedure: The public publish API is used once with the reserved topic itself and once with a topic
+  that appends a byte to it. It is followed by one normal event published with a topic shorter than
+  the reserved value and one with a topic of the same length whose only differing byte is the last one.
+- Verification: The first two calls end with a public argument error before transport admission, and
+  the handler does not run. Each of the last two events is processed once by the handler. No private beacon frame is
   built directly in the E2E.
-- Detailed behavior: verifies the reserved topic in [Transport Liveness §4](../spec/server/02-channel-transport/05-transport-liveness.en.md#4-classic-fanout).
+- Detailed behavior: verifies the reserved topic rule in [Channel messaging §7](../spec/server/02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
 #### PS-F4 Reflects Orderly Disconnect Before The Peer Deadline
 
@@ -469,19 +472,20 @@ while other publishers remain?
 
 Priority: `P0`
 
-Even if the subscriber does not process a particular topic's Application events, it must still
+Even if the subscriber doesn't subscribe to a particular topic, it must still
 separately receive the Framework's liveness record. Otherwise, a healthy publisher could be
 disconnected after 15 seconds.
 
 **Verification question:** Does a publisher stay Ready past the peer deadline even while only an
 unsubscribed topic is being published?
 
-- Starting condition: The subscriber is connected to the ChannelName and registers only an
-  `events.b` handler; the publisher is ready.
+- Starting condition: The subscriber is connected to the ChannelName, restricts its topics with
+  `Subscribe("events.b")`, and registers both `events.a` and `events.b` handlers; the publisher is
+  ready.
 - Procedure: The publisher periodically sends `events.a` events for a verification window longer than
   the peer deadline. The verification window is computed as the fixed 15-second deadline plus a
   runner tolerance.
-- Verification: There is no handler evidence for `events.a`, but the publisher status stays ready.
+- Verification: The `events.a` handler doesn't run, and the publisher status stays ready.
   A subsequent `events.b` marker is processed exactly once.
 - Detailed behavior: verifies [Transport Liveness §2](../spec/server/02-channel-transport/05-transport-liveness.en.md#2-fixed-timing-and-the-public-api-boundary)
   and [§4](../spec/server/02-channel-transport/05-transport-liveness.en.md#4-classic-fanout).

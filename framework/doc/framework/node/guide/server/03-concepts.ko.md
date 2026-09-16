@@ -91,8 +91,8 @@ peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연�
 | fanout channel | 독자적인 PUB/SUB 소켓을 연다 |
 
 pub/sub도 두 갈래다. route mesh channel 위에서 Spot끼리 주고받는 **Logical Multicast**는
-mesh 소켓을 그대로 쓰고, **fanout channel**은 자기 소켓으로 연결된 구독자 전원에게
-전달한다. 셋의 구조 비교와 사용법은
+mesh 소켓을 그대로 쓰고, **fanout channel**은 자기 소켓으로 등록한 prefix와 publish topic이 일치하는 연결된
+구독자에게 전달한다. 셋의 구조 비교와 사용법은
 [05-channel-messaging §1](05-channel-messaging.ko.md#1-channel-종류)이 다룬다.
 
 ## 2. spot — 상태를 소유하고 순서대로 처리하는 단위

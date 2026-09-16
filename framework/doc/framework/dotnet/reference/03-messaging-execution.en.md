@@ -132,7 +132,7 @@ await fanoutClient
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| omitting the topic argument | uses the event's packet name as the topic | using a reserved topic name completes with `ArgumentException` |
+| omitting the topic argument | uses the event's packet name as the topic | a topic that Channel messaging §7 forbids is rejected at the call with `ArgumentException` |
 | `.Async(ct)` | required terminal | waits only until source-local publish admission completes |
 
 **Completion.** Normal completion means publish admission finished. It does not report

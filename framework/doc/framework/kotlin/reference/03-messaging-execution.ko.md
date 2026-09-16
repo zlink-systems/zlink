@@ -83,8 +83,8 @@ fanoutClient.publish("lobby.events", "region.eu", PlayerJoined("player-1")).awai
 
 **옵션.** 반환 타입 `ZLinkKotlinSubmissionCall`에는 `.await()` terminal만 있다.
 
-**완료 결과.** Java 레퍼런스의 classic fanout `publish` 완료 규칙과 같다. 예약된 topic byte(`01 5A
-4C 46 31`)를 명시하면 Java runtime의 `ZLinkConfigurationException`을 그대로 던진다.
+**완료 결과.** Java 레퍼런스의 classic fanout `publish` 완료 규칙과 같다. Channel messaging §7에서 금지한 topic을
+명시하면 Java runtime의 `ZLinkConfigurationException`을 그대로 던진다.
 
 **선택 기준.** Java 레퍼런스의 `publish`(classic fanout) 항목과 같다.
 

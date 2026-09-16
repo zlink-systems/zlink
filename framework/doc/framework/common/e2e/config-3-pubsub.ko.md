@@ -4,7 +4,7 @@
 
 # Config 3 — Classic fanout publish와 subscriber
 
-Classic fanout은 한 publisher가 보낸 event를 현재 준비된 여러 subscriber에게 전달한다. Publish 완료는
+Classic fanout은 한 publisher가 보낸 event를 현재 준비되고 topic이 일치하는 subscriber에게 전달한다. Publish 완료는
 subscriber 수신 확인이 아니며, 늦게 연결했거나 연결이 끊긴 동안의 event를 replay하지 않는다. Automatic
 mode에서는 subscriber가 endpoint를 입력받지 않고 Location Store에서 같은 ChannelName의 publisher를
 찾는다.
@@ -55,7 +55,8 @@ event가 나중에 도착하면 실패다.
 
 Publisher가 여러 subscriber에게 fanout할 때 준비된 각 subscriber가 event를 받을 수 있어야 한다. Classic
 fanout은 subscriber 간 동일한 순서나 lossless delivery를 보장하지 않으므로 이 scenario는 cross-subscriber
-순서를 판정하지 않는다.
+순서를 판정하지 않는다. 별도 언급이 없는 scenario에서는 subscriber가 application topic을 등록하지 않으므로
+빈 prefix 기본값으로 모든 topic과 일치한다.
 
 **검증 질문:** 세 subscriber가 ready인 뒤 발행한 event marker를 각각 관찰하는가.
 
@@ -406,17 +407,19 @@ Subscriber는 publisher마다 connection과 liveness deadline을 구분한다. �
 
 우선순위: `P0`
 
-Framework는 fanout liveness에 사용하는 exact topic을 Application event와 구분한다. Exact reserved 값은
-거부하지만 같은 prefix의 더 긴 topic까지 금지해서는 안 된다.
+Framework는 fanout liveness에 사용하는 reserved topic으로 시작하는 topic을 Application event에서
+금지한다. 예약값보다 짧은 topic과, 예약값과 길이가 같고 마지막 byte만 다른 topic은 사용할 수 있다.
 
-**검증 질문:** Exact reserved topic은 argument error이고 prefix가 더 긴 topic은 정상 전달되는가.
+**검증 질문:** Reserved topic과 같거나 그것으로 시작하는 topic은 argument error이고, 더 짧은 topic과
+길이가 같고 마지막 byte만 다른 topic은 정상 전달되는가.
 
 - 시작 조건: Publisher와 subscriber가 ready이고 subscriber가 typed event handler를 등록했다.
-- 절차: Public publish API로 exact reserved topic을 한 번 시도한다. 이어서 같은 prefix에 byte를 추가한
-  topic으로 정상 event를 publish한다.
-- 검증: 첫 호출은 transport admission 전에 public argument error로 끝나고 handler가 실행되지 않는다.
-  두 번째 event는 handler에서 한 번 처리된다. Private beacon frame을 E2E에서 직접 만들지 않는다.
-- 세부 동작: [Transport liveness §4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)의 reserved topic을
+- 절차: Public publish API로 reserved topic과 같은 값, 그리고 그 뒤에 byte를 추가한 값을 각각 한 번
+  시도한다. 이어서 예약값보다 짧은 topic과, 길이가 같고 마지막 byte만 다른 topic으로 정상 event를
+  각각 publish한다.
+- 검증: 앞의 두 호출은 transport admission 전에 public argument error로 끝나고 handler가 실행되지 않는다.
+  뒤의 두 event는 handler에서 각각 한 번 처리된다. Private beacon frame을 E2E에서 직접 만들지 않는다.
+- 세부 동작: [Channel messaging §7](../spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)의 reserved topic 규칙을
   검증한다.
 
 #### PS-F4 Orderly disconnect를 peer deadline 전에 반영한다
@@ -439,16 +442,17 @@ Framework는 fanout liveness에 사용하는 exact topic을 Application event와
 
 우선순위: `P0`
 
-Subscriber가 특정 topic의 Application event를 처리하지 않아도 Framework의 liveness record는 별도로
+Subscriber가 특정 topic을 구독하지 않아도 Framework의 liveness record는 별도로
 수신해야 한다. 그렇지 않으면 정상 publisher를 15초 뒤 끊을 수 있다.
 
 **검증 질문:** 구독하지 않은 topic만 계속 publish해도 publisher가 peer deadline을 넘겨 Ready를
 유지하는가.
 
-- 시작 조건: Subscriber는 ChannelName에 연결되어 `events.b` handler만 등록하고 publisher는 ready다.
+- 시작 조건: Subscriber는 ChannelName에 연결되어 `Subscribe("events.b")`로 topic을 제한하고 `events.a`와
+  `events.b` handler를 모두 등록했으며 publisher는 ready다.
 - 절차: Publisher가 `events.a` event를 peer deadline보다 긴 검증 구간 동안 주기적으로 보낸다. 검증
   구간은 fixed 15초 deadline에 runner tolerance를 더한 값으로 계산한다.
-- 검증: `events.a` handler evidence는 없지만 publisher status는 ready를 유지한다. 이후 `events.b` marker를
+- 검증: `events.a` handler는 실행되지 않고 publisher status는 ready를 유지한다. 이후 `events.b` marker를
   보내면 한 번 처리된다.
 - 세부 동작: [Transport liveness §2](../spec/server/02-channel-transport/05-transport-liveness.ko.md)와
   [§4](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를 검증한다.

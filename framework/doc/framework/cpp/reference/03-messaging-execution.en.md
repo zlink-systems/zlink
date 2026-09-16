@@ -139,7 +139,7 @@ co_await publisher
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| Omitting the topic argument | Uses the event's `packet_name` as the topic | Using the reserved topic name (the internal liveness exact bytes `01 5A 4C 46 31`) completes with `framework_exception_t` |
+| Omitting the topic argument | Uses the event's `packet_name` as the topic | A topic that Channel messaging §7 forbids is rejected at the call with `framework_exception_t` |
 | `.submit()` | Required terminal | Waits only until source-local publish admission completes |
 
 **Completion result.** A normal completion means publish admission finished. It does not return

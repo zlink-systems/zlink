@@ -145,9 +145,9 @@ ClientServer의 local Server도 listener와 service admission을 마친 뒤 remo
 제외 규칙은 없다. Local Server를 선택해도 Client DEALER에서 Server ROUTER로 실제 transport message를
 전달하며 codec, HWM, timeout, cancellation, correlation과 terminal completion을 우회하지 않는다.
 
-`ZLinkFanoutClient.publish(...)`에 내부 liveness용 topic byte `01 5A 4C 46 31`을 명시하면 transport를
-시작하지 않고 `ZLinkConfigurationException`을 발생시킨다. [Topic](../../../00-foundation/02-glossary.ko.md#topic)을 생략한 overload는 typed event의 packet
-name을 사용하므로 이 내부 topic을 만들지 않는다.
+`ZLinkFanoutClient.publish(...)`에 명시하거나 `subscribe`에 등록하는 topic이
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 `ZLinkConfigurationException`을 발생시킨다. [Topic](../../../00-foundation/02-glossary.ko.md#topic)을 생략한 overload는 typed event의 packet
+name을 topic으로 사용하며 같은 규칙을 적용한다.
 
 Framework는 public call 뒤에서 Java binding의 exported raw socket API만 사용한다. Core service object,
 private dispatch record와 native handle은 handler context, call result나 exception payload에 노출하지 않는다.

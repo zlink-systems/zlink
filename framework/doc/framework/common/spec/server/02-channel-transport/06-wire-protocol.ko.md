@@ -388,7 +388,7 @@ Payload: 5A 46 01 01
   [Ready](../00-foundation/02-glossary.ko.md#ready)가 되고, 마지막 valid receive 뒤 15초가 지나면
   해당 publisher만 not-ready로 바꾼다.
 - Reserved topic의 frame 수나 payload가 정확하지 않으면 즉시 protocol error다.
-- 공개 topic을 유도한 결과가 예약된 topic과 그대로 일치하면 transport 전 application argument 또는 configuration error로 거부한다.
+- Public topic의 예약 규칙은 [Channel messaging](02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
 
 ## 6. Typed application message JSON
 

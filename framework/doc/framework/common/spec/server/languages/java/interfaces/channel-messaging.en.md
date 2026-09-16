@@ -173,11 +173,10 @@ transport message is delivered from the Client DEALER to the Server
 ROUTER, without bypassing codec, HWM, timeout, cancellation, correlation,
 or terminal completion.
 
-Specifying the internal liveness-dedicated topic byte `01 5A 4C 46
-31` in `ZLinkFanoutClient.publish(...)` raises
-`ZLinkConfigurationException` without starting transport. The overload
+A topic specified in `ZLinkFanoutClient.publish(...)` or registered with `subscribe` that
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises `ZLinkConfigurationException`. The overload
 that omits [topic](../../../00-foundation/02-glossary.en.md#topic) uses the typed
-event's packet name, so it doesn't create this internal topic.
+event's packet name, and the same rule applies to it.
 
 Behind the public call, the framework only uses the Java binding's
 exported raw socket API. Core service objects, private dispatch records,

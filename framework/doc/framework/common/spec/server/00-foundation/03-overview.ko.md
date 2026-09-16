@@ -103,8 +103,8 @@ sequenceDiagram
 - **뒤 target의 실패가 앞에서 수락된 target의 제출을 취소하지 않는다.** target마다 독립적으로
   제출하기 때문이다.
 
-[classic fanout](02-glossary.ko.md#classic-fanout)은 연결되어 있고 subscription 준비가 끝난
-subscriber에게 event를 보내는 독립 PUB/SUB 기능이다.
+[classic fanout](02-glossary.ko.md#classic-fanout)은 연결되어 있고 subscription 준비가 끝났으며
+등록한 topic prefix가 publish topic과 일치하는 subscriber에게 event를 보내는 독립 PUB/SUB 기능이다.
 
 - **automatic discovery를 사용하는 publisher는 전용 location descriptor에 실제 endpoint를
   게시하고, automatic subscriber는 같은 ChannelName의 live publisher를 모두 연결한다.**

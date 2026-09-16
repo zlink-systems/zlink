@@ -93,7 +93,9 @@ export interface ZLinkFanoutChannelBuilder {
  setAdvertiseHost(advertiseHost: string): this;
  routingId(publisherRoutingId: RoutingId): this;
  setRoutingIdPrefix(prefix: string): this;
+ setNoDrop(noDrop?: boolean): this;
  enableSubscriber(): this;
+ subscribe(topic: string): this;
  connect(endpoint: string): this;
  subscriberConnections(): ZLinkEndpointConnections;
 }
@@ -153,11 +155,10 @@ the returned endpoint contains the actual port the operating system
 chose. It fails with `ZLinkConfigurationException` if the host hasn't
 started or that channel isn't registered as a publisher.
 
-Passing the internal liveness-dedicated byte `01 5A 4C 46 31` to
-the overload that specifies topic raises `ZLinkConfigurationException`
-without starting transport. The overload that omits topic uses the
+A topic passed to the overload that specifies topic, or registered with `subscribe`, that
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises `ZLinkConfigurationException`. The overload that omits topic uses the
 typed event's [packet name](../../../00-foundation/02-glossary.en.md#packet-name),
-so it doesn't create this internal topic.
+and the same rule applies to it.
 
 A fanout publisher that registered a location store selects one of a
 fixed Publisher RID or automatic allocation before startup, and

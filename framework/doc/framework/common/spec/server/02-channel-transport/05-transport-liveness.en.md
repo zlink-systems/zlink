@@ -185,9 +185,9 @@ subscription receives a message within the same ChannelName.
 | Payload frame | `5A 46 01 01` |
 | Frame count | Exactly 2 |
 
-The application can't use this exact topic value as a fanout topic. Specifying it is
-a call-argument error. Even starting with the same bytes, a topic differing in length or in
-the remaining bytes can be used as an application topic.
+The restriction on application topics starting with this topic and the subscriber's topic
+registration rules are defined by
+[Channel messaging](02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
 A subscriber marks a publisher ready once it first receives, on that publisher's socket, one
 of the following.
@@ -199,12 +199,18 @@ Afterward, it updates the last-receive time whenever it receives either. If noth
 received for 15 seconds, only that publisher is switched to not-ready and its dedicated
 socket is closed. It reconnects with a new socket per the current connection configuration.
 
-Since the beacon uses the same PUB socket as application records, it also follows Classic
-fanout's loss rule. A beacon published while a subscriber's receive queue is full is dropped
-and doesn't arrive again later. So if a host stays saturated for more than 15 seconds while
-fanout application traffic keeps filling the queue, that publisher becomes not-ready. This
-determination isn't a false positive — during that time the subscriber genuinely can't
-process application records.
+Since the beacon uses the same PUB socket as application records, it also follows that
+socket's Classic fanout loss rule
+([Channel messaging](02-channel-messaging.en.md)). By default, a beacon published while a
+subscriber's receive queue is full is dropped and doesn't arrive again later. So if a host
+stays saturated for more than 15 seconds while fanout application traffic keeps filling the
+queue, that publisher becomes not-ready. This determination isn't a false positive — during
+that time the subscriber genuinely can't process application records.
+
+On a socket where the publisher has enabled `NoDrop`, if even one pipe matching the beacon
+topic isn't ready during a beacon cycle, that beacon isn't delivered to any subscriber. A
+subscriber that receives neither a beacon nor an application record for a 15-second period
+that includes that beacon marks the publisher not-ready.
 
 Conversely, it's a false positive if one peer monopolizes the receive stage so a different
 peer's check signal is delayed.

@@ -460,27 +460,70 @@ handler doesn't directly build a source endpoint or internal route frame.
 
 ## 7. The Boundary with Classic Fanout (Reserved Liveness Beacon Topic)
 
-Classic fanout delivers events over a separate PUB/SUB socket to subscribers whose
-connections and subscriptions are both ready. It doesn't share
-a target set with RouteMesh ChannelName select-one or Spot Logical Multicast.
+The delivery targets, completion, and the guarantees before and after a connection of
+[Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) are defined by
+[Interaction model §6](../00-foundation/04-interaction-model.en.md#6-classic-fanout). Classic
+fanout doesn't share a target set with RouteMesh ChannelName select-one or Spot Logical
+Multicast. This section defines only the boundary of HWM admission and the `NoDrop` setting,
+the subscriber's topic registration, and the liveness beacon topic reservation.
 
-[Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) doesn't provide the following
-functionality.
+Classic fanout's default behavior is loss-tolerant delivery. If a subscriber's receipt is
+slow and the publisher's send queue reaches HWM, the message to that subscriber is dropped
+and publish ends successfully. Delivery to the remaining subscribers isn't affected. The
+publisher isn't stalled by one slow subscriber.
 
-- Durable storage of a message
-- Subscriber processing acknowledgement
-- Replay, resending a message later
-- Lossless delivery
+`NoDrop` is a channel-scoped startup setting for the publisher role of a Classic fanout
+channel, and changes only this HWM admission behavior. It doesn't apply to the subscriber
+role or to an individual publish call. When it is `true`, if even one subscriber pipe
+matching the topic isn't ready to accept a publish record, the publisher transport doesn't
+submit that record to any matching pipe. It submits the complete record only when all
+matching pipes can accept it. One slow subscriber can therefore delay completion of the
+publish call. The setting defaults to `false` when omitted. Setting it on a channel without the publisher
+role fails startup. The language-specific interfaces define the exact public types and member
+names.
 
-Classic fanout is loss-tolerant delivery. If a subscriber's receipt is slow and the
-publisher's send queue reaches HWM, the message to that subscriber is dropped and
-publish ends successfully. Delivery to the remaining subscribers isn't affected.
-The publisher isn't stalled by one slow subscriber.
+The waiting and completion contract for Publish and the rules for handling events before a
+connection and during a disconnection follow
+[Interaction model §6](../00-foundation/04-interaction-model.en.md#6-classic-fanout). An error
+when the send timeout expires follows
+[Framework error model §4](../00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
+Because `NoDrop` is a socket-level setting, it also applies to the liveness beacon sent on
+the same PUB socket. [Transport liveness](05-transport-liveness.en.md) defines the result.
 
-Delivery that can't tolerate loss is handled by RouteMesh, not Classic fanout. A
-Spot's [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) doesn't use a
+Turning `NoDrop` on doesn't change the delivery guarantees defined by
+[Interaction model §6](../00-foundation/04-interaction-model.en.md#6-classic-fanout). It only
+prevents HWM from admitting the event to some matching subscriber pipes but not others.
+
+A Spot's [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) doesn't use a
 PUB/SUB socket — it delivers to each participating node over the MeshNode
 connection, so it isn't subject to this loss rule.
+
+### Topics a Subscriber Receives
+
+The subscriber role selects the records it receives with a set of topics registered at
+startup. Each call to the builder's `Subscribe(topic)` adds one topic to this set.
+Registering the same value twice is the same as registering it once. With no accepted
+registration, the set is the same as one holding the empty topic. The set can't be changed after
+startup. A rejected `Subscribe` call doesn't change the set. Registering a topic on a channel
+without the subscriber role fails startup. The language-specific interfaces define the exact
+public member name.
+
+A record is delivered to a subscriber when its topic starts with any value in the set. A public
+topic is a sequence of Unicode scalar values. An unpaired surrogate in a UTF-16 string and a byte
+sequence that isn't valid UTF-8 are call-argument errors in publish and `Subscribe`. The
+comparison is over the UTF-8 encoding of that sequence as is, with no normalization. The empty
+topic matches every record. For example, a
+subscriber that registered `order` receives `order`, `order.created`, and `orders`, but
+not `payment`.
+
+Only the records matching a subscriber's set are destined for that subscriber pipe, and the
+same set determines the matching pipes used for `NoDrop` and HWM accounting. A subscription decides only whether a record is delivered. Handler selection
+for a delivered event is defined by [Interaction model §6](../00-foundation/04-interaction-model.en.md#6-classic-fanout).
+
+The framework always adds the liveness beacon topic below to the set the application
+registered. So the beacon keeps arriving even when application topics are restricted, and
+the connection-liveness judgement in [Transport liveness](05-transport-liveness.en.md) is the
+same regardless of subscription settings.
 
 ### The Topic Reserved for the Framework's Connection-Liveness Check Cannot Be Used
 
@@ -492,17 +535,19 @@ The publisher periodically sends an internal signal so connection status can be
 checked even with no application event. This signal is called a liveness beacon,
 and uses the five bytes `01 5A 4C 46 31` as its topic.
 
-The application can't use exactly this same value as a
-[topic](../00-foundation/02-glossary.en.md#topic) in the public publish API. This restriction
-distinguishes the framework's internal signal from application events. Specifying
-this value causes a call-argument error.
+The application can't use, in the public publish API or in `Subscribe`, a
+[topic](../00-foundation/02-glossary.en.md#topic) that starts with this value. Because a
+subscriber registers this value to receive the beacon, an application topic starting with
+it would reach every subscriber regardless of subscription settings. Specifying such a
+value causes a call-argument error at the call, without starting transport or changing the topic
+set.
 
-A topic that differs in length or by even one byte, as shown below, can be used.
+A topic that doesn't start with this value, as shown below, can be used.
 
 ```text
-01 5A 4C 46 31       not usable: exactly matches the internal signal's topic.
-01 5A 4C 46          usable: different length.
-01 5A 4C 46 31 00    usable: one extra byte.
+01 5A 4C 46 31       not usable: equals the beacon topic.
+01 5A 4C 46 31 00    not usable: starts with the beacon topic.
+01 5A 4C 46          usable: shorter, so it doesn't start with the beacon topic.
 01 5A 4C 46 32       usable: last byte differs.
 ```
 
@@ -568,6 +613,7 @@ fanout.EnablePublisher(); // opens a PUB listener for this process to publish ev
 
 fanout
     .EnableSubscriber()
+    .Subscribe("system.notice") // receives only topics starting with this value; omit it to receive every topic.
     .AddHandler<SystemNoticeHandler, SystemNotice>(
         packetName: "system.notice"); // registers the typed handler to process received events.
 
@@ -761,9 +807,18 @@ contract test.
 
 - Node direct payload doesn't go into a Spot callback or Actor handler.
 
+**Fanout Subscription**
+
+- A subscriber that never called `Subscribe` receives events of every topic.
+- A subscriber that registered `order` receives `order.created` and doesn't receive `payment`.
+- A subscriber that registered several different topics receives their union, and registering
+  the same topic again doesn't change what it receives.
+- A subscriber whose application topics are restricted keeps receiving the liveness beacon
+  and stays ready.
+
 **Fanout Liveness Boundary**
 
-- A public publish rejects the fanout-liveness-only topic.
+- Public publish and `Subscribe` reject a topic that starts with the liveness beacon topic.
 - The liveness beacon isn't delivered to an application handler.
 - Classic fanout's dedicated publish call doesn't provide an application metadata
   setter.

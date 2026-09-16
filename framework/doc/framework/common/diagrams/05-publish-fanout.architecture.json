@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Classic fanout — 발행자 하나가 연결된 구독자 전원에게",
+    "title": "Classic fanout — 발행자 하나가 등록한 prefix와 publish topic이 일치하는 연결된 구독자에게",
     "subtitle": "독립 PUB/SUB 소켓 · publisher → subscriber A · B · C",
     "output": "05-publish-fanout.html",
     "legend": { "mode": "hidden" }
@@ -24,7 +24,7 @@
       "dot": "cyan",
       "title": "fanout channel (Classic fanout)",
       "items": [
-        "독립된 PUB/SUB 소켓 쌍을 연다 — Spot·MeshNode와 무관하게 발행자 하나가 연결된 구독자 전원에게 전달한다."
+        "독립된 PUB/SUB 소켓 쌍을 연다 — Spot·MeshNode와 무관하게 발행자 하나가 등록한 prefix와 publish topic이 일치하는 연결된 구독자에게 전달한다."
       ]
     }
   ]

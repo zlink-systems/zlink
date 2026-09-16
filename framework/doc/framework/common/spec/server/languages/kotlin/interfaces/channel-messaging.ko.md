@@ -165,10 +165,10 @@ Queue가 가득 차면 send timeout까지 기다린다. Timeout은 `DeadlineExce
 `Unavailable`, runtime 종료는 `ShuttingDown`으로 완료한다. Target이나 session binding이 없으면
 `NotFound`다. Cancellation이 먼저 확정되면 coroutine cancellation로 완료한다.
 
-Topic을 받는 `publishToTopic(...)`에 내부 liveness용 byte `01 5A 4C 46 31`을 전달하면 transport를
-시작하지 않고 Java runtime의 `ZLinkConfigurationException`을 발생시킨다.
+Topic을 받는 `publishToTopic(...)`에 전달하거나 Java builder의 `subscribe`에 등록하는 topic이
+[Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 Java runtime의 `ZLinkConfigurationException`을 발생시킨다.
 [Topic](../../../00-foundation/02-glossary.ko.md#topic)을 생략한 overload는 typed
-event의 packet name을 사용하므로 이 내부 topic을 만들지 않는다.
+event의 packet name을 topic으로 사용하며 같은 규칙을 적용한다.
 
 RouteMesh DSL은 Java builder의 의미를 바꾸지 않고 receiver와 lambda만 제공한다. MeshNode 하나의 physical
 connection 위에 [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)별 role을 구성한다.
