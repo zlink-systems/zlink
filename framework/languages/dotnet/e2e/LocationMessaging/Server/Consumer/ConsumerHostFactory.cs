@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Contracts.Handlers;
@@ -149,6 +150,7 @@ internal sealed class RmA3FanoutProbeHandler : IZLinkFanoutHandler<ProfileEvent>
 {
     public ValueTask HandleAsync(
         ProfileEvent message,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 }

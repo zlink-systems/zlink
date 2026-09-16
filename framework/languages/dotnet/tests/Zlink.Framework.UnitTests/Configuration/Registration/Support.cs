@@ -73,6 +73,7 @@ public abstract class RegistrationValidationSupport
     {
         public ValueTask HandleAsync(
             TestPublishedEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
             _ = message;

@@ -625,9 +625,10 @@ The three branches in minimal form look like this.
     {
         public ValueTask HandleAsync(
             CacheRefreshedEvent message,
+            ZLinkPublishMessageContext context,
             CancellationToken cancellationToken)
         {
-            // A Classic fanout handler only receives the payload of the registered event type.
+            // context carries the ChannelName, topic, packet name and metadata snapshot.
             return ValueTask.CompletedTask;
         }
     }
@@ -2631,7 +2632,7 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
         : IZLinkFanoutHandler<UserCacheRefreshedEvent>
     {
         public ValueTask HandleAsync(
-            UserCacheRefreshedEvent message, CancellationToken ct)
+            UserCacheRefreshedEvent message, ZLinkPublishMessageContext context, CancellationToken ct)
             => ValueTask.CompletedTask;
     }
     ```

@@ -998,6 +998,7 @@ internal sealed class ChannelSubscriptionEventHandler(TestHostEventSink sink)
 {
     public ValueTask HandleAsync(
         TestHostPublishedEvent @event,
+        ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         _ = cancellationToken;

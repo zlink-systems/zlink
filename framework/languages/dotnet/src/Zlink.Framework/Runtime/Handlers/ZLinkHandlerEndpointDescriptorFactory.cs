@@ -22,9 +22,13 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             "Handler");
 
         var messageName = packetName ?? ZLinkMessageNameResolver.ResolveFromType(messageType);
-        Type? contextType = kind is ZLinkMessageKind.Request or ZLinkMessageKind.Command
-            ? typeof(IZLinkMessageContext)
-            : null;
+        Type? contextType = kind switch
+        {
+            ZLinkMessageKind.Request or ZLinkMessageKind.Command =>
+                typeof(IZLinkMessageContext),
+            ZLinkMessageKind.Publish => typeof(ZLinkPublishMessageContext),
+            _ => null
+        };
 
         return new ZLinkHandlerEndpointDescriptor(
             kind,
