@@ -1132,11 +1132,11 @@ public final class ZLinkChannelRuntime
     }
 
     @Override
-    public ZLinkSendCall sendToNode(String channelName, RoutingId target, Object message) {
+    public ZLinkSendCall sendToNode(String meshName, RoutingId target, Object message) {
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
         return new RouteSendCall(
-            callRuntime, channelName, sockets, target, encoded.payload(),
+            callRuntime, meshName, sockets, target, encoded.payload(),
             Optional.of(encoded.packetName()), encoded.contentType(), null);
     }
 
@@ -1161,11 +1161,11 @@ public final class ZLinkChannelRuntime
     }
 
     @Override
-    public ZLinkRequestCall requestToNode(String channelName, RoutingId target, Object message) {
+    public ZLinkRequestCall requestToNode(String meshName, RoutingId target, Object message) {
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
         return new RouteRequestCall(
-            callRuntime, channelName, sockets, defaultRequestTimeout, target,
+            callRuntime, meshName, sockets, defaultRequestTimeout, target,
             encoded.payload(), Optional.of(encoded.packetName()), null,
             encoded.contentType(), null);
     }
