@@ -1536,9 +1536,17 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/ZlinkStreamReceivedMessages.ts
   var ZlinkStreamReceivedMessages = class {
-    constructor(events) {
+    /**
+     * @param deliverOnArrival `Immediate` runs registered handlers on the receive
+     *   path; `Manual` leaves them queued until {@link pump} runs them on the
+     *   caller's thread (spec stream-connector 32 §7). Wait surfaces observe the
+     *   queue in both modes, so they never depend on this flag.
+     */
+    constructor(events, deliverOnArrival) {
       this.events = events;
+      this.deliverOnArrival = deliverOnArrival;
       __publicField(this, "handlers", /* @__PURE__ */ new Map());
+      __publicField(this, "observers", /* @__PURE__ */ new Map());
       // A handler can be registered after messages for another name arrive, so the
       // queue is not a simple FIFO. Tombstones let us remove a deliverable entry
       // without shifting every later message on the hot receive path.
@@ -1555,7 +1563,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.handlers.set(name, set);
       }
       set.add(handler);
-      if (this.hasQueuedMessage(name)) {
+      if (this.deliverOnArrival && this.hasQueuedMessage(name)) {
         queueMicrotask(() => this.scheduleDrain());
       }
       return subscription(() => {
@@ -1565,10 +1573,68 @@ var ZlinkStreamConnectorBundle = (() => {
         }
       });
     }
+    /**
+     * Registers a wait surface over the receive queue. Spec stream-connector 32
+     * §7: these are not registered callbacks — they observe and consume the
+     * packets the queue has not delivered yet, in both dispatch modes, so
+     * `Manual` needs no dispatch pump to complete a wait. The queue is scanned in
+     * a microtask so a message that arrived before the wait started is still
+     * observed, and so the caller has its subscription in hand by then.
+     */
+    observe(name, observer) {
+      validateName(name);
+      let set = this.observers.get(name);
+      if (set === void 0) {
+        set = /* @__PURE__ */ new Set();
+        this.observers.set(name, set);
+      }
+      set.add(observer);
+      queueMicrotask(() => {
+        var _a;
+        if (((_a = this.observers.get(name)) == null ? void 0 : _a.has(observer)) === true) {
+          this.offerQueued(name, observer);
+        }
+      });
+      return subscription(() => {
+        set.delete(observer);
+        if (set.size === 0 && this.observers.get(name) === set) {
+          this.observers.delete(name);
+        }
+      });
+    }
     enqueue(message, signal) {
+      var _a;
+      for (const observer of [...(_a = this.observers.get(message.name)) != null ? _a : []]) {
+        if (observer(message)) {
+          return;
+        }
+      }
       this.queue.push({ message, signal });
       this.queuedCount += 1;
+      if (this.deliverOnArrival) {
+        this.scheduleDrain();
+      }
+    }
+    /**
+     * Runs the registered handlers the receive path left queued. `Manual` calls
+     * this from `dispatch`; `Immediate` has already drained on arrival.
+     */
+    async pump() {
       this.scheduleDrain();
+      await this.drainTask;
+    }
+    offerQueued(name, observer) {
+      for (let index = this.queueHead; index < this.queue.length; index += 1) {
+        const queued = this.queue[index];
+        if (queued === void 0 || queued.message.name !== name) {
+          continue;
+        }
+        if (!observer(queued.message)) {
+          continue;
+        }
+        this.removeAt(index);
+        return;
+      }
     }
     scheduleDrain() {
       if (this.drainTask !== void 0) {
@@ -1576,7 +1642,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       this.drainTask = this.drain().finally(() => {
         this.drainTask = void 0;
-        if (this.findDeliverableIndex() >= 0) {
+        if (this.deliverOnArrival && this.findDeliverableIndex() >= 0) {
           this.scheduleDrain();
         }
       });
@@ -1585,10 +1651,7 @@ var ZlinkStreamConnectorBundle = (() => {
       for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
         const queued = this.queue[index];
         if (queued === void 0) continue;
-        this.queue[index] = void 0;
-        this.queuedCount -= 1;
-        this.advanceHead();
-        this.compactQueue();
+        this.removeAt(index);
         const { message, signal } = queued;
         const handlers = [...this.handlers.get(message.name)];
         for (const handler of handlers) {
@@ -1603,6 +1666,12 @@ var ZlinkStreamConnectorBundle = (() => {
           }
         }
       }
+    }
+    removeAt(index) {
+      this.queue[index] = void 0;
+      this.queuedCount -= 1;
+      this.advanceHead();
+      this.compactQueue();
     }
     findDeliverableIndex() {
       var _a, _b;
@@ -1860,14 +1929,18 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/ZlinkStreamConnectorLifecycle.ts
   var ZlinkStreamConnectorLifecycle = class {
-    constructor(options, pendingRequests, frameSender, receiveDispatcher, events, metrics) {
+    constructor(options, pendingRequests, frameSender, receiveDispatcher, receivedMessages, events, metrics) {
       this.options = options;
       this.pendingRequests = pendingRequests;
       this.frameSender = frameSender;
       this.receiveDispatcher = receiveDispatcher;
+      this.receivedMessages = receivedMessages;
       this.events = events;
       this.metrics = metrics;
       __publicField(this, "receiveLoopAbort");
+      __publicField(this, "receiveLoopSleeping", false);
+      __publicField(this, "receiveLoopWake");
+      __publicField(this, "receiveLoopSettled", []);
       __publicField(this, "currentConnection");
       __publicField(this, "connectionGeneration", 0);
       __publicField(this, "currentState", "created" /* Created */);
@@ -1987,16 +2060,21 @@ var ZlinkStreamConnectorBundle = (() => {
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
     }
+    /**
+     * Spec stream-connector 32 §7: `dispatch` runs the callbacks the receive loop
+     * queued, it does not drive the transport. Receiving is the receive loop's
+     * job in both dispatch modes, which is what lets a `Manual` consumer complete
+     * a `waitFor` without pumping, and what keeps this call from blocking on an
+     * idle connection. In `Manual` it first lets the loop settle whatever has
+     * already arrived, so a packet the transport is holding is delivered by this
+     * pump rather than the next one.
+     */
     async dispatch(signal) {
-      const connection = this.currentConnection;
-      const generation = this.connectionGeneration;
-      try {
-        await this.dispatchAvailable(connection, generation, signal);
-      } catch (cause) {
-        const error = toStreamError(cause, "frameDecodeFailed" /* FrameDecodeFailed */, "Stream dispatch failed.");
-        await this.disconnectForTransportFailure(error, connection, generation);
-        throw new ZlinkStreamException(error);
+      throwIfAborted(signal);
+      if (this.options.dispatchMode !== "immediate" /* Immediate */) {
+        await this.settleReceiveLoop();
       }
+      await this.receivedMessages.pump();
     }
     connectionForSend() {
       if (this.currentConnection === void 0 || this.currentState !== "connected" /* Connected */) {
@@ -2065,9 +2143,13 @@ var ZlinkStreamConnectorBundle = (() => {
         this.heartbeatTimer = void 0;
       }
     }
+    // Spec stream-connector 32 §7: the receive loop runs in both dispatch modes.
+    // `Manual` only changes what the loop does with a frame — it queues the
+    // registered callbacks instead of running them — never whether frames are
+    // read off the transport.
     startReceiveLoop() {
       var _a;
-      if (this.options.dispatchMode !== "immediate" /* Immediate */ || ((_a = this.currentConnection) == null ? void 0 : _a.read) === void 0) {
+      if (((_a = this.currentConnection) == null ? void 0 : _a.read) === void 0) {
         return;
       }
       this.stopReceiveLoop();
@@ -2081,19 +2163,67 @@ var ZlinkStreamConnectorBundle = (() => {
       var _a;
       (_a = this.receiveLoopAbort) == null ? void 0 : _a.abort();
       this.receiveLoopAbort = void 0;
+      this.receiveLoopSleeping = false;
+      this.releaseReceiveLoopSettled();
     }
     async runReceiveLoop(connection, generation, signal) {
       try {
         while (this.shouldContinueReceiveLoop(connection, generation, signal)) {
           const dispatched = await this.dispatchAvailable(connection, generation, signal);
           if (!dispatched && this.shouldContinueReceiveLoop(connection, generation, signal)) {
-            await delay(1, signal);
+            await this.sleepUntilWork(signal);
           }
         }
       } catch (cause) {
         if (signal.aborted) return;
         const error = toStreamError(cause, "frameDecodeFailed" /* FrameDecodeFailed */, "Receive loop failed.");
         await this.disconnectForTransportFailure(error, connection, generation);
+      } finally {
+        this.receiveLoopSleeping = false;
+        this.releaseReceiveLoopSettled();
+      }
+    }
+    // A transport whose read resolves only when a frame arrives parks the loop
+    // inside that read; one that reports "nothing available" instead parks it
+    // here. Both are the loop waiting for new data, and `dispatch` treats them
+    // the same way.
+    async sleepUntilWork(signal) {
+      this.receiveLoopSleeping = true;
+      this.releaseReceiveLoopSettled();
+      try {
+        await new Promise((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", onAbort);
+            this.receiveLoopWake = void 0;
+            resolve();
+          };
+          const onAbort = () => finish();
+          const timer = setTimeout(finish, 1);
+          signal.addEventListener("abort", onAbort, { once: true });
+          this.receiveLoopWake = finish;
+        });
+      } finally {
+        this.receiveLoopSleeping = false;
+      }
+    }
+    // Returns once the loop has consumed everything the transport already had.
+    // A loop that is mid-batch, or parked inside a read that has not produced a
+    // frame, is already caught up, so only a sleeping loop is woken and awaited.
+    async settleReceiveLoop() {
+      var _a;
+      if (this.receiveLoopAbort === void 0 || !this.receiveLoopSleeping) {
+        return;
+      }
+      const settled = new Promise((resolve) => {
+        this.receiveLoopSettled.push(resolve);
+      });
+      (_a = this.receiveLoopWake) == null ? void 0 : _a.call(this);
+      await settled;
+    }
+    releaseReceiveLoopSettled() {
+      for (const resolve of this.receiveLoopSettled.splice(0)) {
+        resolve();
       }
     }
     shouldContinueReceiveLoop(connection, generation, signal) {
@@ -2514,7 +2644,10 @@ var ZlinkStreamConnectorBundle = (() => {
       const metrics = new ZlinkStreamRuntimeMetrics(this.options);
       const protocol = new ZlinkStreamFrameProtocol(this.options);
       this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
-      this.receivedMessages = new ZlinkStreamReceivedMessages(this.events);
+      this.receivedMessages = new ZlinkStreamReceivedMessages(
+        this.events,
+        this.options.dispatchMode === "immediate" /* Immediate */
+      );
       this.receiveDispatcher = new ZlinkStreamReceiveDispatcher(
         protocol,
         this.pendingRequests,
@@ -2530,6 +2663,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.pendingRequests,
         this.frameSender,
         this.receiveDispatcher,
+        this.receivedMessages,
         this.events,
         metrics
       );
@@ -2650,7 +2784,10 @@ var ZlinkStreamConnectorBundle = (() => {
           finish(connectorError("requestTimeout" /* RequestTimeout */, "Wait for stream message timed out."));
         }, timeoutMs);
         signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
-        disposable = this.receivedMessages.on(name, (message) => {
+        disposable = this.receivedMessages.observe(name, (message) => {
+          if (done) {
+            return false;
+          }
           try {
             const decoded = {
               name: message.name,
@@ -2659,12 +2796,14 @@ var ZlinkStreamConnectorBundle = (() => {
               flowId: message.flowId,
               flowOrigin: message.flowOrigin
             };
-            if (predicate(decoded)) {
-              finish(void 0, decoded);
+            if (!predicate(decoded)) {
+              return false;
             }
+            finish(void 0, decoded);
           } catch (cause) {
             finish(cause);
           }
+          return true;
         });
       });
     }

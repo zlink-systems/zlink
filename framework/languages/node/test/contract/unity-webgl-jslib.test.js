@@ -90,7 +90,12 @@ test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 },
     encoder.encode(JSON.stringify({ value: 'jslib-send' })),
     { codec: 1, packetName: 'EchoReq' }
   );
-  await waitUntil(() => connector.pendingDispatchCount > 0, () => connector.pumpAndTransfer());
+  // Advancing the transport is not dispatching: the jslib pump moves the push
+  // across the boundary, and the registered handler still waits for Dispatch.
+  await waitUntil(
+    () => connector.dispatchQueue.some((item) => item.kind === 'message'),
+    () => { connector.startAdvanceIfIdle(); connector.pumpAndTransfer(); }
+  );
   assert.deepEqual(pushed, [], 'manual dispatch must hold the handler until Dispatch runs');
   await connector.dispatch();
   assert.deepEqual(pushed, ['jslib-send']);

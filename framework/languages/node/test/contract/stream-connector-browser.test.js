@@ -13,6 +13,16 @@ test.before(async () => {
   browserEntry = await import('../../packages/stream-connector/dist/browser/index.mjs');
 });
 
+async function pumpUntil(instance, predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await instance.dispatch();
+    if (predicate()) return;
+    if (Date.now() >= deadline) throw new Error('pump timed out');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 test('package root rejects tcp and tls immediately', () => {
   for (const endpoint of ['tcp://127.0.0.1:19000', 'tls://127.0.0.1:19000']) {
     assert.throws(
@@ -49,7 +59,9 @@ test('package root dispatches every stream frame in one native WebSocket message
       payload: new TextEncoder().encode('request')
     }).packetName('BrowserRequest').timeout(1000).submitEncoded();
 
-    await instance.dispatch();
+    // Manual is the default: the receive loop advances the transport, and each
+    // dispatch runs the handlers it has queued so far.
+    await pumpUntil(instance, () => pushed.length === 2);
     assert.equal(new TextDecoder().decode((await pending).payload), 'reply');
     assert.deepEqual(pushed, ['progress', 'completed']);
     await instance.close();
