@@ -603,13 +603,12 @@ Bind, rebind, disconnect, and request correlation are defined by
 | A call addressed by ActorRef has a generation differing from the current generation. | Ends with `InvalidOperation`. |
 | The Actor is sealed before commit. | Ends with `Unavailable`. |
 | An operation needing a bound session has no valid binding. | Ends with `InvalidOperation`. It's an ordering issue — a binding must be made first. |
-| A one-way goes to a bound session whose binding existed and whose session has since closed. | The call completes and no frame is sent. It is recorded as dropped in observability. |
 
 <a id="where-a-bound-session-failure-surfaces"></a>
-Those two rows are different cases. Never having made a binding is an ordering
-issue and ends with `InvalidOperation`; a binding that was made and has since
-closed means the peer is gone, which does not make a one-way fail. Sending the
-latter as a request ends with a target error, like the other rows above.
+That row covers both never having made a binding and a binding that was made
+and has since closed. Either way no valid binding exists now, so an operation
+needing a bound session fails. Observability still separates the two: a closed
+session must be recognisable as the peer having gone away.
 
 A bound-session failure surfaces where every other call failure does: at the
 call's terminal, observable through the language's asynchronous completion, not
