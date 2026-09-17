@@ -113,6 +113,14 @@ std::string relative_sample_path (const std::filesystem::path &path)
     return std::filesystem::relative (path, cpp_language_root () / "samples").generic_string ();
 }
 
+// Local tooling (e.g. a JetBrains `.idea` directory) can create gitignored directories under
+// `samples/` on a developer machine. Those are not part of the repository's sample set, so the
+// name check below skips them rather than treating them as an unexpected sample directory.
+bool is_ignorable_sample_directory_name (const std::string &name)
+{
+    return !name.empty () && name.front () == '.';
+}
+
 } // namespace
 
 TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
@@ -960,10 +968,31 @@ TEST (CppFrameworkSampleParity, PublicSampleNamesDoNotUseVariantSuffixes)
         if (name == "Shared") {
             continue;
         }
+        // Skip dot-directories (e.g. a gitignored IDE directory such as `.idea`): they are not
+        // part of the repository's sample set and reflect local tooling, not a naming violation.
+        if (is_ignorable_sample_directory_name (name)) {
+            continue;
+        }
         EXPECT_TRUE (std::find (expected_samples.begin (), expected_samples.end (), name)
                      != expected_samples.end ())
           << entry.path () << " adds a sample-name variant suffix";
     }
+}
+
+TEST (CppFrameworkSampleParity, IgnorableSampleDirectoryNameDetectsDotDirectoriesOnly)
+{
+    // Positive control: local-tooling directories such as `.idea` or `.vs` must be ignored so a
+    // gitignored IDE directory under samples/ cannot fail this contract.
+    EXPECT_TRUE (is_ignorable_sample_directory_name (".idea"));
+    EXPECT_TRUE (is_ignorable_sample_directory_name (".vs"));
+    EXPECT_TRUE (is_ignorable_sample_directory_name ("."));
+
+    // Negative control: a real, unexpected sample directory name must NOT be silently ignored,
+    // or this check would stop catching genuine sample-name variant suffixes.
+    EXPECT_FALSE (is_ignorable_sample_directory_name ("Bingo"));
+    EXPECT_FALSE (is_ignorable_sample_directory_name ("Bingo_v2"));
+    EXPECT_FALSE (is_ignorable_sample_directory_name ("Shared"));
+    EXPECT_FALSE (is_ignorable_sample_directory_name (""));
 }
 
 TEST (CppFrameworkSampleParity, SharedSampleDirectoryContainsOnlyContracts)
