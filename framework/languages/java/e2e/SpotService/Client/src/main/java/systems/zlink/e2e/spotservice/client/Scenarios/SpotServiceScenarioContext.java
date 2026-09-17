@@ -296,6 +296,7 @@ public class SpotServiceScenarioContext {
             URI.create(endpoint),
             dispatchMode,
             REQUEST_TIMEOUT,
+            Duration.ofSeconds(5),
             2,
             Duration.ofSeconds(5),
             64 * 1024,
@@ -309,6 +310,7 @@ public class SpotServiceScenarioContext {
             2.0,
             skipServerCertificateValidation,
             ZLinkStreamCompression.LZ4,
+            null,
             ZLinkStreamPacketNameResolver.defaultResolver(),
             null));
     }

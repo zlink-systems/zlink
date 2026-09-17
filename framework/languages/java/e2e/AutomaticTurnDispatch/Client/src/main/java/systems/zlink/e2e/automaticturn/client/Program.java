@@ -46,7 +46,6 @@ public final class Program {
                         Duration.ofSeconds(5),
                         64 * 1024,
                         64 * 1024,
-                        1024,
                         true,
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(5),

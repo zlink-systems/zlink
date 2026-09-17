@@ -160,11 +160,11 @@ public final class Program {
             URI.create(endpoint),
             ZLinkStreamDispatchMode.IMMEDIATE,
             Duration.ofSeconds(10),
+            Duration.ofSeconds(5),
             2,
             Duration.ofSeconds(5),
             64 * 1024,
             64 * 1024,
-            Integer.MAX_VALUE,
             true,
             Duration.ofSeconds(1),
             Duration.ofSeconds(5),
@@ -174,6 +174,7 @@ public final class Program {
             2.0,
             false,
             ZLinkStreamCompression.LZ4,
+            null,
             ZLinkStreamPacketNameResolver.defaultResolver(),
             null));
         try {

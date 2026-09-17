@@ -5,11 +5,11 @@ import java.net.URI;
 import java.time.Duration;
 import systems.zlink.e2e.kotlin.automaticturn.Contracts;
 import systems.zlink.e2e.kotlin.automaticturn.Env;
-import systems.zlink.stream.connector.ZLinkStreamCompression;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode;
+import systems.zlink.stream.connector.ZLinkStreamPacketNameResolver;
 import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall;
 import systems.zlink.stream.connector.ZLinkTypedStreamSendCall;
 
@@ -39,7 +39,10 @@ public final class ClientStreamSupport {
             Duration.ofSeconds(5),
             2.0,
             false,
-            ZLinkStreamCompression.LZ4));
+            //  The 15-argument overload ends with the packet name resolver.
+            //  Compression is not a parameter here and defaults to LZ4, which
+            //  is what this client asked for when it passed LZ4 in this position.
+            ZLinkStreamPacketNameResolver.defaultResolver()));
     }
 
     public static Contracts.ActorJoinRes joinActor(
