@@ -673,6 +673,11 @@ final class SampleReleaseGateContractTest {
                     "checks_all ZW-D1-spots 'zone spot: announcement delivered'",
                     "old=\"$rid2\"; kill_node zone-node-2 TERM",
                     "wait_log_while_running zone-node-replacement topology=ready",
+                    // A ZoneNode never prints its own RID; only the Ops node status report
+                    // carries it (#545). Reading it anywhere else silently yields the empty
+                    // string and ZW-G1/ZW-G2-rid/ZW-G3 then fail on every platform.
+                    "wait_log ops \"node status observed\\. node=$node, rid=zn-\"",
+                    "tail -n +\"$first\" \"$LOG_DIR/ops.log\"",
                     "[[ \"$new\" != \"$old\" ]] && run_client ZW-G3-fresh",
                     "scenario ZW-G3-fresh owner=$new ",
                     "pass ZW-G3",
@@ -682,6 +687,24 @@ final class SampleReleaseGateContractTest {
                     "phase zoneworld=completed")) {
                 assertTrue(script.contains(requiredText),
                     language + "/ZoneWorld runner must prove continuity marker '" + requiredText + "'");
+            }
+
+            String powerShellScript = readSource(sampleRoot.resolve("run_sample.ps1"));
+            assertTrue(powerShellScript.contains("Get-CurrentLogPath \"ops\""),
+                language + "/ZoneWorld PowerShell runner must observe the RID in the Ops report");
+            for (String forbiddenText : List.of(
+                    "sed -nE 's/.*\\brid=(zn-[0-9a-f-]+)\\b.*/\\1/p'",
+                    "routing_id zone-node-replacement")) {
+                assertFalse(script.contains(forbiddenText),
+                    language + "/ZoneWorld runner must not read a ZoneNode's own log for its RID: '"
+                        + forbiddenText + "'");
+            }
+            for (String forbiddenText : List.of(
+                    "'\\brid=(zn-[0-9a-f-]+)\\b'",
+                    "Get-RoutingId \"zone-node-replacement\"")) {
+                assertFalse(powerShellScript.contains(forbiddenText),
+                    language + "/ZoneWorld PowerShell runner must not read a ZoneNode's own log"
+                        + " for its RID: '" + forbiddenText + "'");
             }
         }
     }

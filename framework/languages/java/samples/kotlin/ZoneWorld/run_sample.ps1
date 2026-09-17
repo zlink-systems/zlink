@@ -187,24 +187,36 @@ function Wait-EvidenceWhileRunning {
     return $false
 }
 
+# A ZoneNode never prints its own RID. The RID reaches an observer only through the Ops
+# node status report (sample README 9.2-7, 9.3), so read it from ops.log and wait there for
+# the incarnation that started at line $FirstLine of that log to report.
 function Get-RoutingId {
-    param([Parameter(Mandatory = $true)][string]$Name, [int]$FirstLine = 1)
-    $path = Get-CurrentLogPath $Name
+    param(
+        [Parameter(Mandatory = $true)][string]$NodeId,
+        [int]$FirstLine = 1,
+        [int]$Attempts = 900
+    )
+    if (-not (Wait-Log "ops" "node status observed. node=$NodeId, rid=zn-" $FirstLine $Attempts)) {
+        return ""
+    }
+    $path = Get-CurrentLogPath "ops"
+    $pattern = "node status observed\. node=$([regex]::Escape($NodeId)), rid=(zn-[0-9a-f-]+)"
     $stream = [IO.File]::Open(
         $path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     $reader = [IO.StreamReader]::new($stream)
+    $observed = ""
     try {
         $lineNumber = 0
         while ($null -ne ($line = $reader.ReadLine())) {
             $lineNumber++
             if ($lineNumber -lt $FirstLine) { continue }
-            $match = [regex]::Match($line, '\brid=(zn-[0-9a-f-]+)\b')
-            if ($match.Success) { return $match.Groups[1].Value }
+            $match = [regex]::Match($line, $pattern)
+            if ($match.Success) { $observed = $match.Groups[1].Value }
         }
     } finally {
         $reader.Dispose()
     }
-    return ""
+    return $observed
 }
 
 function Test-ZoneRoutingId {
@@ -508,8 +520,9 @@ try {
         if (-not (Wait-Log "zone-node-2" "crash-boundary join pending" $targetFirst 900)) { throw "scenario ZW-G4 failed" }
         Stop-Node "zone-node-2" "KILL"
         if (-not (Complete-Client $run)) { throw "scenario ZW-G4 failed" }
+        $opsFirst = Get-NextLogLine "ops"
         if (-not (Start-Zone "zone-node-2" "zone-node-crash-replacement")) { throw "scenario ZW-G4 failed" }
-        $new = Get-RoutingId "zone-node-2"
+        $new = Get-RoutingId "zone-node-2" $opsFirst
         if (-not (Test-ZoneRoutingId $new) -or $new -eq $old) { throw "scenario ZW-G4 failed" }
         if (-not (Invoke-Client "ZW-G4-fresh") -or
             -not (Select-String -LiteralPath $ClientLog -SimpleMatch "scenario ZW-G4-fresh owner=$new " -Quiet)) {
@@ -613,9 +626,10 @@ try {
     if (Test-Scenario "ZW-G3") {
         $old = $Rid2
         Stop-Node "zone-node-2" "TERM"
+        $opsFirst = Get-NextLogLine "ops"
         Start-Role "zone-node-replacement" $ServerBin @("--config", (Join-Path $ConfigDir "zone-node-crash-replacement.properties")) | Out-Null
         if (Wait-LogWhileRunning "zone-node-replacement" "topology=ready" 1 $NodeProcesses["zone-node-replacement"] 900) {
-            $new = Get-RoutingId "zone-node-replacement"
+            $new = Get-RoutingId "zone-node-2" $opsFirst
             $first = @((Get-Content -LiteralPath $ClientLog)).Count + 1
             $fresh = (Test-ZoneRoutingId $new) -and $new -ne $old -and (Invoke-Client "ZW-G3-fresh")
             $freshLines = @(Get-Content -LiteralPath $ClientLog | Select-Object -Skip ($first - 1))

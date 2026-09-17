@@ -142,10 +142,14 @@ wait_b8_evidence_while_running() {
   done
   return 1
 }
+# A ZoneNode never prints its own RID. The RID reaches an observer only through the Ops
+# node status report (sample README 9.2-7, 9.3), so read it from ops.log and wait there for
+# the incarnation that started at line $first of that log to report.
 routing_id() {
-  local log=$1 first=${2:-1}
-  tail -n +"$first" "$LOG_DIR/$log.log" \
-    | sed -nE 's/.*\brid=(zn-[0-9a-f-]+)\b.*/\1/p' | tail -1
+  local node=$1 first=${2:-1} limit=${3:-900}
+  wait_log ops "node status observed\. node=$node, rid=zn-" "$first" "$limit" || return 1
+  tail -n +"$first" "$LOG_DIR/ops.log" \
+    | sed -nE "s/.*node status observed\. node=$node, rid=(zn-[0-9a-f-]+).*/\1/p" | tail -1
 }
 is_zone_rid() { [[ "$1" =~ ^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; }
 
@@ -242,12 +246,14 @@ if [[ "$G4_CHILD" == 1 ]]; then
   kill_node zone-node-2 KILL
   wait "$client_pid" || exit 1
   tail -n +"$first" "$LOG_DIR/client.log" | grep -Fxq 'scenario ZW-G4 passed' || exit 1
-  target_first="$(next_line "$LOG_DIR/zone-node-2.log")"; start_zone zone-node-2 zone-node-crash-replacement
-  new="$(routing_id zone-node-2 "$target_first")"
-  is_zone_rid "$new" && [[ "$new" != "$old" ]]
-  first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-G4-fresh
-  tail -n +"$first" "$LOG_DIR/client.log" | grep -Fq "scenario ZW-G4-fresh owner=$new "
-  pass ZW-G4; exit 0
+  ops_first="$(next_line "$LOG_DIR/ops.log")"; start_zone zone-node-2 zone-node-crash-replacement
+  new="$(routing_id zone-node-2 "$ops_first")"
+  first="$(next_line "$LOG_DIR/client.log")"
+  if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-G4-fresh \
+      && tail -n +"$first" "$LOG_DIR/client.log" | grep -Fq "scenario ZW-G4-fresh owner=$new "; then
+    pass ZW-G4; exit 0
+  fi
+  echo "scenario ZW-G4 failed: replacement RID/fresh object placement failed" >&2; exit 1
 fi
 
 selected ZW-G1 && { if is_zone_rid "$rid1" && is_zone_rid "$rid2" && [[ "$rid1" != "$rid2" ]]; then pass ZW-G1; else fail ZW-G1 "noncanonical or duplicate RID"; fi; }
@@ -332,9 +338,10 @@ fi
 
 if selected ZW-G3; then
   old="$rid2"; kill_node zone-node-2 TERM
+  ops_first="$(next_line "$LOG_DIR/ops.log")"
   start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-crash-replacement.properties"
   if wait_log_while_running zone-node-replacement topology=ready 1 "${node_pid[zone-node-replacement]}" 900; then
-    new="$(routing_id zone-node-replacement)"
+    new="$(routing_id zone-node-2 "$ops_first")"
     first="$(next_line "$LOG_DIR/client.log")"
     if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-G3-fresh \
         && tail -n +"$first" "$LOG_DIR/client.log" | grep -Fq "scenario ZW-G3-fresh owner=$new "; then
