@@ -25,7 +25,7 @@ Per language, "excluded from the default" means the following.
 |---|---|---|
 | .NET | CI and release build only `Zlink.Framework.ci.slnf` (16 projects) | The developer `Zlink.Framework.sln` carries the sample projects so the IDE can open them, but CI and release use the slnf only. Each sample also opens through `samples/<name>/<name>.sln` |
 | Node.js | `npm run verify:ci` (workspace `packages/*`) | Samples are standalone packages outside the workspace. `npm run test:samples`, `npm run lint:samples` and `npm run verify:samples` run only in `verify:release` and `framework-gate.sh` |
-| Java/Kotlin | Modules of the root `settings.gradle.kts` | Samples are the `samples/` composite build. The root build registers the composite without running its tasks, and CI and release skip the registration with `-Pzlink.includeSamples=false` |
+| Java/Kotlin | Modules of the root `settings.gradle.kts` | Samples are the `samples/` composite build. The root build registers the composite without running its tasks, and CI and release skip the registration with `-Pzlink.includeSamples=false`. Java CI instead runs `./gradlew -p samples classes` as its own step, so a sample call site that drifts from the public API fails to compile there (issue #515) |
 | C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON` by default | The run scripts pass the option they need as `ON` and build in the same build tree |
 
 ## 2. The two sample modes
