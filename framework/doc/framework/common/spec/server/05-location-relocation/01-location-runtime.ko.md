@@ -518,6 +518,12 @@ Framework에 노출하지 않는다.
 바꾸려면 반드시 Revision을 증가시켜야 한다 — Revision이 바뀌지 않은 `RENEW`는 여러 번
 반복되더라도 error가 되지 않고 저장된 descriptor를 덮어쓰지도 않는다.
 
+**Descriptor 내용을 바꾸는 runtime 호출은 그 변경을 반영한 다음 Revision의 게시를 그
+호출에서 시작한다.** Host는 게시를 automatic discovery polling 주기까지 미루지 않는다 — 그
+주기는 다른 host가 게시한 descriptor를 읽는 간격이며, 자신의 변경을 게시하는 시점을 정하지
+않는다. 게시가 끝나는 시점은 host의 실행 모델을 따른다. 호출자는 호출이 반환한 시점에 새
+Revision이 Store에 저장되어 있다고 가정하지 않는다.
+
 Host는 startup 중 descriptor 전체를 먼저 만든다. 크기 제한을 넘으면 일부를 자르거나 나누어
 게시하지 않고 startup 전체를 실패시킨다. Application state의 format과 version은 descriptor에
 넣지 않는다.
@@ -1349,6 +1355,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 전역 ID로 조회한 위치는 MeshName과 독립적으로 같은 결과를 반환한다.
 - 목록 읽기의 다음 페이지 값은 최대 4,096 bytes이고, 한 페이지는 최대 1,000개·4 MiB이며
   모든 페이지가 같은 시점의 목록이다.
+- Polling 주기를 길게 설정한 host에서도 runtime descriptor 변경이 그 주기 전에 새 Revision
+  으로 Store에서 관찰되며, 변경이 없으면 같은 대기가 관찰에 실패한다.
 
 **생성**
 

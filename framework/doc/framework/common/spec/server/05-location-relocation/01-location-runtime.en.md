@@ -567,6 +567,13 @@ publisher must increment Revision to change published content — a replayed `RE
 unchanged Revision never errors and never overwrites the stored descriptor, even if
 replayed more than once.
 
+**A runtime call that changes descriptor content starts, within that call, the
+publication of the next Revision that reflects the change.** A host doesn't defer that
+publication to the automatic discovery polling cycle — that cycle is the interval at
+which a host reads descriptors other hosts published, and it doesn't set when a host
+publishes its own change. When the publication completes follows the host's execution
+model. A caller doesn't assume the new Revision is stored by the time the call returns.
+
 The host builds the whole descriptor during startup first. If it exceeds the size limit,
 it doesn't publish a truncated or split version — the whole startup fails instead. The
 format and version of application state aren't put in the descriptor.
@@ -1491,6 +1498,9 @@ against the store record golden fixture. Each item maps to one test.
 - A location looked up by global ID returns the same result independent of MeshName.
 - The next-page value for a list read is at most 4,096 bytes; one page is at most 1,000
   entries and 4 MiB, and every page is from the same-point-in-time list.
+- Even on a host configured with a long polling interval, a runtime descriptor change is
+  observed in the Store as a new Revision before that interval elapses; with no change,
+  the same wait fails to observe one.
 
 **Creation**
 
