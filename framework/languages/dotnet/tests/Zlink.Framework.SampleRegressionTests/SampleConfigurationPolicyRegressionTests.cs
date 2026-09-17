@@ -307,6 +307,106 @@ public sealed partial class RegressionTests
         return offenders;
     }
 
+    /// <summary>
+    /// ZW-G3 and ZW-G4 judge a replacement process, and the fresh-object half of that verdict
+    /// has to come from a probe the runner owns. Borrowing a client-batch scenario imports
+    /// whatever that scenario needs: ZW-G3 borrowed ZW-A1, whose spawn zone is fixed at
+    /// zone-nw, so in the lane where ZW-B4 stopped zone-node-1 and ZW-C3 stopped zone-node-2
+    /// every zone was registered to a dead incarnation and ZW-G3 failed for something it does
+    /// not assert (#567). The dedicated probe places an Actor in the mesh, so it needs a live
+    /// node and not a live zone.
+    /// </summary>
+    [Fact]
+    public void ZoneWorldReplacementVerdictsUseDedicatedRunnerDrivenProbes()
+    {
+        var sample = ResolveSampleRoot("ZoneWorld");
+        var shell = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
+        var powershell = File.ReadAllText(Path.Combine(sample, "run_sample.ps1"));
+        var scenarios = File.ReadAllText(Path.Combine(sample, "Client", "Scenarios.cs"));
+
+        var clientBatch = ZoneWorldScenarioIds(scenarios, "All");
+        var runnerDriven = ZoneWorldScenarioIds(scenarios, "RunnerDriven");
+        Assert.Contains("ZW-A1", clientBatch);
+        Assert.Contains("ZW-G3-fresh", runnerDriven);
+        Assert.Contains("ZW-G4-fresh", runnerDriven);
+
+        // Positive: neither runner decides anything with a scenario out of the client batch.
+        Assert.Empty(ZoneWorldBorrowedClientBatchScenarios(shell, clientBatch, runnerDriven));
+        Assert.Empty(ZoneWorldBorrowedClientBatchScenarios(powershell, clientBatch, runnerDriven));
+
+        // Negative control: the pre-fix shape, where ZW-G3 reached its verdict through the
+        // fixed-spawn-zone scenario, is reported by the same check.
+        Assert.Equal(
+            new[] { "ZW-A1" },
+            ZoneWorldBorrowedClientBatchScenarios(
+                shell.Replace("run_client ZW-G3-fresh", "run_client ZW-A1", StringComparison.Ordinal),
+                clientBatch,
+                runnerDriven));
+        Assert.Equal(
+            new[] { "ZW-A1" },
+            ZoneWorldBorrowedClientBatchScenarios(
+                powershell.Replace(
+                    "Invoke-ZoneWorldClient \"ZW-G3-fresh\"",
+                    "Invoke-ZoneWorldClient \"ZW-A1\"",
+                    StringComparison.Ordinal),
+                clientBatch,
+                runnerDriven));
+
+        // The verdict is unchanged: the fresh object still has to land on the RID the
+        // replacement itself published.
+        Assert.Contains("scenario ZW-G3-fresh owner=$replacement_rid ", shell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G4-fresh owner=$crash_rid ", shell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G3-fresh owner=$replacementRid ", powershell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G4-fresh owner=$crashRid ", powershell, StringComparison.Ordinal);
+
+        // One probe body serves both scenarios, and it places into the mesh rather than
+        // spawning into a zone.
+        var probe = ZoneWorldMethodBody(scenarios, "ReplacementAcceptsFreshObject");
+        Assert.Contains("CreateFreshActorAsync", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("JoinWorld", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZoneId", probe, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns every scenario id a ZoneWorld runner drives that belongs to the client's own
+    /// batch instead of the runner-driven table. An empty result is the contract; a non-empty
+    /// one names the borrowed scenario whose preconditions the runner silently inherited.
+    /// </summary>
+    private static IReadOnlyList<string> ZoneWorldBorrowedClientBatchScenarios(
+        string runner,
+        IReadOnlyCollection<string> clientBatch,
+        IReadOnlyCollection<string> runnerDriven) =>
+        Regex.Matches(
+                runner,
+                @"(?:run_client|Invoke-ZoneWorldClient|Start-ZoneWorldClient)\s+""?(ZW-[A-Za-z0-9-]+)""?")
+            .Select(match => match.Groups[1].Value)
+            .Where(id => clientBatch.Contains(id) && !runnerDriven.Contains(id))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>Returns the scenario ids registered in one of the client's dispatch tables.</summary>
+    private static IReadOnlyList<string> ZoneWorldScenarioIds(string scenarios, string table)
+    {
+        var start = scenarios.IndexOf($" {table} =>", StringComparison.Ordinal);
+        Assert.True(start > 0, $"Scenarios.{table} must exist");
+        var end = scenarios.IndexOf("};", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"Scenarios.{table} must be a dictionary initializer");
+        return Regex.Matches(scenarios[start..end], @"\[""(ZW-[A-Za-z0-9-]+)""\]")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+    }
+
+    /// <summary>Returns the source text of one method of the scenario client.</summary>
+    private static string ZoneWorldMethodBody(string scenarios, string method)
+    {
+        var start = scenarios.IndexOf($"ValueTask {method}(", StringComparison.Ordinal);
+        Assert.True(start > 0, $"{method} must exist");
+        var end = scenarios.IndexOf("\n    }", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{method} must be a complete method");
+        return scenarios[start..end];
+    }
+
     [Fact]
     public void ZoneWorldScenariosUseConnectorWaitContractsDirectly()
     {
