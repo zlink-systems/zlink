@@ -77,7 +77,7 @@ function Invoke-ZoneWorldChild {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $powerShell = (Get-Process -Id $PID).Path
+    $powerShell = Get-ZlinkSampleSelfShellPath
     $child = Start-SampleProcess -Name $Name -FilePath $powerShell -LogDirectory $LogDir `
         -Arguments (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath) + $Arguments)
     try {
