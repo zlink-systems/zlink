@@ -1,7 +1,6 @@
-package Support
+package systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 
 
-import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 import java.io.IOException
 import java.util.Locale
 import com.fasterxml.jackson.databind.JsonNode

@@ -1,6 +1,5 @@
-package Configuration
+package systems.zlink.e2e.kotlin.discoveryregistryha.consumer.Configuration
 
-import systems.zlink.e2e.kotlin.discoveryregistryha.consumer.Configuration
 import systems.zlink.e2e.kotlin.discoveryregistryha.CliOptions
 
 data class ConsumerOptions(

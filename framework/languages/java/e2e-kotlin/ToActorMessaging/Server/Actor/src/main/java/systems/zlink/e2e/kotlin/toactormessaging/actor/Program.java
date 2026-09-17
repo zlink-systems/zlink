@@ -7,9 +7,9 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.annotation.Bean;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.kotlin.toactormessaging.shared.Contracts;
 import systems.zlink.e2e.kotlin.toactormessaging.shared.Env;
@@ -20,15 +20,17 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
+import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreValue;
+import systems.zlink.framework.locationprovider.ZLinkStoreVersion;
+import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
-import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -36,9 +38,8 @@ import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkSpotActorRequestContext;
-import systems.zlink.framework.spots.ZLinkSpotActorSendContext;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkActorCreateResponse;
+import systems.zlink.framework.ZLinkMessageContext;
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
@@ -90,19 +91,17 @@ public final class Program {
         });
         boot("http route fault stale");
         http.post("/fault/stale", Contracts.ActorFaultReq.class, request -> {
-            ZLinkAuthoritySnapshot live = ensureLiveAuthority(
+            ZLinkStoreValue live = ensureLiveAuthority(
                 actors, locations, request.actorId());
-            var result = locations.compareExchange(
-                    ZLinkAuthorityKeyCodec.actor(request.actorId()),
-                    new ZLinkAuthorityExpectFound("stale-" + live.storeVersion()),
-                    new ZLinkAuthorityPut(
-                        live.payload(),
-                        ZLinkAuthorityGenerationTransition.PRESERVE,
-                        Optional.empty(),
-                        Optional.empty()),
+            ZLinkStoreKey key = actorAuthorityKey(request.actorId());
+            var result = locations.write(
+                    new ZLinkStoreWriteRequest(
+                        List.of(new ZLinkStoreVersionCondition(key, staleVersion(live))),
+                        List.of(new ZLinkStorePut(
+                            key, live.bytes(), remainingRetention(live)))),
                     () -> false)
                 .toCompletableFuture().join();
-            if (!(result instanceof ZLinkAuthorityConflict)) {
+            if (!(result instanceof ZLinkStoreWriteConflict)) {
                 throw new IllegalStateException(
                     "stale authority CAS was not rejected actorId=" + request.actorId());
             }
@@ -111,15 +110,16 @@ public final class Program {
         });
         boot("http route fault route");
         http.post("/fault/route-disconnected", Contracts.ActorFaultReq.class, request -> {
-            ZLinkAuthoritySnapshot live = ensureLiveAuthority(
+            ZLinkStoreValue live = ensureLiveAuthority(
                 actors, locations, request.actorId());
-            var result = locations.compareExchange(
-                    ZLinkAuthorityKeyCodec.actor(request.actorId()),
-                    new ZLinkAuthorityExpectFound("stale-" + live.storeVersion()),
-                    new ZLinkAuthorityDelete(),
+            ZLinkStoreKey key = actorAuthorityKey(request.actorId());
+            var result = locations.write(
+                    new ZLinkStoreWriteRequest(
+                        List.of(new ZLinkStoreVersionCondition(key, staleVersion(live))),
+                        List.of(new ZLinkStoreDelete(key))),
                     () -> false)
                 .toCompletableFuture().join();
-            if (!(result instanceof ZLinkAuthorityConflict)) {
+            if (!(result instanceof ZLinkStoreWriteConflict)) {
                 throw new IllegalStateException(
                     "stale authority delete was not rejected actorId=" + request.actorId());
             }
@@ -171,7 +171,32 @@ public final class Program {
         };
     }
 
-    private static ZLinkAuthoritySnapshot ensureLiveAuthority(
+    //  The Actor authority row's logical key preimage is fixed by the
+    //  cross-language Location Store contract (framework spec
+    //  server/05-location-relocation/01-location-runtime, "Logical key
+    //  preimage"): authority\0{actor|spot}\0{Id}.
+    private static ZLinkStoreKey actorAuthorityKey(String actorId) {
+        if (actorId == null || actorId.isBlank() || actorId.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("actorId is required");
+        }
+        return new ZLinkStoreKey("authority\0actor\0" + actorId);
+    }
+
+    //  A store version that cannot match the live row, so the write must conflict.
+    private static ZLinkStoreVersion staleVersion(ZLinkStoreValue live) {
+        return new ZLinkStoreVersion("stale-" + live.version().value());
+    }
+
+    //  Keeps the row's remaining lifetime, so the probe never extends the lease.
+    private static Duration remainingRetention(ZLinkStoreValue live) {
+        if (live.expiresAt() == null) {
+            return null;
+        }
+        Duration remaining = Duration.between(live.storeNow(), live.expiresAt());
+        return remaining.isNegative() ? Duration.ZERO : remaining;
+    }
+
+    private static ZLinkStoreValue ensureLiveAuthority(
         ZLinkActorManager actors,
         ZLinkRedisLocationStore locations,
         String actorId) {
@@ -183,17 +208,17 @@ public final class Program {
         return waitForActorAuthority(locations, actorId);
     }
 
-    private static ZLinkAuthoritySnapshot waitForActorAuthority(
+    private static ZLinkStoreValue waitForActorAuthority(
         ZLinkRedisLocationStore locations,
         String actorId) {
         long deadline = System.nanoTime() + 5_000_000_000L;
         while (System.nanoTime() < deadline) {
             var result = locations.read(
-                    ZLinkAuthorityKeyCodec.actor(actorId),
+                    actorAuthorityKey(actorId),
                     () -> false)
                 .toCompletableFuture().join();
-            if (result instanceof ZLinkAuthoritySnapshot snapshot) {
-                return snapshot;
+            if (result instanceof ZLinkStoreReadFound found) {
+                return found.value();
             }
             sleepBriefly();
         }
@@ -232,22 +257,20 @@ public final class Program {
     }
 
     public static final class TestActor implements ZLinkActor {
-        private final String actorId;
         private final ZLinkActorContext context;
 
-        TestActor(String actorId, ZLinkActorContext context) {
-            this.actorId = actorId;
+        TestActor(ZLinkActorContext context) {
             this.context = context;
         }
 
-        @Override public String actorId() { return actorId; }
+        String actorId() { return context.actorId(); }
         @Override public ZLinkActorContext context() { return context; }
     }
 
     public static final class TestActorFactory implements ZLinkActorFactory {
         @Override
-        public CompletionStage<ZLinkActor> create(String actorId, ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new TestActor(actorId, context));
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new TestActor(context));
         }
     }
 
@@ -268,18 +291,17 @@ public final class Program {
             context.handlers().addHandler(AskHandler.class);
         }
 
+        //  Entry Spot admission is decided once, on first creation. The
+        //  previous generation split that decision over onCreateActor and
+        //  onActorJoin; onActorJoin now belongs to User Spots only, so the
+        //  single hook that owns the decision writes both evidence rows.
         @Override
-        public CompletionStage<Void> onCreateActor(TestActor actor, ZLinkMessage createRequest) {
+        public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+            TestActor actor,
+            ZLinkMessage createRequest) {
             evidence.append(new Contracts.ActorEvidence("create", actor.actorId(), "create", "created"));
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
-            evidence.append(new Contracts.ActorEvidence("admission", actorId, "join", "accepted"));
-            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+            evidence.append(new Contracts.ActorEvidence("admission", actor.actorId(), "join", "accepted"));
+            return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
         }
 
         @Override
@@ -307,7 +329,7 @@ public final class Program {
         public CompletionStage<Void> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
-            ZLinkSpotActorSendContext context,
+            ZLinkMessageContext context,
             Contracts.ActorMsg message) {
             evidence.append(new Contracts.ActorEvidence(message.scenario(), actor.actorId(), "send", message.value()));
             return CompletableFuture.completedFuture(null);
@@ -330,7 +352,7 @@ public final class Program {
         public CompletionStage<Contracts.ActorRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
-            ZLinkSpotActorRequestContext context,
+            ZLinkMessageContext context,
             Contracts.ActorReq request) {
             evidence.append(new Contracts.ActorEvidence(request.scenario(), actor.actorId(), "request", request.value()));
             return CompletableFuture.completedFuture(new Contracts.ActorRes(
