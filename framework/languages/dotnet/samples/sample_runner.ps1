@@ -459,7 +459,12 @@ function New-SampleRunDirectory {
             [System.Security.AccessControl.PropagationFlags]::None,
             [System.Security.AccessControl.AccessControlType]::Allow)
         $security.AddAccessRule($rule)
-        [System.IO.Directory]::SetAccessControl($path, $security)
+        #  Set-Acl로 적용한다. [System.IO.Directory]::SetAccessControl은 .NET Framework에만
+        #  있고, .NET Core 계열에서는 ACL이 Windows 전용이라는 이유로 핵심 타입에서 빠졌다.
+        #  Windows PowerShell 5.1은 .NET Framework, pwsh 7은 .NET 10 위에서 돌기 때문에
+        #  정적 메서드를 부르면 pwsh 7에서만 "does not contain a method named
+        #  'SetAccessControl'"로 죽는다. cmdlet은 두 셸에서 같은 결과를 낸다.
+        Set-Acl -LiteralPath $path -AclObject $security
     }
     else {
         [System.IO.File]::SetUnixFileMode(
