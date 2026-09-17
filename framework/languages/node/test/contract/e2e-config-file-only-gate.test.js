@@ -91,3 +91,8 @@ test('Node topology sample runners write one configuration per server role', () 
     assert.doesNotMatch(runner, /const configPath\s*=\s*ctx\.writeConfig/, sample);
   }
 });
+
+test('the browser connector runner serves its client configuration over /config.json', () => {
+  const browserRunner = fs.readFileSync(path.join(root, 'scripts/browser-e2e/run-e2e-client.mjs'), 'utf8');
+  assert.match(browserRunner, /url\.pathname === ['"]\/config\.json['"]/);
+});

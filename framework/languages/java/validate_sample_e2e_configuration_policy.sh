@@ -21,6 +21,12 @@ if rg -n 'ZLINK_(JAVA|KOTLIN)_(SAMPLE|E2E)_[A-Z0-9_]+' \
   failures=1
 fi
 
+if rg -n 'environmentVariable\s*\(' \
+    "${SOURCE_ROOTS[@]}" --glob '*.gradle' --glob '*.gradle.kts' --glob '!**/build/**'; then
+  echo "sample builds must not provide application configuration from the environment" >&2
+  failures=1
+fi
+
 if (( failures != 0 )); then
   exit 1
 fi

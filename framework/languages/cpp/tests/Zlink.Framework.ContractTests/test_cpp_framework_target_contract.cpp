@@ -88,6 +88,15 @@ int main ()
 {
     const std::filesystem::path root = ZLINK_FRAMEWORK_CPP_SOURCE_DIR;
     const auto include_root = root / "framework/include";
+
+    for (const auto &required :
+         {include_root, root / "framework/src", root / "connector/core"}) {
+        if (!std::filesystem::exists (required)) {
+            std::cerr << "target contract scan root is missing: " << required << '\n';
+            return 1;
+        }
+    }
+
     const auto cmake = read_file (root / "CMakeLists.txt");
     const auto redis_hpp =
       read_file (root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
@@ -245,6 +254,9 @@ int main ()
     gate.require (actor_hpp.find ("class actor_gateway_t") == std::string::npos
                     && app_runtime.find ("typeid (actor_gateway_t)") == std::string::npos,
                   "IMP-CP-39", "actor_gateway_t is still a public injectable type");
+    gate.require (!tree_contains (root / "samples", "actor_gateway_t")
+                    && !tree_contains (root / "samples", ".bind_session_route ("),
+                  "IMP-CP-40", "application code still binds session transport routes");
     gate.require (actor_gateway_unit.find ("stale_session_unbind_preserves_rebind")
                     != std::string::npos,
                   "IMP-CP-02", "late disconnect has no binding-token regression gate");
@@ -790,6 +802,11 @@ int main ()
                     && spot_runtime.find ("emit_actor_handoff_marker") == std::string::npos,
                   "E2E-CP-57",
                   "spot runtime still emits environment-gated stderr handoff markers");
+    /* CPP-G0-E2E-004 — the runtime half of the transfer evidence contract: the
+     * spot runtime names the committed Location transition it publishes. */
+    gate.require (spot_runtime.find ("\"location_committed\"") != std::string::npos,
+                  "CPP-G0-E2E-004",
+                  "spot runtime does not emit committed Location evidence");
     gate.require (mesh_node_runtime.find (
                     "ZLINK_FRAMEWORK_CPP_ACTOR_HANDOFF_MARKERS") == std::string::npos
                     && mesh_node_runtime.find ("emit_backlog_enqueued_marker")
