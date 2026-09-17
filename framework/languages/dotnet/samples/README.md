@@ -40,25 +40,18 @@ options.AddFanoutChannel("events")
 
 ## Running Samples
 
-Run all supported samples on Linux or WSL:
+Each sample root owns `run_sample.sh` and `run_sample.ps1`; run one sample per
+invocation so a stalled sample cannot hold up the rest of the run:
 
 ```bash
-./framework/languages/dotnet/samples/run_samples.sh
+./framework/languages/dotnet/samples/TicTacToe/run_sample.sh
 ```
-
-Run all supported samples on Windows PowerShell:
 
 ```powershell
-.\framework\languages\dotnet\samples\run_samples.ps1
+.\framework\languages\dotnet\samples\TicTacToe\run_sample.ps1
 ```
 
-Pass sample names to run a subset in the given order.
-
-```bash
-./framework/languages/dotnet/samples/run_samples.sh Bingo SupportChat
-```
-
-Each sample root owns `run_sample.sh` and `run_sample.ps1`. The runner creates
+The runner creates
 role-specific configuration files, starts each role as a separate process,
 waits for readiness, runs the probe or client self-check, and then removes the
 processes and Redis container it created. Server code starts only its own role.

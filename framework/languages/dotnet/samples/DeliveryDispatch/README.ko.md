@@ -86,12 +86,6 @@ PowerShell:
 location store로 시작한다. 외부 Redis endpoint를 재사용하지 않는다. 실행별 key
 prefix와 log directory를 사용하므로 동시에 실행한 샘플이 상태를 공유하지 않는다.
 
-전체 .NET 샘플은 다음 명령으로 실행한다.
-
-```bash
-./framework/languages/dotnet/samples/run_samples.sh
-```
-
 ## 성공 조건
 
 runner는 다음 결과를 확인한다.
