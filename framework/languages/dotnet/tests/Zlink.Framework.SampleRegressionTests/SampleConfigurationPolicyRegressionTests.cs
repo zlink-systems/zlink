@@ -1,4 +1,5 @@
 using Xunit;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -183,7 +184,7 @@ public sealed partial class RegressionTests
         Assert.Contains("$0\" --g4-child ZW-G4", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G3", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G5", runner, StringComparison.Ordinal);
-        Assert.Contains("config_name=\"zone-node-replacement\"", runner, StringComparison.Ordinal);
+        Assert.Contains("config_name=\"$name-replacement\"", runner, StringComparison.Ordinal);
         Assert.Contains("start \"$name\" \"$SERVER_BIN\" --config \"$CONFIG_DIR/$config_name.json\"", runner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("stop_node zone-node-replacement", runner, StringComparison.Ordinal);
@@ -204,6 +205,105 @@ public sealed partial class RegressionTests
         // reading the source identity, so the read happens through that local.
         Assert.Contains("ZLinkRouteMessageContext", reportHandler, StringComparison.Ordinal);
         Assert.Contains("route.SourceNodeRid", reportHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A Ready owner failure is not an automatic replacement, so the Zone Spots a killed
+    /// ZoneNode owned stay registered to the dead incarnation. A process that comes back with
+    /// the same NodeId therefore has to announce readiness with no zones — the ZoneWorld
+    /// README fixes that for every restart, graceful or abrupt. A restart that reused the
+    /// cold-start configuration would demand two zones it can never obtain and burn its whole
+    /// claim budget, which is what ZW-B4, ZW-C2, ZW-C3 and ZW-E5 hit (#555).
+    /// </summary>
+    [Fact]
+    public void ZoneWorldRestartsUseTheZeroZoneReplacementConfiguration()
+    {
+        var sample = ResolveSampleRoot("ZoneWorld");
+        var shell = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
+        var powershell = File.ReadAllText(Path.Combine(sample, "run_sample.ps1"));
+
+        // Every restart selects the node's own replacement configuration, not just zone-node-2's:
+        // ZW-B4 picks the node to stop from what the client observed, so either node can restart.
+        Assert.Contains("config_name=\"$name-replacement\"", shell, StringComparison.Ordinal);
+        Assert.Contains("$ConfigName = \"$Name-replacement\"", powershell, StringComparison.Ordinal);
+        // One replacement configuration, not a separate crash variant: the stop kind does not
+        // change what a restarted node may claim.
+        Assert.DoesNotContain("crash-replacement", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("crash-replacement", powershell, StringComparison.Ordinal);
+
+        // Positive: no replacement configuration in either runner asks for a zone.
+        Assert.Empty(ZoneWorldReplacementConfigsThatClaimZones(shell));
+        Assert.Empty(ZoneWorldReplacementConfigsThatClaimZones(powershell));
+
+        // Negative control: the same check reports the pre-fix shape, where the replacement
+        // configuration carried no empty-zone-set intent.
+        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
+            shell.Replace("\"allowEmptyZoneSet\": True,", string.Empty, StringComparison.Ordinal)));
+        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
+            powershell.Replace("allowEmptyZoneSet = $true", string.Empty, StringComparison.Ordinal)));
+
+        // A replacement claims nothing at all. The empty-zone-set branch returns before the
+        // cold-start claim loop, so a restarted node can never settle on one zone — a state
+        // that is neither the two a cold start needs nor the none a replacement announces, and
+        // one the bootstrap could not leave.
+        var bootstrap = File.ReadAllText(Path.Combine(
+            sample, "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "BotSpawner.cs"));
+        Assert.Equal(1, Regex.Matches(bootstrap, @"settings\.AllowEmptyZoneSet").Count);
+        Assert.True(
+            bootstrap.IndexOf("if (settings.AllowEmptyZoneSet)", StringComparison.Ordinal)
+            < bootstrap.IndexOf("EnsureZoneAsync(zoneId", StringComparison.Ordinal),
+            "the replacement path must return before the cold-start claim loop");
+
+        // ZW-E5 judges the restart from a connection opened before the stop: a node status
+        // payload carries no incarnation token, so the replacement counts as ready only after
+        // that same connection observed the old process leave. Both runners launch the client
+        // first and only then take the node away.
+        var shellLaunch = shell.IndexOf("run_client ZW-E5 &", StringComparison.Ordinal);
+        Assert.True(shellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
+        Assert.True(
+            shellLaunch
+            < shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal));
+        Assert.True(
+            shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal)
+            < shell.IndexOf("scenario ZW-E5 replacement waiting", StringComparison.Ordinal));
+        var powershellLaunch = powershell.IndexOf(
+            "Start-ZoneWorldClient \"ZW-E5\"", StringComparison.Ordinal);
+        Assert.True(powershellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
+        Assert.True(
+            powershellLaunch
+            < powershell.IndexOf(
+                "Stop-ZoneWorldNode \"zone-node-2\"", powershellLaunch, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Returns the header line of every ZoneNode replacement configuration a runner writes
+    /// without turning the empty zone set on. An empty result is the contract; a non-empty one
+    /// names the configuration that would make a restarted node demand zones.
+    /// </summary>
+    private static IReadOnlyList<string> ZoneWorldReplacementConfigsThatClaimZones(string runner)
+    {
+        var offenders = new List<string>();
+        var lines = runner.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var header = lines[index];
+            if (!header.Contains("-replacement\"", StringComparison.Ordinal)) continue;
+            if (!header.Contains("write(", StringComparison.Ordinal)
+                && !header.Contains("Write-ZoneWorldConfig", StringComparison.Ordinal)) continue;
+
+            var body = new StringBuilder();
+            for (var line = index + 1; line < lines.Length; line++)
+            {
+                var text = lines[line].Trim();
+                if (text is "}" or "})") break;
+                body.Append(text);
+            }
+
+            if (!body.ToString().Contains("allowEmptyZoneSet", StringComparison.OrdinalIgnoreCase))
+                offenders.Add(header.Trim());
+        }
+
+        return offenders;
     }
 
     [Fact]

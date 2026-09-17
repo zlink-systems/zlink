@@ -31,11 +31,32 @@ internal sealed class ZoneNodeBootstrap(
     ILogger<ZoneNodeBootstrap> logger) : IHostedService
 {
     private const int StartupRetryAttempts = 120;
+    private const int ReplacementReadyAttempts = 8;
     private static readonly TimeSpan StartupRetryDelay = TimeSpan.FromMilliseconds(250);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await RestoreMaintenanceAsync(cancellationToken);
+
+        // A replacement claims no Zone. Only the initial cold start claims: a Ready owner
+        // failure is not an automatic replacement, so the Zones the previous incarnation owned
+        // stay registered to it, and the Zones a graceful stop released belong to the next cold
+        // start rather than to the process coming back. Claiming here would also let a
+        // replacement settle on one Zone — neither the two a cold start needs nor the none a
+        // replacement announces — and that is a state this bootstrap cannot leave.
+        if (settings.AllowEmptyZoneSet)
+        {
+            for (var attempt = 0; attempt < ReplacementReadyAttempts; attempt++)
+                await Task.Delay(StartupRetryDelay, cancellationToken);
+            if (census.ZoneIds.Count != 0)
+                throw new InvalidOperationException(
+                    "A replacement must reach ready with no Zone of its own. "
+                    + $"node={maintenance.OwnNodeId}; zones={string.Join(',', census.ZoneIds)}");
+            logger.LogInformation(
+                "topology=ready node={NodeId} zones=",
+                maintenance.OwnNodeId);
+            return;
+        }
 
         // Every eligible process requests the same four global ZoneIds. Placement capacity,
         // not NodeId, distributes two Spot owners to each process. A process that fills its
@@ -56,9 +77,7 @@ internal sealed class ZoneNodeBootstrap(
 
             // Re-issuing the canonical create operation every round is what lets this process
             // claim a Zone as soon as capacity frees up; merely waiting on the local census
-            // would never trigger a new placement decision. A Zone whose owner the runner just
-            // crashed stays unclaimable — Framework does not reassign that object (§7.5) — so
-            // a crash replacement finishes these rounds with nothing claimed.
+            // would never trigger a new placement decision.
             foreach (var zoneId in claimOrder)
             {
                 if (await EnsureZoneAsync(zoneId, cancellationToken))
@@ -66,10 +85,6 @@ internal sealed class ZoneNodeBootstrap(
                 if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed)) break;
             }
 
-            if (settings.AllowEmptyZoneSet
-                && census.ZoneIds.Count == 0
-                && attempt >= 8)
-                break;
             if (attempt + 1 >= StartupRetryAttempts)
                 throw new InvalidOperationException(
                     $"Zone Spot capacity did not settle at two local owners. node={maintenance.OwnNodeId}; "
@@ -77,17 +92,6 @@ internal sealed class ZoneNodeBootstrap(
             await Task.Delay(StartupRetryDelay, cancellationToken);
         }
         var zones = census.ZoneIds;
-
-        // A crash replacement must not claim the dead Ready owner's Zone objects. It still
-        // advertises the Actor factory and can accept brand-new objects; the G4 runner probes
-        // that exact boundary through the replacement RID.
-        if (settings.AllowEmptyZoneSet && zones.Count == 0)
-        {
-            logger.LogInformation(
-                "topology=ready node={NodeId} zones=",
-                maintenance.OwnNodeId);
-            return;
-        }
 
         if (!settings.DisableBots)
             foreach (var route in zones.SelectMany(BotPatrolPolicy.RoutesOf))

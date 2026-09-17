@@ -93,7 +93,7 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("BroadcastEndpoint", ops + zoneNode, StringComparison.Ordinal);
         Assert.DoesNotContain("BroadcastEndpoint", settings, StringComparison.Ordinal);
         Assert.DoesNotContain("broadcastEndpoint", runner, StringComparison.Ordinal);
-        Assert.Contains("while len(sockets) < 9", runner, StringComparison.Ordinal);
+        Assert.Contains("while len(sockets) < 10", runner, StringComparison.Ordinal);
 
         // The third ZoneNode role is the documented classic pub/sub-only
         // subscriber. It returns before RouteMesh configuration and is not a
