@@ -24,7 +24,7 @@ runtime에 의존하지 않는다.**
 - [package snapshot](../../../../../../../languages/dotnet/contract/packages/Zlink.Stream.Connector.package.txt)
 
 이 문서는 [snapshot](../../../server/00-foundation/02-glossary.ko.md#snapshot)의 member를 반복해 나열하지 않고 **표면의 구조와 `.NET` 고유 의미**를 고정한다.
-검증 절차는 [이 문서 §14](#14-회귀-테스트)가 소유한다.
+검증 절차는 [이 문서 §13](#13-회귀-테스트)가 소유한다.
 
 **담당 대상은 네이티브 빌드다**(데스크톱·서버, Unity, Godot C#). Unity 네이티브 빌드는 별도
 package 없이 같은 `Zlink.Stream.Connector` NuGet package를 사용한다. **웹(브라우저·WASM)
@@ -48,8 +48,10 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 {
     bool IsConnected { get; }
     ZlinkStreamConnectionState State { get; }
+    ZlinkStreamCloseReason? CloseReason { get; } // 마지막 종료 사유. 끊긴 적이 없으면 null(§10)
     ZlinkStreamConnectorOptions Options { get; }
     int PendingDispatchCount { get; }
+    int ReceivedCount(string name);             // packet 이름별 수신 개수(§8)
 
     IZlinkStreamLifecycleCall Connect { get; }
     IZlinkStreamLifecycleCall Close { get; }
@@ -63,16 +65,42 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
 
-    event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
-    event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>?           Disconnected;
-    event Func<ZlinkStreamError, CancellationToken, ValueTask>?                  ErrorReceived;
+    IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
+    IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
+    IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
 }
 ```
 
-- **event handler는 등록 순서대로 호출된다.** handler 실패는 connector runtime을 종료하지 않고
+- **handler는 등록 순서대로 호출된다.** handler 실패는 connector runtime을 종료하지 않고
   `UserCallbackFailed` 오류로 보고한다.
+- **연결 이벤트는 C# `event`가 아니라 등록 메서드다.** `event`는 등록 시점에 해제 값을
+  돌려주지 않아 공통 스펙 §7을 만족하지 못한다. 화면 하나의 수명에 맞춰 구독을 관리하는
+  client가 등록한 델리게이트를 따로 보관해야 하기 때문이다.
 - `PendingDispatchCount`는 **dispatch pump 상태를 진단하기 위한 값**이다.
   **application flow control에 사용하지 않는다.**
+- **`ReceivedCount(name)`은 packet 이름별 수신 개수를 돌려준다**([공통 스펙
+  §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)). 소비해도 줄지 않고 dispatch mode와
+  무관하며, 연결이 성립할 때 0에서 다시 시작한다.
+- **등록 표면은 모두 `IDisposable`을 돌려준다**([공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)).
+  `On(...)`과 `OnConnectionStateChanged`·`OnDisconnected`·`OnErrorReceived`가 같다.
+  `Dispose()`를 두 번 호출해도 오류로 처리하지 않는다.
+
+`.NET`은 오류를 `ZlinkStreamError`로 전달하고, 던지는 표면은 그 값을 `ZlinkStreamException`에
+담는다([공통 스펙 §9.2](../../32-stream-connector.ko.md#92-전달--받는-쪽이-코드를-읽을-수-있어야-한다)).
+호출자는 `ZlinkStreamException.Error.Code`로 오류 코드를 읽는다.
+
+```csharp
+public sealed record ZlinkStreamError(
+    ZlinkStreamErrorCode Code,      // 공통 스펙 §9의 닫힌 13개 코드
+    string Message,
+    Exception? Exception = null);   // 원인 예외. 없으면 null
+
+public sealed class ZlinkStreamException(ZlinkStreamError error)
+    : Exception(error.Message, error.Exception)
+{
+    public ZlinkStreamError Error { get; } = error; // 코드를 읽는 자리다
+}
+```
 
 ## 4. Call builder
 
@@ -126,8 +154,17 @@ public interface IZlinkStreamWaitCall
 `WaitFor<TPayload>`, `ExpectNone<TPayload>`, `WaitForSequence<TPayload>`를 제공하고, 각각 typed
 builder를 반환한다.
 
-**packet identity는 `IZlinkStreamPacketNameResolver`가 결정한다.** 기본 resolver는
-`ZlinkStreamPacketNameAttribute`를 우선하고, attribute가 없으면 타입 이름을 사용한다.
+**packet identity는 `IZlinkStreamPacketNameResolver`가 결정한다.**
+[공통 스펙 §5](../../32-stream-connector.ko.md#5-packet-모델)가 요구하는 타입에 packet 이름을 붙이는
+수단은 attribute다. 기본 resolver는 이 attribute를 우선하고, 없으면 타입 이름을 사용한다.
+
+```csharp
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
+public sealed class ZlinkStreamPacketNameAttribute(string name) : Attribute
+{
+    public string Name { get; } = name; // 타입에 붙인 packet 이름
+}
+```
 
 - **operation별 `PacketName(...)` override를 허용한다.** 이미 encode한 raw payload와 외부 protocol
   interop을 위해서다. **이는 server framework의 typed registration descriptor와 역할이 다르며,
@@ -137,6 +174,15 @@ builder를 반환한다.
 
 codec 표면은 `IZlinkStreamPayloadCodec`과 `IZlinkStreamCompressionCodec`이다. `ZlinkStreamJsonCodec`이
 기본 payload codec이며, `CompressionCodec`을 지정하면 built-in 대신 그 구현을 사용한다.
+
+[공통 스펙 §5.4](../../32-stream-connector.ko.md#54-codec)의 두 주입점은
+`ZlinkStreamConnectorOptions`의 다음 property다.
+
+```csharp
+public IZlinkStreamPayloadCodec? PayloadCodec { get; init; }          // null이면 ZlinkStreamJsonCodec
+public IZlinkStreamPacketNameResolver NameResolver { get; init; }
+    = new ZlinkStreamPacketNameResolver();                            // 기본 resolver
+```
 
 Framework codec extension이 STREAM header 값을 함께 제공해야 하면 Stream Connector package의
 `IZlinkStreamCodecRegistration`을 구현한다. 이 descriptor는 STREAM 전용 정보만 소유한다. 공통 serializer
@@ -196,8 +242,20 @@ response와 heartbeat 같은 control frame은 이 기록을 거치지 않는다.
 IZlinkStreamWaitCall       WaitFor(string name);        // 도달할 때까지 대기
 IZlinkStreamExpectNoneCall ExpectNone(string name);     // .Within(window) 동안 오지 않는지
 IZlinkStreamSequenceCall   WaitForSequence(string name); // .Expect(p).Expect(p)…를 순서대로
+```
 
-// typed: ZlinkStreamTypedConnectorExtensions 가 WaitFor<T>·ExpectNone<T>·WaitForSequence<T> 제공
+typed 표면은 `ZlinkStreamTypedConnectorExtensions`의 확장 메서드다. 각 표면은
+**packet 이름을 `TPayload`에서 결정하는 overload와 호출자가 명시하는 overload를 함께** 둔다
+([공통 스펙 §10.1.1](../../32-stream-connector.ko.md#1011-push-관측-표면--waitfor-계열)). 이름을 주지
+않으면 `Options.NameResolver`가 `typeof(TPayload)`에서 이름을 결정한다.
+
+```csharp
+public static ZlinkStreamTypedWaitBuilder<TPayload>       WaitFor<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedWaitBuilder<TPayload>       WaitFor<TPayload>(this IZlinkStreamConnector connector, string name);
+public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(this IZlinkStreamConnector connector, string name);
+public static ZlinkStreamTypedSequenceBuilder<TPayload>   WaitForSequence<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedSequenceBuilder<TPayload>   WaitForSequence<TPayload>(this IZlinkStreamConnector connector, string name);
 ```
 
 negative observation과 순서 검증의 typed builder는 다음 public interface를 고정한다.
@@ -221,8 +279,9 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 }
 ```
 
-- `ExpectNone(name).Within(TimeSpan).Async(ct)` — window 안에 도착하면 **오류를 던진다**. `WaitFor`의 대칭.
-- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 payload 목록을 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- `ExpectNone(name).Within(TimeSpan).Async(ct)` — window 안에 도착하면 **`ValidationFailed`를 담은 `ZlinkStreamException`을 던진다**. `WaitFor`의 대칭.
+- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 `IReadOnlyList<ZlinkStreamMessage<TPayload>>`를 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- **술어와 반환은 `ZlinkStreamMessage<TPayload>`를 다룬다.** `Where(...)`와 `Expect(...)`가 받는 인자도 payload가 아니라 message다.
 - **status 전용 표면을 두지 않는다.** status는 payload 필드이므로 `WaitFor<T>(name).Where(p => p.Status == …)`로 표현한다. connector가 어느 필드가 status인지 알지 않는다.
 
 - **도메인 REST 폴링(`GET /deliveries/{id}` 등)은 이 표면이 아니다.** 그건 `ZLinkHttpClient`의 일이다.
@@ -240,9 +299,12 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
 
 ## 10. 종료 사유
 
-값 집합과 의미는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-종료-사유)가 소유한다. `.NET`은
-`ZlinkStreamCloseReason` enum으로 표현하고 **`Disconnected` event의 인자
-`ZlinkStreamDisconnected.CloseReason`으로 노출한다.**
+값 집합과 의미는 [공통 스펙 §6.2](../../32-stream-connector.ko.md#62-종료-사유)가 소유한다. `.NET`은
+`ZlinkStreamCloseReason` enum으로 표현한다.
+
+**읽기 표면은 `IZlinkStreamConnector.CloseReason` property다**(§3). 타입은
+`ZlinkStreamCloseReason?`이며, 한 번도 끊긴 적이 없으면 `null`이다. `Disconnected` event의 인자
+`ZlinkStreamDisconnected.CloseReason`은 이 property에 추가하는 표면이다.
 
 **`session-closing` frame의 wire 값은 1~6이고 `.NET` enum의 내부 ordinal은 0~5다.** codec이 둘을
 명시적으로 변환하므로 **enum을 정수로 cast해 wire 값으로 사용하지 않는다.**
@@ -255,23 +317,41 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
 
 **connector outbound operation은 별도 public 옵션 없이 UUIDv7 `flow_id`를 한 번 생성한다.**
 callback 안에서 시작한 후속 operation은 **현재 inbound flow를 재사용하고, callback이 끝나면 ambient
-flow를 정리한다.**
+flow를 정리한다.** `.NET`은 ambient 실행 문맥을 제공하므로 송신 call에 flow를 명시하는 인자를
+두지 않는다([공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)).
+
+수신 message는 flow 한 쌍을 다음 property로 노출한다.
+
+```csharp
+public sealed record ZlinkStreamMessage<TPayload>(
+    string Name,
+    ZlinkStreamMetadata Metadata,
+    TPayload Payload,
+    string? FlowId = null,                    // diagnostics level이 Off이면 null(§13)
+    ZlinkStreamFlowOrigin? FlowOrigin = null);
+
+public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
+```
+
+**`flow_origin`의 wire 값은 1~4이고 `ZlinkStreamFlowOrigin`의 내부 ordinal은 0~3이다.** 종료
+사유(§10)와 같은 주의가 필요하다. codec이 둘을 명시적으로 변환하므로 **enum을 정수로 cast해
+wire 값으로 사용하지 않는다.**
 
 wire 표현은 [공통 스펙 §4.2](../../32-stream-connector.ko.md)와
 [flow-correlation](../../../server/06-observability/04-flow-correlation.ko.md)이 소유한다.
 
-## 12. Metric
-
-connector metric은 [Stream Connector 공통 계약 §6.2](../../32-stream-connector.ko.md#62-connector-reconnect-계기)의
-이름과 닫힌 label을 따른다. `.NET` connector는 `System.Diagnostics.Metrics` provider에
-`zlink.stream.reconnects`를 게시하며 application과 E2E는 `MeterListener`로 읽는다. **metric listener 실패는
-send/request 결과나 연결 상태를 바꾸지 않는다.**
-
-## 13. Options와 검증
+## 12. Options와 검증
 
 **기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다.** `.NET`은 이를
 `ZlinkStreamConnectorOptions`(+ `ZlinkStreamHeartbeatOptions`, `ZlinkStreamReconnectOptions`)의
 property로 표현한다.
+
+[공통 스펙 §6](../../32-stream-connector.ko.md#6-연결-생명주기)이 요구하는 **무제한 reconnect는
+nullable `int`의 `null`로 표현한다.**
+
+```csharp
+public int? MaxAttempts { get; init; } = 3; // null이면 무제한. 그 밖에는 양수여야 한다
+```
 
 공통 계약의 diagnostics level([공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level))은
 다음 property로 투영한다. 미정의 enum 값은 검증에서 거부한다.
@@ -294,10 +374,16 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 {
     ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
 
-    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);      // 기다리지 않고 값을 바꾼다
+    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level); // 같은 값을 바꾸는 비동기 짝
     // ...
 }
 ```
+
+`SetDiagnosticsLevelAsync`는 `.NET`의 비동기 관용에 맞춘 짝이며
+[공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 요구하는 동기 표면을
+대신하지 않는다. 동기 표면은 비동기 짝의 완료를 기다리지 않으므로 receive callback 안에서
+호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
 
 `DiagnosticsLevel`은 `Options.DiagnosticsLevel`을 그대로 읽는 값이며 항상 최근에
 `SetDiagnosticsLevel`로 적용한 level과 일치한다(`Options`가 노출하는 값도 마찬가지다).
@@ -316,15 +402,22 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 
 **검증 계약:**
 
+검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다. `.NET`은
+`ZlinkStreamConnectorFactory.Create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
+`IZlinkStreamConnector` 인스턴스를 만들지 않고 실패를 호출자에게 전달한다.
+
 | 위반 | 실패 |
 |---|---|
-| endpoint 없음 | `ArgumentException` |
-| 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | **연결을 시작하기 전에** `ZlinkStreamException`의 `ConfigurationError` |
-| 유효하지 않은 timeout·queue 크기·heartbeat/reconnect 조합 | `ValidationFailed` |
+| endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
+| 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
+| 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
+| 유효하지 않은 timeout·queue 크기·heartbeat/reconnect 조합 | `ZlinkStreamException`의 `ValidationFailed` |
+| 정의되지 않은 `ZlinkStreamDiagnosticsLevel` 값 | `ZlinkStreamException`의 `ValidationFailed` |
 
 모든 timeout과 queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
+`MaxAttempts`는 `null`이거나 양수여야 한다.
 
-## 14. 회귀 테스트
+## 13. 회귀 테스트
 
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|

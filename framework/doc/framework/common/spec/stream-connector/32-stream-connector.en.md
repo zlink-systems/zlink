@@ -68,6 +68,7 @@ language can open an OS socket in a browser sandbox.
 | Game engine (common) | An engine object can't be handled off the main thread | The default of dispatch mode, which decides the receive callback's execution context, is **`Manual`**. It's explicitly pumped on the main thread (§7). |
 | Game engine (C++) | Some builds have exception/coroutine disabled | The C++ connector core is **no-exception/no-coroutine**. The public header doesn't expose `<coroutine>` |
 | **Browser · WASM** | **Can't open an OS socket** (security sandbox) | **`tcp`/`tls` unusable.** Only `ws`/`wss` are used, running on top of the platform's native WebSocket API (§3.2) |
+| **Browser JavaScript** | **No ambient execution context** equivalent to `AsyncLocalStorage` | To continue a received message's flow, the caller **passes that flow explicitly** to the send call (§5.5) |
 | Node.js | Not the TypeScript connector's product execution environment | Only handles the server process and browser test runner |
 
 ## 3. Transport
@@ -81,8 +82,13 @@ language can open an OS socket in a browser sandbox.
 | `ws://` | WebSocket |
 | `wss://` | WebSocket over TLS |
 
-If transport is specified but doesn't match the endpoint scheme, it's
-treated as a **configuration error**.
+- **If transport isn't specified, the endpoint scheme decides the
+  transport.** The table above is that mapping, and an option's fixed
+  default doesn't override the scheme. A configuration that names only
+  a `ws://` endpoint connects over WebSocket with no further option.
+- **If the specified transport doesn't match the endpoint scheme, it
+  fails with `ConfigurationError` (§9).** When the two values name
+  different transports, there's no way to decide which one to follow.
 
 ### 3.2 Per-Environment Transport Availability
 
@@ -263,8 +269,20 @@ this value.
 
 The user API doesn't handle raw header bytes.
 
-- **The default packet name is the payload type name.**
-- If the caller specifies a name explicitly, that takes priority.
+- **The default packet name is the payload type's simple name.** No
+  namespace or package qualifier is attached.
+- **A name that varies with the compiler or the runtime isn't used as a
+  packet name.** The packet name is a value agreed with the server, so
+  a compiler-mangled name — anything that changes when the build
+  environment changes — leaves the server unable to find a handler for
+  the same type.
+- **All five languages provide a way to attach a packet name directly
+  to the payload type.** The form of that attachment (attribute,
+  annotation, static member, and so on) is owned by the per-language
+  document. A name attached to the type takes priority over the simple
+  type name.
+- If the caller specifies a name **per operation**, that takes the
+  highest priority.
 - If auxiliary information is needed, it's added as a metadata
   key-value.
 - **An API that handles arbitrary header bytes isn't put on the public
@@ -336,9 +354,15 @@ typed payload codec as a connector creation option, used together for
 typed send, request, and receive. MessagePack/Protobuf are provided by
 an optional package with that codec implementation. A public API for
 registering a codec per message type, or switching codec per
-send/request operation, isn't provided. A Raw encoded payload can use
-the codec number the payload specifies as is, for external protocol
-interworking.
+send/request operation, isn't provided. **The typed payload codec and
+the name resolver that decides a packet name from the payload type
+(§5) are both injected as connector creation options.** Instead of a
+surface that switches them per operation, the two injection points sit
+in the creation options only. If neither is given, the JSON codec
+and §5's default name rule are used, and the injection point's type
+name is owned by the per-language document. A Raw encoded payload can
+use the codec number the payload specifies as is, for external
+protocol interworking.
 
 The TypeScript package root exports a browser-safe
 `ZlinkStreamPayloadCodec`, injected as the `codec` option when building
@@ -346,6 +370,37 @@ a connector. Node framework serializer registration uses the same
 package's `./framework` subpath. The two entry points use the same
 codec number owned by `stream-wire`, but the browser module graph
 mustn't reference the server framework runtime.
+
+### 5.5 Flow Exposure And Propagation
+
+**A received message exposes `flow_id`/`flow_origin` alongside the
+payload, the packet name, and the metadata.** All five languages expose
+them. The format and meaning of the two values are owned by
+[Flow correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership),
+and when the diagnostics level is `Off` the connector doesn't deliver
+them, so both are empty (§13). The application reads these values to
+line up its own log with the server trace as one flow.
+
+A send or request started while a handler processes a received message
+**continues that message's flow.** How it is continued is decided by the
+execution environment.
+
+| Execution Environment | How the flow is continued |
+|---|---|
+| A runtime with an ambient execution context | The connector holds the current flow in the context it runs the handler on, and a send/request started on that same context uses the value with no argument |
+| A runtime with no ambient execution context (browser JavaScript) | The caller passes the flow of the message being processed to the send call explicitly. The name of that surface is owned by the per-language document |
+
+- **The difference between the two is the calling form, not the
+  guarantee.** Either way the built frame carries the same
+  `flow_id`/`flow_origin`, and a send that continues no flow starts a
+  new flow on both.
+- **Placing an explicit surface on a runtime with no ambient context
+  applies the requirement of
+  [Flow correlation §6](../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context)
+  to the connector.** Browser JavaScript has no surface equivalent to
+  `AsyncLocalStorage`, so a value can't be held on the execution
+  context (§2.2). As that same document forbids, the current flow isn't
+  guessed from a process-global variable or a mutable connector field.
 
 ## 6. Connection Lifecycle
 
@@ -419,6 +474,29 @@ state.
   `Disconnected` error.**
 - Once the connection drops, **every pending request fails**, and it's
   **not automatically resent** after reconnect.
+- **The reconnect max attempt count must be able to express
+  unlimited.** The form of that expression (a null value, a negative
+  number, a named constant, and so on) is owned by the per-language
+  document. A client that keeps trying until the connection is restored
+  specifies unlimited instead of writing a large number, which is what
+  separates it from a configuration with a finite attempt count.
+- **The delay between attempts carries randomness.** The base delay
+  starts at the initial delay, is multiplied by the backoff factor on
+  each attempt, and stops at the maximum delay. What is actually waited
+  is **a value drawn between 50% and 100% of that base delay.**
+
+    With a deterministic delay, every client that was attached comes
+    back **at the same moment** once the server drops them. That moment
+    is the heaviest one for the server, so the timing is spread out.
+
+- **When the attempts run out, the disconnect handler runs.** After the
+  last attempt fails the connection state becomes `Disconnected` and
+  registered disconnect handlers run. A configuration set to unlimited
+  never reaches this point.
+
+    **Whether the handler receives the close reason as an argument is
+    settled by the language.** Where it does not, the reason is read
+    from the surface in §6.2. Either way there is a path to it.
 
 **Heartbeat:**
 
@@ -447,29 +525,7 @@ the same across every language.**
 | TLS certificate validation | On — the default of the validation-skip option is off, used only for a test's self-signed certificate |
 | Diagnostics level | `Errors` (§13) |
 
-### 6.2 Connector Reconnect Instrument
-
-The Connector records automatic/manual reconnect attempt results with
-the following metric. This instrument is owned by the client
-connector, and the server session runtime doesn't guess or record
-reconnect status on its behalf.
-
-| Instrument | Kind | Unit | Label | Meaning |
-|---|---|---|---|---|
-| `zlink.stream.reconnects` | counter | `{reconnect}` | `transport`, `outcome`, `reason` | Cumulative Connector reconnect attempt result |
-
-`outcome` is a closed value of `connected|failed|cancelled|shutdown`,
-and `reason` is a closed value of
-`transport_closed|connect_failed|tls_failed|timeout|requested`.
-`transport` is one of §3.1's `tcp|tls|ws|wss`. Session ID and remote
-endpoint aren't included in the label. The per-language connector
-publishes the same name and closed label to the public metric provider
-or sink the per-language exact interface decides. E2E and the
-application use that provider's or sink's public reader, and don't
-build a server-side proxy API. A reader, sink, or exporter failure
-doesn't change send, request, or connection state.
-
-### 6.3 Close Reason
+### 6.2 Close Reason
 
 Once the connection drops, the connector exposes a **close reason.**
 The value set is a **closed set** aligned with the server-side
@@ -493,9 +549,48 @@ reconnection and backoff**
 **A capability for the server to specify a replacement endpoint isn't
 included in this contract.**
 
-The per-language document only owns the **type name and exposure
-form** (whether a property or an event argument) expressing this
+**The close reason can be read from the connector's read surface at any
+time.** Code that didn't receive the disconnect event reads the same
+value after the connection closed. If the connection has never dropped,
+the value is empty. **A failed first connect also leaves a reason** —
+the impact table in §9 settles it, so `ConnectTimeout` and
+`TlsValidationFailed` give `TransportError`. Even where a connection was
+never established, how the attempt ended is kept. The disconnect event carrying the reason as an
+argument adds to this read surface rather than replacing it.
+Reconnecting doesn't clear the value — the last close's reason is kept.
+
+The per-language document only owns the **type name and the shape of
+the read surface** (whether a property or a method) expressing this
 reason.
+
+### 6.3 Option Validation
+
+**Every option item is validated.** Checking only some of them lets a
+bad value elsewhere pass unnoticed, and the caller cannot tell a
+configuration mistake from a connection failure.
+
+- The endpoint/transport match (§3.1), the connect/request/wait
+  timeouts, the heartbeat interval and timeout, the reconnect delays,
+  backoff factor, and max attempts, the send/receive payload bounds,
+  the codec and compression settings, the dispatch mode, and the
+  diagnostics level are **all checked.** The values checked are the
+  ones left after §6.1's defaults are applied.
+- **Validation happens at the earliest point the language can report
+  the failure.** A language whose creation surface can return a failure
+  validates when the connector is built; one whose creation surface
+  cannot validates when the connection is attempted. Either way the
+  rejection comes **before a connection is made.**
+- **A configuration that fails validation never reaches a connection.**
+  Only options that passed go on to connect.
+- A single value outside its allowed range is **`ValidationFailed`**;
+  items that don't fit together are **`ConfigurationError`** (§9). A
+  conflict between the endpoint scheme and the transport, a transport
+  the environment doesn't support, and a compression codec supplied
+  with compression turned off belong to the latter.
+- **Delivery follows §9.2.** A build with exceptions disabled receives
+  a value, and every other language receives an exception carrying the
+  code. Throwing a language's standard exception as is leaves the
+  caller unable to tell the two codes apart.
 
 ## 7. Dispatch Mode
 
@@ -514,6 +609,22 @@ unconsumed packet in the receive message queue in both dispatch modes,
 it doesn't need a separate dispatch pump even in `Manual`. `dispatch`
 only runs a registered push handler, error/disconnect handler, and
 request callback.
+
+**Handler registration returns a value that can unregister it.** This
+holds for the push handler and for the error/disconnect/connection
+state handlers alike. If a registration can only be removed by closing
+the connector, a client that registers and unregisters subscriptions
+with the lifetime of one screen has to build the connection again. An
+unregistered handler isn't run by later dispatches, and unregistering
+the same value twice isn't treated as an error. The returned type name
+is owned by the per-language document.
+
+**Whether the returned value's lifetime is the registration's lifetime
+is settled by the language.** A language that expresses ownership as a
+value unregisters when that value goes away; there, the returned value
+is kept for as long as the registration must live. Elsewhere the value
+may be discarded and the registration stays until it is unregistered
+explicitly.
 
 ## 8. Compression
 
@@ -541,13 +652,14 @@ request callback.
 |---|---|
 | `Disconnected` | No connection, or dropped |
 | `ConfigurationError` | Invalid configuration (scheme mismatch, **a transport the environment doesn't support**, etc.) |
-| `ValidationFailed` | Pre-send validation failure (metadata bound exceeded, send payload bound exceeded, etc.) |
+| `ValidationFailed` | A validation failure — covers pre-send validation (metadata bound exceeded, send payload bound exceeded), option validation for a value outside its allowed range (§6.3), and a violation of a wait surface's observation condition (§10.1) |
 | `RequestTimeout` | Reply wait time exceeded |
 | `ConnectTimeout` | Connect time exceeded |
 | `FrameDecodeFailed` | Frame/header decode failure (§4.5), or a structurally valid Error frame's JSON payload doesn't satisfy §5.3 |
 | `FrameTooLarge` | The payload exceeded the receive bound |
 | `SendFailed` | Send failure |
-| `CompressionFailed` / `DecompressionFailed` | Compression/decompression failure |
+| `CompressionFailed` | Compression failure |
+| `DecompressionFailed` | Decompression failure |
 | `TlsValidationFailed` | TLS validation failure |
 | `UserCallbackFailed` | A user callback failed |
 | `RemoteError` | The server responded with an Error payload satisfying §5.3. If `request_seq` matches a pending request, that request fails; if absent or mismatched, it's delivered as an error event |
@@ -570,13 +682,41 @@ reason, or the reconnect condition.
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
-**The delivery method differs by surface, but the meaning is the
-same.**
+### 9.1 The Closed Error Code Set
 
-- An async (await) surface **throws the error on failure.**
+The **thirteen codes above are all of them.** An implementation neither adds nor
+drops one. A per-language document owns only how the names are spelled.
+
+One exception is stated explicitly — **`TlsValidationFailed` does not occur in a
+browser runtime**, because the browser's WebSocket API does not distinguish a TLS
+failure from an ordinary connection failure. The code stays in the set and simply
+goes unused there. Varying the set per runtime would split the impact table above.
+
+### 9.2 Delivery — The Receiver Must Be Able To Read The Code
+
+**The delivery method differs by surface, but the meaning is the same.**
+
+- An async (await) surface **delivers the error on failure.**
 - A callback-based surface **delivers the failure as a result object.**
-- A stream-level error with no request id is delivered as an
-  **error event.**
+- A stream-level error with no request id is delivered as an **error event.**
+
+Whichever the method, **the receiver must be able to tell which of the thirteen it
+is.** That is this section's requirement; what carries it is up to the platform.
+
+| Target | Delivery | How the code is read |
+|---|---|---|
+| A build with exceptions disabled (game engines) | Returned as a value. **Nothing is thrown** | The result object's error code |
+| Other C++ consumers (e2e, tooling) | A throwing adapter over the same surface | The code the exception carries |
+| Every other language | An exception is thrown | The code the exception carries |
+
+**A language's standard exception type is not used as is.** Types such as
+`IllegalArgumentException` or `InvalidOperationException` have nowhere to put the
+code, so the caller cannot tell `ValidationFailed` from `ConfigurationError`. A
+language that delivers by exception defines **a dedicated exception type that
+carries the code.**
+
+The same requirement applies to option validation failures and to violations of the
+observation surfaces (§10.1).
 
 ## 10. Receive Message Queue
 
@@ -591,10 +731,25 @@ A `Send` packet the server sent stays in the **receive message queue** until it 
   server's STREAM socket and is outside this document.
 - **A response, error response, and heartbeat control frame do not pass through this queue.**
   They are needed for request completion and connection keep-alive.
+- **The connector exposes the received count per packet name as
+  `receivedCount(name)`, and all five languages provide it.** The value is the
+  **number received** under that name. **Consuming does not lower it** — the value
+  stands whether a handler dispatched the message or a wait surface took it. **The
+  count is independent of the dispatch mode** — whether `Manual` waits for a pump or
+  `Immediate` runs on the receive path, the value rises when the packet arrives (§7).
+  This surface exists for scenario assertions, so "how many arrived under this name"
+  must still be answerable after an `on` handler has dispatched them.
+- **The reference point is the moment the connection is established.** The count
+  starts at zero when the connection is established and counts what arrives on that
+  connection. A reconnect is a new connection, so it starts at zero again. A name
+  never received is zero.
+- The value is for scenario assertions and diagnostics, not as a basis for flow
+  control — the queue has no bound, so a larger value changes nothing about what the
+  connector does.
 
 Messages do not pile up in a client that works. A handler dispatches them or a wait surface
 consumes them. If they do pile up it is a client bug, and neither discarding them nor closing the
-connection gains anything - the client has to be restarted either way. So the connector holds no
+connection gains anything — the client has to be restarted either way. So the connector holds no
 policy for it.
 
 ### 10.1 Test Wait Surface
@@ -612,17 +767,25 @@ language's `Client/Support`.
 Something that can only be judged by observing the receive message
 queue (§10). A method of the connector instance.
 
-All three surfaces let the caller specify the packet name explicitly,
-or decide it from the payload type. The exact argument and overload,
-and the completion terminator (`.Async`/`.submit`/`.run`), are owned by
-each language's document, and the remaining conditions are narrowed by
+The surfaces below provide **both** paths for the packet name: naming
+it at the call site, and deriving it from the payload type. Neither
+path is offered alone. The exact argument and overload, and the
+completion terminator (`.Async`/`.submit`/`.run`), are owned by each
+language's document, and the remaining conditions are narrowed by
 builder chaining.
+
+- **The predicate and the return value carry messages, not payloads.**
+  A payload alone hides the metadata and the packet name from the
+  predicate. `T` is the type of the payload the message carries.
+- **These surfaces fail with `ValidationFailed`.** How that reaches
+  the caller is settled by §9.2 — as a value where exceptions are
+  disabled, as an exception carrying the code everywhere else.
 
 | Surface | Contract | Failure |
 |------|------|------|
-| `waitFor<T>(name)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Throws an error** if it doesn't arrive within the timeout (§10 specifies this surface consumes the queue) |
-| `expectNone<T>(name)` | Confirms that packet **doesn't arrive** during `.within(window)` (negative). The symmetric of `waitFor` | **Throws an error** if it arrives within the window |
-| `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — confirms a push of the same name arrives **in the given predicate order** and returns the payload list | **Throws an error** if the order is wrong or it times out. This surface exists to verify **"arrived in order"**, not "N arrived" |
+| `waitFor<T>(name)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Fails with an error** if it doesn't arrive within the timeout (§10 specifies this surface consumes the queue) |
+| `expectNone<T>(name)` | Confirms that packet **doesn't arrive** during `.within(window)` (negative). The symmetric of `waitFor` | **Fails with an error** if it arrives within the window |
+| `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — confirms a push of the same name arrives **in the given predicate order** and returns the message list | **Fails with an error** if the order is wrong or it times out. This surface exists to verify **"arrived in order"**, not "N arrived" |
 
 - **A status wait doesn't have a separate surface.** Since status is a
   field of the payload, it's expressed as
@@ -688,6 +851,15 @@ test name differs, the meaning must be the same.
 | Compression | Per-direction behavior (§8) |
 | Error handling | Error meaning (§9) |
 | Connection lifecycle | State transition/reconnect/heartbeat (§6) |
+| **Option validation** | **Every option is checked before a connection is made; a value out of range is rejected as `ValidationFailed` and a mismatch between options as `ConfigurationError` (§6.3)** |
+| **Transport inference** | **An unspecified transport is settled by the endpoint scheme, and a specified one that conflicts with the scheme is `ConfigurationError` (§3.1)** |
+| **Error delivery** | **The receiver can tell which of §9's thirteen it is. A language's standard exception type is not used as is (§9.2)** |
+| **Reconnect delay** | **The wait between attempts falls between 50% and 100% of the base delay. When the attempts run out the state becomes `Disconnected` and disconnect handlers run (§6)** |
+| **Unregistration** | **All four registrations — push, error, disconnect, connection state — return a value that unregisters, and an unregistered handler is not run by later dispatches (§7)** |
+| **Received count** | **`receivedCount(name)` counts what arrived, does not fall on consumption, and is independent of dispatch mode. It restarts at zero when the connection is established (§10)** |
+| **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, and a violation is `ValidationFailed` (§10.1)** |
+| **Flow exposure and propagation** | **A received message exposes the flow identifier and origin, and a runtime without an ambient context provides an explicit means of passing it (§5.5)** |
+| **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
 | Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
 
 ## 13. Diagnostics Level
@@ -703,6 +875,15 @@ as is. The application can read and change the level without recreating the conn
 change applies from the processing points after it, and already-built frames are not
 retroactively changed. Each processing point reads the current level once and decides with
 that value.
+
+**A surface that reads the level and a synchronous surface that changes it are provided.**
+Changing the level alters one value, so there is no completion for the caller to wait on. Where
+asynchronous completion is that language's idiom, an asynchronous counterpart with the same
+meaning is placed alongside — both surfaces change the same value, and the asynchronous
+counterpart does not replace the synchronous one. Implementing the synchronous surface as a
+blocking call over the asynchronous counterpart would make that call wait on its own completion
+inside a receive callback, so the synchronous surface changes the value without waiting. The
+names of both surfaces are owned by the per-language document.
 
 When the level is not `Off`, the connector keeps the current behavior: it creates and
 attaches `flow_id`/`flow_origin` to outbound frames (§4.2, flag `0x10`) and validates the

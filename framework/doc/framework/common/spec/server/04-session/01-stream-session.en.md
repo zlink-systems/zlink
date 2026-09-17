@@ -254,7 +254,7 @@ The session error callback is limited to surfacing a monitor-observable
 transport error at the session level.
 
 The termination reason when a session closes matches the closed set in
-[Stream Connector §6.3](../../stream-connector/32-stream-connector.en.md#63-close-reason),
+[Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason),
 and the corresponding instrument is owned by
 [runtime-metrics §4](../06-observability/02-runtime-metrics.en.md).
 
