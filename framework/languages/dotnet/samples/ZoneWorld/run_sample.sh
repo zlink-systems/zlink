@@ -87,7 +87,7 @@ cleanup() {
   fi
   zlink_sample_copy_evidence "$RUN_DIR" "ZoneWorld"
 }
-trap cleanup EXIT
+trap zlink_sample_exit_trap EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run ZoneWorld (it provisions a dedicated Redis container)." >&2
