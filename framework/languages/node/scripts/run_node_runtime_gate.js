@@ -58,6 +58,10 @@ for (const testFile of listTestFiles(path.join(nodeRoot, 'test'))) {
   const result = runTestFile(relative, [
     '--test',
     '--test-timeout=600000',
+    //  inspectTap() below parses TAP. TAP is Node 22's default reporter but not
+    //  every Node's, so pin it explicitly instead of relying on the default.
+    '--test-reporter=tap',
+    '--test-reporter-destination=stdout',
     testFile
   ]);
   expectedTestCount += result.announced;
