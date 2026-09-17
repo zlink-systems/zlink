@@ -799,8 +799,15 @@ try {
         Wait-ZoneWorldLog "ops" "node status observed. node=zone-node-2, rid=zn-" -FirstLine $firstOpsLine -Attempts 600
         $replacementRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstOpsLine
         $passed = (Test-ZoneWorldRoutingId $replacementRid) -and $replacementRid -ne $oldRid
+        # The fresh-object half of the verdict is a mesh placement probe, not a spawn into the
+        # fixed ZW-A1 zone: the crash scenarios above leave every zone registered to a dead
+        # incarnation, so a spawn probe would judge those instead of the replacement
+        # (§7.5, the same probe ZW-G4 uses).
         if ($passed) {
-            try { Invoke-ZoneWorldClient "ZW-A1" } catch { $passed = $false }
+            try { Invoke-ZoneWorldClient "ZW-G3-fresh" } catch { $passed = $false }
+        }
+        if ($passed) {
+            $passed = [bool](Select-String -LiteralPath $ClientLog -SimpleMatch "scenario ZW-G3-fresh owner=$replacementRid " -Quiet)
         }
         Add-ZoneWorldVerdict "ZW-G3" $passed "Normal replacement did not publish a new RID and accept a fresh object."
     }

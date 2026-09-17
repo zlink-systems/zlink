@@ -997,8 +997,14 @@ if scenario_selected ZW-G3 && [[ "$G4_CHILD" == "0" ]]; then
   wait_for_log_after ops "node status observed. node=zone-node-2, rid=zn-" \
     "$first_replacement_ops_line" 600
   replacement_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
+  # The fresh-object half of the verdict is a mesh placement probe, not a spawn into the fixed
+  # ZW-A1 zone: the crash scenarios above leave every zone registered to a dead incarnation, so
+  # a spawn probe would judge those instead of the replacement (§7.5, same probe as ZW-G4).
+  first_fresh_line="$(next_log_line "$LOG_DIR/client.log")"
   if is_zone_node_rid "$replacement_rid" && [[ "$replacement_rid" != "$old_rid" ]] \
-      && run_client ZW-A1; then
+      && run_client ZW-G3-fresh \
+      && tail -n +"$first_fresh_line" "$LOG_DIR/client.log" \
+        | grep -Fq "scenario ZW-G3-fresh owner=$replacement_rid "; then
     g_pass ZW-G3
   else
     g_fail ZW-G3 "normal replacement did not publish a new RID and accept a fresh object"
