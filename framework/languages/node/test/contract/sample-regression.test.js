@@ -1215,30 +1215,6 @@ test('node top-level sample runner only invokes selected samples in order', () =
   assert.doesNotMatch(runSamples, /node --test|retry|sleep|grep/);
 });
 
-test('node RegistryMessaging e2e endpoints do not hide local routing failures with retry loops', () => {
-  const registryMessagingRoot = path.join(workspaceRoot, 'e2e', 'RegistryMessaging');
-  const endpointFiles = [
-    'Server/Provider/Endpoints/provider-endpoints.ts',
-    'Server/Consumer/Endpoints/consumer-endpoints.ts',
-    'Server/Workflow/Endpoints/workflow-endpoints.ts'
-  ];
-  const violations = [];
-  for (const relative of endpointFiles) {
-    const content = fs.readFileSync(path.join(registryMessagingRoot, relative), 'utf8');
-    for (const pattern of [
-      /\bWithRetry\b/,
-      /\bretryUntil\b/,
-      /Timed out waiting for .*route/
-    ]) {
-      if (pattern.test(content)) {
-        violations.push(`${relative}:${pattern.source}`);
-      }
-    }
-  }
-
-  assert.deepEqual(violations, []);
-});
-
 test('node client samples wait for push packets through stream connector helpers', () => {
   const bingoApp = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'bingo-client-scenario.ts'), 'utf8');
   const ticTacToeClient = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'), 'utf8');
@@ -2202,28 +2178,20 @@ test('node shared sample runner fails before completion output when a role requi
     'browser completion output must remain deferred until cleanup passes');
 });
 
-test('framework aggregate runners never remove Redis containers or processes owned by another run', () => {
+test('framework aggregate sample runners never remove Redis containers or processes owned by another run', () => {
   const shellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
   const powershellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.ps1'), 'utf8');
-  const e2eRunner = fs.readFileSync(path.join(workspaceRoot, 'e2e/run_e2e_all.sh'), 'utf8');
-  const redisHelper = fs.readFileSync(path.join(workspaceRoot, 'e2e/redis-container.sh'), 'utf8');
   const frameworkRoot = path.resolve(workspaceRoot, '..', '..');
 
   for (const [label, content] of [
     ['samples:sh', shellRunner],
     ['samples:ps1', powershellRunner],
-    ['e2e:sh', e2eRunner],
-    ['redis-helper:sh', redisHelper],
     ['dotnet:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/dotnet/samples/run_samples.sh'), 'utf8')],
-    ['dotnet:e2e', fs.readFileSync(path.join(frameworkRoot, 'languages/dotnet/e2e/run_e2e_all.sh'), 'utf8')],
     ['java:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/java/samples/run_samples.sh'), 'utf8')],
-    ['java:e2e', fs.readFileSync(path.join(frameworkRoot, 'languages/java/e2e/run_e2e_all.sh'), 'utf8')],
-    ['kotlin:e2e', fs.readFileSync(path.join(frameworkRoot, 'languages/java/e2e-kotlin/run_e2e_all.sh'), 'utf8')],
-    ['cpp:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/cpp/samples/run_samples.sh'), 'utf8')],
-    ['cpp:e2e', fs.readFileSync(path.join(frameworkRoot, 'languages/cpp/e2e/run_e2e_all.sh'), 'utf8')]
+    ['cpp:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/cpp/samples/run_samples.sh'), 'utf8')]
   ]) {
     assert.doesNotMatch(content, /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
-      `${label} must only clean resources created by its own sample or E2E run`);
+      `${label} must only clean resources created by its own sample run`);
   }
 
   assert.match(shellRunner, /\[\[ ! -f "\$\{runner\}" \]\]/);

@@ -31,28 +31,6 @@ test('framework packages only depend on binding public entry points', () => {
   assert.deepEqual(offenders, []);
 });
 
-test('Node E2E clients use only client-facing packages', () => {
-  const e2eRoot = path.join(workspaceRoot, 'e2e');
-  const forbidden = [
-    /['"]@zlink-systems\/framework['"]/, 
-    /['"]@zlink-systems\/framework-locations-redis['"]/, 
-    /packages[\\/]framework[\\/]/,
-    /runtime[\\/]internal/
-  ];
-  const offenders = [];
-
-  for (const file of clientSourceFiles(e2eRoot)) {
-    const content = fs.readFileSync(file, 'utf8');
-    for (const pattern of forbidden) {
-      if (pattern.test(content)) {
-        offenders.push(`${path.relative(workspaceRoot, file)} matches ${pattern}`);
-      }
-    }
-  }
-
-  assert.deepEqual(offenders, []);
-});
-
 test('framework root public surface does not export backend adapter modules', () => {
   const rootIndex = fs.readFileSync(path.join(packageRoot, 'framework', 'src', 'index.ts'), 'utf8');
 
@@ -108,30 +86,6 @@ function* sourceFiles(root) {
       continue;
     }
     if (entry.isFile() && absolute.endsWith('.ts')) {
-      yield absolute;
-    }
-  }
-}
-
-function* clientSourceFiles(root) {
-  if (!fs.existsSync(root)) return;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const absolute = path.join(root, entry.name);
-    if (!entry.isDirectory() || entry.name === 'dist' || entry.name === 'node_modules') continue;
-    for (const child of fs.readdirSync(absolute, { withFileTypes: true })) {
-      if (!child.isDirectory() || (child.name !== 'Client' && child.name !== 'Contract')) continue;
-      yield* clientTreeFiles(path.join(absolute, child.name));
-    }
-  }
-}
-
-function* clientTreeFiles(root) {
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const absolute = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'dist' || entry.name === 'node_modules') continue;
-      yield* clientTreeFiles(absolute);
-    } else if (entry.isFile() && /\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)) {
       yield absolute;
     }
   }

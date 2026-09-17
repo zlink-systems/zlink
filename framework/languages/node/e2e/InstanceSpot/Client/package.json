@@ -1,9 +1,0 @@
-{
-  "name": "@zlink-systems/e2e-instance-spot-client",
-  "version": "0.10.0",
-  "private": true,
-  "main": "dist/InstanceSpot/Client/main.js",
-  "scripts": {
-    "build": "node ../../../node_modules/typescript/bin/tsc -p tsconfig.json"
-  }
-}

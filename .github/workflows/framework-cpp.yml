@@ -83,8 +83,7 @@ jobs:
               build-essential cmake ninja-build git pkg-config curl \
               libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
               libuv1-dev nlohmann-json3-dev libssl-dev \
-              protobuf-compiler libprotobuf-dev \
-              ripgrep
+              protobuf-compiler libprotobuf-dev
 
       - name: Cache hiredis and redis-plus-plus
         id: redis-cache
@@ -200,18 +199,15 @@ jobs:
           cmake --preset linux-ninja-release \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
-            -DZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
           cmake --build --preset linux-ninja-release --parallel 2
 
       - name: Run Framework C++ unit and contract tests
         working-directory: framework/languages/cpp
         run: |
-          # No test is excluded. sample_parity, layout_contract and
-          # common_e2e_inventory were once believed to fail on main; they pass,
-          # and all three read only the source tree, so BUILD_SAMPLES=OFF and
-          # BUILD_E2E=OFF above do not change their result. common_e2e_inventory
-          # shells out to rg, which is why ripgrep is installed above.
+          # No test is excluded. sample_parity and layout_contract were once
+          # believed to fail on main; they pass, and both read only the source
+          # tree, so BUILD_SAMPLES=OFF above does not change their result.
           ctest --preset linux-ninja-release \
             -L 'framework-unit|framework-contract'
 
@@ -279,16 +275,6 @@ jobs:
             --clean-after-build
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg install failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Ensure ripgrep is available
-        shell: pwsh
-        run: |
-          if (-not (Get-Command rg.exe -ErrorAction SilentlyContinue)) {
-            choco install ripgrep --no-progress -y
-            if ($LASTEXITCODE -ne 0) {
-              throw "ripgrep installation failed with exit code $LASTEXITCODE"
-            }
           }
 
       - name: Fetch the Core release package

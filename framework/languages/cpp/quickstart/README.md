@@ -376,8 +376,7 @@ added to get a real binary past `app.run()`:
    `reply_type` pair (JSON body), or a raw `handle(const http_request_t&)`
    that reads `request.route_values.at("name")` itself -- there is no
    per-parameter route binding. This quickstart uses the raw shape, matching
-   every real handler found in `framework/languages/cpp/e2e/**` and
-   `samples/**`.
+   every real handler found in `framework/languages/cpp/samples/**`.
 
 None of these are version mismatches -- they are gaps between the guide's
 illustrative snippet and the handler/builder API that ships in

@@ -1,9 +1,0 @@
-{
-  "name": "@zlink-systems/e2e-to-actor-messaging-actor",
-  "version": "0.10.0",
-  "private": true,
-  "main": "dist/Server/Actor/main.js",
-  "scripts": {
-    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
-  }
-}

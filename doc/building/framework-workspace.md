@@ -16,17 +16,16 @@ through their dedicated run scripts.
 
 | Target | Location | How to run |
 |---|---|---|
-| Per-language scenario e2e | `framework/languages/<lang>/e2e/<name>/` | each `run_e2e.sh` / `run_e2e.ps1` |
 | The seven samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | per-sample `run_sample.sh` / `.ps1` (one sample per run), Node `npm run sample` |
 
 Per language, "excluded from the default" means the following.
 
-| Language | Default build unit | How samples and e2e stay out |
+| Language | Default build unit | How samples stay out |
 |---|---|---|
 | .NET | CI and release build only `Zlink.Framework.ci.slnf` (16 projects) | The developer `Zlink.Framework.sln` carries the sample projects so the IDE can open them, but CI and release use the slnf only. Each sample also opens through `samples/<name>/<name>.sln` |
 | Node.js | `npm run verify:ci` (workspace `packages/*`) | Samples are standalone packages outside the workspace. `npm run test:samples`, `npm run lint:samples` and `npm run verify:samples` run only in `verify:release` and `framework-gate.sh` |
-| Java/Kotlin | Modules of the root `settings.gradle.kts` | Samples are the `samples/` composite build. The root build registers the composite without running its tasks, and CI and release skip the registration with `-Pzlink.includeSamples=false`. Java CI instead runs `./gradlew -p samples classes` as its own step, so a sample call site that drifts from the public API fails to compile there (issue #515). Each e2e scenario is its own Gradle build and that step does not reach them, so `scripts/compile_e2e.sh` walks the scenarios and compiles them (issue #519) |
-| C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON` by default | The run scripts pass the option they need as `ON` and build in the same build tree |
+| Java/Kotlin | Modules of the root `settings.gradle.kts` | Samples are the `samples/` composite build. The root build registers the composite without running its tasks, and CI and release skip the registration with `-Pzlink.includeSamples=false`. Java CI instead runs `./gradlew -p samples classes` as its own step, so a sample call site that drifts from the public API fails to compile there (issue #515) |
+| C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON` by default | The run scripts pass the option they need as `ON` and build in the same build tree |
 
 ## 2. The two sample modes
 
@@ -79,8 +78,8 @@ Preset names follow the IDE or platform; the option bundles are `dev` and `ci`.
 | `windows-ninja` | Windows terminal, VS Code, CLion | Ninja | |
 | `linux-ninja` | Linux, WSL | Ninja | |
 | `macos-ninja` | Apple Silicon Mac | Ninja | `arm64-osx` triplet. Intel Mac is unsupported from Core up |
-| `dev` | Repository development | Ninja | samples, e2e, tests, foundation tests and cross-language all `ON` |
-| `ci` | CI and release verification | Ninja | samples and e2e `OFF`, tests and cross-language `ON` |
+| `dev` | Repository development | Ninja | samples, tests, foundation tests and cross-language all `ON` |
+| `ci` | CI and release verification | Ninja | samples `OFF`, tests and cross-language `ON` |
 
 Every preset uses the vcpkg toolchain under `VCPKG_ROOT` and the repository overlay ports
 (`vcpkg/ports`). One bootstrap script prepares them.

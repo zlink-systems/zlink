@@ -51,7 +51,6 @@ zlink_cpp_sample_prepare_build() {
     -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=ON
     -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=ON
     -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON
-    -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON
   )
   if [[ -n "$dependency_prefix" ]]; then
     cmake_args+=("-DCMAKE_PREFIX_PATH=$dependency_prefix")

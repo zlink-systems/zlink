@@ -10,7 +10,6 @@ param(
     [int]$Parallel = 8,
     [string[]]$Target = @(),
     [switch]$IncludeTests,
-    [switch]$IncludeE2E,
     [switch]$Install
 )
 
@@ -116,7 +115,6 @@ if (-not (Test-Path $Toolchain)) {
 }
 
 $TestsEnabled = if ($IncludeTests) { "ON" } else { "OFF" }
-$E2EEnabled = if ($IncludeE2E) { "ON" } else { "OFF" }
 $ImportedConfigurationMaps = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") |
     Where-Object { $_ -ne $Configuration } |
     ForEach-Object { "-DCMAKE_MAP_IMPORTED_CONFIG_$($_.ToUpperInvariant())=$Configuration" }
@@ -135,7 +133,6 @@ $ConfigureArguments = @(
     "-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=$BindingVersion",
     "-DZLINK_FRAMEWORK_CPP_BUILD_TESTS=$TestsEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=$TestsEnabled",
-    "-DZLINK_FRAMEWORK_CPP_BUILD_E2E=$E2EEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON",
     "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON"
 ) + $ImportedConfigurationMaps

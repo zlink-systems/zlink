@@ -923,8 +923,7 @@ inline void from_json (const nlohmann::json &json, user_spot_discovery_probe_res
 
 /* Spot/Actor instances are built by framework factories that receive only a
  * context, so the event sink and this node's own routing id travel through
- * file-scope pointers -- the same convention the C++ e2e relocation node
- * (e2e/DiscoveryRegistryHa/Server/Relocation/main.cpp) uses. */
+ * file-scope pointers. */
 event_sink_t *g_user_spot_sink = nullptr;
 std::string g_user_spot_node_rid;
 

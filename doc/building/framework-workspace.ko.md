@@ -11,21 +11,20 @@ bindings를 어떤 방식으로 참조하는지, C++는 어떤 preset으로 여�
 ## 1. 기본 빌드에 들어가는 것과 빠지는 것
 
 framework의 기본 빌드, CI, 배포는 **runtime library, unit test, `cross-language` e2e host**만
-포함합니다. 다음 둘은 기본에서 빠지고 전용 run script로만 실행합니다.
+포함합니다. 다음은 기본에서 빠지고 전용 run script로만 실행합니다.
 
 | 대상 | 위치 | 실행 방법 |
 |---|---|---|
-| 언어별 시나리오 e2e | `framework/languages/<lang>/e2e/<name>/` | 각 `run_e2e.sh` / `run_e2e.ps1` |
 | 7개 샘플(Bingo, DeliveryDispatch, GameQuest, ShoppingMall, SupportChat, TicTacToe, ZoneWorld) | `framework/languages/<lang>/samples/<name>/` | 샘플별 `run_sample.sh` / `.ps1` (한 번에 하나씩 실행한다), Node는 `npm run sample` |
 
 언어별로 "기본에서 빠진다"는 뜻은 다음과 같습니다.
 
-| 언어 | 기본 빌드 단위 | 샘플·e2e가 빠지는 방식 |
+| 언어 | 기본 빌드 단위 | 샘플이 빠지는 방식 |
 |---|---|---|
 | .NET | CI·배포는 `Zlink.Framework.ci.slnf`(16개 project)만 빌드 | 개발용 `Zlink.Framework.sln`은 IDE에서 열 수 있도록 샘플 project를 포함하지만 CI·배포는 slnf만 씁니다. 샘플은 각 `samples/<name>/<name>.sln`으로도 열립니다 |
 | Node.js | `npm run verify:ci`(workspace `packages/*`) | 샘플은 workspace 밖의 독립 package입니다. `npm run test:samples`, `npm run lint:samples`, `npm run verify:samples`는 `verify:release`와 `framework-gate.sh`에서만 돌립니다 |
-| Java/Kotlin | 루트 `settings.gradle.kts`의 module | 샘플은 `samples/` composite build입니다. 루트 빌드는 composite를 등록만 하고 task를 실행하지 않으며, CI·배포는 `-Pzlink.includeSamples=false`로 등록도 하지 않습니다. 대신 Java CI가 `./gradlew -p samples classes`를 따로 실행해 샘플 호출부가 public API와 어긋나면 컴파일에서 잡습니다(issue #515). e2e는 시나리오마다 독립 Gradle 빌드라 그 step이 닿지 않으므로 `scripts/compile_e2e.sh`가 시나리오를 훑어 컴파일합니다(issue #519) |
-| C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON`이 기본 | run script가 필요한 옵션을 `ON`으로 넘겨 같은 build tree에서 빌드합니다 |
+| Java/Kotlin | 루트 `settings.gradle.kts`의 module | 샘플은 `samples/` composite build입니다. 루트 빌드는 composite를 등록만 하고 task를 실행하지 않으며, CI·배포는 `-Pzlink.includeSamples=false`로 등록도 하지 않습니다. 대신 Java CI가 `./gradlew -p samples classes`를 따로 실행해 샘플 호출부가 public API와 어긋나면 컴파일에서 잡습니다(issue #515) |
+| C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON`이 기본 | run script가 필요한 옵션을 `ON`으로 넘겨 같은 build tree에서 빌드합니다 |
 
 ## 2. 샘플의 두 모드
 
@@ -75,8 +74,8 @@ preset 이름은 IDE·플랫폼 기준이고, 옵션 묶음은 `dev`·`ci` 둘�
 | `windows-ninja` | Windows terminal, VS Code, CLion | Ninja | |
 | `linux-ninja` | Linux, WSL | Ninja | |
 | `macos-ninja` | Apple Silicon Mac | Ninja | `arm64-osx` triplet. Intel Mac은 Core부터 지원하지 않습니다 |
-| `dev` | 저장소 개발 | Ninja | samples·e2e·tests·foundation tests·cross-language 모두 `ON` |
-| `ci` | CI와 배포 검증 | Ninja | samples·e2e `OFF`, tests·cross-language `ON` |
+| `dev` | 저장소 개발 | Ninja | samples·tests·foundation tests·cross-language 모두 `ON` |
+| `ci` | CI와 배포 검증 | Ninja | samples `OFF`, tests·cross-language `ON` |
 
 모든 preset은 `VCPKG_ROOT`의 vcpkg toolchain과 저장소 overlay port(`vcpkg/ports`)를 씁니다. 준비는
 bootstrap script 하나로 끝납니다.

@@ -1,6 +1,0 @@
-plugins {
-    base
-}
-
-subprojects {
-}
