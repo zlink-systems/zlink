@@ -1,6 +1,5 @@
-package Support
+package systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 
-import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 object ScenarioAssert {
     fun that(condition: Boolean, message: String) {
         if (!condition) {

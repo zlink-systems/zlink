@@ -44,6 +44,7 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler
 import systems.zlink.framework.channels.ZLinkSendHandler
 import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState
 import systems.zlink.framework.monitoring.ZLinkPeerState
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
@@ -489,16 +490,30 @@ class RoleHttpServer(
         respond(exchange, 200, state.handlerCounts(operationId))
     }
 
+    //  Admission has two observable gates and this endpoint reports both.
+    //  `acceptingWork` is the host gate: shutdown closed admission.
+    //  `paused` is the receive-flow gate: the host stopped taking new
+    //  application jobs because the ones in flight saturate it. The
+    //  Application Job Queue owns that gate now -- the inbound dispatch
+    //  payload-byte accounting the previous generation reported no longer
+    //  exists, and the bytes that remain are Core HWM's, a different owner
+    //  and a different question. So the load numbers are reported in the
+    //  unit admission is actually decided in: queued jobs, permits in use
+    //  and callers waiting for capacity.
     private fun runtimeStatus(exchange: HttpExchange) {
         val status = runtime.getIfAvailable()?.status()
             ?: throw IllegalStateException("framework runtime is not ready")
-        val inbound = status.inboundDispatch()
+        val jobQueue = status.capacity().applicationJobQueue()
+        val paused =
+            jobQueue.pressureState() == ZLinkApplicationJobQueuePressureState.PAUSED
         respond(
             exchange,
             200,
             "state=${status.state()},acceptingWork=${status.acceptingWork()}," +
-                "paused=${inbound.applicationReceivePaused()},pendingBytes=${inbound.pendingPayloadBytes()}," +
-                "queuedBytes=${inbound.queuedPayloadBytes()},activeBytes=${inbound.activePayloadBytes()}",
+                "paused=$paused,pressure=${jobQueue.pressureState()}," +
+                "queuedJobs=${jobQueue.queuedApplicationJobs()}," +
+                "permitsInUse=${jobQueue.permitsInUse()}," +
+                "capacityWaiters=${jobQueue.capacityWaiters()}",
         )
     }
 

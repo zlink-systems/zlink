@@ -11,14 +11,10 @@
 #  Extra Gradle arguments pass through: scripts/compile_e2e.sh --max-workers=2
 set -euo pipefail
 
-#  Scenarios that do not compile for reasons this guard does not own, tracked by
-#  issue #524. The guard also fails when one of these compiles, so the list
-#  cannot quietly rot: fixing a scenario forces its removal from here.
-known_broken=(
-  "e2e-kotlin/DiscoveryRegistryHa"
-  "e2e-kotlin/SubmitAdmission"
-  "e2e-kotlin/ToActorMessaging"
-)
+#  Scenarios that do not compile for reasons this guard does not own. The guard
+#  also fails when one of these compiles, so the list cannot quietly rot: fixing
+#  a scenario forces its removal from here. Empty since issue #524.
+known_broken=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 java_root="$(cd "${script_dir}/.." && pwd)"
