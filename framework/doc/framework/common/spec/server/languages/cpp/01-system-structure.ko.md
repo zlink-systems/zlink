@@ -28,7 +28,7 @@
 logging, lifecycle을 함께 제공한다.
 
 **다른 언어와 결정적으로 다르다.** `.NET`은 ASP.NET Core를, Node는 NestJS를, Java는 Spring Boot를
-**빌려 쓴다.** C++에는 그런 host가 없으므로 **framework가 직접 제공한다.** 그래서 C++ 문서만
+**빌려 사용한다.** C++에는 그런 host가 없으므로 **framework가 직접 제공한다.** 그래서 C++ 문서만
 기능별 스펙을 유지한다.
 
 framework가 제공해야 하는 것:
@@ -64,7 +64,7 @@ class hosted_service_t; // 시작·종료 훅
 class module_t;         // 기능 묶음 등록
 ```
 
-- **`module_t`는 관련 등록을 한 덩어리로 묶는다.** 큰 app을 기능 단위로 나눌 때 쓴다.
+- **`module_t`는 관련 등록을 한 덩어리로 묶는다.** 큰 app을 기능 단위로 나눌 때 사용한다.
 - **runtime은 host startup에서 만들고 shutdown에서 정리한다.** lazy 생성으로 숨기지 않는다
   ([channel-messaging §2](../../02-channel-transport/02-channel-messaging.ko.md)).
 
@@ -146,7 +146,7 @@ public:
 
 ```
 
-**handler는 service locator를 받지 않는다.** 생성자 주입만 쓴다.
+**handler는 service locator를 받지 않는다.** 생성자 주입만 사용한다.
 
 ### 4.5 오류 계약
 
@@ -181,7 +181,7 @@ enum class optional_t;      // 필수/선택 구분
 class configuration_model_t;
 ```
 
-**설정 소스는 계층으로 합친다.** 뒤에 추가한 소스가 앞을 덮어쓴다. 필수 값이 없으면 **host 시작
+**설정 소스는 계층으로 합친다.** 뒤에 추가한 소스가 앞을 덮어사용한다. 필수 값이 없으면 **host 시작
 전에 실패한다.**
 
 ## 6. Logging

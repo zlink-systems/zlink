@@ -69,7 +69,7 @@ class AMyGameMode : public AGameModeBase
 
 ### Thread 규칙
 
-core callback이 어느 thread에서 오든 `UObject`를 직접 만지지 않는다. 어댑터가 adapter queue에 넣고 `Dispatch()` 또는 Game Thread 예약 경로에서 delegate를 broadcast한다. PIE 종료, map unload, game instance shutdown에서 `Close()`가 자동 호출된다.
+core callback이 어느 thread에서 오든 `UObject`를 직접 건드리지 않는다. 어댑터가 adapter queue에 넣고 `Dispatch()` 또는 Game Thread 예약 경로에서 delegate를 broadcast한다. PIE 종료, map unload, game instance shutdown에서 `Close()`가 자동 호출된다.
 
 ### Automation Test 실행
 

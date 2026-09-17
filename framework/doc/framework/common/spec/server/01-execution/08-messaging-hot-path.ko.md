@@ -9,7 +9,7 @@ title: "Messaging hot path"
 > 이 문서는 application이 send나 request를 제출한 뒤 그 message가 상대 node의 handler에 도달하고
 > reply가 caller에게 돌아올 때까지, runtime 안에서 **몇 개의 실행 단계를 어떤 순서로 지나며 어디서
 > 기다리는지**를 정의한다. 독자가 관찰하는 결과는 하나다 — 같은 언어에서 Framework를 거친 send·request의
-> 처리량이 Framework 없이 같은 binding socket을 직접 쓴 처리량의 0.90 이상이어야 한다(§7).
+> 처리량이 Framework 없이 같은 binding socket을 직접 사용한 처리량의 0.90 이상이어야 한다(§7).
 > 같은 mesh의 node 사이에서 ChannelName으로 target을 고르는
 > [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh) channel, Client가 ready Server 하나를 호출하는
 > [ClientServer channel](../00-foundation/02-glossary.ko.md#clientserver-channel), Spot ID로 current owner를
@@ -42,12 +42,12 @@ record마다 확보하는 자리로, 그 공유 queue가 [Application job queue]
 | 구현이 이 문서를 지켰는지 무엇으로 확인하는가 | [§7](#7-검증-요구) |
 
 이 문서가 다루지 않는 것 — Core의 I/O thread 배치와 socket byte HWM은 Core spec이, Framework 없이
-binding socket을 직접 쓰는 경로의 성능은 bindings 성능 계획이, fanout(PUB/SUB)의 발행 경로와 STREAM
+binding socket을 직접 사용하는 경로의 성능은 bindings 성능 계획이, fanout(PUB/SUB)의 발행 경로와 STREAM
 session의 packet 경로는 각 문서가 소유한다. 수신 쪽 permit 순서는 STREAM도 이 문서와 같은
 [Application job queue 「3. Ordinary ingress permit 순서」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)를
 따른다.
 
-이 문서 안에서만 쓰는 이름 둘을 미리 밝힌다. node마다 하나 있으면서 socket readiness를 기다리고
+이 문서 안에서만 사용하는 이름 둘을 미리 밝힌다. node마다 하나 있으면서 socket readiness를 기다리고
 record를 claim하는 실행 단위를 **ingress owner**라 부르고, owner queue의 record를 꺼내 handler를
 실행하는 지속적인 실행 자원을 **application worker**라 부른다. 둘 다 용어집 항목이 아니라 이 장의
 설명용 이름이며, 언어별 실제 타입 이름은 §6이 적는다.
@@ -91,7 +91,7 @@ sequenceDiagram
 
 | 단계 | runtime이 하는 일 | 실행 자원 | 그래서 |
 |---|---|---|---|
-| E1 encode | typed payload를 codec으로 wire part 목록으로 만든다. **wire 형식이 요구하는 자리 하나에 한 번 쓰는 것 외에 Framework가 복사를 더하지 않는다** — part 목록을 그대로 보내는 형식이면 합치지 않고, 하나의 frame으로 합쳐 보내는 service wire라면 전체 크기를 먼저 구해 그 크기의 buffer 하나를 잡고 각 part를 거기에 한 번 쓴다. 중간 byte 배열을 거쳐 되돌아오거나(`message → byte[] → message`), 같은 payload를 표현 두 벌로 동시에 들고 있거나, 결과를 다시 감싸며 또 복사하는 것은 위반이다. | caller | Framework가 **추가하는** 전체 복사가 0이다 — wire 형식이 요구하는 한 번의 쓰기는 이 수에 넣지 않는다([Payload ownership 「2」](05-payload-ownership-and-codec.ko.md#2-없앨-수-있는-복사)). |
+| E1 encode | typed payload를 codec으로 wire part 목록으로 만든다. **wire 형식이 요구하는 자리 하나에 한 번 사용하는 것 외에 Framework가 복사를 더하지 않는다** — part 목록을 그대로 보내는 형식이면 합치지 않고, 하나의 frame으로 합쳐 보내는 service wire라면 전체 크기를 먼저 구해 그 크기의 buffer 하나를 잡고 각 part를 거기에 한 번 사용한다. 중간 byte 배열을 거쳐 되돌아오거나(`message → byte[] → message`), 같은 payload를 표현 두 벌로 동시에 들고 있거나, 결과를 다시 감싸며 또 복사하는 것은 위반이다. | caller | Framework가 **추가하는** 전체 복사가 0이다 — wire 형식이 요구하는 한 번의 쓰기는 이 수에 넣지 않는다([Payload ownership 「2」](05-payload-ownership-and-codec.ko.md#2-없앨-수-있는-복사)). |
 | E2 resolve | 변경 시점에 미리 준비된 후보 목록과 선택 순서에서 target 하나를 고른다. 후보 교체와 선택은 selector 소유자의 state lane에서 하나의 순서로 확정한다 — 선택 상태(후보 목록·누적값·cursor)의 소유, 그 순서를 만드는 방법, 주기 탐색 한도에 닿았을 때 선택 절차를 그대로 수행하는 대체 경로는 [Channel messaging 「후보 목록과 선택 순서는 변경 시점에 미리 준비한다」](../02-channel-transport/02-channel-messaging.ko.md#후보-목록과-선택-순서는-변경-시점에-미리-준비한다)가 소유한다. 준비된 선택 순서의 정상 경로는 target 조회와 cursor 진행만 수행하며, 그를 위해 topology·liveness·port 소유자의 lane에 **추가** turn을 요청해 결과를 기다리지 않는다. 이 문서가 요구하는 것은 선택이 selector 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다 — caller가 그 lane 위에 있지 않으면 그 turn으로의 전환 1회가 정상 경로에 포함된다. | selector 소유자의 turn | 요청마다 peer 목록을 훑거나 필터링·정렬을 다시 하지 않고, 다른 소유자의 lane을 기다리지 않는다. |
 | E3 register | terminal 완료가 나중에 도착할 수 있는 모든 operation — request와 send 둘 다 — 에 대해 pending entry와 completion dispatcher 자리를 등록한다. request는 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)대로 `OperationId`·`ReplyRouteId`와 reply route도 함께 등록한다. 등록은 자리가 없어 실패하지 않으며([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)), 등록과 close를 같은 operation 소유자가 직렬화한다. Terminal 권한의 경쟁 규칙은 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기가 소유하며, 이 문서는 그 꺼내기가 완료 알림을 받은 자리에서 이뤄지고 소유 turn으로의 추가 왕복을 만들지 않는다는 것만 정한다(E5). 등록은 transport submit 전에 완료하고([상태 소유와 state lane 「반환 전 완료 보장」](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)), 등록한 자리는 callback 반환까지 유지한다. 필수 소유 turn 외에 별도 등록 queue나 추가 lane 왕복을 만들지 않는다. pending entry와 등록한 dispatcher 자리의 상태 분류와 수명은 [Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)과 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)이 정한다. 이 문서가 요구하는 것은 등록이 operation 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다. | operation 소유자의 turn | 등록보다 완료가 먼저 처리되지 않으며, 별도 timer 객체를 요청마다 만들지 않는다 — deadline은 entry의 값이고 만료 검사는 §4.2의 관리 작업이나 timer wheel이 한다. |
 | E4 submit | binding의 비동기 request·send operation을 **한 번** 시작하고 결과 객체(`result`와 `admitted`, request는 `reply`)를 돌려받는다. Framework는 `result`로 즉시 판정하고 `result == BACKPRESSURED`일 때만 `admitted`를 소비한다(§15). E3의 등록을 확정한 그 turn 안에서 이어서 시작하며, caller는 제출의 반환을 관찰하기 전에 등록이 끝나 있음을 믿어도 된다. Framework는 자기 send queue를 두지 않는다. | E3와 같은 turn | operation이 시작된 뒤의 HWM 대기와 재시도는 Core·binding이 소유하며([Submit과 완료 「5」](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)), Framework는 두 번째 operation을 만들지 않는다. 결과 객체 할당 1회가 추가될 뿐 실행 자원 전환(hop) 수는 바뀌지 않는다. |
@@ -235,14 +235,14 @@ dispatch마다 새 scope를 만들고, 그 dispatch의 handler와 filter에 같�
 비용을 줄이려고 dispatch 사이에 그 instance나 scoped dependency를 공유하지 않는다.
 
 - **생성 절차를 미리 결정해 재사용한다.** Handler·filter의 constructor와 dependency 연결 방법은
-  등록·구성 준비 때 결정하고, 그 등록을 쓰는 dispatch들이 factory·invoker 또는 그에 해당하는 생성
+  등록·구성 준비 때 결정하고, 그 등록을 사용하는 dispatch들이 factory·invoker 또는 그에 해당하는 생성
   절차를 재사용한다. Record마다 등록 후보를 훑거나, constructor를 다시 고르거나, reflection
   metadata로 dependency 연결을 다시 짜지 않는다. 미리 정한 service key로 descriptor와 현재 scope의
   dependency를 바로 조회하고 필요한 새 instance를 만드는 일은 허용한다. 재사용하는 생성 절차는 특정
   scope의 provider나 scoped dependency instance를 들고 있지 않는다. Scope별 instance 저장소는 그
   scope의 수명을 따르며, 생성 절차 재사용을 대신하지 못한다.
 - **instance를 얻으려고 실행 자원을 바꾸거나 blocking 대기를 만들지 않는다.** 적용 구간은 W1~W3에서
-  scope 생성이나 handler·filter 조회를 시작한 때부터 그 instance를 쓸 수 있게 된 때까지다. 그 준비
+  scope 생성이나 handler·filter 조회를 시작한 때부터 그 instance를 사용할 수 있게 된 때까지다. 그 준비
   작업을 다른 state lane·queue·executor에 맡기거나, 준비 작업 자체를 뒤의 task·event-loop 작업으로
   미뤘다가 재개하거나, 그 완료를 호출 thread에서 blocking으로 기다리지 않는다. 같은 호출 안에서
   끝나는 lane의 상태 접근은 실행 자원 전환으로 세지 않는다. 이미 얻은 결과를 비동기 반환형으로
@@ -274,7 +274,7 @@ DI 통합은 core runtime에 둘 수도 있고 별도 package·확장에 둘 수
 세 API는 E1~E5, I0~I4·M, W1~W5를 공유한다. 다른 것은 E2가 읽는 후보 목록의 종류와 reply가 도착하는
 connection뿐이다.
 
-| 언제 쓰는가 | API | E2가 읽는 것 | connection 모양 | reply의 경로 |
+| 언제 사용하는가 | API | E2가 읽는 것 | connection 모양 | reply의 경로 |
 |---|---|---|---|---|
 | 같은 mesh의 node 중 ChannelName으로 하나를 고를 때 | RouteMesh channel | channel별 후보 목록과 가중 라운드로빈 순서 | ROUTER–ROUTER. reply는 별도 [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)으로 온다. | Completion connection → binding 완료 알림 → E5 |
 | Client가 ready Server 하나를 호출할 때 | ClientServer channel | ready Server 후보 목록([ClientServer 「4」](../02-channel-transport/03-client-server-channel.ko.md#4-weight와-target-선택)) | DEALER(client)–ROUTER(server), Application connection 하나 | 같은 connection에서 pre-receive에 completion으로 식별되면 permit을 우회해([Application job queue 「3」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)) E5 |

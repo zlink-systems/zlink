@@ -43,7 +43,7 @@ services.AddHealthChecks()
 세부는 topology-discovery category를 참고한다.
 
 같은 exact interface가 선언하는 `services.AddZLinkHttpClient(name, configure)`는 이 host가 다른
-ZLink 서비스를 HTTP client로 호출할 때 쓰는 별도 등록이며, 이 category가 다루는 server topology와는
+ZLink 서비스를 HTTP client로 호출할 때 사용하는 별도 등록이며, 이 category가 다루는 server topology와는
 성격이 다르다 — 이 레퍼런스의 범위 밖이다.
 
 ---
@@ -82,7 +82,7 @@ host는 `Relocated` 상태가 된다(새 operation은 받지 않지만 infrastru
 `Reason`에 `TargetUnavailable`·`StoreUnavailable`·`DeadlineExceeded` 등이 담기고, host는 처리
 중이던 local object가 남아 있으면 `Serving`으로 복귀한다.
 
-**선택 기준.** 배포 전 무중단 이전이 필요할 때 쓴다. 이전 없이 바로 종료하려면 `ShutdownAsync`를
+**선택 기준.** 배포 전 무중단 이전이 필요할 때 사용한다. 이전 없이 바로 종료하려면 `ShutdownAsync`를
 직접 호출한다. 같은 `Mode`와 목표 version으로 중복 호출하면 진행 중인 operation에 합류하고, 다른
 값으로 호출하면 `Blocked/OperationInProgress`로 완료한다.
 
@@ -135,8 +135,8 @@ await foreach (var observed in frameworkRuntime.ObserveAsync(ct))
 스트리밍한다. `ZLinkObservedStatus.Loss`는 소비가 느려 coalesce되거나 버려진 상태 개수를 알려준다 —
 관찰 유실 여부는 이 필드로만 판단한다.
 
-**선택 기준.** Host state를 push 기반으로 관찰하고 싶을 때 쓴다. 지금 시점 값만 필요하면 스트림
-대신 `Status` 항목을 쓴다.
+**선택 기준.** Host state를 push 기반으로 관찰하고 싶을 때 사용한다. 지금 시점 값만 필요하면 스트림
+대신 `Status` 항목을 사용한다.
 
 ---
 
@@ -153,8 +153,8 @@ bool canAcceptNewOperations = status.IsReady && status.AcceptingWork;
 `AcceptingWork`는 새 application operation 수락 여부를 나타낸다 — 두 값이 다를 수 있으므로 둘 다
 확인한다.
 
-**선택 기준.** 지금 이 순간의 상태 한 번만 필요할 때 쓴다. 상태 전이를 놓치지 않고 계속 받으려면
-`ObserveAsync`를 쓴다.
+**선택 기준.** 지금 이 순간의 상태 한 번만 필요할 때 사용한다. 상태 전이를 놓치지 않고 계속 받으려면
+`ObserveAsync`를 사용한다.
 
 ---
 

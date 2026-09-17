@@ -39,6 +39,7 @@ object ApiServer {
             mesh.setRoutingId(RoutingId.from("tictactoe-api-${settings.nodeId}"))
                 .listen(settings.routeEndpoint)
             mesh.objects().client()
+            // --8<-- [start:doc-manual-peer-connect]
             settings.spotEndpoints.forEachIndexed { index, endpoint ->
                 val playNodeId = if (index == 0) "play-a" else "play-b"
                 mesh.peerConnections().connect(
@@ -46,5 +47,6 @@ object ApiServer {
                     endpoint,
                 )
             }
+            // --8<-- [end:doc-manual-peer-connect]
         }
 }

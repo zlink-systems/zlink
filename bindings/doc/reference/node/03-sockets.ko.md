@@ -9,7 +9,7 @@
 상수를 다룬다. 모든 socket의 `send`/`publish`/`request`/`reply`는
 Messaging category에 문서화된 operation-builder family를 반환한다 — 이
 category는 각 builder가 어디서 시작하고 각 socket type이 고유하게 무엇을
-더하는지만 다룬다. socket은 `Context`의 메서드가 아니라 최상위
+추가하는지만 다룬다. socket은 `Context`의 메서드가 아니라 최상위
 `createXxxSocket(ctx)` 함수(Core category)로 생성된다. 정확한 signature는
 [`contracts/sockets/`](../../../../bindings/node/src/zlink/contracts/sockets/)가
 소유한다.
@@ -143,7 +143,7 @@ if (pair.recv(received)) { /* ... */ }
 **Completion result.** `recv`는 `boolean`을 반환한다 —
 `RecvFlags.DontWait`가 설정되고 메시지가 없을 때만 `false`다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer 라우팅이
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer 라우팅이
 없고 load-balance하지 않는다.
 
 ---
@@ -204,7 +204,7 @@ await router.send(peerRid).message(Message.from('hello')).submit();
 또는 blocking terminal로만 전달된다. `recv`는 위 `boolean` 관례를 따른다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(peerRid)`/`reply(peerRid, token)`을 쓴다.
+응답 request/reply엔 `request(peerRid)`/`reply(peerRid, token)`을 사용한다.
 `ReplyToken`은 opaque하고 socket-owned이며 one-shot인 채로 유지한다.
 
 ---
@@ -240,7 +240,7 @@ if (xpub.receiveSubscriptionEvent(evt)) { /* ... */ }
 
 **선택 기준.** `receiveSubscriptionEvent`로 구독자 변동을 관찰하거나
 `PubSocketOptions.manual`/`approveSubscribe`/`rejectSubscribe`로 수동
-admission을 하려면 특별히 `XPubSocket`을 쓴다. 그 외엔 publish 자체는
+admission을 하려면 특별히 `XPubSocket`을 사용한다. 그 외엔 publish 자체는
 둘이 같게 동작한다.
 
 ---
@@ -274,8 +274,8 @@ if (sub.subscribe(msg)) { /* ... */ }
 **Completion result.** `subscribe`는 위와 같은 관례로 `boolean`을
 반환한다.
 
-**선택 기준.** 일반적인 경우엔 `SubSocket`을 쓴다. 구독을 일반 메시지로
-실어 날라야 할 때만 특별히 `XSubSocket`을 쓴다 — interface 자체는 둘을
+**선택 기준.** 일반적인 경우엔 `SubSocket`을 사용한다. 구독을 일반 메시지로
+실어 날라야 할 때만 특별히 `XSubSocket`을 사용한다 — interface 자체는 둘을
 구분할 게 없으므로 선택은 전적으로 어떤 구체 타입을 생성하는지
 (`createSubSocket` vs `createXSubSocket`)에 달려 있다.
 
@@ -283,7 +283,7 @@ if (sub.subscribe(msg)) { /* ... */ }
 
 ## `StreamSocket`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP peer와
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와
 framed packet을 직접 주고받는다. (`ConnectableSocket`이 아니라)
 `Socket`을 확장하고 자신의 `disconnectRid`를 독립적으로 선언한다.
 
@@ -330,7 +330,7 @@ Caller가 packet의 header/body를 소유하며 `packet.close()`로 해제한다
 | `PollEventFlag` | Poller 등록/wait(Eventing category) | `PollIn`, `PollOut`, `PollErr`, `PollPri`, `PollCompletion` |
 
 **선택 기준.** `RecvFlags.DontWait`는 pull API가 block하는 대신 `false`를
-반환해야 할 때 쓴다. Managed send/request/reply terminal은 의도적으로
+반환해야 할 때 사용한다. Managed send/request/reply terminal은 의도적으로
 `DontWait`를 노출하지 않는다. `monitorOpen` 필터에는 `MonitorEventType`
 값 목록을 넘긴다.
 

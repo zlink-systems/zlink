@@ -1,15 +1,9 @@
 # TypeScript Stream Connector
 
-> **⚠️ This guide is not current.** The only guide that has finished review and upkeep right now is
-> the [`.NET` guide](../../../dotnet/README.en.md). This document reflects an earlier state, and
-> **once the `.NET` guide is finished, this document will be deleted and rewritten based on it.**
->
-> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/server/README.en.md).**
-
 This is the documentation entry point for the TypeScript STREAM client connector
 (`@zlink-systems/stream-connector`). The target is browser web clients and browser-executed builds
-like Unity WebGL, Cocos Creator web, and Godot Web. Node.js is not a connector execution
-environment — it's used only to run the test runner and server processes.
+like Unity WebGL, Cocos Creator web, and Godot Web. Node.js is not the connector's product
+runtime — it handles only server processes and the browser test runner.
 
 | Document | Content |
 |------|------|

@@ -39,7 +39,7 @@ zlink::context_t ctx_with_threads (zlink::io_thread_count_t::value (4));
 소멸자는 아직 종료되지 않았으면 `term()`을 호출한다.
 
 **선택 기준.** application이 필요로 하는 context마다 `context_t` 하나를 생성한다 —
-대부분은 정확히 하나가 필요하다. 여러 스레드에서 socket을 쓰는 중에 소멸시키기
+대부분은 정확히 하나가 필요하다. 여러 스레드에서 socket을 사용하는 중에 소멸시키기
 전엔 `shutdown()`을 호출한다.
 
 ---
@@ -95,12 +95,12 @@ value-type wrapper들로, 각각 static `value(...)` factory로 생성한다 —
 | --- | --- | --- |
 | `io_thread_count_t` | `int`(`::value(int)`/`.value()`) | `context_t` 생성자와 `context_options_t::io_threads`의 인자 |
 | `socket_count_t` | `int`(`::value(int)`/`.value()`) | `context_options_t::max_sockets`/`socket_limit` |
-| `worker_count_t` | `int`(`::value(int)`/`.value()`) | 상위 socket-option facade가 쓰는 worker-thread 개수(Sockets category) |
+| `worker_count_t` | `int`(`::value(int)`/`.value()`) | 상위 socket-option facade가 사용하는 worker-thread 개수(Sockets category) |
 | `thread_priority_t` | `int`(`::value(int)`/`.value()`) | `context_options_t::thread_priority` |
 | `cpu_index_t` | `int`(`::value(int)`/`.value()`) | `context_options_t::add_thread_affinity`/`remove_thread_affinity` |
 | `socket_backlog_t` | `int`(`::value(int)`/`.value()`) | `common_socket_options_t::backlog`(Sockets category) |
 | `byte_size_t` | `int64_t`(`::bytes(int64_t)`/`.bytes()`) | `max_msg_size` 같은 평범한 byte-size option |
-| `byte_count_t`(Core) | `uint64_t`(`::bytes(uint64_t)`/`.bytes()`) | HWM과 byte-budget option이 쓰는 무손실 byte count |
+| `byte_count_t`(Core) | `uint64_t`(`::bytes(uint64_t)`/`.bytes()`) | HWM과 byte-budget option이 사용하는 무손실 byte count |
 | `peer_weight_t` | `uint32_t`(`::value(uint32_t)`) | load-balancing 가중치(Sockets category); 0-100 범위 밖이면 `std::invalid_argument` |
 
 **완료 결과.** `peer_weight_t::value`를 제외한 모든 factory·accessor는
@@ -138,7 +138,7 @@ auto restored = zlink::routing_id_t::from_hex (previously_printed.to_hex ());
 | `to_string()` | 표시용 형태: printable UTF-8, 그다음 4-byte를 uint32로, 그다음 16-byte를 GUID로, 마지막 `hex:` 접두 fallback |
 | `to_hex()` | `from_hex`와 round-trip 가능한 hex 인코딩 |
 | `operator==`/`!=` | 값 동등성 |
-| `std::hash<routing_id_t>` | unordered container의 key로 쓸 수 있게 하는 특수화 |
+| `std::hash<routing_id_t>` | unordered container의 key로 사용할 수 있게 하는 특수화 |
 
 **완료 결과.** 모든 factory·accessor는 동기다. 빈 입력, 255바이트 초과, 크기는
 0이 아닌데 null pointer면 `std::invalid_argument`를 던진다. `from_hex`에 잘못된
@@ -146,8 +146,8 @@ hex 문자열을 주면 마찬가지다.
 
 **선택 기준.** 사람이 부여한 identity엔 `from(const std::string&)`를, 숫자·GUID
 형태 identity엔 `from(uint32_t)`/16-byte 배열 overload를, 이미 binary인
-identity엔 raw byte overload를 쓴다. 내구성 있는 round trip 전용으로
-`to_hex()`/`from_hex()`를 쓴다 — `to_string()`은 표시 전용이다.
+identity엔 raw byte overload를 사용한다. 내구성 있는 round trip 전용으로
+`to_hex()`/`from_hex()`를 사용한다 — `to_string()`은 표시 전용이다.
 
 ---
 
@@ -174,7 +174,7 @@ bool has_tls = zlink::has ("tls");
 **완료 결과.** 셋 다 동기이며 예외를 던지지 않는다.
 
 **선택 기준.** 동적으로 로드된 native library가 기대와 일치하는지 확인하려면
-`version()`을 쓴다. 기동 시점에 선택적 transport를 분기하려면 `has(...)`를 쓴다.
+`version()`을 사용한다. 기동 시점에 선택적 transport를 분기하려면 `has(...)`를 사용한다.
 
 ---
 
@@ -211,9 +211,9 @@ worker.join ();
 
 **완료 결과.** 모두 동기다.
 
-**선택 기준.** 스레드 전체에서 안전한 공유 count엔 `atomic_counter_t`를 쓴다.
-벤치마킹엔 `stopwatch_t`를 쓴다. 플랫폼 특정 API 대신 이식 가능한 background
-thread엔 `thread_t`를 쓴다.
+**선택 기준.** 스레드 전체에서 안전한 공유 count엔 `atomic_counter_t`를 사용한다.
+벤치마킹엔 `stopwatch_t`를 사용한다. 플랫폼 특정 API 대신 이식 가능한 background
+thread엔 `thread_t`를 사용한다.
 
 ---
 

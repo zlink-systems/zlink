@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "세 종류의 Spot — 무엇이 만드는가",
+    "subtitle": "만드는 주체가 다르고, 그에 따라 id를 정하는 쪽과 받는 callback이 갈린다",
+    "output": "34-spot-kinds.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 80,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "F",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "Object Server 시작",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "application",
+      "sublabel": "spot manager로 만든다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "M",
+      "type": "frontend",
+      "label": "첫 메시지",
+      "sublabel": "그 id로 처음 도착한다",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "E",
+      "type": "backend",
+      "label": "Entry Spot",
+      "sublabel": "Object Server마다 하나",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "U",
+      "type": "backend",
+      "label": "User Spot",
+      "sublabel": "room · stage · zone",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "I",
+      "type": "backend",
+      "label": "Instance Spot",
+      "sublabel": "id 단위 처리 단위",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "F",
+      "to": "E",
+      "label": "시작할 때 만든다",
+      "variant": "default"
+    },
+    {
+      "from": "A",
+      "to": "U",
+      "label": "만들어 달라",
+      "variant": "default"
+    },
+    {
+      "from": "M",
+      "to": "I",
+      "label": "도착이 곧 생성이다",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "만드는 주체가 나머지를 정한다",
+      "items": [
+        "Framework가 만드는 Entry Spot에는 stable type이 없고, 만들기를 거절할 자리도 없다.",
+        "Instance Spot에는 만드는 호출이 없다. 첫 메시지가 instance를 고르거나 만든 뒤 그 같은 메시지를 처리한다."
+      ]
+    }
+  ]
+}

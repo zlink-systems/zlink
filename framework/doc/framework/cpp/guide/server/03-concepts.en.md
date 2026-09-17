@@ -10,19 +10,18 @@ title: "3. Core Concepts · C++"
 # 3. Core Concepts
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 2. Getting Started](02-getting-started.en.md) | [Next: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md)
+[Guide Home](README.en.md) | [Previous: C++ Quickstart — from Install to a First Request](../../quickstart.en.md) | [Next: Channel Messaging](20-channel-messaging.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · **C++** · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
-> **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md)
-> and the [Interaction Model](../../../common/spec/server/00-foundation/04-interaction-model.en.md) own the
-> formal meaning of the concepts, and the
-> [per-language handler interface contracts](../../../common/spec/server/languages/README.en.md)
-> own the formal definition of the interfaces. This document lays out what that meaning
-> looks like in code.
+!!! info "What you get from this chapter"
+
+    You can tell what a channel, a Spot, an Actor, STREAM and Location each are, and when to
+    choose them.
 
 The ZLink framework provides **channel · spot · actor · stream · location** as its core
 concepts. Every other chapter is a variation on these. We'll go through them in order below,
@@ -82,7 +81,7 @@ mesh.channel_name ("billing").client ();
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers
-as they scale up or down, is covered by [10-location](10-location.en.md).
+as they scale up or down, is covered by [Location](25-location.en.md).
 
 > **Note:** `MeshName` and `ChannelName` are different names. You can register several
 > `ChannelName`s on one mesh, and the same `ChannelName` can be used across different
@@ -101,7 +100,7 @@ pub/sub also splits two ways. **Logical Multicast**, exchanged between Spots ove
 mesh channel, uses the mesh socket as-is, and a **fanout channel** delivers over its own
 socket to the connected subscribers with a matching topic subscription. The structural comparison of the three and how to
 use them is covered by
-[05-channel-messaging §1](05-channel-messaging.en.md#1-channel-kinds).
+[Channel Messaging](20-channel-messaging.en.md#2-the-three-channel-messaging-arrangements).
 
 ## 2. spot — a unit that owns state and processes it in order
 
@@ -131,7 +130,7 @@ MeshNode's Channel role.
 Spots fall into three kinds — **Entry Spot · User Spot · Instance Spot** — based on when
 they're created, and **execution mode** determines which work runs concurrently. The
 differences between the three kinds, choosing an execution mode, and
-registration/lifecycle/timer/outbound are covered by [06-spot](06-spot.en.md).
+registration/lifecycle/timer/outbound are covered by [Spot](21-spot.en.md).
 
 ## 3. actor — a state object identified by ID
 
@@ -143,7 +142,7 @@ binds to an external client connection continues in the
 <iframe class="zlink-diagram" src="/common/diagrams/03-actor-route-en.html" title="actor — identified by id" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-actor-route-en.html" target="_blank">↗ View larger</a></p>
 
-See [07-actor-spot](07-actor-spot.en.md) for details.
+See [Actor](22-actor.en.md) and [Actor Membership](35-actor-membership.en.md) for details.
 
 ## 4. stream — external client connections
 
@@ -167,8 +166,8 @@ framework keeps the relay path alive. Even if the actor moves via
 [relocation](#5-relocation--moving-to-another-node), the same session remains connected to
 the actor at its new location.
 
-See [09-stream](09-stream.en.md) for details; how to bind a session to an actor is covered by
-[08-actor-session](08-actor-session.en.md).
+See [STREAM](23-stream.en.md) for details; how to bind a session to an actor is covered by
+[Session and Actor](24-actor-session.en.md).
 
 ## 5. relocation — moving to another node
 
@@ -212,8 +211,8 @@ the move (not moved, recreated, or restored as-is) is fixed at spot/actor factor
 registration and doesn't change while running.
 
 Policy types and selection criteria are covered by
-[07-actor-spot §1](07-actor-spot.en.md); making an actor join call and receiving the
-completion result are covered by [07-actor-spot §5](07-actor-spot.en.md); and Host Relocate
+[Relocation](37-relocation.en.md#21-the-relocation-policy-the-factory-registration-picks); making an actor join call and receiving the
+completion result are covered by [Actor Membership](35-actor-membership.en.md#23-where-the-result-arrives); and Host Relocate
 as zero-downtime maintenance/deployment, along with how a relocation unit is scoped, is
 covered by [12-operations §2](12-operations.en.md).
 
@@ -225,12 +224,11 @@ server registers its own location as a descriptor in the store on startup, and t
 side looks up the target in the store by logical name and connects. When the server topology
 changes, connections update accordingly.
 
-Usage is covered by [10-location](10-location.en.md); the contract is defined by the
-[common spec](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md).
+Usage is covered by [Location](25-location.en.md).
 
 Manual connections — specifying an endpoint directly at registration without a store — are
 also supported, for development/testing and small fixed deployments
-([05-channel-messaging §6](05-channel-messaging.en.md)). You can't use both approaches
+([How Channels Work](20-channel-messaging.en.md)). You can't use both approaches
 together on the same MeshNode.
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -271,9 +269,21 @@ chapter.
 **Completion has two consistent forms.** A send-family call finishes with
 no return value once **the send slot accepts it**, and a request-family call finishes with
 one of **reply · timeout · route error**. This holds no matter which surface you use
-([04-backpressure §3](04-backpressure.en.md#3-backpressure-visible-in-the-api)).
+([33-backpressure §3](33-backpressure.en.md#3-backpressure-visible-in-the-api)).
 
-## 8. What the Framework Owns and What It Doesn't
+## 8. Naming Convention
+
+The guide uses the following notation consistently throughout.
+
+- C++ framework public types and functions live in the `zlink::framework` namespace.
+- Type names use the `_t` suffix. e.g. `spot_context_t`, `message_context_t`.
+- The facade header is `#include <zlink/framework.hpp>`; the CMake target is
+  `zlink::framework`.
+- A client-side HTTP request is owned not by the framework but by the separate
+  `zlink::http_client` deliverable.
+- The underlying zlink core C API is `zlink_*` snake_case.
+
+## 9. What the Framework Owns and What It Doesn't
 
 **Everything below is handled internally by the framework.** None of it appears in
 application code.
@@ -298,15 +308,14 @@ external edge.
 Server-to-server communication and a real-time state server are this framework's territory.
 Policy for an edge exposed directly to the internet is owned by whatever sits in front of it.
 
-## 9. Related Documents
+## 10. Related Documents
 
 - Full usage of request/send/pub-sub, writing a handler, and the `async` execution model:
-  [05-channel-messaging](05-channel-messaging.en.md)
-- Spot kinds, execution model, handler lifetime, and DI scope: [06-spot](06-spot.en.md)
+  [Channel Messaging](20-channel-messaging.en.md)
+- Spot kinds, execution model, handler lifetime, and DI scope: [Spot](21-spot.en.md)
 - Host lifecycle and operations: [12-operations](12-operations.en.md)
 - Registration points and layering: the [01. Overview](01-overview.en.md)
-- The full interface/attribute/context set:
-  [per-language handler interface contracts](../../../common/spec/server/languages/README.en.md)
+- The full interface, attribute and context set: [Key type index](13-interface-catalog.en.md)
 - Runnable sample code: [14-samples](14-samples.en.md)
 
 <script>

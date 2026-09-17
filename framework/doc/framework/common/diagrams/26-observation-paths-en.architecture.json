@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The Kinds of Observation Surface",
+    "subtitle": "State through lookups and subscriptions · one message through diagnostics · numbers through meters",
+    "output": "26-observation-paths-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "RT",
+      "type": "external",
+      "label": "framework runtime",
+      "sublabel": "what is running",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "ST",
+      "type": "backend",
+      "label": "status surface",
+      "sublabel": "the value now and its changes",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "DG",
+      "type": "messagebus",
+      "label": "diagnostics",
+      "sublabel": "traces and records",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "MT",
+      "type": "database",
+      "label": "meters",
+      "sublabel": "numbers",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "RT",
+      "to": "ST",
+      "label": "readiness and its changes",
+      "variant": "default"
+    },
+    {
+      "from": "RT",
+      "to": "DG",
+      "label": "the path of one message",
+      "variant": "default"
+    },
+    {
+      "from": "RT",
+      "to": "MT",
+      "label": "values gathered over time",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "They are consumed differently",
+      "items": [
+        "The status surface is for reading the current value or receiving changes in order. A subscription stays open until cancelled, so run it somewhere tied to the host's lifetime.",
+        "Diagnostics are for tracing one message and meters for gathering dashboard numbers. There is no surface that delivers runtime events to a handler."
+      ]
+    }
+  ]
+}

@@ -31,7 +31,7 @@
 ## Cookie jar
 
 `Cookies()`로 활성화한다. 네이티브 `CookieContainer`(RFC 6265 전체) 대신 래퍼 소유
-jar를 쓴다. 좁은 의미론을 따른다:
+jar를 사용한다. 좁은 의미론을 따른다:
 
 - host 정확 매칭으로 저장(`Domain` 속성 미지원).
 - 기본 `Path=/`. `Path`/`Secure`/`Max-Age` 속성만 해석하고 `Domain`/`Expires`는 무시.

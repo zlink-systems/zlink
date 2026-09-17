@@ -349,7 +349,7 @@ Framework host가 현재 lifecycle의 등록 정보와 object ownership을 계�
 | `zlink.observability.events.overflow` | counter | `{event}` | `source` | Runtime status와 trace를 전달하는 내부 telemetry queue overflow 횟수를 누적한다. |
 
 `scope_kind`는 `mesh|channel`이다. `scope_name`에는 해당 MeshName이나 ChannelName을
-쓴다. `operation`은 다음 7값으로 닫혀 있다 —
+사용한다. `operation`은 다음 7값으로 닫혀 있다 —
 `read|compare_exchange|relocation_put|relocation_get|relocation_delete|lease_renew|release`.
 Logical Multicast와 classic fanout publish는 집계하지 않는다.
 

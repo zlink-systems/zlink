@@ -341,8 +341,8 @@ caller must remain available.
 | `StreamRecv`, `StreamPacketCallback` | STREAM RAW/PACKET pull (legacy sample-directory name) |
 
 > SPOT/Actor examples are covered by the framework samples, not the core binding —
-> see the [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.en.md) ·
-> [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.en.md) guides.
+> see the [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.en.md) ·
+> [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.en.md) guides.
 
 Run: `./samples/run_samples.sh` (or `run_samples.ps1`).
 
@@ -361,8 +361,8 @@ Run: `./samples/run_samples.sh` (or `run_samples.ps1`).
 
 **Services**
 - [Framework service overview](../../../../framework/doc/framework/common/guide/server/03-concepts.en.md)
-  - [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.en.md)
-  - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.en.md)
+  - [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.en.md)
+  - [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.en.md)
 
 **Operations**
 - [Socket options](../../../../core/doc/guide/12-socket-options.en.md)

@@ -48,9 +48,9 @@ Application이 compile 시점에 참조하는 것 — interface, 호출, context
 은 배포 package마다 **소스 파일이 놓이는 자리가 한 곳**이어야 한다. 그 자리를 이 문서에서
 "계약 소스"라고 부른다. Directory 이름은 언어의 관례를 따르되 다음은 모든 언어에서 지킨다.
 
-- **Application이 쓰는 계약의 소스는 그 계약을 배포하는 package 안에 둔다.**
+- **Application이 사용하는 계약의 소스는 그 계약을 배포하는 package 안에 둔다.**
 - **Server, HTTP client와 Stream Connector는 서로 다른 배포 package이므로 계약 소스도 각각
-  자기 package 안에 둔다.** 한 package의 계약 파일을 다른 package의 계약 자리로 쓰지 않는다 —
+  자기 package 안에 둔다.** 한 package의 계약 파일을 다른 package의 계약 자리로 사용하지 않는다 —
   그러면 그 package를 받는 쪽이 쓰지도 않는 package에 의존하게 된다.
 - **Public constructor, factory, builder 진입점, free function, extension, DTO, value, enum과
   public error·result도 interface와 같은 자리에 둔다.** 이것들을 interface와 다른 곳에 흩어
@@ -63,7 +63,7 @@ Application이 compile 시점에 참조하는 것 — interface, 호출, context
   owner와 lifecycle 상태를 여러 node가 함께 확인하도록 보관하는 저장소인
   [Location Store](02-glossary.ko.md#location-store) provider처럼 Framework 밖에서 만드는
   구현체는 그 package 하나만 참조하면 되기 때문이다.
-  다만 application이 직접 쓰는 계약까지 그 package로 옮기지는 않는다 — application이 provider
+  다만 application이 직접 사용하는 계약까지 그 package로 옮기지는 않는다 — application이 provider
   package에 의존하게 된다.
 - **여러 package가 같은 타입으로 주고받아야 하는 codec과 error만 어느 package에도 속하지 않는
   공용 package에 둘 수 있다.** 같은 이름의 타입을 package마다 따로 선언하면 서로 다른 타입이
@@ -73,10 +73,10 @@ Application이 compile 시점에 참조하는 것 — interface, 호출, context
 Namespace와 package의 **전체 이름** — `systems.zlink.framework.actors`처럼 최상위부터 이어
 붙인 이름 — 은 언어별 interface가 정한다. Source directory를 정리한다는 이유로 이 이름을 바꾸지
 않는다. 이름은 그 package를 참조하는 쪽의 코드에 그대로 박혀 있어서, 바꾸면 계약을 바꾸지
-않았는데도 받아 쓰는 쪽이 깨진다.
+않았는데도 받아 사용하는 쪽이 깨진다.
 
 Layout을 바꾸려면 세 가지를 함께 통과해야 한다 — 기록해 둔 public API 목록과의 대조, 그
-package를 받아 쓰는 쪽의 build, 그리고 소유자 검토.
+package를 받아 사용하는 쪽의 build, 그리고 소유자 검토.
 
 각 언어 interface 문서는 package마다 계약 소스가 어디에 있고 어떤 선언을 public으로 내보내는지
 기록한다. 어떤 선언을 그 자리가 아닌 곳에 두어야 한다면 그 선언 하나와 그렇게 해야 하는 의존

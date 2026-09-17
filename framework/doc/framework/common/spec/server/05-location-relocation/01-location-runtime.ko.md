@@ -390,19 +390,19 @@ bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 — 
 | Field | 의미 |
 |---|---|
 | `recordVersion` | 이 record의 JSON 구조 버전이다. 현재 값은 `1`이다. Provider가 아니라 Framework가 이 값을 확인하며, 인식하지 못하는 값을 만나면 명시적으로 실패시키고 추측해서 읽지 않는다. |
-| `ownerId`, `leaseGeneration` | 이 record를 게시한 host의 `(OwnerId, LeaseGeneration)`(§3.1)이다. Authority record는 대신 `ownerId`·`ownerLeaseGeneration`이라는 이름을 쓴다(아래 표). |
+| `ownerId`, `leaseGeneration` | 이 record를 게시한 host의 `(OwnerId, LeaseGeneration)`(§3.1)이다. Authority record는 대신 `ownerId`·`ownerLeaseGeneration`이라는 이름을 사용한다(아래 표). |
 | `descriptorRevision` | §4의 Revision이다. Owner lease record와 authority record에는 없다. |
 | `descriptor` | MeshNode·ClientServer·fanout publisher 각각의 descriptor 내용(§4)이다. Owner lease record와 authority record에는 없다. |
 
 `descriptor`의 정확한 field 목록은 이 문서 §3.3·§4의 계약과
 [glossary](../00-foundation/02-glossary.ko.md#meshnode-descriptor)가 이미 고정한 .NET 표기를 기준으로
 정한다. generation·revision류 정수 field는 다른 record의 generation field와 마찬가지로
-JSON number가 아닌 JSON string으로 쓴다. 반면 weight·limit·capacity count류의 크기 값은
-JSON number로 쓴다 — golden fixture가 고정한 형태가 기준이다. RoutingId는 소문자 16진수
-문자열로, timestamp는 Unix epoch millisecond를 담은 문자열로 쓴다. 세 record 모두
+JSON number가 아닌 JSON string으로 사용한다. 반면 weight·limit·capacity count류의 크기 값은
+JSON number로 사용한다 — golden fixture가 고정한 형태가 기준이다. RoutingId는 소문자 16진수
+문자열로, timestamp는 Unix epoch millisecond를 담은 문자열로 사용한다. 세 record 모두
 `descriptor` 안에 자신의 `ownerId`·`leaseGeneration`·`descriptorRevision`을 다시 담는다 —
-이 값은 record 최상위 field와 같은 publish 작업이 쓰는 같은 값이므로 항상 같아야 한다(최상위와
-`descriptor` 안 두 곳에 각각 쓰지만 CAS는 record 전체를 하나의 opaque bytes로 다루므로 두
+이 값은 record 최상위 field와 같은 publish 작업이 사용하는 같은 값이므로 항상 같아야 한다(최상위와
+`descriptor` 안 두 곳에 각각 사용하지만 CAS는 record 전체를 하나의 opaque bytes로 다루므로 두
 값이 어긋나는 중간 상태는 없다). 언어별 provider가 내부적으로 관리하는 storage-row 버전
 counter(예: 일부 구현이 `generation`이라는 이름으로 descriptor 안에 넣던 값)는 이 opaque
 record의 cmsgpack `version` member([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급))가
@@ -471,7 +471,7 @@ opaque-record 행으로 저장한다. `objectGeneration`은 Store 전역 단조 
 [02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)이 정한다.
 
 Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `payload`를 제외한 정수
-field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌 JSON string으로 쓴다
+field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌 JSON string으로 사용한다
 (64-bit 값이 JSON number 정밀도를 넘을 수 있으므로).
 
 | Field | 의미 |
@@ -969,7 +969,7 @@ Runtime이 종료를 진행하여 새 작업을 받지 않는 상태를
 
 **Location Store의 owner를 source에서 target으로 바꾸는 CAS는 준비를 마친 target만
 실행한다.** Source와 Session owner는 target 선택 결과나 timeout을 근거로 Location Store를
-쓰지 않는다. Target은 Restore와 temporary queue 등록을 마치고 cutover를 받거나 1,000ms가
+사용하지 않는다. Target은 Restore와 temporary queue 등록을 마치고 cutover를 받거나 1,000ms가
 지나기 전에는 CAS를 시작하지 않는다. CAS가 실패하면 application dispatch를 열지 않는다.
 
 다음 그림은 §5의 owner lease 갱신이 §3.1의 host 실행 조합을 유지하는 동안, target이 현재
@@ -1072,7 +1072,7 @@ operation ID와 source·target Actor 수를 함께 갱신하여 합계가 전체
 
 ### 8.2 단계마다 어느 node가 owner인지
 
-Source와 Session owner는 target 선택 결과나 timeout을 근거로 Location Store를 쓰지 않는다.
+Source와 Session owner는 target 선택 결과나 timeout을 근거로 Location Store를 사용하지 않는다.
 
 | 단계 | 인정하는 owner와 target 조건 |
 |---|---|

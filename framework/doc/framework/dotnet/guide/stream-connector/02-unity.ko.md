@@ -6,7 +6,7 @@
 
 이 문서는 Unity client에서 `Zlink.Stream.Connector`를 사용하는 방법을 설명한다.
 Unity 전용 connector package는 따로 두지 않는다. Unity도 일반 `.NET` connector를 그대로
-쓰고, Unity main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을 실행한다.
+사용하고, Unity main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을 실행한다.
 
 > **WebGL 빌드는 이 문서의 대상이 아니다.** Unity WebGL은 브라우저 샌드박스에서 실행되므로
 > OS 소켓을 열 수 없고, `.NET` connector를 사용할 수 없다. WebGL은 `com.zlink.stream-connector.webgl`
@@ -29,7 +29,7 @@ Unity에서도 connector의 public API는 일반 `.NET`과 같은 `Task` / `Valu
 `Request(...).Async<TReply>(...)`, `WaitFor(...).Async(...)` 같은 호출을 그대로 사용한다.
 
 `Send(...)`는 응답을 기다리지 않는 one-way 호출이다. 정상 완료 값을 반환하지 않는
-`Async()`로 실행한다. 응답이 필요하면 `Request(...)`를 쓴다.
+`Async()`로 실행한다. 응답이 필요하면 `Request(...)`를 사용한다.
 
 ## MonoBehaviour 예시
 
@@ -87,7 +87,9 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
 ```
 
 `Update()`에서 `Dispatch.Async()`를 호출하지 않으면 handler와 event는 실행되지 않는다.
-`PendingDispatchCount`로 아직 처리하지 않은 callback 수를 확인한다.
+`PendingDispatchCount`로 아직 처리하지 않은 callback 수를 확인한다. **대기 queue는
+`MaxPendingDispatchCallbacks`(기본 1024)까지만 보관하고, 넘치면 버릴 수 있는 것 중 가장
+오래된 것부터 버린다.**
 
 ## 일시 정지 처리
 
@@ -105,9 +107,9 @@ private async void OnApplicationPause(bool paused)
 }
 ```
 
-## 코루틴을 쓰는 프로젝트
+## 코루틴을 사용하는 프로젝트
 
-최신 Unity에서는 `async` / `await`를 쓸 수 있으므로 코루틴이 필수는 아니다. 기존 코드가
+최신 Unity에서는 `async` / `await`를 사용할 수 있으므로 코루틴이 필수는 아니다. 기존 코드가
 `StartCoroutine(...)` 중심이라면 아래처럼 얇은 helper를 application 안에 둘 수 있다.
 이 helper는 `Dispatch.Async()` 전용 기능이 아니라, connector의 awaitable 호출을 Unity
 frame 흐름에 맞추는 application adapter 예시다.

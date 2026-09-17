@@ -62,10 +62,12 @@ class api_server_host_factory_t
         mesh.set_routing_id (zlink::routing_id_t::from ("tictactoe-api-" + topology.api_node))
           .listen (topology.selected_api_route_endpoint ());
         mesh.objects ().client ();
+        // --8<-- [start:doc-manual-peer-connect]
         mesh.peer_connections ().connect (zlink::routing_id_t::from (sample_names_t::play_a_rid),
                                           topology.play_a_route_endpoint);
         mesh.peer_connections ().connect (zlink::routing_id_t::from (sample_names_t::play_b_rid),
                                           topology.play_b_route_endpoint);
+        // --8<-- [end:doc-manual-peer-connect]
 
         options.handlers ().group ("api").add<authenticate_player_handler_t> ();
         app.add_hosted_service (

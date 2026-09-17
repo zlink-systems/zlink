@@ -1,0 +1,103 @@
+{
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "suspend한 사이에 worker가 다른 핸들러를 처리한다",
+    "subtitle": "핸들러 A가 co_await로 스레드를 놓는 동안 worker가 B를 끝내고, 응답이 오면 A가 이어간다",
+    "column_fit": "spread",
+    "viewBox": [
+      1040,
+      680
+    ],
+    "output": "43-suspend-resume.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "W",
+      "type": "messagebus",
+      "label": "worker 스레드"
+    },
+    {
+      "id": "H1",
+      "type": "backend",
+      "label": "핸들러 A",
+      "sublabel": "코루틴"
+    },
+    {
+      "id": "CH",
+      "type": "external",
+      "label": "Play 채널"
+    },
+    {
+      "id": "H2",
+      "type": "backend",
+      "label": "핸들러 B",
+      "sublabel": "코루틴"
+    }
+  ],
+  "messages": [
+    {
+      "from": "W",
+      "to": "H1",
+      "y": 160,
+      "label": "handle() 실행",
+      "variant": "default"
+    },
+    {
+      "from": "H1",
+      "to": "CH",
+      "y": 220,
+      "label": "co_await request(...).async() → suspend, 스레드 반납",
+      "variant": "default"
+    },
+    {
+      "from": "W",
+      "to": "H2",
+      "y": 300,
+      "label": "worker는 즉시 다음 일로 — handle() 실행",
+      "variant": "default"
+    },
+    {
+      "from": "H2",
+      "to": "W",
+      "y": 360,
+      "label": "co_return (완료)",
+      "variant": "return"
+    },
+    {
+      "from": "CH",
+      "to": "H1",
+      "y": 420,
+      "label": "응답 도착 → resume",
+      "variant": "return"
+    },
+    {
+      "from": "H1",
+      "to": "W",
+      "y": 480,
+      "label": "co_return (완료)",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "suspend는 그 흐름만 멈춘다",
+      "items": [
+        "핸들러 A가 co_await 자리에서 suspend하면 그 실행 흐름만 멈추고 스레드는 풀로 돌아간다 — 스레드 점유가 없다.",
+        "worker는 곧바로 다음 일을 집어 B를 실행하고, B는 A의 응답이 오기 전에 먼저 끝난다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "막으면 이 구조가 무너진다",
+      "items": [
+        "응답이 도착하면 A가 그 자리에서 resume해 co_return한다. 그래서 worker 몇 개로 수많은 동시 요청을 받는다.",
+        "핸들러 안에서 스레드를 막는 대기(동기 wait)를 쓰면 그 스레드가 계속 점유되므로 금지한다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

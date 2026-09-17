@@ -357,7 +357,7 @@ to the guild is just the next line, with no callback or futures composition.
 Building the same thing with a Redis distributed lock means taking and releasing two locks
 in a fixed order, and the code in between gets scattered across request/response callbacks.
 None of that is here -- how calls between Spots and an Instance Spot actually behave is
-covered in [06-spot](cpp/guide/server/06-spot.en.md).
+covered in [Spot](cpp/guide/server/21-spot.en.md).
 
 - **Zero-downtime relocation** — bringing a node down doesn't drop in-progress rooms or
   users.
@@ -432,11 +432,11 @@ switch line at the top of each chapter lets you view the same chapter in another
 
 | Language | Server guide | Get started right away | Client-side guide |
 | --- | --- | --- | --- |
-| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Installation and first run](dotnet/guide/server/02-getting-started.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
-| C++ | [Server](cpp/guide/server/README.en.md) | [Installation and first run](cpp/guide/server/02-getting-started.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
-| Java | [Server](java/guide/server/README.en.md) | [Installation and first run](java/guide/server/02-getting-started.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
-| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Installation and first run](kotlin/guide/server/02-getting-started.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
-| Node.js | [Server](node/guide/server/README.en.md) | [Installation and first run](node/guide/server/02-getting-started.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |
+| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
+| C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
+| Java | [Server](java/guide/server/README.en.md) | [Quickstart](java/quickstart.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
+| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
+| Node.js | [Server](node/guide/server/README.en.md) | [Quickstart](node/quickstart.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |
 
 **The two client-side guides** cover libraries deployed separately from the server
 framework. Stream Connector is the library a client uses to connect to a STREAM endpoint

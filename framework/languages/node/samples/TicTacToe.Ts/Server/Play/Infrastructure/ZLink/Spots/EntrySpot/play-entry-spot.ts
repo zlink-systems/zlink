@@ -35,12 +35,14 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     this.context.handlers.addHandler(PlayActorObserveMilestoneHandler);
     // send: the internal notification message is relayed to the current session.
     this.context.handlers.addHandler(DeliverPlayNotificationEntryHandler);
+    // --8<-- [start:doc-multicast-subscribe]
     // subscribe: the published milestone event is delivered to this Entry Spot.
     this.context.handlers.addSubscribe(
       PlayerWinMilestoneEventHandler,
       SampleNames.playerMilestoneChannel,
       SampleNames.playerMilestoneTopic
     );
+    // --8<-- [end:doc-multicast-subscribe]
   }
 
   async onActorJoin(_actorId: string, _request: ZLinkMessage): Promise<{ accepted: boolean }> {

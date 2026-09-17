@@ -76,7 +76,7 @@ if (result.outcome == zlink::framework::relocation_outcome_t::relocated) {
 `reason`에 `target_unavailable`·`store_unavailable`·`deadline_exceeded` 등이 담기고, host는 처리
 중이던 local object가 남아 있으면 `serving`으로 복귀한다.
 
-**선택 기준.** 배포 전 무중단 이전이 필요할 때 쓴다. 이전 없이 바로 종료하려면 `shutdown`을
+**선택 기준.** 배포 전 무중단 이전이 필요할 때 사용한다. 이전 없이 바로 종료하려면 `shutdown`을
 직접 호출한다. 같은 `relocation_options_t`로 중복 호출하면 진행 중인 operation에 합류하고, 다른
 값으로 호출하면 `blocked/operation_in_progress`로 완료한다.
 
@@ -122,13 +122,13 @@ app.request_stop();
 
 **옵션.** 세 호출 모두 modifier가 없다.
 
-**완료 결과.** `run(argc, argv)`는 host가 완전히 정지한 뒤 process exit code로 쓸 수 있는
+**완료 결과.** `run(argc, argv)`는 host가 완전히 정지한 뒤 process exit code로 사용할 수 있는
 `int`를 반환하는 blocking 호출이다. Handler 예외, runtime 오류, signal shutdown은 host가 수집하고
 종료 경로를 닫는다. `stop()`은 즉시 정지를 시작하고, `request_stop()`은 graceful shutdown 신호만
 보낸다.
 
 **선택 기준.** `run`은 일반적인 `main()` 진입점에서 한 번 호출한다. `request_stop`은 signal handler
-같은 외부 코드에서 host 종료를 시작할 때 쓴다.
+같은 외부 코드에서 host 종료를 시작할 때 사용한다.
 
 ---
 
@@ -153,8 +153,8 @@ app.set_message_flow_mode(zlink::framework::message_flow_log_mode_t::detailed);
 수 있다.
 
 **선택 기준.** 배포를 다시 하지 않고 특정 시점에만 diagnostics 상세도를 올리거나 내릴 때
-`set_message_flow_mode`를 쓴다. Diagnostics 시작값 등록은 observability-diagnostics category의
-`configure_dispatch()` 항목을 쓴다.
+`set_message_flow_mode`를 사용한다. Diagnostics 시작값 등록은 observability-diagnostics category의
+`configure_dispatch()` 항목을 사용한다.
 
 ---
 
@@ -171,7 +171,7 @@ app.health()
 zlink::framework::health_report_t report = app.health().report();
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -185,8 +185,8 @@ zlink::framework::health_report_t report = app.health().report();
 **완료 결과.** `report()`는 동기 호출이며 `health_report_t`를 반환한다. `readiness`와 `liveness`를
 분리해 판단하며, `degraded`는 `ready()`·`live()`를 막지 않는다.
 
-**선택 기준.** HTTP `/health`, `/readiness`, `/liveness` endpoint(HTTP hosting 확장을 쓰는 경우
-`http().map_health(...)` 등)나 외부 오케스트레이터가 조회할 상태를 구성할 때 쓴다.
+**선택 기준.** HTTP `/health`, `/readiness`, `/liveness` endpoint(HTTP hosting 확장을 사용하는 경우
+`http().map_health(...)` 등)나 외부 오케스트레이터가 조회할 상태를 구성할 때 사용한다.
 
 ---
 

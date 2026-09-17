@@ -35,7 +35,7 @@ protocol을 구성한다.
 ## 2. 대상 실행 환경
 
 **이 절이 이 스펙의 출발점이다.** 실행 환경의 제약이 계약을 결정하기 때문이다. 어떤
-connector를 쓰는지는 **언어가 아니라 "엔진 × 빌드 타깃"** 으로 정해진다.
+connector를 사용하는지는 **언어가 아니라 "엔진 × 빌드 타깃"** 으로 정해진다.
 
 ### 2.1 엔진·환경별 담당 connector
 
@@ -179,7 +179,7 @@ prefix를 사용할 수 없다.**
 **control frame의 이름 공간은 packet kind로 분리된다.** control frame은 `Control` kind로만
 전달되므로, 아래 control 이름과 같은 문자열을 application이 `Send`/`Request` kind로 쓰더라도
 dispatch가 섞이지 않는다. 다만 혼동을 피하기 위해 application packet에 `session-closing`을
-쓰지 않는다. 신규 control packet은 `$zlink.` prefix를 사용한다.
+사용하지 않는다. 신규 control packet은 `$zlink.` prefix를 사용한다.
 
 control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow flag 없음이다.
 **payload는 control packet마다 다르다.**
@@ -225,7 +225,7 @@ metadata 한도와 달리 **option으로 조절한다.**
 
 **한도는 length prefix와 encoded header를 뺀 payload 바이트에만 적용한다.** 압축 frame을 수신하면
 wire의 압축된 payload와 압축 해제 결과를 각각 같은 수신 한도와 비교한다. 어느 쪽이든 넘으면
-application handler나 request completion으로 전달하지 않는다. 송신 한도는 실제 transport에 쓰는
+application handler나 request completion으로 전달하지 않는다. 송신 한도는 실제 transport에 사용하는
 payload를 기준으로 하므로 압축을 요청한 송신은 압축 결과를 검사한다. 64KB보다 큰 payload가 필요한
 애플리케이션은 이 값을 명시적으로 키운다.
 
@@ -515,7 +515,7 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 - **client는 받은 것을 계속 받아서 처리한다.** 큐에 한도를 두지 않고, message를 버리지 않으며,
   이 때문에 연결을 닫지도 않는다.
 - **connector는 backpressure를 하지 않는다.** connector는 socket을 직접 구현하지 않고 실행 환경이
-  주는 것을 쓴다(§2·§3.2). 브라우저·WASM은 네이티브 WebSocket API 위에서 동작하는데 거기에는
+  주는 것을 사용한다(§2·§3.2). 브라우저·WASM은 네이티브 WebSocket API 위에서 동작하는데 거기에는
   읽기를 보류할 표면이 없다. 흐름 제어는 서버 STREAM socket이 소유하며 이 문서의 범위가 아니다.
 - **response·error response·heartbeat control frame은 이 큐를 거치지 않는다.** request 완료와
   연결 유지에 필요하기 때문이다.

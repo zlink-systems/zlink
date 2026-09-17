@@ -36,8 +36,8 @@ zlink::framework::actor_create_result_t created = co_await actor_manager
 이미 있으면 두 대안이 아니라 `already_exists` 오류로 완료한다 — `actor_create_existing_t`는
 `get_or_create`에만 있다. Ready incarnation이 있는데 stable type이 다르면 `type_mismatch`다.
 
-**선택 기준.** 항상 새 Actor가 필요할 때 쓴다. 있으면 재사용하고 없을 때만 만들려면
-`get_or_create`를 쓴다.
+**선택 기준.** 항상 새 Actor가 필요할 때 사용한다. 있으면 재사용하고 없을 때만 만들려면
+`get_or_create`를 사용한다.
 
 ---
 
@@ -60,7 +60,7 @@ zlink::framework::actor_create_result_t existing_or_created = co_await actor_man
 무시한다. Creating attempt와 경합하면 그 결과를 기다렸다가 합류하며, 서로 다른 operation은 Ready
 뒤 `actor_create_existing_t`를 받고 이전 reply를 공유하지 않는다.
 
-**선택 기준.** ActorId로 멱등하게 "있으면 쓰고 없으면 만들기"가 필요할 때 쓴다.
+**선택 기준.** ActorId로 멱등하게 "있으면 사용하고 없으면 만들기"가 필요할 때 사용한다.
 
 ---
 
@@ -85,14 +85,14 @@ if (actor) {
 Spot membership이 없으면 `std::nullopt`을 반환한다. `destroy`는 해당 incarnation이 없으면
 `false`, generation이 다르면 `invalid_operation`, pre-commit seal 중이면 `unavailable`이다.
 
-**선택 기준.** 지금 시점의 존재·소속 확인이나 명시적 종료가 필요할 때 쓴다.
+**선택 기준.** 지금 시점의 존재·소속 확인이나 명시적 종료가 필요할 때 사용한다.
 
 ---
 
 ## `send` / `request` (actor_client_t)
 
 Global ActorId 하나로 one-way message를 보내거나 typed request/reply를 주고받는다. 외부 client에서
-쓴다.
+사용한다.
 
 ```cpp
 co_await actor_client
@@ -117,7 +117,7 @@ inventory_t reply = co_await actor_client
 **완료 결과.** ActorId가 없으면 `not_found`. 나머지 완료 kind는 messaging-execution category의
 공통 규칙과 같다.
 
-**선택 기준.** Reply가 필요 없으면 `send`, 필요하면 `request`를 쓴다.
+**선택 기준.** Reply가 필요 없으면 `send`, 필요하면 `request`를 사용한다.
 
 ---
 
@@ -146,7 +146,7 @@ context_
 같은 128-bit operation ID를 담은 `actor_t::on_join_completed(...)` callback으로 비동기 전달된다 —
 `actor_join_accepted_t`/`actor_join_rejected_t`/`actor_join_failed_t` `std::variant` 중 하나다.
 
-**선택 기준.** Actor를 다른 Spot으로 옮기거나 Entry Spot으로 되돌릴 때 쓴다. Entry Spot과
+**선택 기준.** Actor를 다른 Spot으로 옮기거나 Entry Spot으로 되돌릴 때 사용한다. Entry Spot과
 `per_actor` User Spot의 Actor에서 호출하면 `invalid_operation`으로 완료한다.
 
 ---

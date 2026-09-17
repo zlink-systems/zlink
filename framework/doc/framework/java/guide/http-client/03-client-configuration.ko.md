@@ -26,7 +26,7 @@ builder는 client 전역 설정을 모은다. `java.net.http` 설정으로 매�
 
 ## 네이티브 위임 vs 래퍼 구현
 
-`HttpClient`는 `Redirect.NEVER`로 두고(래퍼 루프), cookie manager는 쓰지 않는다(래퍼 jar).
+`HttpClient`는 `Redirect.NEVER`로 두고(래퍼 루프), cookie manager는 사용하지 않는다(래퍼 jar).
 `java.net.http`는 응답을 자동 해제하지 않으므로 래퍼가 `java.util.zip`으로 통제한다.
 connection pool·proxy·TLS는 네이티브에 위임한다. `Redirect` enum에는 횟수 개념이 없어
 redirect 루프를 래퍼에서 구현한다.

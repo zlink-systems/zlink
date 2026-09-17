@@ -10,10 +10,10 @@ title: "13. 주요 타입 사용 색인 · Node/TypeScript"
 
 > **이 장의 계약 소유 문서** —
 > [Node.js exact interface 목차](../../../common/spec/server/languages/node/interfaces/README.ko.md)가
-> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 쓰는 public 표면을
+> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 사용하는 public 표면을
 > 기능별로 찾는 안내서다.
 
-Node 표면은 **어디서 import하는지**로 먼저 갈린다.
+Node 표면은 **어디서 import하는지**로 먼저 달라진다.
 
 | 패키지 | 무엇이 있나 |
 | --- | --- |
@@ -65,7 +65,7 @@ topic이다.
 | `zlinkSpotActorSendHandler(...)` · `zlinkSpotActorRequestHandler(...)` | member Actor 앞 packet · request |
 | `zlinkEntrySpotPacketHandler(...)` · `zlinkEntrySpotSubscriptionHandler(...)` | Entry Spot 앞 |
 | `zlinkEntrySpotActorSendHandler(...)` · `zlinkEntrySpotActorRequestHandler(...)` | Entry Spot의 Actor 앞 |
-| `zlinkHandler(...)` | 위 갈래를 직접 지정할 때 |
+| `zlinkHandler(...)` | 위 종류를 직접 지정할 때 |
 
 **packet 이름은 보내는 쪽과 정확히 같아야 한다.** 상수 모듈로 묶어 공유한다.
 
@@ -124,7 +124,7 @@ topic이다.
 | `ZLinkDispatchOptionsBuilder` · `ZLinkMessageFlowLogMode` | 진단 수준 |
 | Application logger/telemetry provider | 메시지 흐름과 dispatch error structured record 수신 |
 | `ZLinkFrameworkException` | 실패. `kind` · `isRetriable` |
-| `ZLinkFrameworkErrorKind` | 실패 갈래 |
+| `ZLinkFrameworkErrorKind` | 실패 종류 |
 
 ## 7. Node에서 다른 자리
 
@@ -149,5 +149,5 @@ topic이다.
 ## 9. 관련 문서
 
 - 정확한 signature: [Node.js exact interface 목차](../../../common/spec/server/languages/node/interfaces/README.ko.md)
-- 등록 진입점: [2. 시작하기](02-getting-started.ko.md)
+- 등록 진입점: [퀵스타트](../../quickstart.ko.md)
 - NestJS host 계약: [Node.js NestJS host 공개 계약](../../../common/spec/server/languages/node/interfaces/07-nestjs-host.ko.md)

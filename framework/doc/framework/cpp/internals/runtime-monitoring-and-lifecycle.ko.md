@@ -72,7 +72,7 @@ field만 사용하며 native private storage나 reflection에 의존하지 않�
 C++ RuntimeMonitoring E2E runner는 peer가 not-ready가 된 뒤에도 replacement를
 바로 시작하지 않는다. 설정된 owner lease TTL과 fencing margin을 기다린 후
 replacement를 시작한다. 만료 전 claim을 허용하는 takeover 우회는 stale owner가
-현재 descriptor를 덮어쓸 수 있으므로 사용하지 않는다.
+현재 descriptor를 덮어사용할 수 있으므로 사용하지 않는다.
 
 ## 6. Logging provider의 격리
 

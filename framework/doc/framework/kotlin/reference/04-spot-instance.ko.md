@@ -117,7 +117,7 @@ timer handler는 `ZLinkSuspendingSpotTimerHandler<TSpot>`(`suspend fun handle(sp
 때 logical timer registration이 자동으로 이전되는 규칙도 동일하다.
 
 **선택 기준.** Java 레퍼런스와 같다 — CPU-bound는 `runCpuWorker`, I/O 대기가 있는 작업은
-`runIoWorker`를 쓴다.
+`runIoWorker`를 사용한다.
 
 ---
 

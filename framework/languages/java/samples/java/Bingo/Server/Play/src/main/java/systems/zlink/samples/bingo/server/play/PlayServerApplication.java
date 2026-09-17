@@ -67,6 +67,9 @@ public final class PlayServerApplication {
             node.objects()
                 .server()
                 .addEntrySpot(BingoEntrySpot.class)
+                // --8<-- [start:doc-execution-mode]
+                // SPOT_WIDE is the default. Naming it here keeps the choice visible:
+                // every callback of this room runs through one gate.
                 .addSpotFactory(
                     SampleNames.RoomSpotType,
                     BingoRoomSpot.class,
@@ -76,6 +79,7 @@ public final class PlayServerApplication {
                             ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
                         factory.preserveStateWith(BingoRoomRelocationAdapter.class);
                     })
+                // --8<-- [end:doc-execution-mode]
                 .addActorFactory(
                     SampleNames.PlayerActorType,
                     PlayerActor.class,

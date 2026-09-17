@@ -11,12 +11,11 @@ Transport and wire behavior follow the
 
 ## 1. Add The Dependency
 
-Specify the ZLink distribution version you're using for `<version>`.
 
 ```kotlin
 dependencies {
     // Provides the Java connector itself and TCP/TLS/WS/WSS transport.
-    implementation("systems.zlink:zlink-stream-connector:<version>")
+    implementation("systems.zlink:zlink-stream-connector:0.16.0")
 }
 ```
 
@@ -100,7 +99,12 @@ var registration = connector.on(
 connector.dispatch().submit();
 
 // Unregister the handler once it's no longer needed.
-registration.close();
+// on(...) returns AutoCloseable, whose close() declares a checked Exception.
+try {
+    registration.close();
+} catch (Exception e) {
+    // Follow the application's error handling policy.
+}
 ```
 
 `IMMEDIATE` mode runs the handler directly on the receive path. No separate dispatch call is

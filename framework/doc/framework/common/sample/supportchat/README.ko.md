@@ -498,7 +498,7 @@ Server evidence는 client scenario가 끝난 뒤 확인한다.
 | `supportchat-closed-typing-ignore=verified` | Closed 이후 typing·close 요청이 무시됨을 확인 |
 
 두 번째 marker의 표기는 위 문자열 하나다. `supportchat closed-typing-ignore=verified`처럼 하이픈
-대신 공백을 쓴 변형을 쓰지 않는다. **runner는 두 marker를 모두 직접 확인한다** — client 프로세스의
+대신 공백을 사용한 변형을 사용하지 않는다. **runner는 두 marker를 모두 직접 확인한다** — client 프로세스의
 종료 코드나 browser 판정으로 대신하지 않는다.
 
 #### Marker는 그 사실이 일어난 자리에서 출력한다
@@ -516,7 +516,7 @@ Server-side self-check가 **도메인 객체를 직접 만들어 굴리는 in-pr
 stream scenario가 이미 시험한다.
 
 Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
-적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 재시도 없는 단발 검사를 쓰지 않는다. 다섯 언어 모두
+적용하며 **`.sh`와 `.ps1`이 같은 값을 사용한다.** 재시도 없는 단발 검사를 사용하지 않는다. 다섯 언어 모두
 `.sh`와 `.ps1`을 함께 제공한다.
 
 모든 행이 통과하면 runner가 마지막에 `supportchat-placement=completed`를 출력한다. 한 행이라도

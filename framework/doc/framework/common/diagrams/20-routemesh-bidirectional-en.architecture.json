@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RouteMesh — both sides call each other",
+    "subtitle": "one peer connection · a node registers per channel",
+    "output": "20-routemesh-bidirectional-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 170,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "A",
+      "type": "backend",
+      "label": "node A",
+      "sublabel": "serves profile",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "serves match",
+      "row": 0,
+      "col": 1
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "game mesh",
+      "wraps": [
+        "A",
+        "B"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "match call",
+      "variant": "default",
+      "fromSide": "top",
+      "toSide": "top"
+    },
+    {
+      "from": "B",
+      "to": "A",
+      "label": "profile call",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two-way means two channels",
+      "items": [
+        "One channel is one direction. Two-way is made by registering each node as the server of a different channel."
+      ]
+    }
+  ]
+}

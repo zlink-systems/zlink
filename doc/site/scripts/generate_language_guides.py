@@ -114,9 +114,12 @@ def language_switch(current: str, name: str, suffix: str) -> str:
             parts.append(f"**{label}**")
         else:
             parts.append(f"[{label}](../../../{lang}/guide/server/{name})")
+    #  `{ .zlink-langswitch }`는 attr_list가 이 문단에 class를 붙이는 표기다.
+    #  extra.css가 그 class를 상단 언어 선택기 모양으로 낸다.
     return ("<!-- language-switch:start -->\n"
             f"{STRINGS[suffix]['switch_label']} — " + " · ".join(parts)
-            + "\n<!-- language-switch:end -->\n\n")
+            + "\n{ .zlink-langswitch }\n"
+            + "<!-- language-switch:end -->\n\n")
 
 
 def reading_order(lang_dir: str, suffix: str) -> list[str]:
@@ -286,10 +289,13 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
         titles: dict[str, str] = {}
         for entry in order:
             name = Path(entry).name
+            #  읽는 순서 표는 guide/server 밖의 문서도 담는다(언어별 quickstart).
+            #  상대 경로를 먼저 풀어 보고, 안 되면 형제 파일과 공통 정본에서 찾는다.
+            relative = (target_dir / entry).resolve()
             local = target_dir / name
             src = COMMON / name
-            path = local if local.exists() else src
-            if path.exists():
+            path = next((c for c in (relative, local, src) if c.exists()), None)
+            if path is not None:
                 titles[entry] = chapter_title(path)
 
         generated = {src.name for src in sources} & set(siblings)

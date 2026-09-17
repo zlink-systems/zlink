@@ -6,7 +6,7 @@ title: "Framework 메시징 용어집"
 
 [Foundation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 01. 공개 계약 관리](01-public-contract-governance.ko.md) · [다음: 03. Framework 개요](03-overview.ko.md)
 
-> **이 장이 정의하는 것** — 이 스펙 전체에서 쓰는 공통 domain term, 상태와 결과 이름.
+> **이 장이 정의하는 것** — 이 스펙 전체에서 사용하는 공통 domain term, 상태와 결과 이름.
 
 [스펙 문서 작성 가이드](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md) ·
 [Spot 메시징](../03-spot-actor/02-spot-messaging.ko.md)
@@ -40,7 +40,7 @@ pseudocode**이며 실제 API 이름이나 생성자를 뜻하지 않는다. 공
 ## 이 용어집이 지키는 규칙
 
 이 용어집은 여러 스펙이 공유하는 domain term 정의의 단일 기준이다. 개별 스펙은 그
-용어를 처음 쓰는 자리에서 현재 문맥에 맞는 한 문장으로 소개한 뒤 이 문서의 항목에
+용어를 처음 사용하는 자리에서 현재 문맥에 맞는 한 문장으로 소개한 뒤 이 문서의 항목에
 링크한다 — 스펙 전체를 다시 정의하지 않는다([스펙 문서 작성 가이드](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md#32-용어집-정의와-첫-링크) §3.2).
 
 - 값이나 record를 나타내는 용어는 먼저 요약 표(형태·.NET 표기·공개 구성·생성·관리·수명)를
@@ -52,9 +52,9 @@ pseudocode**이며 실제 API 이름이나 생성자를 뜻하지 않는다. 공
 - 용어집은 11개 주제 절(`## N. 제목`)로 나뉘고, 각 항목은 `<a id>` anchor와 `### 용어`
   제목을 고정 형식으로 갖는다. 다른 스펙이 이 anchor로 직접 들어오므로 anchor와 제목
   문자열은 바꾸지 않는다.
-- 같은 이름을 다른 개념에 다시 쓰지 않는다. 두 계약에서 같은 이름(예: `OperationId`)이
+- 같은 이름을 다른 개념에 다시 사용하지 않는다. 두 계약에서 같은 이름(예: `OperationId`)이
   필요하면 항목 안에서 서로 다른 계약임을 명시해 구분한다.
-- 항목은 다른 계약 문서가 이미 소유한 절차·표·오류 조건을 다시 풀어 쓰지 않는다. 정의
+- 항목은 다른 계약 문서가 이미 소유한 절차·표·오류 조건을 다시 풀어 사용하지 않는다. 정의
   자체(형태·공개 구성·생성·관리·수명)는 이 문서가 소유하지만, 그 값이 쓰이는 흐름은 그
   절차를 소유하는 문서로 링크한다.
 - 새 용어는 다음 네 조건을 모두 만족할 때만 추가한다 — 기존 public identifier나 업계
@@ -391,7 +391,7 @@ public readonly record struct ZLinkAuthorityKey(
 Store에서 값을 읽을 때 받은 version이 그대로일 때만 값을 바꾸는 조건부 변경이다.
 다른 요청이 먼저 값을 바꿨으면 변경하지 않고 충돌을 반환한다. Framework는 이
 방식으로 같은 Actor·Spot의 owner나 membership을 동시에 두 요청이 서로 다르게
-바꾸지 못하게 한다. 문서에서는 줄여서 CAS라고 쓴다.
+바꾸지 못하게 한다. 문서에서는 줄여서 CAS라고 사용한다.
 
 CAS가 여러 record를 대상으로 할 때는 조건 확인과 모든 변경을 한 Store 요청에서
 처리한다. 하나라도 조건이 다르면 어떤 record도 변경하지 않는다.
@@ -1405,7 +1405,7 @@ connection과 chunk가 실은 identity가 같은지로만 판정한다.
 ### In-flight payload budget
 
 Source node가 peer 연결 하나에 동시에 전송 중인 relocation chunk byte 합계의
-상한이다. 큰 payload가 같은 연결을 쓰는 일반 message의 대역폭을 독점하지 않게
+상한이다. 큰 payload가 같은 연결을 사용하는 일반 message의 대역폭을 독점하지 않게
 한다. Payload 전체 크기가 아니라 동시에 전송 중인 byte를 제한하므로, 예산보다 큰
 payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
 
@@ -1562,7 +1562,7 @@ Server membership에는 handler와 target 선택에 사용할 weight가 포함�
 - Server role은 송신 경로와 remote target membership을 등록하고 handler와 weight를
   제공한다. RouteMesh의 Server role은 Client의 송신 기능도 포함한다.
 
-[ClientServer Channel](#clientserver-channel)의 Client·Server는 같은 이름을 쓰지만 다른 계약이다.
+[ClientServer Channel](#clientserver-channel)의 Client·Server는 같은 이름을 사용하지만 다른 계약이다.
 Server가 Client에 새 업무 호출을 시작하지 못하는 규칙은
 [ClientServer Channel §1](../02-channel-transport/03-client-server-channel.ko.md#1-clientserver-channel-개요)이 소유한다.
 
@@ -1674,7 +1674,7 @@ Peer lifecycle 종료는
 | 형태 | 0이 아닌 opaque equality token. 숫자 크기로 실행 순서를 판단하지 않는다. |
 | .NET 표기 | `ulong LifecycleGeneration` |
 | 공개 구성 | 0이 아닌 generation 값 하나다. Endpoint가 같아도 재시작한 실행은 이전 값과 다른 새 값을 사용한다. |
-| 생성·관리 | Framework가 새 listener·server lifecycle에 사용할 값을 확정한다. 발급 값은 wire의 `nonzero-u64` 범위 `1..long.MaxValue`(2^63-1) 안에서 만든다 — full-width `ulong` 상위 bit를 쓰는 값을 발급해서는 안 된다. 수신측은 값이 같은지로만 비교한다. |
+| 생성·관리 | Framework가 새 listener·server lifecycle에 사용할 값을 확정한다. 발급 값은 wire의 `nonzero-u64` 범위 `1..long.MaxValue`(2^63-1) 안에서 만든다 — full-width `ulong` 상위 bit를 사용하는 값을 발급해서는 안 된다. 수신측은 값이 같은지로만 비교한다. |
 | 수명 | 해당 실행이 끝날 때까지 유지된다. Remote는 descriptor와 transport admission의 값이 같은지 비교한다. |
 
 <a id="descriptor"></a>

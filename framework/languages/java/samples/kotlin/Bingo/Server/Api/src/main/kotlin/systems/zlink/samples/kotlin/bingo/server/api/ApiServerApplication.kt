@@ -40,7 +40,10 @@ class ApiServerApplication {
             options.configureDispatch {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
+            // --8<-- [start:doc-codec-register]
+            // Every payload this process sends is encoded with Protobuf instead of the default codec.
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
+            // --8<-- [end:doc-codec-register]
             options.configureLocations()
             val api = options.addRouteMesh(SampleNames.Mesh)
                 .setRoutingIdPrefix("api")

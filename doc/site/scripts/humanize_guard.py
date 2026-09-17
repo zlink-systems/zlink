@@ -49,7 +49,10 @@ def head_version(path: str) -> str | None:
     try:
         return subprocess.run(
             ["git", "show", f"HEAD:{path}"],
-            capture_output=True, text=True, check=True,
+            #  encoding을 적지 않으면 Windows에서 로캘 코덱(cp949)으로 디코드하다 실패하고,
+            #  그 예외가 스레드 안에서 나므로 결과가 빈 문자열이 된다. 그러면 모든 파일이
+            #  "신규 파일"로 건너뛰어져 가드가 조용히 통과한다.
+            capture_output=True, text=True, check=True, encoding="utf-8",
         ).stdout
     except subprocess.CalledProcessError:
         return None  # new file — nothing to compare

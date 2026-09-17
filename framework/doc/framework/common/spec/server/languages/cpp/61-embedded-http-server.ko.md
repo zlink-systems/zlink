@@ -305,7 +305,7 @@ health:
 - timeout 없는 request read를 허용하지 않는다.
 - TLS certificate/private key 설정 오류를 시작 전에 잡는다.
 - error response는 stack trace나 내부 파일 경로를 노출하지 않는다.
-- reverse proxy 뒤에서 쓸 수 있도록 forwarded header 정책을 별도 option으로 둔다.
+- reverse proxy 뒤에서 사용할 수 있도록 forwarded header 정책을 별도 option으로 둔다.
 - request logging에서 민감 header를 그대로 기록하지 않는다.
 
 auth provider는 이 계약의 지원 범위가 아니다. 인증은 middleware/filter extension point와

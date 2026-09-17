@@ -187,7 +187,7 @@ absolute deadline을 전달한다.
 | 0 | `ExplicitClose` | X | O | O | Application이 User·Instance Spot close를 시작하고 해당 local instance를 정상적으로 정리할 때 호출한다. |
 | 1 | `HostShutdown` | O | O | O | Relocation 없이 host가 local Spot을 정리할 때 호출한다. |
 | 2 | `RelocationOut` | X | O | O | User·Instance Spot owner를 target으로 commit한 뒤 source local instance를 정리할 때 호출한다. |
-| 3 | `IdleEvicted` | X | X | O | Instance Spot이 쓰지 않고 남아 있는 시간 기준을 넘겨 local instance를 내릴 때 호출한다. |
+| 3 | `IdleEvicted` | X | X | O | Instance Spot이 사용하지 않고 남아 있는 시간 기준을 넘겨 local instance를 내릴 때 호출한다. |
 
 User Spot에 Actor membership이 남아 있어 explicit close가 `false`로 끝나면
 `OnClosingAsync`를 호출하지 않는다. Standalone Actor만 다른 Entry Spot으로 이동하는
@@ -418,9 +418,9 @@ Application이 자신의 context에서 정상적으로 닫으면 `ExplicitClose`
 relocation 없이 종료하면 `HostShutdown`, relocation commit 뒤 source instance를
 정리하면 `RelocationOut` 이유로 `OnClosingAsync`를 호출한다.
 
-### 6.2 쓰지 않고 남아 있는 Instance Spot 정리
+### 6.2 사용하지 않고 남아 있는 Instance Spot 정리
 
-Framework는 Instance Spot을 쓰지 않고 남아 있는 시간 기준으로 정리할 수 있다.
+Framework는 Instance Spot을 사용하지 않고 남아 있는 시간 기준으로 정리할 수 있다.
 **User Spot과 Entry Spot은 정리하지 않는다** — 일반 message는 없는 object를 만들지
 않으므로([Spot·Actor routing](08-routing.ko.md)) 정리한 User Spot으로 온 message는
 되살아나지 못하고 실패한다. Instance Spot은 Instance intent를 명시한 call이 다시
@@ -430,7 +430,7 @@ cold activation하므로 정리해도 다음 call에서 복구된다.
 
 | 조건 | 내용 |
 |---|---|
-| 쓰지 않고 남아 있는 시간 | 마지막 application 작업 완료 이후 `InstanceSpotIdleTimeout`을 넘겼다. 기본값은 `0`이며 `0`은 정리하지 않음을 뜻한다. |
+| 사용하지 않고 남아 있는 시간 | 마지막 application 작업 완료 이후 `InstanceSpotIdleTimeout`을 넘겼다. 기본값은 `0`이며 `0`은 정리하지 않음을 뜻한다. |
 | 진행 중 작업 없음 | application queue와 timer queue가 비어 있고, 완료를 기다리는 operation과 relocation 참여가 없다. |
 
 정리는 `IdleEvicted`로 `OnClosingAsync`를 호출한 뒤 local instance를 내리고 Location

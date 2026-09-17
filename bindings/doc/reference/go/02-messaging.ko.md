@@ -39,7 +39,7 @@ fromString, err := contracts.NewMessageString("payload")
 | `NewMessage(data []byte)` | `data`를 복사; `nil`/빈 슬라이스는 길이 0 메시지를 만든다 |
 | `NewMessageWithSize(size int)` | 쓰기 가능한, 0으로 초기화된 storage |
 | `NewMessageString(value string)` | UTF-8 인코딩 후 복사 |
-| `Data() []byte` | `Close`까지만 유효한 view — 여러 goroutine에 걸쳐 또는 메시지 수명을 넘어 보관하지 **말 것**, 그럴 땐 `Bytes()`를 쓴다 |
+| `Data() []byte` | `Close`까지만 유효한 view — 여러 goroutine에 걸쳐 또는 메시지 수명을 넘어 보관하지 **말 것**, 그럴 땐 `Bytes()`를 사용한다 |
 | `Bytes() []byte` | payload의 스냅샷 복사 |
 | `Size()` | payload 바이트 길이 |
 | `IsEmpty()` | `Size()`가 0인지 |
@@ -59,9 +59,9 @@ caller가 명시적으로 호출해야 한다. `MoveMessage` 계열 builder 호�
 `Close()`가 필요하다.
 
 **선택 기준.** outbound payload를 만들 땐 `NewMessageWithSize`/
-`NewMessage`를 쓴다; `MoveMessage`로 소유권을 이전하는 대신 독립
-복사본이 필요할 땐 `Clone()`을 쓴다. 다음 `recv` 호출 전에 슬라이스를
-다 쓰는 hot path에선 `Bytes()`보다 `Data()`를 우선한다 —
+`NewMessage`를 사용한다; `MoveMessage`로 소유권을 이전하는 대신 독립
+복사본이 필요할 땐 `Clone()`을 사용한다. 다음 `recv` 호출 전에 슬라이스를
+다 사용하는 hot path에선 `Bytes()`보다 `Data()`를 우선한다 —
 `Bytes()`는 항상 복사를 할당한다.
 
 ---
@@ -103,7 +103,7 @@ if _, replyable := received.ReplyToken(); ok && replyable {
 
 **선택 기준.** 수신 loop에서 매 메시지당 새로 할당하는 대신 `Received`
 하나를 참조로 재사용한다. 목적지 route를 손으로 재구성하는 대신
-`Reply()`를 쓴다 — routing id와 opaque reply token은 캡슐화돼 있어 이
+`Reply()`를 사용한다 — routing id와 opaque reply token은 캡슐화돼 있어 이
 builder 밖에선 접근할 수 없다.
 
 ---
@@ -159,7 +159,7 @@ native resource를 소유하지 않는다(message part를 소유하는
 `Received`/`TopicMessage`와 다름).
 
 **선택 기준.** subscriber 이탈을 관찰하려고 XPUB socket의
-subscription-event receive 경로(Sockets category)에서 쓴다.
+subscription-event receive 경로(Sockets category)에서 사용한다.
 
 ---
 
@@ -207,7 +207,7 @@ native submit이 실행되기 전에 그 context의 `Err()`로 호출을 즉시
 
 **선택 기준.** owning goroutine에서 `Submit(ctx)`의 직접 결과를 처리한다. 목적지
 route를 손으로 재구성하는 대신
-`Received.Reply()`/`Send()`를 쓴다 — routing id(그리고 `Reply`의
+`Received.Reply()`/`Send()`를 사용한다 — routing id(그리고 `Reply`의
 경우 reply token)는 builder에 캡슐화된다.
 
 ---

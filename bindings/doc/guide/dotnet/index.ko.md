@@ -269,7 +269,7 @@ catch (ZlinkSubmitException ex) when (ex.Result == SubmitResult.Backpressured) {
 
 ## C API 대응표
 
-C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 때 쓰는 압축 매핑입니다.
+C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 때 사용하는 압축 매핑입니다.
 .NET은 raw 함수 대신 객체와 플루언트 빌더로 감싸므로 1:1은 아니지만 개념 단위로는
 대응합니다. 전체 C 함수 목록은 [코어 C API 가이드](../../../../core/doc/guide/02-core-api.ko.md)를
 참고하세요.
@@ -330,8 +330,8 @@ RID 자산이 출력에 포함되는지 확인하세요 (`dotnet publish -r <rid
 | `StreamRecv`, `StreamPacketCallback` | STREAM RAW/PACKET pull(legacy sample directory 이름) |
 
 > SPOT·Actor 예제는 core 바인딩이 아니라 framework 샘플이 다룬다 —
-> [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.ko.md) ·
-> [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.ko.md) 가이드를 본다.
+> [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.ko.md) ·
+> [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.ko.md) 가이드를 본다.
 
 실행: `./samples/run_samples.sh` (또는 `run_samples.ps1`).
 
@@ -350,8 +350,8 @@ RID 자산이 출력에 포함되는지 확인하세요 (`dotnet publish -r <rid
 
 **서비스**
 - [Framework 서비스 개요](../../../../framework/doc/framework/common/guide/server/03-concepts.ko.md)
-  - [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.ko.md)
-  - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.ko.md)
+  - [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.ko.md)
+  - [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.ko.md)
 
 **운영**
 - [소켓 옵션](../../../../core/doc/guide/12-socket-options.ko.md)

@@ -147,7 +147,7 @@ client control loop와 `ZLinkManagedMeshNode` receive loop는 message를 같은 
 처리한다. 이 경로는 lifecycle 동안 `Received.Create()` 한 개를 보유하고
 `Recv(storage, RecvFlags.DontWait)`에 반복해서 넘긴다. binding은 성공할 때 이전 parts와
 metadata를 reset한 뒤 새 결과를 채운다. 처리가 끝난 뒤에만 다음 receive를 호출하므로
-storage를 덮어써도 consumer가 이전 message를 보유하지 않는다.
+storage를 덮어사용해도 consumer가 이전 message를 보유하지 않는다.
 
 ### 4.2 비동기 application dispatch
 

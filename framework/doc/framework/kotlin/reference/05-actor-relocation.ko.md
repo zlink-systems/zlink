@@ -82,7 +82,7 @@ Actor send는 one-way `await(): Unit`만 제공하고 `yield()`를 제공하지 
 
 **완료 결과.** Java 레퍼런스의 `sendToActor`/`requestToActor` 완료 kind와 같다.
 
-**선택 기준.** Reply가 필요 없으면 `sendToActor`, 필요하면 `requestToActor`를 쓴다.
+**선택 기준.** Reply가 필요 없으면 `sendToActor`, 필요하면 `requestToActor`를 사용한다.
 
 ---
 

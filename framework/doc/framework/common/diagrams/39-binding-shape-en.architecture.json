@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A Session Binds Several; an Actor Binds to One",
+    "subtitle": "No rebinding when an Actor moves · the framework refreshes the route it kept",
+    "output": "39-binding-shape-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "S",
+      "type": "frontend",
+      "label": "session",
+      "sublabel": "one connection",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "B",
+      "type": "messagebus",
+      "label": "party-3",
+      "sublabel": "Actor",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "N",
+      "type": "backend",
+      "label": "the new node",
+      "sublabel": "player-7 moved here",
+      "row": 0,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "S",
+      "to": "A",
+      "label": "binds",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "B",
+      "label": "binds as well",
+      "variant": "default"
+    },
+    {
+      "from": "A",
+      "to": "N",
+      "label": "the execution site moves",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Only one side is plural",
+      "items": [
+        "One session may bind several Actors at once, but one Actor is bound to exactly one session at a time. When a new binding is committed, the previous one becomes void.",
+        "The relay uses the route it verified at bind time. When the Actor moves, the framework refreshes that route once the move is committed, so the application does not bind again."
+      ]
+    }
+  ]
+}

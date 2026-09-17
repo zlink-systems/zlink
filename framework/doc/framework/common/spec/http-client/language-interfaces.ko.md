@@ -49,7 +49,7 @@
 **HTTP request builder는 Messaging call builder다.** 비동기 완료 종결자는 .NET `Async`, Kotlin
 wrapper `await`, Java·C++ `submit`을 사용한다. Node는 raw response에 `submitRaw`, typed response와
 callback에 `async`, one-way에 `submit`을 사용한다.
-Awaitable을 쓰지 않는 호출자를 위한 callback
+Awaitable을 사용하지 않는 호출자를 위한 callback
 완료 경로도 함께 제공한다([12 HTTP client](12-http-client.ko.md)).
 아래는 **목표 계약**이다. 현재 구현과의 차이와 수정 증거는 언어별 audit·실행 ledger가 소유한다.
 

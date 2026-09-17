@@ -40,7 +40,7 @@ structured record를 기록한다. Provider 호출 실패는 원래 message oper
 runtime error sink나 raw event DTO를 노출하지 않는다. `unhandled`도 같은
 `ZLinkDispatchOptions`에 속한다.
 
-**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 쓴다.
+**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 사용한다.
 
 ---
 
@@ -63,7 +63,7 @@ ClientServer와 classic fanout은 제공하지 않는다.
 
 **완료 결과.** 읽기 전용 property 접근이다 — 별도 완료 kind가 없다.
 
-**선택 기준.** Filter 안에서 어떤 dispatch 경로인지 분기해야 할 때 쓴다.
+**선택 기준.** Filter 안에서 어떤 dispatch 경로인지 분기해야 할 때 사용한다.
 
 ---
 
@@ -94,7 +94,7 @@ Framework operation이 실패하면 `ZLinkFrameworkException.kind`로 원인 계
 operation의 완료 조건, idempotency와 업무 상태를 확인해 application이 직접 판단한다.
 
 **선택 기준.** 각 category 항목의 "완료 결과"에 나온 kind를 이 표로 되짚어 대응 방법을 정할 때
-쓴다.
+사용한다.
 
 ---
 

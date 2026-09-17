@@ -101,9 +101,9 @@ loss 전에 transport가 operation을 수락했는지 알 수 없으면 그 oper
 ### 4.1 Logical ID 메시징과 ObjectGeneration
 
 같은 ActorId 또는 Spot의 global ID가 가리키는 서로 다른 logical incarnation을 구분하는 번호를
-[`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)이라고 한다. 이 값을 어디에 쓰고
-어디에 쓰지 않는지는
-[Spot·Actor routing §2.5](../03-spot-actor/08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)가
+[`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)이라고 한다. 이 값을 어디에 사용하고
+어디에 사용하지 않는지는
+[Spot·Actor routing §2.5](../03-spot-actor/08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)가
 정한다. Operation별 적용 표와 owner가 사라졌을 때의 결과가 그곳에 있다.
 
 장애 대응에서 이 구분이 만드는 차이는 하나다. **일반 Actor·Spot message는 global logical

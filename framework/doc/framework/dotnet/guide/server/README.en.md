@@ -10,28 +10,38 @@ you pick the `C#/.NET` tab.
 
 | Order | Document | Content |
 |----|------|------|
-| 1 | [1. Overview](01-overview.en.md) | What/why/who it's for, the felt difficulty versus the existing approach, the four axes |
-| 2 | [2. Getting Started](02-getting-started.en.md) | NuGet install, a minimal two-process example, the TicTacToe room-creation flow |
-| 3 | [3. Core Concepts](03-concepts.en.md) | Core concepts mapped to the common spec |
-| 4 | [4. Backpressure](04-backpressure.en.md) | How the system behaves when arrival outpaces processing, and the options that affect it |
-| 5 | [5. Channel Messaging](05-channel-messaging.en.md) | How to register and call request / send / pub-sub |
-| 6 | [6. Spot](06-spot.en.md) | How to register and call a dynamic SPOT such as a room / stage / zone |
-| 7 | [7. Actor And Spot](07-actor-spot.en.md) | The Actor model and Actor hosting on a Spot (lifecycle callbacks/trigger functions, the location axis) |
-| 8 | [8. Session And Actor Binding](08-actor-session.en.md) | Session ↔ Actor relay/binding/bound-session push (the binding axis) |
-| 9 | [9. STREAM](09-stream.en.md) | How to use the external-client STREAM server and the Stream Connector |
-| 10 | [10. Location](10-location.en.md) | How to register a location store, auto-connect, and query for operations |
-| 11 | [11. Monitoring](11-monitoring.en.md) | How to observe the runtime through state snapshots, the status stream, and diagnostics |
-| 12 | [12. Operations](12-operations.en.md) | Operations — runtime metrics, graceful drain, readiness integration |
-| 13 | [13. Key Type Usage Index](13-interface-catalog.en.md) | Every contract interface indexed against its ContractTests verification code |
-| 14 | [14. Picking A Sample](14-samples.en.md) | How to choose which sample to look at first and run it |
-| 15 | [15. E2E Testing](15-e2e-testing.en.md) | How to build an E2E test that verifies the whole system with the client library |
-| 16 | [16. Options](16-options.en.md) | Configuration — the option list, defaults, and when they can change |
-| 17 | [17. Where ZLink Fits](17-alternative.en.md) | Where it's used, the warning signs, and the boundary of the technology choice |
+| 1 | [Overview](01-overview.en.md) | What it solves and how it differs from the usual way |
+| 2 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
+| 3 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
+| 4 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
+| 5 | [Spot](21-spot.en.md) | Creating and calling a shared place by id |
+| 6 | [Actor](22-actor.en.md) | Creating and calling one entity by id |
+| 7 | [STREAM](23-stream.en.md) | A client outside the mesh attaching over one connection |
+| 8 | [Session and Actor](24-actor-session.en.md) | Binding one connection to one Actor |
+| 9 | [Location](25-location.en.md) | Looking up the node something is on by id |
+| 10 | [Monitoring](26-monitoring.en.md) | A placeholder in the feature guide — no body yet |
+| 11 | [The Execution Model](32-execution-model.en.md) | Two queues, the serialization scope, the turn |
+| 12 | [Backpressure](33-backpressure.en.md) | When arrival outruns processing, and the options that affect it |
+| 13 | [Activation and Lifetime](34-activation-lifetime.en.md) | Creation time per kind, lifecycle callbacks, injection lifetime |
+| 14 | [Actor Membership](35-actor-membership.en.md) | Moving between Spots, reservations and limits |
+| 15 | [Timers and Workers](36-timer-worker.en.md) | Periodic execution, running outside the line, giving the turn back |
+| 16 | [Relocation](37-relocation.en.md) | What survives a move, the adapter, the unit |
+| 17 | [How Channels Work](30-channel-patterns.en.md) | Pattern differences, target selection, pub/sub, connection and discovery |
+| 18 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
+| 19 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
+| 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
+| 21 | [Where ZLink Applies](17-alternative.en.md) | Where it fits, the signals, the boundary, the license |
+| 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
+| 23 | [Options](16-options.en.md) | The option list, the defaults and when to change them |
+| 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
+| 25 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
+| 26 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
+| 27 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
 
 The file number identifies the same chapter regardless of language. This table owns the
 reading order.
 
-Chapters 01, 02, 11, 13, and 16 are written separately for `.NET` because the install steps
+Chapters 01, 11, 13, and 16 are written separately for `.NET` because the install steps
 and surface names differ per language.
 
 ## Related Documents

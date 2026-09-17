@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "연결 하나를 개체 하나에 묶는다",
+    "subtitle": "묶은 뒤에는 session이 다루지 않은 packet이 그 개체로 가고, 개체가 그 연결로 민다",
+    "output": "24-actor-session-binding.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 92,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "연결 하나",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "session",
+      "sublabel": "연결을 대표한다",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "A",
+      "type": "messagebus",
+      "label": "player p1",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "binding",
+      "wraps": [
+        "S",
+        "A"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "packet",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "A",
+      "label": "넘긴다",
+      "variant": "default"
+    },
+    {
+      "from": "A",
+      "to": "C",
+      "label": "민다",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "labelDy": 18
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "묶는 것은 인증이 끝난 뒤다",
+      "items": [
+        "묶기 전에는 session이 아는 packet만 처리된다. 나머지를 넘길 대상이 없으므로 인증이 먼저다.",
+        "묶은 쪽은 연결이고 개체가 아니다. 연결이 끊겨도 개체는 남고, 다시 붙으면 같은 id로 같은 개체에 묶인다."
+      ]
+    }
+  ]
+}

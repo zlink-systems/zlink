@@ -233,7 +233,7 @@ Each library's guide covers its full usage.
 - The HTTP Client guide — request construction, body, auth/TLS, retry, and error handling,
   across 13 chapters
 - The Stream Connector guide — per-runtime integration (Unity, Godot). Server-side STREAM
-  registration is covered by [09-stream](09-stream.en.md).
+  registration is covered by [STREAM](23-stream.en.md).
 
 ## 2. Verification Functions and Usage
 
@@ -1116,7 +1116,7 @@ fi
 ## 8. Related Documents
 
 - Which sample to look at first: [14-samples](14-samples.en.md)
-- Server-side STREAM registration and sessions: [09-stream](09-stream.en.md)
+- Server-side STREAM registration and sessions: [STREAM](23-stream.en.md)
 - Full HTTP client usage: the HTTP Client guide
 - Engine integration and manual pumping: the Stream Connector guide
 - The connector's formal contract:

@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A business call names a name, an ops call names a node RID",
+    "subtitle": "a business call does not name the node that serves it",
+    "output": "20-node-direct-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 120,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "APP",
+      "type": "frontend",
+      "label": "business server",
+      "sublabel": "knows only the name",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "picks the serving node",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "SRV",
+      "type": "backend",
+      "label": "serving node",
+      "sublabel": "identity unknown",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "OPS",
+      "type": "frontend",
+      "label": "ops tool",
+      "sublabel": "knows the node RID",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "N1",
+      "type": "backend",
+      "label": "play-node-1",
+      "sublabel": "that node itself",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "APP",
+      "to": "FW",
+      "label": "channel name",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "SRV",
+      "variant": "default"
+    },
+    {
+      "from": "OPS",
+      "to": "N1",
+      "label": "node RID",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "A node RID is for ops calls only",
+      "items": [
+        "A business call gives a logical name. A node RID is for an ops call whose target is that one node."
+      ]
+    }
+  ]
+}

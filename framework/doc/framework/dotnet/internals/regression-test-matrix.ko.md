@@ -172,7 +172,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 | `FindAsync(spotId)` | `StatefulServiceRuntimeTests.FrameworkHostAutomaticallyExecutesRemoteUserSpotCreateAndCloseAgainstAuthorityStore` | global SpotId의 current SpotRef를 반환하고 close 뒤에는 `null`을 반환한다 |
 | `Configure()` handler registration | `integration-single-process` | `Context.Handlers.AddPacket(...)`, `AddActorPacket(...)`, `AddSubscribe(...)` 등록이 frozen handler catalog에 반영된다 |
 | Entry Spot handler registration | `integration-single-process` | `AddEntrySpot<TEntrySpot>()`로 등록한 `Context.Handlers`와 actor membership lifecycle callback이 Entry Spot catalog에 반영된다 |
-| Entry Spot packet callback concurrency | `integration-single-process` | Entry Spot 일반 packet handler는 user Spot과 같은 등록 표면을 쓰지만 Entry Spot 전체 실행 줄에 직렬화되지 않는다 |
+| Entry Spot packet callback concurrency | `integration-single-process` | Entry Spot 일반 packet handler는 user Spot과 같은 등록 표면을 사용하지만 Entry Spot 전체 실행 줄에 직렬화되지 않는다 |
 | `OnInitializeAsync(...)` handler resolve | `integration-single-process` | spot마다 분리된 DI scope가 정상 동작한다 |
 | `OnClosingAsync(...)` 정상 close callback | `integration-single-process` | `CloseAsync(...)` 호출 시 spot 실행 문맥에서 한 번 호출된다 |
 | `IZLinkSpotContext.CloseAsync(...)` self close | `integration-single-process` | timer/handler 실행 중 현재 Spot 종료를 요청하면 현재 callback 이후 close가 진행되고 manager 조회에서 사라진다 |
@@ -480,7 +480,7 @@ backend gate 와 별도로 유지한다.
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
 | `E2E:SM-B7` | actor join 뒤 stage 역할의 Spot에서 packet이 lifecycle 순서에 맞게 처리된다. |
-| `E2E:SM-E3` | stage tick으로 쓰는 timer가 Spot 종료 뒤 추가 callback을 만들지 않는다. |
+| `E2E:SM-E3` | stage tick으로 사용하는 timer가 Spot 종료 뒤 추가 callback을 만들지 않는다. |
 | `E2E:SM-A5` | application stage wrapper가 Spot request, timer와 lifecycle을 public API로 실행한다. |
 
 ### E2E inventory and aggregate runner

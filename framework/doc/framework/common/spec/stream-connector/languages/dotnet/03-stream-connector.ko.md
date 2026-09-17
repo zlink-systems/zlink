@@ -114,10 +114,10 @@ public interface IZlinkStreamWaitCall
 
 - **`Send`는 reply를 기다리지 않는 one-way 전송이다.** `Async()`의 완료 값에는 전송 결과나
   admission status가 없으며, 비동기 완료와 실패만 전달한다(§6).
-  응답이 필요하면 `Request`를 쓴다.
+  응답이 필요하면 `Request`를 사용한다.
 - **`Timeout(...)`은 그 operation에만 적용한다.**
 - **`On(...)`은 지속적인 push handler, `WaitFor(...)`는 한 번성 대기**다. production의 push 처리는
-  `On(...)`, sample·CLI·E2E의 대기는 `WaitFor(...)`를 쓴다.
+  `On(...)`, sample·CLI·E2E의 대기는 `WaitFor(...)`를 사용한다.
 - **`Metadata`는 전송 시점에 불변 snapshot으로 복사된다.**
 
 ## 5. Typed 표면

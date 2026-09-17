@@ -254,7 +254,7 @@ request로 호출하는 메시지는 업무 이름이 `Changed`, `Accepted`, `Cr
 `Command`, `Result`, `Ack` 같은 접미어는 샘플의 wire message 이름으로 새로 늘리지
 않는다. 이런 이름은 내부 도메인 event, 업무 명령, 처리 결과, transport 응답을 서로 섞어 보이게
 할 수 있다. 이미 존재하는 샘플 메시지를 손볼 때도 호출 방식 기준으로 위 표의 접미어 중 하나로
-정리한다. `Event`는 **publish 호출에만** 쓴다 — request나 send로 보내는 메시지에 `Event`를
+정리한다. `Event`는 **publish 호출에만** 사용한다 — request나 send로 보내는 메시지에 `Event`를
 붙이지 않는다.
 
 이 규칙은 stream, channel, actor, Spot 경계를 실제로 넘나드는 ZLink wire message에
@@ -284,15 +284,15 @@ operation의 reply는 Framework가 정의한 생성 결과이므로 sample 전�
 
 | terminator | 실행 줄 | 언제 |
 |---|---|---|
-| `submit` | 그대로 진행(one-way) | 응답을 쓰지 않는다 |
+| `submit` | 그대로 진행(one-way) | 응답을 사용하지 않는다 |
 | **`async`**(기본) | **turn을 유지한다** | 대기 결과로 **이 spot의 상태를 판단·변경**한다. handler = 하나의 turn |
 | **`yield`**(opt-in) | **turn을 반납한다** | 대기가 **이 spot의 공유 상태와 무관**하다. 그 대기로 spot 전체가 멈추면 안 된다 |
 
 기준은 하나다 — **그 대기가 이 spot의 공유 상태와 관련이 있는가.** `yield`는 편의가 아니라
 **직렬 실행의 이점을 지키면서 무관한 대기만 빼내는** 도구다. 그래서 기본은 `async`이고 `yield`는
-근거가 있을 때만 쓴다.
+근거가 있을 때만 사용한다.
 
-`yield`를 쓰는 자리는 **`yield` 앞뒤로 같은 mutable state를 이어서 판단하지 않는다.** 양보 중에
+`yield`를 사용하는 자리는 **`yield` 앞뒤로 같은 mutable state를 이어서 판단하지 않는다.** 양보 중에
 다른 메시지가 먼저 처리될 수 있으므로, 재개 후에는 필요한 상태를 다시 확인한다.
 
 샘플의 기준 사용처는 아래와 같다.
@@ -305,7 +305,7 @@ operation의 reply는 Framework가 정의한 생성 결과이므로 sample 전�
 | TicTacToe | game join이 게임 상태 흐름으로 바로 이어진다 | `async` |
 
 **worker와 HTTP client도 같은 축이다**([04 §1.2](../spec/server/01-execution/README.ko.md),
-[12 §3](../spec/http-client/12-http-client.ko.md)). 외부 HTTP·레거시 API는 HTTP client의 terminator를 직접 쓰고,
+[12 §3](../spec/http-client/12-http-client.ko.md)). 외부 HTTP·레거시 API는 HTTP client의 terminator를 직접 사용하고,
 DB 드라이버·외부 SDK처럼 자체 terminator가 없는 비동기 대기는 `RunIoWorker(...)`로 감싼다. CPU
 작업은 `RunCpuWorker(...)`로 넘긴다.
 
@@ -318,7 +318,7 @@ DTO를 직접 받는다. Status나 header를 검증해야 할 때만 typed respo
 
 Bingo와 TicTacToe는 각자 맡은 기능을 보여 주는 예외 샘플이다. Bingo는 Protobuf
 payload, 두 RouteMesh로 분리한 matchmaking·gameplay 배치 pool과 location store 기반
-gateway를 보여 주고, TicTacToe는 수동 endpoint와 공식 Location Store를 함께 쓰는
+gateway를 보여 주고, TicTacToe는 수동 endpoint와 공식 Location Store를 함께 사용하는
 scale-out 흐름을 보여 준다.
 
 그 밖의 정본 샘플(SupportChat, DeliveryDispatch, ShoppingMall, GameQuest)은
@@ -370,8 +370,8 @@ scale-out 흐름을 보여 준다.
 TicTacToe, SupportChat 같은 서로 다른 샘플이 logging 설정 helper를 공유하지 않는다. 샘플은 독립적으로
 읽고 옮길 수 있어야 하며, logging 설정이 다른 샘플의 디렉토리에 의존하면 그 기준이 깨진다.
 
-로그 출력은 새 logging 체계를 만들지 않고 각 샘플이 이미 쓰는 logger를 따른다.
-파일 로그를 이미 직접 쓰는 샘플은 그 파일 logger에 기록하고, 실행 스크립트가
+로그 출력은 새 logging 체계를 만들지 않고 각 샘플이 이미 사용하는 logger를 따른다.
+파일 로그를 이미 직접 사용하는 샘플은 그 파일 logger에 기록하고, 실행 스크립트가
 stdout/stderr를 `logs/*.log`로 저장하는 샘플은 그 샘플의 console logger에 기록하면 된다.
 Trace attribute는 [Message flow tracing](../spec/server/06-observability/03-message-flow-tracing.ko.md)의 정확한 snake_case 이름과
 포함 조건을 따른다. `surface`, `message_kind`, `outcome`은 message-flow 기록에 포함하고, 원인이 있을 때
@@ -467,13 +467,13 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
   생명주기를 소유하면 안 된다.
 - Docker Redis를 만들지 못하면 runner는 즉시 실패한다. host Redis나 다른 실행의 endpoint로
   자동 전환해서 성공 처리하면 안 된다.
-- Redis container 시작은 모든 언어에서 같은 순서를 쓴다.
+- Redis container 시작은 모든 언어에서 같은 순서를 사용한다.
   언어별 Redis 구간에서 OS bind가 가능한 `<redis-port>`를 고른 뒤
   `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1:<redis-port>:6379 <pinned-redis-image>`로
   container를 만든다. `docker start <container-id>`로 시작한 뒤 `docker inspect`로 실행 상태와
   publish된 host port가 선택값과 같은지 확인한다. Bind conflict가 발생하면 해당 시도의
   container만 제거하고 같은 구간의 다른 port로 재시도한다. `docker run -d` 출력에 의존해
-  container id와 port를 동시에 처리하는 방식은 쓰지 않는다.
+  container id와 port를 동시에 처리하는 방식은 사용하지 않는다.
 - sample Redis 데이터는 실행 중에만 필요하므로 Docker volume을 만들지 않는다. Redis 이미지가
   선언한 `/data` volume은 `--tmpfs /data`로 덮어쓰고, container 정리에는 `docker rm -fv`를
   사용한다. 이렇게 해야 반복 실행 후 anonymous volume이 남지 않는다.
@@ -493,7 +493,7 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
 - 통합 sample runner는 특정 sample 리스트만 실행할 수 있어야 한다. 인자가 없으면 모든 sample을
   실행하고, 인자가 있으면 지정한 sample runner만 순차 실행한다. 예:
   `./run_samples.sh Bingo SupportChat` 또는 언어별 경로를 구분해야 하는 runner에서는
-  `./run_samples.sh java/Bingo kotlin/SupportChat`처럼 쓴다. 통합 runner는 sample 내부 절차를
+  `./run_samples.sh java/Bingo kotlin/SupportChat`처럼 사용한다. 통합 runner는 sample 내부 절차를
   재구현하지 않고 선택한 개별 `run_sample.*`만 호출한다.
 - 통합 sample runner는 sample별 내부 동작을 다시 구현하지 않는다. 각 시도에서는 선택한 개별
   `run_sample.*`를 호출하고 최종 결과만 관리한다. Redis endpoint 생성,
@@ -501,7 +501,7 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
 - Redis host port는 언어별 Redis 구간 안에서 실행할 때마다 선택한다. Runner는 OS bind로
   사용 가능 여부를 확인한 뒤 그 port를 Docker에 명시하고, `inspect` 결과가 선택값과 같은지
   확인해서 애플리케이션 설정에 전달한다. Redis key prefix도 실행마다 고유하게 만든다.
-- 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 쓰지 않는다. 새
+- 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 사용하지 않는다. 새
   Docker Redis container를 만들고 해당 실행에 배정된 언어별 Redis port를 사용해야 테스트 간섭을
   막을 수 있다.
 - Redis container 생성은 오래 걸릴 수 있으므로 Docker 명령 자체에는 짧은 timeout을 두고,
@@ -546,7 +546,7 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
 - 클라이언트에서 실제 서버에 접속해 request, push, final state를 확인하는 흐름은
   `ClientScenario` 이름으로 둔다. 예를 들어 `BingoClientScenario`처럼 샘플 이름과
   client scenario 역할이 함께 드러나야 한다. `TestScenario`는 별도 테스트 fixture로
-  오해될 수 있으므로 샘플 client 실행 흐름의 이름으로 쓰지 않는다.
+  오해될 수 있으므로 샘플 client 실행 흐름의 이름으로 사용하지 않는다.
 - 공통 문서의 메시지 계약은 언어 중립 schema로 읽는다. 언어별 샘플은 record,
   class, struct, interface, type alias처럼 자기 언어에 맞는 표현으로 같은 필드와
   의미를 구현한다.
@@ -561,7 +561,7 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
   터진다. 문서가 `Field?`로 표시한 것만 nullable이고, 표시 없는 필드는 항상 실린다.
 - channel, route, stream, actor, Spot 경계를 넘는 wire message는 이름 있는 계약으로
   둔다. Python `dict` 나 Node.js object literal 처럼 동적 객체를 쉽게 만들 수 있는
-  언어에서도 호출 지점에 `{ ... }` 를 바로 쓰거나 packet name 문자열을 흩어 놓지
+  언어에서도 호출 지점에 `{ ... }` 를 바로 사용하거나 packet name 문자열을 흩어 놓지
   않는다. 요청, 응답, 알림 payload는 `Shared/Contracts` 같은 공용 계약 위치에
   message type 또는 schema로 두고, client와 server는 그 객체의 public interface만
   사용해야 한다.
@@ -569,12 +569,12 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
   JSON, MessagePack, Protobuf 중 어떤 codec을 쓰더라도 샘플 코드는 connector와
   message 객체가 제공하는 public interface를 직접 사용해야 한다. connector 전용 codec
   package나 bindings codec package를 샘플의 표준 사용법으로 안내하지 않는다.
-- inline object literal은 한 함수 안에서만 쓰는 local state, 테스트 보조 값, 파싱 결과처럼
+- inline object literal은 한 함수 안에서만 사용하는 local state, 테스트 보조 값, 파싱 결과처럼
   wire 계약이 아닌 값에만 사용한다. 샘플은 짧은 데모보다 여러 언어에서 같은 메시지
   흐름을 비교할 수 있는 가시성을 우선한다.
 - Bingo와 TicTacToe는 같은 기능을 반복해서 보여 주지 않는다. Bingo는 두 RouteMesh로 분리한
   matchmaking·gameplay 배치 pool과 공유 Location Store를 이용한 gateway 구조를, TicTacToe는
-  수동 endpoint와 공식 Location Store를 함께 쓰는 scale-out 구조를 맡는다.
+  수동 endpoint와 공식 Location Store를 함께 사용하는 scale-out 구조를 맡는다.
 - codec 선택은 샘플의 역할을 방해하지 않도록 단순하게 둔다. Bingo는 여러 언어가 공유하는
   schema가 분명한 Protobuf payload를 맡고, TicTacToe와 나머지 샘플은 읽고 비교하기 쉬운
   JSON payload를 기본으로 둔다. Bingo의 Protobuf 사용도 업무 API 차이가 아니라 dependency와

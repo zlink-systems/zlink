@@ -9,7 +9,7 @@
 functional interface를 다룬다. 모든 socket의
 `send`/`publish`/`request`/`reply`는 Messaging category에 문서화된
 operation-builder family를 반환한다 — 이 category는 각 builder가 어디서
-시작하고 각 socket type이 고유하게 무엇을 더하는지만 다룬다. dotnet과 달리
+시작하고 각 socket type이 고유하게 무엇을 추가하는지만 다룬다. dotnet과 달리
 **공유 `IConnectableSocket` 계층이 없다** — `bind`/`connect`/`unbind`/
 `disconnect`/`disconnectRid`는 하나의 공유 connectable-socket tier에서
 상속되는 게 아니라 각 구체 socket interface에 독립적으로 재선언된다. 정확한
@@ -100,7 +100,7 @@ socket.options().submitRetryMode(SubmitRetryMode.LOCAL_FAILURE);
 
 **선택 기준.** 기본값이 배포 환경에 맞지 않을 때 socket이 메시지 교환을
 시작하기 전에 `sendHwm`/`recvHwm`, `linger`를 설정한다. package-private
-option은 application 코드에서 쓸 수 없는 것으로 취급한다 — 이 레퍼런스의
+option은 application 코드에서 사용할 수 없는 것으로 취급한다 — 이 레퍼런스의
 범위 밖인 스펙 차원의 질문이지 우회할 대상이 아니다.
 
 ---
@@ -130,7 +130,7 @@ try (PairSocket pair = context.createPairSocket()) {
 **Completion result.** `recv`는 `boolean`을 반환한다 — `RecvFlags.DONT_WAIT`가
 설정되고 메시지가 없을 때만 `false`다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer 라우팅이
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer 라우팅이
 없고 load-balance하지 않는다.
 
 ---
@@ -146,7 +146,7 @@ try (DealerSocket dealer = context.createDealerSocket()) {
 }
 ```
 
-**Options.** `Socket`의 공유 표면에 다음을 더한다:
+**Options.** `Socket`의 공유 표면에 다음을 추가한다:
 
 | Member | 의미 |
 | --- | --- |
@@ -178,7 +178,7 @@ try (RouterSocket router = context.createRouterSocket()) {
 }
 ```
 
-**Options.** `Socket`의 공유 표면에 다음을 더한다:
+**Options.** `Socket`의 공유 표면에 다음을 추가한다:
 
 | Member | 의미 |
 | --- | --- |
@@ -196,7 +196,7 @@ try (RouterSocket router = context.createRouterSocket()) {
 completion queue에서 settle되고 caller가 반환 reply message를 close한다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(peerRid)`/`reply(rid, replyToken)`을 쓴다. Token은 receive에서
+응답 request/reply엔 `request(peerRid)`/`reply(rid, replyToken)`을 사용한다. Token은 receive에서
 얻고 합성하거나 재사용하지 않는다.
 
 ---
@@ -232,7 +232,7 @@ try (XPubSocket xpub = context.createXPubSocket()) {
 
 **선택 기준.** `receiveSubscriptionEvent`로 구독자 변동을 관찰하거나
 `PubSocketOptions.manual()`/`approveSubscribe`/`rejectSubscribe`로 수동
-admission을 하려면 특별히 `XPubSocket`을 쓴다. 그 외엔 publish 자체는 둘이
+admission을 하려면 특별히 `XPubSocket`을 사용한다. 그 외엔 publish 자체는 둘이
 같게 동작한다.
 
 ---
@@ -267,14 +267,14 @@ try (SubSocket sub = context.createSubSocket()) {
 **Completion result.** `subscribe`는 위 `recv`와 같은 관례로 `boolean`을
 반환한다.
 
-**선택 기준.** 일반적인 경우엔 `SubSocket`을 쓴다. 구독을 일반 메시지로
-실어 날라야 할 때만 특별히 `XSubSocket`을 쓴다.
+**선택 기준.** 일반적인 경우엔 `SubSocket`을 사용한다. 구독을 일반 메시지로
+실어 날라야 할 때만 특별히 `XSubSocket`을 사용한다.
 
 ---
 
 ## `StreamSocket`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP peer와
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와
 framed packet을 직접 주고받는다.
 
 ```java

@@ -21,7 +21,7 @@
 `zlink::http_client`는 C++에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
 JSON 전용 client가 아니라 일반 HTTP client이며 zlink의 call object와 fluent builder
 스타일로 낮은 수준 타입과 설정의 복잡성을 흡수한다. typed JSON 경로
-(`body(dto)`/`submit<T>()`/`fetch<T>()`)는 그 위에 얹은 편의 계층이다.
+(`body(dto)`/`submit<T>()`/`fetch<T>()`)는 그 위에 더해진 편의 계층이다.
 
 `zlink::http_client`는 `zlink::framework` target을 public dependency로 사용한다.
 Framework 공용 오류·codec 계약을 소비하는 방향은
@@ -111,7 +111,7 @@ pointer가 아니라) 값으로 보유하므로, on-demand로 만든 client와 �
 
 `submit<T>()`의 결과는 `result_t<http_response_t<T>>`다. 즉 성공/실패 래퍼와 HTTP 봉투
 (`status`/`headers`/`body`)를 거쳐 `.value().body`로 typed DTO에 닿는다. typed body만
-바로 필요한 경우에는 `fetch<T>()`를 쓴다. `fetch<T>()`는 result와 봉투를 풀어 DTO를 직접
+바로 필요한 경우에는 `fetch<T>()`를 사용한다. `fetch<T>()`는 result와 봉투를 풀어 DTO를 직접
 반환하고 실패는 예외로 던진다.
 
 ```cpp
@@ -122,7 +122,7 @@ auto created = zlink::http_client::client_t::create(topology.api_http_endpoint)
 ```
 
 `fetch<T>()`는 결과를 blocking으로 기다린다. 따라서 테스트와 client 시나리오처럼 blocking이
-허용되는 곳에서 쓴다. runtime/handler 코드는 runtime thread를 막지 않도록 `submit<T>()`를
+허용되는 곳에서 사용한다. runtime/handler 코드는 runtime thread를 막지 않도록 `submit<T>()`를
 `co_await`한다.
 
 일반 HTTP client 기능은 아래 범위를 지원한다.
@@ -138,7 +138,7 @@ auto created = zlink::http_client::client_t::create(topology.api_http_endpoint)
   proxy Basic(`proxy_basic_auth`), mTLS client certificate(`client_certificate_file`)
 - connection keep-alive pool: 같은 origin(+proxy)의 idle 연결을 재사용한다. 서버가
   연결을 닫았으면(stale) fresh 연결로 1회 자동 재시도한다. `body_stream` request는
-  provider를 되감을 수 없으므로 항상 fresh 연결을 쓴다.
+  provider를 되감을 수 없으므로 항상 fresh 연결을 사용한다.
 - coroutine scheduler: 설정하지 않은 client는 기존 blocking submit 의미를 유지한다.
   `.coroutines()`를 명시하면 HTTP 작업을 내부 scheduler에 등록하고 custom scheduler를
   주입하면 HTTP 실행 위치와 continuation resume 위치를 분리할 수 있다.
@@ -229,7 +229,7 @@ auto client = zlink::http_client::client_t::create("https://matchmaking.internal
 ```
 
 HTTP 작업 실행 위치와 resume 위치를 모두 caller가 정해야 하면
-`.coroutines(execute_scheduler, resume_scheduler)`를 쓴다.
+`.coroutines(execute_scheduler, resume_scheduler)`를 사용한다.
 
 | client 설정 | `submit<T>()` 실행 의미 |
 |-------------|-------------------------|
@@ -309,7 +309,7 @@ HTTP handler e2e 테스트는 외부 HTTP 도구나 sample-local client가 아�
 - 인증: `basic_auth`/`bearer_token`이 `Authorization` 헤더로 실리고 mTLS 서버는
   `client_certificate_file` 설정 시에만 handshake가 성공한다
 - keep-alive: 같은 client의 연속 request가 단일 connection을 재사용한다
-- request timeout override: request 단위 `timeout(...)`이 client 기본값을 덮어쓴다
+- request timeout override: request 단위 `timeout(...)`이 client 기본값을 덮어사용한다
 - HTTP status mapping: `400`, `404`, `500` 응답이 client result/error kind로 고정된다
 - timeout: 응답 지연은 timeout error로 닫힌다
 - fluent input validation: 잘못된 base URL, path, header name, timeout은

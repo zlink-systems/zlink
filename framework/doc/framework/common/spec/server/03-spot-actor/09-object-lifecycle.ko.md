@@ -151,9 +151,9 @@ owner 정보는 캐시되므로, 보내는 쪽이 아는 owner가 이미 바뀌�
 **걸러내는 기준은 owner 신원과 유효 기간이다. 객체 세대가 아니다.**
 
 [ObjectGeneration](../00-foundation/02-glossary.ko.md#objectgeneration)은 일반 message의 대상
-조건이 **아니다**([Spot·Actor routing 「2.6 ObjectGeneration을 어디에 쓰고 어디에 쓰지 않는가」](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)).
+조건이 **아니다**([Spot·Actor routing 「2.6 ObjectGeneration을 어디에 사용하고 어디에 사용하지 않는가」](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)).
 객체 세대까지 일반 message의 조건으로 검사하면, 객체가 다시 만들어진 직후 정상
-message가 전부 거절된다. 객체 세대는 lifecycle 변경과 이동 중계를 걸러낼 때 쓴다.
+message가 전부 거절된다. 객체 세대는 lifecycle 변경과 이동 중계를 걸러낼 때 사용한다.
 
 | 검사 대상 | 무엇을 거른다 |
 |---|---|
@@ -183,9 +183,9 @@ Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 �
 
 ## 5. 활성 객체를 언제 정리하고 무엇으로 막는가
 
-### 쓰지 않고 남아 있는 Instance Spot만 정리 대상으로 한다
+### 사용하지 않고 남아 있는 Instance Spot만 정리 대상으로 한다
 
-쓰지 않고 남아 있는 상태를 정리하는 책임은 runtime 내부 object catalog가 소유한다.
+사용하지 않고 남아 있는 상태를 정리하는 책임은 runtime 내부 object catalog가 소유한다.
 .NET mapping에서는 이 owner의 이름이 `ZLinkSpotNodeCatalog`다. 설정된
 `InstanceSpotIdleTimeout`이 양수이면 catalog가 주기적으로 후보를 검사한다. 한 번의
 검사에서 최대 64개만 확인하고 마지막 검사 위치를 다음 주기에 이어서 사용하므로, Spot
@@ -222,7 +222,7 @@ Resolver는 idle cleanup이 authority release를 완료한 결과와 owner avail
 동작과 새 활성화를 서로 다른 판단으로 두면, 이미 해당 node를 가리키는 요청이 상한을
 우회할 수 있다.
 
-**상한은 두 지점에서 쓴다.**
+**상한은 두 지점에서 사용한다.**
 
 | 지점 | 하는 일 |
 |---|---|
@@ -245,7 +245,7 @@ Instance Spot 한정으로 추가했다([Spot 모델](01-spot-model.ko.md)). Use
 
 **Framework는 정리할 때 application 상태를 보존하지 않는다.** 유지해야 하는
 상태는 application이 종료 callback에서 직접 저장한다
-([Spot 모델 「6.2 쓰지 않고 남아 있는 Instance Spot 정리」](01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)). Framework가 상태를 대신 저장하려면 무엇을
+([Spot 모델 「6.2 사용하지 않고 남아 있는 Instance Spot 정리」](01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)). Framework가 상태를 대신 저장하려면 무엇을
 저장할지 알아야 하고, 그것은 application의 몫이다.
 
 ## 6. 메모리 회계를 어느 단위로 하는가
@@ -294,7 +294,7 @@ pre-start terminal lease cleanup은 [Payload 소유권](../01-execution/05-paylo
 - 여러 caller가 동시에 같은 객체 생성을 요청해도 factory는 한 번만 실행되고, 나머지 caller는
   그 결과로 만들어진 객체를 대상으로 삼는다.
 - 생성이 끝난 직후에 보낸 message는 캐시 수명만큼 지연되지 않고 곧바로 처리된다.
-- Owner를 쓸 수 없다는 것만 확인된 경우(`Unavailable`)에는 새 생성을 시작하지 않으며, 그 결과는
+- Owner를 사용할 수 없다는 것만 확인된 경우(`Unavailable`)에는 새 생성을 시작하지 않으며, 그 결과는
   진행 중인 요청의 terminal completion으로만 전달된다.
 
 **낡은 owner 필터링**
@@ -306,7 +306,7 @@ pre-start terminal lease cleanup은 [Payload 소유권](../01-execution/05-paylo
 
 - 활성 객체 수가 상한에 도달하면 그 node에서 새 활성화가 거절된다.
 - 정리 대상은 Instance Spot으로 한정된다 — Entry Spot과 User Spot은 정리되지 않는다.
-- 진행 중인 작업이 있는 Instance Spot은 쓰지 않은 시간이 지나도 정리되지 않는다.
+- 진행 중인 작업이 있는 Instance Spot은 사용하지 않은 시간이 지나도 정리되지 않는다.
 - 정리될 때 `IdleEvicted` 종료 사유로 closing callback이 호출된다.
 
 **실행 대기열**

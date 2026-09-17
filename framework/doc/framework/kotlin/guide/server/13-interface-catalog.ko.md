@@ -17,7 +17,7 @@ Java 장을 먼저 본다. 여기 없는 이름은 전부 Java와 같다.
 ## 1. suspend handler 계약
 
 Java handler는 `CompletionStage`를 돌려주고, Kotlin 짝은 `suspend`다. **둘 중 아무거나
-구현해도 되고 한 프로젝트에 섞어도 된다** — 등록이 어느 계약인지 보고 맞게 부른다.
+구현해도 되고 한 프로젝트에 섞어도 된다** — 등록이 어느 계약인지 보고 맞게 호출한다.
 
 | 받는 것 | Java | Kotlin |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ wrapper가 돌려주는 호출 타입도 Kotlin 짝이다 — `ZLinkKotlinReques
 `ZLinkKotlinMessageSendCall` · `ZLinkKotlinActorCreateCall` ·
 `ZLinkKotlinLifecycleCall` · `ZLinkKotlinBoundSession`이다.
 
-**wrapper는 선택이다.** Java 표면을 그대로 쓰고 §3의 `await()`로 받아도 된다.
+**wrapper는 선택이다.** Java 표면을 그대로 사용하고 §3의 `await()`로 받아도 된다.
 
 ## 3. 확장 함수
 
@@ -76,7 +76,7 @@ wrapper가 없는 자리는 확장 함수가 메운다.
 Spot이나 Actor의 turn 안에서 불러도 그 turn의 직렬 실행 보장을 깨지 않는다.
 
 `kotlinx.coroutines.future.await`도 같은 이름이라 import 하나 차이로 바뀐다. turn 안에서
-쓰는 코드라면 어느 쪽을 import했는지 확인한다.
+사용하는 코드라면 어느 쪽을 import했는지 확인한다.
 
 ```kotlin
 import systems.zlink.framework.kotlin.await   // turn을 아는 쪽

@@ -1,0 +1,151 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "event 하나에 코루틴 하나, 스레드는 풀이 나눠 쓴다",
+    "subtitle": "co_await에 닿으면 스레드를 놓고, 응답이 오면 그 자리에서 이어간다",
+    "output": "43-coroutine-pool.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 4,
+    "gapX": 150,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "E0",
+      "type": "external",
+      "label": "message A",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "T0",
+      "type": "backend",
+      "label": "task_t 코루틴 A",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "E1",
+      "type": "external",
+      "label": "timer tick",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "T1",
+      "type": "backend",
+      "label": "task_t 코루틴 T",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "E2",
+      "type": "external",
+      "label": "message B",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "T2",
+      "type": "backend",
+      "label": "task_t 코루틴 B",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "POOL",
+      "type": "messagebus",
+      "label": "worker 스레드 풀",
+      "sublabel": "CPU 코어 수만큼",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "WAIT",
+      "type": "frontend",
+      "label": "대기 중 코루틴",
+      "sublabel": "스레드 점유 0",
+      "row": 1,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SPOT event 마다 코루틴 하나",
+      "wraps": [
+        "E0",
+        "E1",
+        "E2"
+      ],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "from": "E0",
+      "to": "T0",
+      "variant": "default"
+    },
+    {
+      "from": "E1",
+      "to": "T1",
+      "variant": "default"
+    },
+    {
+      "from": "E2",
+      "to": "T2",
+      "variant": "default"
+    },
+    {
+      "from": "T0",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "T1",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "T2",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "POOL",
+      "to": "WAIT",
+      "label": "co_await → suspend",
+      "variant": "dashed"
+    },
+    {
+      "from": "WAIT",
+      "to": "POOL",
+      "label": "응답 도착 → resume",
+      "variant": "dashed",
+      "labelDy": 26
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "코루틴은 스레드가 아니다",
+      "items": [
+        "event마다 코루틴을 하나 만들지만 스레드는 늘지 않는다. 스레드는 CPU 코어 수만큼의 풀이 전부다.",
+        "co_await에 닿은 코루틴은 스레드를 놓는다. 대기하는 동안 점유가 0이므로 대기가 많아도 스레드가 마르지 않는다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

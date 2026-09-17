@@ -76,7 +76,7 @@ ZLinkModule.forRootFactory({
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `listen(endpoint)` · `listen(port?)` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
-| `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소를 나눠 쓸 때 | `configureNetwork()` 값 |
+| `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소를 나눠 사용할 때 | `configureNetwork()` 값 |
 | `routingId(...)` · `setRoutingIdPrefix(string)` | 이 node의 식별자 | 자동 생성 |
 | `objects()` | Object role — spot · actor 배치 | 배치하지 않음 |
 | `channel(name)` | channel 역할 등록 | — |
@@ -102,7 +102,7 @@ ZLinkModule.forRootFactory({
 > `mailboxByteBudget`을 이 config에 두지만 현재 builder 표면에는 없다.
 
 동작 원리와 값을 고르는 기준은
-[4. Backpressure](04-backpressure.ko.md)가 다룬다.
+[Backpressure](33-backpressure.ko.md)가 다룬다.
 `0`은 기본값이 아니라 **무제한**이다.
 
 ### 3.2 CPU worker 풀
@@ -116,7 +116,7 @@ ZLinkModule.forRootFactory({
 | `idleTimeoutMs` | 유휴 스레드를 접는 시간 |
 | `maxQueueLength` | 대기 큐 길이 |
 
-**I/O worker는 이 풀을 쓰지 않는다.** `runIoWorker(...)`는 이벤트 루프에서 돈다.
+**I/O worker는 이 풀을 사용하지 않는다.** `runIoWorker(...)`는 이벤트 루프에서 돈다.
 
 ### 3.3 Core HWM과 Application job queue
 
@@ -135,7 +135,7 @@ job 수를 host instance 전체에서 제한한다.
 Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
 `1..2,147,483,647`이며 `0n`은 unlimited가 아니라 startup configuration error다. 두 profile은
 같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
-[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
+[Backpressure](33-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -185,7 +185,7 @@ factory class를 받는다.** 둘 다 다른 언어와 마찬가지로 class 참
 ## 7. 실행 중 바꿀 수 있는 것
 
 시작 뒤에 바꿀 수 있는 값은 **가중치 둘뿐**이다. `ZLINK_ROUTE_MESH_RUNTIME_OPTIONS`
-토큰으로 주입받아 쓴다.
+토큰으로 주입받아 사용한다.
 
 | 값 | 표면 | 무엇에 쓰나 |
 | --- | --- | --- |
@@ -205,7 +205,7 @@ factory class를 받는다.** 둘 다 다른 언어와 마찬가지로 class 참
 | STREAM node의 `bind` 주소와 session factory | `addStreamNode(...)` |
 | fanout publisher의 endpoint | `addFanoutChannel(...).enablePublisher(...)` |
 | Spot · Actor를 배치할 node의 Object role | `objects().server()` |
-| 여러 node를 쓸 때의 location store | `addLocationStore(...)` |
+| 여러 node를 사용할 때의 location store | `addLocationStore(...)` |
 
 ## 9. 자주 발생하는 문제
 
@@ -213,17 +213,17 @@ factory class를 받는다.** 둘 다 다른 언어와 마찬가지로 class 참
   `return builder.build()`가 있어야 한다.
 - **timeout이 이상하게 짧거나 길다** → 인자가 **밀리초 숫자**다. 초로 착각해 `3`을
   넣으면 3밀리초다.
-- **`setApplicationVersion`에서 타입 오류가 난다** → `bigint`를 받는다. `12n`으로 쓴다.
+- **`setApplicationVersion`에서 타입 오류가 난다** → `bigint`를 받는다. `12n`으로 사용한다.
 - **`0`으로 두었더니 memory가 계속 는다** → high-water mark의 `0`은 무제한이다.
 - **level 값이 안 맞는다** → Node는 lowercase string(`"errors"`)을 사용한다.
 - **`registerSession`이 factory만 받는다고 알고 있었다** → session class를 직접 넘겨도
-  된다. factory class는 연결별로 다른 생성 로직이 필요할 때만 쓴다.
+  된다. factory class는 연결별로 다른 생성 로직이 필요할 때만 사용한다.
 - **가중치를 0으로 했는데 기존 연결이 끊긴다고 생각했다** → 가중치는 **새 배정만** 막는다.
 - **여러 언어 node를 섞었더니 owner 판정이 다르다** → lease 기본값이 언어마다 다르다(§5).
 
 ## 10. 관련 문서
 
 - 정식 계약: [Node.js foundation과 configuration 공개 계약](../../../common/spec/server/languages/node/interfaces/01-foundation-configuration.ko.md)
-- 상한이 무엇을 바꾸는지: [4. Backpressure](04-backpressure.ko.md)
+- 상한이 무엇을 바꾸는지: [Backpressure](33-backpressure.ko.md)
 - 가중치로 트래픽을 빼는 절차: [12. 운영](12-operations.ko.md)
 - 주입 토큰 목록: [13. 주요 interface 사용 색인](13-interface-catalog.ko.md) §1

@@ -204,11 +204,11 @@ Implementing a store yourself is rare. You'll only look at the `ZLinkStore*` /
 | A call returns it | `*Call` · `*Result` · `*Response` · `*Snapshot` |
 
 **Handlers and Spot/Actor/Session aren't beans.** The framework creates them, and only their
-constructor arguments get injected from the Spring container ([2. Getting Started](02-getting-started.en.md) §3).
+constructor arguments get injected from the Spring container ([Quickstart](../../quickstart.en.md) §3).
 
 ## 10. Related Documents
 
 - Exact signatures: [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.en.md)
-- Registration entry point: [2. Getting Started](02-getting-started.en.md)
+- Registration entry point: [Quickstart](../../quickstart.en.md)
 - Options and defaults: [16. Options](16-options.en.md)
-- Observation surfaces: [11. Monitoring](11-monitoring.en.md)
+- Observation surfaces: [Monitoring](26-monitoring.en.md)

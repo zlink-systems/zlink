@@ -49,6 +49,6 @@ Leaderboard board = ZLinkHttpClient.create("http://127.0.0.1:18080")
 ```
 
 `fetch(Type)`는 결과를 기다려 typed body를 돌려주고 실패를 예외로 던진다. handler
-스레드에서는 쓰지 않는다([7장](07-async.ko.md)).
+스레드에서는 사용하지 않는다([7장](07-async.ko.md)).
 
 [다음: Client 구성 →](03-client-configuration.ko.md)

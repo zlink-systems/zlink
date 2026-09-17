@@ -6,7 +6,7 @@
 
 ## non-blocking 보장
 
-`java.net.http.HttpClient.sendAsync`는 NIO selector 기반 비동기 I/O를 쓴다. 따라서 응답을
+`java.net.http.HttpClient.sendAsync`는 NIO selector 기반 비동기 I/O를 사용한다. 따라서 응답을
 기다리는 동안 **호출 스레드는 park되지 않는다.** 런타임의 비동기 I/O가 이를 제공하므로
 별도의 worker scheduler가 필요 없다.
 래퍼의 redirect 루프·retry 루프도 `CompletionStage` 체인으로 합성되어 hop 사이에 스레드를
@@ -31,7 +31,7 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
 ## handler 규칙 — `.get()`/`.join()` 금지
 
 > **framework handler 스레드에서는 `CompletionStage` 합성(`thenCompose`/`thenApply`/
-> `thenAccept`)만 쓰고 `.get()`/`.join()`은 쓰지 않는다.** 이 repo의 java
+> `thenAccept`)만 사용하고 `.get()`/`.join()`은 사용하지 않는다.** 이 repo의 java
 > `await`/`join`은 blocking이라 handler 스레드를 막는다.
 
 | 호출 위치 | 권장 |

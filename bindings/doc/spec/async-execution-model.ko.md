@@ -38,7 +38,7 @@ API가 결과를 돌려주는 시점과 그 API를 실행하는 환경은 서로
 
 가상 thread나 goroutine에서 blocking API를 호출해도 그 API 자체는 동기 호출이다. 반대로
 awaitable을 OS thread에서 기다려도 public terminal은 비동기다. `coroutine`은 실제 coroutine
-기능을 가리킬 때만 쓰고, 모든 비동기 실행 방식을 대표하는 말로 쓰지 않는다.
+기능을 가리킬 때만 사용하고, 모든 비동기 실행 방식을 대표하는 말로 사용하지 않는다.
 
 ## 3. Awaitable과 동기 결과
 

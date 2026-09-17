@@ -560,7 +560,7 @@ control transaction은 deadline까지 진행한다.
   non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
   때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
   보내지 않는다.
-- **각 attempt는 남은 deadline 전부를 쓰고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
+- **각 attempt는 남은 deadline 전부를 사용하고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
   한 번도 admission되지 못한 채 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
   `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다. 중복
   실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
@@ -569,7 +569,7 @@ control transaction은 deadline까지 진행한다.
   logical owner(Location·auto-connect 소유자)가 target node의
   [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)를 제거했고 그
   node에 admitted peer가 남아 있지 않다는 사실이며([MeshNode §7.1](03-mesh-node.ko.md#71-peer-연결)),
-  이때 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)의
+  이때 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)의
   "owner process 종료"대로 operation을 즉시 `Unavailable`로 끝낸다. Transport 단절이나 peer
   부재 단독은 재연결로 회복될 수 있으므로 replay를 계속한다. Sender는 이 판정을 위해 별도
   상태·timer·monitor를 두지 않고 이미 존재하는 intent 제거 전이를 조회한다 — 판정 주체가

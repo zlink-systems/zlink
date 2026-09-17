@@ -1,0 +1,103 @@
+{
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "While one handler is suspended, the worker runs another",
+    "subtitle": "Handler A releases the thread at co_await, the worker finishes B, and A resumes when the reply arrives",
+    "column_fit": "spread",
+    "viewBox": [
+      1040,
+      680
+    ],
+    "output": "43-suspend-resume-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "W",
+      "type": "messagebus",
+      "label": "worker thread"
+    },
+    {
+      "id": "H1",
+      "type": "backend",
+      "label": "handler A",
+      "sublabel": "coroutine"
+    },
+    {
+      "id": "CH",
+      "type": "external",
+      "label": "Play channel"
+    },
+    {
+      "id": "H2",
+      "type": "backend",
+      "label": "handler B",
+      "sublabel": "coroutine"
+    }
+  ],
+  "messages": [
+    {
+      "from": "W",
+      "to": "H1",
+      "y": 160,
+      "label": "handle() runs",
+      "variant": "default"
+    },
+    {
+      "from": "H1",
+      "to": "CH",
+      "y": 220,
+      "label": "co_await request(...).async() → suspend, thread released",
+      "variant": "default"
+    },
+    {
+      "from": "W",
+      "to": "H2",
+      "y": 300,
+      "label": "the worker moves on at once — handle() runs",
+      "variant": "default"
+    },
+    {
+      "from": "H2",
+      "to": "W",
+      "y": 360,
+      "label": "co_return (done)",
+      "variant": "return"
+    },
+    {
+      "from": "CH",
+      "to": "H1",
+      "y": 420,
+      "label": "reply arrives → resume",
+      "variant": "return"
+    },
+    {
+      "from": "H1",
+      "to": "W",
+      "y": 480,
+      "label": "co_return (done)",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Suspending stops only that flow",
+      "items": [
+        "When handler A suspends at co_await, only that flow stops; the thread returns to the pool and nothing is held.",
+        "The worker picks up the next item and runs B, which finishes before A's reply arrives."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Blocking undoes this",
+      "items": [
+        "When the reply lands, A resumes in place and co_returns — which is how a handful of workers absorb many concurrent requests.",
+        "A blocking wait inside a handler pins its thread for the duration, so it is not allowed."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Spot은 등록한 node 중 한 곳에 만들어진다",
+    "subtitle": "만든 곳은 Framework가 고르고 Location Store에 적힌다 · 그 뒤로는 id로만 부른다",
+    "output": "21-spot-placement.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "호출 node",
+      "sublabel": "id만 안다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "후보 중 하나를 고른다",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "어느 node에 있는지",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "같은 stable type을 등록했다",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "R"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "FW",
+      "label": "만들어 달라",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "R",
+      "label": "여기 만든다",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "B",
+      "label": "후보였다",
+      "variant": "dashed"
+    },
+    {
+      "from": "FW",
+      "to": "S",
+      "label": "위치를 적는다",
+      "variant": "default",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "만드는 쪽도 부르는 쪽도 node를 고르지 않는다",
+      "items": [
+        "같은 stable type을 등록한 node가 후보다. 그중 어디에 만들지는 Framework가 정하고, 만든 결과로 돌아오는 것은 id 하나다.",
+        "그 뒤의 호출은 id만 준다. Framework가 Location Store에서 지금 어느 node에 있는지 읽어 그곳으로 보낸다."
+      ]
+    }
+  ]
+}

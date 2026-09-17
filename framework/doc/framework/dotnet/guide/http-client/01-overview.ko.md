@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 쓰는 client package다.
+`Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 사용하는 client package다.
 Client 설정과 request 설정을 fluent builder로 구성하며, redirect·cookie·압축·재시도
 정책을 호출부마다 다시 작성하지 않아도 된다.
 
@@ -14,7 +14,7 @@ var profile = await client.Get("/players/7281").Fetch<PlayerProfile>();
 ```
 
 JSON 전용 client가 아니다. 일반 HTTP client이며 typed 경로
-(`Body(dto)` / `Fetch<T>()` / `Async<T>()`)는 그 위에 얹은 편의 계층이다.
+(`Body(dto)` / `Fetch<T>()` / `Async<T>()`)는 그 위에 더해진 편의 계층이다.
 
 ## 사용 원칙
 

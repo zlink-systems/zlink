@@ -32,7 +32,7 @@ try {
 ```
 
 - `create(baseUrl)`로 builder를 시작하고 `.build()`로 client를 만든다.
-- client는 재사용 가능하다. 보통 한 번 만들어 오래 쓴다.
+- client는 재사용 가능하다. 보통 한 번 만들어 오래 사용한다.
 - `close()`로 내부 dispatcher(connection pool)를 정리한다.
 
 ## 한 줄 요청

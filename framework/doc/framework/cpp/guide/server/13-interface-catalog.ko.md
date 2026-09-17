@@ -10,10 +10,10 @@ title: "13. 주요 타입 사용 색인 · C++"
 
 > **이 장의 계약 소유 문서** —
 > [C++ exact interface 목차](../../../common/spec/server/languages/cpp/interfaces/README.ko.md)가
-> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 쓰는 public 타입을
+> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 사용하는 public 타입을
 > 기능별로 찾는 안내서다.
 
-C++ framework의 타입 이름은 `_t` 접미사를 쓴다. **application이 직접 만드는 타입**과
+C++ framework의 타입 이름은 `_t` 접미사를 사용한다. **application이 직접 만드는 타입**과
 **DI로 주입받는 타입**을 구분해 읽으면 빠르다 — 전자는 상속하거나 선언하고, 후자는
 생성자 매개 변수로 받는다.
 
@@ -52,12 +52,12 @@ class place_order_handler_t
 **handler는 class로 만들고 계약을 멤버로 선언한다.** `request_type` · `reply_type` ·
 `topic_name`이 그 계약이다. 반환형이 `task_t<TReply>`면 request, `task_t<void>`면 send다.
 
-Node direct(`request_to_node`)는 특정 MeshNode 자체를 관리할 때만 쓴다. 업무 object는
-ActorId · SpotId · ChannelName으로 부른다.
+Node direct(`request_to_node`)는 특정 MeshNode 자체를 관리할 때만 사용한다. 업무 object는
+ActorId · SpotId · ChannelName으로 호출한다.
 
 ## 2. Topology 등록
 
-시작 단계에서만 쓰는 builder들이다. `app.run ()` 이후에는 없다.
+시작 단계에서만 사용하는 builder들이다. `app.run ()` 이후에는 없다.
 
 | 타입 | 무엇을 등록하나 |
 | --- | --- |
@@ -71,7 +71,7 @@ ActorId · SpotId · ChannelName으로 부른다.
 | `mesh_peer_connections_t` · `endpoint_connections_t` | 수동 peer 연결 |
 | `mesh_node_socket_config_t` | 소켓 상한([16. Options](16-options.ko.md) §3.1) |
 
-`mesh_channel_builder_t`는 `client ()` 또는 `server ()`를 **정확히 한 번** 부른다.
+`mesh_channel_builder_t`는 `client ()` 또는 `server ()`를 **정확히 한 번** 호출한다.
 
 ## 3. Spot
 
@@ -98,11 +98,11 @@ application이 상속해 만드는 타입과 framework가 주는 context가 나�
 **Spot handler는 Spot의 member 함수다.** `configure ()`에서
 `add_handler<&TSpot::method> ()` 형태로 등록한다. 예외가 하나 있다 — **timer만 별도
 handler 타입**을 `add_timer<THandler> ()`로 등록하고, 그 타입의 `handle`이 대상 Spot과
-tick 둘을 받는다([6. Spot](06-spot.ko.md) §6.1).
+tick 둘을 받는다([Spot](21-spot.ko.md) §6.1).
 
 | timer 관련 타입 | 하는 일 |
 | --- | --- |
-| `timer_t` | 등록이 돌려주는 핸들. `cancel ()`에 쓴다 |
+| `timer_t` | 등록이 돌려주는 핸들. `cancel ()`에 사용한다 |
 | `timer_options_t` | overrun 정책과 catch-up 상한 |
 | `timer_tick_t` | tick마다 오는 지연 · 건너뛴 수 등 |
 | `timer_failure_event_t` | tick handler가 실패했을 때 |
@@ -118,14 +118,14 @@ tick 둘을 받는다([6. Spot](06-spot.ko.md) §6.1).
 | `actor_ref_t` · `actor_id_t` | 참조와 식별자 |
 | `actor_factory_t` · `actor_factory_builder_t` | 생성 방법과 등록 정책 |
 | `actor_create_call_t` | 생성 호출 |
-| `actor_create_created_t` · `actor_create_existing_t` · `actor_create_rejected_t` | 생성 결과 세 갈래 |
+| `actor_create_created_t` · `actor_create_existing_t` · `actor_create_rejected_t` | 생성 결과의 세 가지 타입 |
 | `actor_create_response_t` | Entry Spot의 admission 응답 |
 | `actor_join_call_t` | join 예약 |
-| `actor_join_accepted_t` · `actor_join_rejected_t` · `actor_join_failed_t` | join 완료 세 갈래 |
+| `actor_join_accepted_t` · `actor_join_rejected_t` · `actor_join_failed_t` | join 완료의 세 가지 타입 |
 | `actor_relocation_adapter_t<TActor>` | 상태를 담고 푸는 adapter |
 | `session_actor_t` · `session_actor_manager_t` | session에 bind된 Actor |
 
-생성 결과와 join 완료가 각각 **세 갈래 타입**이다. `std::get_if<...>`나 `std::visit`으로
+생성 결과와 join 완료가 각각 **세 가지 타입**이다. `std::get_if<...>`나 `std::visit`으로
 가른다.
 
 ## 5. STREAM session
@@ -143,13 +143,13 @@ tick 둘을 받는다([6. Spot](06-spot.ko.md) §6.1).
 | `stream_snapshot_t` | 상태 조회 |
 
 **C++ session은 handler registry가 아니라 `on_packet` 하나에서 분기한다.** 다른 네
-언어와 모양이 다른 자리다([9. STREAM](09-stream.ko.md)).
+언어와 모양이 다른 자리다([STREAM](23-stream.ko.md)).
 
 ## 6. Location과 relocation
 
 | 타입 | 성격 |
 | --- | --- |
-| `location_store_t` · `relocation_store_t` | 직접 구현하거나 제공 구현을 쓴다 |
+| `location_store_t` · `relocation_store_t` | 직접 구현하거나 제공 구현을 사용한다 |
 | `redis_location_store_t` · `redis_location_options_t` | Redis 구현과 설정 |
 | `redis_relocation_store_t` · `redis_relocation_options_t` | 〃 |
 | `location_options_t` | 동작 값([16. Options](16-options.ko.md) §5) |
@@ -172,7 +172,7 @@ store를 직접 구현할 일은 드물다. `store_*` · `blob_*` 계열은 그�
 | `framework_exception_t` | 실패. `kind ()` · `is_retriable ()` |
 | `logger_t<TOwner>` | DI로 받는 로거 |
 
-관측 표면의 사용법은 [11. Monitoring](11-monitoring.ko.md)이 다룬다.
+관측 표면의 사용법은 [모니터링](26-monitoring.ko.md)이 다룬다.
 
 ## 8. 어디서 오는가
 
@@ -184,11 +184,11 @@ store를 직접 구현할 일은 드물다. `store_*` · `blob_*` 계열은 그�
 | 시작 단계 builder가 돌려준다 | `mesh_node_builder_t` 계열 · `stream_node_options_builder_t` |
 | 호출이 돌려준다 | `*_call_t` · `*_result_t` · `*_ref_t` |
 
-DI 주입 규칙은 [18. DI 컨테이너](18-di-container.ko.md)가 다룬다.
+DI 주입 규칙은 [18. DI 컨테이너](40-di-container.ko.md)가 다룬다.
 
 ## 9. 관련 문서
 
 - 정확한 signature: [C++ exact interface 목차](../../../common/spec/server/languages/cpp/interfaces/README.ko.md)
-- 실행 모델과 `task_t` · `result_t`: [21. 실행·구성 모델](21-execution-model.ko.md)
+- 실행 모델과 `task_t` · `result_t`: [21. 실행·구성 모델](43-execution-model.ko.md)
 - 옵션과 기본값: [16. Options](16-options.ko.md)
-- 관측 표면: [11. Monitoring](11-monitoring.ko.md)
+- 관측 표면: [모니터링](26-monitoring.ko.md)

@@ -70,6 +70,9 @@ class PlayServerApplication {
             node.channelName(SampleNames.RoomRewardChannel).server()
             node.objects().server()
                 .addEntrySpot(BingoEntrySpot::class.java)
+                // --8<-- [start:doc-execution-mode]
+                // SPOT_WIDE is the default. Naming it here keeps the choice visible:
+                // every callback of this room runs through one gate.
                 .addSpotFactory(
                     SampleNames.RoomSpotType,
                     BingoRoomSpot::class.java,
@@ -80,6 +83,7 @@ class PlayServerApplication {
                     )
                     factory.preserveStateWith(BingoRoomRelocationAdapter::class.java)
                 }
+                // --8<-- [end:doc-execution-mode]
                 .addActorFactory(
                     SampleNames.PlayerActorType,
                     PlayerActor::class.java,

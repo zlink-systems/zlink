@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ClientServer — 호출은 한 방향이다",
+    "subtitle": "server만 주소를 공개 · 연결도 client가 시작",
+    "output": "20-clientserver-oneway.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 170,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "node A",
+      "sublabel": "client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "server :7211",
+      "row": 0,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "연결 시작 · 호출",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "역방향 업무 호출이 없다",
+      "items": [
+        "server는 client를 대상으로 새 호출을 시작하지 않는다. client가 받는 것은 자신이 보낸 request의 응답뿐이다."
+      ]
+    }
+  ]
+}

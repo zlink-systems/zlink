@@ -16,7 +16,7 @@ auto registry = zlink::http_client::client_t::create ("https://registry.example.
 ## Bearer 토큰
 
 `bearer_token(token)`이 `Authorization: Bearer <token>`을 싣는다. OAuth/JWT
-기반 API에 쓴다.
+기반 API에 사용한다.
 
 ```cpp
 auto api = zlink::http_client::client_t::create ("https://game-api.example.internal")
@@ -25,7 +25,7 @@ auto api = zlink::http_client::client_t::create ("https://game-api.example.inter
 ```
 
 토큰이 만료로 갱신되는 서비스라면 client를 토큰 수명 단위로 재생성하거나,
-요청 단위 `header("authorization", ...)`로 덮어쓴다.
+요청 단위 `header("authorization", ...)`로 덮어사용한다.
 
 ```cpp
 client.get ("/players/7281")

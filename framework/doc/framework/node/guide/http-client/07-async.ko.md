@@ -7,7 +7,7 @@
 
 ## non-blocking 보장
 
-undici는 libuv event loop 기반 비동기 소켓을 쓴다. 따라서 응답을 기다리는 동안
+undici는 libuv event loop 기반 비동기 소켓을 사용한다. 따라서 응답을 기다리는 동안
 **event loop 스레드는 막히지 않는다.** 런타임의 비동기 I/O가 이를 제공하므로 별도의
 worker scheduler가 필요 없다.
 

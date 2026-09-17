@@ -500,7 +500,7 @@ public interface IZLinkDiagnosticsRuntime
 
 `IZLinkDiagnosticsRuntime`은 DI에서 얻는 process singleton이다. `SetLevelAsync`가 정본 비동기 제어이고
 `Level` setter는 그 위의 동기 bridge다. handler나 callback 같은 Framework 실행 문맥에서는 setter 대신
-`SetLevelAsync`를 쓴다. `Level`을 읽으면 현재 process에
+`SetLevelAsync`를 사용한다. `Level`을 읽으면 현재 process에
 적용하는 level을 반환한다. 값을 바꾸면 이후에 시작하는 message 처리부터 새 level을 적용한다.
 변경은 message 처리를 기다리지 않는 원자적 상태 변경이다. 이미 telemetry queue에 들어간 기록은
 전달하거나 버릴 수 있으며, 다시 켜도 이전 처리의 기록을 소급해서 만들지 않는다.

@@ -356,7 +356,7 @@ intent 하나를 만든다.
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8
 255 bytes 이하다. Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로
-실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 쓴 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
+실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 사용한 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
 
 Object Server의 Entry Spot ID에도 같은 prefix를 사용하지만 MeshNode RID와 별도로 생성한 UUID v4를
 붙인다. 형식은 `<prefix>-entry-<lowercase-canonical-uuid-v4>`이며 caller가 fixed Entry Spot ID를 지정하지
@@ -423,7 +423,7 @@ Type별 limit은 `null`이면 node limit을 공유하고 값이 있으면 1..`in
 시작 전에 고정하고 실행 중 setter를 제공하지 않는다. `ZLinkWorkerOptions.IdleTimeout`과는 별개의 설정이며
 서로 값을 상속하지 않는다. 정리 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을
 받지 않는다. 유휴 판정 조건, `ZLinkSpotCloseReason.IdleEvicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 
 ## 3. Manual peer
 

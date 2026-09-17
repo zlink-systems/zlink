@@ -3,7 +3,7 @@
 # 4. Request 만들기
 
 `client.get(path)` 같은 메서드 호출이 `request_builder_t`를 돌려주고 거기에
-query·헤더·body를 체인으로 얹은 뒤 `submit`/`fetch`/`download`로 보낸다.
+query·헤더·body를 체인으로 지정한 뒤 `submit`/`fetch`/`download`로 보낸다.
 
 ## HTTP 메서드
 
@@ -31,7 +31,7 @@ path는 반드시 `/`로 시작해야 하며 아니면 `request_protocol_error`�
 ## Query 파라미터
 
 `query(name, value)`는 percent-encoding을 자동 처리한다. path에 직접 문자열을
-조립하지 말고 이쪽을 쓴다.
+직접 만들지 말고 이쪽을 사용한다.
 
 ```cpp
 auto open_games = client.get ("/games")
@@ -63,7 +63,7 @@ client.post ("/games")
 ## Request 단위 timeout
 
 client 기본 timeout을 특정 요청에서만 바꿀 수 있다. 긴 작업(리포트 생성 등)이나
-빨리 포기해야 하는 health probe에 쓴다.
+빨리 포기해야 하는 health probe에 사용한다.
 
 ```cpp
 // client 기본은 3초, 리포트 생성만 30초 허용

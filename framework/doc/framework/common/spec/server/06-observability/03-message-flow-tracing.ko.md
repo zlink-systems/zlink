@@ -266,7 +266,7 @@ lazy 형태라도 `if`로 한 번 더 감싸 lambda 생성까지 막는다. 문�
 앞에서 실행하는 호출부는 만들지 않는다.
 
 **언어별 재량** — gate를 표현하는 방법은 언어마다 다르다. C++는 template lambda,
-.NET은 보간 문자열 handler와 `Func<>`, Java는 `Supplier<>`, Node는 thunk를 쓴다.
+.NET은 보간 문자열 handler와 `Func<>`, Java는 `Supplier<>`, Node는 thunk를 사용한다.
 관찰되는 결과 — tracing이 꺼졌을 때 문자열·event·lambda 중 어느 것도 만들지 않아
 비용이 0인 것 — 이 같으면 방법은 재량이다. 새 trace를 추가한 뒤 tracing을 끈
 상태에서 그 경로가 문자열·event·lambda 중 어느 것도 만들지 않는지를 호출부 코드로

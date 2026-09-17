@@ -1,14 +1,8 @@
 # TypeScript Stream Connector
 
-> **⚠️ 이 가이드는 최신이 아니다.** 현재 리뷰·정비가 끝난 가이드는
-> [`.NET` 가이드](../../../dotnet/README.ko.md) 하나뿐이다. 이 문서는 그 이전 상태이며,
-> **`.NET` 가이드가 완성되면 이 문서를 삭제하고 그것을 기준으로 다시 쓴다.**
->
-> **계약을 확인할 때는 이 문서를 믿지 말고 [spec 트리](../../../common/spec/server/README.ko.md)를 본다.**
-
 TypeScript STREAM client connector(`@zlink-systems/stream-connector`)의 문서 진입점이다. 대상은
 브라우저 웹 client와 Unity WebGL, Cocos Creator web, Godot Web처럼 브라우저에서 실행되는 build다.
-Node.js는 connector 실행 환경이 아니며 test runner와 서버 process 실행만 담당한다.
+Node.js는 connector의 제품 실행 환경이 아니며 서버 process와 browser test runner만 담당한다.
 
 | 문서 | 내용 |
 |------|------|

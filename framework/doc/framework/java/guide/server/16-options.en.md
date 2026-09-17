@@ -104,7 +104,7 @@ Values of the `ZLinkMeshNodeSocketConfig` that `configureRouterSocket()` returns
 | `setMailboxByteBudget(long)` | Bytes this node's service mailbox holds |
 
 How the two high-water marks work and how to pick their values is covered by
-[4. Backpressure](04-backpressure.en.md).
+[Backpressure](33-backpressure.en.md).
 `0` is not the default — it means **unlimited.**
 
 **The four HWM values are `long`.** They're in bytes, so `int` can't reach past 2 GiB.
@@ -142,7 +142,7 @@ application job queue limits jobs waiting for handler start across the host inst
 The memory limit and Core budget must be positive. The manual queued-job limit is
 `1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
 use the same labels but are independent enums and calculations. See
-[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+[Backpressure](33-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 for saturation behavior and production measurement.
 
 ## 4. Diagnostics
@@ -242,5 +242,5 @@ alive as-is.
 ## 10. Related Documents
 
 - The formal contract: [Java configuration and host public contract](../../../common/spec/server/languages/java/interfaces/configuration-host.en.md)
-- What each cap changes: [4. Backpressure](04-backpressure.en.md)
+- What each cap changes: [Backpressure](33-backpressure.en.md)
 - The procedure for draining traffic with weights: [12. Operations](12-operations.en.md)

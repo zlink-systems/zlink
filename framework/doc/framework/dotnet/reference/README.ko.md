@@ -5,7 +5,7 @@
 
 이 문서는 기존 두 문서와 역할이 다르다.
 
-- [Guide 13. 주요 타입 사용 색인](../guide/server/13-interface-catalog.ko.md) — 튜토리얼 관점에서 자주 쓰는
+- [Guide 13. 주요 타입 사용 색인](../guide/server/13-interface-catalog.ko.md) — 튜토리얼 관점에서 자주 사용하는
   interface를 소개한다.
 - [.NET exact interface](../../common/spec/server/languages/dotnet/interfaces/README.ko.md) — 계약 원문
   소유 문서. interface 전체를 signature 그대로 싣는다.
@@ -26,7 +26,7 @@
 ## Category
 
 Public contract 감사 categorization([contract-inventory](../../../contract-inventory/route-mesh-v11-public-contract-trace.json))과
-같은 8개 category를 챕터로 쓴다. 언어 사이에 이미 검증된 분류라 새로 만들지 않는다.
+같은 8개 category를 챕터로 사용한다. 언어 사이에 이미 검증된 분류라 새로 만들지 않는다.
 
 | Category | 상태 | 대응 spec |
 |---|---|---|

@@ -186,10 +186,12 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         if (player.wins == 100) {
             const auto milestone_event = player_win_milestone_event_t{
               state.room_id, player.actor_id, player.display_name, player.wins};
+            // --8<-- [start:doc-multicast-publish]
             co_await _context
               .publish (sample_names_t::player_milestone_topic,
                         milestone_event)
               .async ();
+            // --8<-- [end:doc-multicast-publish]
         }
         co_return;
     }

@@ -62,7 +62,7 @@ client.get ("/players/7281");   // 실제 target: /v2/players/7281
 같은 connection pool과 cookie jar를 공유한다.
 
 같은 origin으로 가는 요청은 **keep-alive 연결을 자동 재사용**한다. 서버가 그 사이
-연결을 닫았다면(stale) fresh 연결로 1회 자동 재시도하므로 호출자는 신경 쓸 것이
+연결을 닫았다면(stale) fresh 연결로 1회 자동 재시도하므로 호출자는 신경 사용할 것이
 없다.
 
 ```cpp

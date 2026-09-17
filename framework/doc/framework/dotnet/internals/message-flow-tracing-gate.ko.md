@@ -10,7 +10,7 @@ sampling hash·telemetry queue item 생성, provider 호출)을 하지 않는다
 - **게이트가 이벤트 생성보다 먼저다.** `ZLinkMessageFlowTracer.Enabled(outcome)`
   는 live level의 저렴한 읽기이며, 호출부는 이 게이트를 통과한 뒤에만 이벤트를
   만든다.
-- **드문 경로는 `TraceLazy(outcome, Func<ZLinkMessageFlowEvent>)`를 쓴다.**
+- **드문 경로는 `TraceLazy(outcome, Func<ZLinkMessageFlowEvent>)`를 사용한다.**
   delegate는 게이트 통과 후에만 실행되므로 Off에서 이벤트가 생성되지 않는다.
   단, closure 할당 자체가 부담인 message-hot path는 `if (Enabled(outcome))`
   가드를 유지해 closure 할당도 피한다.

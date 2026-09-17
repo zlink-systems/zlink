@@ -35,7 +35,7 @@ val profile = client.get("/players/7281").fetch<PlayerProfile>()
 ```
 
 `fetch<T>()`는 typed body를 직접 돌려주는 suspend 확장이다(`await<T>().body()` 편의).
-blocking이 아니므로 handler에서도 쓸 수 있다.
+blocking이 아니므로 handler에서도 사용할 수 있다.
 
 ## status 처리 정리
 

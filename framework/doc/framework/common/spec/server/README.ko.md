@@ -24,7 +24,7 @@ Application이 관찰하는 동작을 정의하고, **구현 스펙** 층은 모
 
 | 주제 | 독자의 질문 한 줄 | 진입 문서 |
 |---|---|---|
-| foundation | 이 스펙 전체가 어떤 규칙으로 쓰였고, 공통으로 쓰는 용어와 API 등록 방법은 무엇인가 | [00-foundation/README.ko.md](00-foundation/README.ko.md) |
+| foundation | 이 스펙 전체가 어떤 규칙으로 쓰였고, 공통으로 사용하는 용어와 API 등록 방법은 무엇인가 | [00-foundation/README.ko.md](00-foundation/README.ko.md) |
 | execution | handler는 언제 어떤 순서로 실행되고, 완료·취소·동시성은 어떤 구조로 보장되는가 | [01-execution/README.ko.md](01-execution/README.ko.md) |
 | channel-transport | MeshNode 사이 물리 연결과 Channel로 메시지를 보내는 경로는 어떻게 구성되는가 | [02-channel-transport/README.ko.md](02-channel-transport/README.ko.md) |
 | spot-actor | Spot과 Actor는 무엇이고, 메시지가 그 위치까지 도달하는 경로는 무엇인가 | [03-spot-actor/README.ko.md](03-spot-actor/README.ko.md) |

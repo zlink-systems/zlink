@@ -2,7 +2,7 @@
 
 # 8. Streaming
 
-응답이나 요청 body가 메모리에 다 올리기엔 클 때 streaming 경로를 쓴다.
+응답이나 요청 body가 메모리에 다 올리기엔 클 때 streaming 경로를 사용한다.
 
 ## 다운로드: download(sink)
 

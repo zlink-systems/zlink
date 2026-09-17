@@ -35,9 +35,11 @@ public final class ApiServer {
             mesh.listen(settings.routeEndpoint())
                 .setRoutingIdPrefix("tictactoe-api");
             mesh.objects().client();
+            // --8<-- [start:doc-manual-peer-connect]
             for (String endpoint : settings.spotEndpoints()) {
                 mesh.peerConnections().connect(endpoint);
             }
+            // --8<-- [end:doc-manual-peer-connect]
         };
     }
 }

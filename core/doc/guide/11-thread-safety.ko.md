@@ -21,7 +21,7 @@ part 배열 하나를 독립된 record로 원자적으로 제출하므로 thread
 
 별도 계약이 없으면 receive는 single-consumer다. 같은 socket에서 receive를 동시에 실행하지 않는다.
 Receive가 반환한 routing-id view는 socket이 소유한다 — 같은 socket의 다음 data-recv 호출(성공·실패
-모두)이나 close 뒤에는 이 view를 쓰지 않는다. 값을 보관하려면 반환 즉시 복사한다.
+모두)이나 close 뒤에는 이 view를 사용하지 않는다. 값을 보관하려면 반환 즉시 복사한다.
 
 ## Control 경로
 

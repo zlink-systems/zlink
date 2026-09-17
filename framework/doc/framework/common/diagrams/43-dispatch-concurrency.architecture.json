@@ -1,0 +1,181 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "노드 핸들러는 동시, SPOT 핸들러는 직렬",
+    "subtitle": "같은 요청 셋이 두 자리에서 다르게 처리된다",
+    "output": "43-dispatch-concurrency.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 76,
+    "cellW": 130,
+    "cellH": 56
+  },
+  "components": [
+    {
+      "id": "NR0",
+      "type": "external",
+      "label": "req A",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "NW0",
+      "type": "backend",
+      "label": "worker 1",
+      "sublabel": "처리",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "NR1",
+      "type": "external",
+      "label": "req B",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "NW1",
+      "type": "backend",
+      "label": "worker 2",
+      "sublabel": "처리",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "NR2",
+      "type": "external",
+      "label": "req C",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "NW2",
+      "type": "backend",
+      "label": "worker 3",
+      "sublabel": "처리",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "SR0",
+      "type": "external",
+      "label": "req A",
+      "row": 3,
+      "col": 0
+    },
+    {
+      "id": "SR1",
+      "type": "external",
+      "label": "req B",
+      "row": 4,
+      "col": 0
+    },
+    {
+      "id": "SR2",
+      "type": "external",
+      "label": "req C",
+      "row": 5,
+      "col": 0
+    },
+    {
+      "id": "SQ",
+      "type": "messagebus",
+      "label": "단일 큐",
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": "SEX",
+      "type": "frontend",
+      "label": "A → B → C",
+      "sublabel": "하나씩 순서대로",
+      "row": 4,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "노드 핸들러 — 동시 (worker 풀)",
+      "wraps": [
+        "NR0",
+        "NW0",
+        "NR1",
+        "NW1",
+        "NR2",
+        "NW2"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "SPOT 핸들러 — 직렬 (단일 큐)",
+      "wraps": [
+        "SR0",
+        "SR1",
+        "SR2",
+        "SQ",
+        "SEX"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "NR0",
+      "to": "NW0",
+      "variant": "default"
+    },
+    {
+      "from": "NR1",
+      "to": "NW1",
+      "variant": "default"
+    },
+    {
+      "from": "NR2",
+      "to": "NW2",
+      "variant": "default"
+    },
+    {
+      "from": "SR0",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SR1",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SR2",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SQ",
+      "to": "SEX",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "무엇이 다른가",
+      "items": [
+        "노드 핸들러는 worker 풀이 요청을 나눠 맡는다. 셋이 동시에 돈다.",
+        "SPOT 핸들러는 큐 하나를 지난다. 도착 순서대로 하나씩 실행되므로 그 안에서 lock이 필요 없다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

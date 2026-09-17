@@ -8,7 +8,7 @@
 interface, 이들의 공유 lifecycle/option 기반, 그리고 타입별 typed option을 다룬다.
 모든 socket의 `Send`/`Publish`/`Request`/`Reply`는 Messaging category에 문서화된
 operation-builder family를 반환한다 — 이 category는 각 builder가 어디서 시작하고 각
-socket type이 고유하게 무엇을 더하는지만 다룬다. 정확한 signature는
+socket type이 고유하게 무엇을 추가하는지만 다룬다. 정확한 signature는
 [`Contracts/Sockets/`](../../../../bindings/dotnet/src/Zlink/Contracts/Sockets/)가
 소유한다.
 
@@ -45,7 +45,7 @@ socket.Close();
 
 **선택 기준.** `Bind`/`Connect` 전에 각각 `SetTlsServer`/`SetTlsClient`를 호출한다 —
 이미 bind·connect된 후엔 효과가 없다. native socket이 일반 disposal이 아니라 즉시
-해제돼야 할 때만 `Close()`를 쓴다.
+해제돼야 할 때만 `Close()`를 사용한다.
 
 ---
 
@@ -106,12 +106,12 @@ if (pair.Recv(received)) { /* ... */ }
 | `Send()` | — | 공유 `SendOperation` builder 시작(Messaging category) |
 | `Recv(Received result, RecvFlags flags)` | `RecvFlags.None` | `result`를 채움 |
 
-`IPairSocket`은 이 공유 `IMessageSocket` 표면 외에 더하는 게 없다.
+`IPairSocket`은 이 공유 `IMessageSocket` 표면 외에 추가하는 것이 없다.
 
 **완료 결과.** `Recv`는 `bool`을 반환한다 — `RecvFlags.DontWait`에서 아무것도 없을
 때만 `false`다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer 라우팅이 없고
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer 라우팅이 없고
 load-balance하지 않는다.
 
 ---
@@ -129,7 +129,7 @@ IReadOnlyList<Message> reply = await dealer.Request()
     .Async();
 ```
 
-**옵션.** `IMessageSocket`에 더하는 것:
+**옵션.** `IMessageSocket`에 추가하는 것:
 
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
@@ -145,7 +145,7 @@ IReadOnlyList<Message> reply = await dealer.Request()
 **선택 기준.** peer가 첫 메시지부터 관찰하도록 connect 전에 `SetRoutingId`를
 설정한다. DEALER엔 임의 token에 reply하는 protocol envelope helper가 없다 —
 수신된 request context(`Received.Reply()`, Messaging category)에서 답하거나 명시적
-ROUTER/service reply 표면을 쓴다.
+ROUTER/service reply 표면을 사용한다.
 
 ---
 
@@ -161,7 +161,7 @@ router.Reply(peerRid, replyToken).Message(Message.From("ok")).Submit();
 ```
 
 **옵션.** `IRoutedMessageSocket`(`Send(RoutingId)`, `Recv(Received, RecvFlags)`)과
-`IConnectableSocket`에 더하는 것:
+`IConnectableSocket`에 추가하는 것:
 
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
@@ -181,7 +181,7 @@ router.Reply(peerRid, replyToken).Message(Message.From("ok")).Submit();
 reply message를 소유하고 dispose한다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER 응답
-request/reply엔 `Request(peerRid)`/`Reply(rid, replyToken)`을 쓴다. Opaque token은 합성하거나
+request/reply엔 `Request(peerRid)`/`Reply(rid, replyToken)`을 사용한다. Opaque token은 합성하거나
 재사용하지 않는다.
 
 ---
@@ -225,7 +225,7 @@ lossy이므로 HWM에 도달한 subscriber의 copy는 drop되고 publisher는 �
 
 **선택 기준.** `ReceiveSubscriptionEvent`로 구독자 변동을 관찰하려면(또는
 `Manual`/`ApproveSubscribe`/`RejectSubscribe`로 수동 admission을 하려면)
-`IPubSocket` 대신 `IXPubSocket`을 쓴다 — publish 자체는 둘이 같게 동작한다.
+`IPubSocket` 대신 `IXPubSocket`을 사용한다 — publish 자체는 둘이 같게 동작한다.
 
 ---
 
@@ -251,7 +251,7 @@ if (sub.Subscribe(msg)) { /* ... */ }
 | `Options.TopicsCount`(`int`) | 읽기 전용 | 활성 구독 filter 개수 |
 | `SetRoutingId(RoutingId)` / `GetRoutingId()` | — | 이 socket 자신의 routing id를 지정/읽음; `ISubSocket`만 |
 
-**`IXSubSocket`은 `ISubscriberSocket` 외에 더하는 게 없다** — `SetRoutingId`/
+**`IXSubSocket`은 `ISubscriberSocket` 외에 추가하는 것이 없다** — `SetRoutingId`/
 `GetRoutingId`도, 고유 member도 없다; 모든 operation이 공유 표면이다(자신의
 `Options`도 같은 `SubSocketOptions` 타입).
 
@@ -259,13 +259,13 @@ if (sub.Subscribe(msg)) { /* ... */ }
 없을 때만 `false`다.
 
 **선택 기준.** 일반적인 경우(구독을 socket option으로 설정)엔 `ISubSocket`을,
-구독을 일반 메시지로 실어 날라야 할 때만 `IXSubSocket`을 쓴다.
+구독을 일반 메시지로 실어 날라야 할 때만 `IXSubSocket`을 사용한다.
 
 ---
 
 ## `IStreamSocket`
 
-STREAM socket — 다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP
+STREAM socket — 다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP
 peer와 framed packet을 직접 주고받는다.
 
 ```csharp

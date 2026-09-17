@@ -1,0 +1,2126 @@
+diff --git a/doc/site/docs/bindings b/doc/site/docs/bindings
+deleted file mode 120000
+index c1ff6e8825..0000000000
+--- a/doc/site/docs/bindings
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../bindings/doc
+\ No newline at end of file
+diff --git a/doc/site/docs/common b/doc/site/docs/common
+deleted file mode 120000
+index 22fda6e654..0000000000
+--- a/doc/site/docs/common
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/common
+\ No newline at end of file
+diff --git a/doc/site/docs/cpp b/doc/site/docs/cpp
+deleted file mode 120000
+index 6beda2585f..0000000000
+--- a/doc/site/docs/cpp
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/cpp
+\ No newline at end of file
+diff --git a/doc/site/docs/dotnet b/doc/site/docs/dotnet
+deleted file mode 120000
+index e034fe7867..0000000000
+--- a/doc/site/docs/dotnet
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/dotnet
+\ No newline at end of file
+diff --git a/doc/site/docs/guide b/doc/site/docs/guide
+deleted file mode 120000
+index 19f1823d70..0000000000
+--- a/doc/site/docs/guide
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../core/doc/guide
+\ No newline at end of file
+diff --git a/doc/site/docs/java b/doc/site/docs/java
+deleted file mode 120000
+index 9cabac4bc4..0000000000
+--- a/doc/site/docs/java
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/java
+\ No newline at end of file
+diff --git a/doc/site/docs/kotlin b/doc/site/docs/kotlin
+deleted file mode 120000
+index 534790c1ce..0000000000
+--- a/doc/site/docs/kotlin
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/kotlin
+\ No newline at end of file
+diff --git a/doc/site/docs/node b/doc/site/docs/node
+deleted file mode 120000
+index 0e4bccde94..0000000000
+--- a/doc/site/docs/node
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../framework/doc/framework/node
+\ No newline at end of file
+diff --git a/doc/site/docs/reference b/doc/site/docs/reference
+deleted file mode 120000
+index 9df7556837..0000000000
+--- a/doc/site/docs/reference
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../core/doc/reference
+\ No newline at end of file
+diff --git a/doc/site/docs/spec b/doc/site/docs/spec
+deleted file mode 120000
+index ea30c1f838..0000000000
+--- a/doc/site/docs/spec
++++ /dev/null
+@@ -1 +0,0 @@
+-../../../core/doc/spec
+\ No newline at end of file
+diff --git a/framework/doc/framework/common/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/common/guide/server/05-channel-messaging.ko.md
+index ad9fd2c624..1d728805f7 100644
+--- a/framework/doc/framework/common/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/common/guide/server/05-channel-messaging.ko.md
+@@ -1016,7 +1016,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/common/guide/server/06-spot.ko.md b/framework/doc/framework/common/guide/server/06-spot.ko.md
+index 53ba410bc5..73b1fb4a5f 100644
+--- a/framework/doc/framework/common/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/common/guide/server/06-spot.ko.md
+@@ -1,16 +1,308 @@
+ # 6. Spot
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++=== "C#/.NET"
++
++    ```csharp
++    public sealed class Matchmaker(IZLinkInstanceSpotContext context) : IZLinkInstanceSpot
++    {
++        private readonly List<string> _waiting = [];
++
++        public IZLinkInstanceSpotContext Context { get; } = context;
++
++        // 이 Spot이 받을 handler를 등록한다.
++        public void Configure() => Context.Handlers.AddPacket<JoinQueueHandler>();
++
++        public void Enqueue(string playerId) => _waiting.Add(playerId);
++    }
++
++    // 첫 인자가 대상 Spot instance다.
++    public sealed class JoinQueueHandler : IZLinkSpotPacketHandler<Matchmaker, JoinQueue>
++    {
++        public ValueTask HandleAsync(
++            Matchmaker spot,
++            JoinQueue message,
++            CancellationToken cancellationToken)
++        {
++            spot.Enqueue(message.PlayerId); // 락 없이 직접 만진다.
++            return ValueTask.CompletedTask;
++        }
++    }
++    ```
++
++=== "C++"
++
++    ```cpp
++    // C++은 handler class 대신 Spot member 함수를 등록한다.
++    class matchmaker_t : public instance_spot_t
++    {
++      public:
++        explicit matchmaker_t (instance_spot_context_t context)
++            : _context (std::move (context))
++        {
++        }
++
++        instance_spot_context_t &context () noexcept override { return _context; }
++        const instance_spot_context_t &context () const noexcept override { return _context; }
++
++        // 이 Spot이 받을 handler를 등록한다.
++        void configure () override
++        {
++            _context.handlers ().add_handler<&matchmaker_t::join_queue> ();
++        }
++
++        task_t<void> join_queue (const join_queue_t &message)
++        {
++            _waiting.push_back (message.player_id); // 락 없이 직접 만진다.
++            co_return;
++        }
++
++      private:
++        instance_spot_context_t _context;
++        std::vector<std::string> _waiting;
++    };
++    ```
++
++=== "Java"
++
++    ```java
++    public final class Matchmaker implements ZLinkInstanceSpot {
++        private final ZLinkInstanceSpotContext context;
++        private final List<String> waiting = new ArrayList<>();
++
++        public Matchmaker(ZLinkInstanceSpotContext context) {
++            this.context = context;
++        }
++
++        @Override
++        public ZLinkInstanceSpotContext context() {
++            return context;
++        }
++
++        // 이 Spot이 받을 handler를 등록한다.
++        @Override
++        public void configure() {
++            context.handlers().addHandler(JoinQueueHandler.class);
++        }
++
++        public void enqueue(String playerId) {
++            waiting.add(playerId);
++        }
++    }
++
++    // 첫 인자가 대상 Spot instance다.
++    public final class JoinQueueHandler implements ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++        @Override
++        public CompletionStage<Void> handle(Matchmaker spot, JoinQueue message) {
++            spot.enqueue(message.playerId()); // 락 없이 직접 만진다.
++            return CompletableFuture.completedFuture(null);
++        }
++    }
++    ```
++
++=== "Kotlin"
++
++    ```kotlin
++    class Matchmaker(private val spotContext: ZLinkInstanceSpotContext) : ZLinkInstanceSpot {
++        private val waiting = mutableListOf<String>()
++
++        override fun context(): ZLinkInstanceSpotContext = spotContext
++
++        // 이 Spot이 받을 handler를 등록한다.
++        override fun configure() {
++            spotContext.handlers().addHandler(JoinQueueHandler::class.java)
++        }
++
++        fun enqueue(playerId: String) {
++            waiting.add(playerId)
++        }
++    }
++
++    // 첫 인자가 대상 Spot instance다.
++    class JoinQueueHandler : ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++        override fun handle(spot: Matchmaker, message: JoinQueue): CompletionStage<Void> {
++            spot.enqueue(message.playerId) // 락 없이 직접 만진다.
++            return CompletableFuture.completedFuture(null)
++        }
++    }
++    ```
++
++=== "Node/TypeScript"
++
++    ```typescript
++    export class Matchmaker implements ZLinkInstanceSpot {
++      private readonly waiting: string[] = [];
++
++      constructor(readonly context: ZLinkInstanceSpotContext) {}
++
++      // 이 Spot이 받을 handler를 등록한다.
++      configure(): void {
++        this.context.handlers.addPacket(JoinQueueHandler);
++      }
++
++      enqueue(playerId: string): void {
++        this.waiting.push(playerId);
++      }
++    }
++
++    // 첫 인자가 대상 Spot instance다.
++    export class JoinQueueHandler implements ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++      async handle(
++        spot: Matchmaker,
++        message: JoinQueue,
++        messageContext: ZLinkMessageContext
++      ): Promise<void> {
++        spot.enqueue(message.playerId); // 락 없이 직접 만진다.
++      }
++    }
++    ```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++=== "C#/.NET"
++
++    ```csharp
++    var mesh = options.AddRouteMesh("play").Listen("tcp://0.0.0.0:9001");
++
++    mesh.Objects().Server()
++        // 옵션은 기본값으로 둔다(§3.1).
++        .AddInstanceSpotFactory<Matchmaker>("matchmaker", factory => { });
++    ```
++
++=== "C++"
++
++    ```cpp
++    auto mesh = options.add_route_mesh ("play");
++    mesh.listen ("tcp://0.0.0.0:9001");
++
++    mesh.set_object_role (object_role_t::server)
++      .add_instance_spot_factory<matchmaker_t> (
++        "matchmaker",
++        [] (instance_spot_context_t c) { return std::make_shared<matchmaker_t> (std::move (c)); },
++        // 옵션은 기본값으로 둔다(§3.1).
++        [] (auto &) {});
++    ```
++
++=== "Java"
++
++    ```java
++    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play").listen("tcp://0.0.0.0:9001");
++
++    mesh.objects().server()
++        // 옵션은 기본값으로 둔다(§3.1).
++        .addInstanceSpotFactory("matchmaker", Matchmaker.class, factory -> { });
++    ```
++
++=== "Kotlin"
++
++    ```kotlin
++    val mesh = options.addRouteMesh("play").listen("tcp://0.0.0.0:9001")
++
++    mesh.objects().server()
++        // 옵션은 기본값으로 둔다(§3.1).
++        .addInstanceSpotFactory("matchmaker", Matchmaker::class.java) { }
++    ```
++
++=== "Node/TypeScript"
++
++    ```typescript
++    const mesh = builder.addRouteMesh('play').listen('tcp://0.0.0.0:9001');
++
++    mesh.objects().server()
++      // 옵션은 기본값으로 둔다(§3.1).
++      .addInstanceSpotFactory('matchmaker', Matchmaker, () => { });
++    ```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++=== "C#/.NET"
++
++    ```csharp
++    await spotClient
++        .SendToSpot("queue-ranked", new JoinQueue("player-1"))
++        .InstanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++        .InMesh("play")
++        .Async(cancellationToken);
++    ```
++
++=== "C++"
++
++    ```cpp
++    co_await spot_outbound.send_to_spot ("queue-ranked", join_queue_t{"player-1"})
++      .instance_spot ("matchmaker") // 없으면 이 stable type으로 만든다.
++      .in_mesh ("play")
++      .async ();
++    ```
++
++=== "Java"
++
++    ```java
++    spotClient
++        .sendToSpot("queue-ranked", new JoinQueue("player-1"))
++        .instanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++        .inMesh("play")
++        .submit()
++        .toCompletableFuture().join();
++    ```
++
++=== "Kotlin"
++
++    ```kotlin
++    spotClient
++        .sendToSpot("queue-ranked", JoinQueue("player-1"))
++        .instanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++        .inMesh("play")
++        .submit()
++        .await()
++    ```
++
++=== "Node/TypeScript"
++
++    ```typescript
++    await spotClient
++      .sendToSpot('queue-ranked', joinQueue('player-1'))
++      .instanceSpot('matchmaker') // 없으면 이 stable type으로 만든다.
++      .inMesh('play')
++      .submit();
++    ```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -32,7 +324,7 @@ Actor membership과 종료 계약이 다르다.
+ | `Configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `OnCreate` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `OnInitialize` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `OnCreate` 없이 이것만 받는다 |
+-| `OnClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `OnClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `OnActorJoin` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `OnCreateActor` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `OnJoinedActor` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -50,7 +342,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -304,7 +596,7 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -406,7 +698,7 @@ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고
+     ```
+ 
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -464,7 +756,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`Create`는 새 Spot을 만드는 호출**이고, **`GetOrCreate`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -758,7 +1050,7 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 
+     ```
+ 
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -775,7 +1067,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `Configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -787,7 +1079,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -800,7 +1092,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+     | Spot 앞 one-way packet | `IZLinkSpotPacketHandler<TSpot, TMessage>` | `AddPacket<THandler>()` |
+     | Spot 앞 request | `IZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `AddPacket<THandler>()` |
+     | Logical Multicast 구독 이벤트 | `IZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `AddSubscribe<THandler>(channelName, topic)` |
+-    | timer tick | `IZLinkSpotTimerHandler<TSpot>` | `AddTimer<THandler>(name, period, …)`(§6.1) |
++    | timer tick | `IZLinkSpotTimerHandler<TSpot>` | `AddTimer<THandler>(name, period, …)`(§7.1) |
+     | member Actor 앞 one-way packet | `IZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `AddActorPacket<THandler, TActor>()` |
+     | member Actor 앞 request | `IZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `AddActorPacket<THandler, TActor>()` |
+ 
+@@ -813,7 +1105,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+     | Spot 앞 one-way packet | `add_handler<&TSpot::method> ()` |
+     | Spot 앞 request | `add_handler<&TSpot::method> ()`(반환값이 reply) |
+     | Logical Multicast 구독 이벤트 | `add_subscribe<&TSpot::method> (channel_name, topic)` |
+-    | timer tick | `add_timer<THandler> (name, period, options)`(§6.1) |
++    | timer tick | `add_timer<THandler> (name, period, options)`(§7.1) |
+     | member Actor 앞 one-way packet | `add_actor_send<&TSpot::method> ()` |
+     | member Actor 앞 request | `add_actor_request<&TSpot::method> ()` |
+ 
+@@ -824,7 +1116,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+     | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler.class)` |
+     | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler.class)` |
+     | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler.class)` |
+-    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)`(§6.1) |
++    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)`(§7.1) |
+     | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler.class)` |
+     | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler.class)` |
+ 
+@@ -838,7 +1130,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+     | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
+     | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
+     | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler::class.java)` |
+-    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`(§6.1) |
++    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`(§7.1) |
+     | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler::class.java)` |
+     | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler::class.java)` |
+ 
+@@ -852,7 +1144,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+     | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addPacket(THandler)` |
+     | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addPacket(THandler)` |
+     | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `addSubscribe(THandler, channelName, topic)` |
+-    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `addTimer(name, periodMs, THandler, options)`(§6.1) |
++    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `addTimer(name, periodMs, THandler, options)`(§7.1) |
+     | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `addActorPacket(THandler)` |
+     | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `addActorPacket(THandler)` |
+ 
+@@ -1345,7 +1637,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -1560,7 +1852,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -1754,7 +2046,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -1765,12 +2057,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -2073,9 +2365,9 @@ timer handler가 받는 tick 값은 예정 대비 지연과 건너뛴 tick 수
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -2304,7 +2596,7 @@ I/O를 기다리는 작업은 `RunIoWorker`로 넘긴다.
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다(`16. Options` 장 §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `Capture`로 application state를
+@@ -2557,7 +2849,7 @@ callback은 **두 경우 모두** 호출되므로, 다음 라운드를 여는 
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: `13. Interface 카탈로그` 장 §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/common/guide/server/07-actor-spot.ko.md b/framework/doc/framework/common/guide/server/07-actor-spot.ko.md
+index 2cb2f84e09..e427bf1b15 100644
+--- a/framework/doc/framework/common/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/common/guide/server/07-actor-spot.ko.md
+@@ -742,7 +742,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `Defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/common/guide/server/12-operations.ko.md b/framework/doc/framework/common/guide/server/12-operations.ko.md
+index 84f0e1d263..af716d0cb3 100644
+--- a/framework/doc/framework/common/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/common/guide/server/12-operations.ko.md
+@@ -683,7 +683,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: `13. Interface 카탈로그` 장 §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: `11. Monitoring` 장
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+diff --git a/framework/doc/framework/cpp/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/cpp/guide/server/05-channel-messaging.ko.md
+index f9de5dd033..193967266e 100644
+--- a/framework/doc/framework/cpp/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/cpp/guide/server/05-channel-messaging.ko.md
+@@ -417,7 +417,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/cpp/guide/server/06-spot.ko.md b/framework/doc/framework/cpp/guide/server/06-spot.ko.md
+index b867c8e721..a4893d51bc 100644
+--- a/framework/doc/framework/cpp/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/cpp/guide/server/06-spot.ko.md
+@@ -17,17 +17,98 @@ title: "6. Spot · C++"
+ 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · **C++** · [Java](../../../java/guide/server/06-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
+ <!-- language-switch:end -->
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++```cpp
++// C++은 handler class 대신 Spot member 함수를 등록한다.
++class matchmaker_t : public instance_spot_t
++{
++  public:
++    explicit matchmaker_t (instance_spot_context_t context)
++        : _context (std::move (context))
++    {
++    }
++
++    instance_spot_context_t &context () noexcept override { return _context; }
++    const instance_spot_context_t &context () const noexcept override { return _context; }
++
++    // 이 Spot이 받을 handler를 등록한다.
++    void configure () override
++    {
++        _context.handlers ().add_handler<&matchmaker_t::join_queue> ();
++    }
++
++    task_t<void> join_queue (const join_queue_t &message)
++    {
++        _waiting.push_back (message.player_id); // 락 없이 직접 만진다.
++        co_return;
++    }
++
++  private:
++    instance_spot_context_t _context;
++    std::vector<std::string> _waiting;
++};
++```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++```cpp
++auto mesh = options.add_route_mesh ("play");
++mesh.listen ("tcp://0.0.0.0:9001");
++
++mesh.set_object_role (object_role_t::server)
++  .add_instance_spot_factory<matchmaker_t> (
++    "matchmaker",
++    [] (instance_spot_context_t c) { return std::make_shared<matchmaker_t> (std::move (c)); },
++    // 옵션은 기본값으로 둔다(§3.1).
++    [] (auto &) {});
++```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++```cpp
++co_await spot_outbound.send_to_spot ("queue-ranked", join_queue_t{"player-1"})
++  .instance_spot ("matchmaker") // 없으면 이 stable type으로 만든다.
++  .in_mesh ("play")
++  .async ();
++```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -49,7 +130,7 @@ Actor membership과 종료 계약이 다르다.
+ | `configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `on_create` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `on_initialize` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `on_create` 없이 이것만 받는다 |
+-| `on_closing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `on_closing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `on_actor_join` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `on_create_actor` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `OnJoinedActor` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -67,7 +148,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -126,7 +207,7 @@ auto created = co_await spots
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -152,7 +233,7 @@ mesh.set_object_role (object_role_t::server)
+     [] (auto &factory) { factory.recreate_on_relocation (); });
+ ```
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -210,7 +291,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`create`는 새 Spot을 만드는 호출**이고, **`get_or_create`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -285,7 +366,7 @@ if (current) {
+ }
+ ```
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -302,7 +383,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -314,7 +395,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -327,7 +408,7 @@ C++은 handler class 대신 Spot member 함수를 등록한다. 등록 호출이
+ | Spot 앞 one-way packet | `add_handler<&TSpot::method> ()` |
+ | Spot 앞 request | `add_handler<&TSpot::method> ()`(반환값이 reply) |
+ | Logical Multicast 구독 이벤트 | `add_subscribe<&TSpot::method> (channel_name, topic)` |
+-| timer tick | `add_timer<THandler> (name, period, options)`(§6.1) |
++| timer tick | `add_timer<THandler> (name, period, options)`(§7.1) |
+ | member Actor 앞 one-way packet | `add_actor_send<&TSpot::method> ()` |
+ | member Actor 앞 request | `add_actor_request<&TSpot::method> ()` |
+ 
+@@ -453,7 +534,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -522,7 +603,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -574,7 +655,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -585,12 +666,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -685,9 +766,9 @@ task_t<void> game_tick_handler_t::handle (game_room_t &spot,
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -752,7 +833,7 @@ task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다([16. Options](16-options.ko.md) §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `capture`로 application state를
+@@ -829,7 +910,7 @@ task_t<void> game_room_t::on_relocation_ready_completed (
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/cpp/guide/server/07-actor-spot.ko.md b/framework/doc/framework/cpp/guide/server/07-actor-spot.ko.md
+index 74b704f584..f3ced0b835 100644
+--- a/framework/doc/framework/cpp/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/cpp/guide/server/07-actor-spot.ko.md
+@@ -263,7 +263,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/cpp/guide/server/12-operations.ko.md b/framework/doc/framework/cpp/guide/server/12-operations.ko.md
+index 6ab88b965c..16d90d7b3e 100644
+--- a/framework/doc/framework/cpp/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/cpp/guide/server/12-operations.ko.md
+@@ -408,7 +408,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+diff --git a/framework/doc/framework/dotnet/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/dotnet/guide/server/05-channel-messaging.ko.md
+index c5c06867f3..e0c1f56a7b 100644
+--- a/framework/doc/framework/dotnet/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/dotnet/guide/server/05-channel-messaging.ko.md
+@@ -420,7 +420,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/dotnet/guide/server/06-spot.ko.md b/framework/doc/framework/dotnet/guide/server/06-spot.ko.md
+index daa0f997a3..3c9930efcf 100644
+--- a/framework/doc/framework/dotnet/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/dotnet/guide/server/06-spot.ko.md
+@@ -17,17 +17,91 @@ title: "6. Spot · C#/.NET"
+ 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/06-spot.ko.md) · [Java](../../../java/guide/server/06-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
+ <!-- language-switch:end -->
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++```csharp
++public sealed class Matchmaker(IZLinkInstanceSpotContext context) : IZLinkInstanceSpot
++{
++    private readonly List<string> _waiting = [];
++
++    public IZLinkInstanceSpotContext Context { get; } = context;
++
++    // 이 Spot이 받을 handler를 등록한다.
++    public void Configure() => Context.Handlers.AddPacket<JoinQueueHandler>();
++
++    public void Enqueue(string playerId) => _waiting.Add(playerId);
++}
++
++// 첫 인자가 대상 Spot instance다.
++public sealed class JoinQueueHandler : IZLinkSpotPacketHandler<Matchmaker, JoinQueue>
++{
++    public ValueTask HandleAsync(
++        Matchmaker spot,
++        JoinQueue message,
++        CancellationToken cancellationToken)
++    {
++        spot.Enqueue(message.PlayerId); // 락 없이 직접 만진다.
++        return ValueTask.CompletedTask;
++    }
++}
++```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++```csharp
++var mesh = options.AddRouteMesh("play").Listen("tcp://0.0.0.0:9001");
++
++mesh.Objects().Server()
++    // 옵션은 기본값으로 둔다(§3.1).
++    .AddInstanceSpotFactory<Matchmaker>("matchmaker", factory => { });
++```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++```csharp
++await spotClient
++    .SendToSpot("queue-ranked", new JoinQueue("player-1"))
++    .InstanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++    .InMesh("play")
++    .Async(cancellationToken);
++```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -49,7 +123,7 @@ Actor membership과 종료 계약이 다르다.
+ | `Configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `OnCreateAsync` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `OnInitializeAsync` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `OnCreateAsync` 없이 이것만 받는다 |
+-| `OnClosingAsync` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `OnClosingAsync` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `OnActorJoinAsync` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `OnCreateActorAsync` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `OnJoinedActorAsync` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -67,7 +141,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -122,7 +196,7 @@ var created = await spots
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -144,7 +218,7 @@ mesh.Objects().Server()
+         factory => factory.RecreateOnRelocation());
+ ```
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -202,7 +276,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`Create`는 새 Spot을 만드는 호출**이고, **`GetOrCreate`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -275,7 +349,7 @@ if (current is { } exact)
+ }
+ ```
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -292,7 +366,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `Configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -304,7 +378,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -315,7 +389,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | `IZLinkSpotPacketHandler<TSpot, TMessage>` | `AddPacket<THandler>()` |
+ | Spot 앞 request | `IZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `AddPacket<THandler>()` |
+ | Logical Multicast 구독 이벤트 | `IZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `AddSubscribe<THandler>(channelName, topic)` |
+-| timer tick | `IZLinkSpotTimerHandler<TSpot>` | `AddTimer<THandler>(name, period, …)`(§6.1) |
++| timer tick | `IZLinkSpotTimerHandler<TSpot>` | `AddTimer<THandler>(name, period, …)`(§7.1) |
+ | member Actor 앞 one-way packet | `IZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `AddActorPacket<THandler, TActor>()` |
+ | member Actor 앞 request | `IZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `AddActorPacket<THandler, TActor>()` |
+ 
+@@ -465,7 +539,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -544,7 +618,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -598,7 +672,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -609,12 +683,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -707,9 +781,9 @@ public ValueTask HandleAsync(GameRoom spot, ZLinkTimerTick tick, CancellationTok
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -788,7 +862,7 @@ public sealed class SaveScoreHandler
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다([16. Options](16-options.ko.md) §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `Capture`로 application state를
+@@ -869,7 +943,7 @@ public ValueTask OnRelocationReadyCompletedAsync(
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/dotnet/guide/server/07-actor-spot.ko.md b/framework/doc/framework/dotnet/guide/server/07-actor-spot.ko.md
+index 7b6cf2ac3e..920bc7430d 100644
+--- a/framework/doc/framework/dotnet/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/dotnet/guide/server/07-actor-spot.ko.md
+@@ -286,7 +286,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `Defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/dotnet/guide/server/12-operations.ko.md b/framework/doc/framework/dotnet/guide/server/12-operations.ko.md
+index e6714eb531..a7dbbb0172 100644
+--- a/framework/doc/framework/dotnet/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/dotnet/guide/server/12-operations.ko.md
+@@ -420,7 +420,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+diff --git a/framework/doc/framework/dotnet/guide/server/16-options.ko.md b/framework/doc/framework/dotnet/guide/server/16-options.ko.md
+index 4254de1e20..2bde294e5a 100644
+--- a/framework/doc/framework/dotnet/guide/server/16-options.ko.md
++++ b/framework/doc/framework/dotnet/guide/server/16-options.ko.md
+@@ -95,7 +95,7 @@ process 전체에 적용되는 값이다.
+ - codec 선택과 자체 serializer 등록: [05-channel-messaging](05-channel-messaging.ko.md#7-직렬화-codec)
+ - handler 발견과 노출의 차이: [05-channel-messaging](05-channel-messaging.ko.md#3-handler를-channel에-노출하기)
+ - filter가 적용되는 범위: [05-channel-messaging](05-channel-messaging.ko.md#5-filter--공통-처리)
+-- worker 호출: [06-spot](06-spot.ko.md#6-timer와-worker)
++- worker 호출: [06-spot](06-spot.ko.md#7-timer와-worker)
+ - 버전·점검 그룹을 쓰는 배포 흐름: [12-operations](12-operations.ko.md)
+ 
+ `AddLocationStore(...)`와 `AddRelocationStore(...)`도 루트에서 등록한다. 논리 이름으로
+diff --git a/framework/doc/framework/java/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/java/guide/server/05-channel-messaging.ko.md
+index 8c80c49cbd..d47c18429c 100644
+--- a/framework/doc/framework/java/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/java/guide/server/05-channel-messaging.ko.md
+@@ -402,7 +402,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/java/guide/server/06-spot.ko.md b/framework/doc/framework/java/guide/server/06-spot.ko.md
+index 5670b5442d..152d40f238 100644
+--- a/framework/doc/framework/java/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/java/guide/server/06-spot.ko.md
+@@ -17,17 +17,100 @@ title: "6. Spot · Java"
+ 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · [C++](../../../cpp/guide/server/06-spot.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
+ <!-- language-switch:end -->
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++```java
++public final class Matchmaker implements ZLinkInstanceSpot {
++    private final ZLinkInstanceSpotContext context;
++    private final List<String> waiting = new ArrayList<>();
++
++    public Matchmaker(ZLinkInstanceSpotContext context) {
++        this.context = context;
++    }
++
++    @Override
++    public ZLinkInstanceSpotContext context() {
++        return context;
++    }
++
++    // 이 Spot이 받을 handler를 등록한다.
++    @Override
++    public void configure() {
++        context.handlers().addHandler(JoinQueueHandler.class);
++    }
++
++    public void enqueue(String playerId) {
++        waiting.add(playerId);
++    }
++}
++
++// 첫 인자가 대상 Spot instance다.
++public final class JoinQueueHandler implements ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++    @Override
++    public CompletionStage<Void> handle(Matchmaker spot, JoinQueue message) {
++        spot.enqueue(message.playerId()); // 락 없이 직접 만진다.
++        return CompletableFuture.completedFuture(null);
++    }
++}
++```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++```java
++ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play").listen("tcp://0.0.0.0:9001");
++
++mesh.objects().server()
++    // 옵션은 기본값으로 둔다(§3.1).
++    .addInstanceSpotFactory("matchmaker", Matchmaker.class, factory -> { });
++```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++```java
++spotClient
++    .sendToSpot("queue-ranked", new JoinQueue("player-1"))
++    .instanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++    .inMesh("play")
++    .submit()
++    .toCompletableFuture().join();
++```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -49,7 +132,7 @@ Actor membership과 종료 계약이 다르다.
+ | `configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `onCreate` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `onInitialize` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `onCreate` 없이 이것만 받는다 |
+-| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `onActorJoin` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `onCreateActor` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `onJoinedActor` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -67,7 +150,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -124,7 +207,7 @@ ZLinkSpotCreateResult created = spots
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -148,7 +231,7 @@ mesh.objects().server()
+         factory -> factory.recreateOnRelocation());
+ ```
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -206,7 +289,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`create`는 새 Spot을 만드는 호출**이고, **`getOrCreate`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -279,7 +362,7 @@ current.ifPresent(spot ->
+     spots.close(spot).toCompletableFuture().join());
+ ```
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -296,7 +379,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -308,7 +391,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -319,7 +402,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler.class)` |
+ | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler.class)` |
+ | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler.class)` |
+-| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)`(§6.1) |
++| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)`(§7.1) |
+ | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler.class)` |
+ | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler.class)` |
+ 
+@@ -459,7 +542,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -532,7 +615,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -587,7 +670,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -598,12 +681,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -694,9 +777,9 @@ public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -760,7 +843,7 @@ public final class SaveScoreHandler
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다([16. Options](16-options.ko.md) §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `capture`로 application state를
+@@ -838,7 +921,7 @@ public CompletionStage<Void> onRelocationReadyCompleted(
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/java/guide/server/07-actor-spot.ko.md b/framework/doc/framework/java/guide/server/07-actor-spot.ko.md
+index 2d8cf68979..123422fb07 100644
+--- a/framework/doc/framework/java/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/java/guide/server/07-actor-spot.ko.md
+@@ -271,7 +271,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/java/guide/server/12-operations.ko.md b/framework/doc/framework/java/guide/server/12-operations.ko.md
+index ccac120d03..983721e7e0 100644
+--- a/framework/doc/framework/java/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/java/guide/server/12-operations.ko.md
+@@ -408,7 +408,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+diff --git a/framework/doc/framework/kotlin/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/kotlin/guide/server/05-channel-messaging.ko.md
+index a5b62baedc..d1b3a8de93 100644
+--- a/framework/doc/framework/kotlin/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/kotlin/guide/server/05-channel-messaging.ko.md
+@@ -386,7 +386,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/kotlin/guide/server/06-spot.ko.md b/framework/doc/framework/kotlin/guide/server/06-spot.ko.md
+index 9ecf37f3eb..5d25d47bdf 100644
+--- a/framework/doc/framework/kotlin/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/kotlin/guide/server/06-spot.ko.md
+@@ -17,17 +17,90 @@ title: "6. Spot · Kotlin"
+ 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · [C++](../../../cpp/guide/server/06-spot.ko.md) · [Java](../../../java/guide/server/06-spot.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
+ <!-- language-switch:end -->
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++```kotlin
++class Matchmaker(private val spotContext: ZLinkInstanceSpotContext) : ZLinkInstanceSpot {
++    private val waiting = mutableListOf<String>()
++
++    override fun context(): ZLinkInstanceSpotContext = spotContext
++
++    // 이 Spot이 받을 handler를 등록한다.
++    override fun configure() {
++        spotContext.handlers().addHandler(JoinQueueHandler::class.java)
++    }
++
++    fun enqueue(playerId: String) {
++        waiting.add(playerId)
++    }
++}
++
++// 첫 인자가 대상 Spot instance다.
++class JoinQueueHandler : ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++    override fun handle(spot: Matchmaker, message: JoinQueue): CompletionStage<Void> {
++        spot.enqueue(message.playerId) // 락 없이 직접 만진다.
++        return CompletableFuture.completedFuture(null)
++    }
++}
++```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++```kotlin
++val mesh = options.addRouteMesh("play").listen("tcp://0.0.0.0:9001")
++
++mesh.objects().server()
++    // 옵션은 기본값으로 둔다(§3.1).
++    .addInstanceSpotFactory("matchmaker", Matchmaker::class.java) { }
++```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++```kotlin
++spotClient
++    .sendToSpot("queue-ranked", JoinQueue("player-1"))
++    .instanceSpot("matchmaker") // 없으면 이 stable type으로 만든다.
++    .inMesh("play")
++    .submit()
++    .await()
++```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -49,7 +122,7 @@ Actor membership과 종료 계약이 다르다.
+ | `configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `onCreate` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `onInitialize` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `onCreate` 없이 이것만 받는다 |
+-| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `onActorJoin` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `onCreateActor` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `onJoinedActor` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -67,7 +140,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -125,7 +198,7 @@ val created = spots
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -145,7 +218,7 @@ mesh.objects().server()
+     }
+ ```
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -203,7 +276,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`create`는 새 Spot을 만드는 호출**이고, **`getOrCreate`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -280,7 +353,7 @@ if (current != null) {
+ }
+ ```
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -297,7 +370,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -309,7 +382,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -320,7 +393,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
+ | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
+ | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler::class.java)` |
+-| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`(§6.1) |
++| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`(§7.1) |
+ | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler::class.java)` |
+ | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler::class.java)` |
+ 
+@@ -438,7 +511,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -509,7 +582,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -564,7 +637,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -575,12 +648,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -669,9 +742,9 @@ override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -733,7 +806,7 @@ class SaveScoreHandler : ZLinkSpotRequestHandler<GameRoom, SaveScore, SaveScoreR
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다(`16. Options` 장 §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `capture`로 application state를
+@@ -804,7 +877,7 @@ override suspend fun onRelocationReadyCompleted(
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/kotlin/guide/server/07-actor-spot.ko.md b/framework/doc/framework/kotlin/guide/server/07-actor-spot.ko.md
+index e48bff28cf..b2f93e77aa 100644
+--- a/framework/doc/framework/kotlin/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/kotlin/guide/server/07-actor-spot.ko.md
+@@ -248,7 +248,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/kotlin/guide/server/12-operations.ko.md b/framework/doc/framework/kotlin/guide/server/12-operations.ko.md
+index 62fe07da68..60aaf2ea4f 100644
+--- a/framework/doc/framework/kotlin/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/kotlin/guide/server/12-operations.ko.md
+@@ -404,7 +404,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+diff --git a/framework/doc/framework/node/guide/server/05-channel-messaging.ko.md b/framework/doc/framework/node/guide/server/05-channel-messaging.ko.md
+index 49b3e923dd..fac0d30b3a 100644
+--- a/framework/doc/framework/node/guide/server/05-channel-messaging.ko.md
++++ b/framework/doc/framework/node/guide/server/05-channel-messaging.ko.md
+@@ -387,7 +387,7 @@ Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handle
+ 
+ 같은 `await` 규칙이 Spot·Actor handler에도 적용되지만, 그쪽은 turn이 handler 완료까지
+ 유지되어 동시 실행 범위가 다르다 —
+-[06-spot §2.1](06-spot.ko.md#21-실행-모델--동시-실행-범위)이 다룬다.
++[06-spot §2.1](06-spot.ko.md#31-실행-모델--동시-실행-범위)이 다룬다.
+ 
+ ## 3. handler를 channel에 노출하기
+ 
+diff --git a/framework/doc/framework/node/guide/server/06-spot.ko.md b/framework/doc/framework/node/guide/server/06-spot.ko.md
+index df4b8c53e8..f3eceacd75 100644
+--- a/framework/doc/framework/node/guide/server/06-spot.ko.md
++++ b/framework/doc/framework/node/guide/server/06-spot.ko.md
+@@ -17,17 +17,92 @@ title: "6. Spot · Node/TypeScript"
+ 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · [C++](../../../cpp/guide/server/06-spot.ko.md) · [Java](../../../java/guide/server/06-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · **Node/TypeScript**
+ <!-- language-switch:end -->
+ 
+-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
+-> [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
+-> [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
+-> 시그니처를 소유한다. Actor와 Spot membership은
+-> [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
++!!! info "이 장의 계약 소유 문서"
++
++    [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
++    [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
++    [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
++    시그니처를 소유한다. Actor와 Spot membership은
++    [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.
+ 
+ Spot은 room, stage, zone처럼 문자열 ID로 찾는 실행 단위다. `SpotId`는 Location Store 전체에서
+ 유일하며, 대소문자를 구분한다. Application은 Spot이 존재하는 `NodeRid`를 선택하거나 보관하지 않는다.
+ Framework가 현재 위치와 generation을 조회한다.
+ 
+-## 1. 세 가지 Spot
++## 1. 먼저 하나 돌려본다
++
++Spot은 상태를 가진 실행 단위다. 그 Spot 앞으로 보낸 메시지는 **한 번에 하나씩 상태 옆에서**
++실행되므로, handler 안에서 상태를 락 없이 직접 고친다.
++
++제일 짧은 형태를 먼저 만든다. **클래스 하나 · 등록 한 번 · 메시지 한 번**이면 끝난다.
++lifecycle callback은 기본 구현이 있으므로 지금은 적지 않는다.
++
++### 1.1 Spot과 handler
++
++상태를 담을 클래스를 만들고, 구성 단계에서 이 Spot이 받을 handler를 등록한다.
++
++```typescript
++export class Matchmaker implements ZLinkInstanceSpot {
++  private readonly waiting: string[] = [];
++
++  constructor(readonly context: ZLinkInstanceSpotContext) {}
++
++  // 이 Spot이 받을 handler를 등록한다.
++  configure(): void {
++    this.context.handlers.addPacket(JoinQueueHandler);
++  }
++
++  enqueue(playerId: string): void {
++    this.waiting.push(playerId);
++  }
++}
++
++// 첫 인자가 대상 Spot instance다.
++export class JoinQueueHandler implements ZLinkSpotPacketHandler<Matchmaker, JoinQueue> {
++  async handle(
++    spot: Matchmaker,
++    message: JoinQueue,
++    messageContext: ZLinkMessageContext
++  ): Promise<void> {
++    spot.enqueue(message.playerId); // 락 없이 직접 만진다.
++  }
++}
++```
++
++### 1.2 등록
++
++Spot을 실행할 MeshNode에 factory를 등록한다. `"matchmaker"`가 **stable type**이며, 이 type을
++등록한 node가 배치 후보가 된다. 어느 node에 둘지는 지정하지 않는다.
++
++```typescript
++const mesh = builder.addRouteMesh('play').listen('tcp://0.0.0.0:9001');
++
++mesh.objects().server()
++  // 옵션은 기본값으로 둔다(§3.1).
++  .addInstanceSpotFactory('matchmaker', Matchmaker, () => { });
++```
++
++### 1.3 메시지 보내기
++
++`"queue-ranked"`는 그 type으로 만들 instance의 ID다. **그 ID로 첫 메시지가 도착한 순간
++Framework가 Spot을 만들고 같은 메시지를 처리한다.** 생성 호출을 따로 하지 않는다.
++
++```typescript
++await spotClient
++  .sendToSpot('queue-ranked', joinQueue('player-1'))
++  .instanceSpot('matchmaker') // 없으면 이 stable type으로 만든다.
++  .inMesh('play')
++  .submit();
++```
++
++여기까지가 Spot 하나를 만들고 쓰는 전부다. 같은 ID로 보낸 메시지가 몇 개 동시에 와도
++한 번에 하나씩 실행되므로 `waiting`을 보호할 장치가 필요 없다.
++
++!!! note "방금 만든 것은 세 종류 중 Instance Spot이다"
++    생성 호출이 없어서 제일 짧다. room·stage·zone처럼 Actor가 드나드는 자리는 **User Spot**이고
++    생성 호출이 따로 있다. 셋의 차이는 §2에서 비교하고, User Spot은 §4에서 만든다.
++
++## 2. 세 가지 Spot
+ 
+ 세 종류 모두 ID와 상태를 가지고 순서대로 callback을 실행하는 Spot이지만, 생성 시점,
+ Actor membership과 종료 계약이 다르다.
+@@ -49,7 +124,7 @@ Actor membership과 종료 계약이 다르다.
+ | `configure` | O | O | O | handler를 등록하는 구성 단계 |
+ | `onCreate` | X | O | X | 새 User Spot 생성 요청을 확인하고 수락 여부를 정한다. 기존 Spot을 찾은 경우에는 부르지 않는다 |
+ | `onInitialize` | O | O | O | 만들어진 instance의 초기화. Instance Spot은 `onCreate` 없이 이것만 받는다 |
+-| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§4.1 아래) |
++| `onClosing` | O | O | O | 아직 유효한 local instance가 정리되기 전(§5.1 아래) |
+ | `onActorJoin` | X | O※ | X | 이미 있는 Actor가 이 User Spot으로 오려 할 때 승인·거부 |
+ | `onCreateActor` | O※ | X | X | 새 Actor의 최초 Entry Spot membership 승인·거부 |
+ | `onJoinedActor` | O※ | O※ | X | join commit이 끝났음을 **간 쪽** Spot에 알린다 |
+@@ -67,7 +142,7 @@ User Spot과 Instance Spot은 역할이 다르다. User Spot은 caller가 ID를
+ 발급한다. Instance Spot은 별도 create API를 사용하지 않는다. 첫 메시지에 instance type을 지정하면
+ Framework가 기존 instance를 선택하거나 필요한 위치에 생성한 뒤 같은 메시지를 처리한다.
+ 
+-### 1.1 실제 샘플에서 보기
++### 2.1 실제 샘플에서 보기
+ 
+ [Bingo 샘플](../../../common/sample/bingo/README.ko.md)은 세 종류를 모두 사용한다. Play
+ 서버가 Entry Spot과 방을 담을 User Spot을, Matchmaking 서버가 매칭 대기열을 담을
+@@ -122,7 +197,7 @@ const created = await spots
+ User·Instance Spot은 factory 등록에서 relocation policy도 함께 지정한다. 생략할 수
+ 없으며, 무엇을 선택하는지는 [Actor & Spot 호스팅](07-actor-spot.ko.md)이 다룬다.
+ 
+-## 2. Object Server 등록
++## 3. Object Server 등록
+ 
+ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고정 `NodeRid`를 사용해 배치 대상을
+ 선택하지 않는다. 같은 stable type을 등록한 `Serving` node가 배치 후보가 된다.
+@@ -141,7 +216,7 @@ mesh.objects().server()
+     factory.recreateOnRelocation());
+ ```
+ 
+-### 2.1 실행 모델 — 동시 실행 범위
++### 3.1 실행 모델 — 동시 실행 범위
+ 
+ Spot에 들어오는 작업은 두 queue로 나뉘어 대기한다. Spot 자신에게 온 direct packet과
+ timer는 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에
+@@ -199,7 +274,7 @@ Spot queue를 거치지 않고 Actor queue로 바로 간다.** Spot callback이
+ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려 하면 실행 중이
+ 아니라 **등록하거나 Spot을 준비하는 시점에** 거부된다.
+ 
+-## 3. User Spot 만들기
++## 4. User Spot 만들기
+ 
+ 두 호출은 목적이 다르다. **`create`는 새 Spot을 만드는 호출**이고, **`getOrCreate`는 그
+ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 있으면 어떻게 되기를 바라는가"로
+@@ -272,7 +347,7 @@ if (current !== undefined) {
+ }
+ ```
+ 
+-## 4. Spot 작성
++## 5. Spot 작성
+ 
+ Spot handler는 [05-channel-messaging](05-channel-messaging.ko.md)의 channel handler와
+ 작성 규칙이 다르다. 주소·수명·실행·상태가 모두 갈린다.
+@@ -289,7 +364,7 @@ Spot handler는 Spot class의 메서드가 아니라 그 Spot에 바인딩된 **
+ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히거나 relocation될 때
+ 정리한다. Actor handler도 같은 방식으로 해당 Actor activation에 묶인다.
+ 
+-### 4.1 handler 종류와 구현할 interface
++### 5.1 handler 종류와 구현할 interface
+ 
+ 무엇을 받느냐에 따라 구현할 interface가 다르다. 어느 것이든 `configure()`에서 등록한
+ 것과 짝이 맞아야 한다.
+@@ -301,7 +376,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | packet 등록 |
+ | Spot 앞 request | packet 등록 |
+ | Logical Multicast 구독 이벤트 | 구독 등록(channel과 topic 지정) |
+-| timer tick | timer 등록(이름과 주기 지정, §6.1) |
++| timer tick | timer 등록(이름과 주기 지정, §7.1) |
+ | member Actor 앞 one-way packet | actor packet 등록 |
+ | member Actor 앞 request | actor packet 등록 |
+ 
+@@ -312,7 +387,7 @@ Framework는 Spot activation에서 handler를 한 번 만들고 Spot이 닫히
+ | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addPacket(THandler)` |
+ | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addPacket(THandler)` |
+ | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `addSubscribe(THandler, channelName, topic)` |
+-| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `addTimer(name, periodMs, THandler, options)`(§6.1) |
++| timer tick | `ZLinkSpotTimerHandler<TSpot>` | `addTimer(name, periodMs, THandler, options)`(§7.1) |
+ | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `addActorPacket(THandler)` |
+ | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `addActorPacket(THandler)` |
+ 
+@@ -433,7 +508,7 @@ host shutdown에서는 **Actor membership과 local instance가 아직 살아 있
+ callback이 실행된다. 정리는 callback이 끝난 뒤에 이뤄지므로, 이 안에서 member Actor를
+ 읽는 코드가 성립한다.
+ 
+-### 4.2 Spot과 Actor의 activation scope
++### 5.2 Spot과 Actor의 activation scope
+ 
+ Framework는 Spot을 활성화할 때 DI scope를 하나 만들고 Spot 본체와 Spot handler의
+ dependency를 이 scope에서 resolve한다. Scope는 Spot이 닫히거나 다른 node로 이전할
+@@ -506,7 +581,7 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순
+ 함께 쓰는 인프라(캐시·카운터)는 싱글톤에 두고 자체 동기화한다. Handler field는 어느
+ 경우에도 상태를 두는 자리가 아니다.
+ 
+-## 5. Spot으로 메시지 보내기
++## 6. Spot으로 메시지 보내기
+ 
+ 일반 User Spot 메시징은 SpotId만 필요하다. 위치와 generation은 Framework가 현재 authority에서 찾는다.
+ 
+@@ -558,7 +633,7 @@ payload로 처리된다. 보내는 쪽이 같은 message를 두 번 보내지 
+ ID로 다시 보내는 것은 application의 새 operation이다. 이전 target이 이미 실행했을 수
+ 있으므로 **중복 실행 처리는 보내는 쪽 책임**이다.
+ 
+-### 5.1 Spot handler에서 channel 호출하기
++### 6.1 Spot handler에서 channel 호출하기
+ 
+ Spot handler와 timer는 channel send · request를 시작할 수 있다. **그 Spot을 소유한
+ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 이름의 송신 경로가
+@@ -569,12 +644,12 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 
+ 찾아 주지 않으며 `NotFound`로 끝난다. 그래서 Spot을 배치할 node를 정할 때 **그 Spot이
+ 호출할 channel의 송신 경로가 같은 process에 등록되어 있는지**를 함께 본다.
+ 
+-## 6. Timer와 worker
++## 7. Timer와 worker
+ 
+ 둘 다 Spot context에서 시작하지만 목적이 다르다. **Timer는 주기적으로 실행할 작업**을
+ 등록하고, **worker는 오래 걸리는 단발 작업**을 Spot queue 밖에서 실행한다.
+ 
+-### 6.1 Timer — 주기 실행
++### 7.1 Timer — 주기 실행
+ 
+ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer 핸들을 돌려주며, 이것으로
+@@ -662,9 +737,9 @@ async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
+ 
+ Spot이 다른 node로 옮겨갈 때 Framework가 timer 이름·handler type·주기·timer 옵션·
+ 스케줄 커서·아직 실행하지 않은 tick을 함께 옮긴다. 그래서 relocation adapter가 timer를
+-저장하거나 target에서 다시 등록하지 않는다([§7](#7-relocation을-시작해도-되는-시점-알리기)).
++저장하거나 target에서 다시 등록하지 않는다([§8](#8-relocation을-시작해도-되는-시점-알리기)).
+ 
+-### 6.2 Worker — 긴 작업을 Spot queue 밖에서 실행
++### 7.2 Worker — 긴 작업을 Spot queue 밖에서 실행
+ 
+ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이나 외부 I/O를 handler 안에서 그대로
+ 기다리면 그동안 그 Spot의 다른 작업이 전부 멈춘다. 이런 작업은 worker call로 위임한다.
+@@ -726,7 +801,7 @@ export class SaveScoreHandler
+ Worker 스레드 풀 자체(최소·최대 스레드, 유휴 시간, 대기열 길이)는 루트 옵션의 `Worker`에서
+ 정한다([16. Options](16-options.ko.md) §2).
+ 
+-## 7. Relocation을 시작해도 되는 시점 알리기
++## 8. Relocation을 시작해도 되는 시점 알리기
+ 
+ Relocation은 Spot을 다른 node로 옮기는 절차다([03-concepts](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)).
+ Framework는 source에서 새 turn 수락을 닫고, adapter의 `capture`로 application state를
+@@ -795,7 +870,7 @@ async onRelocationReadyCompleted(
+ - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
+   `FrameworkManaged` 모드에서는 호출할 수 없다.
+ 
+-## 8. 관련 문서
++## 9. 관련 문서
+ 
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`
+ - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
+diff --git a/framework/doc/framework/node/guide/server/07-actor-spot.ko.md b/framework/doc/framework/node/guide/server/07-actor-spot.ko.md
+index 89211787fa..811a41d202 100644
+--- a/framework/doc/framework/node/guide/server/07-actor-spot.ko.md
++++ b/framework/doc/framework/node/guide/server/07-actor-spot.ko.md
+@@ -239,7 +239,7 @@ barrier가 활성화된 뒤에는 그 뒤에 도착한 일반 message가 complet
+ ### 등록과 결과 수신
+ 
+ Actor handler에서 join을 예약한다. handler는 member Actor 앞 one-way packet을 받는 별도
+-class이며([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), 구성 단계에서
++class이며([06-spot §4.1](06-spot.ko.md#51-handler-종류와-구현할-interface)), 구성 단계에서
+ actor packet으로 등록한 것이다.
+ `defer()` 뒤에는 이 handler를 정상 종료시키는 것 외에 할 일이 없다.
+ 
+diff --git a/framework/doc/framework/node/guide/server/12-operations.ko.md b/framework/doc/framework/node/guide/server/12-operations.ko.md
+index 1d9ca34c03..1e5439c29d 100644
+--- a/framework/doc/framework/node/guide/server/12-operations.ko.md
++++ b/framework/doc/framework/node/guide/server/12-operations.ko.md
+@@ -406,7 +406,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
+ - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
+ - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
+ - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
+-- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
++- relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#8-relocation을-시작해도-되는-시점-알리기)
+ 
+ <script>
+ (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

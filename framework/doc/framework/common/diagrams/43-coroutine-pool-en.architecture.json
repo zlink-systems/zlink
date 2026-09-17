@@ -1,0 +1,151 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "One coroutine per event; threads come from a shared pool",
+    "subtitle": "Reaching co_await releases the thread; the reply resumes work where it stopped",
+    "output": "43-coroutine-pool-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 4,
+    "gapX": 150,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "E0",
+      "type": "external",
+      "label": "message A",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "T0",
+      "type": "backend",
+      "label": "task_t coroutine A",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "E1",
+      "type": "external",
+      "label": "timer tick",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "T1",
+      "type": "backend",
+      "label": "task_t coroutine T",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "E2",
+      "type": "external",
+      "label": "message B",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "T2",
+      "type": "backend",
+      "label": "task_t coroutine B",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "POOL",
+      "type": "messagebus",
+      "label": "worker thread pool",
+      "sublabel": "about one per CPU core",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "WAIT",
+      "type": "frontend",
+      "label": "waiting coroutines",
+      "sublabel": "holding no thread",
+      "row": 1,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "One coroutine per SPOT event",
+      "wraps": [
+        "E0",
+        "E1",
+        "E2"
+      ],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "from": "E0",
+      "to": "T0",
+      "variant": "default"
+    },
+    {
+      "from": "E1",
+      "to": "T1",
+      "variant": "default"
+    },
+    {
+      "from": "E2",
+      "to": "T2",
+      "variant": "default"
+    },
+    {
+      "from": "T0",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "T1",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "T2",
+      "to": "POOL",
+      "variant": "default"
+    },
+    {
+      "from": "POOL",
+      "to": "WAIT",
+      "label": "co_await → suspend",
+      "variant": "dashed"
+    },
+    {
+      "from": "WAIT",
+      "to": "POOL",
+      "label": "reply arrives → resume",
+      "variant": "dashed",
+      "labelDy": 26
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "A coroutine is not a thread",
+      "items": [
+        "Each event gets its own coroutine, yet the thread count never grows — the pool holds about one thread per CPU core.",
+        "A coroutine that reaches co_await releases its thread and holds none while waiting, so many waits never starve the pool."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

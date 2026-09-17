@@ -597,10 +597,10 @@ non-JSON content-type과 일치하는 codec이 registry에 없으면 payload를 
 송신 codec 선택의 입력은 **호출 지점에 선언된 message type**이다. 실제 전달한 instance의
 concrete type이 아니다. Base type이나 interface로 선언한 자리에 subtype instance를 넘겨도
 선언 type으로 고른다. 그래야 같은 호출 코드가 실행 시 넘어온 값에 따라 다른 codec과 다른
-content-type을 쓰지 않는다.
+content-type을 사용하지 않는다.
 
 여러 조건이 동시에 맞으면 **등록 순서가 늦은 것을 우선한다.** 어느 것도 맞지 않으면 JSON
-codec을 쓴다.
+codec을 사용한다.
 
 Framework는 선언 type별 송신 선택 결과를 최대 1,024개까지 저장한다. 저장 공간이 차면 기존
 결과를 제거하지 않는다. 그 뒤 처음 보는 type은 송신할 때마다 등록 목록을 다시 평가하며, 그
@@ -1005,7 +1005,7 @@ Framework는 startup에서 등록 순서대로 시작하고, 종료에서 역순
 | 정지 요청 | 종료 시작 시 역순으로 | 기록하고 계속 진행한다 |
 | 정지 | 정지 요청 뒤 역순으로 | 기록하고 계속 진행한다 |
 
-**언어별 재량** — 비동기 표현은 각 언어의 것을 쓴다(`Task`, `task_t`, `Promise`,
+**언어별 재량** — 비동기 표현은 각 언어의 것을 사용한다(`Task`, `task_t`, `Promise`,
 `CompletionStage`). 관찰 결과는 같다 — 시작이 끝나야 다음이 시작하고, 실패하면 startup이
 실패한다.
 
@@ -1069,9 +1069,9 @@ filter 실행 순서와 codec registry의 송수신 결과만으로 다음을 �
 - 같은 stable type의 factory를 Object Server builder에 중복 등록하면 startup이 실패한다.
 - Actor·User Spot·Instance Spot factory가 `DisableRelocation`·`RecreateOnRelocation`·
   `PreserveStateWith` 가운데 정확히 하나를 선택하지 않으면 startup이 실패한다.
-- Instance Spot factory가 하나라도 있거나 `RecreateOnRelocation`·`PreserveStateWith`를 쓰는
+- Instance Spot factory가 하나라도 있거나 `RecreateOnRelocation`·`PreserveStateWith`를 사용하는
   factory가 있는데 Relocation Store를 정확히 하나 등록하지 않으면 startup이 실패한다.
-- Object Client·Server role이나 automatic discovery 기능을 쓰는데 location store를 등록하지 않으면
+- Object Client·Server role이나 automatic discovery 기능을 사용하는데 location store를 등록하지 않으면
   startup이 실패한다.
 - 같은 dispatch key(owner와 message kind)로 handler를 중복 등록하면 startup이 실패한다.
 

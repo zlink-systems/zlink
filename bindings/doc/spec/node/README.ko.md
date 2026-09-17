@@ -368,7 +368,7 @@ TypeScript 관용 표기를 유지한다.
 
 런타임 소스는 [.NET 바인딩 청사진](../dotnet/README.ko.md)의 런타임 분류를 따라가되 구현만 담는다. Node
 런타임 파일 이름은 계약 트리와 같은 소문자 TypeScript 개념 이름을 사용한다.
-`default_context.ts`나 `default_pair_socket.ts`와 같이 `default_` 접두사를 쓰는
+`default_context.ts`나 `default_pair_socket.ts`와 같이 `default_` 접두사를 사용하는
 파일명을 사용하지 않는다. 이 패키지에서는 `src/zlink/runtime` 아래 모든 파일이
 이미 계약/런타임 분리에서 네이티브 기반 구현 쪽이다. 파일 이름은 구현체라는
 사실이 아니라 구현하는 리소스나 operation을 설명해야 한다.
@@ -481,8 +481,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 
 ## 수신 readiness
 
-Node는 단일 이벤트 루프에서 동작하므로 다른 바인딩이 쓰는 blocking readiness 대기를
-그대로 쓸 수 없다. `Poller.wait`는 동기 호출이라 이벤트 루프를 막고, 고정 간격
+Node는 단일 이벤트 루프에서 동작하므로 다른 바인딩이 사용하는 blocking readiness 대기를
+그대로 사용할 수 없다. `Poller.wait`는 동기 호출이라 이벤트 루프를 막고, 고정 간격
 타이머 폴링은 왕복마다 최소 1 ms를 더한다. 그래서 socket은 **Node 이벤트 루프에
 등록되는 readiness 알림**을 공개한다.
 

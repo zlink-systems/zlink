@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "관측 표면의 종류",
+    "subtitle": "상태는 조회와 구독으로 · 개별 message는 진단으로 · 수치는 계기로",
+    "output": "26-observation-paths.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "RT",
+      "type": "external",
+      "label": "framework runtime",
+      "sublabel": "돌고 있는 것",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "ST",
+      "type": "backend",
+      "label": "상태 조회·구독",
+      "sublabel": "지금 값과 변화",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "DG",
+      "type": "messagebus",
+      "label": "진단",
+      "sublabel": "trace·구조적 기록",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "MT",
+      "type": "database",
+      "label": "계기",
+      "sublabel": "수치",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "RT",
+      "to": "ST",
+      "label": "준비 상태와 그 변화",
+      "variant": "default"
+    },
+    {
+      "from": "RT",
+      "to": "DG",
+      "label": "message 하나의 경과",
+      "variant": "default"
+    },
+    {
+      "from": "RT",
+      "to": "MT",
+      "label": "쌓아서 보는 값",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "소비하는 방식이 서로 다르다",
+      "items": [
+        "상태 표면은 지금 값을 읽거나 변화를 순서대로 받을 때 쓴다. 구독은 취소할 때까지 열려 있으므로 host의 수명에 묶인 자리에서 돌린다.",
+        "진단은 개별 message를 추적할 때, 계기는 대시보드에 올릴 수치를 모을 때 쓴다. runtime의 사건을 handler로 받는 표면은 없다."
+      ]
+    }
+  ]
+}

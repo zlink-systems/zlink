@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ClientServer — calls run one way",
+    "subtitle": "only the server publishes an address · the client starts the connection too",
+    "output": "20-clientserver-oneway-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 170,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "node A",
+      "sublabel": "client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "server :7211",
+      "row": 0,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "connect · call",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "There is no reverse business call",
+      "items": [
+        "A server never starts a new call toward a client. All a client receives is the reply to a request it sent."
+      ]
+    }
+  ]
+}

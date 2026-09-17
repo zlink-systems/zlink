@@ -10,22 +10,17 @@ title: "1. 개요 · Java"
 # 1. 개요
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [다음: 2. 시작하기](02-getting-started.ko.md)
+[가이드 홈](README.ko.md) | [다음: Java Quickstart — 설치부터 첫 요청까지](../../quickstart.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/01-overview.ko.md) · [C++](../../../cpp/guide/server/01-overview.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/server/01-overview.ko.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
-> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
-> [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.
-
-> 이 문서는 `Java` 가이드의 진입점이다. 가이드는 Java 개발자가
-> ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
-> 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-> 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)가, `Java` public API의 **정식 계약**은
-> [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
-> spec이 우선이다.
+> 이 문서는 Java 가이드의 진입점이다. 가이드는 Java 개발자가
+> ZLink Framework의 기능을 **읽고 바로 따라 사용할 수 있도록** 개념과 사용법을
+> 직접 설명한다. 개념만 먼저 확인하려면 [핵심 개념](03-concepts.ko.md)으로 간다.
 
 ## 1. 한 줄 정의
 
@@ -65,7 +60,7 @@ correlation은 framework가 처리한다.
 - **상태가 메모리에 유지된다.** 웹은 상태를 DB에 두고 stateless로 scale-out하면
   되지만, 게임은 빠른 처리를 위해 room·참가자 상태를 **in-memory**에 두고 멀티
   스레드로 로직을 실행한다. 그 순간 lock, 경합, 데드락, "어느 스레드가 이 room을
-  만지는가"라는 동기화 문제가 업무 로직 안으로 스며든다.
+  만지는가"라는 동기화 문제를 업무 로직이 함께 처리하게 된다.
 - **연결 자체가 관리 대상이다.** 유저는 장기 연결을 유지한다. 소켓 framing과
   세션 수명을 직접 다루고, 재접속하면 어느 서버의 어느 room에 있었는지 이어 줘야
   하고, 배포·축소 때 접속 유저와 진행 중인 게임 상태를 유지해야 한다.
@@ -107,17 +102,17 @@ correlation은 framework가 처리한다.
 
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#33-계층-구조와-등록-지점) · [05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[10](10-location.ko.md) |
-| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](06-spot.ko.md) |
-| 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [09](09-stream.ko.md) |
-| 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [08](08-actor-session.ko.md) |
+| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#33-계층-구조와-등록-지점) · [05](20-channel-messaging.ko.md)·[06](21-spot.ko.md)·[10](25-location.ko.md) |
+| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](21-spot.ko.md) |
+| 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [09](23-stream.ko.md) |
+| 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [08](24-actor-session.ko.md) |
 | 배포 때 유저 튕김 | **graceful drain** — 신규 차단, actor handoff, 진행 중 마무리 후 종료. 앱 코드 0줄 | [12](12-operations.ko.md) |
 
 그리고 위의 **네 방식이 전부 같은 선언 모델 위의 조합**이 된다. 방식마다 소켓부터
 다시 만들 필요가 없다.
 
 - **① zone 분할** — zone을 `addRouteMesh` + 노드 지목 route mesh로 잡는다. 경계를 넘는
-  플레이어는 **actor 크로스노드 relocation**이 대신 넘겨준다([07](07-actor-spot.ko.md)).
+  플레이어는 **actor 크로스노드 relocation**이 대신 넘겨준다([07](22-actor.ko.md)).
   [ZoneWorld](../../../common/sample/zoneworld/README.ko.md)가 이 방식 그대로다.
 - **② lobby + room** — 입장·매칭은 Entry Spot, 방은 `getOrCreate`로 만드는 room spot이다.
   [Bingo](../../../common/sample/bingo/README.ko.md)가 이 방식 그대로다.
@@ -129,7 +124,7 @@ correlation은 framework가 처리한다.
   동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
   [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
 
-위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 조립된다.
+위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink.html" target="_blank">↗ 크게 보기</a></p>
@@ -174,7 +169,7 @@ ZLink는 언어마다 처음부터 다시 만드는 대신, 어려운 런타임�
 한 번만 구현하고 언어 표면만 갈아 끼우면 C++ · .NET · JVM · Node가 같은 코어를 공유한다.
 `bindings`와 Core는 프레임워크 내부 구현이라 public API에 노출되지 않고, 나중에 교체돼도
 application 코드는 바뀌지 않는다 — 이 backend 경계는
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.ko.md)가
+[internals/backend-dependency-policy](../../../node/internals/backend-dependency-policy.ko.md)가
 별도로 설명한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" loading="lazy" style="width:100%;border:0"></iframe>
@@ -210,7 +205,7 @@ public final class MarkNumberHandler
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
 구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
 실행하기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
-직렬화**다([06 §3](06-spot.ko.md)).
+직렬화**다([06 §3](21-spot.ko.md)).
 
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
@@ -224,18 +219,18 @@ public final class MarkNumberHandler
 
 - **동시 수정이 충돌한다.** 여러 API 인스턴스가 같은 길드 row를 동시에
   읽고-고치고-쓰면 lost update가 생긴다.
-- **직렬화 장치를 직접 조립해야 한다.** Redis 분산 락이나 DB row lock으로 길드
+- **직렬화 장치를 직접 구성해야 한다.** Redis 분산 락이나 DB row lock으로 길드
   단위 critical section을 만들어야 한다.
 - **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale
-  write 처리를 앱이 떠안는다.
+  write 처리가 앱의 책임으로 남는다.
 
-**ZLink가 제공하는 것.** 락을 조립하는 대신 그 엔티티를 직렬 실행 단위로 만든다.
+**ZLink가 제공하는 것.** 락을 직접 구성하는 대신 그 엔티티를 직렬 실행 단위로 만든다.
 
-| 조립하던 것 | ZLink 기능 | 자세히 |
+| 직접 구성하던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 길드 id별 Redis 분산 락 | **Instance Spot** — 길드 id로 cold activation되는 spot 하나가 그 길드의 모든 요청을 직렬 처리 | [06](06-spot.ko.md) |
-| 락 획득·해제·타임아웃 처리 | **직렬 실행** — 락 개념 자체가 없어지고, 항상 spot 큐 순서대로 처리된다 | [06 §3](06-spot.ko.md) |
-| 길드 spot을 찾는 서버 간 호출·LB | **channel name + location store** | [05](05-channel-messaging.ko.md)·[10](10-location.ko.md) |
+| 길드 id별 Redis 분산 락 | **Instance Spot** — 길드 id로 cold activation되는 spot 하나가 그 길드의 모든 요청을 직렬 처리 | [06](21-spot.ko.md) |
+| 락 획득·해제·타임아웃 처리 | **직렬 실행** — 락 개념 자체가 없어지고, 항상 spot 큐 순서대로 처리된다 | [06 §3](21-spot.ko.md) |
+| 길드 spot을 찾는 서버 간 호출·LB | **channel name + location store** | [05](20-channel-messaging.ko.md)·[10](25-location.ko.md) |
 | 새 길드의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
 
 **기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
@@ -269,7 +264,7 @@ spots.requestToSpot(guildId, new JoinGuildReq(userId))
 
 **왜 복잡도가 올라가는가.** **배달 주문 앱**을 떠올려 보자 — 주문 넣기·조회는 평범한
 HTTP 요청/응답이지만, "준비 중 → 배달 출발 → 곧 도착" 상태는 앱을 새로고침하지 않아도
-실시간으로 밀어줘야 한다. 대규모 웹 서비스의 표준 구성 — Spring/`ASP.NET Core` +
+실시간으로 전달해야 한다. 대규모 웹 서비스의 표준 구성 — Spring/`ASP.NET Core` +
 Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에 최적화되어 있어서,
 이런 실시간 기능을 추가하는 순간 전제들이 하나씩 안 맞으면서 복잡도가 올라간다.
 
@@ -282,17 +277,17 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 - **순서가 중요한 단위가 생긴다.** 주문·대화는 이벤트 처리 순서가 곧 정합성이다.
   여러 인스턴스가 같은 주문을 동시에 만질 수 있으니 분산 락으로 직렬화한다.
 
-기능 하나 붙였는데 WebSocket 서버, sticky LB, 브로커 경유, 분산 락 — 조립 세트
+기능 하나 붙였는데 WebSocket 서버, sticky LB, 브로커 경유, 분산 락 — 직접 구성할 목록
 한 벌과 그 운영 부담이 늘어난다.
 
-**ZLink가 제공하는 것.** 조립 세트의 조각마다 기능이 대응한다.
+**ZLink가 제공하는 것.** 그 목록의 항목마다 기능이 대응한다.
 
-| 조립하던 것 | ZLink 기능 | 자세히 |
+| 직접 구성하던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| WebSocket 서버 + sticky LB | **STREAM** — 앱 서버가 client 연결을 직접 받는다 | [09](09-stream.ko.md) |
-| 분산 락으로 순서 보장 | **SPOT owner routing** — 같은 주문·대화는 항상 자기 Spot 한 곳에서 직렬 실행 | [06](06-spot.ko.md) |
-| 브로커 경유 실시간 전달 | **channel·fanout** — 서버 간 전달과 fan-out을 transport가 직접 | [05](05-channel-messaging.ko.md) |
-| "누가 어디 연결돼 있지" 관리 | **actor binding + location store** — 재접속 이전성과 위치 조회를 framework가 소유 | [08](08-actor-session.ko.md)·[10](10-location.ko.md) |
+| WebSocket 서버 + sticky LB | **STREAM** — 앱 서버가 client 연결을 직접 받는다 | [09](23-stream.ko.md) |
+| 분산 락으로 순서 보장 | **SPOT owner routing** — 같은 주문·대화는 항상 자기 Spot 한 곳에서 직렬 실행 | [06](21-spot.ko.md) |
+| 브로커 경유 실시간 전달 | **channel·fanout** — 서버 간 전달과 fan-out을 transport가 직접 | [05](20-channel-messaging.ko.md) |
+| "누가 어디 연결돼 있지" 관리 | **actor binding + location store** — 재접속 이전성과 위치 조회를 framework가 소유 | [08](24-actor-session.ko.md)·[10](25-location.ko.md) |
 
 같은 배달 주문 앱 — HTTP 주문 처리 + 실시간 배달 상태 push — 을 두 방식으로 그리면
 차이가 그림에서 바로 보인다.
@@ -372,9 +367,9 @@ stateful stream processor(Kafka Streams/Flink)로 상태를 소비자 곁에 두
 
 두 그림에서 Kafka의 색이 바뀐다. 처리 경로 **안에서** 순서를 담당하던
 Kafka(주황)가 처리 경로 **밖으로** 나가 전파·보존만 맡는다(회색). 그러면서 순서
-담당을 위해 조립했던 조각들 — 주문 처리 소비자 그룹(offset·rebalance·dedupe), 캐시,
+담당을 위해 직접 구성했던 항목들 — 주문 처리 소비자 그룹(offset·rebalance·dedupe), 캐시,
 조회용 read model, 재동기화 잡 — 이 사라진다. 같은 `OrderId`가 항상 같은 owner에서
-직렬로 처리되므로, 파이프라인이 제공하던 순서·중복 방지를 조립할 필요가 없어진
+직렬로 처리되므로, 파이프라인이 제공하던 순서·중복 방지를 직접 구성할 필요가 없어진
 것이다.
 
 **서버 간 호출의 LB도 사라진다.** 주문 처리는 재고·결제 같은 다른 서비스를 동기
@@ -390,23 +385,23 @@ API 서버에 분배하고(회색), 주문 상태는 여전히 DB에 저장한�
 [17장 §5.1](17-alternative.ko.md)이 다룬다).
 
 **ZLink가 제공하는 것.** "같은 key를 한 곳에 모아 순서대로"를 log가 아니라 **owner
-routing**으로 풀면, 위 조각의 대부분은 조립할 필요 자체가 사라진다.
+routing**으로 풀면, 위 항목의 대부분은 직접 구성할 필요 자체가 사라진다.
 
-| 조립하던 것 | ZLink 기능 | 자세히 |
+| 직접 구성하던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| key partition + consumer group | **SPOT owner routing** — 같은 `OrderId`는 항상 같은 Spot에서 직렬 실행. 어느 API 인스턴스가 받아도 같은 owner로 route된다 | [06](06-spot.ko.md) |
-| 이벤트마다 DB load-modify-store | **owner spot의 hot state** — 상태가 owner 메모리에 있고, 저장 시점은 업무 규칙에 맞춰 앱이 결정한다 | [06](06-spot.ko.md) |
-| 재전달 대비 version check·분산 락 | **직렬 실행** — 같은 단위에 동시 writer가 없어 정상 경로에서 락·version 경합이 없다 | [06 §3](06-spot.ko.md) |
-| 서버 간 호출용 LB·service discovery | **channel name + location store** — `"inventory"` 이름으로 부르면 현재 사용 가능한 peer로 직접 전송한다 | [05](05-channel-messaging.ko.md)·[10](10-location.ko.md) |
+| key partition + consumer group | **SPOT owner routing** — 같은 `OrderId`는 항상 같은 Spot에서 직렬 실행. 어느 API 인스턴스가 받아도 같은 owner로 route된다 | [06](21-spot.ko.md) |
+| 이벤트마다 DB load-modify-store | **owner spot의 hot state** — 상태가 owner 메모리에 있고, 저장 시점은 업무 규칙에 맞춰 앱이 결정한다 | [06](21-spot.ko.md) |
+| 재전달 대비 version check·분산 락 | **직렬 실행** — 같은 단위에 동시 writer가 없어 정상 경로에서 락·version 경합이 없다 | [06 §3](21-spot.ko.md) |
+| 서버 간 호출용 LB·service discovery | **channel name + location store** — `"inventory"` 이름으로 부르면 현재 사용 가능한 peer로 직접 전송한다 | [05](20-channel-messaging.ko.md)·[10](25-location.ko.md) |
 | offset·lag·재동기화 잡 운영 | 소비 파이프라인이 없으므로 해당 운영 항목 자체가 없다 | |
 
 **기존 스택을 대체하는 것이 아니다.** Kafka는 내구성 있는 이벤트 스트림으로, Redis는
-캐시/영속 보조로 그대로 남는다. ZLink가 줄이는 것은 그 사이에서 직접 조립하던
+캐시/영속 보조로 그대로 남는다. ZLink가 줄이는 것은 그 사이에서 직접 구성하던
 **연결·라우팅·상태 관리의 복잡도**다.
 
 **경계는 그대로다.** durable log가 진짜 필요한 요구 — 이벤트 replay, 장기 보존, 독립
 시스템들로의 광범위 fan-out — 는 Kafka가 맞고 그대로 남긴다([17장 §4](17-alternative.ko.md)).
-ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파이프라인을 조립하던
+ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파이프라인을 직접 구성하던
 경우다. 순서와 정합성이 목적의 전부였다면, owner routing이 그 목적을 파이프라인 없이
 직접 달성한다.
 
@@ -433,7 +428,7 @@ public final class StartOrderWorkflowHandler
 
 지금까지 살펴본 상황들의 차이는 진입점일 뿐, 쓰는 표면은 같다. 기능 하나씩 제공하는 제품은
 있어도 — RPC는 gRPC가, actor는 Orleans가, 연결은 게임 엔진이 — **메이저
-프레임워크 통합 + 직렬 실행 상태 단위 + 자동 연결 토폴로지를 한 몸에 담은
+프레임워크 통합 + 직렬 실행 상태 단위 + 자동 연결 토폴로지를 함께 제공하는
 조합**이 ZLink의 자리다.
 
 ## 3. 표면과 구조
@@ -546,21 +541,19 @@ ZLinkFrameworkConfigurer zlink = options -> {
 };
 ```
 
-gRPC+LB, broker, WebSocket 서버로 각각 조립하던 토폴로지들이 **같은 선언 모델
+gRPC+LB, broker, WebSocket 서버로 각각 직접 구성하던 토폴로지들이 **같은 선언 모델
 하나**로 내려온다. location store를 등록했으므로 서버가 늘어나거나 줄어들 때
 connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일을 고치거나 LB를
 재구성할 일이 없다.
-([05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[09](09-stream.ko.md)·[10](10-location.ko.md))
+([05](20-channel-messaging.ko.md)·[06](21-spot.ko.md)·[09](23-stream.ko.md)·[10](25-location.ko.md))
 
 무엇을 어디서 선언하는지는 다음 세 자리로 정리된다.
 
 | 표면 | 역할 | 다루는 장 |
 | --- | --- | --- |
-| `builder.Services.AddZLinkFramework(...)` | channel·SPOT·STREAM 선언 | [5장](05-channel-messaging.ko.md)~[9장](09-stream.ko.md) |
-| `options.AddRouteMesh(...)` / `addFanoutChannel(...)` | RouteMesh·fanout 선언 | [5장](05-channel-messaging.ko.md) |
-| `IZLink*Runtime` status | 상태 관측과 진단 | [11장](11-monitoring.ko.md) |
-
-각 표면에서 정할 수 있는 옵션 전체와 기본값은 [16-options](16-options.ko.md)에 모아 두었다.
+| `builder.Services.AddZLinkFramework(...)` | channel·SPOT·STREAM 선언 | [5장](20-channel-messaging.ko.md)~[9장](23-stream.ko.md) |
+| `options.AddRouteMesh(...)` / `addFanoutChannel(...)` | RouteMesh·fanout 선언 | [5장](20-channel-messaging.ko.md) |
+| `IZLink*Runtime` status | 상태 관측과 진단 | [11장](26-monitoring.ko.md) |
 
 ## 4. 통합 4축 요약
 
@@ -569,12 +562,12 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
 | --- | --- | --- |
-| channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.ko.md) |
-| fanout | `addFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.ko.md) |
-| SPOT | typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-| actor / session | actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-| STREAM | framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-| 인프라 | Location 기반 자동 연결·운영 조회, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
+| channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](20-channel-messaging.ko.md) |
+| fanout | `addFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](20-channel-messaging.ko.md) |
+| SPOT | typed spot factory, Spot context outbound, timer | [06-spot](21-spot.ko.md) |
+| actor / session | actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](22-actor.ko.md) · [08-actor-session](24-actor-session.ko.md) |
+| STREAM | framework session packet, Stream Connector | [09-stream](23-stream.ko.md) |
+| 인프라 | Location 기반 자동 연결·운영 조회, runtime monitoring | [10-location](25-location.ko.md), [11-monitoring](26-monitoring.ko.md) |
 | 운영 | 런타임 메트릭(등록 한 줄), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
 
 ## 5. 전체 topology
@@ -618,9 +611,8 @@ ZLink의 용도를 구체적인 업무 흐름으로 확인할 때는 [공통 샘
 
 **이 계층이 하지 않는 것도 분명하다.** ZLink Framework는 transport 구현을 application
 코드에 노출하는 계층이 아니다. application 개발자는 DI, hosted service, handler와
-location store 모델로 공개 기능을 사용한다. 정식 public API 계약을 검토하는 사람은
-[spec/interfaces 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md)를, runtime 내부 구조를
-고치는 사람은 [internals/](../../internals/backend-dependency-policy.ko.md)를 같이 봐야 한다.
+location store 모델로 공개 기능을 사용한다. runtime 내부 구조를 고치는 사람은
+[internals/](../../../java/internals/backend-dependency-policy.ko.md)를 같이 봐야 한다.
 
 ## 7. 이름 표기 규칙
 
@@ -635,21 +627,40 @@ location store 모델로 공개 기능을 사용한다. 정식 public API 계약
 
 ## 8. 가이드 읽는 순서
 
-- [02-getting-started](02-getting-started.ko.md) — 패키지부터 첫 동작 확인까지
-- [03-concepts](03-concepts.ko.md) — 핵심 개념 (channel, 역할, DI)
-- [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub 상세
-- [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot 호출
-- [07-actor-spot](07-actor-spot.ko.md) — actor lifecycle, Spot 호스팅·콜백
-- [08-actor-session](08-actor-session.ko.md) — session↔actor binding·dispatch, client push
-- [09-stream](09-stream.ko.md) — 외부 client(STREAM) 서버 + Stream Connector
-- [10-location](10-location.ko.md) — location store 기반 자동 연결과 운영 조회
-- [11-monitoring](11-monitoring.ko.md) — 상태 관측과 진단
-- [13-interface-catalog](13-interface-catalog.ko.md) — 모든 계약 인터페이스를 코드로(ContractTests 검증)
+- [퀵스타트](../../../java/quickstart.ko.md) — 설치부터 첫 동작 확인까지
+- [핵심 개념](03-concepts.ko.md) — channel, 역할, DI
+
+**기능별 가이드**
+
+- [20-channel-messaging](20-channel-messaging.ko.md) — Channel 메시징 — request·send·pub/sub
+- [21-spot](21-spot.ko.md) — Spot — room·stage·zone과 timer
+- [22-actor](22-actor.ko.md) — Actor — 활성화와 상태 소유
+- [23-stream](23-stream.ko.md) — STREAM — 외부 client를 받는 endpoint
+- [24-actor-session](24-actor-session.ko.md) — Session과 Actor 연결 — client push
+- [25-location](25-location.ko.md) — Location — 자동 연결과 운영 조회
+- [26-monitoring](26-monitoring.ko.md) — 모니터링 — 상태 관측과 진단
+
+**동작 원리**
+
+- [30-channel-patterns](30-channel-patterns.ko.md) — Channel 동작 원리
+- [31-handler-dispatch](31-handler-dispatch.ko.md) — Handler와 메시지 처리
+- [32-execution-model](32-execution-model.ko.md) — 실행 모델
+- [33-backpressure](33-backpressure.ko.md) — Backpressure — 처리보다 도착이 빠를 때
+- [34-activation-lifetime](34-activation-lifetime.ko.md) — 활성화와 수명
+- [35-actor-membership](35-actor-membership.ko.md) — Actor membership
+- [36-timer-worker](36-timer-worker.ko.md) — Timer와 worker
+- [37-relocation](37-relocation.ko.md) — Relocation
+- [38-stream-boundary](38-stream-boundary.ko.md) — STREAM의 동작 원리
+- [39-session-binding](39-session-binding.ko.md) — Session 묶음의 동작 원리
+- [17-alternative](17-alternative.ko.md) — ZLink를 어디에 사용하나 — 사용처와 기술 선택 경계
+
+**운영과 확인**
+
+- [12-operations](12-operations.ko.md) — 운영 — 배포와 장애 대응
 - [14-samples](14-samples.ko.md) — 실행되는 샘플로 확인하기
-- [16-options](16-options.ko.md) — 옵션 목록과 기본값, 무엇을 언제 바꾸나
-- [17-alternative](17-alternative.ko.md) — **ZLink를 어디에 쓰나**(사용처·문제 신호·기술 선택 경계)
+- [15-e2e-testing](15-e2e-testing.ko.md) — e2e 테스트
+- [16-options](../../../java/guide/server/16-options.ko.md) — 옵션 목록과 기본값
 - [공통 샘플](../../../common/sample/README.ko.md) — 대표 업무 시나리오와 검증 기준
-- [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md) — 정식 계약
 
 ---
 

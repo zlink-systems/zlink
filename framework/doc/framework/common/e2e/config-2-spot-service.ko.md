@@ -98,14 +98,14 @@ Application은 domain key에서 SpotId만 정하고 current owner는 Framework�
 
 우선순위: `P2`
 
-Stage는 Application이 Spot·Actor·timer API를 묶어 쓰는 wrapper이며 별도 scheduler나 routing layer가 아니다.
+Stage는 Application이 Spot·Actor·timer API를 묶어 사용하는 wrapper이며 별도 scheduler나 routing layer가 아니다.
 
 **검증 질문:** SpotWide와 PerActor Stage variants가 각 execution mode의 public ordering을 유지하는가.
 
 - 시작 조건: 같은 domain behavior를 두 User Spot execution mode로 구성한다.
 - 절차: Spot request, member Actor request와 timer를 application wrapper를 통해 실행한다.
 - 검증: SpotWide는 shared gate 순서를, PerActor는 Actor별·timer별 lane 순서를 유지한다. Public replies와
-  state는 wrapper를 쓰지 않은 대조 flow와 같다.
+  state는 wrapper를 사용하지 않은 대조 flow와 같다.
 - 세부 동작: [비동기 실행 정책](../spec/server/01-execution/README.ko.md)을 검증한다.
 
 #### SM-A6 User Spot initialize와 close lifecycle을 실행한다

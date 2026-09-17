@@ -204,6 +204,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     if (participant === undefined) return;
     const wins = participant.wins + 1;
     if (wins !== 100) return;
+    // --8<-- [start:doc-multicast-publish]
     await this.context.outbound
       .publish(
         SampleNames.playerMilestoneChannel,
@@ -211,6 +212,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
         playerWinMilestoneEvent(after.roomId, actorId, participant.displayName, wins)
       )
       .submit();
+    // --8<-- [end:doc-multicast-publish]
   }
 
   private admit(actorId: string, request: TicTacToeGameJoinReq): TicTacToeGameJoinRes {

@@ -72,13 +72,13 @@ catch (const zlink::framework::framework_exception_t &error) {
   ([6. Response 다루기](06-handling-responses.ko.md)).
 
 업무 로직이 404/409 같은 status에 의미를 두면 raw 경로를, "200 + DTO 아니면
-실패"가 맞으면 typed 경로를 쓴다.
+실패"가 맞으면 typed 경로를 사용한다.
 
 ## is_retriable과 자동 retry의 관계
 
 `retry(attempts)`([10장](10-redirects-retries-cookies.ko.md))가 자동 재시도하는
 범위가 바로 `is_retriable() == true`인 실패다. 직접 재시도 루프를 짤 때도 같은
-기준을 쓰면 일관된다.
+기준을 사용하면 일관된다.
 
 ```cpp
 for (int attempt = 0;; ++attempt) {

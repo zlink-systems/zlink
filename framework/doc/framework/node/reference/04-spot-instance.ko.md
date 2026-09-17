@@ -4,7 +4,7 @@
 
 이 category는 `ZLinkSpotManager`(`ZLINK_SPOT_MANAGER`)·`ZLinkRouteClient`·`ZLinkSpotPublisherClient`
 (`ZLINK_SPOT_PUBLISHER_CLIENT`)가 제공하는 외부 진입점과, Spot 코드 안에서 `ZLinkSpotContext`/
-`ZLinkInstanceSpotContext`로 쓰는 진입점을 다룬다. 정확한 signature는
+`ZLinkInstanceSpotContext`로 사용하는 진입점을 다룬다. 정확한 signature는
 [Spot과 Instance Spot exact interface](../../common/spec/server/languages/node/interfaces/04-spots.ko.md)와
 [STREAM, timer와 worker exact interface](../../common/spec/server/languages/node/interfaces/06-stream-worker.ko.md)가
 소유한다.
@@ -40,8 +40,8 @@ const spotId = created.spot.spotId;
 거부하면 `"rejected"`이고 `reply`에 거부 메시지가 담긴다. 같은 option을 두 번 설정하거나 terminal을
 두 번 호출하면 `InvalidOperation`, deadline 안에 끝나지 않으면 `DeadlineExceeded`다.
 
-**선택 기준.** 항상 새 인스턴스가 필요할 때 쓴다. 있으면 재사용하고 없을 때만 만들려면
-`getOrCreate`를 쓴다.
+**선택 기준.** 항상 새 인스턴스가 필요할 때 사용한다. 있으면 재사용하고 없을 때만 만들려면
+`getOrCreate`를 사용한다.
 
 ---
 
@@ -64,8 +64,8 @@ const existingOrCreated = await spotManager
 `"created"`면 새로 만든 것이다. 같은 SpotId가 creating 상태로 경합 중이면 그 결과를 기다렸다가
 합류하고, cleanup으로 missing이 되면 새 reservation을 다시 경쟁한다.
 
-**선택 기준.** SpotId로 멱등하게 "있으면 쓰고 없으면 만들기"가 필요할 때 쓴다. 항상 새 인스턴스가
-필요하면 `create`를 쓴다.
+**선택 기준.** SpotId로 멱등하게 "있으면 사용하고 없으면 만들기"가 필요할 때 사용한다. 항상 새 인스턴스가
+필요하면 `create`를 사용한다.
 
 ---
 
@@ -87,7 +87,7 @@ if (spot) {
 없으면 `false`, generation이 다르면 `InvalidOperation`, pre-commit seal 중이면 `Unavailable`이다.
 User Spot에 Actor membership이 남아 있으면 `false`이며 Actor를 자동으로 leave·destroy하지 않는다.
 
-**선택 기준.** 지금 시점의 존재 여부 확인이나 명시적 종료가 필요할 때 쓴다. `close`는 stale
+**선택 기준.** 지금 시점의 존재 여부 확인이나 명시적 종료가 필요할 때 사용한다. `close`는 stale
 `SpotRef`로 다른 incarnation을 대신 닫지 않는다.
 
 ---
@@ -116,14 +116,14 @@ await routeClient
 | `.metadata(key, value)` | 없음 | handler에 전달할 key-value |
 | `.instanceSpot()` | 없음(User Spot만 resolve) | Missing이면 cold activation한다. Existing authority가 있으면 등록 타입 수와 관계없이 저장된 stable type을 사용한다 |
 | `.instanceSpot(instanceSpotType)` | — | Missing인데 등록 타입이 여럿이면 stable type을 명시해야 한다 |
-| `.inMesh(meshName)` | Object Client·Server role의 Mesh가 하나면 생략 가능 | Missing Instance Spot을 처음 만들 Mesh. Instance marker 없이 쓰면 `InvalidOperation` |
+| `.inMesh(meshName)` | Object Client·Server role의 Mesh가 하나면 생략 가능 | Missing Instance Spot을 처음 만들 Mesh. Instance marker 없이 사용하면 `InvalidOperation` |
 | `.submit(signal?)` | 필수 terminal | source-local admission까지만 기다린다 |
 
 **완료 결과.** SpotId가 없고 Instance marker도 없으면 `NotFound`. `.instanceSpot(...)`을 썼는데
 existing authority가 User Spot이거나 명시한 타입과 다르면 `TypeMismatch`. 그 외 완료 kind는
 messaging-execution category의 공통 규칙과 같다.
 
-**선택 기준.** Reply가 필요 없는 Spot 메시징에 쓴다. Reply가 필요하면 `requestToSpot`을 쓴다.
+**선택 기준.** Reply가 필요 없는 Spot 메시징에 사용한다. Reply가 필요하면 `requestToSpot`을 사용한다.
 
 ---
 
@@ -149,7 +149,7 @@ const reply = await routeClient
 **완료 결과.** `sendToSpot`과 같은 실패 kind에 더해, cold activation 중 factory나 initialize가
 실패하면 typed failure로 완료된다 — Framework가 내부적으로 재시도하지 않는다.
 
-**선택 기준.** Reply 값이 필요할 때 쓴다. One-way면 `sendToSpot`을 쓴다.
+**선택 기준.** Reply 값이 필요할 때 사용한다. One-way면 `sendToSpot`을 사용한다.
 
 ---
 
@@ -171,8 +171,8 @@ await spotPublisherClient
 messaging-execution category의 classic fanout `publish`와 달리, ChannelName만으로 owner MeshNode를
 결정하며 caller가 MeshName을 추가로 넘기지 않는다.
 
-**선택 기준.** Spot 상태 변화를 관찰자에게 알릴 때 쓴다. 구독자에게 직접 reply가 필요하면 이
-항목이 아니라 `requestToSpot`을 쓴다.
+**선택 기준.** Spot 상태 변화를 관찰자에게 알릴 때 사용한다. 구독자에게 직접 reply가 필요하면 이
+항목이 아니라 `requestToSpot`을 사용한다.
 
 ---
 
@@ -201,7 +201,7 @@ const timer = await context.addTimer(
 때 자동으로 이전되며 application이 target에서 다시 등록할 필요가 없다. `cancel(signal?)` 또는
 `dispose()`로 취소한다.
 
-**선택 기준.** Spot 안에서 주기 작업이 필요할 때 쓴다.
+**선택 기준.** Spot 안에서 주기 작업이 필요할 때 사용한다.
 
 ---
 
@@ -228,7 +228,7 @@ const result = await context
 (`minThreads`/`maxThreads`)와 idle timeout은 host 시작 전에만 설정한다.
 
 **선택 기준.** CPU-bound 계산은 `runCpuWorker`, I/O 대기가 있는 작업(`Promise<T>` 반환)은
-`runIoWorker`를 쓴다. 둘 다 owner turn의 순차 실행을 막지 않으려는 목적이다.
+`runIoWorker`를 사용한다. 둘 다 owner turn의 순차 실행을 막지 않으려는 목적이다.
 
 ---
 
@@ -245,7 +245,7 @@ export class StartGameHandler implements ZLinkSpotRequestHandler<RoomSpot, Start
 }
 ```
 
-**옵션.** Handler가 처리하는 대상에 따라 구현하는 interface와 decorator가 갈린다.
+**옵션.** Handler가 처리하는 대상에 따라 구현하는 interface와 decorator가 달라진다.
 
 | 대상 | Handler interface | Decorator |
 | --- | --- | --- |
@@ -260,7 +260,7 @@ export class StartGameHandler implements ZLinkSpotRequestHandler<RoomSpot, Start
 | Instance Spot 앞 packet(raw builder) | `ZLinkInstanceSpotHandlerRegistry.addPacket(handlerType)` | 없음(직접 등록) |
 
 **완료 결과.** 반환값 없이 동기로 등록된다. `spot`/`entrySpot` field는 `Type<T> | (() => Type<T>)`
-— 순환 참조를 피하려면 lazy resolver(`() => RoomSpot`)를 쓴다. 같은 owner의 handler key 중복은
+— 순환 참조를 피하려면 lazy resolver(`() => RoomSpot`)를 사용한다. 같은 owner의 handler key 중복은
 startup 검증에서 configuration error로 드러난다.
 
 **선택 기준.** 모든 Spot handler class에 정확히 하나의 decorator를 붙인다. Node·Channel handler는
@@ -287,7 +287,7 @@ const reply = await context.outbound
 **완료 결과.** messaging-execution category의 완료 kind와 같다.
 
 **선택 기준.** Spot이 외부 client가 아니라 자기 코드 안에서 다른 ChannelName의 handler를 호출해야
-할 때 쓴다. 다른 Spot을 직접 호출하려면 `sendToSpot`/`requestToSpot`을 쓴다.
+할 때 사용한다. 다른 Spot을 직접 호출하려면 `sendToSpot`/`requestToSpot`을 사용한다.
 
 ---
 
@@ -312,7 +312,7 @@ await entryContext.destroyActor(actor); // Entry Spot: Actor를 완전히 파기
 
 **선택 기준.** Member Actor를 다른 곳으로 옮기지 않고 이 Spot에서만 빼려면 `leaveActor`를, Spot
 자신을 스스로 종료하려면 `close`를, Entry Spot에서 더 이상 필요 없는 Actor를 완전히 없애려면
-`destroyActor`를 쓴다.
+`destroyActor`를 사용한다.
 
 ---
 
@@ -333,7 +333,7 @@ optional `onRelocationReadyCompleted(...)`로 받는다(callback이 없으면 no
 mode, `PerActor` Spot, Entry·Instance Spot, Spot turn 밖, 같은 turn의 중복 호출은
 `InvalidOperation`으로 완료한다.
 
-**선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 쓴다.
+**선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 사용한다.
 기본 `FrameworkManaged` mode에서는 이 호출이 필요하지 않다.
 
 ---

@@ -199,7 +199,7 @@ Framework 기본 표면은 session, session context, stream과 message까지만 
 raw transport나 framework 기본 runtime에 특정 codec 구현을 직접 섞지 않는다.
 
 Session handler는 codec별 helper를 직접 호출하지 않는다. JSON·Protobuf·MessagePack·custom
-codec을 바꿔도 업무 코드는 같은 decode 표면을 쓴다.
+codec을 바꿔도 업무 코드는 같은 decode 표면을 사용한다.
 
 Server framework, HTTP client host와 stream connector는 codec 번호, content-type과 typed
 payload 선택 계약을 공유하지만 registry instance는 공유하지 않는다. Server는 server root별

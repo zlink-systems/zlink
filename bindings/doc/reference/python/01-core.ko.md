@@ -57,7 +57,7 @@ context 하위 socket의 blocking 호출을 인터럽트하지만 context나 그
 socket을 닫지 않는다. `recalculate_auto_hwm`은 아직 `AutoHwmProfile`이
 설정된 socket에 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 스레드에서 socket을 쓰는 중인 context를 닫기
+**선택 기준.** 여러 스레드에서 socket을 사용하는 중인 context를 닫기
 전엔 `shutdown()`을 호출해 socket 호출을 기다리는 스레드가 무기한
 block되는 걸 막는다. auto-HWM profile이나 message-unit option을 바꾼
 후엔 새 sizing을 즉시 적용하려고 `recalculate_auto_hwm()`을 호출한다.
@@ -154,10 +154,10 @@ restored = RoutingId.from_hex(previously_printed.to_hex())
 길이는 `ValueError`를 던진다. `from_hex`에 잘못된 hex 문자열을 주면
 `TypeError`/`ValueError`를 던진다.
 
-**선택 기준.** 임의 입력 타입엔 `from_(value)`를 쓴다 — 하나의
+**선택 기준.** 임의 입력 타입엔 `from_(value)`를 사용한다 — 하나의
 호출로 문자열, int, UUID, raw byte를 다 다루며, 타입별 별개 overload/
-factory를 쓰는 언어와 다르다. 내구성 있는 raw-byte round trip
-전용으로 `to_hex()`/`from_hex()`를 쓴다 — `str(routing_id)`는 표시
+factory를 사용하는 언어와 다르다. 내구성 있는 raw-byte round trip
+전용으로 `to_hex()`/`from_hex()`를 사용한다 — `str(routing_id)`는 표시
 전용이며 가역성이 보장되지 않는다.
 
 ---
@@ -186,9 +186,9 @@ message = strerror(errnum)
 `strerror`는 `str`을 반환한다.
 
 **선택 기준.** 링크된 native library 버전이 application이 기대하는
-버전과 일치하는지 확인하려면 `version()`을 쓴다. 기동 시점에
+버전과 일치하는지 확인하려면 `version()`을 사용한다. 기동 시점에
 `has(...)`로 선택적 transport에 분기한다. `strerror`는 다른 곳(Errors
-category)에서 드러난 native error code와 함께 진단용으로 쓴다.
+category)에서 드러난 native error code와 함께 진단용으로 사용한다.
 
 ---
 
@@ -227,10 +227,10 @@ context-manager 프로토콜을 둘 다 지원한다. `Thread`는 그렇지 않�
 (`close()`/`__enter__`가 아예 없다).
 
 **선택 기준.** 스레드 전체에서 안전한 공유 count엔 `AtomicCounter`를
-쓴다. 벤치마킹엔 `Stopwatch`를 쓴다 — `intermediate()`는 몇 번이든
+사용한다. 벤치마킹엔 `Stopwatch`를 사용한다 — `intermediate()`는 몇 번이든
 호출하고, `stop()`은 정확히 한 번 호출한다. zlink 런타임이 수명주기를
-소유해야 할 땐 Python의 `threading.Thread`를 직접 쓰는 대신
-`create_thread`를 쓴다.
+소유해야 할 땐 Python의 `threading.Thread`를 직접 사용하는 대신
+`create_thread`를 사용한다.
 
 ---
 
@@ -257,9 +257,9 @@ multipart_close(parts)
 **Completion result.** 모두 반환값 없이 동기다. `proxy`는 context가 종료될 때까지
 호출 스레드를 block한다 — 전용 스레드에서 실행한다.
 
-**선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를 쓴다. 수신되거나
+**선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를 사용한다. 수신되거나
 구성된 multipart sequence의 모든 메시지를 손으로 짠 loop 대신 한
-호출로 해제하려면 `multipart_close`를 쓴다.
+호출로 해제하려면 `multipart_close`를 사용한다.
 
 ---
 

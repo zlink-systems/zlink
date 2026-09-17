@@ -1,0 +1,171 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Servers talk in typed messages by role; clients receive over a stream",
+    "subtitle": "An HTTP request passes through channels to a SPOT; a live connection arrives over the stream",
+    "output": "cpp-topology-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 4,
+    "gapX": 150,
+    "gapY": 84,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "CL",
+      "type": "frontend",
+      "label": "client app",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "HTTP",
+      "type": "external",
+      "label": "HTTP API",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "APIC",
+      "type": "backend",
+      "label": "channel client",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "REG",
+      "type": "database",
+      "label": "Registry",
+      "sublabel": "discovery",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "ST",
+      "type": "messagebus",
+      "label": "stream",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "CORES",
+      "type": "backend",
+      "label": "channel server",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "AG",
+      "type": "messagebus",
+      "label": "actor gateway",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "SPOT",
+      "type": "frontend",
+      "label": "SPOT",
+      "sublabel": "unit of state",
+      "row": 2,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "entry server",
+      "wraps": [
+        "HTTP",
+        "APIC"
+      ],
+      "pad": 26
+    },
+    {
+      "kind": "region",
+      "label": "domain server",
+      "wraps": [
+        "ST",
+        "CORES",
+        "AG",
+        "SPOT"
+      ],
+      "pad": 26
+    }
+  ],
+  "connections": [
+    {
+      "from": "CL",
+      "to": "HTTP",
+      "label": "① HTTP request",
+      "variant": "default"
+    },
+    {
+      "from": "HTTP",
+      "to": "APIC",
+      "variant": "default"
+    },
+    {
+      "from": "APIC",
+      "to": "CORES",
+      "label": "② server-to-server",
+      "variant": "default",
+      "labelDy": 38
+    },
+    {
+      "from": "CORES",
+      "to": "SPOT",
+      "variant": "default"
+    },
+    {
+      "from": "CL",
+      "to": "ST",
+      "label": "③ live connection",
+      "variant": "default"
+    },
+    {
+      "from": "ST",
+      "to": "AG",
+      "variant": "default"
+    },
+    {
+      "from": "AG",
+      "to": "SPOT",
+      "variant": "default"
+    },
+    {
+      "from": "APIC",
+      "to": "REG",
+      "label": "address lookup",
+      "variant": "dashed"
+    },
+    {
+      "from": "CORES",
+      "to": "REG",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two ways in",
+      "items": [
+        "A request goes HTTP API → channel client → channel server → SPOT; servers address each other by name, not by host.",
+        "A live connection arrives over the stream, passes the actor gateway and reaches the same SPOT.",
+        "The channel client and channel server look up the node behind a name in the Registry."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,7 +1,7 @@
 # ZLink C++ quickstart
 
-The same scenario as `common/guide/server/02-getting-started.ko.md` §2 "minimal
-example -- two processes call each other", built and actually run with only
+The project that `framework/doc/framework/cpp/quickstart.ko.md` reads from, built and
+actually run with only
 **published GitHub Release source archives** -- no repository source, no vcpkg
 overlay port, no local package cache. Two processes exchange endpoints
 directly (no Redis, no location store) and complete one request/reply.

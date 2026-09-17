@@ -224,14 +224,14 @@ Automatic discovery에서 message를 보내거나 받는 runtime node인
 게시하는 [MeshNode descriptor](../00-foundation/02-glossary.ko.md#meshnode-descriptor), owner lease,
 ClientServer server descriptor, fanout publisher
 descriptor와 authority record는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 —
-그래야 한 언어가 쓴 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장 방식을
+그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장 방식을
 **반드시** 따른다.
 
 Redis key는 `{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`이며, `{prefix}`는
 provider가 등록 시 지정하는 key namespace, `preimage`는
 [Location runtime §3.4](01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
 정하는 record별 logical key preimage다(주의 — 이 `sha256hex(preimage)`는 §8의
-`sha256hex(logicalKey)`와 다른 입력을 쓴다. Counter는 짧은 literal logical key를 그대로
+`sha256hex(logicalKey)`와 다른 입력을 사용한다. Counter는 짧은 literal logical key를 그대로
 해시하고, 이 다섯 record는 record별로 구성한 preimage 문자열을 해시한다).
 
 `{zlink-location-v3}`을 감싼 중괄호는 Redis Cluster hashtag다 — `Put`이 record·sequence
@@ -247,8 +247,8 @@ append-log로 기록한다 — 가장 큰 score의 member가 현재 값이다. M
 실패시키며, 값을 추측해서 읽지 않는다.
 
 `cmsgpack`은 Redis Lua `cmsgpack` library가 만드는 표준 MessagePack 인코딩을 뜻하며, array의
-다섯 member는 다음 MessagePack type을 쓴다 — 일반 encoder의 기본값(예: byte 문자열에 `bin`
-family를 쓰는 선택)은 Lua `cmsgpack`의 출력과 byte 단위로 일치하지 않으므로 명시적으로
+다섯 member는 다음 MessagePack type을 사용한다 — 일반 encoder의 기본값(예: byte 문자열에 `bin`
+family를 사용하는 선택)은 Lua `cmsgpack`의 출력과 byte 단위로 일치하지 않으므로 명시적으로
 고정한다.
 
 | Member | MessagePack type |
@@ -259,7 +259,7 @@ family를 쓰는 선택)은 Lua `cmsgpack`의 출력과 byte 단위로 일치하
 | `expiresAtMs` | 부호 없는 `int` family(크기에 따라 positive fixint/uint8/uint16/uint32/uint64); `0`은 만료 없음을 뜻한다 |
 | `tombstone` | `bool`(`0xc2` false / `0xc3` true) |
 
-바깥 array 자체는 `array` family(요소 5개이므로 fixarray)를 쓴다.
+바깥 array 자체는 `array` family(요소 5개이므로 fixarray)를 사용한다.
 
 Redis에 이미 저장된 상태를 옛 key·value 형식에서 읽어 새 opaque record로 변환하는 하위 호환
 경로는 두지 않는다. 이 형식으로 올라가는 배포는 **clean break**다 — 기존 Redis 상태는

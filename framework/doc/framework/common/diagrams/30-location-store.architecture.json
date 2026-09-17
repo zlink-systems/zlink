@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Location Store — 누가 어디 있는지 적어 두는 곳",
+    "subtitle": "각 process가 자기 주소를 적고, 다른 process가 그것을 읽어 연결한다",
+    "output": "30-location-store.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 130, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "A", "type": "backend", "label": "서버 node", "sublabel": "자기 주소를 적는다", "row": 0, "col": 0 },
+    { "id": "B", "type": "backend", "label": "서버 node", "sublabel": "자기 주소를 적는다", "row": 2, "col": 0 },
+    { "id": "S", "type": "database", "label": "Location Store", "sublabel": "Redis 등 외부 저장소", "row": 1, "col": 1 },
+    { "id": "C", "type": "frontend", "label": "호출 node", "sublabel": "주소를 읽어 연결", "row": 1, "col": 2 }
+  ],
+  "connections": [
+    { "from": "A", "to": "S", "label": "등록", "variant": "default" },
+    { "from": "B", "to": "S", "variant": "default" },
+    { "from": "S", "to": "C", "label": "조회", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "설정 파일에 주소를 적지 않아도 되는 이유",
+      "items": [
+        "각 process가 시작할 때 자기 주소와 맡은 이름을 Store에 적고, 살아 있는 동안 그 기록을 갱신한다. 멈추면 기록이 사라진다.",
+        "호출하는 쪽은 Store를 읽어 연결할 곳을 찾는다. 서버를 늘리거나 다른 주소로 재시작해도 호출하는 쪽 설정을 고치지 않는다.",
+        "Spot과 Actor가 지금 어느 node에 있는지도 여기에 기록된다. Spot·Actor를 쓰려면 Store가 반드시 필요하다."
+      ]
+    }
+  ]
+}

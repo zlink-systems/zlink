@@ -49,7 +49,7 @@ const auto &profile = response.body;             // ③ DTO
 `request_failed`("HTTP request failed with status 404")로 닫히고 `value()`에
 접근할 수 없다. typed 경로는 "성공 응답을 DTO로 받는" 경로이기 때문이다.
 
-status를 직접 분기하고 싶으면 `submit_raw()`를 쓴다. raw 경로는 status가 몇이든
+status를 직접 분기하고 싶으면 `submit_raw()`를 사용한다. raw 경로는 status가 몇이든
 응답 자체를 성공으로 돌려준다.
 
 ```cpp

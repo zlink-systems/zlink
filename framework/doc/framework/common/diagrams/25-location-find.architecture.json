@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "find는 Store에 묻고 끝난다",
+    "subtitle": "돌아오는 것은 지금 있는 node 이름이다 · 대상에게는 아무것도 가지 않는다",
+    "output": "25-location-find.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "호출 node",
+      "sublabel": "id만 안다",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "room-42 → node A",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 0,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "R"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "지금 어디냐고 묻는다",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "R",
+      "label": "node A 라고 적혀 있다",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "C",
+      "to": "R",
+      "label": "호출은 id만 준다",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "조회한 값을 호출 주소로 쓰지 않는다",
+      "items": [
+        "find는 Store만 읽으므로 대상이 실제로 살아 있는지까지 확인하지 않는다. 돌아온 node 이름은 그 시점의 기록이다.",
+        "호출은 id만 준다. Framework가 같은 기록을 다시 읽어 보내므로, 사이에 대상이 옮겨 가도 따라간다."
+      ]
+    }
+  ]
+}

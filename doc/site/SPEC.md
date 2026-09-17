@@ -5,6 +5,9 @@
 `doc/guide/`의 21개 가이드 문서를 기반으로, 바인딩 사용자가 자기 언어로
 코드 예제를 볼 수 있는 정적 문서 사이트를 만든다.
 
+> **어떤 장이 있고 각 장이 무엇을 맡는지**는 [GUIDE-STRUCTURE.md](GUIDE-STRUCTURE.md)가
+> 소유한다. 이 문서는 그것을 사이트로 만드는 설정을 다룬다.
+
 참조 모델: https://zguide.zeromq.org (언어별 코드 탭 전환)
 
 ## 도구
@@ -171,9 +174,15 @@ ASCII 다이어그램, bash 명령, text 블록 등. 변환하지 않고 그대�
 
 ## 코드 예제 작성 원칙
 
+> **Framework 서버 가이드는 이 절이 아니라
+> [사용자 가이드 문서 작성 가이드](../principal/documentation/guide-writing-guide.ko.md)과
+> [가이드 작성 가이드](../principal/documentation/guide-writing-guide.ko.md)를 따른다.**
+> 아래는 bindings 가이드에 적용한다.
+
 - **샘플 코드 직접 활용**: 각 바인딩의 `samples/` 디렉터리에 있는 실행 가능한
   샘플 코드를 가이드에 직접 사용한다. 별도의 문서 전용 코드를 만들지 않는다.
-  - 샘플 코드는 실행 가능하고 CI로 검증되므로 문서와 코드의 동기화가 보장된다.
+  - 샘플 코드는 실행 가능하므로 문서와 코드가 함께 움직인다. 다만 **워크플로 트리거가
+    꺼져 있는 동안은 자동 검증이 돌지 않는다** — 인용한 코드는 직접 실행해 확인한다.
   - 샘플에서 사용하는 helper(`sample_common.hpp`, `SampleSupport.java` 등)는
     이름만으로 의도가 파악 가능하도록 설계되어 있다.
   - 가이드에서 helper를 처음 참조할 때 한 줄로 설명을 추가한다.
@@ -309,6 +318,10 @@ pymdown-extensions>=10.0
 
 ## 문서 페이지 헤더 규약
 
+> Framework 서버 가이드의 장 머리말은
+> [가이드 문서 가이드 작성 가이드 §2](../principal/documentation/guide-writing-guide.ko.md)가 정한다.
+> 아래는 spec·internals·bindings 문서 묶음에 적용한다.
+
 가이드 문서(`framework/doc/framework/<lang>/guide/`)가 이미 갖춘 페이지 상단 구조를,
 internals를 포함해 손으로 관리하는 모든 문서 묶음에도 같은 원칙으로 적용한다. 독자가
 목차를 거치지 않고 이 페이지로 바로 들어와도 무엇을 다루는 문서인지, 정본 계약은
@@ -331,7 +344,7 @@ internals를 포함해 손으로 관리하는 모든 문서 묶음에도 같은 
    있어야 한다.
 
    ```markdown
-   [목차](README.ko.md) · [이전: 3. 핵심 개념](03-concepts.ko.md) · [다음: 5. Channel Messaging](05-channel-messaging.ko.md)
+   [목차](README.ko.md) · [이전: 3. 핵심 개념](03-concepts.ko.md) · [다음: 4. Backpressure](33-backpressure.ko.md)
    ```
 
 3. **여는 인용 상자** — H1 바로 뒤에 이 페이지가 답하는 질문과, 정본 계약을 소유하는

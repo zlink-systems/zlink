@@ -155,23 +155,23 @@ public 타입이 어떤 범주에 속하는지는 바인딩마다 같은 기준�
 ### 핸들러 등록 네이밍 정책
 
 callback/handler 등록 함수 이름은 실제 동작을 드러내야 한다. 이벤트가 발생했을 때
-호출되는 함수처럼 보이는 이름을 등록 함수에 쓰면, 사용자가 직접 구현해야 하는 hook
+호출되는 함수처럼 보이는 이름을 등록 함수에 사용하면, 사용자가 직접 구현해야 하는 hook
 인지 handler를 저장하는 API인지 헷갈릴 수 있다.
 
 - 한 subject에 handler 하나를 저장하거나 기존 handler를 교체하는 public API는
-  `set...Handler` 계열 이름을 쓴다. 언어 관례에 따라 `Set...Handler`,
+  `set...Handler` 계열 이름을 사용한다. 언어 관례에 따라 `Set...Handler`,
   `set...Handler`, `set_..._handler`처럼 표기한다.
 - public binding의 `set...Handler`는 같은 subject에 활성 handler를 하나만 둔다.
   같은 setter를 다시 호출하면 현재 handler를 교체한다. raw native attach 충돌이나
   recv mode 충돌은 별도 오류로 보고할 수 있지만, public setter 이름은 누적 등록을
   뜻하지 않는다.
 - 여러 handler를 누적 등록하는 public API만 `add...Handler` 또는
-  `register...Handler` 계열 이름을 쓴다.
+  `register...Handler` 계열 이름을 사용한다.
 - `on...` 계열 이름은 이벤트가 발생했을 때 호출되는 protected/internal hook이나
-  framework-level handler method에만 쓴다. handler 등록 함수의 canonical 이름으로
-  쓰지 않는다.
-- topic 구독처럼 프로토콜 상태를 바꾸는 API는 `subscribe` / `unsubscribe`를 쓸 수
-  있다. 단순히 callback을 저장하는 함수에는 `subscribe...Handler`를 쓰지 않는다.
+  framework-level handler method에만 사용한다. handler 등록 함수의 canonical 이름으로
+  사용하지 않는다.
+- topic 구독처럼 프로토콜 상태를 바꾸는 API는 `subscribe` / `unsubscribe`를 사용할 수
+  있다. 단순히 callback을 저장하는 함수에는 `subscribe...Handler`를 사용하지 않는다.
 - callback을 `null`/`None`으로 설정해서 해제하는 표면은 만들지 않는다. 해제가
   필요하면 close/lifecycle 규칙으로 처리한다.
 
@@ -274,7 +274,7 @@ function 이름, request pump, callback trampoline, buffer marshalling 순서를
 
 파일 구조에서도 같은 기준을 적용한다.
 
-- category aggregate 파일은 작은 re-export barrel이나 factory wiring에만 쓴다.
+- category aggregate 파일은 작은 re-export barrel이나 factory wiring에만 사용한다.
   `sockets`, `service`, `eventing` 같은 category 파일 하나가 여러 public resource의
   실제 동작을 모두 담고 있으면 contract/runtime 분리가 된 것이 아니다.
 - native-backed resource 구현은 resource별 파일에 둔다. 예를 들어 socket family,
@@ -401,7 +401,7 @@ pass-through class를 늘리면 안 된다.
   `native`, send/recv 흐름 변경은 `sockets`, message ownership 변경은 `messaging`
   또는 `buffers`가 바뀌어야 한다.
 - `core`, `common`, `utils`, `internal`, `misc` 같은 포괄 이름은 canonical runtime
-  category로 쓰지 않는다. 이런 이름은 서로 다른 변경 이유를 한곳에 섞기 쉽다.
+  category로 사용하지 않는다. 이런 이름은 서로 다른 변경 이유를 한곳에 섞기 쉽다.
 
 기존 runtime에 `monitoring` 또는 `Monitoring` 범주가 있으면 contract와 마찬가지로
 canonical category는 `eventing`이다. monitor 구현만 담긴 파일이라도 poller, timer,
@@ -480,7 +480,7 @@ payload part로 추가하지 않는다. Request와 reply에 multipart N개를 �
 application part N개만 관찰한다.
 
 Binding이 public `Message`에서 native copy나 view를 만드는 언어에서는 Core가 소비할 그 native
-message에만 request-reply metadata가 연결된다. Public source에 metadata를 쓰거나, 실패한 submit의
+message에만 request-reply metadata가 연결된다. Public source에 metadata를 사용하거나, 실패한 submit의
 source를 raw send했을 때 request-reply kind가 다시 나타나게 해서는 안 된다. Source를 보존하는지
 소비하는지는 각 언어의 기존 ownership 계약을 그대로 따른다.
 
@@ -515,7 +515,7 @@ record마다 한 번 호출해야 한다. 이는 `Required` 규칙이다.
 이 규칙은 내부 구현 기반에 관한 것이다. binding 사용자가 보는 public API 형태는
 이 규칙과 무관하게 각 언어 spec이 정한 대로 유지한다.
 
-- 사용자는 `send(List<Message>)`, `recv()`, `request(...)` 같은 언어 친화적 API를 그대로 쓴다.
+- 사용자는 `send(List<Message>)`, `recv()`, `request(...)` 같은 언어 친화적 API를 그대로 사용한다.
 - public binding의 receive 표면은 `recv`, `subscribe`, `recvRouted` 같은
   aggregate 결과 저장소 API를 제공한다.
 
@@ -907,7 +907,7 @@ error 표현을 분리해서 설명해야 한다.
   포함한다. hard error 는 언어 관용대로 예외 또는 error code 로 전달한다.
 - `recv_flags_t::dontwait` 등 non-blocking flag 가 적용된 호출에서 데이터가
   없으면 `false`, `recv_result_t::no_data`, `(false, nil)`, `Ok(false)` 같이
-  caller-provided storage와 함께 쓰는 no-data 표현을 반환한다. exception 으로
+  caller-provided storage와 함께 사용하는 no-data 표현을 반환한다. exception 으로
   EAGAIN 을 알리지 않는다.
 - multipart 결과는 caller 결과 저장소에 누적 노출한다. binding 이 임시
   컬렉션을 만들어 caller 결과 저장소와 별도로 캐싱하면 안 된다 (할당이 사라지지
@@ -1563,7 +1563,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
 ### 기반 타입 노출
 - 가능하면 컴파일 단계에서 사용자가 concrete socket type만 직접 쓰게 해야 한다.
 - 사용자가 generic root base, raw compat base, shared base를 concrete socket
-  type 대신 직접 쓰는 구조는 피한다.
+  type 대신 직접 사용하는 구조는 피한다.
 - static typed binding은 public type/export/visibility를 이용해 이 규칙을
   강제해야 한다.
 - dynamic binding은 export 제한과 surface test로 같은 규칙을 강제해야 한다.
@@ -1662,9 +1662,9 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
       `zlink_config_result_t`).
    - Go: `(T, error)` 반환. error 객체에 `int` 코드를 포함한다.
    - Rust: `Result<T, E>` 반환. `E` 는 가능한 한 함수군별 구체 에러
-     (`BindError`, `SubmitError` 등)를 쓰고, 여러 함수군이 섞이는 경계에서만
+     (`BindError`, `SubmitError` 등)를 사용하고, 여러 함수군이 섞이는 경계에서만
      `ZlinkError` 로 승격한다. 에러 값에는 `int` 코드가 포함된다.
-     `?` 연산자로 호출측 전파를 쓴다.
+     `?` 연산자로 호출측 전파를 사용한다.
 3. **`Try*` 대신 `flags` 와 반환 규칙으로 blocking 여부를 표현한다.**
    - C 는 C ABI 함수형 계약을 유지한다.
    - Go / Rust 는 return-based 오류 전달을 유지하되, wrapper binding의
@@ -1709,7 +1709,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
 | Python | throw | `ZlinkError` | `.code` | `.internal_errno` |
 
 - `return` 그룹(C / Go / Rust) 은 호출자가 반환값을 명시적으로 검사한다.
-  Go 는 `if err != nil`, Rust 는 `match` / `?` 연산자 관용구를 쓴다.
+  Go 는 `if err != nil`, Rust 는 `match` / `?` 연산자 관용구를 사용한다.
 - `throw` 그룹(C++ / Java / .NET / Node / Python) 은 예외를 전파한다. caller
   는 언어별 `try`/`catch` 또는 상위 propagation 에서 처리한다.
 
@@ -1831,7 +1831,7 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
 
 - 일반 생성은 `from(...)` 또는 언어별 동등 이름 하나로 모은다.
   `from_bytes`, `from_string`, `from_u32`, `from_uuid` 같은 타입 suffix 이름은
-  canonical public API 로 쓰지 않는다.
+  canonical public API 로 사용하지 않는다.
 - hex 디코딩은 사람이 읽는 문자열 디코딩이라는 의미가 다르므로
   `from_hex` 계열을 예외로 허용한다. 언어별 표기는 `FromHex`, `fromHex`,
   `from_hex`, `NewRoutingIDFromHex`처럼 관용구를 따른다.
@@ -1872,7 +1872,7 @@ request_to_channel_async(channel, parts, timeout)
 - Poller 대기 결과 타입의 canonical 이름은 `PollEvent` 이다.
   C++은 `poll_event_t`, Java/.NET은 `PollEvent`, Node/TypeScript는
   `PollEvent` 형태를 사용한다. `PollerEvent`처럼 owner를 한 번 더 붙인
-  이름은 canonical public API 로 쓰지 않는다.
+  이름은 canonical public API 로 사용하지 않는다.
 - Timer, monitor, dispatch 결과도 같은 규칙을 따른다. owner가 이미
   반환 타입이나 네임스페이스에서 드러나면 타입 이름에 owner를 반복하지 않는다.
 
@@ -2000,7 +2000,7 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
   buffer 를 이후 자유롭게 변경하거나 해제할 수 있어야 한다.
 - Java `from(ByteBuf)` 는 Netty `ByteBuf` 의 readable bytes 를 복사하되
   `readerIndex` 를 변경하지 않는다. `copyTo(ByteBuf)` 는 destination 의
-  writable 영역에 쓰고 `writerIndex` 를 증가시킨다.
+  writable 영역에 사용하고 `writerIndex` 를 증가시킨다.
 - borrowed / zero-copy 생성자는 canonical public contract 가 아니다. 특정
   바인딩이 내부 최적화로 쓰더라도 public API 에서 lifetime 책임을 caller 에게
   떠넘기면 안 된다.
@@ -2456,7 +2456,7 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
 서비스 계층의 introspection / snapshot / entry 타입은 **사용 빈도에 따라
 두 계층으로 구분**한다. 바인딩 spec 은 이 구분을 반영한다.
 
-- **Primary (핵심)**: 일반 사용자가 자주 쓰는 snapshot/query surface.
+- **Primary (핵심)**: 일반 사용자가 자주 사용하는 snapshot/query surface.
   `bindings/<lang>/README.md` 의 상위 섹션에 기술한다.
   - `SpotNodeStatus` (spot node 상태)
 
@@ -2476,8 +2476,8 @@ Primary 타입만으로 기본 사용 시나리오가 성립해야 한다. Advan
 - 바인딩은 **raw `zlink_errno()` / `zlinkErrno()` 함수를 public 으로 노출하지
   않는다**. 에러 상세는 **언제나 에러 타입의 `internalErrno` /
   `internal_errno` 필드**로만 접근한다.
-- 사용자가 에러 조사 시 "가끔 `ZlinkException.getCode()` 쓰고 가끔 `Zlink.
-  errno()` 쓰는" 이중 경로를 만들지 않는다 — 한 진입점으로 통일.
+- 사용자가 에러 조사 시 "가끔 `ZlinkException.getCode()` 사용하고 가끔 `Zlink.
+  errno()` 사용하는" 이중 경로를 만들지 않는다 — 한 진입점으로 통일.
 - 바인딩 내부 구현이 `zlink_errno()` 를 호출해 예외 객체에 채워 넣는 건
   허용 (내부 해석용). public surface 에만 금지 적용.
 - `Zlink.strerror(errno)` 같은 message lookup 유틸은 convenience 로 남겨두되,
@@ -2779,7 +2779,7 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
   - `SpotNodeSubjectFilter`: subject 조회 필터
   - `SpotNodeSocketFilter`: 내부 socket 진단 필터
 - enum/value object:
-  - `SocketType`: 일반 socket과 SpotNode 내부 socket 진단에서 함께 쓰는
+  - `SocketType`: 일반 socket과 SpotNode 내부 socket 진단에서 함께 사용하는
     socket 종류
   - `SpotRole`: `PUB`, `SUB`
   - `SubjectKind`: `NONE`, `TOPIC`, `PATTERN`
@@ -2806,7 +2806,7 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 | SpotNode | `connectPeer` | raw peer 연결 |
 | SpotNode | `disconnectPeer` | raw peer 연결 해제 |
 | SpotNode | `createRouteBridge` | caller/channel runtime 소유 socket을 SPOT route bridge에 등록 |
-| SpotNode | `createPublisher` | SpotNode의 topic publish ingress에 쓰는 publisher handle 생성 |
+| SpotNode | `createPublisher` | SpotNode의 topic publish ingress에 사용하는 publisher handle 생성 |
 | SpotNode | `setTlsServer` | TLS 서버 설정 |
 | SpotNode | `setTlsClient` | TLS 클라이언트 설정 |
 | SpotNode | `status` | 노드 상태 스냅샷 |
@@ -2896,7 +2896,7 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
   `setDispatchHandler`가 readable event를 알리고, 사용자는 `recvRouted` 또는
   `recvActorLifecycle`로 queue를 명시적으로 drain한다.
 - `onReceive` 는 raw `STREAM` direct fragment callback 의 내부 이름으로만
-  사용할 수 있다. canonical public binding API 이름으로 쓰지 않는다.
+  사용할 수 있다. canonical public binding API 이름으로 사용하지 않는다.
 - callback을 `null`/`None`으로 설정하여 해제하는 것은 허용하지 않는다.
   callback 해제는 socket close로만 이루어진다.
 
@@ -3560,7 +3560,7 @@ SpotNode의 node-level 옵션은 `zlink_set_spot_node_option()` 계열로 다룬
   - 특정 프레임워크 종속을 public surface 전체에 강제하지 않는가
 - 비기준:
   - niche 라이브러리
-  - 특정 회사/프로젝트 내부에서만 주로 쓰는 버퍼 타입
+  - 특정 회사/프로젝트 내부에서만 주로 사용하는 버퍼 타입
   - canonical type 을 대체하려는 wrapper
 
 권장 우선순위:
@@ -3989,7 +3989,7 @@ enum/상수로 매핑하여 타입 안전한 분기를 제공한다.
   bind / connect / config / request) 를 유지하거나, 언어 관용구에 따라
   단일 enum 으로 통합해도 된다. 둘 중 어떤 스타일이든 **값은 누락 없이 모두
   표현해야 한다**.
-- 상수/variant 이름은 원본 `UPPER_SNAKE_CASE` 를 그대로 쓰거나 언어 스타일
+- 상수/variant 이름은 원본 `UPPER_SNAKE_CASE` 를 그대로 사용하거나 언어 스타일
   (`PascalCase` / `camelCase`) 로 변환한다. 숫자 값과 의미는 고정이다.
 - `internalErrno` / `internal_errno` 필드는 별도로 제공하며, 주로
   `INTERNAL_ERROR` 같은 coarse bucket 의 상세 원인 조회용이다.
@@ -4107,7 +4107,7 @@ Application HWM·PAUSED와 `SNDTIMEO`를 적용하고, ROUTER peer에는 HWM 없
      허용한다. 이 접미사는 동작 구분이며, 파라미터 인코딩이 아니다.
      - 예: `send` → Go: `Send` / `SendTo`, Rust: `send` / `send_to`
      - 허용 접미사 범위: `To` 수준의 최소 동작 구분 접미사까지만 허용한다.
-       파라미터 타입이나 의미를 풀어쓴 접미사는 금지한다.
+       파라미터 타입이나 의미를 풀어사용한 접미사는 금지한다.
        - 허용: `SendTo`, `send_to`
        - 금지: `SendWithRoutingId`, `send_routed`, `send_multipart`
      - 접미사 허용은 overloading도 keyword/optional parameter도 없는
@@ -4148,7 +4148,7 @@ Application HWM·PAUSED와 `SNDTIMEO`를 적용하고, ROUTER peer에는 HWM 없
   - 예: internal helper에서 `sendRouted(id, msg)`는 허용
 - 메서드 이름은 동작(action)만 표현한다.
 - 파라미터의 존재, 타입, 개수를 이름에 반복하지 않는다.
-- 시그니처가 이미 설명하는 것을 이름에 다시 쓰면 안 된다.
+- 시그니처가 이미 설명하는 것을 이름에 다시 사용하면 안 된다.
 - 동작 자체가 다른 경우(예: `send` vs `publish`)는 이름이 달라야 한다.
 - 입력만 다른 경우(예: routing id 유무)는 이름을 늘리지 않는다.
 
@@ -4768,7 +4768,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 - 다음 질문에 "예"이면 리팩터링이 필요한 지점이다.
   - 이 public 타입을 제거하면 사용자가 잃는 것이 없는가 → 얕은 래퍼
   - 이 규칙을 고치면 3개 이상의 파일을 건드려야 하는가 → 변경 파급
-  - 사용자가 이 API를 쓰려면 다른 API의 내부 동작을 알아야 하는가 → 정보 누출
+  - 사용자가 이 API를 사용하려면 다른 API의 내부 동작을 알아야 하는가 → 정보 누출
   - 같은 능력이 2개 이상의 이름으로 노출되는가 → 중복 surface
   - 사용자가 호출 순서를 기억해야 올바르게 동작하는가 → 시간 순서 의존
 
@@ -4841,7 +4841,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
    - 주석으로 처리된 코드 블록(`// removed`, `// deprecated`, `// remove later`)이
      남아 있지 않다.
    - 빈 파일, 빈 클래스, 빈 모듈이 남아 있지 않다.
-   - dead code는 "나중에 쓸 수 있으니까" 남겨 두지 않는다. 필요하면 git
+   - dead code는 "나중에 사용할 수 있으니까" 남겨 두지 않는다. 필요하면 git
      history에서 복원한다.
 
 ### 리팩터링 반복 규칙
@@ -4857,7 +4857,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 - 내부 리팩터링으로 public API의 시그니처가 달라지면 안 된다.
   - 시그니처가 달라져야 하면 그것은 API 변경이지 리팩터링이 아니다.
 - 성능 개선을 이유로 correctness를 타협하면 안 된다.
-- "나중에 쓸 수 있으니까" 미리 추상화를 만들면 안 된다.
+- "나중에 사용할 수 있으니까" 미리 추상화를 만들면 안 된다.
 - 한 번만 쓰이는 코드를 utility/helper로 빼면 안 된다.
 
 ## 구현 리뷰 체크리스트

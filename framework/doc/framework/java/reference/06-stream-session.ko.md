@@ -2,8 +2,8 @@
 
 [레퍼런스 목차](README.ko.md)
 
-이 category는 STREAM session 코드 안에서 쓰는 진입점(`ZLinkSession`, `ZLinkSessionClient`,
-`ZLinkSessionActors`, `ZLinkSessionActor`)과 Actor 코드 안에서 bound session에 쓰는 진입점
+이 category는 STREAM session 코드 안에서 사용하는 진입점(`ZLinkSession`, `ZLinkSessionClient`,
+`ZLinkSessionActors`, `ZLinkSessionActor`)과 Actor 코드 안에서 bound session에 사용하는 진입점
 (`ZLinkBoundSession`)을 다룬다. 정확한 signature는
 [Java STREAM session exact interface](../../common/spec/server/languages/java/interfaces/stream-session.ko.md)와
 [Java Actor exact interface](../../common/spec/server/languages/java/interfaces/actors.ko.md)가
@@ -46,7 +46,7 @@ public class GameSession implements ZLinkSession {
 header framing과 queue admission을 끝낸 뒤 packet마다 호출한다. Handshake 실패는 session이
 만들어지기 전이므로 `onError`가 아니라 runtime monitoring에만 기록된다.
 
-**선택 기준.** `stream-session` topology를 쓰는 모든 host가 구현한다.
+**선택 기준.** `stream-session` topology를 사용하는 모든 host가 구현한다.
 `ZLinkSessionDispatchContext.canReply()`가 `true`인 packet에만 `reply`로 응답할 수 있다.
 
 ---
@@ -75,8 +75,8 @@ sessionContext.client().send(new ServerTick(tickNumber)).submit();
 값은 millisecond 올림 뒤 `1..INT_MAX`여야 하고 deadline 뒤 late admission이나 replay는 없다. Reply에는
 이 modifier를 적용하지 않는다.
 
-**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 쓴다. Client의
-request에 답할 때는 `reply`를 쓴다.
+**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 사용한다. Client의
+request에 답할 때는 `reply`를 사용한다.
 
 ---
 
@@ -96,8 +96,8 @@ sessionContext.client().reply(new GetPlayerStateResult(state)).submit();
 끝난다. Caller의 request timeout은 wire로 전달되지 않으므로 이 reply의 admission deadline은
 STREAM socket send timeout만 사용한다.
 
-**선택 기준.** `ZLinkSessionDispatchContext.canReply()`가 `true`인 packet(request)에만 쓴다.
-Client가 보낸 것이 아닌 새 메시지를 보내려면 `send`를 쓴다.
+**선택 기준.** `ZLinkSessionDispatchContext.canReply()`가 `true`인 packet(request)에만 사용한다.
+Client가 보낸 것이 아닌 새 메시지를 보내려면 `send`를 사용한다.
 
 ---
 
@@ -150,7 +150,7 @@ terminal까지 기다린다. Physical disconnect는 Framework가 자동으로 �
 복원하지 않는다. 같은 generation의 relocation route 갱신은 rebind가 아니므로 disconnect callback을 실행하지
 않는다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 쓴다. Request에 대한 응답은
+**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 사용한다. Request에 대한 응답은
 Session 쪽 `reply`가 처리한다.
 
 ---
@@ -171,8 +171,8 @@ context.boundSession().send(new InventoryChanged(item)).submit();
 새 request operation을 제공하지 않는다 — client request에 대한 reply는 Actor request handler의
 반환값으로 처리한다.
 
-**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 쓴다. Session 쪽에서 직접 보내려면 위
-`send`(ZLinkSessionClient) 항목을 쓴다. 연결을 끊으려면 `ZLinkBoundSession.disconnect()`를 쓴다.
+**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 사용한다. Session 쪽에서 직접 보내려면 위
+`send`(ZLinkSessionClient) 항목을 사용한다. 연결을 끊으려면 `ZLinkBoundSession.disconnect()`를 사용한다.
 
 ---
 
@@ -190,8 +190,8 @@ sessionContext.close().toCompletableFuture().get();
 관찰하며, timeout이나 terminal failure는 close failure로 반환한다 — 성공·실패와 관계없이 local
 binding과 session transport는 정리한다.
 
-**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 쓴다. Actor 쪽에서 bound
-client 연결을 끊으려면 `ZLinkBoundSession.disconnect()`를 쓴다.
+**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 사용한다. Actor 쪽에서 bound
+client 연결을 끊으려면 `ZLinkBoundSession.disconnect()`를 사용한다.
 
 ---
 
@@ -207,8 +207,8 @@ context.boundSession().disconnect().toCompletableFuture().get();
 
 **완료 결과.** Bound session과의 연결을 끊는다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 쓴다. Session 쪽에서
-직접 끊으려면 `close` 항목을 쓴다.
+**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 사용한다. Session 쪽에서
+직접 끊으려면 `close` 항목을 사용한다.
 
 ---
 

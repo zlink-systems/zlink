@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Fanout — 구독한 node 전부가 받는다",
+    "subtitle": "publish 한 번 · 받을 node를 지정하지 않는다 · topic으로 구분",
+    "output": "20-fanout-topic.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 170,
+    "gapY": 78,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "P",
+      "type": "frontend",
+      "label": "node A",
+      "sublabel": "publisher",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "S1",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "subscriber",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "S2",
+      "type": "backend",
+      "label": "node C",
+      "sublabel": "subscriber",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S3",
+      "type": "backend",
+      "label": "node D",
+      "sublabel": "subscriber",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "P",
+      "to": "S1",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "S2",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "S3",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "topic을 구독한 node 전부가 받는다",
+      "items": [
+        "발행하는 쪽은 구독자 목록을 보관하지 않는다. 응답도 없다."
+      ]
+    }
+  ]
+}

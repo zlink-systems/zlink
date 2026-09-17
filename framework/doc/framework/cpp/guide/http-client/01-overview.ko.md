@@ -4,8 +4,8 @@
 
 ## 무엇인가
 
-`zlink::http_client`는 C++ 애플리케이션이 HTTP API를 호출할 때 쓰는 client-side
-산출물이다. C++ 표준 라이브러리에는 HTTP client가 없고 Boost.Beast를 직접 쓰면
+`zlink::http_client`는 C++ 애플리케이션이 HTTP API를 호출할 때 사용하는 client-side
+산출물이다. C++ 표준 라이브러리에는 HTTP client가 없고 Boost.Beast를 직접 사용하면
 socket·resolver·parser 같은 낮은 수준 타입이 application 코드에 흘러들어온다.
 이 client는 그 복잡성을 fluent builder 뒤로 숨긴다.
 
@@ -16,11 +16,11 @@ auto profile = client.get ("/players/7281").fetch<player_profile_t> ();
 ```
 
 JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
-(`body(dto)` / `submit<T>()` / `fetch<T>()`)는 그 위에 얹은 편의 계층이다.
+(`body(dto)` / `submit<T>()` / `fetch<T>()`)는 그 위에 더해진 편의 계층이다.
 
 ## 설계 원칙
 
-- **fluent builder.** client 구성과 request 구성 모두 메서드 체인으로 쓴다.
+- **fluent builder.** client 구성과 request 구성 모두 메서드 체인으로 사용한다.
 - **public header에 Beast 없음.** `Boost.Beast`, `Boost.Asio`, OpenSSL, socket,
   resolver, parser 타입은 public header에 드러나지 않는다. 의존성은 runtime
   구현(private) 안에 갇힌다.
@@ -51,7 +51,7 @@ JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
 
 > framework runtime/handler 스레드 안에서는 `submit<T>()`를 `co_await`하고,
 > `.result()`/`fetch<T>()` 같은 blocking 접근은 테스트·client 시나리오처럼 blocking이
-> 허용되는 곳에서만 쓴다. handler 안에서 HTTP 대기 중 스레드를 비우려면 client를
+> 허용되는 곳에서만 사용한다. handler 안에서 HTTP 대기 중 스레드를 비우려면 client를
 > `.coroutines()` 또는 server가 제공한 resume scheduler로 구성한다.
 
 자세한 규칙은 [7. 비동기와 코루틴](07-async-coroutines.ko.md)에서 다룬다.

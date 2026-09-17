@@ -10,11 +10,12 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
 # 14. Picking a Sample — Start with the Example Closest to Your Problem
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 13. Key Type Usage Index](13-interface-catalog.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
+[Guide Home](README.en.md) | [Previous: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/14-samples.en.md) · [C++](../../../cpp/guide/server/14-samples.en.md) · [Java](../../../java/guide/server/14-samples.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/14-samples.en.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
 > **This chapter has no spec document that owns a contract.** It's guidance for choosing
@@ -74,11 +75,9 @@ it got from `Api`. When the win count reaches 100, the room Spot publishes a mil
 Logical Multicast, and an observer handler registered on another Play server's Entry Spot
 receives it and pushes it to spectating clients.
 
-- Paired chapters: [05-channel-messaging](05-channel-messaging.en.md) (ClientServer channel),
-  [06-spot](06-spot.en.md) (creating a User Spot), [09-stream](09-stream.en.md)
+- Paired chapters: [Channel Messaging](20-channel-messaging.en.md) (ClientServer channel),
+  [Spot](21-spot.en.md) (creating a User Spot), [STREAM](23-stream.en.md)
 - Scenario: [TicTacToe](../../../common/sample/tictactoe/README.en.md) · payload JSON
-- The [02. Getting Started](02-getting-started.en.md) follows this sample. If this is your first read, start
-  here.
 
 ## 3. Bingo — Building an Online Game Server
 
@@ -115,9 +114,9 @@ This is the only sample where the payload is Protobuf. Because it's a gateway-sh
 with many roles and contracts, the schema is used as the anchor so each language's sample
 keeps the same field and wire names.
 
-- Paired chapters: [06-spot](06-spot.en.md) (all three Spot kinds appear),
-  [07-actor-spot](07-actor-spot.en.md), [08-actor-session](08-actor-session.en.md),
-  [10-location](10-location.en.md)
+- Paired chapters: [Spot](21-spot.en.md) (all three Spot kinds appear),
+  [Actor](22-actor.en.md), [Session and Actor](24-actor-session.en.md),
+  [Location](25-location.en.md)
 - Scenario: [Bingo](../../../common/sample/bingo/README.en.md) · payload Protobuf
 - The registration-code examples in chapters 06 and 07 come from this sample.
 
@@ -161,8 +160,8 @@ while, a Spot timer starts the conversation-closing flow.
 This shape isn't specific to support. **Any system where one user participates in several
 rooms/tasks at once** has the same architecture.
 
-- Paired chapters: [08-actor-session](08-actor-session.en.md), [06-spot](06-spot.en.md)
-  (timer), [09-stream](09-stream.en.md)
+- Paired chapters: [Session and Actor](24-actor-session.en.md), [Spot](21-spot.en.md)
+  (timer), [STREAM](23-stream.en.md)
 - Scenario: [SupportChat](../../../common/sample/supportchat/README.en.md) · payload JSON
 
 ## 5. DeliveryDispatch — Building a Dispatch System
@@ -184,8 +183,8 @@ stands in for it, and courier selection and reassignment are owned by the dispat
 and the courier actor route. The client scenario verifies both the normal-dispatch and the
 timeout-reassignment flows.
 
-- Paired chapters: [05-channel-messaging](05-channel-messaging.en.md),
-  [07-actor-spot](07-actor-spot.en.md), [09-stream](09-stream.en.md)
+- Paired chapters: [Channel Messaging](20-channel-messaging.en.md),
+  [Actor](22-actor.en.md), [STREAM](23-stream.en.md)
 - Scenario: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md) · payload JSON
 
 ## 6. ShoppingMall — Building an Order-Processing System
@@ -206,7 +205,7 @@ event stream. An idempotency key handles duplicate clicks, an expected version h
 periods when the previous owner is still present, and an explicit resume command handles
 stalled orders. If the read model breaks, it can be rebuilt by replaying the events.
 
-- Paired chapters: [06-spot](06-spot.en.md), [12-operations](12-operations.en.md)
+- Paired chapters: [Spot](21-spot.en.md), [12-operations](12-operations.en.md)
 - Scenario: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) · payload JSON
 - Event sourcing itself isn't a framework feature — it's a shape the application builds on
   top of a Spot.
@@ -229,7 +228,7 @@ owner or requiring an explicit resume — a gap is absorbed by snapshot-based co
 instead. Anything that genuinely needs zero loss, like an actual currency payout, is split
 into a separate tier.
 
-- Paired chapters: [06-spot](06-spot.en.md), [08-actor-session](08-actor-session.en.md)
+- Paired chapters: [Spot](21-spot.en.md), [Session and Actor](24-actor-session.en.md)
 - Scenario: [GameQuest](../../../common/sample/event/gamequest.en.md) · payload JSON
 
 ## 8. ZoneWorld — Building a Zone-Sharded MMORPG and Ops Control
@@ -263,8 +262,8 @@ topic were shared by several zones, unrelated players would receive it too, so t
 name carries both the sending and receiving zone. It's **the only sample with a browser
 UI**, so you can watch boundary crossings and maintenance-mode changes in the browser.
 
-- Paired chapters: [07-actor-spot](07-actor-spot.en.md) (relocation),
-  [11. Monitoring](11-monitoring.en.md), [12-operations](12-operations.en.md)
+- Paired chapters: [Relocation](37-relocation.en.md),
+  `11. Monitoring` chapter, [12-operations](12-operations.en.md)
 - Scenario: [ZoneWorld](../../../common/sample/zoneworld/README.en.md) · payload JSON
 - The server and runner are provided in all five languages and share the business behavior and
   verification criteria. The .NET and Node.js browser smoke tests use the same TypeScript client.
@@ -290,7 +289,7 @@ To run only ZoneWorld, invoke `ZoneWorld/run_sample.sh` from that language's sam
 - Each sample's language-neutral scenario and verification criteria:
   [Common sample](../../../common/sample/README.en.md)
 - Per-language sample directory layout: the `README` at each language's sample root
-- Per-feature usage: [05-channel-messaging](05-channel-messaging.en.md) through
+- Per-feature usage: [Channel Messaging](20-channel-messaging.en.md) through
   [12-operations](12-operations.en.md)
 
 <script>

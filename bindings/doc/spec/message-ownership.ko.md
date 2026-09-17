@@ -379,7 +379,7 @@ Application은 `Message` identity를 장기 `Map`, `WeakMap`이나 별도 metada
 편의 overload는 임시 native `Message`를 만들 수 있지만, caller의 원본 bytes까지
 소비한다는 뜻은 아니다. (여기서의 send-시 ownership 이전은 send 경로의 기본 동작이며,
 application이 명시적으로 소유권을 옮기는 `Move`(= `zlink_msg_move`)와는 별개다 — `Move`는
-받은 message를 사본 없이 그대로 다시 보내는 relay/echo 같은 경로에서 쓴다.)
+받은 message를 사본 없이 그대로 다시 보내는 relay/echo 같은 경로에서 사용한다.)
 
 ## 기본 구현과 성능 특화 범위
 
@@ -463,7 +463,7 @@ body option은 native relay와 managed 처리의 서로 다른 사용 방식이 
 
 모든 binding은 언어별 test 문법으로 다음 결과를 검증해야 한다.
 
-1. `allocate(size)`로 만든 payload view에 쓴 bytes를 send가 그대로 전달한다.
+1. `allocate(size)`로 만든 payload view에 사용한 bytes를 send가 그대로 전달한다.
 2. 일반 socket의 성공한 submit 뒤 원본 `Message` 접근과 재전송이 실패한다.
 3. 일반 socket의 `DONTWAIT` backpressure 뒤에도 원본 `Message`가 consumed 상태다.
 4. Builder가 입력을 받아들이기 전 validation 실패 뒤에는 원본 `Message`를 다시 사용할

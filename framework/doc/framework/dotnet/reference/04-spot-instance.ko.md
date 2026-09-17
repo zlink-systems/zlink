@@ -3,7 +3,7 @@
 [레퍼런스 목차](README.ko.md)
 
 이 category는 `IZLinkSpotManager`·`IZLinkSpotClient`·`IZLinkSpotPublisherClient`가 제공하는 외부
-진입점과, Spot 코드 안에서 `IZLinkSpotContext`로 쓰는 진입점을 다룬다. 정확한 signature는
+진입점과, Spot 코드 안에서 `IZLinkSpotContext`로 사용하는 진입점을 다룬다. 정확한 signature는
 [Spot exact interface](../../common/spec/server/languages/dotnet/interfaces/05-spots.ko.md)가
 소유한다.
 
@@ -38,8 +38,8 @@ string spotId = created.Spot.SpotId;
 거부하면 `Rejected`이고 `Reply`에 거부 메시지가 담긴다. 같은 option을 두 번 설정하거나 terminal을
 두 번 호출하면 `InvalidOperation`, deadline 안에 끝나지 않으면 `DeadlineExceeded`다.
 
-**선택 기준.** 항상 새 인스턴스가 필요할 때 쓴다. 있으면 재사용하고 없을 때만 만들려면
-`GetOrCreate`를 쓴다.
+**선택 기준.** 항상 새 인스턴스가 필요할 때 사용한다. 있으면 재사용하고 없을 때만 만들려면
+`GetOrCreate`를 사용한다.
 
 ---
 
@@ -63,8 +63,8 @@ ZLinkSpotCreateResult existingOrCreated = await spotManager
 합류하고, cleanup으로 Missing이 되면 새 reservation을 다시 경쟁한다. Kind나 stable type이 기존
 authority와 다르면 `TypeMismatch`로 완료한다.
 
-**선택 기준.** SpotId로 멱등하게 "있으면 쓰고 없으면 만들기"가 필요할 때 쓴다. 항상 새 인스턴스가
-필요하면 `Create`를 쓴다.
+**선택 기준.** SpotId로 멱등하게 "있으면 사용하고 없으면 만들기"가 필요할 때 사용한다. 항상 새 인스턴스가
+필요하면 `Create`를 사용한다.
 
 ---
 
@@ -88,7 +88,7 @@ incarnation이 없으면 `false`, generation이 다르면 `InvalidOperation`, pr
 `Unavailable`이다. User Spot에 Actor membership이 남아 있으면 `false`이며 Actor를 자동으로
 leave·destroy하지 않는다.
 
-**선택 기준.** 지금 시점의 존재 여부 확인이나 명시적 종료가 필요할 때 쓴다. `CloseAsync`는 stale
+**선택 기준.** 지금 시점의 존재 여부 확인이나 명시적 종료가 필요할 때 사용한다. `CloseAsync`는 stale
 `SpotRef`로 다른 incarnation을 대신 닫지 않는다.
 
 ---
@@ -96,7 +96,7 @@ leave·destroy하지 않는다.
 ## `SendToSpot<TMessage>`
 
 Global SpotId 하나로 one-way message를 보낸다. 외부 client(Node·Channel handler, 다른 Actor·Spot,
-application code)에서 쓴다.
+application code)에서 사용한다.
 
 ```csharp
 await spotClient
@@ -117,14 +117,14 @@ await spotClient
 | `.Metadata(...)` | 없음 | handler에 전달할 key-value |
 | `.InstanceSpot()` | 없음(User Spot만 resolve) | Missing이면 cold activation한다. 등록된 Instance Spot 타입이 하나일 때만 타입 생략 가능 |
 | `.InstanceSpot(instanceSpotType)` | — | 등록 타입이 여럿이면 타입을 명시해야 한다 |
-| `.InMesh(meshName)` | Object Client·Server role의 Mesh가 하나면 생략 가능 | Missing Instance Spot을 처음 만들 Mesh. Instance marker 없이 쓰면 `InvalidOperation` |
+| `.InMesh(meshName)` | Object Client·Server role의 Mesh가 하나면 생략 가능 | Missing Instance Spot을 처음 만들 Mesh. Instance marker 없이 사용하면 `InvalidOperation` |
 | `.Async(ct)` | 필수 terminal | source-local admission까지만 기다린다 |
 
 **완료 결과.** SpotId가 없고 Instance marker도 없으면 `NotFound`. `InstanceSpot(...)`을 썼는데
 existing authority가 User Spot이거나 명시한 타입과 다르면 `TypeMismatch`. 그 외 완료 kind는
 messaging-execution category의 공통 규칙과 같다.
 
-**선택 기준.** Reply가 필요 없는 Spot 메시징에 쓴다. Reply가 필요하면 `RequestToSpot`을 쓴다.
+**선택 기준.** Reply가 필요 없는 Spot 메시징에 사용한다. Reply가 필요하면 `RequestToSpot`을 사용한다.
 
 ---
 
@@ -150,7 +150,7 @@ var reply = await spotClient
 **완료 결과.** `SendToSpot`과 같은 실패 kind에 더해, cold activation 중 factory나 initialize가
 실패하면 typed failure로 완료된다 — Framework가 내부적으로 재시도하지 않는다.
 
-**선택 기준.** Reply 값이 필요할 때 쓴다. One-way면 `SendToSpot`을 쓴다.
+**선택 기준.** Reply 값이 필요할 때 사용한다. One-way면 `SendToSpot`을 사용한다.
 
 ---
 
@@ -171,8 +171,8 @@ await spotPublisherClient
 messaging-execution category의 classic fanout `Publish`와 달리, ChannelName만으로 owner
 MeshNode를 결정하며 caller가 MeshName을 추가로 넘기지 않는다.
 
-**선택 기준.** Spot 상태 변화를 관찰자에게 알릴 때 쓴다. 구독자에게 직접 reply가 필요하면 이 항목이
-아니라 `RequestToSpot`을 쓴다.
+**선택 기준.** Spot 상태 변화를 관찰자에게 알릴 때 사용한다. 구독자에게 직접 reply가 필요하면 이 항목이
+아니라 `RequestToSpot`을 사용한다.
 
 ---
 
@@ -200,7 +200,7 @@ IZLinkTimer timer = await Context.AddTimer<RoomTickHandler>(
 relocation 때 자동으로 이전되며 application이 target에서 다시 등록할 필요가 없다. `CancelAsync()`나
 `DisposeAsync()`로 취소한다.
 
-**선택 기준.** Spot 안에서 주기 작업이 필요할 때 쓴다.
+**선택 기준.** Spot 안에서 주기 작업이 필요할 때 사용한다.
 
 ---
 
@@ -227,7 +227,7 @@ int result = await Context
 **완료 결과.** `TResult`를 반환하거나 timeout이면 `DeadlineExceeded`로 완료한다. Worker pool
 크기(`MinThreads`/`MaxThreads`)와 idle timeout은 host 시작 전에만 설정한다.
 
-**선택 기준.** CPU-bound 계산은 `RunCpuWorker`, I/O 대기가 있는 작업은 `RunIoWorker`를 쓴다. 둘 다
+**선택 기준.** CPU-bound 계산은 `RunCpuWorker`, I/O 대기가 있는 작업은 `RunIoWorker`를 사용한다. 둘 다
 owner turn의 순차 실행을 막지 않으려는 목적이다.
 
 ---
@@ -247,7 +247,7 @@ public void Configure()
 }
 ```
 
-**옵션.** Handler가 구현하는 interface에 따라 등록 메서드가 갈린다.
+**옵션.** Handler가 구현하는 interface에 따라 등록 메서드가 달라진다.
 
 | 대상 | Handler interface | 등록 메서드 |
 | --- | --- | --- |
@@ -262,10 +262,10 @@ public void Configure()
 | Instance Spot 앞 packet | `IZLinkSpotPacketHandler<TSpot, TMessage>`과 동일한 모양 | `AddPacket<THandler>()`(`IZLinkInstanceSpotHandlerRegistry`) |
 
 Entry Spot의 `AddActorPacket<THandler, TActor>()`는 User Spot의 것과 메서드 이름은 같지만 `THandler`가
-구현해야 하는 interface가 다르다 — 등록하는 registry가 어느 Spot 종류의 것인지에 따라 갈린다.
+구현해야 하는 interface가 다르다 — 등록하는 registry가 어느 Spot 종류의 것인지에 따라 달라진다.
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Packet name을 생략하면 handler가 처리하는 메시지
-타입의 `ZLinkPacketAttribute`를 확인하고, 그것도 없으면 타입 이름을 쓴다. 같은 owner의 handler key
+타입의 `ZLinkPacketAttribute`를 확인하고, 그것도 없으면 타입 이름을 사용한다. 같은 owner의 handler key
 중복은 host startup 검증에서 `ZLinkConfigurationException`으로 드러난다.
 
 **선택 기준.** `Configure()`가 호출될 때마다 이 Spot이 처리할 모든 handler를 등록한다. Node·Channel
@@ -292,7 +292,7 @@ await Context.Outbound
 **완료 결과.** messaging-execution category의 완료 kind와 같다.
 
 **선택 기준.** Spot이 외부 client가 아니라 자기 코드 안에서 다른 ChannelName의 handler를 호출해야
-할 때 쓴다. 다른 Spot을 직접 호출하려면 `SendToSpot`/`RequestToSpot`을 쓴다.
+할 때 사용한다. 다른 Spot을 직접 호출하려면 `SendToSpot`/`RequestToSpot`을 사용한다.
 
 ---
 
@@ -317,7 +317,7 @@ Spot 자신을 대상으로 한다. `DestroyActorAsync`(`IZLinkEntrySpotContext`
 
 **선택 기준.** Member Actor를 다른 곳으로 옮기지 않고 이 Spot에서만 빼려면 `LeaveActorAsync`를,
 Spot 자신을 스스로 종료하려면 `CloseAsync`를, Entry Spot에서 더 이상 필요 없는 Actor를 완전히
-없애려면 `DestroyActorAsync`를 쓴다.
+없애려면 `DestroyActorAsync`를 사용한다.
 
 ---
 
@@ -337,7 +337,7 @@ commit 전에 abort했으면 source에서 `Continued`, 이동했으면 target에
 `OnRelocationReadyCompletedAsync(...)`로 받는다. `FrameworkManaged` mode, `PerActor` Spot, Entry·
 Instance Spot, Spot turn 밖, 같은 turn의 중복 호출은 `InvalidOperation`으로 완료한다.
 
-**선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 쓴다. 기본
+**선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 사용한다. 기본
 `FrameworkManaged` mode에서는 이 호출이 필요하지 않다.
 
 ---

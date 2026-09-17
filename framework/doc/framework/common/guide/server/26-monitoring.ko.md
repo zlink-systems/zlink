@@ -1,0 +1,234 @@
+# 모니터링
+
+!!! info "이 장을 읽고 나면"
+
+    지금 무엇이 준비되었는지 읽고, 그 상태가 바뀔 때마다 받고, message 하나가 어디서
+    끝났는지 남길 수 있다. 이 장의 코드는 언어별 관측 표면의 최소 호출이다.
+
+앞 장들은 등록하고 호출하는 쪽을 다뤘다. 돌기 시작하면 다른 것이 필요해진다 — 연결이
+준비되었는지, 어느 상대가 빠졌는지, message가 어디서 실패했는지다. handler를 아무리 읽어도
+그 답은 나오지 않는다. **Framework는 그것들을 공개 표면으로 제공한다.**
+
+runtime의 사건을 handler로 받는 표면은 없다. 관측은 다음 표면을 통한다.
+
+## 1. 관측 표면의 종류
+
+| 무엇을 보나 | 어떻게 | 어디서 다루나 |
+| --- | --- | --- |
+| 지금 준비되었는가, 누가 빠졌는가 | 상태 조회와 상태 구독 | [지금 상태 읽기](#2-지금-상태-읽기) · [변화 구독하기](#3-변화-구독하기) |
+| message 하나가 어디서 어떻게 끝났는가 | 진단 기록(trace·log) | [진단 수준 정하기](#4-진단-수준-정하기) |
+| 동시 접속 수·queue 깊이 같은 수치 | 계기(meter) | [운영과 lifecycle](12-operations.ko.md#1-런타임-메트릭) |
+
+<iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths.html" title="관측 표면의 종류" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/26-observation-paths.html" target="_blank">↗ 크게 보기</a></p>
+
+소비하는 방식이 서로 다르다. **상태 표면**은 지금 값을 읽거나 변화를 순서대로 받을 때,
+**진단**은 개별 message를 추적할 때, **계기**는 대시보드에 올릴 수치를 모을 때 사용한다.
+
+## 2. 지금 상태 읽기
+
+조회는 **호출 시점의 값 한 장**을 돌려준다. 운영 endpoint의 응답을 만들거나 한 번만
+확인할 때 사용한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
+
+    var status = meshRuntime.GetStatus("game.room");
+    var ready = meshRuntime.IsReady("game.room");
+    ```
+
+=== "C++"
+
+    ```cpp
+    auto snapshot = mesh_runtime.snapshot ("game.room");
+    const bool ready = mesh_runtime.is_ready ("game.room");
+    ```
+
+=== "Java"
+
+    ```java
+    ZLinkMeshNodeSnapshot snapshot = meshRuntime.snapshot("game.room");
+    boolean ready = meshRuntime.isReady("game.room");
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    val snapshot = meshRuntime.snapshot("game.room")
+    val ready = meshRuntime.isReady("game.room")
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    const snapshot = this.meshRuntime.snapshot('game.room');
+    const ready = this.meshRuntime.isReady('game.room');
+    ```
+
+**준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수
+없고, 준비되지 않은 이유가 따로 온다 — 받을 수 있는 상대가 없는 것과 기록 저장소가 멎은
+것과 지금 비우는 중인 것은 대응이 다르다.
+
+돌아오는 값에는 상대의 식별자와 지금 상태와 사용할 수 없는 이유만 담긴다. 재연결 시도 횟수나
+socket 내부 상태는 공개 계약이 아니다.
+
+## 3. 변화 구독하기
+
+구독은 **바뀔 때마다 그 뒤의 완전한 값**을 준다. 바뀐 항목만 담은 사건이 아니라 매번
+전체다. 이전 값과 비교할 일이 있으면 구독하는 쪽이 보관한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    // 한도를 넘기면 느린 소비자는 중간 값을 건너뛴다.
+    await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))
+    {
+        Record(observed.Status);
+    }
+    ```
+
+=== "C++"
+
+    ```cpp
+    // observation 객체를 살려 두는 동안만 callback이 온다. 버리면 구독이 끝난다.
+    auto observation = mesh_runtime.observe (
+      "game.room", 64, [] (const mesh_node_snapshot_t &next) {
+          record (next);
+      });
+    ```
+
+=== "Java"
+
+    ```java
+    // capacity를 넘기면 느린 구독자는 중간 값을 건너뛴다.
+    meshRuntime.observe("game.room", 64).subscribe(subscriber);
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    meshRuntime.observe("game.room", 64).asFlow().collect { observed ->
+        record(observed.status)
+    }
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    // 구독을 끝내려면 signal을 끊는다.
+    for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) {
+      this.record(observed.status);
+    }
+    ```
+
+**놓칠 수 있다.** 받는 쪽이 느리면 보관 한도를 넘는 중간 값을 건너뛴다. 놓친 개수는 항목마다
+함께 오고, 합치기로 건너뛴 것과 한도를 넘겨 다시 받을 수 없는 것으로 나뉜다. 앞의 것은 최신
+값을 받았다는 뜻이지만 뒤의 것은 그렇지 않다.
+
+두 값의 선후는 항목에 실린 순번으로 판단한다. 함께 오는 시각은 표시용이다.
+
+조회는 한 번 읽을 때, 구독은 상태 전이를 기록하거나 반응할 때 사용한다. 중간 값을 건너뛰는 것은
+구독뿐이다.
+
+구독은 취소할 때까지 열려 있으므로 **host의 수명에 묶인 자리에서 돌린다.** 언어마다 그
+자리가 다르다 — 백그라운드 서비스, 구독 객체의 수명, 취소 signal이다.
+
+## 4. 진단 수준 정하기
+
+message 하나가 어디서 어떻게 끝났는지는 진단이 남긴다. 수준은 다음과 같다.
+
+=== "C#/.NET"
+
+    ```csharp
+    builder.Services.AddZLinkFramework(options =>
+    {
+        options.ConfigureDispatch().Diagnostics
+            .SetLevel(ZLinkDiagnosticsLevel.Errors)
+            .SetSampleRate(1.0)
+            .IncludeMessageSizes(true);
+    });
+    ```
+
+=== "C++"
+
+    ```cpp
+    options.configure_dispatch ()
+      .message_flow (message_flow_log_mode_t::errors)
+      .trace_sample_rate (1.0)
+      .include_message_sizes (true);
+    ```
+
+=== "Java"
+
+    ```java
+    options.configureDispatch()
+        .messageFlow(ZLinkMessageFlowLogMode.ERRORS)
+        .traceSampleRate(1.0)
+        .includeMessageSizes(true);
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    options.configureDispatch {
+        messageFlow(ZLinkMessageFlowLogMode.ERRORS)
+        traceSampleRate(1.0)
+        includeMessageSizes(true)
+    }
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    builder.configureDispatch()
+      .messageFlow("errors");
+    ```
+
+| 수준 | 남기는 것 |
+| --- | --- |
+| 끔 | 남기지 않는다. trace 항목도 문자열도 만들지 않는다 |
+| 오류(기본) | dispatch 실패와 backpressure |
+| 보통 | 위에 더해 수신·dispatch·완료 같은 주요 전이 |
+| 상세 | 위에 더해 byte 크기와 걸린 시간 |
+
+**운영에서는 오류 단계로 두고 필요할 때만 올린다.** 상세 단계는 message마다 기록을 남기므로
+처리량이 많은 구간에서는 그 자체가 부하가 된다. 출력만 버리는 기록 filter는 끔 단계와 같지
+않다 — 만드는 비용이 그대로 남는다.
+
+한 요청과 그 답을 잇는 값과, 그 요청이 시작한 뒤따르는 호출까지 잇는 값이 각각 기록에
+실린다. 여러 node를 거친 조각을 하나로 묶어 볼 때 사용한다.
+
+기록을 어디에 저장하고 어디로 내보낼지는 **application의 기존 설정이 소유한다.** Framework는
+관측용 callback이나 파일 경로를 공개하지 않고, application이 구성해 둔 표준 provider에 사용한다.
+provider 호출이 실패해도 원래 메시지 처리의 결과는 바뀌지 않는다.
+
+## 5. 자주 발생하는 문제
+
+- **runtime의 사건을 handler로 받고 싶다** — 그런 표면은 없다. 상태 변화는
+  [변화 구독하기](#3-변화-구독하기)로, 개별 message의 결과는
+  [진단 수준 정하기](#4-진단-수준-정하기)로 본다.
+- **구독이 아무것도 주지 않는다** — 그 이름에 변화가 없으면 조용하다. 지금 값이 필요하면
+  [지금 상태 읽기](#2-지금-상태-읽기)를 먼저 읽고 구독을 이어 받는다.
+- **health endpoint를 기대한다** — Framework는 HTTP endpoint를 만들지 않는다. 준비 여부를
+  application의 기존 endpoint에 연결한다 —
+  [운영과 lifecycle](12-operations.ko.md#4-운영-호출과-readiness-연결)이 그 자리다.
+- **어느 node에 무엇이 있는지 보고 싶다** —
+  [Location](25-location.ko.md)의 조회와
+  [운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)의 topology 조회를 사용한다.
+- **handler가 없는 message를 알고 싶다** — 진단 수준을 오류 이상으로 두면 dispatch 실패로
+  남는다. 요청은 오류 응답으로 돌아오고 보내기는 조용히 버려지므로, 보내기 쪽은 진단으로만
+  확인된다 — [Channel 동작 원리](30-channel-patterns.ko.md#7-호출이-끝났다는-것의-의미)가 그
+  차이를 다룬다.
+
+## 6. 관련 문서
+
+- 수치와 운영 호출 — [운영과 lifecycle](12-operations.ko.md)
+- 준비되지 않은 이유의 종류 — [Channel 동작 원리](30-channel-patterns.ko.md#6-연결과-discovery)
+- 처리보다 도착이 빠를 때 — [Backpressure](33-backpressure.ko.md)
+- 언어별 표면 이름 — [주요 타입 사용 색인](13-interface-catalog.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

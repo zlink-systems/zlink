@@ -152,5 +152,5 @@ Three spots that trip up readers coming from another language.
 ## 9. Related Documents
 
 - Exact signatures: [Node.js exact interface table of contents](../../../common/spec/server/languages/node/interfaces/README.en.md)
-- Registration entry point: [2. Getting Started](02-getting-started.en.md)
+- Registration entry point: [Quickstart](../../quickstart.en.md)
 - The NestJS host contract: [Node.js NestJS host public contract](../../../common/spec/server/languages/node/interfaces/07-nestjs-host.en.md)

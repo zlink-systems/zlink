@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "STREAM은 mesh의 바깥 경계다",
+    "subtitle": "밖에서는 연결 하나로 붙고, 안에서는 여느 node처럼 부른다",
+    "output": "23-stream-boundary.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C1",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "mesh 밖, connector만 쓴다",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "C2",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "mesh 밖, connector만 쓴다",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "stream node",
+      "sublabel": "연결마다 session 하나",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "N",
+      "type": "backend",
+      "label": "다른 node",
+      "sublabel": "channel · Spot · Actor",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "mesh",
+      "wraps": [
+        "S",
+        "N"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C1",
+      "to": "S",
+      "label": "TCP 연결 하나",
+      "variant": "default"
+    },
+    {
+      "from": "C2",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "N",
+      "label": "여느 mesh 호출",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결은 client가 열고, 그 뒤로는 양쪽이 보낸다",
+      "items": [
+        "client는 Framework를 참조하지 않는다. 연결과 packet만 아는 connector 하나로 붙으므로, mesh 구성이 바뀌어도 client는 그대로다.",
+        "연결 하나마다 session 객체 하나가 만들어지고, 그 연결의 callback은 순서대로 실행된다."
+      ]
+    }
+  ]
+}

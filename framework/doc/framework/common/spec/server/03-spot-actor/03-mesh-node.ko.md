@@ -377,8 +377,8 @@ node-wide placement weight도 바꾸지 않는다.
 
 Actor·Spot direct는 logical ID만 target으로 사용한다. 같은 ActorId/Spot ID의 서로
 다른 logical incarnation을 구분하는 번호인
-[`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)을 어디에 쓰고 어디에
-쓰지 않는지는
+[`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)을 어디에 사용하고 어디에
+사용하지 않는지는
 [Routing §2.5](08-routing.ko.md)가
 정한다.
 

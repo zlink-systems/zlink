@@ -1,0 +1,181 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Node handlers run concurrently, SPOT handlers run serially",
+    "subtitle": "The same three requests are handled differently in each place",
+    "output": "43-dispatch-concurrency-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 76,
+    "cellW": 130,
+    "cellH": 56
+  },
+  "components": [
+    {
+      "id": "NR0",
+      "type": "external",
+      "label": "req A",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "NW0",
+      "type": "backend",
+      "label": "worker 1",
+      "sublabel": "handling",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "NR1",
+      "type": "external",
+      "label": "req B",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "NW1",
+      "type": "backend",
+      "label": "worker 2",
+      "sublabel": "handling",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "NR2",
+      "type": "external",
+      "label": "req C",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "NW2",
+      "type": "backend",
+      "label": "worker 3",
+      "sublabel": "handling",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "SR0",
+      "type": "external",
+      "label": "req A",
+      "row": 3,
+      "col": 0
+    },
+    {
+      "id": "SR1",
+      "type": "external",
+      "label": "req B",
+      "row": 4,
+      "col": 0
+    },
+    {
+      "id": "SR2",
+      "type": "external",
+      "label": "req C",
+      "row": 5,
+      "col": 0
+    },
+    {
+      "id": "SQ",
+      "type": "messagebus",
+      "label": "single queue",
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": "SEX",
+      "type": "frontend",
+      "label": "A → B → C",
+      "sublabel": "one at a time, in order",
+      "row": 4,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Node handlers — concurrent (worker pool)",
+      "wraps": [
+        "NR0",
+        "NW0",
+        "NR1",
+        "NW1",
+        "NR2",
+        "NW2"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "SPOT handlers — serial (single queue)",
+      "wraps": [
+        "SR0",
+        "SR1",
+        "SR2",
+        "SQ",
+        "SEX"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "NR0",
+      "to": "NW0",
+      "variant": "default"
+    },
+    {
+      "from": "NR1",
+      "to": "NW1",
+      "variant": "default"
+    },
+    {
+      "from": "NR2",
+      "to": "NW2",
+      "variant": "default"
+    },
+    {
+      "from": "SR0",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SR1",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SR2",
+      "to": "SQ",
+      "variant": "default"
+    },
+    {
+      "from": "SQ",
+      "to": "SEX",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What differs",
+      "items": [
+        "A node handler's requests are spread across the worker pool, so all three run at once.",
+        "A SPOT handler's requests pass through one queue and run one at a time in arrival order, so no lock is needed inside."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

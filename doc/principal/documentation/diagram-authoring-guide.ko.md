@@ -202,6 +202,9 @@ function insertStacks(html) {
 - 언어 탭(`=== "…"`) 안에 넣을 땐 iframe 줄을 **4칸 들여쓴다**(탭 콘텐츠 유지).
 - 페이지 끝에 **iframe 높이 자동 맞춤 스크립트를 페이지당 하나** 둔다. iframe은 내부 문서 높이를
   모르므로, `load` 후 `contentDocument`의 `scrollHeight`를 재서 iframe 높이에 반영한다.
+  **`body.scrollHeight`를 쓰고 `documentElement`와 `Math.max`로 묶지 않는다.** body가 내용보다
+  짧으면 `documentElement`는 뷰포트 높이로 늘어나므로, 둘 중 큰 값을 쓰면 그림이 읽는 사람
+  화면 높이만큼 부풀어 오른다.
 
 ## 10. 자주 나는 실패와 처리
 

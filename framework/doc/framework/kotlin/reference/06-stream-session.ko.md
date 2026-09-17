@@ -53,7 +53,7 @@ metadata modifier가 없다).
 
 **완료 결과.** Java 레퍼런스의 `send`/`reply` 완료 kind와 같다. Application은 `await(): Unit`으로
 local STREAM queue admission만 기다리며 Java `CompletionStage`와 submission result type을 직접
-쓰지 않는다. 호출별 timeout은 STREAM socket timeout보다 admission 대기를 짧게 만들 때만 사용하며
+사용하지 않는다. 호출별 timeout은 STREAM socket timeout보다 admission 대기를 짧게 만들 때만 사용하며
 millisecond 올림 뒤 `1..INT_MAX`여야 한다. 둘 중 빠른 deadline 뒤에는 late admission이나 replay가 없고
 reply에는 이 modifier를 적용하지 않는다.
 

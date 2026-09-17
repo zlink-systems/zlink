@@ -1,0 +1,29 @@
+[versions]
+# 배포된 패키지를 그대로 쓴다. 문서가 보여주는 코드와 독자가 Maven Central에서 받는
+# 라이브러리를 같은 것으로 유지하기 위해서다. 이 디렉터리만 복사해 나가도 빌드된다.
+zlinkFramework = "0.16.0"
+# 아래 셋은 zlink-framework 0.16.0의 POM이 선언한 값과 맞춘 것이다.
+# 충돌 해석에 맡기지 않는다.
+springBoot = "3.5.14"
+kotlin = "2.3.21"
+jackson = "2.17.2"
+# systems.zlink:zlink(binding)는 적지 않는다. zlink-framework-core의 POM이 정한다.
+
+[libraries]
+zlink-framework-core = { module = "systems.zlink:zlink-framework-core", version.ref = "zlinkFramework" }
+zlink-framework-spring-boot-starter = { module = "systems.zlink:zlink-framework-spring-boot-starter", version.ref = "zlinkFramework" }
+zlink-framework-locations-redis = { module = "systems.zlink:zlink-framework-locations-redis", version.ref = "zlinkFramework" }
+zlink-framework-kotlin = { module = "systems.zlink:zlink-framework-kotlin", version.ref = "zlinkFramework" }
+# STREAM 단계의 외부 client가 쓴다. framework가 아니라 connector 하나만 참조한다.
+zlink-stream-connector = { module = "systems.zlink:zlink-stream-connector", version.ref = "zlinkFramework" }
+spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "springBoot" }
+spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
+# Kotlin data class를 Jackson이 다루려면 필요하다. zlink-framework-kotlin이 이미
+# 전이로 가져오지만, Shared/Server가 직접 쓰는 것이므로 명시한다.
+jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+# Spring이 @Configuration·@RestController를 CGLIB로 감싸는데 Kotlin class는 기본이 final이다.
+# 이 플러그인이 해당 class를 열어 준다.
+kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }

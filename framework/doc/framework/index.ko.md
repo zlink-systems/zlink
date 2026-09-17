@@ -2,13 +2,13 @@
 
 **HTTP 요청-응답을 위해 설계된 기존 프레임워크는 TCP 기반의 실시간 메시징을
 다루지 않는다.** ZLink Framework는 그 요구를 충족하는 메시징 계층을 제공한다.
-Spring 위에 Spring MVC가 얹히듯, `ASP.NET Core` · Spring Boot · NestJS · C++ host
+Spring 위에 Spring MVC가 올라가는 것과 같은 자리에서, `ASP.NET Core` · Spring Boot · NestJS · C++ host
 위에 완전히 통합된 형태로 들어간다. 별도 런타임으로 옮겨갈 필요가 없다.
 
 이 요구가 가장 뚜렷하게 나타나는 분야는 실시간 게임이다. 대상은 여기에 한정되지 않는다.
 방·세션·플레이어처럼 메모리에 상주하는 상태를 여러 서버에 나눠 두고 client에
 실시간으로 전달해야 하는 시스템이라면, 기존 web 서비스가 실시간 기능을 더하며
-떠안던 복잡도도 이 계층 하나로 흡수한다.
+직접 처리하던 복잡도도 이 계층 하나가 맡는다.
 
 ## ZLink Framework 목적
 
@@ -30,7 +30,7 @@ Spring 위에 Spring MVC가 얹히듯, `ASP.NET Core` · Spring Boot · NestJS �
 
     연결 자체도 관리 대상이다. 유저는 장시간 연결을 유지하므로, 재접속한 유저를 원래
     있던 room으로 되돌리는 일과, 배포·축소로 노드를 내릴 때 진행 중인 상태를 지켜내는
-    일까지 서버가 떠안는다.
+    일까지 서버의 책임으로 남는다.
 
     그래서 선택지는 오랫동안 둘로 좁혀져 있었다 — 이 모든 것을 처음부터 직접 만들거나,
     게임 서버 엔진이라는 별도 런타임으로 옮겨가 코드 작성 방식부터 배포·운영까지 다시
@@ -351,7 +351,7 @@ Spring 위에 Spring MVC가 얹히듯, `ASP.NET Core` · Spring Boot · NestJS �
 
 Redis 분산 락으로 같은 걸 만들면 락 두 개를 정해진 순서로 걸고 풀어야 하고, 그
 사이 코드는 요청·응답 콜백에 흩어진다. 여기엔 그중 어느 것도 없다 — Spot 간 호출과
-Instance Spot의 실제 동작은 [06-spot](cpp/guide/server/06-spot.ko.md)이 다룬다.
+Instance Spot의 실제 동작은 [Spot](cpp/guide/server/21-spot.ko.md)이 다룬다.
 
 - **무중단 이전** — 노드를 내려도 진행 중인 방과 유저가 끊기지 않는다.
 - **이름으로 호출** — channel name만 알면 된다. gateway도 서비스 디스커버리도 없다.
@@ -380,7 +380,7 @@ location store 하나가 남는다. 서버 간 호출과 실시간 전달은 run
 
 sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discovery — 다섯 조각이
 **location store 하나**로 줄었다. Kafka·Redis 같은 기존 스택을 대체하는 것이 아니다
-— ZLink가 줄이는 것은 그 사이에서 실시간 전달을 위해 직접 조립하던 연결·라우팅·상태
+— ZLink가 줄이는 것은 그 사이에서 실시간 전달을 위해 직접 만들던 연결·라우팅·상태
 관리의 복잡도다.
 
 ## 핵심 개념
@@ -420,11 +420,11 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 
 | 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 |
 | --- | --- | --- | --- |
-| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [설치와 첫 동작](dotnet/guide/server/02-getting-started.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) |
-| C++ | [서버](cpp/guide/server/README.ko.md) | [설치와 첫 동작](cpp/guide/server/02-getting-started.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) |
-| Java | [서버](java/guide/server/README.ko.md) | [설치와 첫 동작](java/guide/server/02-getting-started.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) |
-| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [설치와 첫 동작](kotlin/guide/server/02-getting-started.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) |
-| Node.js | [서버](node/guide/server/README.ko.md) | [설치와 첫 동작](node/guide/server/02-getting-started.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) |
+| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) |
+| C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) |
+| Java | [서버](java/guide/server/README.ko.md) | [퀵스타트](java/quickstart.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) |
+| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) |
+| Node.js | [서버](node/guide/server/README.ko.md) | [퀵스타트](node/quickstart.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) |
 
 **client 쪽 가이드 둘**은 서버 framework와 따로 배포되는 라이브러리를 다룬다.
 Stream Connector는 client가 STREAM endpoint에 접속하는 라이브러리이고(Unity ·
@@ -446,15 +446,15 @@ C++에만 있는 DI · configuration · HTTP hosting · 실행 모델이 18~21�
 | --- | --- |
 | 언어 중립 의미와 공개 계약 | [공통 스펙](common/README.ko.md) |
 | 그 아래 메시징 엔진 — 소켓 패턴, 전송, 옵션 | [Core 가이드](../../../core/doc/guide/01-overview.ko.md) · [Core 스펙](../../../core/doc/spec/core/README.ko.md) |
-| Core를 언어에서 직접 쓸 때 — C API binding | [Bindings 가이드](../../../bindings/doc/guide/README.ko.md) · [Bindings 스펙](../../../bindings/doc/spec/README.ko.md) |
+| Core를 언어에서 직접 사용할 때 — C API binding | [Bindings 가이드](../../../bindings/doc/guide/README.ko.md) · [Bindings 스펙](../../../bindings/doc/spec/README.ko.md) |
 | 소스와 이슈 | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |
 
-Core는 이 프레임워크가 얹히는 메시징 엔진이다. 프레임워크만 사용할 때는 참고할
+Core는 이 framework가 그 위에서 실행되는 메시징 엔진이다. 프레임워크만 사용할 때는 참고할
 필요가 없고, 소켓 수준의 동작이나 전송 옵션을 직접 다뤄야 할 때 그 문서로 내려간다.
 가이드는 패턴과 사용법을, 스펙은 C API의 함수·옵션·오류 코드를 다룬다.
 
 binding은 그 C API를 언어에서 사용하는 얇은 층이다(.NET · C++ · Java · Node.js ·
-Python · Go · Rust). framework가 없는 언어에서 zlink를 쓰거나, framework가 감싸지
+Python · Go · Rust). framework가 없는 언어에서 zlink를 사용하거나, framework가 감싸지
 않은 소켓 기능이 필요할 때 여기서 시작한다.
 
 <script>

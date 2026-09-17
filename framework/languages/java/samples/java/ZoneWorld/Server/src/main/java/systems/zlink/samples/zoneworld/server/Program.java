@@ -158,10 +158,12 @@ public final class Program {
             }
 
             if (topology.is("zone")) {
+                // --8<-- [start:doc-multi-channel-register]
                 mesh.channelName(ZoneWorldNames.ZONE_CHANNEL)
                     .server()
                     .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL);
                 mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).client();
+                // --8<-- [end:doc-multi-channel-register]
                 mesh.objects().server()
                     .addEntrySpot(ZoneEntrySpot.class)
                     .addSpotFactory(

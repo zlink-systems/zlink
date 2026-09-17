@@ -59,5 +59,5 @@
 - keep-alive/pool은 전송 스택에 위임한다(dotnet/java/node). cpp는 자체 pool을
   가지며(키: `scheme|host:port[|proxy]`) 재사용 연결의 교환 실패는 idempotent
   메서드(GET/HEAD/OPTIONS)에 한해 새 연결로 1회 재수행한다.
-- streaming 업로드는 pool을 경유하지 않고 새 연결을 쓴다(cpp 명시 규칙,
+- streaming 업로드는 pool을 경유하지 않고 새 연결을 사용한다(cpp 명시 규칙,
   타 언어는 스택 내부 처리).

@@ -90,7 +90,7 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 
 - **어느 줄이든 같다.** 같은 runtime의 Spot·Actor 대기열, worker 대기열, 답을 보관할 자리,
   진행 중인 호출 표와 완료 자리가 모두 그렇다. 기다리는 동안 host permit을 쥐고 있으므로
-  쓰는 permit이 늘고, 경계에 닿으면 `PAUSED`가 나간다.
+  사용하는 permit이 늘고, 경계에 닿으면 `PAUSED`가 나간다.
 - **다른 node의 줄도 같다.** 상대가 밀리면 상대의 `PAUSED`와 Core의 byte 상한이 이쪽 send를
   늦춘다. 줄을 누가 가졌는지로 오류를 나누지 않는다.
 - **관측은 이 규칙의 대상이 아니다.** status snapshot, trace, observer notification은 처리해야
@@ -104,7 +104,7 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
   relocation ingress hold에는 relocation 자체가 정하는
   record 수나 byte 상한이 없다.**
   - 여기에 보관한 양이 늘었다는 이유만으로 오류를 돌려주지 않는다. 보관하는 동안 그 record는
-    host permit을 계속 쥐므로 쌓일수록 쓰는 permit이 늘고 경계에서 `PAUSED`가 나간다.
+    host permit을 계속 쥐므로 쌓일수록 사용하는 permit이 늘고 경계에서 `PAUSED`가 나간다.
   - 단일 message에 협상된 크기 상한, transport, deadline과 cancellation이 정하는 제한은
     그대로 적용한다.
   - 보관한 work를 일반 application execution lane이 수락한 뒤에는 그 lane의 reservation을

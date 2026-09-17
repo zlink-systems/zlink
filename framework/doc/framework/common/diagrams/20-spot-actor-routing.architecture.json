@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Spot·Actor는 id가 있는 곳으로 간다",
+    "subtitle": "호출하는 쪽은 id만 주고, 어느 node인지는 RouteMesh가 찾는다",
+    "output": "20-spot-actor-routing.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 130,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "호출 node",
+      "sublabel": "id만 안다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "F",
+      "type": "external",
+      "label": "RouteMesh",
+      "sublabel": "현재 위치를 찾는다",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "P",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "P"
+      ],
+      "pad": 34
+    },
+    {
+      "kind": "security-group",
+      "label": "lobby Spot",
+      "wraps": [
+        "P"
+      ],
+      "pad": 12
+    },
+    {
+      "kind": "region",
+      "label": "node B",
+      "wraps": [
+        "R"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "F",
+      "label": "id를 준다",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "P",
+      "label": "player-7",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "R",
+      "label": "room-42",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Actor는 Spot 안에서만 존재한다",
+      "items": [
+        "Spot은 node 위에 있고 Actor는 Spot이 host한다. player-7을 호출하면 그 actor를 맡고 있는 lobby Spot으로 간다.",
+        "channel 호출은 담당 node 중 하나를 고른다. Spot·Actor 호출은 그 id의 대상이 지금 있는 곳으로 간다."
+      ]
+    }
+  ]
+}

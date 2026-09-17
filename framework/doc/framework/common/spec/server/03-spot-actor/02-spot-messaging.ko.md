@@ -718,7 +718,7 @@ Control 작업의 범위와 Actor control claim과의 실행 순서는
 
 Actor join·leave와 lifecycle control callback은 Spot application queue가 아니라 **Spot control
 claim**으로 처리한다. 두 자리는 실행 순서가 다르므로 섞지 않는다. 다만 둘 다 같은 host job
-permit을 쓴다.
+permit을 사용한다.
 Instance Spot의 Actor control이나 Logical Multicast subscription은 등록할 때 또는
 Spot을 준비할 때 거부한다.
 

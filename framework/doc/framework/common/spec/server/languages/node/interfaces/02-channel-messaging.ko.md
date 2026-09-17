@@ -10,7 +10,7 @@
 **Node.js는 동기 blocking 종결자를 제공하지 않는다.** 이 문서의 어떤 call에도 `submit_sync`가
 없는 것은 누락이 아니라 규정이다 — 근거와 이유는
 [Submit과 완료 §4.1](../../../01-execution/01-submit-and-completion.ko.md#41-nodejs는-동기-blocking-종결자를-제공하지-않는다)이 소유한다.
-Node application은 비동기 종결자 `submit(...)`(→ `Promise`)를 쓴다.
+Node application은 비동기 종결자 `submit(...)`(→ `Promise`)를 사용한다.
 
 Node direct·Channel send/request와 classic fanout 구독 handler를 실행할 때마다 provider child
 context를 하나 만든다. Handler와 filter는 같은 context에서 한 번씩 만들며 같은 scoped dependency를

@@ -1,0 +1,110 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The same setting reaches differently depending on where it is set",
+    "subtitle": "The root covers the process, a builder covers one unit, a runtime option applies while running",
+    "output": "16-option-scope-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 84,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "R",
+      "type": "frontend",
+      "label": "① root options",
+      "sublabel": "process-wide default",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "M",
+      "type": "backend",
+      "label": "MeshNode",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "F",
+      "type": "backend",
+      "label": "fanout channel",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "STREAM node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "RT",
+      "type": "messagebus",
+      "label": "③ runtime option",
+      "sublabel": "changed while running",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "② builder — one unit only",
+      "wraps": [
+        "M",
+        "F",
+        "S"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "R",
+      "to": "M",
+      "variant": "default"
+    },
+    {
+      "from": "R",
+      "to": "F",
+      "variant": "default"
+    },
+    {
+      "from": "R",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "RT",
+      "label": "after app.Run()",
+      "variant": "dashed",
+      "labelDy": 38
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What each place covers",
+      "items": [
+        "Root options are the process-wide default, used wherever nothing else is set.",
+        "A value set on a builder applies to that one MeshNode, channel or STREAM node and overrides the root.",
+        "A runtime option is changed after app.Run(); the other two are fixed before the host starts."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

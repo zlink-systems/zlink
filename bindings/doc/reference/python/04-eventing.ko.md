@@ -36,8 +36,8 @@ status = monitor.status()
 **Completion result.** 모든 member는 동기다. sync·async
 context-manager 프로토콜을 둘 다 지원한다.
 
-**선택 기준.** caller-driven pull loop에는 `recv`를 쓰고 시점
-스냅샷에는 `status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
+**선택 기준.** caller-driven pull loop에는 `recv`를 사용하고 시점
+스냅샷에는 `status()`를 사용한다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
@@ -73,7 +73,7 @@ method `is_ready()`.
 **선택 기준.** `state_flags`를 직접 디코딩하는 대신 `is_ready()`를
 읽는다. socket의 실제 send/receive HWM이 설정한
 `CommonSocketOptions` 값(Sockets category)과 다른 이유를 진단할 땐
-connection-bucket과 auto-HWM-plan attribute를 쓴다.
+connection-bucket과 auto-HWM-plan attribute를 사용한다.
 
 ---
 
@@ -136,7 +136,7 @@ Socket을 `PollEventFlag.POLLCOMPLETION`으로 등록했다면 owner가 `wait()`
 계속 호출해 binding이 native completion을 drain·settle하게 해야 한다.
 두 역할이 필요하면 별도 execution context에서 blocking terminal을 수행한다.
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. `wait`
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. `wait`
 호출마다 새로 만드는 대신 `PollEvents` buffer 하나를 재사용한다.
 
 ---
@@ -183,7 +183,7 @@ for i in range(events.ready_count):
 
 **선택 기준.** `revents(index)`를 손으로 bit-test하는 대신
 `has_event(index, flag)`를 선호한다. caller가 진짜로 materialize된
-`PollEvent`가 필요할 때만 `event(index)`를 쓴다 — 개별 accessor를
+`PollEvent`가 필요할 때만 `event(index)`를 사용한다 — 개별 accessor를
 순회하면 hot polling loop에서 그 할당을 피할 수 있다.
 
 ---
@@ -202,7 +202,7 @@ count = timer.recv()
 
 | Member | 의미 |
 | --- | --- |
-| `start(interval_ns: int, repeat_count: int)` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, rust의 `Timer::start`와 일치하고 지금까지 다룬 다른 모든 언어가 쓰는 밀리초/`Duration` 기반 `start`와 다르다; `repeat_count == 0`은 무제한 |
+| `start(interval_ns: int, repeat_count: int)` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, rust의 `Timer::start`와 일치하고 지금까지 다룬 다른 모든 언어가 사용하는 밀리초/`Duration` 기반 `start`와 다르다; `repeat_count == 0`은 무제한 |
 | `stop()` | fire를 멈춤; `start`로 재시작 가능 |
 | `recv()` | `Optional[int]` 반환 — 누적 fire count, 대기 중인 게 없으면 `None` |
 | `close()` | timer를 닫음 |
@@ -221,11 +221,11 @@ wait에서 multiplex하려면 `Poller.add_timer`로 등록한다. Timer 전달�
 | Enum | 사용처 | 값 |
 |---|---|---|
 | `MonitorEventMask`(`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `ALL` |
-| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(16, **readiness flag가 아니다** — legacy 기본 용량 상수, 다른 값들과 종류가 다름), `POLLCOMPLETION`(binding runtime worker용으로 예약됨; 자신의 doc comment에 따르면 application 코드는 대개 `POLLIN`/`POLLOUT`을 쓴다) |
+| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(16, **readiness flag가 아니다** — legacy 기본 용량 상수, 다른 값들과 종류가 다름), `POLLCOMPLETION`(binding runtime worker용으로 예약됨; 자신의 doc comment에 따르면 application 코드는 대개 `POLLIN`/`POLLOUT`을 사용한다) |
 | `PollSourceKind`(`IntEnum`) | `PollEvent.source_kind` | `SOCKET`, `FD`, `TIMER` |
 
 **선택 기준.** `MonitorEventMask`/`PollEventFlag`는 Python
-`IntFlag`이므로, 값을 결합할 땐 비트 `|` 연산자를 직접 쓴다
+`IntFlag`이므로, 값을 결합할 땐 비트 `|` 연산자를 직접 사용한다
 (`MonitorEventMask.CONNECTED | MonitorEventMask.DISCONNECTED`) —
 varargs나 `EnumSet`이 필요한 언어와 다르다.
 

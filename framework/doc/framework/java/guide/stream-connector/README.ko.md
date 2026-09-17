@@ -11,12 +11,11 @@ Java Stream Connector는 JVM client가 ZLink Framework의 STREAM endpoint에 연
 
 ## 1. 의존성 추가
 
-사용 중인 ZLink 배포 버전을 `<version>`에 지정한다.
 
 ```kotlin
 dependencies {
     // Java connector 본체와 TCP/TLS/WS/WSS transport를 제공한다.
-    implementation("systems.zlink:zlink-stream-connector:<version>")
+    implementation("systems.zlink:zlink-stream-connector:0.16.0")
 }
 ```
 
@@ -99,7 +98,12 @@ var registration = connector.on(
 connector.dispatch().submit();
 
 // handler가 더 이상 필요하지 않으면 등록을 해제한다.
-registration.close();
+// on(...)의 반환형은 AutoCloseable이라 close()가 checked Exception을 선언한다.
+try {
+    registration.close();
+} catch (Exception e) {
+    // application의 오류 처리 정책을 따른다.
+}
 ```
 
 `IMMEDIATE` mode는 receive 경로에서 handler를 바로 실행한다. 별도의 dispatch 호출은 필요 없지만,

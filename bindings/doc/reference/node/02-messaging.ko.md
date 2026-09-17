@@ -37,7 +37,7 @@ const copyOfBuffer = Message.from(rawBuffer);
 | `copy()` | `Message.from(this)`와 동등 |
 | `size()` | payload 바이트 길이 |
 | `isEmpty()` | `size()`가 0인지 |
-| `copyTo(destination, sourceOffset?, destinationOffset?, length?)` | payload(또는 범위)를 caller가 제공한 buffer로 복사, 쓴 byte 수 반환; 범위를 벗어나면 `RangeError` |
+| `copyTo(destination, sourceOffset?, destinationOffset?, length?)` | payload(또는 범위)를 caller가 제공한 buffer로 복사, 사용한 byte 수 반환; 범위를 벗어나면 `RangeError` |
 | `tryCopyTo(destination)` | destination이 너무 작아도 예외 없이 `boolean`을 반환하는 bounds-check 버전 |
 | `getString(encoding = 'utf8')` / `toString()` | payload를 텍스트로 디코딩; `toString()`은 `getString()`과 동등 |
 | `refCount()` | native reference count, 진단 전용 |
@@ -50,8 +50,8 @@ storage를 해제하고 instance를 빈 상태로 리셋한다.
 
 **선택 기준.** caller가 raw 소유권을 유지할 필요가 없는 데이터로 outbound
 payload를 만들 땐 `Message.allocate(size)`나 복사하는
-`Message.from(...)`를 쓴다. destination 크기가 충분한지 미리 알 수 없을
-땐 `copyTo`보다 `tryCopyTo`를 쓴다. `getProperty(...)`는 현재 동작하지
+`Message.from(...)`를 사용한다. destination 크기가 충분한지 미리 알 수 없을
+땐 `copyTo`보다 `tryCopyTo`를 사용한다. `getProperty(...)`는 현재 동작하지
 않는 것으로 취급한다 — 예약된 표면이지 실제로 동작하는 metadata 조회가
 아니다.
 
@@ -75,7 +75,7 @@ java/cpp의 non-public 대응물과 달리 Node 고유의 public base class다.
 **Completion result.** 모든 member는 동기다.
 
 **선택 기준.** 직접 생성하지 않는다 — 아래 `Received`/`TopicMessage`를
-쓴다, 둘 다 이 형태를 상속한다.
+사용한다, 둘 다 이 형태를 상속한다.
 
 ---
 
@@ -164,7 +164,7 @@ if (xpub.receiveSubscriptionEvent(evt)) { /* ... */ }
 않는다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets
-category)에서 구독자 변동을 관찰할 때 쓴다. `SubscriptionEntry`는
+category)에서 구독자 변동을 관찰할 때 사용한다. `SubscriptionEntry`는
 socket의 subscription-snapshot 조회(Sockets category)의 반환 타입이다.
 
 ---
@@ -173,8 +173,8 @@ socket의 subscription-snapshot 조회(Sockets category)의 반환 타입이다.
 
 모든 socket type의 `send`/`publish`/`request`/`reply` 진입점(Sockets
 category)이 part를 누적하고 terminal에 도달하기 위해 반환하는 fluent
-builder. Builder 단계는 `PartBuilder<TNext>`(`message(m): TNext`)를 쓰고,
-request는 `Timeoutable<TNext>`(`timeout(ms): TNext`)도 쓴다.
+builder. Builder 단계는 `PartBuilder<TNext>`(`message(m): TNext`)를 사용하고,
+request는 `Timeoutable<TNext>`(`timeout(ms): TNext`)도 사용한다.
 
 ```ts
 await dealer.send().message(Message.from('p1')).message(Message.from('p2')).submit();
@@ -206,15 +206,15 @@ reply `submit()`은 동기다. Managed send/request/reply terminal은
 `SendFlags.DontWait`를 받지 않는다. 모든 builder는 성공적인 submit에서만
 누적된 `Message` part를 소비한다 — 실패 시 소유권은 caller에게 복원된다.
 
-**선택 기준.** 일반 `async`/`await` 코드에선 `submit()`을 쓰고 호출
-thread가 block해도 될 때만 `submit_sync()`를 쓴다. 목적지 route를 손으로
-재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
+**선택 기준.** 일반 `async`/`await` 코드에선 `submit()`을 사용하고 호출
+thread가 block해도 될 때만 `submit_sync()`를 사용한다. 목적지 route를 손으로
+재구성하는 대신 `Received.reply()`/`send()`를 사용한다.
 
 ---
 
 ## Handler type alias
 
-완료 전달에는 더 이상 등록형 function alias를 쓰지 않는다. Public 대체
+완료 전달에는 더 이상 등록형 function alias를 사용하지 않는다. Public 대체
 표면은 terminal 반환값, pull receive 값, opaque reply capability다.
 
 | 영역 | Public 대체 표면 | 결과 |

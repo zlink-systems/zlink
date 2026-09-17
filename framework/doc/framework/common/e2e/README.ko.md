@@ -47,7 +47,7 @@ e2e는 기능을 평면적으로 나열하지 않는다. **실제 배포와 같�
 - client 코드에서 channel/fanout/spot framework client, framework host 구성, test-only
   helper를 직접 사용하지 않는다. 예를 들어 `.NET` client에서는 `IZLinkChannelClient`,
   `AddZLinkFramework`, `Host.CreateDefaultBuilder`, reflection 우회, private/internal API 접근을
-  쓰지 않는다.
+  사용하지 않는다.
 - request/send/publish/resolve 같은 framework 호출은 기능을 제공하는 실제 역할 server app 내부에
   둔다. server는 app endpoint를 통해 사용자가 하는 요청을 받고, 그 안에서 공개 framework API로
   실제 기능을 실행한다. 기존 client 검증 코드를 `Server/Driver`, `ScenarioRunner`, `TestHost` 같은
@@ -61,7 +61,7 @@ e2e는 기능을 평면적으로 나열하지 않는다. **실제 배포와 같�
   전체를 위임하는 endpoint 하나만 호출해서 끝나면 안 된다.
 - 상태 변경을 확인하려고 같은 HTTP 조회를 짧은 간격으로 수십 번 반복하지 않는다. 서버가 push로
   알려 줄 수 있는 흐름이면 client stream connector를 먼저 연결해 두고, HTTP 호출은 상태 변경을
-  트리거하는 역할로만 쓴다. 검증은 connector가 받은 push payload와 실제 역할 server evidence/log를
+  트리거하는 역할로만 사용한다. 검증은 connector가 받은 push payload와 실제 역할 server evidence/log를
   함께 대조한다.
 - Pub/Sub처럼 검증 대상이 client stream session이 아니라 별도 subscriber 역할 server가 받은 fanout
   delivery인 경우에는 subscriber handler가 남긴 bounded `/evidence/wait` marker를 성공 기준으로
@@ -106,7 +106,7 @@ application payload는 RouteMesh를 통과하므로 예외가 아니다. 생성 
 
 ### 수명·배치 시나리오 용어
 
-서버 수와 프로세스 상태가 바뀌는 시나리오는 아래 뜻을 구분해서 쓴다. 이름이 다르면 검증해야 할
+서버 수와 프로세스 상태가 바뀌는 시나리오는 아래 뜻을 구분해서 사용한다. 이름이 다르면 검증해야 할
 계약도 다르므로, 한 시나리오를 여러 용어로 부르지 않는다.
 
 - **scale-out**은 실행 중인 node를 추가하는 것이다. 기존 요청 처리 주체를 자동으로 바꾸는 동작을
@@ -210,7 +210,7 @@ client scenario process timeout, 전체 child group timeout, shutdown/recovery�
 프로세스의 상한이나 검증 대상 동작의 일부이지, 로컬 process가 준비되기를 기다리는 readiness 값이
 아니다.
 bounded evidence wait처럼 서버가 시나리오 event를 기다리는 요청도 같은 원칙을 따른다. 단순 evidence
-snapshot 요청은 3초 HTTP 기준을 쓰지만, event가 나올 때까지 기다리는 bounded wait는 별도 이름의
+snapshot 요청은 3초 HTTP 기준을 사용하지만, event가 나올 때까지 기다리는 bounded wait는 별도 이름의
 시나리오 대기값으로 분리한다.
 
 ### 2.1.1 표준 runner 출력과 중단 정리
@@ -230,7 +230,7 @@ snapshot 요청은 3초 HTTP 기준을 쓰지만, event가 나올 때까지 기�
 [<language>-e2e] total PASS (<seconds>s)
 ```
 
-`<language>`는 `dotnet`, `java`, `node`, `cpp`처럼 언어 runner를 구분하는 짧은 이름을 쓴다.
+`<language>`는 `dotnet`, `java`, `node`, `cpp`처럼 언어 runner를 구분하는 짧은 이름을 사용한다.
 `<selector>`는 `all`, 단일 시나리오 ID, 또는 언어별 runner가 허용하는 쉼표 구분 시나리오 목록이다.
 C++처럼 같은 config를 여러 start order로 반복하는 runner는 config 시작·완료 라인에
 `start_order=<variant>`를 함께 기록한다.
@@ -240,7 +240,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 개별 server stdout/stderr 같은 진단 출력은 이 요약 라인 사이에 나올 수 있다.
 
 개별 config runner는 client 시나리오 진행 상황을 콘솔에 실시간으로 흘려보내야 한다. 로그 파일에만
-쓰고 마지막에 한꺼번에 보여 주면 멈춘 것처럼 보이므로 표준으로 보지 않는다. 파일 로그가 필요하면
+사용하고 마지막에 한꺼번에 보여 주면 멈춘 것처럼 보이므로 표준으로 보지 않는다. 파일 로그가 필요하면
 `tee`처럼 콘솔 출력과 파일 저장을 함께 만족하는 방식으로 처리한다.
 
 `Ctrl-C`, `TERM`, 정상 종료 모두 같은 정리 경로를 사용한다. 집계 runner는 종료 시 자신이 시작한
@@ -257,7 +257,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 다른 언어에 e2e를 추가할 때는 config 하나를 작은 테스트 파일 묶음으로 보지 말고 독립 실행 배포
 묶음으로 구현한다. 한 config를 구현할 때 필요한 기본 산출물은 아래와 같다.
 
-- `Shared/`: server와 client가 함께 쓰는 request/reply/event/evidence DTO만 둔다.
+- `Shared/`: server와 client가 함께 사용하는 request/reply/event/evidence DTO만 둔다.
 - `Server/<Role>/`: provider, consumer, publisher, subscriber, play, session처럼 실제
   배포에서 구분되는 역할마다 하나의 실행 앱을 둔다. 같은 역할의 복제본은 같은 프로젝트를 여러
   번 띄워도 되지만, 서로 다른 역할은 프로젝트와 폴더를 분리한다.
@@ -267,7 +267,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 - `Server/<Role>/Handlers/`: framework handler, route handler, observer처럼 framework runtime에
   등록되는 타입을 둔다.
 - `Server/<Role>/Infrastructure/`: evidence store, role 내부 상태 저장소처럼 endpoint와 handler가
-  함께 쓰지만 public 메시지 계약은 아닌 구현을 둔다.
+  함께 사용하지만 public 메시지 계약은 아닌 구현을 둔다.
 - `Client/Program.*`: 실행할 시나리오 목록을 선언하고, 옵션에 따라 전체 또는 단일 시나리오를
   순서대로 호출한다.
 - `Client/Scenarios/<ScenarioId><Name>Scenario.*`: 시나리오 ID 하나마다 파일 하나를 둔다.
@@ -291,14 +291,14 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 - endpoint 하나가 여러 시나리오를 내부에서 실행하고 결과만 돌려주면 안 된다. `/run`,
   `/scenario/all`, `/execute`처럼 client 검증을 server에 위임하는 endpoint는 금지한다.
 - endpoint 내부에서는 해당 언어 framework의 공개 API를 사용한다. private API, raw frame 조작,
-  reflection 우회, test-only adapter를 쓰지 않는다.
+  reflection 우회, test-only adapter를 사용하지 않는다.
 - evidence endpoint는 역할 server가 실제로 처리한 marker를 노출한다. 시나리오 실행 전용 server가
   만든 marker만으로 성공을 판정하지 않는다.
 - 값이 바뀌기를 기다려야 하면 역할 server에 bounded wait endpoint를 둔다. 예: `/evidence/wait`,
   `/topology/wait`, `/admin/weight/wait`. client가 같은 GET을 수십 번 반복해 값 변화를 관찰하는
-  방식은 쓰지 않는다.
+  방식은 사용하지 않는다.
 - stream, subscription, monitoring event처럼 server가 push할 수 있는 흐름은 client stream connector를
-  먼저 연결하고 push payload로 검증한다. HTTP는 상태 변경을 일으키는 trigger로만 쓴다.
+  먼저 연결하고 push payload로 검증한다. HTTP는 상태 변경을 일으키는 trigger로만 사용한다.
 - 다만 Pub/Sub fanout처럼 event의 수신자가 client가 아니라 subscriber 역할 server인 config는
   subscriber server의 bounded evidence wait를 사용한다. client stream connector로 별도 observer를
   추가해 subscriber 역할을 우회하지 않는다.
@@ -337,7 +337,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 - 공통 서버 library/shared 프로젝트는 기본으로 만들지 않는다. 중복이 조금 생기더라도 각 서버
   프로젝트가 자기 구성을 직접 드러내는 쪽을 우선한다. 정말 여러 config 또는 여러 역할에서 같은
   코드가 반복되어 유지 비용이 커질 때만 별도 shared 프로젝트를 검토한다.
-- `Shared/`는 server와 client가 함께 쓰는 메시지·계약 타입만 둔다. server-only host factory,
+- `Shared/`는 server와 client가 함께 사용하는 메시지·계약 타입만 둔다. server-only host factory,
   handler, filter, evidence store를 config의 top-level `Shared/`에 넣지 않는다.
 
 ### 2.5 client 프로젝트 구성 규칙
@@ -465,12 +465,12 @@ namespace를 사용하므로 지원하지 않는다.
   id만 정리한다. 개별 script가 같은 prefix의 다른 Redis container를 지우면 안 된다.
 - Docker Redis를 만들지 못하면 runner는 즉시 실패한다. host Redis나 다른 실행의 endpoint로
   자동 전환해서 성공 처리하면 안 된다.
-- Redis container 시작은 모든 언어에서 같은 순서를 쓴다.
+- Redis container 시작은 모든 언어에서 같은 순서를 사용한다.
   언어별 Redis 구간에서 OS bind가 가능한 `<redis-port>`를 고른 뒤
   `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1:<redis-port>:6379 <pinned-redis-image>`로
   container를 만든다. `docker start <container-id>`로 시작한 뒤 `docker inspect`로 실행 상태와
   publish된 host port가 선택값과 같은지 확인한다. `docker run -d` 출력에 의존해 container id와
-  port를 동시에 처리하는 방식은 쓰지 않는다.
+  port를 동시에 처리하는 방식은 사용하지 않는다.
 - E2E Redis 데이터는 실행 중에만 필요하므로 Docker volume을 만들지 않는다. Redis 이미지가
   선언한 `/data` volume은 `--tmpfs /data`로 덮어쓰고, container 정리에는 `docker rm -fv`를
   사용한다. 이렇게 해야 반복 실행 후 anonymous volume이 남지 않는다.
@@ -493,7 +493,7 @@ namespace를 사용하므로 지원하지 않는다.
 - Redis host port는 언어별 Redis 구간에서 실행할 때마다 선택한다. Runner는 Docker에 그 값을
   명시하고, `inspect` 결과가 선택값과 같은지 확인한 뒤 각 role server와 client에 전달한다.
   Redis key prefix, routing id, log directory도 실행마다 고유해야 한다.
-- 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 쓰지 않는다. 새
+- 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 사용하지 않는다. 새
   Docker Redis container와 실행별 key prefix를 만들고 해당 언어의 Redis 구간을 사용해야 테스트
   간섭을 막을 수 있다.
 - Redis lifecycle 명령과 짧은 장애 주입·조회 Docker 명령은 timeout으로 감싸고, Redis readiness는
@@ -515,10 +515,10 @@ namespace를 사용하므로 지원하지 않는다.
 근거를 남기는 표다.
 
 - config 문서의 모든 시나리오 ID를 행으로 둔다.
-- 상태는 `implemented`, `not-supported`, `blocked`, `deferred`처럼 명확히 쓴다.
+- 상태는 `implemented`, `not-supported`, `blocked`, `deferred`처럼 명확히 사용한다.
 - `not-supported`는 해당 언어의 public contract에 기능이 없다는 뜻이다. 이 경우 필요한 public API와
   관련 spec/guide 근거가 있는지 함께 적는다.
-- `blocked`는 runtime bug, bindings bug, harness 부족처럼 해결해야 할 원인이 있는 경우에만 쓴다.
+- `blocked`는 runtime bug, bindings bug, harness 부족처럼 해결해야 할 원인이 있는 경우에만 사용한다.
   버그를 피해 시나리오를 약하게 만들지 않는다.
 - 미구현 항목이 있어도 P0이면 완료가 아니다. P1/P2는 해당 기능 지원 여부와 실행 비용을 함께 적는다.
 
@@ -527,7 +527,7 @@ namespace를 사용하므로 지원하지 않는다.
 - 시나리오 파일 첫머리에는 이 파일이 어떤 사용자 흐름과 어떤 framework 동작을 검증하는지 적는다.
   독자가 파일을 열었을 때 "이 시나리오가 왜 필요한가"를 바로 알 수 있어야 한다.
 - 주석은 시나리오 의도, 검증 기준, 기다림이 필요한 이유처럼 코드만으로 드러나지 않는 판단을
-  설명할 때만 쓴다. 코드가 하는 일을 그대로 반복하는 주석은 넣지 않는다.
+  설명할 때만 사용한다. 코드가 하는 일을 그대로 반복하는 주석은 넣지 않는다.
 - HTTP 호출, server evidence 조회, 프로세스 재시작처럼 시나리오의 핵심 단계에는 짧은 주석을 둘 수
   있다. 이 주석은 "무엇을 호출한다"보다 "이 단계가 어떤 실사용 조건을 만든다"를 설명해야 한다.
 - helper나 support 코드의 주석으로 핵심 흐름을 대신 설명하지 않는다. 시나리오 본문만 읽어도
@@ -572,7 +572,7 @@ e2e가 있었지만 그 구성 조합을 아무도 돌리지 않았던" 경로�
 | peer 수 | 한 발신자가 **2개 이상 노드로 연속 요청** | Config 1, 2 | 두 번째 peer의 응답 drain 누락 |
 | 기동 순서 | 서버 역할의 **기동 순서를 뒤바꾼** 변형(의존 역방향 기동) | Config 1, 2, 9 | 특정 기동 순서에서만 나타나는 연결 수렴 레이스 — 순서가 고정된 러너에서는 재현 불가 |
 
-축 변형은 시나리오를 새로 쓰는 게 아니라 같은 client 시나리오를 서버 topology만 바꿔
+축 변형은 시나리오를 새로 사용하는 게 아니라 같은 client 시나리오를 서버 topology만 바꿔
 다시 돌리는 것이다. 모든 조합을 다 돌릴 필요는 없고, config별 P0 시나리오에 대해
 "route mesh 없음 × 분리 배치" 조합을 우선 적용한다(발굴 결함의 대다수가 이 조합).
 
@@ -608,7 +608,7 @@ e2e가 있었지만 그 구성 조합을 아무도 돌리지 않았던" 경로�
   보낸다. 재시도나 sleep으로 가리지 않는다 — 첫 요청이 바로 성공하거나 fail-fast로
   분류되는 것 자체가 검증 대상이다.
 - **인프라 게이트**: location store가 필수인 config는 store 없는 빌드/구성에서 조용히
-  미연결로 돌지 않고 구성 시점에 실패해야 한다. 러너 스크립트는 표준 도구만 쓴다
+  미연결로 돌지 않고 구성 시점에 실패해야 한다. 러너 스크립트는 표준 도구만 사용한다
   (미설치 도구 의존으로 판정 루프 전체가 무효가 된 사례 있음).
 - **다단 push 사슬**: 서버 내부에서 role 경계를 두 번 이상 넘어(channel request → actor
   send → bound session push) 최종적으로 client stream에 도달하는 사슬을 끝까지 어서션한다.
@@ -628,20 +628,20 @@ e2e가 있었지만 그 구성 조합을 아무도 돌리지 않았던" 경로�
 
 ## 5. 공통 실행 원칙
 
-- 테스트는 독립된 임시 작업 디렉토리와 로그 디렉토리를 쓴다.
+- 테스트는 독립된 임시 작업 디렉토리와 로그 디렉토리를 사용한다.
 - 서버 프로세스는 config가 선언한 역할대로 시작한다. 공유 location store가 필요한 config는
   실행 전에 store(Redis 등)를 준비하거나 별도 프로세스로 시작하고, 실행 후 자신이 만든 store
   process 또는 container를 정리한다.
   multi-process config의 공유 저장소는 공식 Redis extension을 기본으로 한다. 단일 process
   smoke에서 위치 조회가 필요하면 process-local `IZLinkLocationStore` 구현체를
   `AddLocationStore(instance)`로 등록할 수 있다.
-- port, routing id, Redis key prefix, 저장소 경로는 실행마다 격리한다. Docker Redis를 쓰는
+- port, routing id, Redis key prefix, 저장소 경로는 실행마다 격리한다. Docker Redis를 사용하는
   runner는 언어·e2e 범위 prefix로 container를 만들고 자신이 만든 container id만 정리한다.
   통합 runner도 같은 prefix의 다른 실행 container를 제거하지 않는다.
 - 서버 준비 여부는 sleep만으로 판단하지 않고, 포트 readiness 또는 readiness marker로 확인한다.
 - 성공 기준은 client 반환값, client stream connector가 받은 push, server의 public application evidence와
   정식 public flow·metric record를 조합한다. 일반 diagnostic log는 실패 조사 자료이며 성공 조건이 아니다.
-  Location Store를 쓰는 config는 public RouteMesh status와 Actor·Spot manager의 resolve 결과도 성공
+  Location Store를 사용하는 config는 public RouteMesh status와 Actor·Spot manager의 resolve 결과도 성공
   기준에 넣는다. Application과 E2E client는 Store provider record를 직접 읽거나 해석하지 않는다.
 - 실패하면 각 프로세스의 stdout/stderr, framework 로그, client 마지막 요청 정보를 남긴다.
 - 실패 시 먼저 원인 레이어를 분리한다. `core-capi`, `bindings`, `framework`, `sample`, 테스트 실행
@@ -653,7 +653,7 @@ e2e가 있었지만 그 구성 조합을 아무도 돌리지 않았던" 경로�
 
 모든 e2e는 **파일 로깅을 반드시 켜고**, 일반 시나리오에서는 메시지 흐름 추적도 켜서
 작성·디버깅한다. ad-hoc `printf`나 콘솔 스크롤로 대신하지 않는다. 트레이싱은 "메시지가 도착했나 /
-핸들러로 갔나 / 응답이 나갔나"를 표준 기능으로 기록하므로 테스트의 1차 디버깅 도구로 쓴다.
+핸들러로 갔나 / 응답이 나갔나"를 표준 기능으로 기록하므로 테스트의 1차 디버깅 도구로 사용한다.
 Tracing의 `off` 동작과 실행 중 level 변경을 검증하는 시나리오는 해당 구간에 한해 추적을 끈다.
 (기능 스펙: [메시지 흐름 추적과 dispatch 관측](../spec/server/06-observability/03-message-flow-tracing.ko.md))
 
@@ -663,7 +663,7 @@ Tracing의 `off` 동작과 실행 중 level 변경을 검증하는 시나리오�
   출력한다. 콘솔 출력만으로 끝내지 않는다.
 - 로그 디렉토리는 실행마다 격리하고(§5), VCS에서 제외한다(`.gitignore`). (C++ Bingo 예:
   `samples/Bingo/logs/`, `run_sample.sh`가 `BINGO_LOG_DIR`를 export.)
-- 파일 sink는 부모 디렉토리를 자동 생성하는 API를 쓴다(C++ `app.logging().use_file(...)`/
+- 파일 sink는 부모 디렉토리를 자동 생성하는 API를 사용한다(C++ `app.logging().use_file(...)`/
   `use_rotating_file(...)`; `.NET`/Java/Node도 동일 의미 옵션). 디렉토리가 없다고 조용히 실패하면
   안 된다.
 - 프로세스마다 파일을 분리해(예: `provider-a.log`, `play-a.log`, `session-a.log`, `client.log`)
@@ -706,7 +706,7 @@ Tracing의 `off` 동작과 실행 중 level 변경을 검증하는 시나리오�
 
 ## 7. 시나리오 ID 규칙
 
-ID는 `config 접두사 - 트랙 - 번호`를 쓴다. 예: `RM-A1`(Location messaging, Track A, 1번).
+ID는 `config 접두사 - 트랙 - 번호`를 사용한다. 예: `RM-A1`(Location messaging, Track A, 1번).
 Config 1은 `RM` 접두사를 사용한다.
 
 | 접두사 | config |

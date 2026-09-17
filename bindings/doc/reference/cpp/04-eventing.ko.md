@@ -41,8 +41,8 @@ zlink::monitor_status_t status = monitor.status ();
 **완료 결과.** 모든 member는 동기다. move-only다 — 소멸자는 암묵적으로
 close하지 않는다.
 
-**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 쓰고 시점 스냅샷엔
-`status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 사용하고 시점 스냅샷엔
+`status()`를 사용한다.
 
 ---
 
@@ -71,7 +71,7 @@ auto-high-water-mark telemetry 스냅샷. accessor method가 있는 class가 아
 **선택 기준.** `state_flags`를 직접 디코딩하는 대신 `is_ready()`를 읽는다.
 socket의 실제 send/receive HWM이 설정한 `common_socket_options_t` 값(Sockets
 category)과 다른 이유를 진단할 땐 connection-bucket과 auto-HWM-plan 필드를
-쓴다.
+사용한다.
 
 ---
 
@@ -103,13 +103,13 @@ size_t count = poller.wait (ready.data (), ready.size (), std::chrono::seconds (
 | `wait(poll_event_t* events_, size_t capacity_, std::chrono::milliseconds timeout_)` | — | source 하나 이상이 ready 상태이거나 `timeout_`이 지날 때까지 block |
 
 **완료 결과.** 등록/제거 member는 동기다. `wait`는 `timeout_`까지 block하며,
-`capacity_`까지 결과를 쓰고 쓴 개수를 반환한다(timeout이면 `0`). `poller_t`는
+`capacity_`까지 결과를 사용하고 사용한 개수를 반환한다(timeout이면 `0`). `poller_t`는
 `socket_monitor_t&`도 직접 등록할 수 있다(dotnet의 `IPoller`의 `Add`
 overload는 `IZlinkSocket`/`IZlinkTimer`만 받고, monitor는 대신
 `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`을 통해 간접적으로
 poll되는 것과 다르다).
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. 감시하는 event만 바뀔
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. 감시하는 event만 바뀔
 땐 `remove` + `add` 대신 `modify`를 선호한다.
 
 ---
@@ -162,8 +162,8 @@ int ready = zlink::poll (items, std::chrono::milliseconds (1000));
 `poll_item_t`의 `revents`는 호출로 그 자리에서 쓰인다.
 
 **선택 기준.** 작고 고정된 집합에 대한 임시 one-off wait엔 이 자유 함수 형태를
-쓴다. 감시 대상 집합이 시간에 따라 바뀌거나 monitor/timer를 socket과 함께
-multiplex해야 할 땐 `poller_t`를 쓴다.
+사용한다. 감시 대상 집합이 시간에 따라 바뀌거나 monitor/timer를 socket과 함께
+multiplex해야 할 땐 `poller_t`를 사용한다.
 
 ---
 

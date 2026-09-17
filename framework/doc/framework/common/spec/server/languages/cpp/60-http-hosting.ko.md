@@ -43,7 +43,7 @@ C++ framework는 이 흐름을 아래 의미로 맞춘다.
 - HTTP server는 app lifecycle에 묶인 hosted service다.
 - HTTP route는 `map_get`, `map_post`, `map_put`, `map_delete`로 method와 path를 등록한다
   (ASP.NET Core Minimal API의 `MapGet` 계열과 같은 개념이며, C++ public 표면은 §7의 규약대로
-  `snake_case`를 쓴다).
+  `snake_case`를 사용한다).
 - HTTP endpoint는 `http://`와 `https://`를 모두 지원한다.
 - request body는 JSON DTO로 변환한다.
 - route handler는 DI에서 resolve한다.
@@ -179,7 +179,7 @@ create_game_http_handler_t::handle(const create_game_http_req_t &request)
 - raw HTTP request async: `task_t<http_response_t> handle(const http_request_t &request)`
 
 `http_request_t`와 `http_response_t`는 zlink framework public 타입이다. `Boost.Beast`,
-`Boost.Asio`, OpenSSL stream, socket 타입을 handler signature에 직접 쓰면 public contract
+`Boost.Asio`, OpenSSL stream, socket 타입을 handler signature에 직접 사용하면 public contract
 위반이다.
 
 `map_*<THandler>(...)`는 위 signature 형식을 compile-time으로 판별한다. `request_type`이 있으면
@@ -346,7 +346,7 @@ options.http()
   문맥을 함께 받을 수 있다. `handle(request)`만 제공하는 기존 handler도 그대로 동작한다.
 
 raw route는 `request_type` serializer를 요구하지 않는다. runtime은 `http_request_t`를 만들어
-handler에 넘기고, handler가 반환한 `http_response_t`를 그대로 HTTP response로 쓴다. raw route도
+handler에 넘기고, handler가 반환한 `http_response_t`를 그대로 HTTP response로 사용한다. raw route도
 middleware, correlation id, timeout, limit, logging, metrics 정책을 똑같이 통과한다.
 
 Invoker 생성 의사 코드는 아래와 같다.
@@ -396,7 +396,7 @@ Response precedence:
 | DTO 반환만 있음 | `200 OK`, `application/json`, DTO JSON body 사용 |
 
 middleware `after(...)`는 handler result가 만들어진 뒤 실행된다. `after(...)`가 response header를
-추가하면 기존 header를 같은 이름으로 덮어쓸 수 있다. 단, `Content-Length`는 runtime이 최종 body
+추가하면 기존 header를 같은 이름으로 덮어사용할 수 있다. 단, `Content-Length`는 runtime이 최종 body
 기준으로 계산하므로 handler나 middleware가 직접 고정하지 않는다.
 
 route parameter와 query string binding은 ASP.NET Core model binding을 단순화해서 따른다.

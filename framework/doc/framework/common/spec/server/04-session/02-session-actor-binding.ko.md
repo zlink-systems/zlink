@@ -164,7 +164,7 @@ reply를 한 번만 반환한다. **승인 판정은 이 세 값으로만 한다
 `OwnerLeaseGeneration`은 envelope에 보존하는 값이지 bind 승인 판정의 입력이 아니다 —
 caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 current lease가
 다르다는 이유로 bind를 거부하지 않는다. lease는 route fence
-검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 쓰면
+검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 사용하면
 파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
 
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
@@ -174,13 +174,13 @@ application queue에 직접 추가한다. Current Spot은 authority 검증에 �
 실행 문맥이 아니다. Session callback thread에서 Actor handler를 실행하지 않으며 서로
 다른 Actor를 session의 실행 문맥으로 직렬화하지 않는다. Actor 사이의 실행 순서는
 [Actor 모델](../03-spot-actor/04-actor-model.ko.md)의 실행 모드(`PerActor`·`SpotWide`)가
-정한다 — `SpotWide` User Spot에 속한 Actor들은 그 Spot의 공통 gate를 함께 쓴다.
+정한다 — `SpotWide` User Spot에 속한 Actor들은 그 Spot의 공통 gate를 함께 사용한다.
 
 - **session의 실행 권한과 Actor의 실행 권한은 서로 다른 권한이다.** Session callback을 실행하는 문맥은 Actor
   handler를 실행하지 않는다. 나누지 않으면 한 client가 보낸 packet 처리가 그 Actor가 속한
   Spot 전체를 잡거나, 반대로 Spot이 바쁠 때 그 연결의 keepalive 처리까지 밀린다. 연결
   수명 관리와 업무 처리는 빈도도 지연 요구도 다르다.
-- **runtime이 쓰는 제어 record는 application queue에 넣지 않는다.** 연결 유지 신호가 업무 message와 같은 queue에서
+- **runtime이 사용하는 제어 record는 application queue에 넣지 않는다.** 연결 유지 신호가 업무 message와 같은 queue에서
   기다리면, 업무가 밀릴 때 연결이 끊긴 것으로 오판할 수 있다.
 
 Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session owner에
@@ -189,7 +189,7 @@ Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session o
 STREAM connection에 제출한다.
 
 **Binding의 완료와 그 인지는 해석의 여지가 없는 두 선형화점으로 정의한다. push의
-current 판정에 그 선형화점 밖의 사본을 쓰지 않는다.**
+current 판정에 그 선형화점 밖의 사본을 사용하지 않는다.**
 
 1. **Actor owner 측 완료 — terminal reply 반환 전.** Actor owner는 위 검증을 통과한
    binding 등록을 — 그 노드에서 Actor→session 송신 경로가 참조하는 상태까지 포함해 —
@@ -205,7 +205,7 @@ current 판정에 그 선형화점 밖의 사본을 쓰지 않는다.**
    상태와 대조되는 창을 만들지 않는다.
 3. **판정 권위는 하나다.** push의 current 판정은 [§8.1](#81-seal-held-message와-route-전환)이
    열거한 Session owner 검증 항목(위의 네 generation 값)만 사용한다. 파생 사본의
-   미갱신·불일치를 binding이 stale하다는 근거로 쓰지 않는다. Source 측도 전송 조건으로
+   미갱신·불일치를 binding이 stale하다는 근거로 사용하지 않는다. Source 측도 전송 조건으로
    binding 정체성(SessionRid·binding generation)과 위 열거 항목 외의 field 일치를
    요구하지 않는다 — binding 성립 후 owner lifecycle field가 갱신되어도 같은 binding의
    push는 현행 등록 route로 전송된다.
@@ -284,7 +284,7 @@ Bound-session API는 current binding으로 one-way push를 보내거나 connecti
 요청한다. 임의의 session을 지정하는 global proxy는 제공하지 않는다. Disconnect는
 binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸지 않는다.
 
-이 절과 §8.2가 쓰는 control command는 다음과 같다.
+이 절과 §8.2가 사용하는 control command는 다음과 같다.
 
 | Command | 이름 | 오가는 방향과 용도 | 완료 방식 |
 |---|---|---|---|

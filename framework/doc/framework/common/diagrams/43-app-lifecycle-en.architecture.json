@@ -1,0 +1,108 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The three stages of app_t — configure, serve, stop",
+    "subtitle": "run(argc, argv) blocks, and its return value is the exit code",
+    "output": "43-app-lifecycle-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 5,
+    "gapX": 130,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "BEGIN",
+      "type": "external",
+      "label": "create()",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "CONF",
+      "type": "frontend",
+      "label": "configure",
+      "sublabel": "config, logging, registration",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "SERVE",
+      "type": "backend",
+      "label": "serving",
+      "sublabel": "channel, HTTP, spot dispatch",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "STOP",
+      "type": "messagebus",
+      "label": "stopping",
+      "sublabel": "hosted services torn down",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "END",
+      "type": "external",
+      "label": "exit",
+      "row": 0,
+      "col": 4
+    }
+  ],
+  "connections": [
+    {
+      "from": "BEGIN",
+      "to": "CONF",
+      "variant": "default"
+    },
+    {
+      "from": "CONF",
+      "to": "SERVE",
+      "label": "run(argc, argv)",
+      "variant": "default"
+    },
+    {
+      "from": "SERVE",
+      "to": "STOP",
+      "label": "stop(), request_stop(), a signal",
+      "variant": "default",
+      "labelDy": 54
+    },
+    {
+      "from": "STOP",
+      "to": "END",
+      "label": "returns the exit code",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Configure",
+      "items": [
+        "Everything is declared before run — config/logging, add_zlink_framework, add_hosted_service.",
+        "An invalid configuration is rejected with an exception, either at declaration time or as run starts."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Stopping",
+      "items": [
+        "request_stop() is the asynchronous request (from a signal handler, say); stop() stops synchronously.",
+        "Registered hosted services are stopped in reverse order; channels, streams and HTTP are hosted services too, so they unwind the same way."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

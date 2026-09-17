@@ -37,8 +37,8 @@ const created = await actorManager
 있으면 두 상태가 아니라 `AlreadyExists` 오류로 완료한다 — `status: "existing"`은 `getOrCreate`에만
 있다. Ready incarnation이 있는데 stable type이 다르면 `TypeMismatch`다.
 
-**선택 기준.** 항상 새 Actor가 필요할 때 쓴다. 있으면 재사용하고 없을 때만 만들려면
-`getOrCreate`를 쓴다.
+**선택 기준.** 항상 새 Actor가 필요할 때 사용한다. 있으면 재사용하고 없을 때만 만들려면
+`getOrCreate`를 사용한다.
 
 ---
 
@@ -61,7 +61,7 @@ const existingOrCreated = await actorManager
 attempt와 경합하면 그 결과를 기다렸다가 합류하며, 서로 다른 operation은 Ready 뒤 `"existing"`을
 받고 이전 reply를 공유하지 않는다.
 
-**선택 기준.** ActorId로 멱등하게 "있으면 쓰고 없으면 만들기"가 필요할 때 쓴다.
+**선택 기준.** ActorId로 멱등하게 "있으면 사용하고 없으면 만들기"가 필요할 때 사용한다.
 
 ---
 
@@ -84,14 +84,14 @@ if (actor) {
 membership이 없으면 `undefined`를 반환한다. `destroy`는 해당 incarnation이 없으면 `false`,
 generation이 다르면 `InvalidOperation`, pre-commit seal 중이면 `Unavailable`이다.
 
-**선택 기준.** 지금 시점의 존재·소속 확인이나 명시적 종료가 필요할 때 쓴다.
+**선택 기준.** 지금 시점의 존재·소속 확인이나 명시적 종료가 필요할 때 사용한다.
 
 ---
 
 ## `sendToActor` / `requestToActor` (ZLinkActorClient)
 
 Global ActorId 하나로 one-way message를 보내거나 typed request/reply를 주고받는다. 외부 client에서
-쓴다.
+사용한다.
 
 ```ts
 await actorClient.sendToActor("player-1", new GrantItem("sword")).submit();
@@ -114,7 +114,7 @@ const reply = await actorClient
 **완료 결과.** ActorId가 없으면 `NotFound`. 나머지 완료 kind는 messaging-execution category의
 공통 규칙과 같다.
 
-**선택 기준.** Reply가 필요 없으면 `sendToActor`, 필요하면 `requestToActor`를 쓴다.
+**선택 기준.** Reply가 필요 없으면 `sendToActor`, 필요하면 `requestToActor`를 사용한다.
 
 ---
 
@@ -144,7 +144,7 @@ context
 실패)는 같은 `ZLinkActorJoinOperationId`를 담은 `onJoinCompleted(...)` callback으로 비동기
 전달된다 — `status: "accepted"`/`"rejected"`/`"failed"` 중 하나인 discriminated union이다.
 
-**선택 기준.** Actor를 다른 Spot으로 옮기거나 Entry Spot으로 되돌릴 때 쓴다. Entry Spot과
+**선택 기준.** Actor를 다른 Spot으로 옮기거나 Entry Spot으로 되돌릴 때 사용한다. Entry Spot과
 `PerActor` User Spot의 Actor에서 호출하면 `invalidConfiguration`으로 완료한다.
 
 ---

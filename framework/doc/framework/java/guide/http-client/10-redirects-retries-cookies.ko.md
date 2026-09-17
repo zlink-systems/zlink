@@ -29,7 +29,7 @@
 
 ## Cookie jar
 
-`cookies()`로 활성화한다. JDK `CookieManager`(RFC 6265 전체) 대신 래퍼 소유 jar를 쓴다.
+`cookies()`로 활성화한다. JDK `CookieManager`(RFC 6265 전체) 대신 래퍼 소유 jar를 사용한다.
 좁은 의미론을 따른다:
 
 - host 정확 매칭으로 저장(`Domain` 속성 미지원).

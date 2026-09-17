@@ -10,11 +10,12 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Java"
 # 15. E2E Testing — Verifying the Whole System with a Client
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 16. Options — Setting List And Defaults](16-options.en.md)
+[Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
 > **This chapter has no spec document that owns its contract.** That's because it covers
@@ -99,7 +100,7 @@ Each library's guide covers its full usage.
 - The HTTP Client guide — request construction, body, auth/TLS, retry, and error handling,
   across 13 chapters
 - The Stream Connector guide — per-runtime integration (Unity, Godot). Server-side STREAM
-  registration is covered by [09-stream](09-stream.en.md).
+  registration is covered by [STREAM](23-stream.en.md).
 
 ## 2. Verification Functions and Usage
 
@@ -364,7 +365,7 @@ fi
 ## 8. Related Documents
 
 - Which sample to look at first: [14-samples](14-samples.en.md)
-- Server-side STREAM registration and sessions: [09-stream](09-stream.en.md)
+- Server-side STREAM registration and sessions: [STREAM](23-stream.en.md)
 - Full HTTP client usage: the HTTP Client guide
 - Engine integration and manual pumping: the Stream Connector guide
 - The connector's formal contract:

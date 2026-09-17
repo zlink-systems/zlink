@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A join is a reservation; it runs after the handler ends",
+    "subtitle": "The receiving side approves first · both sides are told after the commit",
+    "output": "35-actor-join-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "E",
+      "type": "backend",
+      "label": "Entry Spot",
+      "sublabel": "where it sits once created",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "external",
+      "label": "reservation",
+      "sublabel": "opens when the handler ends",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "U",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "the User Spot it is going to",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "E",
+      "to": "A",
+      "label": "where it runs right now",
+      "variant": "default",
+      "labelDy": 24
+    },
+    {
+      "from": "A",
+      "to": "B",
+      "label": "the handler only reserves",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "U",
+      "label": "runs after the handler ends",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The receiving side approves first",
+      "items": [
+        "When the reservation runs, the User Spot it is going to approves or refuses first, and only after the commit are the arriving and departing sides told.",
+        "On acceptance the Actor that committed receives the completion. On a refusal, or a failure before the commit, the Actor that stayed put receives it."
+      ]
+    }
+  ]
+}

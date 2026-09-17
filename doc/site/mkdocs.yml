@@ -42,8 +42,14 @@ theme:
   features:
     - content.code.copy
     - content.tabs.link
-    # navigation.sections를 켜면 언어 묶음이 접히지 않는 제목 덩어리가 된다.
-    # 빼면 각 묶음이 여닫히므로 지금 보는 언어만 펼쳐 둘 수 있다.
+    # navigation.tabs는 켜지 않는다. 최상위 nav를 헤더 탭으로 빼면 Spec·Bindings·Core가
+    # 사이드바에서 사라진다. 대신 최상위를 사이드바 1차 메뉴로 두고, 언어는 헤더의
+    # 드롭다운으로 고른다(overrides/partials/zlink-lang.html).
+    #
+    # instant가 없으면 사이드바를 누를 때마다 페이지 전체를 다시 받는다. 목록이 깜박이고
+    # 스크롤이 맨 위로 돌아간다. 켜면 본문만 바뀌고 사이드바는 그대로 남는다.
+    - navigation.instant
+    - navigation.instant.progress
     - navigation.top
     # 본문 맨 아래에 앞·뒤 장 링크. 순서는 이 파일의 nav가 정한다.
     - navigation.footer
@@ -53,9 +59,17 @@ extra_css:
   - assets/korean.css
   - assets/stylesheets/extra.css
 
+extra_javascript:
+  #  사이드바에서 지금 고른 언어의 묶음만 1차 메뉴로 편다. 헤더 드롭다운과 짝이다.
+  - assets/javascripts/zlink-lang.js
+
 # 다이어그램 안 글씨를 키운다. 폰트만 올리면 자연폭이 함께 늘어 축소율이 나빠지므로
 # 폰트와 간격 상수를 같이 조정한다. 자세한 이유는 hook 파일 머리말에.
 hooks:
+  #  파일 심링크를 만들 수 없는 환경에서 정본을 docs/로 복사한다. 반드시 먼저 돈다.
+  - hooks/mirror_files.py
+  #  로케일 전환기를 JS가 고쳐 주므로, 그 한 건의 경고만 내린다.
+  - hooks/quiet_i18n_instant.py
   - hooks/mermaid_size.py
   - hooks/repo_links.py
 
@@ -66,6 +80,10 @@ hooks:
 # 소스 디렉터리만 적는다. quickstart 최상위를 통째로 적으면 `build/`·`obj/`·
 # `node_modules/`까지 감시 대상이 되어, 그 프로젝트를 빌드하는 동안 재빌드가 끝없이 걸린다.
 watch:
+  - ../../framework/languages/dotnet/tutorial/Shared
+  - ../../framework/languages/dotnet/tutorial/Server
+  - ../../framework/languages/dotnet/tutorial/Client
+  - ../../framework/languages/dotnet/tutorial/StreamClient
   - ../../framework/languages/dotnet/quickstart/Shared
   - ../../framework/languages/dotnet/quickstart/Server
   - ../../framework/languages/dotnet/quickstart/Client
@@ -107,12 +125,19 @@ plugins:
           # 남는다. 반대로 nav를 한국어로 적으면 영어 화면에서 한국어가 남는다 —
           # 실제로 그렇게 갈라져서 영어 전환이 반쪽만 되고 있었다.
           nav_translations:
-            # 최상위 구획. Home · Install · Samples와 Framework · Bindings · Core가
-            # 같은 이름을 공유한다.
+            # 최상위 구획. `Samples`는 샘플 고르기와 공통 시나리오 목록을 한데 묶는다.
             Home: 홈
+            Channel messaging: Channel 메시징
+            Spot: Spot
+            Actor: Actor
+            STREAM: STREAM
+            Session and Actor: Session과 Actor 연결
+            How channels work: Channel 동작 원리
+            Handlers and message processing: Handler와 메시지 처리
             Install: 설치
             Quickstart: 퀵스타트
             Samples: 샘플
+            Picking a sample: 샘플 고르기
             Guide: 가이드
             Reference: 레퍼런스
             Spec: 스펙
@@ -125,19 +150,51 @@ plugins:
             "Event sourcing": 이벤트 소싱
 
             # Framework 언어별 서버 가이드. 5개 언어가 같은 라벨을 공유한다.
+            # 구획 이름은 doc/plan/guide-rewrite.ko.md의 목차가 정한다.
             Guide home: 가이드 홈
-            "1. Overview": "1. 개요"
-            "2. Getting started": "2. 시작하기"
-            "3. Core concepts": "3. 핵심 개념"
+            Getting started: 시작
+            Feature guide: 기능별 가이드
+            How it works: 동작 원리
+            Operations: 운영
+            Tests: 테스트
+
+            # 시작
+            Where ZLink fits: ZLink를 어디에 쓰나
+            Core concepts: 핵심 개념
+            Install and first run: 설치와 첫 실행
+
+            # 기능별 가이드
+            Location: Location
+            Monitoring: 모니터링
+
+            # 동작 원리
+            The execution model: 실행 모델
+            Backpressure: Backpressure
+            Activation and lifetime: 활성화와 수명
+            Actor membership: Actor membership
+            Timers and workers: Timer와 worker
+            Relocation: Relocation
+            How session binding works: Session 묶음의 동작 원리
+            How STREAM works: STREAM의 동작 원리
+
+            # 운영 · 샘플 · 레퍼런스
+            Operations and lifecycle: 운영과 lifecycle
+            Options: 옵션
+            Picking a sample: 샘플 고르기
+            E2E testing: E2E 테스트
+            Key type index: 주요 타입 사용 색인
+
+            # ZLink host — C++에만 있는 host 구성 요소
+            DI container: DI 컨테이너
+            Configuration: 구성
+            HTTP hosting: HTTP 호스팅
+            Execution and configuration model: 실행·구성 모델
+
             "7. Actor and Spot": "7. Actor와 Spot"
             "8. Session and Actor binding": "8. Session과 Actor binding"
-            "12. Operations": "12. 운영"
-            "13. Key type index": "13. 주요 타입 사용 색인"
-            "14. Picking a sample": "14. 샘플 고르기"
-            "15. E2E testing": "15. E2E 테스트"
-            "17. Where ZLink fits": "17. ZLink를 어디에 쓰나"
-            "18. DI container": "18. DI 컨테이너"
-            "21. Execution and configuration model": "21. 실행·구성 모델"
+            "9. STREAM": "9. STREAM"
+            "10. Location": "10. Location"
+            "11. Monitoring": "11. Monitoring"
 
             # Framework 공통 스펙.
             Common spec: 공통 스펙
@@ -244,394 +301,453 @@ exclude_docs: |
 nav:
   - Home: index.md
   - Install: install.md
-  - Framework:
-      - Guide:
-          - .NET:
-              - "Guide home": dotnet/guide/server/README.md
-              - Quickstart: dotnet/quickstart.md
-              - "1. Overview": dotnet/guide/server/01-overview.md
-              - "2. Getting started": dotnet/guide/server/02-getting-started.md
-              - "3. Core concepts": dotnet/guide/server/03-concepts.md
-              - "4. Backpressure": dotnet/guide/server/04-backpressure.md
-              - "5. Channel Messaging": dotnet/guide/server/05-channel-messaging.md
-              - "6. Spot": dotnet/guide/server/06-spot.md
-              - "7. Actor and Spot": dotnet/guide/server/07-actor-spot.md
-              - "8. Session and Actor binding": dotnet/guide/server/08-actor-session.md
-              - "9. STREAM": dotnet/guide/server/09-stream.md
-              - "10. Location": dotnet/guide/server/10-location.md
-              - "11. Monitoring": dotnet/guide/server/11-monitoring.md
-              - "12. Operations": dotnet/guide/server/12-operations.md
-              - "13. Key type index": dotnet/guide/server/13-interface-catalog.md
-              - "14. Picking a sample": dotnet/guide/server/14-samples.md
-              - "15. E2E testing": dotnet/guide/server/15-e2e-testing.md
-              - "16. Options": dotnet/guide/server/16-options.md
-              - "17. Where ZLink fits": dotnet/guide/server/17-alternative.md
-          - C++:
-              - "Guide home": cpp/guide/server/README.md
-              - Quickstart: cpp/quickstart.md
-              - "1. Overview": cpp/guide/server/01-overview.md
-              - "2. Getting started": cpp/guide/server/02-getting-started.md
-              - "3. Core concepts": cpp/guide/server/03-concepts.md
-              - "4. Backpressure": cpp/guide/server/04-backpressure.md
-              - "5. Channel Messaging": cpp/guide/server/05-channel-messaging.md
-              - "6. Spot": cpp/guide/server/06-spot.md
-              - "7. Actor and Spot": cpp/guide/server/07-actor-spot.md
-              - "8. Session and Actor binding": cpp/guide/server/08-actor-session.md
-              - "9. STREAM": cpp/guide/server/09-stream.md
-              - "10. Location": cpp/guide/server/10-location.md
-              - "11. Monitoring": cpp/guide/server/11-monitoring.md
-              - "12. Operations": cpp/guide/server/12-operations.md
-              - "13. Key type index": cpp/guide/server/13-interface-catalog.md
-              - "14. Picking a sample": cpp/guide/server/14-samples.md
-              - "15. E2E testing": cpp/guide/server/15-e2e-testing.md
-              - "16. Options": cpp/guide/server/16-options.md
-              - "17. Where ZLink fits": cpp/guide/server/17-alternative.md
-              - "18. DI container": cpp/guide/server/18-di-container.md
-              - "19. Configuration": cpp/guide/server/19-configuration.md
-              - "20. HTTP Hosting": cpp/guide/server/20-http-hosting.md
-              - "21. Execution and configuration model": cpp/guide/server/21-execution-model.md
-          - Java:
-              - "Guide home": java/guide/server/README.md
-              - Quickstart: java/quickstart.md
-              - "1. Overview": java/guide/server/01-overview.md
-              - "2. Getting started": java/guide/server/02-getting-started.md
-              - "3. Core concepts": java/guide/server/03-concepts.md
-              - "4. Backpressure": java/guide/server/04-backpressure.md
-              - "5. Channel Messaging": java/guide/server/05-channel-messaging.md
-              - "6. Spot": java/guide/server/06-spot.md
-              - "7. Actor and Spot": java/guide/server/07-actor-spot.md
-              - "8. Session and Actor binding": java/guide/server/08-actor-session.md
-              - "9. STREAM": java/guide/server/09-stream.md
-              - "10. Location": java/guide/server/10-location.md
-              - "11. Monitoring": java/guide/server/11-monitoring.md
-              - "12. Operations": java/guide/server/12-operations.md
-              - "13. Key type index": java/guide/server/13-interface-catalog.md
-              - "14. Picking a sample": java/guide/server/14-samples.md
-              - "15. E2E testing": java/guide/server/15-e2e-testing.md
-              - "16. Options": java/guide/server/16-options.md
-              - "17. Where ZLink fits": java/guide/server/17-alternative.md
-          - Kotlin:
-              - "Guide home": kotlin/guide/server/README.md
-              - Quickstart: kotlin/quickstart.md
-              - "1. Overview": kotlin/guide/server/01-overview.md
-              - "2. Getting started": kotlin/guide/server/02-getting-started.md
-              - "3. Core concepts": kotlin/guide/server/03-concepts.md
-              - "4. Backpressure": kotlin/guide/server/04-backpressure.md
-              - "5. Channel Messaging": kotlin/guide/server/05-channel-messaging.md
-              - "6. Spot": kotlin/guide/server/06-spot.md
-              - "7. Actor and Spot": kotlin/guide/server/07-actor-spot.md
-              - "8. Session and Actor binding": kotlin/guide/server/08-actor-session.md
-              - "9. STREAM": kotlin/guide/server/09-stream.md
-              - "10. Location": kotlin/guide/server/10-location.md
-              - "11. Monitoring": kotlin/guide/server/11-monitoring.md
-              - "12. Operations": kotlin/guide/server/12-operations.md
-              - "13. Key type index": kotlin/guide/server/13-interface-catalog.md
-              - "14. Picking a sample": kotlin/guide/server/14-samples.md
-              - "15. E2E testing": kotlin/guide/server/15-e2e-testing.md
-              - "17. Where ZLink fits": kotlin/guide/server/17-alternative.md
-          - Node.js:
-              - "Guide home": node/guide/server/README.md
-              - Quickstart: node/quickstart.md
-              - "1. Overview": node/guide/server/01-overview.md
-              - "2. Getting started": node/guide/server/02-getting-started.md
-              - "3. Core concepts": node/guide/server/03-concepts.md
-              - "4. Backpressure": node/guide/server/04-backpressure.md
-              - "5. Channel Messaging": node/guide/server/05-channel-messaging.md
-              - "6. Spot": node/guide/server/06-spot.md
-              - "7. Actor and Spot": node/guide/server/07-actor-spot.md
-              - "8. Session and Actor binding": node/guide/server/08-actor-session.md
-              - "9. STREAM": node/guide/server/09-stream.md
-              - "10. Location": node/guide/server/10-location.md
-              - "11. Monitoring": node/guide/server/11-monitoring.md
-              - "12. Operations": node/guide/server/12-operations.md
-              - "13. Key type index": node/guide/server/13-interface-catalog.md
-              - "14. Picking a sample": node/guide/server/14-samples.md
-              - "15. E2E testing": node/guide/server/15-e2e-testing.md
-              - "16. Options": node/guide/server/16-options.md
-              - "17. Where ZLink fits": node/guide/server/17-alternative.md
+  - .NET:
+      - Guide home: dotnet/guide/server/README.md
+      - Getting started:
+          - Overview: dotnet/guide/server/01-overview.md
+          - Core concepts: dotnet/guide/server/03-concepts.md
+          - Quickstart: dotnet/quickstart.md
+      - Feature guide:
+          - Channel messaging: dotnet/guide/server/20-channel-messaging.md
+          - Spot: dotnet/guide/server/21-spot.md
+          - Actor: dotnet/guide/server/22-actor.md
+          - STREAM: dotnet/guide/server/23-stream.md
+          - Session and Actor: dotnet/guide/server/24-actor-session.md
+          - Location: dotnet/guide/server/25-location.md
+          - Monitoring: dotnet/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: dotnet/guide/server/32-execution-model.md
+          - Backpressure: dotnet/guide/server/33-backpressure.md
+          - Activation and lifetime: dotnet/guide/server/34-activation-lifetime.md
+          - Actor membership: dotnet/guide/server/35-actor-membership.md
+          - Timers and workers: dotnet/guide/server/36-timer-worker.md
+          - Relocation: dotnet/guide/server/37-relocation.md
+          - How channels work: dotnet/guide/server/30-channel-patterns.md
+          - Handlers and message processing: dotnet/guide/server/31-handler-dispatch.md
+          - How STREAM works: dotnet/guide/server/38-stream-boundary.md
+          - How session binding works: dotnet/guide/server/39-session-binding.md
+          - Where ZLink fits: dotnet/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: dotnet/guide/server/12-operations.md
+          - Options: dotnet/guide/server/16-options.md
+      - Tests: dotnet/guide/server/15-e2e-testing.md
       - Reference:
-          - .NET:
-              - "Reference home": dotnet/reference/README.md
-              - "01. Host lifecycle": dotnet/reference/01-host-lifecycle.md
-              - "02. Topology discovery": dotnet/reference/02-topology-discovery.md
-              - "03. Messaging execution": dotnet/reference/03-messaging-execution.md
-              - "04. Spot instance": dotnet/reference/04-spot-instance.md
-              - "05. Actor relocation": dotnet/reference/05-actor-relocation.md
-              - "06. Stream session": dotnet/reference/06-stream-session.md
-              - "07. Location authority": dotnet/reference/07-location-authority.md
-              - "08. Observability diagnostics": dotnet/reference/08-observability-diagnostics.md
-          - C++:
-              - "Reference home": cpp/reference/README.md
-              - "01. Host lifecycle": cpp/reference/01-host-lifecycle.md
-              - "02. Topology discovery": cpp/reference/02-topology-discovery.md
-              - "03. Messaging execution": cpp/reference/03-messaging-execution.md
-              - "04. Spot instance": cpp/reference/04-spot-instance.md
-              - "05. Actor relocation": cpp/reference/05-actor-relocation.md
-              - "06. Stream session": cpp/reference/06-stream-session.md
-              - "07. Location authority": cpp/reference/07-location-authority.md
-              - "08. Observability diagnostics": cpp/reference/08-observability-diagnostics.md
-          - Java:
-              - "Reference home": java/reference/README.md
-              - "01. Host lifecycle": java/reference/01-host-lifecycle.md
-              - "02. Topology discovery": java/reference/02-topology-discovery.md
-              - "03. Messaging execution": java/reference/03-messaging-execution.md
-              - "04. Spot instance": java/reference/04-spot-instance.md
-              - "05. Actor relocation": java/reference/05-actor-relocation.md
-              - "06. Stream session": java/reference/06-stream-session.md
-              - "07. Location authority": java/reference/07-location-authority.md
-              - "08. Observability diagnostics": java/reference/08-observability-diagnostics.md
-          - Kotlin:
-              - "Reference home": kotlin/reference/README.md
-              - "01. Host lifecycle": kotlin/reference/01-host-lifecycle.md
-              - "02. Topology discovery": kotlin/reference/02-topology-discovery.md
-              - "03. Messaging execution": kotlin/reference/03-messaging-execution.md
-              - "04. Spot instance": kotlin/reference/04-spot-instance.md
-              - "05. Actor relocation": kotlin/reference/05-actor-relocation.md
-              - "06. Stream session": kotlin/reference/06-stream-session.md
-              - "07. Location authority": kotlin/reference/07-location-authority.md
-              - "08. Observability diagnostics": kotlin/reference/08-observability-diagnostics.md
-          - Node.js:
-              - "Reference home": node/reference/README.md
-              - "01. Host lifecycle": node/reference/01-host-lifecycle.md
-              - "02. Topology discovery": node/reference/02-topology-discovery.md
-              - "03. Messaging execution": node/reference/03-messaging-execution.md
-              - "04. Spot instance": node/reference/04-spot-instance.md
-              - "05. Actor relocation": node/reference/05-actor-relocation.md
-              - "06. Stream session": node/reference/06-stream-session.md
-              - "07. Location authority": node/reference/07-location-authority.md
-              - "08. Observability diagnostics": node/reference/08-observability-diagnostics.md
-      - Spec:
-          - "Common spec": common/README.md
-          - "Server spec": common/spec/server/README.md
-          - Foundation:
-              - "Foundation overview": common/spec/server/00-foundation/README.md
-              - "Public Contract Governance": common/spec/server/00-foundation/01-public-contract-governance.md
-              - "Framework Messaging Glossary": common/spec/server/00-foundation/02-glossary.md
-              - "Framework Overview": common/spec/server/00-foundation/03-overview.md
-              - "Interaction Model": common/spec/server/00-foundation/04-interaction-model.md
-              - "Message Model": common/spec/server/00-foundation/05-message-model.md
-              - "ZLink Framework API": common/spec/server/00-foundation/06-framework-api.md
-              - "Framework Error Model": common/spec/server/00-foundation/07-framework-error-model.md
-              - "Layering Boundaries And Identifiers": common/spec/server/00-foundation/08-layering.md
-          - Execution:
-              - "Execution overview": common/spec/server/01-execution/README.md
-              - "Submit And Completion": common/spec/server/01-execution/01-submit-and-completion.md
-              - "Handler Turn And Execution Gate": common/spec/server/01-execution/02-handler-turn-and-execution-gate.md
-              - "Cancellation And Shutdown": common/spec/server/01-execution/03-cancellation-and-shutdown.md
-              - "Application Job Queue And Backpressure": common/spec/server/01-execution/04-application-job-queue-and-backpressure.md
-              - "Payload Ownership And Codec": common/spec/server/01-execution/05-payload-ownership-and-codec.md
-              - "State Ownership And Lanes": common/spec/server/01-execution/06-state-ownership-and-lanes.md
-              - "Serial Executor Layers": common/spec/server/01-execution/07-serial-executor-layers.md
-              - "Messaging Hot Path": common/spec/server/01-execution/08-messaging-hot-path.md
-          - Channel and transport:
-              - "Channel and transport overview": common/spec/server/02-channel-transport/README.md
-              - "RouteMesh Topology": common/spec/server/02-channel-transport/01-channel-topology.md
-              - "Channel Messaging": common/spec/server/02-channel-transport/02-channel-messaging.md
-              - "ClientServer Channel": common/spec/server/02-channel-transport/03-client-server-channel.md
-              - "Network Listener Identity": common/spec/server/02-channel-transport/04-network-listener-identity.md
-              - "Transport Liveness": common/spec/server/02-channel-transport/05-transport-liveness.md
-              - "Service Wire Protocol": common/spec/server/02-channel-transport/06-wire-protocol.md
-          - Spot and Actor:
-              - "Spot and Actor overview": common/spec/server/03-spot-actor/README.md
-              - "Spot Model — Entry, User, Instance": common/spec/server/03-spot-actor/01-spot-model.md
-              - "Spot Messaging": common/spec/server/03-spot-actor/02-spot-messaging.md
-              - "MeshNode": common/spec/server/03-spot-actor/03-mesh-node.md
-              - "Actor Model": common/spec/server/03-spot-actor/04-actor-model.md
-              - "Spot And Actor Membership": common/spec/server/03-spot-actor/05-spot-actor-membership.md
-              - "Spot Address Messaging": common/spec/server/03-spot-actor/06-spot-address-messaging.md
-              - "Stage Wrapper On Spot": common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.md
-              - "Spot/Actor Routing": common/spec/server/03-spot-actor/08-routing.md
-              - "09. Object Kind And Activation": common/spec/server/03-spot-actor/09-object-lifecycle.md
-              - "Spot Timer": common/spec/server/03-spot-actor/10-spot-timer.md
-          - Session:
-              - "Session overview": common/spec/server/04-session/README.md
-              - "STREAM Server Session": common/spec/server/04-session/01-stream-session.md
-              - "Session And Actor Binding": common/spec/server/04-session/02-session-actor-binding.md
-          - Location and relocation:
-              - "Location and relocation overview": common/spec/server/05-location-relocation/README.md
-              - "Location Runtime": common/spec/server/05-location-relocation/01-location-runtime.md
-              - "Location Store Provider SPI And The Official Redis Implementation": common/spec/server/05-location-relocation/02-location-store-redis.md
-              - "Relocation Store Provider SPI And The Official Redis Implementation": common/spec/server/05-location-relocation/03-relocation-store-redis.md
-              - "Complete Actor And Spot Relocation Flow": common/spec/server/05-location-relocation/04-relocation-flow.md
-              - "Complete Host Relocation Flow": common/spec/server/05-location-relocation/05-host-relocation-flow.md
-              - "Failure Handling And Failover Scope": common/spec/server/05-location-relocation/06-failure-failover-policy.md
-          - Observability:
-              - "Observability overview": common/spec/server/06-observability/README.md
-              - "Runtime Status Query And Operational Diagnostics": common/spec/server/06-observability/01-runtime-monitoring.md
-              - "Runtime Metrics And Aggregation Rules": common/spec/server/06-observability/02-runtime-metrics.md
-              - "Message Flow Tracing": common/spec/server/06-observability/03-message-flow-tracing.md
-              - "Request Correlation And Business Flow Identification": common/spec/server/06-observability/04-flow-correlation.md
-      - Samples:
-          - Overview: common/sample/README.md
-          - Bingo: common/sample/bingo/README.md
-          - TicTacToe: common/sample/tictactoe/README.md
-          - SupportChat: common/sample/supportchat/README.md
-          - DeliveryDispatch: common/sample/deliverydispatch/README.md
-          - ShoppingMall: common/sample/event/shoppingmall.md
-          - GameQuest: common/sample/event/gamequest.md
-          - ZoneWorld: common/sample/zoneworld/README.md
-          - "Event sourcing": common/sample/event/README.md
+          - Key type index: dotnet/guide/server/13-interface-catalog.md
+          - Reference home: dotnet/reference/README.md
+          - 01. Host lifecycle: dotnet/reference/01-host-lifecycle.md
+          - 02. Topology discovery: dotnet/reference/02-topology-discovery.md
+          - 03. Messaging execution: dotnet/reference/03-messaging-execution.md
+          - 04. Spot instance: dotnet/reference/04-spot-instance.md
+          - 05. Actor relocation: dotnet/reference/05-actor-relocation.md
+          - 06. Stream session: dotnet/reference/06-stream-session.md
+          - 07. Location authority: dotnet/reference/07-location-authority.md
+          - 08. Observability diagnostics: dotnet/reference/08-observability-diagnostics.md
+  - C++:
+      - Guide home: cpp/guide/server/README.md
+      - Getting started:
+          - Overview: cpp/guide/server/01-overview.md
+          - Core concepts: cpp/guide/server/03-concepts.md
+          - Quickstart: cpp/quickstart.md
+      - ZLink host:
+          - DI container: cpp/guide/server/40-di-container.md
+          - Configuration: cpp/guide/server/41-configuration.md
+          - HTTP hosting: cpp/guide/server/42-http-hosting.md
+          - Execution and configuration model: cpp/guide/server/43-execution-model.md
+      - Feature guide:
+          - Channel messaging: cpp/guide/server/20-channel-messaging.md
+          - Spot: cpp/guide/server/21-spot.md
+          - Actor: cpp/guide/server/22-actor.md
+          - STREAM: cpp/guide/server/23-stream.md
+          - Session and Actor: cpp/guide/server/24-actor-session.md
+          - Location: cpp/guide/server/25-location.md
+          - Monitoring: cpp/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: cpp/guide/server/32-execution-model.md
+          - Backpressure: cpp/guide/server/33-backpressure.md
+          - Activation and lifetime: cpp/guide/server/34-activation-lifetime.md
+          - Actor membership: cpp/guide/server/35-actor-membership.md
+          - Timers and workers: cpp/guide/server/36-timer-worker.md
+          - Relocation: cpp/guide/server/37-relocation.md
+          - How channels work: cpp/guide/server/30-channel-patterns.md
+          - Handlers and message processing: cpp/guide/server/31-handler-dispatch.md
+          - How STREAM works: cpp/guide/server/38-stream-boundary.md
+          - How session binding works: cpp/guide/server/39-session-binding.md
+          - Where ZLink fits: cpp/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: cpp/guide/server/12-operations.md
+          - Options: cpp/guide/server/16-options.md
+      - Tests: cpp/guide/server/15-e2e-testing.md
+      - Reference:
+          - Key type index: cpp/guide/server/13-interface-catalog.md
+          - Reference home: cpp/reference/README.md
+          - 01. Host lifecycle: cpp/reference/01-host-lifecycle.md
+          - 02. Topology discovery: cpp/reference/02-topology-discovery.md
+          - 03. Messaging execution: cpp/reference/03-messaging-execution.md
+          - 04. Spot instance: cpp/reference/04-spot-instance.md
+          - 05. Actor relocation: cpp/reference/05-actor-relocation.md
+          - 06. Stream session: cpp/reference/06-stream-session.md
+          - 07. Location authority: cpp/reference/07-location-authority.md
+          - 08. Observability diagnostics: cpp/reference/08-observability-diagnostics.md
+  - Java:
+      - Guide home: java/guide/server/README.md
+      - Getting started:
+          - Overview: java/guide/server/01-overview.md
+          - Core concepts: java/guide/server/03-concepts.md
+          - Quickstart: java/quickstart.md
+      - Feature guide:
+          - Channel messaging: java/guide/server/20-channel-messaging.md
+          - Spot: java/guide/server/21-spot.md
+          - Actor: java/guide/server/22-actor.md
+          - STREAM: java/guide/server/23-stream.md
+          - Session and Actor: java/guide/server/24-actor-session.md
+          - Location: java/guide/server/25-location.md
+          - Monitoring: java/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: java/guide/server/32-execution-model.md
+          - Backpressure: java/guide/server/33-backpressure.md
+          - Activation and lifetime: java/guide/server/34-activation-lifetime.md
+          - Actor membership: java/guide/server/35-actor-membership.md
+          - Timers and workers: java/guide/server/36-timer-worker.md
+          - Relocation: java/guide/server/37-relocation.md
+          - How channels work: java/guide/server/30-channel-patterns.md
+          - Handlers and message processing: java/guide/server/31-handler-dispatch.md
+          - How STREAM works: java/guide/server/38-stream-boundary.md
+          - How session binding works: java/guide/server/39-session-binding.md
+          - Where ZLink fits: java/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: java/guide/server/12-operations.md
+          - Options: java/guide/server/16-options.md
+      - Tests: java/guide/server/15-e2e-testing.md
+      - Reference:
+          - Key type index: java/guide/server/13-interface-catalog.md
+          - Reference home: java/reference/README.md
+          - 01. Host lifecycle: java/reference/01-host-lifecycle.md
+          - 02. Topology discovery: java/reference/02-topology-discovery.md
+          - 03. Messaging execution: java/reference/03-messaging-execution.md
+          - 04. Spot instance: java/reference/04-spot-instance.md
+          - 05. Actor relocation: java/reference/05-actor-relocation.md
+          - 06. Stream session: java/reference/06-stream-session.md
+          - 07. Location authority: java/reference/07-location-authority.md
+          - 08. Observability diagnostics: java/reference/08-observability-diagnostics.md
+  - Kotlin:
+      - Guide home: kotlin/guide/server/README.md
+      - Getting started:
+          - Overview: kotlin/guide/server/01-overview.md
+          - Core concepts: kotlin/guide/server/03-concepts.md
+          - Quickstart: kotlin/quickstart.md
+      - Feature guide:
+          - Channel messaging: kotlin/guide/server/20-channel-messaging.md
+          - Spot: kotlin/guide/server/21-spot.md
+          - Actor: kotlin/guide/server/22-actor.md
+          - STREAM: kotlin/guide/server/23-stream.md
+          - Session and Actor: kotlin/guide/server/24-actor-session.md
+          - Location: kotlin/guide/server/25-location.md
+          - Monitoring: kotlin/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: kotlin/guide/server/32-execution-model.md
+          - Backpressure: kotlin/guide/server/33-backpressure.md
+          - Activation and lifetime: kotlin/guide/server/34-activation-lifetime.md
+          - Actor membership: kotlin/guide/server/35-actor-membership.md
+          - Timers and workers: kotlin/guide/server/36-timer-worker.md
+          - Relocation: kotlin/guide/server/37-relocation.md
+          - How channels work: kotlin/guide/server/30-channel-patterns.md
+          - Handlers and message processing: kotlin/guide/server/31-handler-dispatch.md
+          - How STREAM works: kotlin/guide/server/38-stream-boundary.md
+          - How session binding works: kotlin/guide/server/39-session-binding.md
+          - Where ZLink fits: kotlin/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: kotlin/guide/server/12-operations.md
+          - Options: java/guide/server/16-options.md
+      - Tests: kotlin/guide/server/15-e2e-testing.md
+      - Reference:
+          - Key type index: kotlin/guide/server/13-interface-catalog.md
+          - Reference home: kotlin/reference/README.md
+          - 01. Host lifecycle: kotlin/reference/01-host-lifecycle.md
+          - 02. Topology discovery: kotlin/reference/02-topology-discovery.md
+          - 03. Messaging execution: kotlin/reference/03-messaging-execution.md
+          - 04. Spot instance: kotlin/reference/04-spot-instance.md
+          - 05. Actor relocation: kotlin/reference/05-actor-relocation.md
+          - 06. Stream session: kotlin/reference/06-stream-session.md
+          - 07. Location authority: kotlin/reference/07-location-authority.md
+          - 08. Observability diagnostics: kotlin/reference/08-observability-diagnostics.md
+  - Node.js:
+      - Guide home: node/guide/server/README.md
+      - Getting started:
+          - Overview: node/guide/server/01-overview.md
+          - Core concepts: node/guide/server/03-concepts.md
+          - Quickstart: node/quickstart.md
+      - Feature guide:
+          - Channel messaging: node/guide/server/20-channel-messaging.md
+          - Spot: node/guide/server/21-spot.md
+          - Actor: node/guide/server/22-actor.md
+          - STREAM: node/guide/server/23-stream.md
+          - Session and Actor: node/guide/server/24-actor-session.md
+          - Location: node/guide/server/25-location.md
+          - Monitoring: node/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: node/guide/server/32-execution-model.md
+          - Backpressure: node/guide/server/33-backpressure.md
+          - Activation and lifetime: node/guide/server/34-activation-lifetime.md
+          - Actor membership: node/guide/server/35-actor-membership.md
+          - Timers and workers: node/guide/server/36-timer-worker.md
+          - Relocation: node/guide/server/37-relocation.md
+          - How channels work: node/guide/server/30-channel-patterns.md
+          - Handlers and message processing: node/guide/server/31-handler-dispatch.md
+          - How STREAM works: node/guide/server/38-stream-boundary.md
+          - How session binding works: node/guide/server/39-session-binding.md
+          - Where ZLink fits: node/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: node/guide/server/12-operations.md
+          - Options: node/guide/server/16-options.md
+      - Tests: node/guide/server/15-e2e-testing.md
+      - Reference:
+          - Key type index: node/guide/server/13-interface-catalog.md
+          - Reference home: node/reference/README.md
+          - 01. Host lifecycle: node/reference/01-host-lifecycle.md
+          - 02. Topology discovery: node/reference/02-topology-discovery.md
+          - 03. Messaging execution: node/reference/03-messaging-execution.md
+          - 04. Spot instance: node/reference/04-spot-instance.md
+          - 05. Actor relocation: node/reference/05-actor-relocation.md
+          - 06. Stream session: node/reference/06-stream-session.md
+          - 07. Location authority: node/reference/07-location-authority.md
+          - 08. Observability diagnostics: node/reference/08-observability-diagnostics.md
+  - Samples:
+      - Picking a sample: common/guide/server/14-samples.md
+      - Overview: common/sample/README.md
+      - Bingo: common/sample/bingo/README.md
+      - TicTacToe: common/sample/tictactoe/README.md
+      - SupportChat: common/sample/supportchat/README.md
+      - DeliveryDispatch: common/sample/deliverydispatch/README.md
+      - ShoppingMall: common/sample/event/shoppingmall.md
+      - GameQuest: common/sample/event/gamequest.md
+      - ZoneWorld: common/sample/zoneworld/README.md
+      - Event sourcing: common/sample/event/README.md
+  - Spec:
+      - Common spec: common/README.md
+      - Server spec: common/spec/server/README.md
+      - Foundation:
+          - Foundation overview: common/spec/server/00-foundation/README.md
+          - Public Contract Governance: common/spec/server/00-foundation/01-public-contract-governance.md
+          - Framework Messaging Glossary: common/spec/server/00-foundation/02-glossary.md
+          - Framework Overview: common/spec/server/00-foundation/03-overview.md
+          - Interaction Model: common/spec/server/00-foundation/04-interaction-model.md
+          - Message Model: common/spec/server/00-foundation/05-message-model.md
+          - ZLink Framework API: common/spec/server/00-foundation/06-framework-api.md
+          - Framework Error Model: common/spec/server/00-foundation/07-framework-error-model.md
+          - Layering Boundaries And Identifiers: common/spec/server/00-foundation/08-layering.md
+      - Execution:
+          - Execution overview: common/spec/server/01-execution/README.md
+          - Submit And Completion: common/spec/server/01-execution/01-submit-and-completion.md
+          - Handler Turn And Execution Gate: common/spec/server/01-execution/02-handler-turn-and-execution-gate.md
+          - Cancellation And Shutdown: common/spec/server/01-execution/03-cancellation-and-shutdown.md
+          - Application Job Queue And Backpressure: common/spec/server/01-execution/04-application-job-queue-and-backpressure.md
+          - Payload Ownership And Codec: common/spec/server/01-execution/05-payload-ownership-and-codec.md
+          - State Ownership And Lanes: common/spec/server/01-execution/06-state-ownership-and-lanes.md
+          - Serial Executor Layers: common/spec/server/01-execution/07-serial-executor-layers.md
+          - Messaging Hot Path: common/spec/server/01-execution/08-messaging-hot-path.md
+      - Channel and transport:
+          - Channel and transport overview: common/spec/server/02-channel-transport/README.md
+          - RouteMesh Topology: common/spec/server/02-channel-transport/01-channel-topology.md
+          - Channel Messaging: common/spec/server/02-channel-transport/02-channel-messaging.md
+          - ClientServer Channel: common/spec/server/02-channel-transport/03-client-server-channel.md
+          - Network Listener Identity: common/spec/server/02-channel-transport/04-network-listener-identity.md
+          - Transport Liveness: common/spec/server/02-channel-transport/05-transport-liveness.md
+          - Service Wire Protocol: common/spec/server/02-channel-transport/06-wire-protocol.md
+      - Spot and Actor:
+          - Spot and Actor overview: common/spec/server/03-spot-actor/README.md
+          - Spot Model — Entry, User, Instance: common/spec/server/03-spot-actor/01-spot-model.md
+          - Spot Messaging: common/spec/server/03-spot-actor/02-spot-messaging.md
+          - MeshNode: common/spec/server/03-spot-actor/03-mesh-node.md
+          - Actor Model: common/spec/server/03-spot-actor/04-actor-model.md
+          - Spot And Actor Membership: common/spec/server/03-spot-actor/05-spot-actor-membership.md
+          - Spot Address Messaging: common/spec/server/03-spot-actor/06-spot-address-messaging.md
+          - Stage Wrapper On Spot: common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.md
+          - Spot/Actor Routing: common/spec/server/03-spot-actor/08-routing.md
+          - 09. Object Kind And Activation: common/spec/server/03-spot-actor/09-object-lifecycle.md
+          - Spot Timer: common/spec/server/03-spot-actor/10-spot-timer.md
+      - Session:
+          - Session overview: common/spec/server/04-session/README.md
+          - STREAM Server Session: common/spec/server/04-session/01-stream-session.md
+          - Session And Actor Binding: common/spec/server/04-session/02-session-actor-binding.md
+      - Location and relocation:
+          - Location and relocation overview: common/spec/server/05-location-relocation/README.md
+          - Location Runtime: common/spec/server/05-location-relocation/01-location-runtime.md
+          - Location Store Provider SPI And The Official Redis Implementation: common/spec/server/05-location-relocation/02-location-store-redis.md
+          - Relocation Store Provider SPI And The Official Redis Implementation: common/spec/server/05-location-relocation/03-relocation-store-redis.md
+          - Complete Actor And Spot Relocation Flow: common/spec/server/05-location-relocation/04-relocation-flow.md
+          - Complete Host Relocation Flow: common/spec/server/05-location-relocation/05-host-relocation-flow.md
+          - Failure Handling And Failover Scope: common/spec/server/05-location-relocation/06-failure-failover-policy.md
+      - Observability:
+          - Observability overview: common/spec/server/06-observability/README.md
+          - Runtime Status Query And Operational Diagnostics: common/spec/server/06-observability/01-runtime-monitoring.md
+          - Runtime Metrics And Aggregation Rules: common/spec/server/06-observability/02-runtime-metrics.md
+          - Message Flow Tracing: common/spec/server/06-observability/03-message-flow-tracing.md
+          - Request Correlation And Business Flow Identification: common/spec/server/06-observability/04-flow-correlation.md
   - Bindings:
       - Guide:
-        - Overview: bindings/guide/README.md
-        - .NET: bindings/guide/dotnet/index.md
-        - C++: bindings/guide/cpp/index.md
-        - Java: bindings/guide/java/index.md
-        - Node.js: bindings/guide/node/index.md
-        - Python: bindings/guide/python/index.md
-        - Go: bindings/guide/go/index.md
-        - Rust: bindings/guide/rust/index.md
+          - Overview: bindings/guide/README.md
+          - .NET: bindings/guide/dotnet/index.md
+          - C++: bindings/guide/cpp/index.md
+          - Java: bindings/guide/java/index.md
+          - Node.js: bindings/guide/node/index.md
+          - Python: bindings/guide/python/index.md
+          - Go: bindings/guide/go/index.md
+          - Rust: bindings/guide/rust/index.md
       - Reference:
-        - C:
-          - "Reference home": bindings/reference/c/README.md
-        - .NET:
-          - "Reference home": bindings/reference/dotnet/README.md
-          - "01. Core": bindings/reference/dotnet/01-core.md
-          - "02. Messaging": bindings/reference/dotnet/02-messaging.md
-          - "03. Sockets": bindings/reference/dotnet/03-sockets.md
-          - "04. Eventing": bindings/reference/dotnet/04-eventing.md
-          - "05. Errors": bindings/reference/dotnet/05-errors.md
-        - C++:
-          - "Reference home": bindings/reference/cpp/README.md
-          - "01. Core": bindings/reference/cpp/01-core.md
-          - "02. Messaging": bindings/reference/cpp/02-messaging.md
-          - "03. Sockets": bindings/reference/cpp/03-sockets.md
-          - "04. Eventing": bindings/reference/cpp/04-eventing.md
-          - "05. Errors": bindings/reference/cpp/05-errors.md
-        - Java:
-          - "Reference home": bindings/reference/java/README.md
-          - "01. Core": bindings/reference/java/01-core.md
-          - "02. Messaging": bindings/reference/java/02-messaging.md
-          - "03. Sockets": bindings/reference/java/03-sockets.md
-          - "04. Eventing": bindings/reference/java/04-eventing.md
-          - "05. Errors": bindings/reference/java/05-errors.md
-        - Node.js:
-          - "Reference home": bindings/reference/node/README.md
-          - "01. Core": bindings/reference/node/01-core.md
-          - "02. Messaging": bindings/reference/node/02-messaging.md
-          - "03. Sockets": bindings/reference/node/03-sockets.md
-          - "04. Eventing": bindings/reference/node/04-eventing.md
-          - "05. Errors": bindings/reference/node/05-errors.md
-        - Python:
-          - "Reference home": bindings/reference/python/README.md
-          - "01. Core": bindings/reference/python/01-core.md
-          - "02. Messaging": bindings/reference/python/02-messaging.md
-          - "03. Sockets": bindings/reference/python/03-sockets.md
-          - "04. Eventing": bindings/reference/python/04-eventing.md
-          - "05. Errors": bindings/reference/python/05-errors.md
-        - Go:
-          - "Reference home": bindings/reference/go/README.md
-          - "01. Core": bindings/reference/go/01-core.md
-          - "02. Messaging": bindings/reference/go/02-messaging.md
-          - "03. Sockets": bindings/reference/go/03-sockets.md
-          - "04. Eventing": bindings/reference/go/04-eventing.md
-          - "05. Errors": bindings/reference/go/05-errors.md
-        - Rust:
-          - "Reference home": bindings/reference/rust/README.md
-          - "01. Core": bindings/reference/rust/01-core.md
-          - "02. Messaging": bindings/reference/rust/02-messaging.md
-          - "03. Sockets": bindings/reference/rust/03-sockets.md
-          - "04. Eventing": bindings/reference/rust/04-eventing.md
-          - "05. Errors": bindings/reference/rust/05-errors.md
+          - C:
+              - Reference home: bindings/reference/c/README.md
+          - .NET:
+              - Reference home: bindings/reference/dotnet/README.md
+              - 01. Core: bindings/reference/dotnet/01-core.md
+              - 02. Messaging: bindings/reference/dotnet/02-messaging.md
+              - 03. Sockets: bindings/reference/dotnet/03-sockets.md
+              - 04. Eventing: bindings/reference/dotnet/04-eventing.md
+              - 05. Errors: bindings/reference/dotnet/05-errors.md
+          - C++:
+              - Reference home: bindings/reference/cpp/README.md
+              - 01. Core: bindings/reference/cpp/01-core.md
+              - 02. Messaging: bindings/reference/cpp/02-messaging.md
+              - 03. Sockets: bindings/reference/cpp/03-sockets.md
+              - 04. Eventing: bindings/reference/cpp/04-eventing.md
+              - 05. Errors: bindings/reference/cpp/05-errors.md
+          - Java:
+              - Reference home: bindings/reference/java/README.md
+              - 01. Core: bindings/reference/java/01-core.md
+              - 02. Messaging: bindings/reference/java/02-messaging.md
+              - 03. Sockets: bindings/reference/java/03-sockets.md
+              - 04. Eventing: bindings/reference/java/04-eventing.md
+              - 05. Errors: bindings/reference/java/05-errors.md
+          - Node.js:
+              - Reference home: bindings/reference/node/README.md
+              - 01. Core: bindings/reference/node/01-core.md
+              - 02. Messaging: bindings/reference/node/02-messaging.md
+              - 03. Sockets: bindings/reference/node/03-sockets.md
+              - 04. Eventing: bindings/reference/node/04-eventing.md
+              - 05. Errors: bindings/reference/node/05-errors.md
+          - Python:
+              - Reference home: bindings/reference/python/README.md
+              - 01. Core: bindings/reference/python/01-core.md
+              - 02. Messaging: bindings/reference/python/02-messaging.md
+              - 03. Sockets: bindings/reference/python/03-sockets.md
+              - 04. Eventing: bindings/reference/python/04-eventing.md
+              - 05. Errors: bindings/reference/python/05-errors.md
+          - Go:
+              - Reference home: bindings/reference/go/README.md
+              - 01. Core: bindings/reference/go/01-core.md
+              - 02. Messaging: bindings/reference/go/02-messaging.md
+              - 03. Sockets: bindings/reference/go/03-sockets.md
+              - 04. Eventing: bindings/reference/go/04-eventing.md
+              - 05. Errors: bindings/reference/go/05-errors.md
+          - Rust:
+              - Reference home: bindings/reference/rust/README.md
+              - 01. Core: bindings/reference/rust/01-core.md
+              - 02. Messaging: bindings/reference/rust/02-messaging.md
+              - 03. Sockets: bindings/reference/rust/03-sockets.md
+              - 04. Eventing: bindings/reference/rust/04-eventing.md
+              - 05. Errors: bindings/reference/rust/05-errors.md
       - Spec:
-        - Overview: bindings/spec/README.md
-        - Async & Coroutine Policy: bindings/spec/async-coroutine-policy.md
-        - C: bindings/spec/c/README.md
-        - .NET: bindings/spec/dotnet/README.md
-        - C++: bindings/spec/cpp/README.md
-        - Java: bindings/spec/java/README.md
-        - Node.js: bindings/spec/node/README.md
-        - Python: bindings/spec/python/README.md
-        - Go: bindings/spec/go/README.md
-        - Rust: bindings/spec/rust/README.md
+          - Overview: bindings/spec/README.md
+          - Async & Coroutine Policy: bindings/spec/async-coroutine-policy.md
+          - C: bindings/spec/c/README.md
+          - .NET: bindings/spec/dotnet/README.md
+          - C++: bindings/spec/cpp/README.md
+          - Java: bindings/spec/java/README.md
+          - Node.js: bindings/spec/node/README.md
+          - Python: bindings/spec/python/README.md
+          - Go: bindings/spec/go/README.md
+          - Rust: bindings/spec/rust/README.md
   - Core:
       - Guide:
-        - Overview: guide/01-overview.md
-        - Concepts:
-          - Socket Pattern Selection: guide/03-0-socket-patterns.md
-          - Reliability & Delivery: guide/reliability.md
-          - Design Rationale: guide/design-rationale.md
-          - Message API & Ownership: guide/09-message-api.md
-          - Thread Safety: guide/11-thread-safety.md
-        - Messaging Patterns:
-          - Routing ID: guide/08-routing-id.md
-          - PAIR: guide/03-1-pair.md
-          - PUB/SUB: guide/03-2-pubsub.md
-          - DEALER: guide/03-3-dealer.md
-          - ROUTER: guide/03-4-router.md
-          - STREAM: guide/03-5-stream.md
-          - Proxy: guide/03-6-proxy.md
-        - Transports: guide/04-transports.md
-        - TLS Security: guide/05-tls-security.md
-        - Operations:
-          - Monitoring: guide/06-monitoring.md
-          - Performance: guide/10-performance.md
-        - Reference:
-          - Core C API: guide/02-core-api.md
-          - Socket Options: guide/12-socket-options.md
-          - ZMP Protocol: guide/zmp-protocol.md
-          - Glossary: guide/glossary.md
-          - Shared Scenarios: guide/scenarios.md
+          - Overview: guide/01-overview.md
+          - Concepts:
+              - Socket Pattern Selection: guide/03-0-socket-patterns.md
+              - Reliability & Delivery: guide/reliability.md
+              - Design Rationale: guide/design-rationale.md
+              - Message API & Ownership: guide/09-message-api.md
+              - Thread Safety: guide/11-thread-safety.md
+          - Messaging Patterns:
+              - Routing ID: guide/08-routing-id.md
+              - PAIR: guide/03-1-pair.md
+              - PUB/SUB: guide/03-2-pubsub.md
+              - DEALER: guide/03-3-dealer.md
+              - ROUTER: guide/03-4-router.md
+              - STREAM: guide/03-5-stream.md
+              - Proxy: guide/03-6-proxy.md
+          - Transports: guide/04-transports.md
+          - TLS Security: guide/05-tls-security.md
+          - Operations:
+              - Monitoring: guide/06-monitoring.md
+              - Performance: guide/10-performance.md
+          - Reference:
+              - Core C API: guide/02-core-api.md
+              - Socket Options: guide/12-socket-options.md
+              - ZMP Protocol: guide/zmp-protocol.md
+              - Glossary: guide/glossary.md
+              - Shared Scenarios: guide/scenarios.md
       - API Reference:
-        - "Reference home": reference/README.md
-        - "01. Context": reference/01-context.md
-        - "02. Message": reference/02-message.md
-        - "03. Socket lifecycle": reference/03-socket-lifecycle.md
-        - "04. Socket options and identity": reference/04-socket-options.md
-        - "05. Raw receive": reference/05-raw-receive.md
-        - "06. PAIR": reference/06-pair.md
-        - "07. PUB": reference/07-pub.md
-        - "08. SUB": reference/08-sub.md
-        - "09. XPUB": reference/09-xpub.md
-        - "10. XSUB": reference/10-xsub.md
-        - "11. DEALER": reference/11-dealer.md
-        - "12. ROUTER": reference/12-router.md
-        - "13. STREAM": reference/13-stream.md
-        - "14. Socket monitor": reference/14-socket-monitor.md
-        - "15. Polling and pollers": reference/15-polling.md
-        - "16. Timers": reference/16-timers.md
-        - "17. Utilities": reference/17-utilities.md
-        - "18. Errors, results, and version": reference/18-errors.md
+          - Reference home: reference/README.md
+          - 01. Context: reference/01-context.md
+          - 02. Message: reference/02-message.md
+          - 03. Socket lifecycle: reference/03-socket-lifecycle.md
+          - 04. Socket options and identity: reference/04-socket-options.md
+          - 05. Raw receive: reference/05-raw-receive.md
+          - 06. PAIR: reference/06-pair.md
+          - 07. PUB: reference/07-pub.md
+          - 08. SUB: reference/08-sub.md
+          - 09. XPUB: reference/09-xpub.md
+          - 10. XSUB: reference/10-xsub.md
+          - 11. DEALER: reference/11-dealer.md
+          - 12. ROUTER: reference/12-router.md
+          - 13. STREAM: reference/13-stream.md
+          - 14. Socket monitor: reference/14-socket-monitor.md
+          - 15. Polling and pollers: reference/15-polling.md
+          - 16. Timers: reference/16-timers.md
+          - 17. Utilities: reference/17-utilities.md
+          - 18. Errors, results, and version: reference/18-errors.md
       - Spec:
-        - Overview: spec/core/README.md
-        - Public Contract Governance: spec/core/00-public-contract-governance.md
-        - Context: spec/core/01-context.md
-        - Message: spec/core/02-message.md
-        - Errors: spec/core/03-errors.md
-        - Events: spec/core/04-events.md
-        - Polling: spec/core/05-polling.md
-        - Monitoring: spec/core/06-monitoring.md
-        - Utilities: spec/core/07-utilities.md
-        - Runtime Boundary: spec/core/08-runtime-boundary.md
-        - Sockets:
-          - Overview: spec/core/socket/README.md
-          - PAIR: spec/core/socket/01-pair.md
-          - PUB: spec/core/socket/02-pub.md
-          - SUB: spec/core/socket/03-sub.md
-          - XPUB: spec/core/socket/04-xpub.md
-          - XSUB: spec/core/socket/05-xsub.md
-          - DEALER: spec/core/socket/06-dealer.md
-          - ROUTER: spec/core/socket/07-router.md
-          - STREAM: spec/core/socket/08-stream.md
-        - Protocol:
-          - Overview: spec/core/protocol/README.md
-          - Protocol ZMP: spec/core/protocol/01-zmp.md
-          - Protocol Raw: spec/core/protocol/02-raw.md
-        - Systems:
-          - Overview: spec/core/systems/README.md
-          - Architecture: spec/core/systems/01-architecture.md
-          - Threading Model: spec/core/systems/02-threading-model.md
-          - I/O Thread: spec/core/systems/03-io-thread.md
-          - Thread Safety: spec/core/systems/04-thread-safety.md
-          - Connection Memory: spec/core/systems/05-connection-memory.md
-          - Auto HWM: spec/core/systems/06-auto-hwm.md
-          - Source Layout: spec/core/systems/07-core-source-layout.md
-          - POSD Module Structure: spec/core/systems/08-posd-module-structure.md
-          - Design Decisions: spec/core/systems/09-design-decisions.md
-
+          - Overview: spec/core/README.md
+          - Public Contract Governance: spec/core/00-public-contract-governance.md
+          - Context: spec/core/01-context.md
+          - Message: spec/core/02-message.md
+          - Errors: spec/core/03-errors.md
+          - Events: spec/core/04-events.md
+          - Polling: spec/core/05-polling.md
+          - Monitoring: spec/core/06-monitoring.md
+          - Utilities: spec/core/07-utilities.md
+          - Runtime Boundary: spec/core/08-runtime-boundary.md
+          - Sockets:
+              - Overview: spec/core/socket/README.md
+              - PAIR: spec/core/socket/01-pair.md
+              - PUB: spec/core/socket/02-pub.md
+              - SUB: spec/core/socket/03-sub.md
+              - XPUB: spec/core/socket/04-xpub.md
+              - XSUB: spec/core/socket/05-xsub.md
+              - DEALER: spec/core/socket/06-dealer.md
+              - ROUTER: spec/core/socket/07-router.md
+              - STREAM: spec/core/socket/08-stream.md
+          - Protocol:
+              - Overview: spec/core/protocol/README.md
+              - Protocol ZMP: spec/core/protocol/01-zmp.md
+              - Protocol Raw: spec/core/protocol/02-raw.md
+          - Systems:
+              - Overview: spec/core/systems/README.md
+              - Architecture: spec/core/systems/01-architecture.md
+              - Threading Model: spec/core/systems/02-threading-model.md
+              - I/O Thread: spec/core/systems/03-io-thread.md
+              - Thread Safety: spec/core/systems/04-thread-safety.md
+              - Connection Memory: spec/core/systems/05-connection-memory.md
+              - Auto HWM: spec/core/systems/06-auto-hwm.md
+              - Source Layout: spec/core/systems/07-core-source-layout.md
+              - POSD Module Structure: spec/core/systems/08-posd-module-structure.md
+              - Design Decisions: spec/core/systems/09-design-decisions.md
 markdown_extensions:
   - admonition
   - attr_list
+  #  `:material-server:` 같은 아이콘을 제목과 표에 넣는다. 설치 문서처럼 갈래가
+  #  여럿인 페이지에서 각 절이 무엇에 대한 것인지 글을 읽기 전에 보이게 한다.
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight:
       anchor_linenums: true
       # 줄마다 span을 두면 CSS가 줄 단위로 스타일을 줄 수 있다. 긴 줄을 접을 때

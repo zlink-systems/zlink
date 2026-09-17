@@ -46,5 +46,5 @@ positive placement weight, activation capacity, Actor capacity와 Spot capacity�
 때만 `true`다. Capacity ledger는 예약의 원자성을 담당하고, monitoring projection은 public 상태
 조회에 필요한 현재 count를 담당한다.
 
-Capacity ledger는 object create, commit, abort, close와 같은 lifecycle 경로에서만 읽고 쓴다.
+Capacity ledger는 object create, commit, abort, close와 같은 lifecycle 경로에서만 읽고 사용한다.
 Message receive와 dispatch hot path에는 ledger 조회, collection 복사, 추가 lock을 넣지 않는다.

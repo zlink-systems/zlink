@@ -33,8 +33,8 @@ subscriber 수신은 기다리지 않는다. 큐 여유가 없으면 socket send
 ChannelName에 ready target이 없으면 `NotFound`, route 단절은 `Unavailable`, runtime 종료 중이면
 `ShuttingDown`으로 완료한다.
 
-**선택 기준.** Reply가 필요 없는 fire-and-forget에 쓴다. Reply가 필요하면 `RequestToChannel`을
-쓴다.
+**선택 기준.** Reply가 필요 없는 fire-and-forget에 사용한다. Reply가 필요하면 `RequestToChannel`을
+사용한다.
 
 ---
 
@@ -62,15 +62,15 @@ var reply = await routeClient
 ready target이 없으면 `NotFound`, route 단절은 `Unavailable`, runtime 종료 중이면 `ShuttingDown`으로
 완료한다.
 
-**선택 기준.** Reply 값이 필요할 때 쓴다. One-way면 `SendToChannel`을 쓴다. `Yield`는 `SpotWide`
-handler 안에서 다른 request나 worker가 진행 중일 때, 자신의 대기가 형제 job을 막지 않게 하려고 쓴다.
+**선택 기준.** Reply 값이 필요할 때 사용한다. One-way면 `SendToChannel`을 사용한다. `Yield`는 `SpotWide`
+handler 안에서 다른 request나 worker가 진행 중일 때, 자신의 대기가 형제 job을 막지 않게 하려고 사용한다.
 
 ---
 
 ## `SendToNode<TMessage>`
 
 MeshName과 target Node RID를 직접 지정해 one-way message를 보낸다. ChannelName 기반 선택이 아니라
-특정 MeshNode 하나를 관리할 때 쓴다.
+특정 MeshNode 하나를 관리할 때 사용한다.
 
 ```csharp
 await routeClient
@@ -80,11 +80,11 @@ await routeClient
 
 **옵션.** `SendToChannel`과 동일하다 — `.Metadata(...)`, terminal `.Async(ct)`.
 
-**완료 결과.** `SendToChannel`과 같은 완료 kind를 쓴다. 대상 RID가 Object Client(handler 등록이
+**완료 결과.** `SendToChannel`과 같은 완료 kind를 사용한다. 대상 RID가 Object Client(handler 등록이
 불가능한 RID)이면 다른 target으로 넘기지 않고 `NotFound`로 완료한다.
 
-**선택 기준.** 업무 object(actor·spot)의 배치나 메시징에는 쓰지 않는다 — 그 경우에는
-ActorId·SpotId·ChannelName을 쓴다. Node direct는 운영 목적으로 특정 node를 지목할 때만 쓴다.
+**선택 기준.** 업무 object(actor·spot)의 배치나 메시징에는 사용하지 않는다 — 그 경우에는
+ActorId·SpotId·ChannelName을 사용한다. Node direct는 운영 목적으로 특정 node를 지목할 때만 사용한다.
 
 ---
 
@@ -133,15 +133,15 @@ await fanoutClient
 않는다 — target이 0개여도 정상 완료한다. 시작한 뒤에는 개별 target 실패를 전체 실패로 바꾸지 않고
 재시도하지 않는다.
 
-**선택 기준.** 발행자가 구독자를 알지 못해야 하는 관찰·통지에 쓴다. 특정 대상에 보내는 메시징이면
-`SendToChannel`이나 `RequestToChannel`을 쓴다.
+**선택 기준.** 발행자가 구독자를 알지 못해야 하는 관찰·통지에 사용한다. 특정 대상에 보내는 메시징이면
+`SendToChannel`이나 `RequestToChannel`을 사용한다.
 
 ---
 
 ## Codec 등록 (구성 시점)
 
-다른 항목과 달리 terminal await가 아니라 host 구성 시점의 등록 호출이다. JSON만 쓰는
-application은 이 항목을 쓸 필요가 없다.
+다른 항목과 달리 terminal await가 아니라 host 구성 시점의 등록 호출이다. JSON만 사용하는
+application은 이 항목을 사용할 필요가 없다.
 
 ```csharp
 services.AddZLinkFramework(options =>
@@ -159,7 +159,7 @@ services.AddZLinkFramework(options =>
 **완료 결과.** 반환값 없이 동기로 등록된다. Host 시작 전에만 호출한다 — 시작한 뒤의 호출은 계약
 범위 밖이다.
 
-**선택 기준.** JSON이 아닌 content type(MessagePack, Protobuf 등)을 쓸 때 쓴다. 공식
+**선택 기준.** JSON이 아닌 content type(MessagePack, Protobuf 등)을 사용할 때 사용한다. 공식
 `ZLinkMessagePackCodec.Default`/`ZLinkProtobufCodec.Default` 외에 `IZLinkCodecExtension`을 직접
 구현해 custom serializer를 등록할 수도 있다.
 

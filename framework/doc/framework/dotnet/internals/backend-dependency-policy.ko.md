@@ -22,7 +22,7 @@
 ## 2. 기본 원칙
 
 backend 라이브러리는 언제든 교체할 수 있는 구현체로 보고, 그 위에 framework 의
-public contract 를 안정적으로 얹는 것을 목표로 한다. 구체적으로는 다음 네 가지
+public contract 를 안정적으로 올리는 것을 목표로 한다. 구체적으로는 다음 네 가지
 원칙을 따른다.
 
 - framework 의 public contract 가 우선이다. backend 라이브러리는 언제든 교체할
@@ -40,7 +40,7 @@ public contract 를 안정적으로 얹는 것을 목표로 한다. 구체적으
 - 다만 framework 사용자가 이런 객체를 생성자 파라미터나 public property 로
   직접 받게 만들지는 않는 것이 기본이다.
 
-즉 "지금은 `bindings/dotnet` 을 써서 구현한다" 는 사실과, "framework public API
+즉 "지금은 `bindings/dotnet` 을 사용해서 구현한다" 는 사실과, "framework public API
 가 곧 `bindings/dotnet` 의 객체 모델 그대로여야 한다" 는 주장은 서로 다른
 이야기다.
 
@@ -180,9 +180,9 @@ backend 의존 정책은 framework 의 public API 와 adapter factory 두 축으
 [^transport-primitive]: transport primitive 는 메시지 전송 계층에서 의미가 단단하게 굳어진 기초 값(예: `RoutingId`, `Message`, `SendFlags`)을 가리킨다.
 [^transport-identity]: transport identity 는 전송 계층에서 누가 누구에게 보내는지를 식별하는 값이다. `RoutingId` 가 대표적인 예다.
 [^compatibility-layer]: compatibility layer 는 내부 구현이 바뀌어도 외부에서 보이는 의미가 같게 유지되도록 끼워 넣는 중간 코드를 가리킨다.
-[^public-surface]: public surface 는 외부 사용자에게 노출되는 모든 타입·메서드·attribute 의 총합을 가리킨다. 본문에서는 가능한 한 public API 표면이라고 풀어 쓴다.
+[^public-surface]: public surface 는 외부 사용자에게 노출되는 모든 타입·메서드·attribute 의 총합을 가리킨다. 본문에서는 가능한 한 public API 표면이라고 풀어 사용한다.
 [^breaking-change]: breaking change 는 기존 사용자 코드를 그대로 다시 빌드하거나 실행할 수 없게 만드는 비호환 변경을 뜻한다.
-[^synthetic-enum]: synthetic enum 은 backend 가 내려 주는 원시 값을 그대로 쓰지 않고, framework 쪽에서 다시 정의한 의미 단위로 만든 enum 을 가리킨다.
+[^synthetic-enum]: synthetic enum 은 backend 가 내려 주는 원시 값을 그대로 사용하지 않고, framework 쪽에서 다시 정의한 의미 단위로 만든 enum 을 가리킨다.
 [^dto]: DTO(Data Transfer Object) 는 계층 간에 값을 옮기는 용도의 단순한 데이터 구조다.
 [^backend-adapter]: backend adapter layer 는 framework 의 표면과 실제 저수준 backend 사이를 잇는 중간 계층이다. backend 가 바뀌어도 public API 가 흔들리지 않게 해 준다.
 [^lifecycle]: lifecycle 은 컴포넌트가 시작·동작·종료되는 전체 수명 주기와, 각 단계에서 일어나는 일들을 가리킨다.

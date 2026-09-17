@@ -62,7 +62,7 @@ category에 문서화)을 정확히 미러링해야 하지만, 서로 일치하�
 **선택 기준.** 호출하는 코드가 result code로 분기해야 할 땐 특정
 error family의 `.Result`를 매치한다; POSIX errno 값을 이미 일반적으로
 다루는 코드와 통합할 땐 `Unwrap()`으로 노출되는 `syscall.Errno`에
-`errors.Is`/`errors.As`를 쓴다.
+`errors.Is`/`errors.As`를 사용한다.
 
 ---
 
@@ -97,9 +97,9 @@ concrete 값에 대한 reflection을 통해 여전히 그것을 찾아낸다.
 
 **선택 기준.** 어떤 8개 concrete error struct가 만들었는지 신경 쓰지
 않고 `.Code()`/`.InternalErrno()`만 필요할 땐 `errors.As(err,
-&zerr)`(`zerr`을 `contracts.ZlinkError`로 선언)를 쓴다. result
+&zerr)`(`zerr`을 `contracts.ZlinkError`로 선언)를 사용한다. result
 code의 의미가 family별로 다를 땐 대신 특정 struct 타입(예:
-`*contracts.RecvError`)을 쓴다.
+`*contracts.RecvError`)을 사용한다.
 
 ---
 

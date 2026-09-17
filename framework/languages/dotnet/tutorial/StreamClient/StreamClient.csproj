@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Tutorial.StreamClient</RootNamespace>
+    <ZLinkTutorialStreamConnector>true</ZLinkTutorialStreamConnector>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Shared/Shared.csproj" />
+  </ItemGroup>
+
+</Project>

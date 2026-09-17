@@ -47,8 +47,8 @@ frame이 socket으로 이전되고(아래 operation-builder 형태의 chain에�
 소비됨), 그 후엔 payload를 읽어도 더 이상 의미가 없다.
 
 **선택 기준.** outbound payload를 만들 땐 `Message::with_size`/`allocate`나
-`TryFrom`/`try_from` 변환을 쓴다. 소유권을 옮기는 대신 독립된 복사가
-필요할 땐 `try_clone()`을 쓴다. `copy_to`가(`bool`을 반환하는
+`TryFrom`/`try_from` 변환을 사용한다. 소유권을 옮기는 대신 독립된 복사가
+필요할 땐 `try_clone()`을 사용한다. `copy_to`가(`bool`을 반환하는
 `try_copy_to`가 아니라) `Result`를 반환한다는 건 destination이 작을 수
 있을 때 caller가 `ConfigError` 케이스를 명시적으로 처리해야 한다는
 뜻이다.
@@ -94,7 +94,7 @@ Rust의 소유권 시스템이 컴파일 타임에 소비된 `Received`가 재�
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서(`&mut`
 로) `Received` 하나를 재사용한다. 소비하지 않는 조회엔 `first_part()`를,
 envelope 자체가 더 이상 필요 없고 part를 꺼내야 할 땐
-`single_part()`/`into_parts()`를 쓴다.
+`single_part()`/`into_parts()`를 사용한다.
 
 ---
 
@@ -150,7 +150,7 @@ if xpub.receive_subscription_event(&mut evt, RecvFlags::NONE)? { /* ... */ }
 native resource를 소유하지 않는다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets
-category)에서 구독자 변동을 관찰할 때 쓴다.
+category)에서 구독자 변동을 관찰할 때 사용한다.
 
 ---
 
@@ -182,7 +182,7 @@ category를 참고한다.
 모든 socket type의 `send`/`publish`/`request`/`reply` 진입점(Sockets
 category)이 part를 누적하고 terminal submit에 도달하기 위해 반환하는
 **typestate 기반** fluent builder. 지금까지 다룬 다른 모든 언어(builder
-단계마다 별개의 interface/class 타입을 쓰는, 예:
+단계마다 별개의 interface/class 타입을 사용하는, 예:
 `SendOperation`/`SendSubmitOperation`)와 달리, Rust는 단계 전환을
 컴파일러가 정적으로 추적하는 zero-sized marker 타입(`Empty`, `Ready`)으로
 매개변수화된 단일 제네릭 타입(`SendOp<State>`,
@@ -221,8 +221,8 @@ operation을 취소하지 않으며 socket completion owner가 late terminal을 
 drain한다. 모든 builder는 성공적인 submit에서만 누적 `Message` part를 소비한다.
 
 **선택 기준.** async 코드에서는 Future terminal을 우선하고 호출 thread가
-block해도 될 때만 `submit_sync()`를 쓴다. 목적지 route를 손으로
-재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
+block해도 될 때만 `submit_sync()`를 사용한다. 목적지 route를 손으로
+재구성하는 대신 `Received.reply()`/`send()`를 사용한다.
 
 ---
 

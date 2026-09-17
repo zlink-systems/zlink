@@ -38,7 +38,7 @@ Framework는 Channel, Spot, Actor와 STREAM service runtime을 직접 구현한�
 hosted service[^hosted-service], handler 모델과 Location Store 기반 자동 연결을 노출하며 raw socket
 배선은 Framework 내부에서 처리한다.
 
-현재 구현 backend 는 `bindings/dotnet` 을 그대로 쓴다. 다만 framework 가
+현재 구현 backend 는 `bindings/dotnet` 을 그대로 사용한다. 다만 framework 가
 사용자에게 보여 주는 public contract 는 backend 구현체와 분리해서 유지하는 것을
 원칙으로 둔다. 자세한 기준은
 [backend-dependency-policy.ko.md](internals/backend-dependency-policy.ko.md) 에서 다룬다.
@@ -95,7 +95,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 Options binding 기준�
   - framework adapter 표면 타입은 `ZLink` prefix로 통일한다. 예를 들어
     `IZLinkSession`, `IZLinkActorContext`, `IZLinkBoundSession` 같은 형태다.
     즉 framework가 사용자에게 노출하는 모든
-    interface, record, enum, exception 은 `ZLink`를 쓴다.
+    interface, record, enum, exception 은 `ZLink`를 사용한다.
   - NuGet package id는 `Zlink` 또는 `Zlink.*`를 사용한다. namespace와 assembly
     이름은 package id와 별개로 유지한다. 타입 이름과 namespace 이름의 casing
     의도도 서로 별개다.
@@ -135,7 +135,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 Options binding 기준�
 
 ### 2.0 가이드 (시작하기)
 
-`guide/server/`는 `.NET`/`ASP.NET Core` 개발자가 각 기능을 **읽고 바로 따라 쓸 수
+`guide/server/`는 `.NET`/`ASP.NET Core` 개발자가 각 기능을 **읽고 바로 따라 사용할 수
 있도록** 개념과 사용법을 직접 설명한다. 개념의 정식 의미는 공통 스펙이, 정식
 계약은 spec 문서가 다루며, 가이드는 그 의미를 실사용 코드로 풀어 준다. 실행
 가능한 전체 샘플의 업무 흐름은 [공통 sample](../common/sample/README.ko.md)이 정의한다.

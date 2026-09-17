@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "join은 예약이고, 실행은 handler가 끝난 뒤다",
+    "subtitle": "받는 쪽이 먼저 승인하고 · 확정 뒤 양쪽에 알린다",
+    "output": "35-actor-join.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "E",
+      "type": "backend",
+      "label": "Entry Spot",
+      "sublabel": "만들어진 직후의 자리",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "external",
+      "label": "예약",
+      "sublabel": "handler가 끝나야 열린다",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "U",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "가려는 User Spot",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "E",
+      "to": "A",
+      "label": "지금 실행되는 자리",
+      "variant": "default",
+      "labelDy": 24
+    },
+    {
+      "from": "A",
+      "to": "B",
+      "label": "handler 안에서 예약만 한다",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "U",
+      "label": "handler가 끝난 뒤 실행한다",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "받는 쪽이 먼저 승인한다",
+      "items": [
+        "예약이 실행되면 가려는 User Spot이 먼저 승인하거나 거절하고, 확정된 뒤에야 간 쪽과 떠난 쪽에 알림이 간다.",
+        "받아들여지면 확정한 간 쪽 Actor가 완료를 받는다. 거절되거나 확정 전에 실패하면 그대로 남은 떠난 쪽 Actor가 받는다."
+      ]
+    }
+  ]
+}

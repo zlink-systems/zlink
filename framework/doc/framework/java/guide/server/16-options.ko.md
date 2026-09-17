@@ -67,7 +67,7 @@ Spring 컨텍스트가 시작된 뒤에 builder를 다시 호출하는 표면은
 
 `setDefaultRequestTimeout`은 **0 이하를 거부한다.**
 
-**`useVirtualThreadHandlers()`와 `useHandlerExecutor(...)`는 함께 쓰지 않는다.** 둘 다
+**`useVirtualThreadHandlers()`와 `useHandlerExecutor(...)`는 함께 사용하지 않는다.** 둘 다
 handler 실행기를 정하므로 뒤에 부른 쪽이 앞을 덮는다.
 
 ## 3. MeshNode 옵션
@@ -77,7 +77,7 @@ handler 실행기를 정하므로 뒤에 부른 쪽이 앞을 덮는다.
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `listen(endpoint)` · `listen(port)` · `listen()` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
-| `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소를 나눠 쓸 때 | `configureNetwork()` 값 |
+| `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소를 나눠 사용할 때 | `configureNetwork()` 값 |
 | `setRoutingId(...)` · `setRoutingIdPrefix(String)` | 이 node의 식별자 | 자동 생성 |
 | `objects()` | Object role — spot · actor 배치 | 배치하지 않음 |
 | `channelName(name)` | channel 역할 등록 | — |
@@ -103,7 +103,7 @@ handler 실행기를 정하므로 뒤에 부른 쪽이 앞을 덮는다.
 | `setMailboxByteBudget(long)` | 이 node의 service mailbox가 담을 byte |
 
 두 high-water mark의 동작 원리와 값을 고르는 기준은
-[4. Backpressure](04-backpressure.ko.md)가 다룬다.
+[Backpressure](33-backpressure.ko.md)가 다룬다.
 `0`은 기본값이 아니라 **무제한**이다.
 
 **HWM 넷은 `long`이다.** byte 단위이므로 `int`로는 2 GiB를 넘길 수 없다.
@@ -111,7 +111,7 @@ handler 실행기를 정하므로 뒤에 부른 쪽이 앞을 덮는다.
 ### 3.2 CPU worker 풀
 
 `configureWorkers()`가 돌려주는 `ZLinkWorkerOptions`의 값이다.
-`context.runCpuWorker(...)`가 쓰는 단일 elastic 풀 하나를 정한다.
+`context.runCpuWorker(...)`가 사용하는 단일 elastic 풀 하나를 정한다.
 
 | 옵션 | 기본값 |
 | --- | --- |
@@ -140,7 +140,7 @@ job 수를 host instance 전체에서 제한한다.
 Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
 `1..2,147,483,647`이며 `0`은 unlimited가 아니라 startup configuration error다. 두 profile은
 같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
-[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
+[Backpressure](33-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -153,7 +153,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | `includeMessageSizes(boolean)` | payload byte를 함께 남길지 | 남기지 않음 |
 | `unhandled()` | 처리기가 없는 dispatch의 동작 | 아래 |
 
-`unhandled()`는 `setRequest` · `setSend` · `setPublish`로 갈래마다 동작을 정하고,
+`unhandled()`는 `setRequest` · `setSend` · `setPublish`로 종류마다 동작을 정하고,
 `setSendLogLevel` · `setPublishLogLevel`로 기록 수준을 정한다.
 
 수준별로 무엇이 남는지는 `11. Monitoring` 장이 다룬다.
@@ -196,7 +196,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 ## 7. 실행 중 바꿀 수 있는 것
 
 시작 뒤에 바꿀 수 있는 값은 **가중치 둘뿐**이다. `ZLinkRouteMeshRuntimeOptions` bean을
-주입받아 쓴다.
+주입받아 사용한다.
 
 | 값 | 표면 | 무엇에 쓰나 |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | STREAM node의 `bind` 주소와 session 타입 | `addStreamNode(...)` |
 | fanout publisher의 endpoint | `addFanoutChannel(...).enablePublisher(...)` |
 | Spot · Actor를 배치할 node의 Object role | `objects().server()` |
-| 여러 node를 쓸 때의 location store | `addLocationStore(...)` |
+| 여러 node를 사용할 때의 location store | `addLocationStore(...)` |
 | handler 탐색 시작점 | `addHandlersFromPackageOf(...)` |
 
 ## 9. 자주 발생하는 문제
@@ -227,8 +227,8 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
   `setDefaultRequestTimeout`은 0 이하를 거부한다.
 - **CPU worker submit이 바로 실패한다** → 큐가 찼다. `maxQueueLength`를 늘리기 전에
   worker 작업의 실행 시간을 본다. 기다리는 정책은 없다.
-- **virtual thread 설정이 안 먹는다** → `useHandlerExecutor(...)`를 뒤에 불러 덮었을
-  수 있다. 둘 중 하나만 쓴다.
+- **virtual thread 설정이 적용되지 않는다** → `useHandlerExecutor(...)`를 뒤에 불러 덮었을
+  수 있다. 둘 중 하나만 사용한다.
 - **가중치를 0으로 했는데 기존 연결이 끊긴다고 생각했다** → 가중치는 **새 배정만**
   막는다.
 - **두 언어 node를 섞었더니 owner 판정이 다르다** → `ownerLeaseTtl` 기본값이 언어마다
@@ -237,5 +237,5 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 ## 10. 관련 문서
 
 - 정식 계약: [Java configuration과 host 공개 계약](../../../common/spec/server/languages/java/interfaces/configuration-host.ko.md)
-- 상한이 무엇을 바꾸는지: [4. Backpressure](04-backpressure.ko.md)
+- 상한이 무엇을 바꾸는지: [Backpressure](33-backpressure.ko.md)
 - 가중치로 트래픽을 빼는 절차: [12. 운영](12-operations.ko.md)

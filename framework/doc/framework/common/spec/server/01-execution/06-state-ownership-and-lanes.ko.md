@@ -256,7 +256,7 @@ bindings의 완료 표면 정책(binding 스펙 async-coroutine-policy — ASYNC
 sync terminal을 나란히 제공)과 같은 모형이다: async 표면이 정본이고, sync 표면은 그 위의
 최소 bridge 1개(위 세 조건 충족)로 제공한다. sync 표면은 **framework가 소유한 실행
 문맥(handler·lane·turn·완료 callback) 밖 전용**이며 — 설정 시점, 운영 도구, 테스트가
-그 대상이다. framework 실행 문맥 안에서는 async 표면을 쓴다. 언어별로 한쪽 표면만
+그 대상이다. framework 실행 문맥 안에서는 async 표면을 사용한다. 언어별로 한쪽 표면만
 제공해 발산하지 않는다.
 
 ## 6. 재진입을 만들지 않는 구조
@@ -339,15 +339,15 @@ primitive(C#의 Monitor, Java의 `synchronized`)는 같은 thread의 중첩 획�
 소유한 collection은 평범한 `Dictionary`로 둔다. 재진입은 hang이 아니라 그 호출 지점에서
 즉시 `InvalidOperationException`으로 검출된다.
 
-`ZLinkStateLane`은 Spot·Actor **실행**에 쓰는 `ZLinkSerialExecutionQueue`와 별개다.
+`ZLinkStateLane`은 Spot·Actor **실행**에 사용하는 `ZLinkSerialExecutionQueue`와 별개다.
 `ZLinkSerialExecutionQueue`에는 relocation seal과 lifecycle admission이 함께 있는데, 이는
 상태 소유 목적에는 필요 없는 책임이다 — 상태를 지키려는 컴포넌트가 이 실행용 queue를
-가져다 쓰면 그 queue가 지고 있는 relocation·lifecycle 책임까지 함께 떠안게 된다. 그래서
-상태 소유에는 이 실행용 queue를 쓰지 않는다.
+가져다 사용하면 그 queue가 지고 있는 relocation·lifecycle 책임까지 함께 떠안게 된다. 그래서
+상태 소유에는 이 실행용 queue를 사용하지 않는다.
 
 다른 언어로 포팅할 때는 구체적인 자료형이나 언어 관용구를 그대로 옮기는 대신, 이 문서가
 정의하는 같은 보장 — 한 번에 한 turn만 실행, FIFO, 재진입의 즉시 예외 검출, 소유
-collection의 무잠금 — 을 만족하는 그 언어의 primitive를 쓴다.
+collection의 무잠금 — 을 만족하는 그 언어의 primitive를 사용한다.
 
 **다만 공개 표면의 이름과 계약은 예외다.** state lane의 다음 여섯은 4개 언어가 같은 의미를 갖는다.
 앞의 다섯은 이름도 표기 변환만으로 일치한다. `close`는 현재 언어마다 이름이 갈리므로
@@ -378,7 +378,7 @@ scheduler에 게시한다.
 Java는 lane-current `ThreadLocal` scope 안에서 `CompletableFuture.complete`를 호출하지
 않는다. `complete`는 비동기 표시가 없는 dependent를 완료 thread에서 inline 실행할 수
 있다. Current scope를 해제한 뒤 완료하거나, `completeAsync`처럼 별도 scheduler에서
-완료하는 API를 쓴다.
+완료하는 API를 사용한다.
 
 Node.js의 동기 메서드는 하나의 JavaScript turn 안에서 끝나는 동안 다른 callback과
 동시에 실행되지 않는다. 따라서 `await` 전후로 상태 접근이 갈라지지 않고 public

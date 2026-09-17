@@ -256,7 +256,7 @@ Application listener의 `maxMessageSize()` 기본값은 `16_777_216L` bytes다.
 
 `configureNetwork()`은 process의 RouteMesh, ClientServer, classic fanout과 stream listener가 사용하는
 기본 host를 반환한다. 기본 BindHost는 `127.0.0.1`이다. Listener별 `setBindHost(...)`와
-`setAdvertiseHost(...)`를 호출하면 해당 listener에서만 root 기본값을 덮어쓴다. Port `0`을 사용한 경우
+`setAdvertiseHost(...)`를 호출하면 해당 listener에서만 root 기본값을 덮어사용한다. Port `0`을 사용한 경우
 Framework는 bind 뒤 확정된 port와 AdvertiseHost를 결합해 discovery descriptor에 기록한다. Stream
 listener는 discovery 대상이 아니므로 같은 규칙으로 계산한 advertised endpoint를 운영 정보에 사용하며,
 remote connector endpoint를 자동 게시하지 않는다.
@@ -370,12 +370,12 @@ startup 설정 오류다. 값은 MeshNode lifecycle 시작 전에 고정하고 r
 `ZLinkWorkerOptions.idleTimeout(...)`과는 별개의 설정이며 서로 값을 상속하지 않는다. 정리 대상은
 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지 않는다. 유휴 판정 조건,
 `ZLinkSpotCloseReason.IDLE_EVICTED` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이며 active
 [owner](../../../00-foundation/02-glossary.ko.md#owner)와 충돌하면 새 UUID로 다시 시도하지 않고 즉시
-`ROUTING_ID_CONFLICT`로 실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 쓴 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
+`ROUTING_ID_CONFLICT`로 실패한다. Fixed RID는 automatic discovery topology에서도, object role이 있는 MeshNode에서도 허용한다. 구현·시험 시나리오가 peer를 이름으로 지목해야 할 때가 있고, 자동 UUID로는 그럴 수 없기 때문이다. Fixed RID를 사용한 node가 재시작해 이전 active owner claim과 충돌하면 자동 RID와 같은 규칙으로 처리한다 — 새 값을 만들어 재시도하지 않고 즉시 conflict로 실패하며, 이전 owner lease가 만료된 뒤 재시작이 성공한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
 
 Framework가 모든 registration에서 만든 fully encoded MeshNode descriptor는 1 MiB 이하여야 한다.
 [Spot](../../../00-foundation/02-glossary.ko.md#spot) type과 object capability collection은 각각 최대 1024개다. Relocation adapter class와 opaque application

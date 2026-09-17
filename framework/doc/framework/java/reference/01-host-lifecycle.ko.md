@@ -82,7 +82,7 @@ host는 `RELOCATED` 상태가 된다(새 operation은 받지 않지만 infrastru
 shared operation 결과를 따르는 전용 `CompletableFuture` view를 반환한다 —
 `toCompletableFuture().cancel(...)`은 그 waiter만 해제하며 host operation 자체는 계속 진행된다.
 
-**선택 기준.** 배포 전 무중단 이전이 필요할 때 쓴다. 이전 없이 바로 종료하려면 `shutdown`을 직접
+**선택 기준.** 배포 전 무중단 이전이 필요할 때 사용한다. 이전 없이 바로 종료하려면 `shutdown`을 직접
 호출한다. 같은 mode·target version으로 중복 호출하면 진행 중인 operation에 합류하고, 다른 값으로
 호출하면 `BLOCKED/OPERATION_IN_PROGRESS`로 완료한다.
 
@@ -136,7 +136,7 @@ runtime.observe().subscribe(new Flow.Subscriber<>() {
 (`coalescedCount`/`discardedTerminalCount`)로 관찰 유실 여부를 판단한다.
 
 **선택 기준.** 지금 이 순간의 상태 한 번만 필요할 때 `status()`를, 상태 전이를 놓치지 않고 계속
-받으려면 `observe()`를 쓴다. Spring Boot Actuator `HealthIndicator`를 구현할 때도 이 `status()`를
+받으려면 `observe()`를 사용한다. Spring Boot Actuator `HealthIndicator`를 구현할 때도 이 `status()`를
 읽어 `Health.up()`/`Health.outOfService()`를 결정한다 — Framework가 별도 health builder를 제공하지
 않으므로 이 판단은 application의 `HealthIndicator` bean이 직접 작성한다.
 

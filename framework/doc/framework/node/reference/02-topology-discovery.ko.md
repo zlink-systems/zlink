@@ -23,7 +23,7 @@ const play = zlinkFramework()
   .setPlacementWeight(100);
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ const play = zlinkFramework()
 | `.setPlacementWeight(weight)` | 100(범위 `0..10000`) | 새 Actor·Spot을 이 node에 배치할 상대 가중치 |
 | `.setActorLimit(limit)` / `.setSpotLimit(limit)` | Framework profile 기본값 | 이 node가 수용하는 Actor·Spot 상한 |
 | `.setActivationConcurrency(limit)` | Framework 기본값 | activation admission 동시 실행 상한 |
-| `.setDefaultRequestTimeout(timeoutMs)`(raw builder) | 이 MeshNode의 request 기본 timeout | messaging-execution category의 `requestToNode`/`requestToChannel`이 `.timeout(...)`을 생략했을 때 쓰는 값 |
+| `.setDefaultRequestTimeout(timeoutMs)`(raw builder) | 이 MeshNode의 request 기본 timeout | messaging-execution category의 `requestToNode`/`requestToChannel`이 `.timeout(...)`을 생략했을 때 사용하는 값 |
 | `.setInstanceSpotIdleTimeout(timeoutMs)` | `0`(정리하지 않음) | Instance Spot idle 회수 시간(ms) |
 | `.configureRouterSocket()` | `ZLinkMeshNodeSocketConfig` 기본값 | 이 MeshNode ROUTER 소켓의 HWM·buffer·timeout(`maxMessageSize` 기본 `16_777_216` 등) |
 | `.configureSpotPublisher()` | `ZLinkSpotPublisherConfig` 기본값 | Logical Multicast publisher socket의 HWM·timeout·linger |
@@ -46,8 +46,8 @@ const play = zlinkFramework()
 `ZLinkModule.forRoot(...)`이 초기화될 때 startup 검증에서 `ZLinkConfigurationException`으로
 드러난다.
 
-**선택 기준.** RouteMesh를 쓰는 모든 host가 최소 하나의 MeshNode를 등록할 때 쓴다. Manual peer만
-쓰고 분산 discovery가 필요 없는 node는 Location Store 없이 시작할 수 있다.
+**선택 기준.** RouteMesh를 사용하는 모든 host가 최소 하나의 MeshNode를 등록할 때 사용한다. Manual peer만
+사용하고 분산 discovery가 필요 없는 node는 Location Store 없이 시작할 수 있다.
 
 ---
 
@@ -67,7 +67,7 @@ play.objects().server()
   });
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -100,7 +100,7 @@ play.channel("play.events").client();
 
 **옵션.** `channel(channelName)` 뒤에는 `.client()` 또는 `.server()`를 정확히 한 번 호출한다.
 `.client()`는 송신 경로만 만들고 modifier가 없다(TypeScript type 단계에서 잘못된 역할 설정을
-막는다). `.server()`에 자주 쓰는 modifier는 다음과 같다.
+막는다). `.server()`에 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -113,9 +113,9 @@ play.channel("play.events").client();
 `ZLinkConfigurationException`으로 드러난다.
 
 **선택 기준.** `sendToChannel`/`requestToChannel`(messaging-execution category)로 받을 handler를
-등록할 때 `.server()`를 쓴다. 이 MeshNode가 다른 node의 Server만 호출하고 자신은 handler를 두지
+등록할 때 `.server()`를 사용한다. 이 MeshNode가 다른 node의 Server만 호출하고 자신은 handler를 두지
 않으면 `.client()`만 등록한다. 서로 다른 프로세스 사이 통신이 필요하면 `addClientServerChannel`을
-대신 쓴다.
+대신 사용한다.
 
 ---
 
@@ -133,7 +133,7 @@ zlinkFramework().addClientServerChannel("payments.api").client()
   .connect("payments-1:6001");
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -142,12 +142,12 @@ zlinkFramework().addClientServerChannel("payments.api").client()
 | `.server().setWeight(weight)` / `.addSendHandler`/`.addRequestHandler` | RouteMesh Channel Server와 동일 | 가중치와 handler 등록 |
 | `.client().connect(endpoint)` | manual | 특정 Server에 수동 연결. 생략하면 automatic discovery로 target을 찾는다 |
 
-**완료 결과.** 반환값 없이 동기로 등록된다. Automatic discovery를 쓰는 Client·Server는 Location
+**완료 결과.** 반환값 없이 동기로 등록된다. Automatic discovery를 사용하는 Client·Server는 Location
 Store 등록이 없으면 startup 검증에서 configuration error로 드러난다. 같은 ChannelName에 Client와
 Server를 각각 한 번씩 등록할 수 있지만 같은 역할을 두 번 등록하면 startup이 실패한다.
 
-**선택 기준.** RouteMesh 멤버가 아닌 독립 서비스 사이의 request/reply나 one-way 메시징에 쓴다.
-같은 RouteMesh 안 node끼리는 RouteMesh Channel 등록을 대신 쓴다.
+**선택 기준.** RouteMesh 멤버가 아닌 독립 서비스 사이의 request/reply나 one-way 메시징에 사용한다.
+같은 RouteMesh 안 node끼리는 RouteMesh Channel 등록을 대신 사용한다.
 
 ---
 
@@ -168,7 +168,7 @@ zlinkFramework().addFanoutChannel("lobby.events").enableSubscriber();
 zlinkFramework().addFanoutChannel("lobby.events").enableSubscriber("lobby-1:7001");
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -184,8 +184,8 @@ fanout channel에 함께 설정하면 startup 실패로 드러난다. `getListen
 시작되지 않았거나 해당 channel이 publisher로 등록되지 않았으면 `ZLinkConfigurationException`으로
 실패한다.
 
-**선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 쓴다. Reply가
-필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 쓴다.
+**선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 사용한다. Reply가
+필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 사용한다.
 
 ---
 
@@ -200,7 +200,7 @@ zlinkFramework().addStreamNode("public-gateway")
   .registerSession(GameSession);
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ zlinkFramework().addStreamNode("public-gateway")
 **완료 결과.** 반환값 없이 동기로 등록된다. TLS 설정 오류는 startup 검증에서
 `ZLinkConfigurationException`으로 드러난다.
 
-**선택 기준.** 외부 client가 STREAM 프로토콜로 직접 연결하는 gateway를 열 때 쓴다. 정확한
+**선택 기준.** 외부 client가 STREAM 프로토콜로 직접 연결하는 gateway를 열 때 사용한다. 정확한
 Session·Actor 연결 규칙은 stream-session category를 참고한다.
 
 ---
@@ -242,8 +242,8 @@ RouteMesh Channel Server membership이 없으면 이 연결 intent는 목록에 
 않는다. 어느 한쪽에라도 weight `0`을 포함한 Channel Server membership이 있으면 연결을 만들고
 liveness를 유지한다.
 
-**선택 기준.** Automatic discovery(Location Store)를 쓰지 않고 고정된 peer 목록으로 RouteMesh를
-구성할 때 쓴다.
+**선택 기준.** Automatic discovery(Location Store)를 사용하지 않고 고정된 peer 목록으로 RouteMesh를
+구성할 때 사용한다.
 
 ---
 
@@ -279,7 +279,7 @@ class AuthenticationFilter implements ZLinkHandlerFilter {
 `NodeDirectSend`/`NodeDirectRequest`/`ChannelSend`/`ChannelRequest`/`ClassicFanout`을 구분한다 —
 `ChannelSend`/`ChannelRequest`는 RouteMesh와 ClientServer를 모두 포함한다.
 
-**선택 기준.** 개별 handler마다 반복할 공통 전처리·검증이 필요할 때 쓴다. Filter는 업무 reply를
+**선택 기준.** 개별 handler마다 반복할 공통 전처리·검증이 필요할 때 사용한다. Filter는 업무 reply를
 직접 만들지 않는다 — 거부만 표현하고 나머지는 handler가 처리한다. Spot·Actor·Logical Multicast·
 STREAM handler에는 적용하지 않는다.
 
@@ -304,11 +304,11 @@ zlinkFramework().setApplicationVersion(2n);
 zlinkFramework().options({ requestTimeoutMs: 30_000, worker: { minThreads: 2, maxThreads: 8 } });
 ```
 
-**옵션.** 자주 쓰는 항목은 다음과 같다.
+**옵션.** 자주 사용하는 항목은 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `.configureNetwork()` | `bindHost`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
+| `.configureNetwork()` | `bindHost`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 사용하는 기본 bind·advertise host |
 | `.configureDispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `Balanced`, manual 값은 `undefined` | `ZLinkDispatchOptionsBuilder`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configureStreamCompression()` | 압축 없음 | STREAM 기본 압축 codec(`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(waveId)` | `0n` / 없음(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
@@ -325,7 +325,7 @@ Application Job Queue는 별도의 job-count limit이다. `maxQueuedApplicationJ
 [Core/Framework API 계약](../../common/spec/server/00-foundation/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값
-하나로 끝나는 host-wide 설정을 조정할 때 쓴다.
+하나로 끝나는 host-wide 설정을 조정할 때 사용한다.
 
 ---
 
@@ -348,7 +348,7 @@ routeMeshRuntimeOptions.channel("play.api").weight = 0;
 
 **완료 결과.** 동기 get/set이다. 즉시 적용되며 별도 완료 신호가 없다.
 
-**선택 기준.** 운영 중 배치나 트래픽 비중을 조정할 때 쓴다. `maxMessageSize`를 포함한 transport
+**선택 기준.** 운영 중 배치나 트래픽 비중을 조정할 때 사용한다. `maxMessageSize`를 포함한 transport
 option은 이 경로로 바꿀 수 없다 — startup 전에만 설정한다.
 
 ---
@@ -380,8 +380,8 @@ for await (const observed of routeMeshRuntime.observe("play", /*capacity=*/64)) 
 `AsyncIterable<ZLinkObservedStatus<TStatus>>`를 반환하며, `loss` field로 관찰 유실 여부를
 판단한다. 등록되지 않은 이름을 조회하면 새 상태를 만들지 않고 typed route error로 실패한다.
 
-**선택 기준.** 특정 MeshName·ChannelName의 가용성을 판단하거나 장애 범위를 좁힐 때 쓴다. Host
-전체 상태가 필요하면 host-lifecycle category의 `status`/`observe`를 쓴다.
+**선택 기준.** 특정 MeshName·ChannelName의 가용성을 판단하거나 장애 범위를 좁힐 때 사용한다. Host
+전체 상태가 필요하면 host-lifecycle category의 `status`/`observe`를 사용한다.
 
 ---
 

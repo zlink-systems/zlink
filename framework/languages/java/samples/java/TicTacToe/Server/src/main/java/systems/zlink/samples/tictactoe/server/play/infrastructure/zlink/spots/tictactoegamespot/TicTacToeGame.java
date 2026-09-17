@@ -300,6 +300,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         if (player.wins() < 99 || wins != 100) {
             return;
         }
+        // --8<-- [start:doc-multicast-publish]
         context.outbound()
             .publish(SampleNames.PlayNode, SampleNames.PlayerMilestoneTopic,
                 new PlayerWinMilestoneEvent(
@@ -308,5 +309,6 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
                 player.displayName(),
                 wins))
             .submit();
+        // --8<-- [end:doc-multicast-publish]
     }
 }

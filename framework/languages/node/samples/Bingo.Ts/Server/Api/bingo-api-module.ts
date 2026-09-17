@@ -33,7 +33,10 @@ function createBingoApiModule() {
             .messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           bingoLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-codec-register]
+          // Every payload this process sends is encoded with Protobuf instead of the default codec.
           builder.codecs().use(bingoFrameworkProtobuf);
+          // --8<-- [end:doc-codec-register]
           const apiMesh = builder.addRouteMesh(SampleNames.playMeshName)
             .setRoutingIdPrefix('api')
             .listen(config.apiEndpoint);

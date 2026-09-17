@@ -75,9 +75,11 @@ function createZoneNodeModule(includeZoneRuntime = true) {
             PlayerActorFactory,
             (factory) => factory.preserveStateWith(PlayerActorRelocationAdapter)
           );
+          // --8<-- [start:doc-multi-channel-register]
           zoneMesh.channel(ZoneWorldNames.zoneMesh).server();
           zoneMesh.channel(ZoneWorldNames.bridgeMesh).server();
           zoneMesh.channel(ZoneWorldNames.reportChannel).client();
+          // --8<-- [end:doc-multi-channel-register]
           const opsChannelName = ZoneWorldNames.opsChannel(node.nodeId);
           for (const configuredNodeId of ['zone-node-1', 'zone-node-2']) {
             const configuredChannel = ZoneWorldNames.opsChannel(configuredNodeId);

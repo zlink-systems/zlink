@@ -1,0 +1,17 @@
+{
+  "name": "zlink-tutorial-stream-client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/StreamClient/main.js"
+  },
+  "dependencies": {
+    "@zlink-systems/stream-connector": "0.16.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3",
+    "@types/node": "22.15.30"
+  }
+}

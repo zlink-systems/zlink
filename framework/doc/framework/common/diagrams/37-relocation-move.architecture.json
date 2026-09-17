@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "논리 id는 그대로, 실행 위치만 옮긴다",
+    "subtitle": "상태는 mesh 연결로 직접 간다 · Store에는 새 owner만 적힌다",
+    "output": "37-relocation-move.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "호출 node",
+      "sublabel": "id는 바뀌지 않는다",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "A",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "떠나는 node",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "도착 node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "owner만 바뀐다",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "남은 message · timer · 담은 상태",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "S",
+      "label": "새 owner를 적는다",
+      "variant": "default"
+    },
+    {
+      "from": "C",
+      "to": "S",
+      "label": "호출할 때마다 다시 읽는다",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "C",
+      "to": "B",
+      "label": "id만 주면 도착 node로 간다",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "옮기는 상태는 Store를 거치지 않는다",
+      "items": [
+        "아직 실행하지 않은 message와 timer 등록과 담은 상태는 떠나는 node가 도착 node로 mesh 연결을 통해 직접 보낸다.",
+        "Store에 적히는 것은 새 owner 하나다. 호출하는 쪽은 주소를 다시 받을 필요가 없다 — 논리 id가 그대로이기 때문이다."
+      ]
+    }
+  ]
+}

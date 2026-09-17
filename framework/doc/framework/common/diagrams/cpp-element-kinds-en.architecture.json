@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The five kinds in the diagram",
+    "subtitle": "Colour carries the role, matching the diagram above",
+    "output": "cpp-element-kinds-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 5,
+    "gapX": 130,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "CH",
+      "type": "backend",
+      "label": "channel",
+      "sublabel": "the messaging path",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "SP",
+      "type": "frontend",
+      "label": "SPOT",
+      "sublabel": "the serial execution region",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "AC",
+      "type": "messagebus",
+      "label": "actor / session",
+      "sublabel": "binds a connection to state",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "ST",
+      "type": "external",
+      "label": "stream",
+      "sublabel": "the outside boundary",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "RG",
+      "type": "database",
+      "label": "registry",
+      "sublabel": "infrastructure",
+      "row": 0,
+      "col": 4
+    }
+  ],
+  "connections": []
+}

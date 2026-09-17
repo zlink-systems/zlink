@@ -7,7 +7,7 @@
 
 ## non-blocking 보장
 
-내부 전송은 네이티브 비동기 I/O를 쓰고 `suspend` 확장이 그 `CompletionStage`를
+내부 전송은 네이티브 비동기 I/O를 사용하고 `suspend` 확장이 그 `CompletionStage`를
 `kotlinx-coroutines-jdk8`의 `await()`로 잇는다. 따라서 응답을 기다리는 동안 **어떤 스레드도
 park되지 않는다.** redirect 루프·retry 루프도 hop 사이에 스레드를 점유하지 않는다.
 
@@ -26,7 +26,7 @@ suspend fun notifyMatchResult(client: ZLinkHttpClient, result: MatchResult) {
 ## handler에서 — suspend로 합성
 
 framework handler·actor·spot 코드는 suspend 함수 안에서 `await`/`fetch`를 직접 호출해
-순차로 합성한다. `runBlocking`은 handler 스레드를 막으므로 쓰지 않는다.
+순차로 합성한다. `runBlocking`은 handler 스레드를 막으므로 사용하지 않는다.
 
 | 호출 위치 | 권장 |
 |-----------|------|

@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A filter wraps the messages a node receives",
+    "subtitle": "entered in registration order and unwound in reverse · a Spot handler is not wrapped",
+    "output": "31-filter-scope-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 4,
+    "gapX": 120,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "IN",
+      "type": "frontend",
+      "label": "received message",
+      "sublabel": "channel · node direct · fanout",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "F1",
+      "type": "external",
+      "label": "first filter",
+      "sublabel": "registered first",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "F2",
+      "type": "external",
+      "label": "second filter",
+      "sublabel": "registered later",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "H",
+      "type": "backend",
+      "label": "handler",
+      "sublabel": "registered by the node",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "SP",
+      "type": "backend",
+      "label": "Spot handler",
+      "sublabel": "registered by the Spot",
+      "row": 1,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "what the filter wraps",
+      "wraps": [
+        "F1",
+        "F2",
+        "H"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "IN",
+      "to": "F1",
+      "variant": "default"
+    },
+    {
+      "from": "F1",
+      "to": "F2",
+      "label": "next",
+      "variant": "default"
+    },
+    {
+      "from": "F2",
+      "to": "H",
+      "label": "next",
+      "variant": "default"
+    },
+    {
+      "from": "H",
+      "to": "F2",
+      "label": "unwinds in reverse",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "from": "IN",
+      "to": "SP",
+      "label": "does not pass a filter",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Registration order is execution order",
+      "items": [
+        "Filters pass in front of the handler in registration order, and unwind in reverse once next returns. Each filter calls next at most once.",
+        "What a filter wraps is the messages a node receives. Handlers owned by a Spot or an Actor, subscriptions a Spot registers, and STREAM session handlers do not pass through it."
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # ZLink Java/Kotlin quickstart
 
-Same scenario as `framework/doc/framework/common/guide/server/02-getting-started.ko.md`
-§2 "최소 예제 — 두 process가 서로 호출한다", and the same shape as the working
+The project that `framework/doc/framework/{java,kotlin}/quickstart.ko.md` read from, and
+the same shape as the working
 `framework/languages/dotnet/quickstart/` reference: no Redis, no location store, two
 processes that address each other by a hand-written endpoint and exchange one
 request/reply. This directory holds **both** a Java and a Kotlin copy of that scenario,

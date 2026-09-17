@@ -12,7 +12,7 @@
 
 - typed 제출의 status ≥ 400은 `InternalFailure`로 보고한다. 현행 계약에서는
   이때 응답 body가 노출되지 않는다 — 에러 페이로드가 필요하면 `submitRaw()`를
-  쓴다(개정 후보 [R1](10-revision-candidates.ko.md)).
+  사용한다(개정 후보 [R1](10-revision-candidates.ko.md)).
 - 완료 값을 동기로 언래핑하는 public terminator는 두지 않는다. typed response의 body만
   필요하면 비동기 typed terminator를 완료한 뒤 호출자가 body를 선택한다
   ([5장](05-execution-model.ko.md)).

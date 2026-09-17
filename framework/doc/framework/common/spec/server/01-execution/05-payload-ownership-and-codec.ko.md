@@ -20,10 +20,10 @@ title: "Payload 소유권과 codec"
 | 종류 | 예 | 없앨 수 있나 |
 |---|---|---|
 | **Binding이 강제하는 복사** | 그 언어에서 native 버퍼를 안전하게 유지할 수 없어 관리 메모리로 옮기는 복사 | 없앨 수 없다 |
-| **Framework가 만드는 복사** | Queue를 넘기려고, 형식을 바꾸려고, 나중에 쓸지 모르니 미리 만들어 두려고 하는 복사 | 없앨 수 있다 |
+| **Framework가 만드는 복사** | Queue를 넘기려고, 형식을 바꾸려고, 나중에 사용할지 모르니 미리 만들어 두려고 하는 복사 | 없앨 수 있다 |
 
 Binding은 "native queue의 수명을 그 언어 객체의 도달 가능성과 안전하게 묶을 수 없다"는
-제약 때문에 빌려 쓰는 view를 제공하지 않을 수 있다. 그런 언어 mapping에서는 첫 복사가
+제약 때문에 빌려 사용하는 view를 제공하지 않을 수 있다. 그런 언어 mapping에서는 첫 복사가
 강제된다.
 
 **Framework가 추가로 만드는 복사는 0을 목표로 한다.** Binding이 강제하는 복사는 언어별
@@ -122,7 +122,7 @@ view·slice        // 같은 buffer를 가리키는 참조를 만드는 것. 비
 접근자마다 복사하면 handler가 payload를 두 번 읽는 것만으로 복사가 두 번 늘어난다. 공개
 API의 불변성은 유지하되, runtime 내부 소유권 이전에는 복사하지 않는 경로를 따로 둔다.
 
-Raw byte를 다루는 API는 transport 검사와 codec extension 구현에만 쓴다. 업무 handler
+Raw byte를 다루는 API는 transport 검사와 codec extension 구현에만 사용한다. 업무 handler
 인자로 raw payload를 받게 하면 계약 위반이다.
 
 ## 6. 역직렬화를 언제 하는가
@@ -174,7 +174,7 @@ byte 복사본을 얻는 동작은 이 typed 결과를 만들지 않는다.
 ### 계약 — 선택은 있고, 송신과 수신이 다르다
 
 Codec은 하나가 아니다. 여러 serializer가 동시에 등록되어 있는 것이 전제이며, 그래서
-message마다 어느 것을 쓸지 정해야 한다. 이 선택의 정확한 계약은
+message마다 어느 것을 사용할지 정해야 한다. 이 선택의 정확한 계약은
 [Framework API 「9. Codec」](../00-foundation/06-framework-api.ko.md#12-codec)이 소유한다. 이 문서는
 그 계약이 남기는 구현 쪽 선택만 다룬다.
 
@@ -184,7 +184,7 @@ message마다 어느 것을 쓸지 정해야 한다. 이 선택의 정확한 계
 
 | 방향 | 무엇으로 고르는가 | 못 찾으면 |
 |---|---|---|
-| 송신 | 호출 지점에 선언된 message type | JSON codec을 쓴다 |
+| 송신 | 호출 지점에 선언된 message type | JSON codec을 사용한다 |
 | 수신 | envelope에 실린 정규화된 content-type | JSON으로 다시 해석하지 않고 `ProtocolError`로 끝낸다 |
 
 송신 selector에는 실제 instance의 concrete type이 아니라 호출 지점에 선언된 message
@@ -225,12 +225,12 @@ Registry 자체는 불변이므로 캐시에 들어간 type의 결과는 한 번
 
 송신 캐시는 선언 type `1,024`개의 선택 결과까지만 저장한다. 한도에 도달해도 기존 entry를
 제거하지 않는다. 이후 처음 보는 type은 송신할 때마다 등록 목록을 다시 평가하고, 그
-결과는 캐시에 넣지 않는다. 이 방식은 이미 자주 쓰는 type의 lookup 비용을 유지하면서
+결과는 캐시에 넣지 않는다. 이 방식은 이미 자주 사용하는 type의 lookup 비용을 유지하면서
 캐시 크기를 제한한다. 내부 확인 조건은 1,024개 한도·기존 entry 유지·한도 뒤
 미등록 type의 재평가를 이 문단과 대조하는 것이다.
 
 시작 뒤 불변이면 미리 계산해 두고 잠금 없이 읽으면 된다. 조회 결과를 실행 중에 동시
-접근을 견디지 못하는 사전에 쓰면 race가 생긴다. 미리 확정하면 runtime 중 쓰기와 그에
+접근을 견디지 못하는 사전에 사용하면 race가 생긴다. 미리 확정하면 runtime 중 쓰기와 그에
 따른 race가 없어진다. 내부 확인 조건은 수신 codec table의 startup 확정과 잠금 없는
 조회이며, 실행 중 채우는 송신 cache와 혼동하지 않는다.
 

@@ -99,7 +99,7 @@ client.post ("/games")
 ## 어디서 무엇을 쓰나 — blocking 규칙
 
 > **framework runtime/handler 스레드에서는 blocking 접근(`.result()`,
-> `fetch<T>()`)을 쓰지 않는다.** runtime 스레드를 멈추면 같은 스레드에서 처리될
+> `fetch<T>()`)을 사용하지 않는다.** runtime 스레드를 멈추면 같은 스레드에서 처리될
 > 다른 작업까지 막힌다.
 
 | 호출 위치 | 권장 |

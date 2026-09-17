@@ -1,0 +1,110 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "같은 설정도 어디에 지정하느냐에 따라 범위가 달라진다",
+    "subtitle": "루트는 process 전체, builder는 그 하나, runtime option은 실행 중",
+    "output": "16-option-scope.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 84,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "R",
+      "type": "frontend",
+      "label": "① 루트 options",
+      "sublabel": "process 전체 기본값",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "M",
+      "type": "backend",
+      "label": "MeshNode",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "F",
+      "type": "backend",
+      "label": "fanout channel",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "STREAM node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "RT",
+      "type": "messagebus",
+      "label": "③ runtime option",
+      "sublabel": "실행 중 바꾸는 값",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "② builder — 하나에만 적용",
+      "wraps": [
+        "M",
+        "F",
+        "S"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "R",
+      "to": "M",
+      "variant": "default"
+    },
+    {
+      "from": "R",
+      "to": "F",
+      "variant": "default"
+    },
+    {
+      "from": "R",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "RT",
+      "label": "app.Run() 이후",
+      "variant": "dashed",
+      "labelDy": 38
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "세 자리의 차이",
+      "items": [
+        "루트 options는 process 전체의 기본값이다. 아무 데도 지정하지 않으면 이 값이 쓰인다.",
+        "builder에 지정한 값은 그 MeshNode·channel·STREAM node 하나에만 적용되고 루트 값을 덮는다.",
+        "runtime option은 app.Run() 뒤에 바꾸는 값이다. 나머지 둘은 실행 전에 정한다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

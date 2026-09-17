@@ -7,13 +7,13 @@
 Unity WebGL 빌드는 브라우저 샌드박스에서 실행되므로 OS 소켓을 열 수 없고 `.NET` connector를
 사용할 수 없다. `com.zlink.stream-connector.webgl` UPM 패키지가 이 TypeScript connector의 browser
 bundle을 담고, Unity가 요구하는 jslib·C# 호출 경계를 제공한다. **별도 wire runtime은 없다** —
-브라우저 client와 같은 protocol·codec을 쓴다.
+브라우저 client와 같은 protocol·codec을 사용한다.
 
 정식 계약은 [Stream Connector 공통 스펙](../../../common/spec/stream-connector/32-stream-connector.ko.md)과
 [TypeScript 공개 계약](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md)이
 소유한다. 이 챕터는 사용법을 다룬다.
 
-## 어떤 connector를 쓰는가
+## 어떤 connector를 사용하는가
 
 | 빌드 대상 | connector |
 |---|---|
@@ -29,7 +29,7 @@ C# 표면은 양쪽이 같다. 네임스페이스 `Systems.Zlink.Stream.Connecto
 Package Manager → **Add package from git URL**:
 
 ```
-https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.14.0
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.16.0
 ```
 
 태그를 반드시 고정한다. `framework-node/v<version>`은 패키지에 담긴 browser bundle이 나온
@@ -44,7 +44,7 @@ https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zl
 
 - UPM 패키지의 asmdef는 `"includePlatforms": ["WebGL"]`이다.
 - NuGet으로 받은 `Systems.Zlink.Stream.Connector.dll`은 Plugin Inspector에서 WebGL 플랫폼
-  체크를 해제한다. 소스로 쓴다면 그 asmdef에 `"excludePlatforms": ["WebGL"]`을 넣는다.
+  체크를 해제한다. 소스로 사용한다면 그 asmdef에 `"excludePlatforms": ["WebGL"]`을 넣는다.
 
 ## 연결과 pump
 

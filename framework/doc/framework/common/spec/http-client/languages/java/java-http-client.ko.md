@@ -11,7 +11,7 @@
 `zlink-http-client`는 Java에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
 JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder 스타일로
 `java.net.http`의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`submit(Type)`)는
-그 위에 얹은 편의 계층이다.
+그 위에 더해진 편의 계층이다.
 
 이 산출물의 Framework dependency는 `zlink-framework-core`다. 공용 오류·codec 계약의
 의존 방향은 [01 범위와 아키텍처 §1.3](../../01-scope-and-architecture.ko.md#13-framework와의-관계--단방향-의존)가 소유한다.
@@ -59,7 +59,7 @@ JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder �
 - 서버 request의 응답을 기다리는 `submit`은 현재 Spot turn을 유지하고 callback은 새 turn으로 실행 queue에
   들어간다. HTTP request builder에는 `yield`가 없다. Shared Spot gate를 반납하려면
   `runIoWorker(...)` 안에서 `submit`을 호출하고 Worker call의 `yield()`로 기다린다.
-- handler 경로는 `CompletionStage` 합성만 쓰고 `.get()`/`.join()`은 금지한다.
+- handler 경로는 `CompletionStage` 합성만 사용하고 `.get()`/`.join()`은 금지한다.
 - continuation 재개 위치는 `CompletableFuture.*Async(fn, executor)` 조합으로 지정.
 
 Spring starter는 기본 `ZLinkHttpExecutionTurn` bean을 제공한다. application은 서비스마다

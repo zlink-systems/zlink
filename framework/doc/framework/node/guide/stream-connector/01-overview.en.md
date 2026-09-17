@@ -10,7 +10,7 @@ Browser web clients and Unity WebGL, Cocos Creator web, and Godot Web use the sa
 | Environment | Package | Transport |
 |------|---------|-----------|
 | Browser family | `@zlink-systems/stream-connector` | `ws`, `wss` |
-| Node.js | not a connector execution target | runs only the server and the browser runner |
+| Node.js | not the connector's product runtime | handles only server processes and the browser test runner |
 
 Since a browser can't open an OS socket, `tcp://` and `tls://` endpoints are immediately rejected as
 a configuration error. The WebSocket handshake, frame handling, and TLS certificate verification are

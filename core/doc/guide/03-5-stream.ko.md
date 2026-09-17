@@ -65,7 +65,7 @@ STREAM은 기반 소켓 계열(raw socket family)에서 유일한 예외 타입�
   받는다. poller의 `ZLINK_POLLIN`과 함께 사용한다.
 - **PACKET**: `zlink_stream_recv_packet()`으로 고정 framing(framing,
   패킷 경계를 구분하는 방식) 규약(2B header size + 4B body size + header + body, big-endian)을
-  따르는 패킷을 조립된 header/body 형태로 받는다.
+  따르는 패킷을 header/body로 나눈 형태로 받는다.
 
 bind 전에 `ZLINK_STREAM_OPT_RECV_MODE`를 `ZLINK_STREAM_RECV_MODE_RAW` 또는
 `ZLINK_STREAM_RECV_MODE_PACKET`으로 설정한다. 첫 bind 성공 뒤에는 모드를 바꿀 수 없고,
@@ -128,7 +128,7 @@ if (zlink_recv(stream, &source_rid, parts, 1, &part_count,
 
 - 성공적으로 받은 `zlink_msg_t`는 호출자가 소유하며 정확히 한 번 close한다.
 - 다음 data receive 뒤에도 `source_rid`가 필요하면 borrowed view를 미리 복사한다.
-- 빈 큐에서 `ZLINK_RECV_FLAGS_DONTWAIT`을 쓰면 `EAGAIN`과 `ZLINK_RECV_NO_DATA`를 반환한다.
+- 빈 큐에서 `ZLINK_RECV_FLAGS_DONTWAIT`을 사용하면 `EAGAIN`과 `ZLINK_RECV_NO_DATA`를 반환한다.
 
 ---
 
@@ -167,7 +167,7 @@ PACKET 모드의 규칙은 다음과 같다.
   정확히 한 번 close 하거나 소비해야 한다.
 - PACKET 모드에서 whole-message RAW receive(`zlink_recv()`)는 `ENOTSUP`로 실패한다.
   RAW 모드에서 `zlink_stream_recv_packet()`도 같은 방식으로 실패한다.
-- framing 규약을 지키지 않는 비정형 패킷(malformed packet)(길이 제한 초과, 조립 실패,
+- framing 규약을 지키지 않는 비정형 패킷(malformed packet)(길이 제한 초과, 재구성 실패,
   불완전 상태 연결 종료 등)은 연결을 닫는 기본 동작으로 이어진다. 이
   이벤트는 소켓 모니터(socket monitor) 경로로 관찰한다.
 
@@ -191,7 +191,7 @@ char buf[4096];
 ssize_t n = recv(fd, buf, sizeof(buf), 0);
 ```
 
-서버가 **PACKET 모드**(`zlink_stream_recv_packet`)를 쓰면 클라이언트는 각
+서버가 **PACKET 모드**(`zlink_stream_recv_packet`)를 사용하면 클라이언트는 각
 패킷을 2바이트 BE header size + 4바이트 BE body size + header + body로
 framing해야 한다:
 

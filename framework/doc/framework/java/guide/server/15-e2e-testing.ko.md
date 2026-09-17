@@ -10,11 +10,12 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Java
 # 15. E2E 테스트 — client로 시스템 전체를 검증하기
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: 16. Options — 설정 목록과 기본값](16-options.ko.md)
+[가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: 13. 주요 타입 사용 색인](13-interface-catalog.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.ko.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 자기 시스템에 테스트를 만드는 방법을
@@ -29,9 +30,9 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 적용되었는지, 두 node 사이 라우팅이 맞는지, 방에 있는 다른 참가자에게 push가 전달되는지다.
 이 항목들은 **process를 기동하고 실제 연결로 확인해야** 판정할 수 있다.
 
-이 지점에서 대개 테스트 전용 client를 따로 구현한다. 소켓을 열고, 프레임을 조립하고, 응답을
+이 지점에서 대개 테스트 전용 client를 따로 구현한다. 소켓을 열고, 프레임을 만들고, 응답을
 기다리는 코드를 시나리오마다 다시 작성한다. ZLink에서는 그 작업이 필요하지 않다. **실제
-사용자가 사용할 client 라이브러리가 그대로 검증 도구**이기 때문이다. E2E 테스트는 다음
+사용자가 사용할 client library가 그대로 검증 도구**이기 때문이다. E2E 테스트는 다음
 코드만으로 끝난다.
 
 ```java
@@ -54,9 +55,9 @@ ZLinkStreamAssert.ensure(
 함께 동작해야 드러나는 항목**을 확인한다. handler 안의 분기나 계산은 단위 테스트가 훨씬
 빠르고 정확하므로 E2E에 포함하지 않는다.
 
-## 1. 검증에 사용되는 라이브러리
+## 1. 검증에 사용되는 library
 
-검증에 쓰는 라이브러리는 역할이 겹치지 않는다.
+검증에 사용하는 library는 역할이 겹치지 않는다.
 
 | | `Zlink.HttpClient` | `Zlink.Stream.Connector` |
 | --- | --- | --- |
@@ -90,12 +91,12 @@ ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
 코드에서 별도로 펌프를 실행하지 않는다. 게임 엔진처럼 프레임 루프에 맞춰 직접 펌프해야 하는 환경은
 Stream Connector 가이드가 다룬다.
 
-두 라이브러리의 전체 사용법은 각자의 가이드가 소유한다.
+두 library의 전체 사용법은 각자의 가이드가 소유한다.
 
 - HTTP Client 가이드 — 요청 구성, 본문, 인증·TLS, 재시도,
   오류 처리까지 13장
 - Stream Connector 가이드 — 실행 환경별 통합(Unity,
-  Godot). 서버 쪽 STREAM 등록은 [09-stream](09-stream.ko.md)이 다룬다.
+  Godot). 서버 쪽 STREAM 등록은 [STREAM](23-stream.ko.md)이 다룬다.
 
 ## 2. 검증 함수와 사용법
 
@@ -350,7 +351,7 @@ fi
 ## 8. 관련 문서
 
 - 어떤 샘플을 먼저 볼지: [14-samples](14-samples.ko.md)
-- 서버 쪽 STREAM 등록과 session: [09-stream](09-stream.ko.md)
+- 서버 쪽 STREAM 등록과 session: [STREAM](23-stream.ko.md)
 - HTTP client 전체 사용법: HTTP Client 가이드
 - 엔진 통합과 수동 펌프: Stream Connector 가이드
 - connector 정식 계약:

@@ -103,7 +103,7 @@ auto my_match = connector
     .submit();
 ```
 
-단일 필드가 특정 값과 같은지만 보면 member pointer overload를 쓸 수 있다.
+단일 필드가 특정 값과 같은지만 보면 member pointer overload를 사용할 수 있다.
 이 방식은 C++ 람다의 매개변수 선언을 반복하지 않아도 된다.
 
 ```cpp

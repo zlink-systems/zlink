@@ -28,7 +28,7 @@ redirect 처리를 반복한다.
 ## Cookie jar
 
 `cookies()`로 활성화한다. `fetch`/undici는 서버사이드 영속 cookie jar가 없으므로 래퍼
-소유 jar를 쓴다. 좁은 의미론을 따른다:
+소유 jar를 사용한다. 좁은 의미론을 따른다:
 
 - host 정확 매칭으로 저장(`Domain` 속성 미지원).
 - 기본 `Path=/`. `Path`/`Secure`/`Max-Age` 속성만 해석하고 `Domain`/`Expires`는 무시.

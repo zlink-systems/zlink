@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Binding one connection to one entity",
+    "subtitle": "After the bind, packets the session does not handle go to the entity, and the entity pushes over that connection",
+    "output": "24-actor-session-binding-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 92,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "one connection",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "session",
+      "sublabel": "stands for the connection",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "A",
+      "type": "messagebus",
+      "label": "player p1",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "binding",
+      "wraps": [
+        "S",
+        "A"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "packet",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "A",
+      "label": "forwards",
+      "variant": "default"
+    },
+    {
+      "from": "A",
+      "to": "C",
+      "label": "pushes",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "labelDy": 18
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The bind comes after authentication",
+      "items": [
+        "Before the bind only the packets the session knows are handled. There is nothing to forward the rest to, so authentication comes first.",
+        "What is bound is the connection, not the entity. The entity outlives a dropped connection, and a client that returns binds to the same entity by the same id."
+      ]
+    }
+  ]
+}

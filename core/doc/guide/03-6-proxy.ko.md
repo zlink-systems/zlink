@@ -149,7 +149,7 @@ while (running) {
 | 프록시 적합성 | 프록시가 토픽을 직접 관리해야 함 | **중계만 하면 되므로 적합** |
 
 > **핵심:** `zlink_proxy()`는 raw socket API와 동일한 내부 recv/send 경로를
-> 쓰며, 공개 `zlink_send()`/`zlink_recv()` 표면을 쓰지 않는다.
+> 사용하며, 공개 `zlink_send()`/`zlink_recv()` 표면을 사용하지 않는다.
 > 그 공개 표면으로는 여전히 XSUB에서 `zlink_send()`가
 > `ZLINK_SUBMIT_NOT_SUPPORTED`를, XPUB에서 `zlink_recv()`가
 > `ZLINK_RECV_NOT_SUPPORTED`를 반환한다. 프록시 동작은 `zlink_proxy()` 함수나

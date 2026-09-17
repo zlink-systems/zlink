@@ -499,7 +499,7 @@ entrySpotRegistry.register(PlayerWinMilestoneHandler)
 
 ## 10. Smoke 실행
 
-1. 실행별 Docker Redis와 Location·Relocation Store가 나눠 쓸 key prefix를 준비한다.
+1. 실행별 Docker Redis와 Location·Relocation Store가 나눠 사용할 key prefix를 준비한다.
 2. Api A/B와 Play A/B를 수동 endpoint 설정으로 시작한다.
 3. 각 process의 public readiness와 RouteMesh peer readiness를 확인한다.
 4. Client가 room을 만들고 세 connection을 인증한다. 이어서 join, 수 두기와 milestone 확인을
@@ -521,7 +521,7 @@ observer subscription과 milestone 결과를 확인한다. Self-check assertion�
 Runner는 아래 표의 문자열을 그대로 찾는다. 문자열은 언어별 재량이 아니다. 다섯 구현이 같은
 문자열을 같은 횟수로 출력해야 하며, 문구를 바꾸려면 이 표를 먼저 바꾼다. Node 이름은 `api-a`,
 `api-b`, `play-a`, `play-b`로 고정하고, **Actor ID는 `player-x`, `player-o`, `observer`로 고정한다.**
-지금 Java·Kotlin만 observer를 `player-observer`로 쓰고 있어, `actor=observer`를 0회로 검사해도
+지금 Java·Kotlin만 observer를 `player-observer`로 사용하고 있어, `actor=observer`를 0회로 검사해도
 실제 observer가 destroy돼도 통과해 버린다.
 
 Readiness는 client를 시작하기 전에 확인한다.
@@ -540,7 +540,7 @@ Readiness는 client를 시작하기 전에 확인한다.
 
 `kind=peer-route` 행은 **표에 적힌 그 peer가 ready인지** 확인한다. "ready인 peer가 하나 이상"으로
 느슨하게 판정하지 않는다 — 상대가 아닌 peer가 먼저 올라와도 통과해 버린다. 그러려면 peer를
-이름으로 지목할 수 있어야 하므로 **spot mesh에 고정 RID를 쓴다.** Peer 상태에는 endpoint가 없어
+이름으로 지목할 수 있어야 하므로 **spot mesh에 고정 RID를 사용한다.** Peer 상태에는 endpoint가 없어
 자동 배정된 RID로는 어느 peer가 상대인지 식별할 수 없다. [Object role이 있는 MeshNode에도 고정
 RID를 허용하는 것](../../spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md)이
 이 용도 때문이다.
@@ -573,7 +573,7 @@ Client evidence는 §9 self-check가 통과했음을 runner가 읽을 수 있게
 | Milestone push payload가 game 결과와 일치한다 | `observer-win-milestone=verified actor=player-x wins=100` |
 | Reconnect 뒤 받은 state가 현재 game과 일치한다 | `reconnected-game-state=verified actor=player-x room=<RoomId>` |
 
-완료 marker는 **`tictactoe=completed` 하나다.** `tictactoe completed`처럼 `=`가 없는 변형을 쓰거나
+완료 marker는 **`tictactoe=completed` 하나다.** `tictactoe completed`처럼 `=`가 없는 변형을 사용하거나
 두 형태를 모두 받아들이지 않는다.
 
 Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이

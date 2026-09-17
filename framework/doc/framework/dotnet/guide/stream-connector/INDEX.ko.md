@@ -13,7 +13,7 @@
 
 connector의 API 표면(옵션, send/request, codec, 오류)은
 [.NET 공개 계약](../../../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md)과
-[.NET framework 가이드 09 — STREAM](../../../common/guide/server/09-stream.ko.md)이 다룬다.
+[공통 서버 가이드 23 — STREAM](../../../common/guide/server/23-stream.ko.md)이 다룬다.
 이 가이드는 **엔진 통합**에 집중한다.
 
 ## 다른 언어의 connector

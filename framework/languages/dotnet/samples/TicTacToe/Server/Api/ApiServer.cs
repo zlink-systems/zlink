@@ -57,11 +57,13 @@ internal sealed class ApiServer(SampleSettings settings)
                 .SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))
                 .Listen(settings.MeshEndpoint);
             mesh.Objects().Client();
+            // --8<-- [start:doc-manual-peer-connect]
             // PeerMeshEndpoints is [play-a, play-b] (see run_sample.sh), so index maps to node id.
             for (var index = 0; index < settings.PeerMeshEndpoints.Count; index++)
                 mesh.PeerConnections.Connect(
                     SampleNodes.RouteMeshRoutingId(index == 0 ? "play-a" : "play-b"),
                     settings.PeerMeshEndpoints[index]);
+            // --8<-- [end:doc-manual-peer-connect]
         });
 
         var app = builder.Build();

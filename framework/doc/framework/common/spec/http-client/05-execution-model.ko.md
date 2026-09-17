@@ -22,7 +22,7 @@ gate가 없으므로 제공하지 않는다.
 | **one-way submission** | HTTP 요청이 전송 경계에 제출될 때까지 기다린다 | 현재 turn을 유지한다. 정상 완료 값은 없다 |
 | **response completion** | HTTP response가 도착할 때까지 기다린다 | 현재 turn을 유지한다 |
 
-**Callback은 별도 완료 경로다.** Awaitable을 쓰지 않는 호출자가 사용하며, 완료 callback은
+**Callback은 별도 완료 경로다.** Awaitable을 사용하지 않는 호출자가 사용하며, 완료 callback은
 Spot 실행 줄의 **새 turn**으로 들어간다
 ([framework 12 §3](12-http-client.ko.md)).
 
@@ -103,7 +103,7 @@ handler에서는 사용하지 않는다.
 
 ## 5.5 서버 표면과 client 수명
 
-**서버(Spot handler·channel handler)에서 쓰는 client는 DI로 주입받는다.** handler 안에서 정적
+**서버(Spot handler·channel handler)에서 사용하는 client는 DI로 주입받는다.** handler 안에서 정적
 팩토리로 client를 만들지 않는다 — 연결 pool과 turn seam을 잃는다.
 
 | 표면 | 누가 쓰나 | terminator |
@@ -113,7 +113,7 @@ handler에서는 사용하지 않는다.
 
 - client는 서비스당 하나를 만들어 재사용한다(pool/keep-alive 이득).
 - builder verb 단축(one-shot)은 제출 시 client를 lazy build하고 완료 후 닫는 **편의 경로**다.
-  요청마다 전송 스택 초기화 비용을 내므로 반복/고부하 호출에 쓰지 않는다. one-shot 요청 객체는
+  요청마다 전송 스택 초기화 비용을 내므로 반복/고부하 호출에 사용하지 않는다. one-shot 요청 객체는
   재제출할 수 없다(재제출 시 `InvalidOperation`).
 
 ## 5.6 취소

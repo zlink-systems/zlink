@@ -45,7 +45,7 @@ options.request_timeout   = std::chrono::seconds{30};  // request 기본 제한
 options.wait_timeout      = std::chrono::seconds{5};   // wait_for 기본 제한
 ```
 
-`request_timeout`은 `request().submit()`의 기본값이고, `wait_timeout`은 `wait_for().submit()`의 기본값이다. 호출마다 `.timeout()`으로 덮어쓸 수 있다.
+`request_timeout`은 `request().submit()`의 기본값이고, `wait_timeout`은 `wait_for().submit()`의 기본값이다. 호출마다 `.timeout()`으로 덮어사용할 수 있다.
 
 ## heartbeat
 
@@ -93,7 +93,7 @@ connector가 compressed frame을 보낼 때와 받을 때 사용할 codec 설정
 패킷 단위 압축을 요청한 frame만 압축된다.
 
 server framework와 connector는 같은 compression codec을 사용해야 한다. custom codec을
-쓰는 경우에도 built-in LZ4와 같은 option 경로로 설정한다.
+사용하는 경우에도 built-in LZ4와 같은 option 경로로 설정한다.
 
 ```cpp
 options.compression = zlink::stream_connector::compression_t::lz4;
@@ -124,7 +124,7 @@ options.max_metadata_size        = 8 * 1024;  // 기본 8 KB
 큰 push 또는 reply를 보낼 수 있는 환경이라면 이 값을 명시적으로 올린다.
 
 `max_metadata_size`는 송신 metadata와 수신 frame header 크기에 모두 적용된다. metadata가 큰
-프로토콜을 쓰는 경우 payload 상한과 별도로 조정한다.
+프로토콜을 사용하는 경우 payload 상한과 별도로 조정한다.
 
 ## TLS 인증서 검증
 

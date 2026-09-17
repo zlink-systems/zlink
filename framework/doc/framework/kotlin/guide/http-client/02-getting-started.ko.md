@@ -35,7 +35,7 @@ zlinkHttpClient("http://127.0.0.1:18080").use { client ->
 
 ## DTO
 
-`data class`를 그대로 요청·응답 본문으로 쓴다.
+`data class`를 그대로 요청·응답 본문으로 사용한다.
 
 ```kotlin
 data class CreateGameReq(val mode: String)

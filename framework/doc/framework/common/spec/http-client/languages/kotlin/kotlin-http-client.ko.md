@@ -12,7 +12,7 @@
 
 `zlink-http-client-kotlin`은 Kotlin coroutine으로 HTTP request를 보내기 위한 산출물이다.
 검증된 `zlink-http-client` 전송 런타임을 전이 의존으로 재사용하고 그 위에 DSL과 진짜
-`suspend` 확장만 얹는다. 모든 제출은 non-blocking coroutine이며 호출한 coroutine의
+`suspend` 확장만 추가한다. 모든 제출은 non-blocking coroutine이며 호출한 coroutine의
 dispatcher에서 재개된다.
 
 Framework 계약 의존은 Java 산출물을 통해 전달되며
@@ -50,7 +50,7 @@ DSL과 확장은 `systems.zlink.httpclient.kotlin` 패키지의 top-level 함수
 
 request 구성(`get/post/put/delete/patch/head/options`, `header`, `query`, `timeout`,
 `body`, `bodyStream`, `form`, `multipart`, `multipartFile`)과 응답 타입
-(`RawHttpResponse`, `HttpResponse<T>`)은 재사용 런타임의 공개 타입을 그대로 쓴다.
+(`RawHttpResponse`, `HttpResponse<T>`)은 재사용 런타임의 공개 타입을 그대로 사용한다.
 
 ## 4. 실행 모델
 

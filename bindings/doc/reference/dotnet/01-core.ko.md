@@ -48,7 +48,7 @@ context.RecalculateAutoHwm();
 blocking 호출을 중단시키지만 context나 그 socket을 해제하지 않는다. `RecalculateAutoHwm`은
 여전히 `AutoHwmProfile`로 구성된 socket에 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 스레드에서 socket을 쓰는 context를 해제하기 전에 `Shutdown`을 호출해
+**선택 기준.** 여러 스레드에서 socket을 사용하는 context를 해제하기 전에 `Shutdown`을 호출해
 스레드가 무한정 block되는 걸 피한다. `AutoHwmProfile` 변경은 `RecalculateAutoHwm`과 짝지어
 일반 갱신 경로를 기다리지 않고 즉시 적용한다.
 
@@ -144,8 +144,8 @@ RoutingId restored = RoutingId.FromHex(previouslyPrinted.ToHex());
 던진다.
 
 **선택 기준.** 사람이 부여한 identity엔 `From(string)`, 숫자·GUID 형태 identity엔
-`From(uint)`/`From(Guid)`, 이미 binary인 identity엔 raw `From(byte[])`를 쓴다. 안정적인
-raw-byte round trip엔 `ToHex()`/`FromHex()`를 쓴다 — `ToString()`은 표시 전용이다.
+`From(uint)`/`From(Guid)`, 이미 binary인 identity엔 raw `From(byte[])`를 사용한다. 안정적인
+raw-byte round trip엔 `ToHex()`/`FromHex()`를 사용한다 — `ToString()`은 표시 전용이다.
 
 ---
 
@@ -172,8 +172,8 @@ bool hasTls = Zlink.Has("tls");
 `Strerror`는 `string`을, `Has`는 `bool`을 반환한다.
 
 **선택 기준.** 동적으로 로드된 native library가 기대와 일치하는지 확인하려면
-`Version()`을 쓴다. Startup에 선택적 transport를 분기하려면 `Has(...)`를 쓴다.
-`Strerror`는 다른 곳에서 드러난 native error code와 함께 진단할 때 쓴다.
+`Version()`을 사용한다. Startup에 선택적 transport를 분기하려면 `Has(...)`를 사용한다.
+`Strerror`는 다른 곳에서 드러난 native error code와 함께 진단할 때 사용한다.
 
 ---
 
@@ -211,7 +211,7 @@ thread.Join();
 
 **선택 기준.** 스레드 사이 공유 count엔 `CreateAtomicCounter`, benchmarking엔
 `CreateStopwatch`, 플랫폼 전용 API 대신 portable 백그라운드 thread엔 `CreateThread`를
-쓴다.
+사용한다.
 
 ---
 
@@ -242,8 +242,8 @@ Zlink.MultipartClose(parts);
 때까지) 호출한 스레드를 block한다 — 둘 다 전용 스레드에서 실행한다.
 
 **선택 기준.** 단순 fire-and-forget forwarding loop엔 `Proxy`, 다른 스레드에서
-`control`로 loop를 멈추거나·재개하거나·종료해야 하면 `ProxySteerable`을 쓴다.
-수신·구성된 multipart 배열을 한 번에 해제하려면 `MultipartClose`를 쓴다.
+`control`로 loop를 멈추거나·재개하거나·종료해야 하면 `ProxySteerable`을 사용한다.
+수신·구성된 multipart 배열을 한 번에 해제하려면 `MultipartClose`를 사용한다.
 
 ---
 

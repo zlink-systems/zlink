@@ -39,9 +39,9 @@ status, err := monitor.Status()
 
 **Completion result.** 모든 member는 동기다. `SocketTarget`(Core
 category)은 모든 내장 socket type이 구현하는 공유 interface다 —
-`Proxy`/`Poller` 등록이 쓰는 것과 같다.
+`Proxy`/`Poller` 등록이 사용하는 것과 같다.
 
-**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 사용한다.
 `OpenSocketMonitor`에
 특정 `MonitorEventMask` 값을 넘겨 구독을 제한한다.
 
@@ -56,7 +56,7 @@ category)은 모든 내장 socket type이 구현하는 공유 interface다 —
 두 계열 모두에 존재한다(`MonitorEventConnected` /
 `MonitorEventTypeConnected`, ...) — 구독한 mask를 수신된 event의 type과
 비교하려는 caller는 둘 사이를 명시적으로 변환해야 한다; 같은 비트를
-가졌다 해도 cast 없이는 서로 바꿔 쓸 수 없다.
+가졌다 해도 cast 없이는 서로 바꿔 사용할 수 없다.
 
 **Options.**
 
@@ -105,7 +105,7 @@ caller가 직접 `event.Event&MonitorEventTypeX`로 비트 검사해야 한다,
 **Completion result.** N/A — monitor가 전달하는 불변 값.
 
 **선택 기준.** 다루는 다섯 lifecycle 전이엔 명명된 `Is*` predicate를
-쓴다; 그 외 event 종류는 `Event`를 문서화된 `MonitorEventType` 상수와
+사용한다; 그 외 event 종류는 `Event`를 문서화된 `MonitorEventType` 상수와
 직접 비트 검사한다.
 
 ---
@@ -137,7 +137,7 @@ struct다.
 **선택 기준.** `StateFlags`를 직접 디코딩하는 대신 `IsReady()`를
 호출한다. socket의 실효 send/receive HWM이 설정한
 `CommonSocketOptions` 값(Sockets category)과 다른 이유를 진단할 땐
-connection-bucket과 auto-HWM-plan field를 쓴다.
+connection-bucket과 auto-HWM-plan field를 사용한다.
 
 ---
 
@@ -170,14 +170,14 @@ ready, err := poller.Wait(events, time.Second)
 **Completion result.** 등록/제거 member는 `error`를 반환한다.
 `Wait`는 `(int, error)`를 반환한다 — ready count.
 
-**선택 기준.** 서비스 수명 전체에 걸쳐 poller 하나를 쓴다. `Wait`
+**선택 기준.** 서비스 수명 전체에 걸쳐 poller 하나를 사용한다. `Wait`
 호출마다 새로 할당하는 대신 `[]PollEvent` 슬라이스 하나를 재사용한다.
 
 ---
 
 ## `PollItem` / `PollEvent` / `Poll(...)`
 
-`PollItem`은 `Poller` 대신 standalone `Poll(...)` 함수가 쓰는 raw
+`PollItem`은 `Poller` 대신 standalone `Poll(...)` 함수가 사용하는 raw
 poll descriptor다; `PollEvent`는 `Poller.Wait`가 보고하는 ready
 source 하나다.
 
@@ -198,7 +198,7 @@ if items[0].REvents&contracts.PollIn != 0 { /* ... */ }
 **Options — `PollEvent`**, `Poller.Wait`가 반환. **`PollEvent`의
 밑바탕 socket/timer 참조는 export되지 않는다** — 공개 field인
 `PollItem.Socket`과 달리, `Wait`가 반환한 `PollEvent`는 원래 socket이나
-`*Timer`를 직접 복원할 방법이 없다; caller는 등록할 때 쓴 것을 `Slot`
+`*Timer`를 직접 복원할 방법이 없다; caller는 등록할 때 사용한 것을 `Slot`
 으로 되짚어야 한다.
 
 | Field | 타입 | 의미 |
@@ -220,7 +220,7 @@ time.Duration) (int, error)`은 어떤 `Poller` 인스턴스와도 무관하게
 **선택 기준.** `Poller.Wait` 결과 각각을 대응하는 socket, descriptor,
 timer로 되돌리려면 `PollEvent.SourceKind`/`Slot`으로 분기한다.
 `Poller`의 등록 기반 모델 밖에서 일회성 배치 poll엔
-`PollItem`/`Poll`만 쓴다.
+`PollItem`/`Poll`만 사용한다.
 
 ---
 
@@ -248,7 +248,7 @@ fireCount, ok, err := timer.Recv()
 
 **Completion result.** 모든 member는 동기다.
 
-**선택 기준.** expiration을 pull하려면 `Recv`를 쓰거나, socket과 함께 하나의
+**선택 기준.** expiration을 pull하려면 `Recv`를 사용하거나, socket과 함께 하나의
 wait에서 multiplex하려면 `Poller.AddTimer`로 timer를 등록한다.
 
 ---

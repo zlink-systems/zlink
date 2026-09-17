@@ -1,30 +1,40 @@
-# C++ Quickstart — from an empty project to a first request
+# C++ Quickstart — from Install to a First Request
 
-> **Contract owner for this chapter** — none. The formal API contract is in the
-> [C++ spec](../common/spec/server/languages/cpp/README.en.md).
+!!! info "What you get from this chapter"
+
+    You can install the packages and run a minimal project where two processes call each other.
 
 The project lives at
 [`framework/languages/cpp/quickstart/`](../../../languages/cpp/quickstart/). The code blocks
-below are read from those files when the site is built.
+below are read from those files when the site is built. Without a location store, two processes
+name each other's endpoint directly and exchange one request/reply.
 
-Without a location store, two processes name each other's endpoint directly and exchange one
-request/reply. The next step is
-[Installation and first run](guide/server/02-getting-started.en.md).
+## 1. Installation
 
-## Installation paths
+- CMake 3.20 or later, a C++20 compiler. The framework uses C++20 coroutines. The
+  [Visual Studio 2022](#7-visual-studio-2022) path reads `CMakePresets.json` and needs 3.21 or later
+- nlohmann_json, Boost, liblz4, libprotobuf, OpenSSL, opentelemetry-cpp
 
-C++ has three, and they reach the same place — pick by what the project already uses.
+`zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
+overlay port and Conan recipes as well, so there are three installation paths — but **only the
+GitHub Release path completes today.**
 
-| Path | When |
+| Path | Where it stands |
 |---|---|
-| vcpkg | A project already on vcpkg |
-| Conan | A project already on Conan |
-| GitHub Release | No package manager. Three source archives built in order |
+| GitHub Release | Three source archives built in order. Verified end to end |
+| vcpkg overlay port | Defects remain in the three ports; it does not install as published |
+| Conan recipe | Defects remain in the three recipes; they do not install as published |
 
-`zlink` is not in the official vcpkg registry or ConanCenter yet. Use the overlay port and
-the recipes this repository ships.
+The commands that were run and the point each path stops at are in the project's
+[`README.md`](../../../languages/cpp/quickstart/README.md). Sections 1.1 and 1.2 below keep the
+procedure for when those defects are fixed.
 
-### vcpkg
+### 1.1 vcpkg
+
+!!! warning "This path does not install cleanly yet"
+
+    Defects in the overlay port and the recipes stop it partway. Use
+    [GitHub Release](#13-github-release) for a first install.
 
 ```bash
 git clone https://github.com/zlink-systems/zlink.git
@@ -39,7 +49,12 @@ cmake -S . -B build \
   -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 ```
 
-### Conan
+### 1.2 Conan
+
+!!! warning "This path does not install cleanly yet"
+
+    Defects in the overlay port and the recipes stop it partway. Use
+    [GitHub Release](#13-github-release) for a first install.
 
 ```bash
 git clone https://github.com/zlink-systems/zlink.git
@@ -48,24 +63,33 @@ conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cpps
 conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
 ```
 
-Put `zlink-framework/0.14.0` in the consumer's `conanfile.txt` and run `conan install`.
+Put `zlink-framework/0.16.0` in the consumer's `conanfile.txt` and run `conan install`.
 
-### GitHub Release
+### 1.3 GitHub Release
 
 Three archives built and installed in order — `core/vX.Y.Z` → `cpp/vX.Y.Z` →
 `framework-cpp/vA.B.C`. The order and the exact commands are in the project's
 [`README.md`](../../../languages/cpp/quickstart/README.md).
 
-This path supplies the third-party dependencies itself. `nlohmann_json`, Boost, liblz4,
+On this path the third-party dependencies are installed by hand. `nlohmann_json`, Boost, liblz4,
 libprotobuf and OpenSSL come from distribution packages; `opentelemetry-cpp` has none and is
 built from source. The framework links only `opentelemetry-cpp::api`, so
 `-DOTELCPP_WITH_API_ONLY=ON` is a header-only build.
 
-## Prerequisites
+### 1.4 Targets to add when you need them
 
-- CMake 3.20 or later, a C++20 compiler
+| Target | When to add it |
+| --- | --- |
+| `zlink::framework_locations_redis` | When using the Redis location store for auto-connect ([Location](guide/server/25-location.en.md)) |
+| `zlink::framework_codec_protobuf` · `_messagepack` | To use instead of the default JSON codec ([Handlers and Message Processing](guide/server/31-handler-dispatch.en.md#3-codecs--turning-a-payload-into-bytes)) |
+| `zlink::stream_connector` | When building an external client (a game client, mobile) ([STREAM](guide/server/23-stream.en.md)) |
+| `zlink::http_client` | When the server calls out over HTTP ([HTTP Client guide](guide/http-client/README.en.md)) |
 
-## 1. The consumer's CMake
+The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
+`zlink::http_client` is Apache-2.0. There is no cost to building and selling a service
+([Where ZLink Applies](guide/server/17-alternative.en.md#8-license--the-cost-of-using-it)).
+
+## 2. The consumer's CMake
 
 Once the three-stage install is done, this is all the consumer writes.
 
@@ -73,7 +97,7 @@ Once the three-stage install is done, this is all the consumer writes.
 --8<-- "framework/languages/cpp/quickstart/CMakeLists.txt"
 ```
 
-## 2. Shared contract
+## 3. Shared contract
 
 Message types need `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`. The default JSON serializer finds
 `to_json`/`from_json` by ADL, so a bare struct does not serialize.
@@ -82,18 +106,18 @@ Message types need `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`. The default JSON serial
 --8<-- "framework/languages/cpp/quickstart/Shared/messages.hpp"
 ```
 
-## 3. The handling side
+## 4. The handling side
 
 `object_role` defaults to `server`, which requires a location store; this configuration sets
-it to `none`. A `routing_id` is required. Omitting `advertise_host` on a wildcard bind host advertises the
-loopback of the same address family. In containers or multi-host deployments where remote
+it to `none`. A `routing_id` is required. Binding to `0.0.0.0` without `advertise_host` advertises the loopback of the same address
+family (`127.0.0.1`). In containers or multi-host deployments where remote
 processes cannot use that loopback, set `advertise_host` to a reachable address.
 
 ```cpp title="Server/main.cpp"
 --8<-- "framework/languages/cpp/quickstart/Server/main.cpp"
 ```
 
-## 4. The calling side
+## 5. The calling side
 
 An HTTP handler does not receive route parameters as arguments. It takes an
 `http_request_t` and reads `request.route_values`.
@@ -102,7 +126,7 @@ An HTTP handler does not receive route parameters as arguments. It takes an
 --8<-- "framework/languages/cpp/quickstart/Client/main.cpp"
 ```
 
-## 5. Run
+## 6. Run
 
 ```bash
 cd framework/languages/cpp/quickstart
@@ -118,9 +142,10 @@ curl http://127.0.0.1:5083/hello/world
 
 The response is `"hello, world"` with status 200.
 
-## 6. Visual Studio 2022
+## 7. Visual Studio 2022
 
-On Windows the project can be opened in Visual Studio instead of driving CMake by hand. It
+On Windows the project can be opened in Visual Studio instead of running the CMake commands
+directly. It
 needs the **Desktop development with C++** workload and its **C++ CMake tools for Windows**
 component.
 
@@ -156,7 +181,17 @@ version controlled.
 --8<-- "framework/languages/cpp/quickstart/CMakePresets.json"
 ```
 
-## What to carry over
+## 8. What to check when the first run fails
+
+| Symptom | What to check |
+| --- | --- |
+| `find_package` fails | Check that `CMAKE_PREFIX_PATH` points at the framework install prefix and that all three install stages completed |
+| The server requires a location store | Check that `set_object_role` is set to `none` |
+| Startup fails | Check that both processes name the same mesh and that `routing_id` is set |
+| A message does not serialize | Check that the message type carries `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` |
+| A call ends with no target | Check that the receiving side registered that channel name in the server role, and that the two processes are connected as peers |
+
+## 9. What to carry over
 
 | File | Content |
 |---|---|
@@ -165,5 +200,13 @@ version controlled.
 | `Server/main.cpp` | `add_route_mesh` → `listen` → `set_object_role(none)`, `set_routing_id`, `set_advertise_host` → handler registration |
 | `Client/main.cpp` | The client role, `peer_connections().connect(...)`, `request_to_channel(...)` |
 
-Replacing the manual connection with a location store is covered by
-[10. Location](guide/server/10-location.en.md).
+## 10. What to read next
+
+These two processes connect by writing each other's endpoint directly. Keeping the calling code
+unchanged while servers are added or restarted at another address needs automatic connection, and
+that is covered by [Location](guide/server/25-location.en.md).
+
+- To go over the concepts first — [Core Concepts](guide/server/03-concepts.en.md)
+- The path that calls by name — [Channel Messaging](guide/server/20-channel-messaging.en.md)
+- State objects called by id — [Spot](guide/server/21-spot.en.md) · [Actor](guide/server/22-actor.en.md)
+- To see a complete business flow — [Picking a Sample](guide/server/14-samples.en.md)

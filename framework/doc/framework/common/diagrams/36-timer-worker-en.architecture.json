@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A timer joins the line; a worker runs outside it",
+    "subtitle": "Only what is in the line may touch the state · a result from outside comes back into the line",
+    "output": "36-timer-worker-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "T",
+      "type": "external",
+      "label": "timer",
+      "sublabel": "ticks on its period",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "M",
+      "type": "messagebus",
+      "label": "arriving message",
+      "sublabel": "comes from outside",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "Q",
+      "type": "backend",
+      "label": "the line",
+      "sublabel": "one at a time",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "W",
+      "type": "frontend",
+      "label": "worker",
+      "sublabel": "runs outside the line",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "one Spot",
+      "wraps": [
+        "Q"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "T",
+      "to": "Q",
+      "label": "a tick joins the line too",
+      "variant": "default"
+    },
+    {
+      "from": "M",
+      "to": "Q",
+      "label": "messages take the same line",
+      "variant": "default"
+    },
+    {
+      "from": "Q",
+      "to": "W",
+      "label": "hands off the long work",
+      "variant": "default"
+    },
+    {
+      "from": "W",
+      "to": "Q",
+      "label": "the result returns to the line",
+      "variant": "dashed",
+      "labelAt": [
+        500,
+        370
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The state is not touched outside the line",
+      "items": [
+        "Because a tick joins the line, touching the state inside a timer does not interleave with other processing. That is why no lock is needed.",
+        "A worker runs outside the line, so it neither reads nor writes the Spot's state. The result is put back into the line and applied there."
+      ]
+    }
+  ]
+}

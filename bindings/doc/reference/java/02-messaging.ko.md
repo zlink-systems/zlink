@@ -57,14 +57,14 @@ Message fromString = Message.from("hello");
 
 **완료 결과.** 모든 member는 동기다. `Message implements AutoCloseable`이다. 메시지를
 보내면 native frame이 socket으로 이전돼 이후 읽기에 대해 instance가 무효화된다 —
-보내지 않을 메시지를 해제하려면 `close()`를 쓴다. 범위를 벗어난 offset/length는
+보내지 않을 메시지를 해제하려면 `close()`를 사용한다. 범위를 벗어난 offset/length는
 `IndexOutOfBoundsException`을 던진다.
 
 **선택 기준.** outbound payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)`
-factory를 쓴다. wire format을 중간 `byte[]` 없이 message storage에 직접
-파싱·쓰기하려면 in-place binary accessor(`readIntLe` 등)를 쓴다. 수신되거나
+factory를 사용한다. wire format을 중간 `byte[]` 없이 message storage에 직접
+파싱·쓰기하려면 in-place binary accessor(`readIntLe` 등)를 사용한다. 수신되거나
 구성된 multipart 배열의 모든 part를 손으로 짠 loop 대신 한 호출로 해제하려면
-`closeAll(...)`을 쓴다.
+`closeAll(...)`을 사용한다.
 
 ---
 
@@ -82,7 +82,7 @@ if (router.recv(received)) {
 ```
 
 **옵션.** caller-provided storage용 public 인자 없는 생성자 `Received()` —
-binding이 매 성공적인 receive마다 내부 상태를 그 자리에서 덮어쓴다(receive마다
+binding이 매 성공적인 receive마다 내부 상태를 그 자리에서 덮어사용한다(receive마다
 할당을 피함).
 
 | Member | 반환 | 의미 |
@@ -110,7 +110,7 @@ reply 가능한지 확인한다.
 
 ## `TopicMessage`
 
-raw subscription 경로가 쓰는 topic-aware recv 결과 — 수신된 publish의 topic,
+raw subscription 경로가 사용하는 topic-aware recv 결과 — 수신된 publish의 topic,
 source routing id, message part.
 
 ```java
@@ -164,7 +164,7 @@ if (xpub.receiveSubscriptionEvent(evt)) { /* ... */ }
 `close()`가 없다 — native resource를 소유하지 않는다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets
-category)에서 구독자 변동을 관찰할 때 쓴다. `SubscriptionEntry`는 socket의
+category)에서 구독자 변동을 관찰할 때 사용한다. `SubscriptionEntry`는 socket의
 subscription-snapshot 조회(Sockets category)의 반환 타입이다.
 
 ---
@@ -216,9 +216,9 @@ received.reply().message(Message.from("ok")).submit();
 모든 builder는 성공적인 submit에서만 누적된 `Message` part를 소비한다 — 실패
 시 소유권은 caller에게 복원된다.
 
-**선택 기준.** 일반 async 코드에선 `submit()`의 `CompletionStage`를 쓰고 blocking 가능한
-thread에서는 `submit_sync()`를 쓴다. 목적지 route를 손으로
-재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
+**선택 기준.** 일반 async 코드에선 `submit()`의 `CompletionStage`를 사용하고 blocking 가능한
+thread에서는 `submit_sync()`를 사용한다. 목적지 route를 손으로
+재구성하는 대신 `Received.reply()`/`send()`를 사용한다.
 
 ---
 

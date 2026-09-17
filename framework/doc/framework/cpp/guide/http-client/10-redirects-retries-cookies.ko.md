@@ -72,7 +72,7 @@ client.post ("/games")
 ## Cookie jar
 
 `cookies()`를 켜면 in-memory cookie jar가 활성화된다. `Set-Cookie`를 저장하고
-이후 요청에 `Cookie` 헤더로 싣는다. 세션 쿠키 기반 API를 호출할 때 쓴다.
+이후 요청에 `Cookie` 헤더로 싣는다. 세션 쿠키 기반 API를 호출할 때 사용한다.
 
 ```cpp
 auto portal = zlink::http_client::client_t::create ("https://ops-portal.example.internal")

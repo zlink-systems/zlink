@@ -54,7 +54,7 @@ context 하위 socket의 blocking 호출을 인터럽트하지만 context나 그
 socket을 닫지 않는다. `RecalculateAutoHwm`은 아직 `AutoHwmProfile`이
 설정된 socket에 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 goroutine에서 socket을 쓰는 중인 context엔
+**선택 기준.** 여러 goroutine에서 socket을 사용하는 중인 context엔
 `Close()` 전에 `Shutdown()`을 호출한다. auto-HWM profile이나
 message-unit option을 바꾼 후엔 새 sizing을 즉시 적용하려고
 `RecalculateAutoHwm()`을 호출한다.
@@ -157,11 +157,11 @@ error를 반환하지 않는다 — 나머지는 잘못된 길이에 panic한다
 
 **Completion result.** 모든 member는 동기다. `RoutingID`가 순수
 value struct라는 건 `==`로 직접 비교 가능하고 `Hash()`/`Equal()`
-없이도 map key로 쓸 수 있다는 뜻이다, 다만 둘 다 명시적 대안으로
+없이도 map key로 사용할 수 있다는 뜻이다, 다만 둘 다 명시적 대안으로
 제공된다.
 
 **선택 기준.** 입력이 잘못됐을 수 있을 땐 특별히(hex-디코딩된 byte에
-`NewRoutingID`가 아니라) `NewRoutingIDFromHex`를 쓴다 — 잘못된
+`NewRoutingID`가 아니라) `NewRoutingIDFromHex`를 사용한다 — 잘못된
 입력에 panic하는 대신 error를 보고하는 유일한 routing-id 생성자이기
 때문이다.
 
@@ -182,7 +182,7 @@ hasTLS, err := contracts.Has("tls")
 않는 다른 모든 언어의 `has`/`Has`와 달리**, 여기엔 error 반환이 있다.
 
 **선택 기준.** 모든 transport가 컴파일에 포함됐다고 가정하는 대신
-기동 시점에 선택적 transport에 분기하려고 쓴다. 이 binding엔
+기동 시점에 선택적 transport에 분기하려고 사용한다. 이 binding엔
 `Strerror`/`strerror` 대응물이 없다 — 모든 typed error(Errors
 category)는 공유 native-errno-to-text 조회를 거치는 대신 자신의
 `Error() string` 메서드로 자신만의 메시지를 포맷한다.
@@ -226,10 +226,10 @@ _ = thread.Join()
 메서드는 error 경로가 전혀 없다. `Thread` 생성과 메서드는 있다.
 
 **선택 기준.** goroutine 전체에서 안전한 공유 count엔
-`AtomicCounter`를 쓴다. 벤치마킹엔 `Stopwatch`를 쓴다 —
+`AtomicCounter`를 사용한다. 벤치마킹엔 `Stopwatch`를 사용한다 —
 `Intermediate()`는 몇 번이든 호출하고, `Stop()`은 정확히 한 번
 호출한다. zlink 런타임이 밑에 깔린 native thread의 수명주기를
-소유해야 할 땐 goroutine 대신 `NewThread`를 쓴다.
+소유해야 할 땐 goroutine 대신 `NewThread`를 사용한다.
 
 ---
 
@@ -248,7 +248,7 @@ contracts.MultipartClose(parts)
 
 **Options.** `Proxy`와 모든 socket type이 `SocketTarget` interface를
 만족하므로(Eventing category도 `Poller`/`SocketMonitor` 등록에 이걸
-쓴다), 어떤 구체 socket이든 직접 넘길 수 있다.
+사용한다), 어떤 구체 socket이든 직접 넘길 수 있다.
 
 | Member | 의미 |
 | --- | --- |
@@ -265,9 +265,9 @@ contracts.MultipartClose(parts)
 
 **선택 기준.** 단순한 fire-and-forget forwarding loop엔 `Proxy`를,
 application이 다른 goroutine에서 control socket을 통해 loop을
-일시정지·재개·종료해야 할 땐 `ProxySteerable`을 쓴다. 수신되거나
+일시정지·재개·종료해야 할 땐 `ProxySteerable`을 사용한다. 수신되거나
 구성된 multipart slice의 모든 메시지를 손으로 짠 loop 대신 한
-호출로 해제하려면 `MultipartClose`를 쓴다.
+호출로 해제하려면 `MultipartClose`를 사용한다.
 
 ---
 

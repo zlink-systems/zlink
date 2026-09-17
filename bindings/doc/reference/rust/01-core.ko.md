@@ -57,7 +57,7 @@ ctx.recalculate_auto_hwm()?;
 drop하지 않는다. `recalculate_auto_hwm`은 아직 `AutoHwmProfile`이 설정된
 socket에 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 스레드에서 socket을 쓰는 중인 context를 drop하기 전엔
+**선택 기준.** 여러 스레드에서 socket을 사용하는 중인 context를 drop하기 전엔
 `shutdown()`을 호출해 socket 호출을 기다리는 스레드가 무기한 block되는 걸
 막는다. auto-HWM profile이나 message-unit option을 바꾼 후엔 새 sizing을
 즉시 적용하려고 `recalculate_auto_hwm()`을 호출한다.
@@ -162,8 +162,8 @@ let restored = RoutingId::from_hex(&previously_printed.to_hex())?;
 ConfigError>`를 반환한다.
 
 **선택 기준.** 입력이 이미 유효하다고 알려진 경우(예: 컴파일 타임 문자열
-리터럴)엔 `From`/`.into()` 변환을 쓴다. hex 문자열이 프로그램 밖에서 오고
-잘못됐을 수 있을 땐 `from_hex` 대신 `try_from_hex`를 쓴다 —
+리터럴)엔 `From`/`.into()` 변환을 사용한다. hex 문자열이 프로그램 밖에서 오고
+잘못됐을 수 있을 땐 `from_hex` 대신 `try_from_hex`를 사용한다 —
 `from_hex`/모든 `From` 변환은 error를 반환하는 대신 panic하기 때문이다.
 
 ---
@@ -192,9 +192,9 @@ let message = strerror(errnum);
 `&'static str`을 반환한다.
 
 **선택 기준.** 링크된 native library 버전이 application이 기대하는
-버전과 일치하는지 확인하려면 `version()`을 쓴다. 기동 시점에
+버전과 일치하는지 확인하려면 `version()`을 사용한다. 기동 시점에
 `has(...)`로 선택적 transport에 분기한다. `strerror`는 다른 곳(Errors
-category)에서 드러난 native error code와 함께 진단용으로 쓴다.
+category)에서 드러난 native error code와 함께 진단용으로 사용한다.
 
 ---
 
@@ -237,10 +237,10 @@ thread.join();
 `close()`를 호출한다.
 
 **선택 기준.** 스레드 전체에서 안전한 공유 count엔 `AtomicCounter`를
-쓴다. 벤치마킹엔 `Stopwatch`를 쓴다 — `intermediate()`는 몇 번이든
+사용한다. 벤치마킹엔 `Stopwatch`를 사용한다 — `intermediate()`는 몇 번이든
 호출하고, `stop()`은 정확히 한 번 호출한다. zlink 런타임이 수명주기를
 소유하고 `join()`을 통해 task panic을 다시 전파해야 할 땐
-`std::thread`를 직접 쓰는 대신 `Thread`를 쓴다.
+`std::thread`를 직접 사용하는 대신 `Thread`를 사용한다.
 
 ---
 
@@ -273,12 +273,12 @@ ConfigError>`를 반환한다 — **여기선 실패할 수 있다**, 다른 언
 RecvError>`(준비된 개수)를 반환한다.
 
 **선택 기준.** 단순한 fire-and-forget forwarding loop엔 자신의 스레드에서
-`proxy`를 쓴다. application이 다른 스레드에서 control source를 통해
+`proxy`를 사용한다. application이 다른 스레드에서 control source를 통해
 구성된 multipart slice의 모든 `Message`를 한 호출로 해제하려면
-`multipart_close`를 쓴다. 작고 고정된 raw file descriptor 집합에 대한
+`multipart_close`를 사용한다. 작고 고정된 raw file descriptor 집합에 대한
 임시 wait엔 standalone `poll(...)`을, 감시 대상 집합이 시간에 따라
 바뀌거나 socket/timer를 multiplex해야 할 땐 대신 `Poller`를
-쓴다(Eventing category).
+사용한다(Eventing category).
 
 ---
 

@@ -35,7 +35,7 @@ export class AppModule {}
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `ZLinkModule.forRoot(options: ZLinkModuleOptions)` | 필수 | `zlinkFramework()...build()`가 만든 `ZLinkModuleOptions`를 등록 |
-| `ZLinkModule.forRootFactory({ useFactory, inject?, imports? })` | — | Async factory로 옵션을 만들 때 쓰는 overload |
+| `ZLinkModule.forRootFactory({ useFactory, inject?, imports? })` | — | Async factory로 옵션을 만들 때 사용하는 overload |
 | `zlinkFramework(): ZLinkNestFrameworkOptionsBuilder` | 필수 진입점 | topology, handler, Location Store 등 모든 등록의 fluent builder를 시작한다. 마지막에 `.build()`로 `ZLinkModuleOptions`를 만든다 |
 
 **완료 결과.** 반환값 없이 동기로 등록된다. NestJS module 초기화 시점에 구성을 검증하고, 실패하면
@@ -78,7 +78,7 @@ if (result.outcome === ZLinkFrameworkRelocationOutcome.Relocated) {
 host는 `Relocated` 상태가 된다(새 operation은 받지 않지만 infrastructure는 유지한다). `Blocked`면
 `reason`에 `TargetUnavailable`·`StoreUnavailable`·`DeadlineExceeded` 등이 담긴다.
 
-**선택 기준.** 배포 전 무중단 이전이 필요할 때 쓴다. 이전 없이 바로 종료하려면 `shutdown`을 직접
+**선택 기준.** 배포 전 무중단 이전이 필요할 때 사용한다. 이전 없이 바로 종료하려면 `shutdown`을 직접
 호출한다. 같은 mode·target version으로 중복 호출하면 진행 중인 operation에 합류하고, 다른 값으로
 호출하면 `Blocked/OperationInProgress`로 완료한다.
 
@@ -132,7 +132,7 @@ for await (const observed of frameworkRuntime.observe()) {
 iteration을 종료한다.
 
 **선택 기준.** 지금 이 순간의 상태 한 번만 필요할 때 `status`를, 상태 전이를 놓치지 않고 계속
-받으려면 `observe(...)`를 쓴다. `ZLinkDrainHealthIndicator`(NestJS `@nestjs/terminus` 연동)도 이
+받으려면 `observe(...)`를 사용한다. `ZLinkDrainHealthIndicator`(NestJS `@nestjs/terminus` 연동)도 이
 runtime의 RouteMesh 상태를 읽어 readiness probe를 구성한다 — topology-discovery category의 상태
 조회 항목을 참고한다.
 

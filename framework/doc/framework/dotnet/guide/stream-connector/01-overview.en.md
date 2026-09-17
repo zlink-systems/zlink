@@ -43,10 +43,12 @@ run only when the user **explicitly pumps on the main thread.**
 |------|-----------|
 | Unity | `Dispatch.Async()` in `MonoBehaviour.Update()` |
 | Godot C# | `Dispatch.Async()` in `Node._Process(double)` |
-| General application | Switch to `Dispatch.Immediate` if pumping isn't needed |
+| General application | Set the option `DispatchMode = ZlinkStreamDispatchMode.Immediate` when pumping isn't needed |
 
 **If you don't pump, the handler and events don't run.** Check `PendingDispatchCount` to see how
-many callbacks haven't been processed yet.
+many callbacks haven't been processed yet. The pending queue holds up to
+`MaxPendingDispatchCallbacks` (1024 by default), and past that it drops the oldest droppable
+callback first.
 
 ## Transport Support
 

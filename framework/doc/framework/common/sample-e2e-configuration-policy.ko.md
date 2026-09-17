@@ -119,7 +119,7 @@ runner 설정으로 관리한다. Readiness 대기 한도도 애플리케이션 
 - 인증서 private key나 credential을 저장소의 기본 설정 파일에 기록하지 않는다.
 - Secret이 필요한 E2E는 runner가 실행별 임시 secret 파일을 만들거나 외부 secret file 경로를
   설정 파일에 기록한다.
-- Runner가 만든 설정과 secret 파일은 현재 사용자만 읽고 쓸 수 있게 권한을 제한한다. POSIX
+- Runner가 만든 설정과 secret 파일은 현재 사용자만 읽고 사용할 수 있게 권한을 제한한다. POSIX
   환경에서는 파일 mode를 `0600`으로 설정한다. Windows에서는 상속 ACL을 제거하고 runner를 실행한
   사용자에게만 읽기와 쓰기 권한을 부여한다. 권한을 제한하지 못하면 프로세스를 시작하지 않는다.
 - 정상 종료와 실패 종료 모두에서 runner가 자신이 만든 임시 파일을 정리한다.

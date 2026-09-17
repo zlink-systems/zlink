@@ -128,7 +128,7 @@ public interface IZLinkSessionClient
 ## 3. Node direct와 channel select-one
 
 Node direct는 physical `MeshName` topology를 그대로 사용하는 반면 channel select-one은 그 위에
-process-local 논리 주소를 얹는다. 두 층을 구분해서 본다.
+process-local 논리 주소를 더한다. 두 층을 구분해서 본다.
 
 ```mermaid
 flowchart LR
@@ -145,7 +145,7 @@ flowchart LR
     CS --> Submit
 ```
 
-물리 diagram은 node direct가 caller가 지정한 RID의 실제 ROUTER 연결을 그대로 쓴다는 것을,
+물리 diagram은 node direct가 caller가 지정한 RID의 실제 ROUTER 연결을 그대로 사용한다는 것을,
 논리 diagram은 channel select-one이 process-local 후보 풀에서 하나를 고른 뒤에만 그 물리
 연결에 올라탄다는 것을 보여준다. Channel 호출은 논리 diagram의 선택이 끝나기 전까지 어떤
 물리 연결에도 확정되지 않는다.
@@ -332,12 +332,12 @@ Spot은 만들어지는 방식에 따라 세 종류로 나뉜다. 이 구분이 
   들어와 있는 **협업 문서 하나**나 채팅방이다. player Actor들이 lobby에서 이리로 옮겨 와 같은
   방 안에서 message를 주고받는다.
 - **Instance Spot** — Actor가 살지 않는 자리다. 주제 하나에 여러 곳에서 들어오는 요청을 한
-  줄로 세워 하나씩 처리할 때 쓴다. 게임으로 치면 ranking 집계나 우편함, 웹 서비스로 치면
+  줄로 세워 하나씩 처리할 때 사용한다. 게임으로 치면 ranking 집계나 우편함, 웹 서비스로 치면
   주문 번호 하나에 몰리는 요청을 겹치지 않게 처리하는 자리다.
 
 비유는 이해를 돕는 예일 뿐이다. 실제 계약은 아래 표와 이어지는 절이 정한다.
 
-| 종류 | 언제 쓰는가 | 누가 언제 만드는가 | Actor가 소속되는가 |
+| 종류 | 언제 사용하는가 | 누가 언제 만드는가 | Actor가 소속되는가 |
 |---|---|---|---|
 | Entry Spot | Actor를 만들고 없애는 자리가 필요할 때 (lobby) | Object Server가 시작할 때 Framework가 만들고 Spot ID를 발급한다. | 소속된다 |
 | User Spot | 여러 Actor를 한자리에 모아 서로 주고받게 할 때 (game room) | Application이 필요할 때 manager로 직접 만든다. | 소속된다 |
@@ -387,7 +387,7 @@ endpoint, 내부 frame, runtime resource는 담지 않는다.
 
 Actor가 다른 node로 옮겨 간 뒤 bound session의 `Ref`/`ref()`를 다시 읽으면, 같은
 ActorId·ObjectGeneration에 옮겨 간 node의 `MeshName`·`NodeRid`를 담은 **새 값**을 돌려준다.
-이미 받아 둔 값은 그대로 남는다 — 그래서 값을 보관해 두고 나중에 쓰면 옛 위치를 가리킬 수 있다.
+이미 받아 둔 값은 그대로 남는다 — 그래서 값을 보관해 두고 나중에 사용하면 옛 위치를 가리킬 수 있다.
 
 일반 message를 보낼 때는 이 값이 아니라 global ID를 지정한다. 지금 어느 node가 그 객체를 맡고
 있는지는 Framework가 그때 찾는다.
@@ -398,7 +398,7 @@ Actor message는 global Actor ID로 지금 그 Actor를 맡은 node를 찾은 �
 바로 넣는다. **Spot의 message queue를 거치지 않는다.**
 
 실행 차례는 §7의 첫 표를 따른다 — Entry Spot의 Actor와 `PerActor` User Spot의 Actor는 Actor마다
-자기 차례를 갖고, `SpotWide` User Spot의 member Actor는 Spot과 차례를 함께 쓴다.
+자기 차례를 갖고, `SpotWide` User Spot의 member Actor는 Spot과 차례를 함께 사용한다.
 
 Actor handler에서 Spot이 소유한 상태를 읽거나 바꿔야 하면 Spot에 send/request를 따로 제출한다.
 그 일은 Spot의 차례에서 실행된다.

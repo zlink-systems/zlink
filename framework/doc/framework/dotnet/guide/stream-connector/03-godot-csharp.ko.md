@@ -6,10 +6,10 @@
 
 이 문서는 Godot 4의 C# 프로젝트(Mono/.NET 빌드)에서 `Zlink.Stream.Connector`를
 사용하는 방법을 설명한다. Godot 전용 connector package는 따로 두지 않는다. 일반 `.NET`
-connector를 그대로 쓰고, Godot main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을
+connector를 그대로 사용하고, Godot main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을
 실행한다.
 
-> **C++ GDExtension을 쓰는 Godot 프로젝트는 이 문서가 아니라
+> **C++ GDExtension을 사용하는 Godot 프로젝트는 이 문서가 아니라
 > [C++ 가이드 09 — 엔진 어댑터](../../../cpp/guide/stream-connector/09-engine-adapters.ko.md)를 본다.**
 > **Web 빌드는 [Node/TypeScript connector 가이드](../../../node/guide/stream-connector/01-overview.ko.md)를 본다.**
 
@@ -100,8 +100,9 @@ _connector.On("game.update", (message, _) =>
 ## 일시 정지와 종료
 
 Godot의 `Node.ProcessMode`를 `Disabled`로 바꾸면 `_Process()`가 멈추므로 dispatch도 멈춘다.
-연결은 유지되지만 callback은 queue에 쌓인다. 연결까지 닫으려면 `Close.Async()`를 명시적으로
-호출한다.
+연결은 유지되지만 callback은 queue에 쌓인다. **queue는 `MaxPendingDispatchCallbacks`(기본
+1024)까지만 보관하고, 넘치면 버릴 수 있는 것 중 가장 오래된 것부터 버린다.** 오래 멈춰 둘
+생각이면 연결까지 닫는 편이 낫다. 닫으려면 `Close.Async()`를 명시적으로 호출한다.
 
 `_ExitTree()`에서 `Close.Async()`와 `DisposeAsync()`를 호출하지 않으면 백그라운드 receive
 loop가 남는다.

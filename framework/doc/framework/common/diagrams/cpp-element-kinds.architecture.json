@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구성도에 나오는 다섯 가지",
+    "subtitle": "색이 곧 역할이다 — 위 구성도와 같은 색을 쓴다",
+    "output": "cpp-element-kinds.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 5,
+    "gapX": 130,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "CH",
+      "type": "backend",
+      "label": "채널",
+      "sublabel": "메시징 경로",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "SP",
+      "type": "frontend",
+      "label": "SPOT",
+      "sublabel": "직렬 실행 영역",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "AC",
+      "type": "messagebus",
+      "label": "actor / session",
+      "sublabel": "연결을 상태에 묶는다",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "ST",
+      "type": "external",
+      "label": "stream",
+      "sublabel": "외부 경계",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "RG",
+      "type": "database",
+      "label": "registry",
+      "sublabel": "인프라",
+      "row": 0,
+      "col": 4
+    }
+  ],
+  "connections": []
+}
