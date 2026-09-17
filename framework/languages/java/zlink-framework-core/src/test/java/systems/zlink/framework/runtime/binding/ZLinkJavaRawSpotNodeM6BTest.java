@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Optional;
@@ -42,6 +43,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.eventing.MonitorEvent;
+import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -66,13 +69,13 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
-    void boundSessionLivenessSnapshotAllowsPreviouslyReadyValidationOnly() {
-        assertTrue(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+    void sendRouteLivenessSnapshotAllowsPreviouslyReadyValidationOnly() {
+        assertTrue(ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
             ZLinkServiceLivenessRegistry.Readiness.READY));
-        assertTrue(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+        assertTrue(ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
             ZLinkServiceLivenessRegistry.Readiness
                 .VALIDATING_PREVIOUSLY_READY));
-        assertFalse(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+        assertFalse(ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
             ZLinkServiceLivenessRegistry.Readiness.NOT_READY));
     }
 
@@ -400,6 +403,144 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     receivedContentType.get(1, TimeUnit.SECONDS));
             }
         }
+    }
+
+    @Test
+    void actorSendKeepsTheSelectedRouteWhileADuplicateCandidateRevalidates()
+        throws Exception {
+        String targetEndpoint =
+            "inproc://jvm-revalidation-target-" + System.nanoTime();
+        String callerEndpoint =
+            "inproc://jvm-revalidation-caller-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("jvm-revalidation-target");
+        RoutingId callerRid = RoutingId.from("jvm-revalidation-caller");
+        try (var context = Zlink.createContext();
+             var target = new ZLinkJavaRawMeshNode(context, "mesh");
+             var caller = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            target.setRoutingId(targetRid);
+            target.setBind(targetEndpoint);
+            caller.setRoutingId(callerRid);
+            caller.setBind(callerEndpoint);
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            target.spotNode().entrySpot().onDispatchEvent(info -> {
+                if (info.event()
+                    != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                    return;
+                }
+                try {
+                    delivered.add(info.actorMessages().getLast()
+                        .message().toUtf8String());
+                } finally {
+                    info.actorMessages().forEach(
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorReceived::close);
+                }
+            });
+            target.start();
+            caller.start();
+            acceptAnySource(target);
+            acceptAnySource(caller);
+            caller.connectPeer(targetEndpoint, targetRid);
+            awaitAdmitted(caller, targetRid);
+
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.spotNode().createActor(
+                    "revalidated-actor", create);
+            }
+            target.spotNode().rememberActorAuthority(actor, 41, 1);
+            caller.spotNode().rememberActorAuthority(actor, 41, 1);
+
+            //  Control: the strictly ready route carries the send, so the
+            //  second send below is distinguished by the revalidation window
+            //  alone and not by anything else in this fixture.
+            sendToRemoteActor(caller, actor, "before-revalidation");
+            awaitDelivery(delivered, "before-revalidation");
+
+            //  A second physical connection observed for the same
+            //  (MeshName, RID) pair is the duplicate candidate of mesh-node
+            //  §7.1: the admission guard keeps the connection it already
+            //  selected and excludes the new one from target selection. It
+            //  only pulls the selected pair's validation forward, and
+            //  transport-liveness §5 takes readiness away from a connection
+            //  only when a new one actually replaced it.
+            observeDuplicateCandidate(caller, targetRid, targetEndpoint);
+            assertTrue(caller.peers().stream().noneMatch(
+                peer -> peer.routingId().equals(targetRid)
+                    && peer.state() == MeshPeerState.ADMITTED),
+                "the duplicate candidate must open the revalidation window");
+
+            sendToRemoteActor(caller, actor, "during-revalidation");
+            awaitDelivery(delivered, "during-revalidation");
+        }
+    }
+
+    /**
+     * Drives the real monitor observation for one more physical connection to
+     * an already-admitted peer. The strict ready gate drops for the pair
+     * validation the observation pulls forward, which is exactly the state an
+     * exact-route send must still be able to use.
+     */
+    private static void observeDuplicateCandidate(
+        ZLinkJavaRawMeshNode node,
+        RoutingId peerRoutingId,
+        String peerEndpoint) throws Exception {
+        MonitorEvent candidate = new MonitorEvent(
+            MonitorEventType.CONNECTION_READY,
+            1,
+            Optional.of(peerRoutingId),
+            "inproc://jvm-revalidation-local",
+            peerEndpoint,
+            7,
+            0,
+            1);
+        Method observe = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+            "observeConnectionReady", MonitorEvent.class, RoutingId.class);
+        observe.setAccessible(true);
+        observe.invoke(node, candidate, peerRoutingId);
+    }
+
+    private static void acceptAnySource(ZLinkJavaRawMeshNode node) {
+        node.setPeerAuthorityResolver(
+            (meshName, candidateRid, candidateGeneration) ->
+                CompletableFuture.completedFuture(
+                    candidateGeneration > 0
+                        ? Optional.of(
+                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                candidateRid,
+                                candidateGeneration,
+                                "revalidation-owner-" + candidateRid,
+                                1))
+                        : Optional.empty()));
+    }
+
+    private static void sendToRemoteActor(
+        ZLinkJavaRawMeshNode caller,
+        ZLinkBackendActorRef actor,
+        String payload) throws Exception {
+        List<Message> parts = List.of(
+            Message.from(ZLinkStreamHeaderCodec.encode(
+                new ZLinkStreamHeader(
+                    "RevalidationPacket", Map.of(), Optional.empty()))),
+            Message.from(payload));
+        try {
+            caller.spotNode().sendToActorAsync(actor, parts)
+                .toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
+        } finally {
+            parts.forEach(Message::close);
+        }
+    }
+
+    private static void awaitDelivery(List<String> delivered, String payload)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!delivered.contains(payload)
+            && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertTrue(delivered.contains(payload),
+            "the Actor never received " + payload + ": " + delivered);
     }
 
     private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
