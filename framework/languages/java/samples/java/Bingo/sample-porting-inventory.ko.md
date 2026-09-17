@@ -78,8 +78,8 @@
 | common: Protobuf schema와 생성 message 사용 | `Shared/src/main/proto/bingo_messages.proto`, generated `Messages` | shared-contract | done | `Shared` project가 Protobuf plugin과 checked-in schema로 message class를 생성한다. |
 | common: stream/channel/actor/room Spot payload는 Protobuf codec 사용 | `Program.java`, role application classes, generated `Messages` payloads | codec | done | Client와 server role은 `ZLinkProtobufCodec.defaultCodec()`을 등록하고 generated Protobuf message type을 stream/channel/Spot payload로 사용한다. |
 | common: connector wait API로 push 대기 | `BingoClientScenario.java` | validation | done | `waitFor(...).where(...).submit(...)`과 `await(...)`를 사용한다. |
-| common: inbound observer는 connect 전에 등록 | `Client/Program.java` | validation | done | connector 생성 직후 `observeInbound`를 등록하고 이후 scenario에서 connect한다. |
-| common: inbound observer 로그 확인 | `run_sample.sh`, `run_sample.ps1` | runner | done | `stream-inbound sample=Bingo`와 Notify 수신 marker를 확인한다. |
+| common: pushed Notify가 client에 도착했음을 증명 | `BingoClientScenario.java` | validation | done | `PlayerJoinedNotify` push 수신 뒤 `stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify`를 출력한다. |
+| common: client-side push 수신 증거 확인 | `run_sample.sh`, `run_sample.ps1` | runner | done | `stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify` marker를 확인한다. |
 | common: sample-local polling으로 push 대기를 숨기지 않음 | `BingoClientScenario.java` | validation | done | push 대기는 scenario 코드에 직접 드러난다. |
 | common: Domain은 framework 타입을 모름 | `Server/Play/.../domain/bingo` | design | done | domain package는 sample model과 Java collection 중심이다. |
 | common: Redis client dependency는 adapter 안에 둠 | `RedisBingoMatchQueue.java` | design | done | handler, actor, Spot, Domain에 Redis client 타입을 노출하지 않는다. |

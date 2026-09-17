@@ -237,6 +237,9 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Client completion marker was not found."
     }
+    if (-not (Select-String -Path $clientLog -Pattern "stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify" -Quiet)) {
+        throw "Client push-receipt evidence was not found."
+    }
 
     $playLogs = @((Join-Path $LogDir "play-a.log"), (Join-Path $LogDir "play-b.log"))
     $sessionLogs = @((Join-Path $LogDir "session-a.log"), (Join-Path $LogDir "session-b.log"))
