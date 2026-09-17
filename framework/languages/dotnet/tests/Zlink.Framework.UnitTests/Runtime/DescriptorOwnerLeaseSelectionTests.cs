@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Contracts.Messaging;
@@ -10,6 +11,14 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    //  Long enough that a join which keeps re-running the reservation ends on
+    //  the deadline, short enough that such a regression costs seconds.
+    private static readonly TimeSpan JoinDecisionRequestTimeout =
+        TimeSpan.FromSeconds(5);
+
+    private static readonly TimeSpan JoinDecisionBudget =
+        TimeSpan.FromSeconds(1);
+
     [Fact]
     public async Task ColdActivation_ExcludesExpiredDescriptorAndSelectsLiveOwner()
     {
@@ -240,13 +249,28 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
 
+            //  The request timeout is long on purpose. A lost owner is a
+            //  decision the join makes on the record it just read, so it must
+            //  answer well before the deadline; a deadline-shaped Unavailable
+            //  would mean the reservation is being re-run against a record
+            //  that can never change.
+            var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await fixture.Runtime
                     .GetOrCreate(fixture.ObjectId, fixture.StableType)
-                    .Timeout(TimeSpan.FromMilliseconds(100))
+                    .Timeout(JoinDecisionRequestTimeout)
                     .Async());
+            var elapsed = Stopwatch.GetElapsedTime(started);
 
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Equal(
+                $"User Spot '{fixture.ObjectId}' owner lease is not live.",
+                error.Message);
+            Assert.Equal(ZLinkRetryAdvice.RetryAfterStateChange, error.RetryAdvice);
+            Assert.True(
+                elapsed < JoinDecisionBudget,
+                $"The join consumed {elapsed} of the {JoinDecisionRequestTimeout} "
+                + "request timeout instead of deciding on the owner lease.");
             Assert.Equal(
                 fixture.Owner.OwnerId,
                 (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId);
@@ -319,13 +343,23 @@ public sealed partial class EntrySpotActorDispatchTests
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
             var manager = new ZLinkActorManagerService(fixture.Runtime);
 
+            var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await manager.GetOrCreate(fixture.ObjectId, fixture.StableType)
                     .InMesh("entry")
-                    .Timeout(TimeSpan.FromMilliseconds(100))
+                    .Timeout(JoinDecisionRequestTimeout)
                     .Async());
+            var elapsed = Stopwatch.GetElapsedTime(started);
 
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Equal(
+                $"Actor '{fixture.ObjectId}' owner lease is not live.",
+                error.Message);
+            Assert.Equal(ZLinkRetryAdvice.RetryAfterStateChange, error.RetryAdvice);
+            Assert.True(
+                elapsed < JoinDecisionBudget,
+                $"The join consumed {elapsed} of the {JoinDecisionRequestTimeout} "
+                + "request timeout instead of deciding on the owner lease.");
             Assert.Equal(
                 fixture.Owner.OwnerId,
                 (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId);
