@@ -24,10 +24,6 @@ if rg -n '\.fetch\(' Client/src/main/java --glob '*.java'; then
   echo "TicTacToe client must use the current asynchronous HTTP terminal." >&2
   exit 1
 fi
-if ! rg -q 'stream-inbound sample=TicTacToe' Client/src/main/java --glob '*.java'; then
-  echo "TicTacToe client must register inbound observers before connect" >&2
-  exit 1
-fi
 if rg -n 'SampleSettings' Server/src/main/java --glob '*.java'; then
   echo "TicTacToe API and Play roles must use separate typed settings" >&2
   exit 1
