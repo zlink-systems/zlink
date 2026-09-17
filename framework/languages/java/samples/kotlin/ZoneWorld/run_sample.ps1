@@ -352,7 +352,7 @@ function Assert-Phase {
 
 function Invoke-IsolatedChild {
     param([string]$Name, [string[]]$Arguments)
-    $powerShell = (Get-Process -Id $PID).Path
+    $powerShell = Get-ZlinkSampleSelfShellPath
     $child = Start-Process -FilePath $powerShell -ArgumentList ((@(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath
     ) + $Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " ") `

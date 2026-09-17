@@ -232,7 +232,7 @@ function Wait-NewRoutingId([string]$NodeId, [string]$Previous, [int]$TimeoutSeco
 }
 
 function Invoke-Child([string]$Switch) {
-    $powershell = Join-Path $PSHOME "powershell.exe"
+    $powershell = Get-ZlinkSampleSelfShellPath
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & $powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath $Switch

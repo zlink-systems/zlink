@@ -608,6 +608,45 @@ function Wait-SampleHttpHealth {
     throw "Timed out waiting for $Name at $Endpoint"
 }
 
+function Get-ZlinkSampleSelfShellPath {
+    <#
+        Resolves the executable to relaunch the *current* PowerShell host as a child process
+        (used by ZoneWorld's isolated crash/routing lanes).
+
+        Two things that do NOT work reliably and must not be reintroduced:
+        - Hardcoding "powershell.exe": true only for Windows PowerShell 5.1 (Desktop edition).
+          pwsh 7 (Core edition) ships "pwsh.exe"/"pwsh", so a literal name breaks one host or
+          the other.
+        - Introspecting the running process image via (Get-Process -Id $PID).Path: when pwsh is
+          installed as a dotnet global tool, the OS-visible image for the running Core-edition
+          process is dotnet.exe hosting the managed pwsh.dll, not a directly relaunchable
+          pwsh.exe/pwsh shim. Passing that path back to Start-Process reaches dotnet.exe with the
+          intended shell arguments folded into one unusable blob.
+
+        Instead this resolves the name from $PSVersionTable.PSEdition (Desktop -> powershell.exe,
+        Core -> pwsh[.exe]) and looks it up under $PSHOME, which names the PowerShell
+        installation directory rather than the resolved OS process image and holds the real,
+        directly-relaunchable executable in both hosts (including the dotnet-tool install
+        layout). A PATH lookup is the fallback for layouts where $PSHOME does not hold it.
+    #>
+    $exeName = if ($PSVersionTable.PSEdition -eq "Desktop") {
+        "powershell.exe"
+    } elseif ($IsWindows) {
+        "pwsh.exe"
+    } else {
+        "pwsh"
+    }
+
+    $underPsHome = Join-Path $PSHOME $exeName
+    if (Test-Path -LiteralPath $underPsHome) { return $underPsHome }
+
+    $onPath = Get-Command $exeName -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($onPath) { return $onPath.Source }
+
+    throw "Could not locate the current PowerShell host executable ($exeName) to relaunch a child lane."
+}
+
 function Invoke-SampleDotnetBuild {
     param([Parameter(Mandatory = $true)][string]$Project)
 
