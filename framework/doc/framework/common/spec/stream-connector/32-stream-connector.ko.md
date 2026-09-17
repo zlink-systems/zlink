@@ -429,6 +429,11 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
     **handler가 종료 사유를 인자로 받는지는 언어가 정한다.** 인자로 받지 않는 언어에서는
     §6.2의 읽기 표면으로 사유를 확인한다. 어느 쪽이든 사유에 닿는 길이 있다.
 
+    **끊김 handler는 transport가 끊긴 시점에 한 번, 시도를 다 쓴 시점에 한 번 실행된다.**
+    앞의 것은 "지금 연결이 없다"를, 뒤의 것은 "되살리기를 포기했다"를 알린다. 앞을 없애면
+    `ServerDrain`을 받은 client가 재연결이 성공하는 동안 끊긴 사실을 알지 못하고, 뒤를
+    없애면 재연결을 포기한 시점을 알 수 없다. 재연결이 성공하면 뒤의 실행은 일어나지 않는다.
+
 **heartbeat:**
 
 - 켜져 있으면 지정 주기마다 control ping을 보낸다.
@@ -627,6 +632,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
   dispatch한 뒤에도 "이 이름으로 몇 건 왔다"를 판정할 수 있어야 한다.
 - **기준점은 연결이 성립한 시점이다.** 연결이 성립할 때 0에서 시작해 그 연결에서 받은 수를
   센다. 재연결하면 새 연결이므로 다시 0에서 시작한다. 이름을 받은 적이 없으면 0이다.
+- **연결이 성립할 때 이전 연결에서 남은 미소비 message도 함께 비운다.** 계수만 되돌리고 큐를
+  남기면 계수와 큐가 서로 다른 연결을 말하게 되고, `waitFor`가 끊기기 전의 packet을 새 연결의
+  것으로 돌려준다.
 - 이 값은 시나리오 단정과 진단에 사용하며, 흐름 제어의 근거로 사용하지 않는다 — 큐에 한도가
   없으므로 값이 커졌다고 connector가 하는 일이 달라지지 않는다.
 
@@ -657,8 +665,11 @@ connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 AP
 
 - **술어와 반환은 payload가 아니라 message를 다룬다.** payload만 주면 술어가 metadata와
   packet 이름을 보지 못한다. `T`는 message가 담은 payload의 타입이다.
-- **이 표면의 실패는 모두 `ValidationFailed`다.** 전달 수단은 §9.2가 정한다 — 예외를 끈
-  빌드는 값으로, 나머지는 코드를 담은 예외로 받는다.
+- **관측 조건이 어긋난 실패는 `ValidationFailed`다** — timeout 안에 오지 않음, 오지 않아야 할
+  것이 도착함, 순서가 어긋남. **연결이 끝나 대기를 이어갈 수 없으면 `Disconnected`다.**
+  connector를 닫거나 연결이 끊겨 대기 중이던 호출이 풀리는 경우가 여기 해당하며, 그것은 조건이
+  어긋난 것이 아니라 관측할 자리가 사라진 것이다. 전달 수단은 §9.2가 정한다 — 예외를 끈 빌드는
+  값으로, 나머지는 코드를 담은 예외로 받는다.
 
 - **status 대기는 별도 표면을 두지 않는다.** status는 payload의 한 필드이므로
   `waitFor<T>(name).where(p => p.status == …)`로 표현한다. connector가 어느 필드가 status인지
@@ -724,7 +735,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **재연결 지연** | **시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도를 다 쓰면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
 | **등록 해제** | **push·error·disconnect·connection state 네 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
-| **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 위반은 `ValidationFailed`다(§10.1)** |
+| **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
 | **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 | diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |

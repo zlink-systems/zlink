@@ -498,6 +498,14 @@ state.
     settled by the language.** Where it does not, the reason is read
     from the surface in §6.2. Either way there is a path to it.
 
+    **Disconnect handlers run once when the transport drops and once
+    when the attempts run out.** The first says "there is no connection
+    right now"; the second says "bringing it back has been given up."
+    Without the first, a client that received `ServerDrain` learns
+    nothing while a reconnect is still succeeding; without the second,
+    the moment reconnection was abandoned is invisible. A successful
+    reconnect means the second never happens.
+
 **Heartbeat:**
 
 - If on, sends a control ping at the specified interval.
@@ -743,6 +751,10 @@ A `Send` packet the server sent stays in the **receive message queue** until it 
   starts at zero when the connection is established and counts what arrives on that
   connection. A reconnect is a new connection, so it starts at zero again. A name
   never received is zero.
+- **Establishing a connection also clears whatever the previous connection left
+  unconsumed.** Resetting only the count and keeping the queue leaves the two
+  describing different connections, and `waitFor` would hand back a packet from
+  before the drop as if it belonged to the new connection.
 - The value is for scenario assertions and diagnostics, not as a basis for flow
   control — the queue has no bound, so a larger value changes nothing about what the
   connector does.
@@ -777,9 +789,14 @@ builder chaining.
 - **The predicate and the return value carry messages, not payloads.**
   A payload alone hides the metadata and the packet name from the
   predicate. `T` is the type of the payload the message carries.
-- **These surfaces fail with `ValidationFailed`.** How that reaches
-  the caller is settled by §9.2 — as a value where exceptions are
-  disabled, as an exception carrying the code everywhere else.
+- **A failure of the observed condition is `ValidationFailed`** — not
+  arriving within the timeout, arriving when it should not have,
+  arriving out of order. **Where the connection has ended and the wait
+  cannot continue, it is `Disconnected`.** That covers a call left
+  waiting when the connector is closed or the connection drops: the
+  condition did not fail, the place to observe it went away. How either
+  reaches the caller is settled by §9.2 — as a value where exceptions
+  are disabled, as an exception carrying the code everywhere else.
 
 | Surface | Contract | Failure |
 |------|------|------|
@@ -857,7 +874,7 @@ test name differs, the meaning must be the same.
 | **Reconnect delay** | **The wait between attempts falls between 50% and 100% of the base delay. When the attempts run out the state becomes `Disconnected` and disconnect handlers run (§6)** |
 | **Unregistration** | **All four registrations — push, error, disconnect, connection state — return a value that unregisters, and an unregistered handler is not run by later dispatches (§7)** |
 | **Received count** | **`receivedCount(name)` counts what arrived, does not fall on consumption, and is independent of dispatch mode. It restarts at zero when the connection is established (§10)** |
-| **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, and a violation is `ValidationFailed` (§10.1)** |
+| **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, a failed condition is `ValidationFailed`, and an ended connection is `Disconnected` (§10.1)** |
 | **Flow exposure and propagation** | **A received message exposes the flow identifier and origin, and a runtime without an ambient context provides an explicit means of passing it (§5.5)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
 | Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
