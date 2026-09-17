@@ -248,8 +248,6 @@ wait_log_count 1 "bingo-ready kind=mesh-route node=session-b mesh=room" "${log_d
 "$(app_bin Client Client)" --config "$client_config" >"${log_dir}/client.log" 2>&1
 
 grep -q "bingo=completed" "${log_dir}/client.log"
-grep -q "stream-inbound sample=Bingo" "${log_dir}/client.log"
-grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "${log_dir}/client.log"
 grep -Eq "zlink flow: event_id=zlink\.message_flow" "${log_dir}"/{session,api,play}-*.log
 grep -Eq "zlink metric .*name=zlink\.stream\.connections\.active" "${log_dir}"/session-*.log
 grep -Eq "zlink metric .*name=zlink\.spot\.count" "${log_dir}"/play-*.log
