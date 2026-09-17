@@ -1443,6 +1443,32 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             && liveness.isReady(peerRoutingId, peer.connectionId());
     }
 
+    /**
+     * Whether an already-selected peer route may carry a send now.
+     *
+     * <p>{@link #isReadyPeer} answers the selection question: which peers may
+     * be picked as a target. A send whose target node is already fixed by an
+     * Actor, Spot or Session fence asks a different question, and a duplicate
+     * candidate for the same (MeshName, RID) pair is not an answer to it:
+     * mesh-node §7.1 keeps exactly one ready connection and excludes the
+     * losing candidates from target selection, and transport-liveness §5 only
+     * removes readiness when a new connection actually replaced the selected
+     * one. While the pair revalidation that a rejected candidate pulls forward
+     * is in flight, the previously ready connection is still the selected one,
+     * so it keeps carrying sends. That window does not extend the peer
+     * deadline, so a connection that really died still leaves the registry on
+     * timeout and the send is refused then.
+     */
+    private boolean sendRouteUsable(
+        ZLinkServiceTopologyRegistry.Peer peer) {
+        RoutingId peerRoutingId = peer.descriptor().nodeRoutingId();
+        return peer.connectionId().equals(
+                admissionControlReadyConnections.get(peerRoutingId))
+            && sendRouteLivenessAllows(
+                liveness.peerStateSnapshot(
+                    peerRoutingId, peer.connectionId()).readiness());
+    }
+
     private void refreshChannelReadiness(RoutingId peerRoutingId) {
         ZLinkServiceTopologyRegistry current = topology;
         if (current == null) {
@@ -1615,7 +1641,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 : application.contentType());
     }
 
-    static boolean boundSessionLivenessAllows(
+    /**
+     * The one liveness rule for a send on an already-selected route: the
+     * connection is ready, or it was ready and a pair revalidation is still
+     * in flight.
+     */
+    static boolean sendRouteLivenessAllows(
         ZLinkServiceLivenessRegistry.Readiness readiness) {
         return readiness == ZLinkServiceLivenessRegistry.Readiness.READY
             || readiness == ZLinkServiceLivenessRegistry.Readiness
@@ -1899,7 +1930,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             spots.spotAuthorityOwnerLeaseGeneration(
                 targetNodeRid, targetSpotId, targetSpotGeneration);
         if (peer.isEmpty()
-            || !isReadyPeer(peer.orElseThrow())
+            || !sendRouteUsable(peer.orElseThrow())
             || targetSpotGeneration <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
@@ -1964,7 +1995,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             spots.spotAuthorityOwnerLeaseGeneration(
                 targetNodeRid, targetSpotId, targetSpotGeneration);
         if (peer.isEmpty()
-            || !isReadyPeer(peer.orElseThrow())
+            || !sendRouteUsable(peer.orElseThrow())
             || targetSpotGeneration <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
@@ -2084,7 +2115,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
-        if (!isReadyPeer(peer.orElseThrow())) {
+        if (!sendRouteUsable(peer.orElseThrow())) {
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -6752,38 +6783,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 continue;
             }
             if (event.event() == MonitorEventType.CONNECTION_READY) {
-                RoutingId peerRid = peer.orElseThrow();
                 if (!isConnectionReadyEdge(event)) {
                     continue;
                 }
-                markPeerIntentsActive(event, peerRid);
-                ZLinkServiceAdmissionGuard.ConnectionDirection direction =
-                    monitorConnectionDirection(event, peerRid);
-                String registeredId =
-                    registerTransportConnection(event, peerRid);
-                ZLinkServiceTopologyRegistry.Peer admitted =
-                    topology.peer(peerRid).orElse(null);
-                if (admitted == null
-                    || !admitted.connectionId().equals(registeredId)) {
-                    pendingConnectionIds.computeIfAbsent(
-                            new ConnectionCandidate(peerRid, direction),
-                            ignored ->
-                                new ConcurrentLinkedQueue<>())
-                        .add(registeredId);
-                }
-                if (admitted != null
-                    && !admitted.connectionId().equals(registeredId)) {
-                    // The old pair can have lost its disconnect edge while a
-                    // replacement candidate is already usable. Pull its next
-                    // exact validation forward before a RID ACK can conceal
-                    // that stale selected route.
-                    liveness.requestValidationProbe(
-                        peerRid,
-                        admitted.connectionId(),
-                        System.nanoTime());
-                    refreshChannelReadiness(peerRid);
-                }
-                nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
+                observeConnectionReady(event, peer.orElseThrow());
             } else if (event.event() == MonitorEventType.DISCONNECTED
                 || event.event() == MonitorEventType.CLOSED) {
                 RoutingId peerRid = peer.orElseThrow();
@@ -6814,6 +6817,38 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private static boolean isConnectionReadyEdge(MonitorEvent event) {
         return (event.flags() & CONNECTION_READY_EDGE_FLAG) != 0;
+    }
+
+    /** Records one observed physical connection for an already-known peer. */
+    private void observeConnectionReady(
+        MonitorEvent event,
+        RoutingId peerRid) {
+        markPeerIntentsActive(event, peerRid);
+        ZLinkServiceAdmissionGuard.ConnectionDirection direction =
+            monitorConnectionDirection(event, peerRid);
+        String registeredId = registerTransportConnection(event, peerRid);
+        ZLinkServiceTopologyRegistry.Peer admitted =
+            topology.peer(peerRid).orElse(null);
+        if (admitted == null
+            || !admitted.connectionId().equals(registeredId)) {
+            pendingConnectionIds.computeIfAbsent(
+                    new ConnectionCandidate(peerRid, direction),
+                    ignored -> new ConcurrentLinkedQueue<>())
+                .add(registeredId);
+        }
+        if (admitted != null
+            && !admitted.connectionId().equals(registeredId)) {
+            // The old pair can have lost its disconnect edge while a
+            // replacement candidate is already usable. Pull its next
+            // exact validation forward before a RID ACK can conceal
+            // that stale selected route.
+            liveness.requestValidationProbe(
+                peerRid,
+                admitted.connectionId(),
+                System.nanoTime());
+            refreshChannelReadiness(peerRid);
+        }
+        nextAnnouncementNanos.put(peerRid, 0L);
     }
 
     private void markPeerIntentsActive(
@@ -7278,7 +7313,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 && peer.descriptor().lifecycleGeneration()
                     == binding.sessionOwnerNodeGeneration()
                 && admissionConnectionMatches()
-                && boundSessionLivenessAllows(livenessReadiness);
+                && sendRouteLivenessAllows(livenessReadiness);
         }
     }
 
