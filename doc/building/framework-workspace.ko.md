@@ -24,7 +24,7 @@ framework의 기본 빌드, CI, 배포는 **runtime library, unit test, `cross-l
 |---|---|---|
 | .NET | CI·배포는 `Zlink.Framework.ci.slnf`(16개 project)만 빌드 | 개발용 `Zlink.Framework.sln`은 IDE에서 열 수 있도록 샘플 project를 포함하지만 CI·배포는 slnf만 씁니다. 샘플은 각 `samples/<name>/<name>.sln`으로도 열립니다 |
 | Node.js | `npm run verify:ci`(workspace `packages/*`) | 샘플은 workspace 밖의 독립 package입니다. `npm run test:samples`, `npm run lint:samples`, `npm run verify:samples`는 `verify:release`와 `framework-gate.sh`에서만 돌립니다 |
-| Java/Kotlin | 루트 `settings.gradle.kts`의 module | 샘플은 `samples/` composite build입니다. 루트 빌드는 composite를 등록만 하고 task를 실행하지 않으며, CI·배포는 `-Pzlink.includeSamples=false`로 등록도 하지 않습니다 |
+| Java/Kotlin | 루트 `settings.gradle.kts`의 module | 샘플은 `samples/` composite build입니다. 루트 빌드는 composite를 등록만 하고 task를 실행하지 않으며, CI·배포는 `-Pzlink.includeSamples=false`로 등록도 하지 않습니다. 대신 Java CI가 `./gradlew -p samples classes`를 따로 실행해 샘플 호출부가 public API와 어긋나면 컴파일에서 잡습니다(issue #515) |
 | C++ | `ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF`, `ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=ON`이 기본 | run script가 필요한 옵션을 `ON`으로 넘겨 같은 build tree에서 빌드합니다 |
 
 ## 2. 샘플의 두 모드

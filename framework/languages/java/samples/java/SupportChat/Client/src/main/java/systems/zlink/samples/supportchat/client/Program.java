@@ -47,7 +47,6 @@ public final class Program {
             SampleTimings.ConnectTimeout,
             64 * 1024,
             64 * 1024,
-            Integer.MAX_VALUE,
             true,
             Duration.ofSeconds(1),
             SampleTimings.RequestTimeout.plusSeconds(5),

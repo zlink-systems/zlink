@@ -136,6 +136,18 @@ jobs:
             :zlink-framework-core:test \
             -Pzlink.includeSamples=false
 
+      # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
+      # 않는다. 그래서 public API가 바뀌어도 샘플 호출부는 이 워크플로우에서 한 번도
+      # 컴파일되지 않는다(issue #515). 여기서 컴파일만 따로 한다 — 샘플 실행은
+      # framework-gate.sh가 소유한다.
+      - name: Compile the Java and Kotlin samples
+        working-directory: framework/languages/java
+        shell: bash
+        env:
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
+        run: |
+          ./gradlew --no-daemon --max-workers=2 -p samples classes
+
       - name: Verify and summarize executed tests
         if: always()
         shell: pwsh
