@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# The samples run what Gradle built, so they must run it on the JDK Gradle
+# compiled with. gradle/zlink-jvm-runtime.sh owns that decision (#517).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gradle/zlink-jvm-runtime.sh"
+zlink_jvm_require_toolchain_runtime || return 1
+
 zlink_sample_configure_port_pool() {
   local language="$1"
   case "${language}" in
@@ -439,12 +444,20 @@ zlink_sample_gradle_standalone() (
   exec 9>"${lock_path}"
   flock --exclusive 9
   if [[ -e "${settings_target}" || -L "${settings_target}" ]]; then
-    echo "Refusing to replace existing ${settings_target}" >&2
-    return 1
+    # A run killed hard leaves the staged copy behind. The staged copy is ours
+    # only while it is a regular file byte-identical to the standalone source;
+    # anything else is the developer's own settings file and is never replaced.
+    if [[ -L "${settings_target}" ]] || [[ ! -f "${settings_target}" ]] \
+        || ! cmp -s -- "${settings_source}" "${settings_target}"; then
+      echo "Refusing to replace existing ${settings_target}" >&2
+      return 1
+    fi
+    echo "Taking over the ${settings_target} left by an interrupted run." >&2
+    rm -f -- "${settings_target}"
   fi
 
   cp -- "${settings_source}" "${settings_target}"
-  trap 'rm -f -- "${settings_target}"' EXIT
+  trap 'rm -f -- "${settings_target}"' EXIT INT TERM HUP
   "$@"
 )
 
