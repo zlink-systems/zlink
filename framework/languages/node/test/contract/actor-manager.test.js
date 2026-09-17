@@ -977,8 +977,10 @@ test('unbound actor context boundSession fails retriably until a session is boun
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
 
-  assert.throws(
-    () => actor.context.boundSession.send({ ready: true }),
+  // Spec 04-actor-model 8.1: the failure surfaces at the call's terminal, so
+  // building the call succeeds and submit() rejects.
+  await assert.rejects(
+    () => actor.context.boundSession.send({ ready: true }).submit(),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
       && !('isRetriable' in error)
   );

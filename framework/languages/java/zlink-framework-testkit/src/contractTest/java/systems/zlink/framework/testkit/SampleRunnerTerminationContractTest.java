@@ -10,16 +10,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class SampleRunnerTerminationContractTest {
+
+    //  These pin the behaviour of the Bash sample runners by sourcing
+    //  runner-common.sh. On Windows the bash on PATH is WSL's, which cannot see
+    //  the repository's Windows path, so the sourced file never resolves. The
+    //  Windows runners are the .ps1 ones, pinned by SampleReleaseGateContractTest.
+    private static void requirePosixShell() {
+        Assumptions.assumeTrue(java.io.File.separatorChar == '/',
+            "Bash sample runner contract runs on a POSIX shell; Windows uses the .ps1 runners");
+    }
     @TempDir
     Path temporaryRoot;
 
     @Test
     void teardownFailureEscapesExitTrapAndAggregateConditionalWithoutPidArray()
         throws Exception {
+        requirePosixShell();
         Path logs = writeRoleLog("teardown",
             "ZLINK_FRAMEWORK_READY\n"
                 + "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED\n");
@@ -49,6 +60,7 @@ final class SampleRunnerTerminationContractTest {
 
     @Test
     void restartChecksCurrentProcessAndExcludesOnlyTheIntentionalCrash() throws Exception {
+        requirePosixShell();
         Path logs = writeRoleLog("restarted",
             "ZLINK_FRAMEWORK_READY\n"
                 + "ZLINK_FRAMEWORK_READY\n"
@@ -69,6 +81,7 @@ final class SampleRunnerTerminationContractTest {
     @Test
     void cleanupAcceptsOnlyGracefulFrameworkTerminationForBothLogDirectoryNames()
         throws Exception {
+        requirePosixShell();
         for (String variableName : List.of("log_dir", "LOG_DIR")) {
             Path gracefulLogs = writeRoleLog(
                 variableName + "-graceful",
