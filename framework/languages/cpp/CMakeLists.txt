@@ -430,31 +430,58 @@ if(OpenSSL_FOUND)
 else()
   set(ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY "")
 endif()
-find_program(ZLINK_OPENSSL_EXECUTABLE openssl)
-if(OpenSSL_FOUND AND ZLINK_OPENSSL_EXECUTABLE)
-  set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
-  set(ZLINK_HTTP_CLIENT_TEST_CERT
-    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
-  set(ZLINK_HTTP_CLIENT_TEST_KEY
-    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
-  file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
-  execute_process(
-    COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
-      req -x509 -newkey rsa:2048 -nodes -days 7
-      -subj /CN=localhost
-      -addext subjectAltName=DNS:localhost
-      -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
-      -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
-    RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
-    OUTPUT_QUIET
-    ERROR_QUIET)
-  if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0)
-    message(WARNING
-      "Could not generate HTTP client HTTPS test certificate; HTTPS e2e test will be disabled.")
-  endif()
-  if(EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}" AND
-      EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
+# The HTTPS test certificate is only needed when the http-client-https contract test is
+# actually going to be built (see test_cpp_http_client below, which is registered only under
+# ZLINK_FRAMEWORK_CPP_BUILD_TESTS). Tying this block to the same condition means the rule reads
+# as one sentence: if the HTTPS contract tests are being built, the openssl CLI and a generated
+# certificate are required. A library consumer configuring with
+# ZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF must not need the openssl CLI at all.
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  find_program(ZLINK_OPENSSL_EXECUTABLE openssl)
+  # The http-client-https ctest label is unconditionally required by
+  # verify_ctest_label_contract.cmake whenever tests are built, so once the OpenSSL library is
+  # available (HTTPS client support is being compiled in), the openssl CLI and a successfully
+  # generated test certificate are hard requirements, not best-effort conveniences. Failing here
+  # with the real cause (missing tool, or the tool failed) is more legible than warning and
+  # continuing: continuing left the label contract test to fail several steps later with "label
+  # http-client-https selects no tests", which reads like a label-taxonomy bug rather than a
+  # missing local tool.
+  if(OpenSSL_FOUND)
+    if(NOT ZLINK_OPENSSL_EXECUTABLE)
+      message(FATAL_ERROR
+        "OpenSSL library was found (HTTPS client support is being built), but the 'openssl' "
+        "command-line executable is not on PATH. It is required to generate the test "
+        "certificate used by the http-client-https contract tests. Install the OpenSSL CLI "
+        "(it ships with most OpenSSL distributions, including vcpkg's openssl port) and make "
+        "sure it is on PATH, then re-run configure.")
+    endif()
+    set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
+    set(ZLINK_HTTP_CLIENT_TEST_CERT
+      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
+    set(ZLINK_HTTP_CLIENT_TEST_KEY
+      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
+    file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
+    execute_process(
+      COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
+        req -x509 -newkey rsa:2048 -nodes -days 7
+        -subj /CN=localhost
+        -addext subjectAltName=DNS:localhost
+        -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
+        -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+      RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
+      OUTPUT_VARIABLE ZLINK_HTTP_CLIENT_CERT_OUTPUT
+      ERROR_VARIABLE ZLINK_HTTP_CLIENT_CERT_ERROR)
+    if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0
+        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
+      message(FATAL_ERROR
+        "Failed to generate the HTTP client HTTPS test certificate with "
+        "'${ZLINK_OPENSSL_EXECUTABLE}' (exit code ${ZLINK_HTTP_CLIENT_CERT_RESULT}). "
+        "The http-client-https contract tests require this certificate.\n"
+        "openssl stdout:\n${ZLINK_HTTP_CLIENT_CERT_OUTPUT}\n"
+        "openssl stderr:\n${ZLINK_HTTP_CLIENT_CERT_ERROR}")
+    endif()
     set(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL ON)
   endif()
 endif()
@@ -1600,9 +1627,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_target_contract
     LABELS "framework-contract"
     TIMEOUT 60)
+  # Resolve bash to an absolute path at configure time instead of registering the bare name.
+  # ctest launches the test's COMMAND without going through a shell, so on Windows the OS
+  # process-creation search order is used, which checks System32 (and therefore WSL's
+  # bash.exe shim, when WSL is installed) before honoring the PATH environment variable.
+  # A bare `COMMAND bash` therefore silently resolves to WSL bash on a machine with WSL
+  # installed, and WSL bash cannot see `D:/...` paths. find_program() instead walks PATH
+  # entries directly (respecting the caller's PATH order), so baking in its result here
+  # makes the test resolve to the same interpreter on every machine, regardless of what
+  # happens to be registered under System32.
+  find_program(ZLINK_BASH_EXECUTABLE bash REQUIRED)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_common_e2e_inventory
-    COMMAND bash
+    COMMAND ${ZLINK_BASH_EXECUTABLE}
       ${CMAKE_CURRENT_LIST_DIR}/e2e/verify_common_inventory.sh
     LABELS "framework-contract;framework-e2e"
     TIMEOUT 30)
