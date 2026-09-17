@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify cross-language sample and E2E runner isolation contracts."""
+"""Verify cross-language sample runner isolation contracts."""
 
 from __future__ import annotations
 
@@ -24,35 +24,11 @@ class RangeSource:
 
 
 @dataclass(frozen=True)
-class LockSource:
-    language: str
-    path: str
-    pattern: str
-
-
-@dataclass(frozen=True)
-class RunnerInventory:
-    language: str
-    root: str
-    expected: tuple[str, ...]
-    lock_marker: str
-
-
-@dataclass(frozen=True)
 class SampleRunnerInventory:
     language: str
     root: str
     directory_suffix: str
     powershell_samples: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class AggregateRunner:
-    language: str
-    path: str
-    child_call: str
-    active_pid_marker: str | None = None
-    wait_marker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,24 +46,12 @@ RANGES = (
     RangeSource("cpp", "sample", "application", "framework/languages/cpp/samples/redis-common.sh",
                 r"^ZLINK_CPP_SAMPLE_APP_PORT_MIN=(\d+)$",
                 r"^ZLINK_CPP_SAMPLE_APP_PORT_MAX=(\d+)$"),
-    RangeSource("cpp", "e2e", "redis", "framework/languages/cpp/e2e/redis-common.sh",
-                r"^ZLINK_CPP_E2E_REDIS_PORT_MIN=(\d+)$",
-                r"^ZLINK_CPP_E2E_REDIS_PORT_MAX=(\d+)$"),
-    RangeSource("cpp", "e2e", "application", "framework/languages/cpp/e2e/redis-common.sh",
-                r"^ZLINK_CPP_E2E_APP_PORT_MIN=(\d+)$",
-                r"^ZLINK_CPP_E2E_APP_PORT_MAX=(\d+)$"),
     RangeSource("dotnet", "sample", "redis", "framework/languages/dotnet/samples/sample_runner.ps1",
                 r"^\s*\$redisMinimumPort\s*=\s*(\d+)$",
                 r"^\s*\$redisMaximumPort\s*=\s*(\d+)$"),
     RangeSource("dotnet", "sample", "application", "framework/languages/dotnet/samples/sample_runner.ps1",
                 r"^\s*\$applicationMinimumPort\s*=\s*(\d+)$",
                 r"^\s*\$applicationMaximumPort\s*=\s*(\d+)$"),
-    RangeSource("dotnet", "e2e", "redis", "framework/languages/dotnet/e2e/redis-common.sh",
-                r"^\s*local redis_min_port=(\d+)$",
-                r"^\s*local redis_max_port=(\d+)$"),
-    RangeSource("dotnet", "e2e", "application", "framework/languages/dotnet/e2e/redis-common.sh",
-                r"^minimum_port = (\d+)$",
-                r"^maximum_port = (\d+)$"),
     RangeSource("java", "sample", "redis", "framework/languages/java/samples/runner-common.sh",
                 r"^\s*ZLINK_SAMPLE_REDIS_PORT_MIN=(24000)$",
                 r"^\s*ZLINK_SAMPLE_REDIS_PORT_MAX=(24099)$"),
@@ -100,157 +64,12 @@ RANGES = (
     RangeSource("kotlin", "sample", "application", "framework/languages/java/samples/runner-common.sh",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MIN=(26100)$",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MAX=(27999)$"),
-    RangeSource("java", "e2e", "redis", "framework/languages/java/e2e-runner-common.sh",
-                r"^\s*ZLINK_E2E_REDIS_PORT_MIN=(34000)$",
-                r"^\s*ZLINK_E2E_REDIS_PORT_MAX=(34099)$"),
-    RangeSource("java", "e2e", "application", "framework/languages/java/e2e-runner-common.sh",
-                r"^\s*ZLINK_E2E_APP_PORT_MIN=(34100)$",
-                r"^\s*ZLINK_E2E_APP_PORT_MAX=(35999)$"),
-    RangeSource("kotlin", "e2e", "redis", "framework/languages/java/e2e-runner-common.sh",
-                r"^\s*ZLINK_E2E_REDIS_PORT_MIN=(36000)$",
-                r"^\s*ZLINK_E2E_REDIS_PORT_MAX=(36099)$"),
-    RangeSource("kotlin", "e2e", "application", "framework/languages/java/e2e-runner-common.sh",
-                r"^\s*ZLINK_E2E_APP_PORT_MIN=(36100)$",
-                r"^\s*ZLINK_E2E_APP_PORT_MAX=(37999)$"),
     RangeSource("node", "sample", "redis", "framework/languages/node/samples/run-sample.mjs",
                 r"^const redisPortRange = \{ min: (\d+), max: \d+ \};$",
                 r"^const redisPortRange = \{ min: \d+, max: (\d+) \};$"),
     RangeSource("node", "sample", "application", "framework/languages/node/samples/run-sample.mjs",
                 r"^const applicationPortRange = \{ min: (\d+), max: \d+ \};$",
                 r"^const applicationPortRange = \{ min: \d+, max: (\d+) \};$"),
-    RangeSource("node", "e2e", "redis", "framework/languages/node/e2e/redis-container.sh",
-                r"^NODE_E2E_REDIS_PORT_MIN=(\d+)$",
-                r"^NODE_E2E_REDIS_PORT_MAX=(\d+)$"),
-    RangeSource("node", "e2e", "application", "framework/languages/node/e2e/runner-common.sh",
-                r"^NODE_E2E_APPLICATION_PORT_MIN=(\d+)$",
-                r"^NODE_E2E_APPLICATION_PORT_MAX=(\d+)$"),
-)
-
-LOCKS = (
-    LockSource("cpp", "framework/languages/cpp/e2e/redis-common.sh",
-               r"^ZLINK_CPP_E2E_RUN_LOCK_PATH=(/tmp/[^\s]+)$"),
-    LockSource("dotnet", "framework/languages/dotnet/e2e/redis-common.sh",
-               r'^\s*local lock_path="(/tmp/[^\"]+)"$'),
-    LockSource("java", "framework/languages/java/e2e-runner-common.sh",
-               r'^\s*ZLINK_E2E_RUN_LOCK_PATH="(/tmp/zlink-framework-java-e2e-run\.lock)"$'),
-    LockSource("kotlin", "framework/languages/java/e2e-runner-common.sh",
-               r'^\s*ZLINK_E2E_RUN_LOCK_PATH="(/tmp/zlink-framework-kotlin-e2e-run\.lock)"$'),
-    LockSource("node", "framework/languages/node/e2e/runner-common.sh",
-               r'^NODE_E2E_LANGUAGE_LOCK_FILE="(/tmp/[^\"]+)"$'),
-)
-
-RUNNER_INVENTORIES = (
-    RunnerInventory(
-        "cpp",
-        "framework/languages/cpp/e2e",
-        (
-            "AutomaticTurnDispatch/run_e2e.sh",
-            "ChannelEgressRouting/run_e2e.sh",
-            "DiscoveryRegistryHa/run_e2e.sh",
-            "InstanceSpot/run_e2e.sh",
-            "ObservabilityOps/run_e2e.sh",
-            "PubSub/run_e2e.sh",
-            "RegistrationCodec/run_e2e.sh",
-            "RegistryMessaging/run_e2e.sh",
-            "RegistryMessaging/run_rm_a7_global_identity.sh",
-            "RelocationRetry/run_e2e.sh",
-            "ResilienceLifecycle/run_e2e.sh",
-            "RuntimeMonitoring/run_e2e.sh",
-            "SpotActorTransfer/run_e2e.sh",
-            "SpotService/run_e2e.sh",
-            "SubmitAdmission/run_e2e.sh",
-            "ToActorMessaging/run_e2e.sh",
-        ),
-        'zlink_cpp_e2e_acquire_run_lock',
-    ),
-    RunnerInventory(
-        "dotnet",
-        "framework/languages/dotnet/e2e",
-        (
-            "AutomaticTurnDispatch/run_e2e.sh",
-            "ChannelEgressRouting/run_e2e.sh",
-            "InstanceSpot/run_e2e.sh",
-            "LocationMessaging/run_e2e.sh",
-            "ObservabilityOps/run_e2e.sh",
-            "PubSub/run_e2e.sh",
-            "RegistrationCodec/run_e2e.sh",
-            "ResilienceLifecycle/run_e2e.sh",
-            "RuntimeMonitoring/run_e2e.sh",
-            "SpotActorTransfer/run_e2e.sh",
-            "SpotService/run_e2e.sh",
-            "StoreFailure/run_e2e.sh",
-            "SubmitAdmission/run_e2e.sh",
-            "ToActorMessaging/run_e2e.sh",
-        ),
-        'zlink_dotnet_e2e_acquire_run_lock "$0" "$@"',
-    ),
-    RunnerInventory(
-        "java",
-        "framework/languages/java/e2e",
-        (
-            "AutomaticTurnDispatch/run_e2e.sh",
-            "ChannelEgressRouting/run_e2e.sh",
-            "InstanceSpot/run_e2e.sh",
-            "ObservabilityOps/run_a5_e2e.sh",
-            "ObservabilityOps/run_c_e2e.sh",
-            "ObservabilityOps/run_e2e.sh",
-            "PubSub/run_e2e.sh",
-            "RegistrationCodec/run_e2e.sh",
-            "RegistryMessaging/run_e2e.sh",
-            "ResilienceLifecycle/run_e2e.sh",
-            "RuntimeMonitoring/run_e2e.sh",
-            "SpotActorTransfer/run_e2e.sh",
-            "SpotService/run_e2e.sh",
-            "StoreFailure/run_e2e.sh",
-            "SubmitAdmission/run_e2e.sh",
-            "ToActorMessaging/run_e2e.sh",
-        ),
-        'zlink_e2e_initialize java "$0" "$@"',
-    ),
-    RunnerInventory(
-        "kotlin",
-        "framework/languages/java/e2e-kotlin",
-        (
-            "AutomaticTurnDispatch/run_e2e.sh",
-            "ChannelEgressRouting/run_e2e.sh",
-            "DiscoveryRegistryHa/run_e2e.sh",
-            "InstanceSpot/run_e2e.sh",
-            "ObservabilityOps/run_a5_e2e.sh",
-            "ObservabilityOps/run_e2e.sh",
-            "PubSub/run_e2e.sh",
-            "RegistrationCodec/run_e2e.sh",
-            "RegistryMessaging/run_e2e.sh",
-            "ResilienceLifecycle/run_e2e.sh",
-            "RuntimeMonitoring/run_e2e.sh",
-            "SpotActorTransfer/run_e2e.sh",
-            "SpotService/run_e2e.sh",
-            "StoreFailure/run_e2e.sh",
-            "SubmitAdmission/run_e2e.sh",
-            "ToActorMessaging/run_e2e.sh",
-        ),
-        'zlink_e2e_initialize kotlin "$0" "$@"',
-    ),
-    RunnerInventory(
-        "node",
-        "framework/languages/node/e2e",
-        (
-            "AutomaticTurnDispatch/run_e2e.sh",
-            "ChannelEgressRouting/run_e2e.sh",
-            "DiscoveryRegistryHa/run_e2e.sh",
-            "InstanceSpot/run_e2e.sh",
-            "ObservabilityOps/run_e2e.sh",
-            "PubSub/run_e2e.sh",
-            "RegistrationCodec/run_e2e.sh",
-            "RegistryMessaging/run_e2e.sh",
-            "ResilienceLifecycle/run_e2e.sh",
-            "RuntimeMonitoring/run_e2e.sh",
-            "SpotActorTransfer/run_e2e.sh",
-            "SpotService/run_e2e.sh",
-            "SubmitAdmission/run_e2e.sh",
-            "ToActorMessaging/run_e2e.sh",
-        ),
-        'serialize_node_e2e_run "$0" "$@"',
-    ),
 )
 
 SAMPLE_NAMES = (
@@ -300,40 +119,6 @@ SAMPLE_RUNNER_INVENTORIES = (
     ),
 )
 
-AGGREGATE_RUNNERS = (
-    AggregateRunner(
-        "cpp",
-        "framework/languages/cpp/e2e/run_e2e_all.sh",
-        'run_config_once "${config}" "${scenario}" "${start_order}"',
-    ),
-    AggregateRunner(
-        "dotnet",
-        "framework/languages/dotnet/e2e/run_e2e_all.sh",
-        'run_config "$config" "$scenario"',
-        'active_config_pid="$!"',
-        'wait "$active_config_pid"',
-    ),
-    AggregateRunner(
-        "java",
-        "framework/languages/java/e2e/run_e2e_all.sh",
-        'run_scenario_with_retry "${scenario}"',
-        'active_scenario_pid="$!"',
-        'wait "${active_scenario_pid}"',
-    ),
-    AggregateRunner(
-        "kotlin",
-        "framework/languages/java/e2e-kotlin/run_e2e_all.sh",
-        'run_scenario_with_retry "${scenario}" "${selector}"',
-    ),
-    AggregateRunner(
-        "node",
-        "framework/languages/node/e2e/run_e2e_all.sh",
-        'run_config_with_retry "${config}"',
-        'active_config_pid="$!"',
-        'wait "${active_config_pid}"',
-    ),
-)
-
 SHELL_REDIS_HELPERS = (
     ShellRedisHelper(
         "framework/languages/cpp/samples/redis-common.sh",
@@ -353,30 +138,6 @@ SHELL_REDIS_HELPERS = (
         "zlink_redis_remove_attempt",
         "zlink_redis_remove_by_id",
     ),
-    ShellRedisHelper(
-        "framework/languages/cpp/e2e/redis-common.sh",
-        "zlink_redis_start_scoped",
-        "zlink_redis_remove_attempt",
-        "zlink_redis_remove_by_id",
-    ),
-    ShellRedisHelper(
-        "framework/languages/dotnet/e2e/redis-common.sh",
-        "zlink_redis_start_scoped",
-        "zlink_redis_remove_attempt",
-        "zlink_redis_remove_by_id",
-    ),
-    ShellRedisHelper(
-        "framework/languages/java/e2e-redis-common.sh",
-        "zlink_redis_start_scoped",
-        "zlink_redis_remove_attempt",
-        "zlink_redis_remove_by_id",
-    ),
-    ShellRedisHelper(
-        "framework/languages/node/e2e/redis-container.sh",
-        "start_redis_container",
-        "remove_redis_attempt",
-        "remove_redis_attempt",
-    ),
 )
 
 LANGUAGE_LABELS = {
@@ -392,20 +153,12 @@ README_PATHS = {
         "framework/doc/framework/common/sample/README.ko.md",
         "framework/doc/framework/common/sample/README.en.md",
     ),
-    "e2e": (
-        "framework/doc/framework/common/e2e/README.ko.md",
-        "framework/doc/framework/common/e2e/README.en.md",
-    ),
 }
 
 TEMPLATE_PAIRS = (
     (
         "framework/doc/framework/common/sample/runner-templates/redis-common.template.sh",
         "framework/doc/framework/common/sample/runner-templates/run_sample.template.sh",
-    ),
-    (
-        "framework/doc/framework/common/e2e/runner-templates/redis-common.template.sh",
-        "framework/doc/framework/common/e2e/runner-templates/run_e2e.template.sh",
     ),
 )
 
@@ -482,12 +235,6 @@ def verify_mirrored_ranges(
             r"^\s*local redis_min_port=(\d+)$",
             r"^\s*local redis_max_port=(\d+)$",
         ),
-        RangeSource(
-            "node", "e2e", "application",
-            "framework/languages/node/e2e/port-picker.js",
-            r"^const MIN_PORT = (\d+);$",
-            r"^const MAX_PORT = (\d+);$",
-        ),
     )
     for mirror in mirrors:
         actual = (
@@ -543,19 +290,6 @@ def verify_mirrored_ranges(
             raise ValueError(
                 f"{jvm_powershell.relative_to(ROOT)}: mirrored JVM {purpose} "
                 f"ranges are {actual}, expected {expected}"
-            )
-
-
-def verify_gradle_calls_locked(path: Path, source: str) -> None:
-    lines = source.splitlines()
-    for index, line in enumerate(lines):
-        if "gradlew" not in line:
-            continue
-        context = "\n".join(lines[max(0, index - 8):index + 1])
-        if "zlink_e2e_gradle_build_locked" not in context:
-            raise ValueError(
-                f"{path.relative_to(ROOT)}:{index + 1}: Gradle invocation is "
-                "outside the shared Java/Kotlin build-only lock"
             )
 
 
@@ -733,252 +467,23 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
     return total, bash_runners
 
 
-def verify_runner_inventories() -> int:
-    resource_markers = (
-        "RUN_ID=", "run_id=", "mktemp", "mkdir -p",
-        "zlink_cpp_e2e_allocate_", "zlink_dotnet_e2e_allocate_ports",
-        "zlink_e2e_reserve_ports", "zlink_e2e_reserve_mixed_endpoints",
-        "allocate_port", "pick_port", "zlink_redis_start_scoped",
-        "start_redis_container", "docker create", "docker start",
-    )
-    forbidden_endpoint = r"127\.0\.0\.1:(?::)?6379\b"
-    forbidden_dynamic_bind = (
-        'bind(("127.0.0.1", 0))',
-        's.bind((\'127.0.0.1\', 0))',
-        's.bind((\'127.0.0.1\',0))',
-    )
-    total = 0
-    for inventory in RUNNER_INVENTORIES:
-        root = ROOT / inventory.root
-        discovered = sorted(
-            path.relative_to(root).as_posix()
-            for path in root.rglob("run*.sh")
-            if path.name == "run_e2e.sh"
-            or re.fullmatch(r"run_.+_e2e\.sh", path.name)
-            or path.name == "run_rm_a7_global_identity.sh"
-        )
-        expected = sorted(inventory.expected)
-        if discovered != expected:
-            missing = sorted(set(expected) - set(discovered))
-            unexpected = sorted(set(discovered) - set(expected))
-            raise ValueError(
-                f"{inventory.root}: {inventory.language} E2E runner inventory "
-                f"changed; missing={missing}, unexpected={unexpected}"
-            )
-
-        for relative in expected:
-            path = root / relative
-            source = path.read_text(encoding="utf-8")
-            if not source.startswith("#!/usr/bin/env bash\n"):
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: E2E runner must declare Bash"
-                )
-            verify_explicit_bash_runner_launches(path, source)
-            lock_count = source.count(inventory.lock_marker)
-            if lock_count != 1:
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: expected one whole-run lock "
-                    f"call {inventory.lock_marker!r}, found {lock_count}"
-                )
-            lock_offset = source.index(inventory.lock_marker)
-            for marker in resource_markers:
-                resource_offset = source.find(marker)
-                if 0 <= resource_offset < lock_offset:
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: acquires the whole-run lock "
-                        f"after owned-resource marker {marker!r}"
-                    )
-            if inventory.language == "cpp":
-                cleanup_marker = "zlink_cpp_e2e_install_cleanup_trap"
-                cleanup_offset = source.find(cleanup_marker)
-                if cleanup_offset < lock_offset:
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: missing early owned-resource cleanup"
-                    )
-                for marker in resource_markers:
-                    resource_offset = source.find(marker)
-                    if 0 <= resource_offset < cleanup_offset:
-                        raise ValueError(
-                            f"{path.relative_to(ROOT)}: installs owned-resource "
-                            f"cleanup after {marker!r}"
-                        )
-            if re.search(forbidden_endpoint, source):
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: fixed or dynamic default Redis "
-                    "port 6379 bypasses the scoped helper"
-                )
-            if "ZLINK_TEST_REDIS_ENDPOINT" in source:
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: external Redis endpoint fallback "
-                    "bypasses per-run ownership"
-                )
-            if re.search(
-                r"\$\{ZLINK_[A-Z0-9_]*REDIS[A-Z0-9_]*ENDPOINT(?::-|-)",
-                source,
-            ):
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: Redis endpoint environment "
-                    "fallback bypasses per-run ownership"
-                )
-            for match in re.finditer(
-                r"[\"']keyPrefix[\"']\s*:\s*[\"']([^\"']+)[\"']",
-                source,
-            ):
-                if not re.search(r"[$%{}]", match.group(1)):
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: literal JSON keyPrefix "
-                        f"{match.group(1)!r} is shared across runs"
-                    )
-            for token in forbidden_dynamic_bind:
-                if token in source:
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: dynamic bind(0) bypasses the "
-                        "language application-port pool"
-                    )
-            if re.search(r"\bdocker\s+(?:rm|container\s+rm)\b", source):
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: Redis cleanup must use the "
-                    "shared exact-ID helper"
-                )
-            collapsed_source = re.sub(r"\\\s*\n\s*", " ", source)
-            for line in collapsed_source.splitlines():
-                if re.search(
-                    r"\bredis-cli\b.*\b(?:DEL|UNLINK|FLUSHDB|FLUSHALL)\b",
-                    line,
-                    re.IGNORECASE,
-                ):
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: broad Redis key cleanup must "
-                        "not run from an E2E runner"
-                    )
-                if re.search(
-                    r"\bdocker\s+ps\b.*(?:--filter\s+)?name=",
-                    line,
-                    re.IGNORECASE,
-                ):
-                    raise ValueError(
-                        f"{path.relative_to(ROOT)}: container name/prefix lookup "
-                        "must not be used for cleanup"
-                    )
-            if inventory.language in ("java", "kotlin"):
-                verify_gradle_calls_locked(path, source)
-            total += 1
-    return total
-
-
-def verify_aggregate_runners() -> None:
-    lock_tokens = {
-        "cpp": ("zlink_cpp_e2e_acquire_run_lock",),
-        "dotnet": ("zlink_dotnet_e2e_acquire_run_lock",),
-        "java": ("zlink_e2e_initialize", "e2e-runner-common.sh"),
-        "kotlin": ("zlink_e2e_initialize", "e2e-runner-common.sh"),
-        "node": ("serialize_node_e2e_run", "NODE_E2E_LANGUAGE_LOCK_FILE"),
-    }
-    for aggregate in AGGREGATE_RUNNERS:
-        path = ROOT / aggregate.path
-        source = path.read_text(encoding="utf-8")
-        if not source.startswith("#!/usr/bin/env bash\n"):
-            raise ValueError(f"{path.relative_to(ROOT)}: aggregate must declare Bash")
-        for token in (*lock_tokens[aggregate.language], "flock"):
-            if token in source:
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: aggregate must leave the "
-                    f"whole-run lock to each child; found {token!r}"
-                )
-        if "bash ./run_e2e.sh" not in source:
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: child runners must be invoked with Bash"
-            )
-        if re.search(r"\[\[[^\n]*!\s+-x[^\n]*run_e2e\.sh", source):
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: aggregate must accept 0644 child runners"
-            )
-        call_lines = [
-            line.strip()
-            for line in source.splitlines()
-            if aggregate.child_call in line
-        ]
-        if not call_lines:
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: missing sequential aggregate call "
-                f"{aggregate.child_call!r}"
-            )
-        if any(re.search(r"(?<!&)&\s*$", line) for line in call_lines):
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: aggregate configuration calls must "
-                "run in the foreground"
-            )
-
-        child_launch = source.find("bash ./run_e2e.sh")
-        if aggregate.active_pid_marker is not None:
-            active_pid = source.find(aggregate.active_pid_marker, child_launch)
-            wait = source.find(aggregate.wait_marker or "", active_pid)
-            if not (child_launch >= 0 and active_pid > child_launch and wait > active_pid):
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: must wait for each launched child "
-                    "before starting another configuration"
-                )
-        elif re.search(r"(?m)(?<!&)&\s*$", source):
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: synchronous aggregate unexpectedly "
-                "backgrounds a command"
-            )
-
-
-def verify_lock_reentrancy() -> None:
-    helper_contracts = {
-        "framework/languages/cpp/e2e/redis-common.sh": (
-            "zlink_cpp_e2e_run_lock_held", "return 0",
-            "exec flock --exclusive --close", 'bash "${runner}" "$@"',
-        ),
-        "framework/languages/dotnet/e2e/redis-common.sh": (
-            "ZLINK_DOTNET_E2E_RUN_LOCK_HELD", "return 0",
-            "exec flock --close", 'bash "${runner}" "$@"',
-        ),
-        "framework/languages/java/e2e-runner-common.sh": (
-            "ZLINK_JAVA_E2E_RUN_LOCK_HELD",
-            "ZLINK_KOTLIN_E2E_RUN_LOCK_HELD", "return 0",
-            "exec flock --exclusive --close", 'bash "${runner}" "$@"',
-        ),
-        "framework/languages/node/e2e/runner-common.sh": (
-            "ZLINK_NODE_E2E_LANGUAGE_LOCK_HELD", "return 0",
-            "exec flock --exclusive --close", 'bash "$runner_path" "$@"',
-        ),
-    }
-    for relative, required in helper_contracts.items():
-        path = ROOT / relative
-        source = path.read_text(encoding="utf-8")
-        if "TMPDIR" in source:
-            raise ValueError(
-                f"{path.relative_to(ROOT)}: whole-run lock must use fixed /tmp"
-            )
-        for text in required:
-            if text not in source:
-                raise ValueError(
-                    f"{path.relative_to(ROOT)}: reentrant whole-run lock is "
-                    f"missing {text!r}"
-                )
-
-
 def verify_jvm_build_lock() -> None:
     lock_path = "/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
-    e2e_helper = ROOT / "framework/languages/java/e2e-runner-common.sh"
     sample_helper = ROOT / "framework/languages/java/samples/runner-common.sh"
-    for path in (e2e_helper, sample_helper):
-        require_text(path, lock_path)
+    require_text(sample_helper, lock_path)
     require_text(
         ROOT / "framework/languages/java/samples/redis-common.ps1",
         "zlink-framework-java-kotlin-sample-gradle.lock",
     )
-    build_function = shell_function(e2e_helper, "zlink_e2e_gradle_build_locked")
+    build_function = shell_function(sample_helper, "zlink_sample_gradle_locked")
     if 'flock --exclusive --close "${lock_path}" "$@"' not in build_function:
         raise ValueError(
-            f"{e2e_helper.relative_to(ROOT)}: JVM build lock must wrap only the "
-            "requested build command and close inherited descriptors"
+            f"{sample_helper.relative_to(ROOT)}: JVM build lock must wrap only "
+            "the requested build command and close inherited descriptors"
         )
     if "exec flock" in build_function:
         raise ValueError(
-            f"{e2e_helper.relative_to(ROOT)}: JVM build lock must be released "
+            f"{sample_helper.relative_to(ROOT)}: JVM build lock must be released "
             "when the build command returns"
         )
 
@@ -1110,9 +615,7 @@ def main() -> int:
                 f"{source.language} {source.suite} {source.purpose}: "
                 f"invalid range {minimum}-{maximum}"
             )
-        suite_minimum, suite_maximum = (
-            (20000, 29999) if source.suite == "sample" else (30000, 39999)
-        )
+        suite_minimum, suite_maximum = 20000, 29999
         if minimum < suite_minimum or maximum > suite_maximum:
             raise ValueError(
                 f"{source.language} {source.suite} {source.purpose}: "
@@ -1181,30 +684,19 @@ def main() -> int:
                 f"{runner.relative_to(ROOT)}: cleanup must use the shared helper"
             )
 
-    lock_paths = {
-        source.language: exact_match(ROOT / source.path, source.pattern)
-        for source in LOCKS
-    }
-    if len(set(lock_paths.values())) != len(lock_paths):
-        raise ValueError(f"E2E language lock paths are not unique: {lock_paths}")
-
     resolved_ranges = {
         (source.language, source.suite, source.purpose): (minimum, maximum)
         for source, minimum, maximum in resolved
     }
     verify_mirrored_ranges(resolved_ranges)
     sample_runner_count, _ = verify_sample_runner_inventories()
-    runner_count = verify_runner_inventories()
-    verify_aggregate_runners()
-    verify_lock_reentrancy()
     verify_jvm_build_lock()
     redis_helper_count = verify_shell_redis_helpers()
     verify_non_shell_sample_redis_helpers()
 
     print(
         "FRAMEWORK RUNNER ISOLATION CLEAN "
-        f"ranges={len(resolved)} locks={len(lock_paths)} "
-        f"runners={runner_count} sample_runners={sample_runner_count} "
+        f"ranges={len(resolved)} sample_runners={sample_runner_count} "
         f"redis_helpers={redis_helper_count}"
     )
     return 0

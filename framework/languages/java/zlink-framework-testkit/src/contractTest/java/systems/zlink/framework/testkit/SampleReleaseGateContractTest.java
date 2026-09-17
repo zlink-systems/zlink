@@ -639,23 +639,11 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
-    void sampleAndE2eWireCallSitesUseDirectionSuffixes() throws IOException {
-        Path javaSpotService = frameworkJavaRoot().resolve("e2e/SpotService");
-        assertSourceContains(javaSpotService.resolve("Client"), ".java",
-            ".request(new Contracts.LeaveActorReq(");
-        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
-            "@ZLinkSpotActorRequest(packetName = \"LeaveActorReq\")");
-        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
-            "new Contracts.LeaveActorRes(");
-        assertSourceDoesNotContain(javaSpotService, ".java",
-            ".send(new Contracts.LeaveActorReq(");
-
+    void sampleWireCallSitesUseDirectionSuffixes() throws IOException {
         Map<Path, List<String>> offenders = new LinkedHashMap<>();
         for (Path root : List.of(
                 samplesRoot().resolve("java"),
-                samplesRoot().resolve("kotlin"),
-                frameworkJavaRoot().resolve("e2e"),
-                frameworkJavaRoot().resolve("e2e-kotlin"))) {
+                samplesRoot().resolve("kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files.filter(Files::isRegularFile)
                     .filter(SampleReleaseGateContractTest::isSampleSource)
@@ -770,9 +758,9 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
-    void kotlinSamplesAndE2eUseAddHandlerReifiedRegistrationOnly() throws IOException {
+    void kotlinSamplesUseAddHandlerReifiedRegistrationOnly() throws IOException {
         Map<Path, List<String>> offenders = new LinkedHashMap<>();
-        for (Path root : List.of(samplesRoot().resolve("kotlin"), frameworkJavaRoot().resolve("e2e-kotlin"))) {
+        for (Path root : List.of(samplesRoot().resolve("kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files
                     .filter(Files::isRegularFile)
@@ -785,7 +773,7 @@ final class SampleReleaseGateContractTest {
         }
 
         assertTrue(offenders.isEmpty(),
-            "Kotlin sample/e2e spot handler registration must use only "
+            "Kotlin sample spot handler registration must use only "
                 + "context.handlers().addHandler<MyHandler>(): " + offenders);
     }
 

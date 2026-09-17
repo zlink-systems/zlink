@@ -1,9 +1,0 @@
-{
-  "name": "@zlink-systems/e2e-registration-codec-json-only-peer",
-  "version": "0.10.0",
-  "private": true,
-  "main": "dist/Server/JsonOnlyPeer/main.js",
-  "scripts": {
-    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
-  }
-}

@@ -1,9 +1,0 @@
-{
-  "name": "@zlink-systems/e2e-submit-admission-role",
-  "version": "0.10.0",
-  "private": true,
-  "main": "dist/main.js",
-  "scripts": {
-    "build": "node ../../../node_modules/typescript/bin/tsc -p tsconfig.json"
-  }
-}

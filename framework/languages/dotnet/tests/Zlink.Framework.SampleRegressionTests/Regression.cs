@@ -6,11 +6,9 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
-    public void Sample_And_E2e_Use_Stream_Connector_Assertions()
+    public void Sample_Uses_Stream_Connector_Assertions()
     {
-        var sourceFiles = EnumerateSourceFiles(ResolveSamplesRoot())
-            .Concat(EnumerateSourceFiles(ResolveE2eRoot()))
-            .ToArray();
+        var sourceFiles = EnumerateSourceFiles(ResolveSamplesRoot()).ToArray();
         var clientFiles = sourceFiles
             .Where(path => path.Contains(
                 $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}",
@@ -32,23 +30,6 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("ScenarioAssert.That(", clientText, StringComparison.Ordinal);
         Assert.DoesNotContain("ScenarioContext.Require(", clientText, StringComparison.Ordinal);
         Assert.DoesNotContain("ReceivedCount(nameof(PlayerJoinedNotify))", clientText, StringComparison.Ordinal);
-
-        foreach (var relativePath in new[]
-                 {
-                     "AutomaticTurnDispatch/Client/Scenarios/ShutdownAwaitProbe.cs",
-                     "SpotService/Client/Scenarios/SmD8StreamReconnectRecoveryScenario.cs",
-                     "SpotService/Client/Scenarios/SmD4MultipleActorBindingScenario.cs",
-                     "SpotService/Client/Scenarios/SmD14TlsStreamValidationScenario.cs",
-                     "SpotService/Client/Scenarios/SmG1BoundActorCrashRecoveryScenario.cs"
-                 })
-        {
-            var source = File.ReadAllText(Path.Combine(
-                ResolveE2eRoot(),
-                relativePath.Replace('/', Path.DirectorySeparatorChar)));
-            Assert.Contains("ZlinkStreamAssert.ExpectFailureAsync", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("Failed = false", source, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("catch\n        {", source, StringComparison.Ordinal);
-        }
     }
 
     [Fact]
@@ -273,30 +254,17 @@ public sealed partial class RegressionTests
     [Fact]
     public void Sample_Session_Binding_Uses_BindOrGetAsync()
     {
-        var allowedExplicitRebindFiles = new HashSet<string>(StringComparer.Ordinal)
-        {
-            NormalizeRelativePath(Path.Combine("e2e", "SpotService", "Server", "MultiNode", "Handlers", "MultiNodeSessionHandlers.cs")),
-            NormalizeRelativePath(Path.Combine("e2e", "SpotService", "Server", "Play", "Handlers", "PlaySessionHandlers.cs")),
-            NormalizeRelativePath(Path.Combine("e2e", "SpotService", "Server", "Session", "Handlers", "SessionSessionHandlers.cs")),
-            NormalizeRelativePath(Path.Combine("e2e", "SpotActorTransfer", "Server", "ActorNode", "Program.cs")),
-            NormalizeRelativePath(Path.Combine("e2e", "SpotActorTransfer", "Client", "Scenarios", "StE1ANewIncarnationExplicitBindScenario.cs")),
-            NormalizeRelativePath(Path.Combine("e2e", "AutomaticTurnDispatch", "Server", "Session", "Support", "AwaitSession.cs"))
-        };
-        var sampleSessionFiles = new[] { "Bingo", "DeliveryDispatch", "SupportChat", "TicTacToe" }
+        var sessionFiles = new[] { "Bingo", "DeliveryDispatch", "SupportChat", "TicTacToe" }
             .Select(ResolveSampleRoot)
             .SelectMany(static root => EnumerateSessionRoots(root))
             .SelectMany(static root => EnumerateSourceFiles(root))
             .ToArray();
-        var e2eSessionFiles = EnumerateSourceFiles(ResolveE2eRoot()).ToArray();
-        var sessionFiles = sampleSessionFiles.Concat(e2eSessionFiles).ToArray();
-        Assert.NotEmpty(sampleSessionFiles);
-        Assert.NotEmpty(e2eSessionFiles);
+        Assert.NotEmpty(sessionFiles);
 
         var sessionText = string.Join(Environment.NewLine, sessionFiles.Select(File.ReadAllText));
         var bindAsyncOffenders = sessionFiles
             .Where(file => File.ReadAllText(file).Contains(".BindAsync(", StringComparison.Ordinal))
             .Select(file => NormalizeRelativePath(Path.GetRelativePath(ResolveDotnetRoot(), file)))
-            .Where(file => !allowedExplicitRebindFiles.Contains(file))
             .ToArray();
 
         Assert.Contains("BindOrGetAsync", sessionText, StringComparison.Ordinal);
@@ -337,7 +305,6 @@ public sealed partial class RegressionTests
             @"public\s+(?:async\s+)?(?<return>\S+)\s+OnCreateActorAsync\s*\(",
             RegexOptions.CultureInvariant);
         var offenders = EnumerateSourceFiles(ResolveSamplesRoot())
-            .Concat(EnumerateSourceFiles(ResolveE2eRoot()))
             .SelectMany(path => hookDeclaration.Matches(File.ReadAllText(path))
                 .Cast<Match>()
                 .Where(match => !string.Equals(
@@ -865,19 +832,14 @@ public sealed partial class RegressionTests
         return Path.Combine(ResolveDotnetRoot(), "samples");
     }
 
-    private static string ResolveE2eRoot()
-    {
-        return Path.Combine(ResolveDotnetRoot(), "e2e");
-    }
-
     [Fact]
-    public void Samples_And_E2E_Use_ZLinkHttpClient_Not_Raw_HttpClient()
+    public void Samples_Use_ZLinkHttpClient_Not_Raw_HttpClient()
     {
-        // 규약: 샘플·e2e의 HTTP 클라이언트는 Zlink.HttpClient(ZLinkHttpClient)만 쓴다.
+        // 규약: 샘플의 HTTP 클라이언트는 Zlink.HttpClient(ZLinkHttpClient)만 쓴다.
         // raw System.Net.Http.HttpClient 인스턴스화는 규약 위반이다.
         var root = ResolveDotnetRoot();
         var offenders = new List<string>();
-        foreach (var dir in new[] { "samples", "e2e" })
+        foreach (var dir in new[] { "samples" })
         {
             var basePath = Path.Combine(root, dir);
             if (!Directory.Exists(basePath)) continue;

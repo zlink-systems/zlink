@@ -34,7 +34,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (트리 `core/build-dev`, `core/build-release`). CMake 직접 빌드는 [빌드 가이드](./build-guide.ko.md)·[CMake 옵션](./cmake-options.ko.md) | `build.yml`의 플랫폼 job이 `core/`를 CMake로 빌드해 `core/dist/<platform>/`를 아카이브 | GitHub Release `core/vX.Y.Z` 자산 |
 | Core 로컬 prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (릴리스 아카이브 → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev 빌드 → prefix) | 모든 binding·framework job이 같은 `fetch-release.sh`를 사용 | `~/.cache/zlink/core/`, CI는 `.artifacts/core-release/` |
 | Bindings 7언어 | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows `build-windows.ps1`); 언어별 테스트 `bindings/<lang>/tests/run_tests.sh` | `bindings-release.yml`·`release-dotnet.yml` 각 job의 "Build and test" 단계 | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh`; 시나리오 e2e `e2e/<name>/run_e2e.sh`(opt-in) | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh` | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (`ZLINK_LOCAL_PACKAGE_ROOT` 필요); 샘플 `samples/<name>/<name>.sln` | `framework-dotnet.yml`(검증), `release-dotnet.yml` target `framework`(pack·push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (테스트는 `test`); Central bundle `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `framework/languages/node`에서 `npm ci && npm run build`; http-client 로컬 tgz는 `scripts/local-package/http-client/build-wsl.sh node`; 게이트 `npm run verify:ci`, 릴리스 게이트 `verify:release` | `framework-node.yml`(검증), `framework-release.yml` `release-node`(pack·publish) | npm |
@@ -139,8 +139,7 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 배포와 별개로 도는 검증이다. **모두 `workflow_dispatch` 전용이며 push·PR로 자동 실행되지 않는다.**
 돌리려면 `gh workflow run <파일> --ref <브랜치>`로 띄운다. framework CI는 공개된 binding 패키지와
-Core 릴리스 아카이브만 사용하며, e2e는 `cross-language`만 포함한다(언어별 시나리오 e2e는 각
-`run_e2e.sh`로 opt-in). 7개 샘플(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·
+Core 릴리스 아카이브만 사용하며, e2e는 `cross-language`만 포함한다. 7개 샘플(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·
 TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다. 샘플은 로컬 gate
 (`scripts/gate/framework-gate.sh`)와 각 언어의 `samples/<name>/run_sample.sh`, Node
 `npm run test:samples`로만 검증한다.

@@ -15,11 +15,7 @@ public sealed partial class RegressionTests
     [Fact]
     public void FrameworkHostBuildersRemoveDefaultConfigurationProviders()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         var hostBuilderPattern = new Regex(
             @"(?:WebApplication|Host)\.Create(?:Application|Default)?Builder\(",
             RegexOptions.CultureInvariant);
@@ -73,89 +69,6 @@ public sealed partial class RegressionTests
         {
             Environment.SetEnvironmentVariable(environmentKey, previous);
         }
-    }
-
-    [Fact]
-    public void DynamicDotnetLaunchersUsePrebuiltProjectsAndUniqueConfigurationArtifacts()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var launchers = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains(
-                $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Select(path => (Path: path, Source: File.ReadAllText(path)))
-            .Where(static file => file.Source.Contains("ArgumentList.Add(\"run\")", StringComparison.Ordinal))
-            .ToArray();
-
-        Assert.NotEmpty(launchers);
-        foreach (var (path, source) in launchers)
-            foreach (Match match in Regex.Matches(source, "ArgumentList\\.Add\\(\\\"run\\\"\\)"))
-            {
-                var boundary = Math.Min(source.Length, match.Index + 280);
-                var launch = source[match.Index..boundary];
-                var noBuildIndex = launch.IndexOf(
-                    "ArgumentList.Add(\"--no-build\")",
-                    StringComparison.Ordinal);
-                var projectIndex = launch.IndexOf(
-                    "ArgumentList.Add(\"--project\")",
-                    StringComparison.Ordinal);
-                Assert.True(
-                    noBuildIndex >= 0 && projectIndex >= 0 && noBuildIndex < projectIndex,
-                    $"{path} must launch the project already built by its runner.");
-            }
-
-        var pubSubLauncher = File.ReadAllText(Path.Combine(
-            e2eRoot, "PubSub", "Client", "Support", "ServerProcessLauncher.cs"));
-        Assert.Contains(
-            "CreateServerStartInfo(options.PublisherProject, \"pub-restart\"",
-            pubSubLauncher,
-            StringComparison.Ordinal);
-
-        var locationLauncher = File.ReadAllText(Path.Combine(
-            e2eRoot, "LocationMessaging", "Client", "Support", "DynamicClusterLauncher.cs"));
-        Assert.Contains("scenarioConfigDir", locationLauncher, StringComparison.Ordinal);
-        Assert.Contains("scenarioLogDir", locationLauncher, StringComparison.Ordinal);
-        Assert.Contains("var processName = $\"{scenarioName}-{name}\"", locationLauncher,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void DynamicServerReadinessUsesTheThreeSecondLocalBound()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var pubSub = File.ReadAllText(Path.Combine(
-            e2eRoot, "PubSub", "Client", "Support", "StateObservation.cs"));
-        Assert.Contains("ReadinessTimeout = TimeSpan.FromSeconds(3)", pubSub, StringComparison.Ordinal);
-        Assert.Contains("ReadinessPollInterval = TimeSpan.FromMilliseconds(100)", pubSub,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("TimeSpan.FromSeconds(20)", pubSub, StringComparison.Ordinal);
-        Assert.DoesNotContain("ContinueWith", pubSub, StringComparison.Ordinal);
-
-        foreach (var path in new[]
-                 {
-                     Path.Combine(e2eRoot, "ResilienceLifecycle", "Client", "Support",
-                         "ResilienceProcessManager.cs"),
-                     Path.Combine(e2eRoot, "StoreFailure", "Client", "Support",
-                         "StoreFailureProcessManager.cs"),
-                     Path.Combine(e2eRoot, "LocationMessaging", "Client", "Support",
-                         "DynamicClusterLauncher.cs")
-                 })
-        {
-            var source = File.ReadAllText(path);
-            Assert.Contains("ReadinessTimeout = TimeSpan.FromSeconds(3)", source, StringComparison.Ordinal);
-            Assert.Contains("ReadinessPollInterval = TimeSpan.FromMilliseconds(100)", source,
-                StringComparison.Ordinal);
-            Assert.DoesNotContain("for (var i = 0; i < 120", source, StringComparison.Ordinal);
-            Assert.Contains("error.Kind is ZLinkFrameworkErrorKind.Unavailable", source, StringComparison.Ordinal);
-            Assert.Contains("or ZLinkFrameworkErrorKind.DeadlineExceeded", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("error.RetryAdvice", source, StringComparison.Ordinal);
-        }
-
-        var monitoring = File.ReadAllText(Path.Combine(
-            e2eRoot, "RuntimeMonitoring", "Client", "Scenarios", "MonD1FailureRecoveryScenario.cs"));
-        Assert.Contains("for (var attempt = 0; attempt < 30; attempt++)", monitoring,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("for (var attempt = 0; attempt < 100; attempt++)", monitoring,
-            StringComparison.Ordinal);
     }
 
     [Theory]
@@ -235,42 +148,6 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void AllE2eApplicationsUseTypedFileConfigurationWithoutEnvironmentAccess()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var sourceFiles = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
-
-        foreach (var sourceFile in sourceFiles)
-        {
-            var source = File.ReadAllText(sourceFile);
-            Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("Environment.SetEnvironmentVariable", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("AddEnvironmentVariables", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("StartsWith(\"--\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("TrimStart('-')", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("WriteArguments", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--redis-endpoint\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--redis-key-prefix\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--log-dir\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--role\"", source, StringComparison.Ordinal);
-        }
-
-        var runners = Directory.EnumerateFiles(e2eRoot, "run_e2e.sh", SearchOption.AllDirectories);
-        foreach (var runner in runners)
-        {
-            var source = File.ReadAllText(runner);
-            Assert.Contains("umask 077", source, StringComparison.Ordinal);
-            Assert.Contains("CONFIG_DIR=\"$(mktemp -d)\"", source, StringComparison.Ordinal);
-            Assert.Contains("rm -rf \"$CONFIG_DIR\"", source, StringComparison.Ordinal);
-            Assert.Contains("write_role_config.py", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("env ZLINK_E2E_RID", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("ZLINK_DEBUG_FRAMEWORK_", source, StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
     public void PowerShellSampleRunnerCannotRemoveRedisBySharedPrefix()
     {
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
@@ -283,43 +160,6 @@ public sealed partial class RegressionTests
         Assert.Matches(
             @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
             helper);
-    }
-
-    [Fact]
-    public void SpotServiceScenariosDoNotRetryConnectOrRequests()
-    {
-        var scenarios = Path.Combine(ResolveDotnetRoot(), "e2e", "SpotService", "Client", "Scenarios");
-        var source = string.Join('\n', Directory.EnumerateFiles(scenarios, "*.cs")
-            .Select(File.ReadAllText));
-
-        Assert.DoesNotContain("Actor auth did not become routable", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Last error:", source, StringComparison.Ordinal);
-
-        var reconnect = File.ReadAllText(Path.Combine(scenarios, "SmD8StreamReconnectRecoveryScenario.cs"));
-        var slowHandler = File.ReadAllText(Path.Combine(ResolveDotnetRoot(), "e2e", "SpotService", "Server",
-            "Play", "Handlers", "PlayActorHandlers.cs"));
-        Assert.DoesNotContain("Task.Delay", reconnect, StringComparison.Ordinal);
-        Assert.Contains("actor-slow-ping-started", reconnect, StringComparison.Ordinal);
-        Assert.Contains("actor-slow-ping-started", slowHandler, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ServerConfigurationErrorsDoNotAdvertiseRemovedCliOptions()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        foreach (var configuration in new[]
-                 {
-                     "LocationMessaging", "RuntimeMonitoring", "RegistrationCodec",
-                     "SpotService", "StoreFailure", "ResilienceLifecycle"
-                 })
-        {
-            var serverRoot = Path.Combine(e2eRoot, configuration, "Server");
-            var source = string.Join('\n', Directory.EnumerateFiles(serverRoot, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                               && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-                .Select(File.ReadAllText));
-            Assert.DoesNotMatch("\\\"--(?!config(?:\\\"|=))", source);
-        }
     }
 
     [Fact]
@@ -418,100 +258,6 @@ public sealed partial class RegressionTests
         Assert.True(
             registry.IndexOf("consoles = _consoles.Values.ToArray()", StringComparison.Ordinal)
             < registry.IndexOf("foreach (var console in consoles)", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void AutomaticTurnDispatchScenariosOwnTheirVerificationFlows()
-    {
-        var clientRoot = Path.Combine(ResolveDotnetRoot(), "e2e", "AutomaticTurnDispatch", "Client");
-        var scenarios = Path.Combine(clientRoot, "Scenarios");
-        Assert.False(File.Exists(Path.Combine(scenarios, "ExecutionTurnScenarioSuite.cs")));
-
-        var context = File.ReadAllText(Path.Combine(scenarios, "ExecutionTurnScenarioContext.cs"));
-        Assert.DoesNotMatch("Td[A-G][0-9]+Async", context);
-        Assert.DoesNotMatch("(?:public|internal)\\s+IZlinkStreamConnector\\s+\\w+", context);
-
-        var scenarioFiles = Directory.EnumerateFiles(scenarios, "Td*.cs").OrderBy(path => path).ToArray();
-        Assert.Equal(30, scenarioFiles.Length);
-        foreach (var path in scenarioFiles)
-        {
-            var source = File.ReadAllText(path);
-            Assert.DoesNotMatch("=>\\s*(?:Td\\w+|\\w+Probe)\\.RunAsync", source);
-            Assert.DoesNotMatch("RunAsync\\([^)]*\\)\\s*=>", source);
-        }
-
-        var program = File.ReadAllText(Path.Combine(clientRoot, "Program.cs"));
-        foreach (var probe in Directory.EnumerateFiles(scenarios, "*Probe.cs"))
-            Assert.Contains(Path.GetFileNameWithoutExtension(probe), program, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void E2eRunnersFailTheFirstExecutionInsteadOfRetryingBindFailures()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        foreach (var runnerPath in new[]
-                 {
-                     Path.Combine(e2eRoot, "run_e2e_all.sh"),
-                     Path.Combine(e2eRoot, "SpotService", "run_e2e.sh")
-                 })
-        {
-            var runner = File.ReadAllText(runnerPath);
-            Assert.DoesNotContain("BIND_RETRY_PATTERN", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("retry after transient bind failure", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("retrying child", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("--max-attempts", runner, StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
-    public void SpotActorTransferSourceDownAssertionCannotBeCaughtAsTransportFailure()
-    {
-        var scenario = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "e2e", "SpotActorTransfer", "Client", "Scenarios",
-            "StC1SourceDownBeforeCommitScenario.cs"));
-
-        Assert.DoesNotContain("TimeoutException or InvalidOperationException", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("Task.Delay", scenario, StringComparison.Ordinal);
-        Assert.Contains("if (response is not null)", scenario, StringComparison.Ordinal);
-        Assert.Contains("ZlinkStreamAssert.Ensure(response.Accepted", scenario, StringComparison.Ordinal);
-        Assert.Contains("pending_admission_expired actor={actorId}", scenario, StringComparison.Ordinal);
-        Assert.Contains("WaitRuntimeEvidenceAsync(context.NodeB, 30000", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("DrainAsync(context.NodeB)", scenario, StringComparison.Ordinal);
-
-        var clientRoot = Path.Combine(ResolveDotnetRoot(), "e2e", "SpotActorTransfer", "Client");
-        var clientSource = string.Join('\n', Directory.EnumerateFiles(clientRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText));
-        Assert.DoesNotContain("WaitBoundPushAsync", clientSource, StringComparison.Ordinal);
-        Assert.DoesNotContain(".PacketName(nameof(", clientSource, StringComparison.Ordinal);
-        Assert.Contains(".WaitFor<BoundPushNotify>()", clientSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void E2eOptionalConstructorSettingsHaveExplicitDefaults()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var optionRecords = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Select(path => (Path: path, Source: File.ReadAllText(path)))
-            .Where(static file => file.Source.Contains("E2eConfiguration.Load<", StringComparison.Ordinal))
-            .SelectMany(static file => Regex.Matches(
-                    file.Source,
-                    @"(?:internal|public)\s+sealed\s+record\s+\w+Options\s*\((?<parameters>.*?)\)\s*(?:\{|;)",
-                    RegexOptions.Singleline)
-                .Select(match => (file.Path, Parameters: match.Groups["parameters"].Value)));
-
-        foreach (var (path, parameters) in optionRecords)
-        {
-            var missingDefaults = Regex.Matches(
-                    parameters,
-                    @"\b[\w<>]+\?\s+\w+\s*(?=,|$)",
-                    RegexOptions.Multiline)
-                .Select(static match => match.Value)
-                .ToArray();
-            Assert.True(
-                missingDefaults.Length == 0,
-                $"{path} has nullable constructor settings without '= null': {string.Join(", ", missingDefaults)}");
-        }
     }
 
     [Fact]
@@ -827,13 +573,9 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void SampleAndE2eClientsUseTheConnectorAssertionSurface()
+    public void SampleClientsUseTheConnectorAssertionSurface()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
             foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
                          .Where(static path => path.Contains(
@@ -848,13 +590,9 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void SampleAndE2eClientsDoNotSynchronouslyUnwrapAsyncOperations()
+    public void SampleClientsDoNotSynchronouslyUnwrapAsyncOperations()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
             foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
                          .Where(static path => path.Contains(
@@ -919,27 +657,5 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("Context.Actors.Bound.ToArray()", session, StringComparison.Ordinal);
         Assert.DoesNotContain("NotifyDisconnectedAsync(cancellationToken)", session,
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void EveryE2eScenarioStartsWithItsVerificationPurpose()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var scenarioFiles = Directory.EnumerateFiles(
-                e2eRoot,
-                "*Scenario.cs",
-                SearchOption.AllDirectories)
-            .Where(static path => path.Contains(
-                $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}Scenarios{Path.DirectorySeparatorChar}"))
-            .ToArray();
-
-        Assert.NotEmpty(scenarioFiles);
-        foreach (var scenarioFile in scenarioFiles)
-        {
-            var firstLine = File.ReadLines(scenarioFile).FirstOrDefault();
-            Assert.True(
-                firstLine?.StartsWith("// Verifies ", StringComparison.Ordinal) == true,
-                $"{scenarioFile} must start with a short verification-purpose comment.");
-        }
     }
 }

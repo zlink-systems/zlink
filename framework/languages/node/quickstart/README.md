@@ -153,9 +153,8 @@ three points:
    handler is registered under the packet name `'Hello'` (matching the class name) with
    `mesh.channel('greeting').server().addRequestHandler(PacketNames.hello, HelloHandler)` —
    the same explicit-registration style the guide already uses for the handler side. This
-   matches how the framework's own tested code does it (e.g.
-   `e2e/RegistrationCodec/Server/Main/main-host.ts`, which sends `new EchoAutoReq(...)`
-   rather than an object literal) — read for pattern confirmation, not copied as source.
+   matches how the framework's own tested code does it: a message class instance is
+   sent, not an object literal.
 2. **A wildcard bind host needs an explicit advertise host.** The guide listens with
    `.listen('tcp://0.0.0.0:7101')` and stops there. Doing exactly that throws at startup:
    `ZLinkConfigurationException: SpotNode 'services' router must define an advertise host
@@ -164,11 +163,10 @@ three points:
    `Client/main.ts` add `.setAdvertiseHost('127.0.0.1')` right after `.listen(...)`.
 3. **The client needs its own real HTTP server, and it isn't NestJS's HTTP module.** The
    guide's client tab shows a NestJS `@Controller`/`@Get('/hello/:name')` HTTP handler
-   injecting `ZLINK_ROUTE_CLIENT`. Nowhere in this repository's own Node samples, e2e tests,
+   injecting `ZLINK_ROUTE_CLIENT`. Nowhere in this repository's own Node samples, tests
    or packages is `@Controller`/`@Get` actually used (checked with
-   `grep -rl '@Controller(\|@Get('` across `packages/`, `samples/`, `e2e/`, `test/` — no
-   hits) — every process that needs HTTP in this codebase (e.g.
-   `e2e/RegistrationCodec/Server/Main/main-host.ts`) instead calls
+   `grep -rl '@Controller(\|@Get('` across `packages/`, `samples/`, `test/` — no
+   hits) — every process that needs HTTP in this codebase instead calls
    `NestFactory.createApplicationContext(...)` (a DI-only Nest context, no HTTP listener)
    and layers a plain `node:http` server on top to reach `ZLINK_ROUTE_CLIENT` through
    `app.get(...)`. `Client/main.ts` follows that same tested shape rather than the
