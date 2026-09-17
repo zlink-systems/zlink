@@ -578,22 +578,54 @@ public sealed partial class RegressionTests
     [Fact]
     public void SampleRunnersFailWhenRoleCleanupRequiresSigkill()
     {
-        // The bash side of this contract used to be enforced by the aggregate run_samples.sh,
-        // which set ZLINK_SAMPLE_TEARDOWN_STATUS_FILE around each per-sample run and failed the
-        // whole invocation with status 137 when the file was non-empty. That file is gone
-        // (e106104ffe dropped the per-language batch runners, #405) and nothing else in the repo
-        // sets that variable or reads the resulting file, so a role that needs SIGKILL during
-        // shell-side cleanup no longer fails a bash run_sample.sh invocation or the gate
-        // (scripts/gate/framework-gate.sh calls run_sample.sh directly per sample). What remains
-        // current is the recording half still shared by every run_sample.sh through
-        // redis-common.sh, and the PowerShell side, which never depended on an aggregate: each
-        // run_sample.ps1 calls Stop-SampleProcesses directly and it throws on its own.
+        // Both sides state the same rule in the one place that escalates a role from the
+        // graceful stop to a forced kill. On bash that is zlink_sample_stop_processes in
+        // redis-common.sh, whose verdict is zlink_sample_assert_graceful_teardown; because bash
+        // keeps the shell's exit status across an EXIT trap unless the trap itself exits, every
+        // run_sample.sh installs zlink_sample_exit_trap rather than its own cleanup, and the two
+        // samples that tear down early and drop the trap call the assertion themselves. The
+        // aggregate run_samples.sh that used to carry the bash half through
+        // ZLINK_SAMPLE_TEARDOWN_STATUS_FILE is gone (e106104ffe, #405), and that env-var and
+        // status-file protocol went with it (#575). On PowerShell the rule lives in
+        // Stop-SampleProcesses, which throws on its own.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
         var shellHelper = File.ReadAllText(Path.Combine(samplesRoot, "redis-common.sh"));
         var powershellHelper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
-        Assert.Contains("builtin kill \"$@\"", shellHelper, StringComparison.Ordinal);
-        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).\")",
+            shellHelper, StringComparison.Ordinal);
+        Assert.Contains("zlink_sample_assert_graceful_teardown() {", shellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("  exit 137\n}", shellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "zlink_sample_exit_trap() {\n  local status=$?\n  cleanup\n" +
+            "  zlink_sample_assert_graceful_teardown\n  exit \"${status}\"\n}",
+            shellHelper, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper,
+            StringComparison.Ordinal);
+
+        var shellRunners = Directory
+            .EnumerateFiles(samplesRoot, "run_sample.sh", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.NotEmpty(shellRunners);
+        foreach (var path in shellRunners)
+        {
+            var runner = File.ReadAllText(path);
+            Assert.Contains("\ntrap zlink_sample_exit_trap EXIT\n", runner, StringComparison.Ordinal);
+            Assert.DoesNotContain("\ntrap cleanup EXIT\n", runner, StringComparison.Ordinal);
+            // A sample that drops the trap to print its marker after teardown still has to take
+            // the verdict, otherwise the forced kill is observed and nothing acts on it.
+            if (runner.Contains("\ntrap - EXIT\n", StringComparison.Ordinal))
+            {
+                Assert.True(
+                    runner.IndexOf("\ntrap - EXIT\n", StringComparison.Ordinal) <
+                    runner.IndexOf("\nzlink_sample_assert_graceful_teardown\n", StringComparison.Ordinal),
+                    $"{path} drops its EXIT trap without asserting graceful teardown.");
+            }
+        }
+
         Assert.Contains("$script:SampleProcessNames[$process.Id] = $Name", powershellHelper,
             StringComparison.Ordinal);
         Assert.Contains("$process.ExitCode -eq 137 -or $process.ExitCode -eq -9", powershellHelper,

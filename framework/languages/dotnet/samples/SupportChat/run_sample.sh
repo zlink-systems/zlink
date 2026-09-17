@@ -31,7 +31,7 @@ cleanup() {
     echo "runDir=${RUN_DIR}"
   fi
 }
-trap cleanup EXIT
+trap zlink_sample_exit_trap EXIT
 
 read -r -a PORTS <<<"$(python3 - <<'PY'
 import random
@@ -213,4 +213,5 @@ wait_log_at_least 1 "supportchat-conversation status=Closed conversation=" "${LO
 RUN_SUCCEEDED=1
 cleanup
 trap - EXIT
+zlink_sample_assert_graceful_teardown
 echo "supportchat-placement=completed"
