@@ -985,6 +985,71 @@ test('stream session node runtime maps endpointless monitor disconnect to a sing
   await runtime.dispose();
 });
 
+// Spec server 04-session §2/§7: a session exists once the handshake succeeds,
+// and its connect/disconnect callbacks are the base surface. A peer that
+// connects and never sends - a push-only console - must still be admitted and
+// released, so the socket monitor has to be drained while the data socket stays
+// idle. The poller here never reports readable, which is what a real stream
+// node sees between packets.
+test('stream session node runtime observes connect and disconnect while the data socket stays idle', async () => {
+  const socket = new FakeStreamSocket();
+  const events = [];
+  const queued = [];
+  let monitorHandler;
+  const runtime = createStreamRuntime({
+    socket,
+    readablePoller: idlePoller(),
+    monitor: {
+      onEvent(handler) { monitorHandler = handler; },
+      drain() {
+        let count = 0;
+        while (queued.length > 0) {
+          monitorHandler(queued.shift());
+          count += 1;
+        }
+        return count;
+      }
+    },
+    sessionFactory(context) {
+      return {
+        context,
+        async onConnected(ctx) { events.push(['connected', ctx.sessionId]); },
+        async onDisconnected(ctx) { events.push(['disconnected', ctx.sessionId]); }
+      };
+    }
+  });
+
+  runtime.start();
+  // Negative control: with nothing queued the runtime must report nothing. A
+  // drain loop that invented sessions would make the assertions below vacuous.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.deepEqual(events, []);
+
+  queued.push({
+    nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    value: 0,
+    localAddr: 'tcp://local',
+    remoteAddr: 'tcp://remote-idle',
+    routingId: 'session-idle'
+  });
+  await waitForCondition(() => events.length === 1, 'idle connect observed', 2000);
+  assert.deepEqual(events, [['connected', 'session-idle']]);
+
+  queued.push({
+    nativeEvent: framework.ZLinkSocketNativeEventType.Disconnected,
+    value: 0,
+    localAddr: 'tcp://local',
+    remoteAddr: 'tcp://remote-idle',
+    routingId: 'session-idle'
+  });
+  await waitForCondition(() => events.length === 2, 'idle disconnect observed', 2000);
+  assert.deepEqual(events, [
+    ['connected', 'session-idle'],
+    ['disconnected', 'session-idle']
+  ]);
+  await runtime.dispose();
+});
+
 test('stream session node runtime consumes a removed session tombstone before a late endpointless disconnect', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
@@ -2171,6 +2236,22 @@ function readyPoller() {
     wait() { return true; },
     waitForReadable() {
       return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
+    dispose() {}
+  };
+}
+
+// A data socket that never becomes readable: the receive loop parks and only an
+// independent monitor drain can still report connection lifecycle events.
+function idlePoller() {
+  return {
+    wait() { return false; },
+    waitForReadable(signal) {
+      return new Promise((resolve) => {
+        if (signal === undefined) return;
+        signal.addEventListener('abort', () => resolve(false), { once: true });
+      });
     },
     markDrained() {},
     dispose() {}
