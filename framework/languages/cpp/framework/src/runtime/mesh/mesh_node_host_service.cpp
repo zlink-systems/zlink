@@ -158,6 +158,51 @@ class terminal_callback_guard_t final
     std::function<void ()> _release;
 };
 
+/* The reservation's immutable creation intent is an Application payload
+ * envelope (packet name + content type + serialized body), not the bare
+ * serialized request.  .NET, Java and Node all write and read it that way, and
+ * Node fences the packet name on read, so a bare body is refused by every
+ * decoding target (#549). */
+constexpr std::string_view framework_creation_packet_name = "ZLinkFrameworkCreationRequest";
+
+std::vector<std::byte> encode_actor_creation_intent (const std::string &content_type,
+                                                     std::vector<std::uint8_t> body)
+{
+    const auto encoded = protocol::encode_application_payload (protocol::application_payload_t{
+      std::string (framework_creation_packet_name),
+      content_type.empty () ? std::string (messaging::envelope_codec_t::default_content_type)
+                            : content_type,
+      std::move (body)});
+    std::vector<std::byte> result;
+    result.reserve (encoded.size ());
+    for (const auto value : encoded)
+        result.push_back (static_cast<std::byte> (value));
+    return result;
+}
+
+std::optional<std::vector<std::byte>>
+decode_actor_creation_intent (const std::vector<std::byte> &stored)
+{
+    try {
+        std::vector<std::uint8_t> bytes;
+        bytes.reserve (stored.size ());
+        for (const auto value : stored)
+            bytes.push_back (std::to_integer<std::uint8_t> (value));
+        const auto application = protocol::decode_application_payload (bytes);
+        if (application.packet_name != framework_creation_packet_name)
+            return std::nullopt;
+        const auto body = application.payload_bytes ();
+        std::vector<std::byte> result;
+        result.reserve (body.size ());
+        for (const auto value : body)
+            result.push_back (static_cast<std::byte> (value));
+        return result;
+    }
+    catch (...) {
+        return std::nullopt;
+    }
+}
+
 std::optional<std::vector<std::byte>>
 read_actor_creation_request (const std::shared_ptr<location_repository_t> &store,
                              const protocol::actor_create_header_t &request)
@@ -190,7 +235,7 @@ read_actor_creation_request (const std::shared_ptr<location_repository_t> &store
     if (!payload || snapshot->pending_creation->request_encoded_size != payload->size ()
         || snapshot->pending_creation->request_sha256 != sha256 (*payload))
         return std::nullopt;
-    return payload;
+    return decode_actor_creation_intent (*payload);
 }
 
 bool capacity_available (const capacity_usage_t &usage)
@@ -313,6 +358,32 @@ actor_create_result_t actor_result_from_terminal (const creation_terminal_record
         return actor_create_rejected_t{std::move (reply)};
     throw framework_exception_t (framework_error_kind_t::internal_failure,
                                  "Actor creation operation previously failed");
+}
+
+/* The Location Store reservation record keeps the Application's creation
+ * intent (requestContentReference/requestSha256/requestEncodedSize) and the
+ * Framework's Actor authority payload in two separate slots.  Both the
+ * Creating reservation and the Ready completion write the same canonical
+ * authority body for the chosen placement target; only the state differs.
+ * The target decodes this slot before it materializes the Actor, so the
+ * Application request must never be written here (#549). */
+std::vector<std::byte> target_actor_authority_payload (actor_authority_state_t state,
+                                                       const std::string &stable_type,
+                                                       const actor_id_t &actor_id,
+                                                       const mesh_node_descriptor_t &target)
+{
+    return encode_actor_authority_payload (actor_authority_payload_t{
+      .state = state,
+      .stable_type = stable_type,
+      .actor_id = std::string (actor_id.value ()),
+      .current_spot_id = target.entry_spot_id.value_or (target.rid.to_string ()),
+      .current_spot_generation = target.lifecycle_generation,
+      .current_spot_kind = actor_authority_spot_kind_t::entry,
+      .owner_id = target.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (target.lease_generation),
+      .mesh_name = target.mesh_name,
+      .node_rid = actor_authority_node_rid (target.rid),
+      .node_generation = target.lifecycle_generation});
 }
 
 } // namespace
@@ -454,18 +525,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
             ->complete_creation (
               {reserve_key, fence,
                object_creation_completed_t{
-                 encode_actor_authority_payload (actor_authority_payload_t{
-                   .state = actor_authority_state_t::ready,
-                   .stable_type = stable_type,
-                   .actor_id = std::string (actor_id.value ()),
-                   .current_spot_id = target.entry_spot_id.value_or (target.rid.to_string ()),
-                   .current_spot_generation = target.lifecycle_generation,
-                   .current_spot_kind = actor_authority_spot_kind_t::entry,
-                   .owner_id = target.owner_id,
-                   .owner_lease_generation = static_cast<std::uint64_t> (target.lease_generation),
-                   .mesh_name = target.mesh_name,
-                   .node_rid = actor_authority_node_rid (target.rid),
-                   .node_generation = target.lifecycle_generation}),
+                 target_actor_authority_payload (actor_authority_state_t::ready, stable_type,
+                                                 actor_id, target),
                  publication}})
             .result ();
         if (!completed)
@@ -753,12 +814,15 @@ mesh_node_host_service_t::create_actor (bool exclusive,
       target.rid == source_rid
         ? std::optional<std::uint64_t>{}
         : (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
-    std::vector<std::byte> request_bytes;
+    std::vector<std::uint8_t> request_body;
+    std::string request_content_type;
     if (request) {
-        const auto raw = detail::message_to_raw (*request, *_serializers);
-        const auto bytes = raw.bytes ();
-        request_bytes.assign (bytes.begin (), bytes.end ());
+        request_body = detail::message_to_raw (*request, *_serializers).to_bytes ();
+        if (!request->_packet_name.empty ())
+            request_content_type = _serializers->content_type (request->_type);
     }
+    const auto request_bytes =
+      encode_actor_creation_intent (request_content_type, std::move (request_body));
     object_reserve_request_t reserve{
       .key = {placement_object_kind_t::actor, std::string (actor_id.value ())},
       .intent = {.stable_type = stable_type,
@@ -769,7 +833,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                  .node_rid = node_rid_t::from_string (target.rid.to_string ()),
                  .node_lifecycle_generation = target.lifecycle_generation,
                  .owner = {target.owner_id, target.lease_generation}},
-      .creating_payload = request_bytes,
+      .creating_payload = target_actor_authority_payload (actor_authority_state_t::creating,
+                                                          stable_type, actor_id, target),
       .capacity_bundle = {.actor_slots = 1}};
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = _location_store->reserve (reserve).result ().value ();
@@ -815,6 +880,10 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                               .node_rid = node_rid_t::from_string (target.rid.to_string ()),
                               .node_lifecycle_generation = target.lifecycle_generation,
                               .owner = {target.owner_id, target.lease_generation}};
+            //  The authority payload names the placement target, so it is
+            //  rewritten with the reservation target it belongs to.
+            reserve.creating_payload = target_actor_authority_payload (
+              actor_authority_state_t::creating, stable_type, actor_id, target);
             continue;
         }
         if (const auto *winner = std::get_if<object_reserved_t> (&reserved)) {
@@ -858,6 +927,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                       .node_rid = node_rid_t::from_string (target.rid.to_string ()),
                                       .node_lifecycle_generation = target.lifecycle_generation,
                                       .owner = {target.owner_id, target.lease_generation}};
+                    reserve.creating_payload = target_actor_authority_payload (
+                      actor_authority_state_t::creating, stable_type, actor_id, target);
                     continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
@@ -939,18 +1010,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             object_creation_completion_t completion;
             if (accepted)
                 completion = object_creation_completed_t{
-                  encode_actor_authority_payload (actor_authority_payload_t{
-                    .state = actor_authority_state_t::ready,
-                    .stable_type = stable_type,
-                    .actor_id = std::string (actor_id.value ()),
-                    .current_spot_id = target.entry_spot_id.value_or (target.rid.to_string ()),
-                    .current_spot_generation = target.lifecycle_generation,
-                    .current_spot_kind = actor_authority_spot_kind_t::entry,
-                    .owner_id = target.owner_id,
-                    .owner_lease_generation = static_cast<std::uint64_t> (target.lease_generation),
-                    .mesh_name = target.mesh_name,
-                    .node_rid = actor_authority_node_rid (target.rid),
-                    .node_generation = target.lifecycle_generation}),
+                  target_actor_authority_payload (actor_authority_state_t::ready, stable_type,
+                                                  actor_id, target),
                   publication};
             else
                 completion = object_creation_rejected_t{publication};
