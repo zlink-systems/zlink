@@ -538,10 +538,21 @@ Bind, rebind, disconnect와 request correlation은
 | ActorRef로 직접 지정한 호출의 generation이 current generation과 다르다. | `InvalidOperation`으로 끝난다. |
 | Actor가 commit 전 seal 상태다. | `Unavailable`로 끝난다. |
 | Bound session이 필요한 작업에 유효한 binding이 없다. | `InvalidOperation`으로 끝난다. Binding을 먼저 만들어야 하는 순서 문제다. |
+| Binding이 있었으나 session이 닫힌 뒤 bound session으로 one-way를 보낸다. | 호출은 정상 완료하고 frame은 보내지 않는다. 관측에 dropped로 남긴다. |
+
+<a id="where-a-bound-session-failure-surfaces"></a>
+앞의 두 줄은 서로 다른 경우다. Binding을 한 번도 만들지 않은 상태는 순서 문제이므로
+`InvalidOperation`이고, 만들었던 binding이 닫힌 것은 상대가 사라진 것이므로 one-way를
+실패로 만들지 않는다. 후자를 request로 보내면 앞 표의 나머지 줄과 같이 target 오류로 끝난다.
+
+Bound session 실패도 다른 호출 실패와 같은 자리에서 관측한다. 호출 객체를 만드는 accessor가
+아니라 그 호출의 terminal에서 끝나며, 언어별 비동기 완료 수단으로 관찰할 수 있다. Accessor가
+먼저 던지면 같은 계약의 호출이 언어마다 다른 표면을 갖게 된다.
 
 Handler가 없거나 decode가 실패하거나 application handler가 예외를 반환하면 request는
 복원 가능한 reply route로 오류를 반환한다. One-way message는 runtime 관측 경로에
-오류를 기록한다.
+오류를 기록한다. 이 기록으로 끝난 one-way 실패는 그 Actor의 이후 호출을 실패하게 만들지
+않는다. Actor는 계속 사용할 수 있는 상태로 남는다.
 
 Drain 중에는 새로운 Actor 생성과 membership 배정을 막는다. 이미 수락한 Actor turn과
 control transaction은 deadline까지 진행한다.
