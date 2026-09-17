@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.spots;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -23,6 +22,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkInlineCreationContentCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
@@ -1008,7 +1008,7 @@ public final class ZLinkSpotRuntime
                 ZLinkPlacementObjectKind.USER_SPOT,
                 key,
                 stableType,
-                inlineCreationIntent(envelope),
+                ZLinkInlineCreationContentCodec.encode(envelope),
                 sha256(envelope),
                 envelope.length,
                 new ZLinkMeshNodeDescriptorKey(meshName, target.rid()),
@@ -1587,13 +1587,6 @@ public final class ZLinkSpotRuntime
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
-    }
-
-    private static String inlineCreationIntent(byte[] value) {
-        return "inline-v1:"
-            + Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(value);
     }
 
     private abstract class UserSpotCall {
@@ -2484,7 +2477,7 @@ public final class ZLinkSpotRuntime
                 systems.zlink.framework.runtime.locations
                     .ZLinkAuthorityKeyCodec.spot(spotId),
                 stableType,
-                inlineCreationIntent(requestBytes),
+                ZLinkInlineCreationContentCodec.encode(requestBytes),
                 sha256(requestBytes),
                 requestBytes.length,
                 descriptorKey(target),

@@ -79,6 +79,44 @@ test('store record golden fixture: key derivation and value byte vectors decode 
   }
 });
 
+// 21-location-runtime.md#2.4: pendingCreation.requestContentReference is
+// `inline-v1:{base64url}` and no other form is recognized; the node that runs
+// the creation verifies the decoded bytes against the same record's
+// requestEncodedSize and requestSha256. This drives the production codec with
+// the fixture's accepted and rejected vectors, so node demonstrates rejection
+// as well as acceptance.
+test('store record golden fixture: creation content references accept and reject as pinned', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/store-record-v1.json'
+  ), 'utf8'));
+  const codec = require(
+    '../../packages/framework/dist/runtime/host/user-spot-creation-coordinator'
+  );
+  const creation = fixture.creationContentReference;
+
+  assert.ok(creation.accepted.length > 0);
+  for (const item of creation.accepted) {
+    const expected = Buffer.from(item.payloadHex, 'hex');
+    const payload = codec.decodeLocationCreationContent(
+      item.reference,
+      Buffer.from(item.requestSha256, 'hex'),
+      BigInt(item.requestEncodedSize)
+    );
+    assert.deepEqual(payload, expected, item.name);
+    assert.equal(codec.encodeLocationCreationContent(expected), item.reference, item.name);
+  }
+
+  assert.ok(creation.rejected.length > 0);
+  for (const item of creation.rejected) {
+    assert.throws(() => codec.decodeLocationCreationContent(
+      item.reference,
+      Buffer.from(item.requestSha256, 'hex'),
+      BigInt(item.requestEncodedSize)
+    ), item.name);
+  }
+});
+
 test('authority key codec consumes the shared fixture and rejects non-canonical input', () => {
   const fixture = JSON.parse(fs.readFileSync(path.resolve(
     __dirname,

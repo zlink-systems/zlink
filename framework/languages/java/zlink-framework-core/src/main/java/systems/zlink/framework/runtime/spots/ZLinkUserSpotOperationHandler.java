@@ -1,13 +1,10 @@
 package systems.zlink.framework.runtime.spots;
-import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 
-import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -80,18 +77,11 @@ final class ZLinkUserSpotOperationHandler
                 Admission admission = validate(request, key, snapshot);
                 byte[] stored;
                 try {
-                    stored = decodeInlineCreationIntent(
-                        admission.pending().requestContentReference());
+                    stored = ZLinkInlineCreationContentCodec.decode(
+                        admission.pending().requestContentReference(),
+                        admission.pending().requestSha256(),
+                        admission.pending().requestEncodedSize());
                 } catch (RuntimeException invalid) {
-                    return abort(admission.reservation()).thenCompose(
-                        ignored -> failed(
-                            TERMINAL_REQUEST_FAILED,
-                            FAILURE_REQUEST_FAILED,
-                            "User Spot create payload is invalid"));
-                }
-                if (stored.length != admission.pending().requestEncodedSize()
-                    || !MessageDigest.isEqual(
-                        sha256(stored), admission.pending().requestSha256())) {
                     return abort(admission.reservation()).thenCompose(
                         ignored -> failed(
                             TERMINAL_REQUEST_FAILED,
@@ -355,24 +345,6 @@ final class ZLinkUserSpotOperationHandler
             Message.from(reply.toEncodedPayload(serializer).bytes()));
         return new ZLinkInternalMeshNode.UserSpotCreateResponse(
             result, request.intent().spotId(), generation, parts);
-    }
-
-    private static byte[] sha256(byte[] value) {
-        try {
-            return MessageDigest.getInstance("SHA-256").digest(value);
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new AssertionError(impossible);
-        }
-    }
-
-    private static byte[] decodeInlineCreationIntent(String reference) {
-        String prefix = "inline-v1:";
-        if (reference == null || !reference.startsWith(prefix)) {
-            throw new IllegalArgumentException(
-                "unsupported User Spot creation intent reference");
-        }
-        return Base64.getUrlDecoder().decode(
-            reference.substring(prefix.length()));
     }
 
     private static void require(boolean condition, String message) {

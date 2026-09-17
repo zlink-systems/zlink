@@ -64,11 +64,9 @@ internal sealed class ZLinkUserSpotOperationTarget(
             throw Moving(operation.SpotId);
         if (!ZLinkInlineCreationIntentCodec.TryDecode(
                 pending.RequestContentReference,
-                out var content)
-            || content.Length != pending.RequestEncodedSize
-            || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-                System.Security.Cryptography.SHA256.HashData(content),
-                pending.RequestSha256.Span))
+                pending.RequestSha256.Span,
+                pending.RequestEncodedSize,
+                out var content))
             throw Protocol(
                 operation.SpotId,
                 "The immutable creation content failed integrity validation.");

@@ -57,11 +57,9 @@ internal sealed class ZLinkActorOperationTarget(
                 StringComparison.Ordinal)
             || !ZLinkInlineCreationIntentCodec.TryDecode(
                 pending.RequestContentReference,
+                pending.RequestSha256.Span,
+                pending.RequestEncodedSize,
                 out var content)
-            || content.Length != pending.RequestEncodedSize
-            || !CryptographicOperations.FixedTimeEquals(
-                SHA256.HashData(content),
-                pending.RequestSha256.Span)
             || !ZLinkApplicationPayloadEnvelopeCodec.TryDecode(content, out var application))
             throw Protocol(operation.ActorId, "The immutable Actor creation content is invalid.");
 

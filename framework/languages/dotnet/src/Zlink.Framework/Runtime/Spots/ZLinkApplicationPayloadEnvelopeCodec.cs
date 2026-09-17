@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -505,40 +506,46 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     }
 }
 
+/// <summary>
+/// 21-location-runtime.md#2.4: <c>requestContentReference</c> is
+/// <c>inline-v1:{base64url}</c> over <c>A-Z a-z 0-9 - _</c> with no <c>=</c>
+/// padding, and no other form is recognized. The same atomic record's
+/// <c>requestEncodedSize</c> and <c>requestSha256</c> decide the content's
+/// integrity, so the reference carries no checksum segment of its own.
+/// </summary>
 internal static class ZLinkInlineCreationIntentCodec
 {
     private const string Prefix = "inline-v1:";
 
     internal static string Encode(ReadOnlySpan<byte> payload)
     {
-        var checksum = Zlink.Framework.Runtime.Locations.ZLinkCrc32C
-            .Compute(payload);
         var encoded = Convert.ToBase64String(payload)
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{Prefix}{checksum:x8}:{encoded}");
+            $"{Prefix}{encoded}");
     }
 
+    /// <summary>
+    /// Decodes the reference and verifies it against the same record's
+    /// <paramref name="expectedSha256"/> and
+    /// <paramref name="expectedEncodedSize"/>. A reference outside the
+    /// specified form, a length mismatch or a digest mismatch all return
+    /// <see langword="false"/>, and the caller must record the creation as
+    /// failed without running the factory.
+    /// </summary>
     internal static bool TryDecode(
         string reference,
+        ReadOnlySpan<byte> expectedSha256,
+        long expectedEncodedSize,
         out byte[] payload)
     {
         payload = [];
         if (!reference.StartsWith(Prefix, StringComparison.Ordinal))
             return false;
-        var checksumEnd = reference.IndexOf(':', Prefix.Length);
-        if (checksumEnd != Prefix.Length + 8
-            || checksumEnd + 1 >= reference.Length
-            || !uint.TryParse(
-                reference.AsSpan(Prefix.Length, 8),
-                NumberStyles.AllowHexSpecifier,
-                CultureInfo.InvariantCulture,
-                out var expectedChecksum))
-            return false;
-        var encoded = reference.AsSpan(checksumEnd + 1);
+        var encoded = reference.AsSpan(Prefix.Length);
         foreach (var value in encoded)
             if (!(value is >= 'A' and <= 'Z'
                   or >= 'a' and <= 'z'
@@ -551,19 +558,21 @@ internal static class ZLinkInlineCreationIntentCodec
             .Replace('-', '+')
             .Replace('_', '/')
             .PadRight((encoded.Length + 3) / 4 * 4, '=');
+        byte[] decoded;
         try
         {
-            payload = Convert.FromBase64String(padded);
+            decoded = Convert.FromBase64String(padded);
         }
         catch (FormatException)
         {
-            payload = [];
             return false;
         }
-        if (Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(payload)
-            == expectedChecksum)
-            return true;
-        payload = [];
-        return false;
+        if (decoded.Length != expectedEncodedSize
+            || !CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(decoded),
+                expectedSha256))
+            return false;
+        payload = decoded;
+        return true;
     }
 }

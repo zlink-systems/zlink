@@ -104,9 +104,8 @@ export class ZLinkUserSpotCreationCoordinator {
     const deadlineUnixMs = Date.now() + request.timeoutMs;
     const signal = deadline.signal;
     signal.throwIfAborted();
-    const checksum = crc32c(request.requestPayload);
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
-    const contentReference = encodeLocationCreationContent(request.requestPayload, checksum);
+    const contentReference = encodeLocationCreationContent(request.requestPayload);
     const excludedNodeRids = new Set<string>();
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
     let authorityTarget;
@@ -542,18 +541,10 @@ export class ZLinkUserSpotCreationCoordinator {
       );
     }
     const requestPayload = decodeLocationCreationContent(
-      pending.requestContentReference
+      pending.requestContentReference,
+      pending.requestSha256,
+      pending.requestEncodedSize
     );
-    if (
-      BigInt(requestPayload.byteLength) !== pending.requestEncodedSize
-      || !createHash('sha256').update(requestPayload).digest()
-        .equals(Buffer.from(pending.requestSha256))
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        'Remote User Spot Pending creation content failed integrity validation.'
-      );
-    }
     let local: ZLinkLocalSpotCreateResult | undefined;
     try {
       local = await materialize(
@@ -1002,45 +993,38 @@ function localCreationRecord(
   };
 }
 
-export function encodeLocationCreationContent(
-  payload: Uint8Array,
-  checksum = crc32c(payload)
-): string {
-  return `inline-v1:${checksum.toString(16).padStart(8, '0')}:${Buffer.from(payload).toString('base64url')}`;
+// 21-location-runtime.md#2.4: requestContentReference is `inline-v1:{base64url}`
+// over `A-Z a-z 0-9 - _` with no `=` padding, and no other form is recognized.
+// The same atomic record's requestEncodedSize and requestSha256 decide the
+// content's integrity, so the reference carries no checksum segment of its own.
+export function encodeLocationCreationContent(payload: Uint8Array): string {
+  return `inline-v1:${Buffer.from(payload).toString('base64url')}`;
 }
 
+// Decodes the reference and verifies it against the same record's
+// requestEncodedSize and requestSha256. A reference outside the specified form,
+// a length mismatch or a digest mismatch all throw, and the caller must record
+// the creation as failed without running the factory.
 export function decodeLocationCreationContent(
   reference: string,
-  expectedSha256?: Uint8Array,
-  expectedEncodedSize?: bigint
+  expectedSha256: Uint8Array,
+  expectedEncodedSize: bigint
 ): Buffer {
-  const match = /^inline-v1:([0-9a-f]{8}):([A-Za-z0-9_-]+)$/.exec(reference);
-  if (match === null) {
+  const match = /^inline-v1:([A-Za-z0-9_-]*)$/.exec(reference);
+  if (match === null || match[1]!.length % 4 === 1) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestFailed,
-      'User Spot creation content reference is invalid.'
+      'Creation content reference is not in the inline-v1 form.'
     );
   }
-  const payload = Buffer.from(match[2]!, 'base64url');
-  if (crc32c(payload) !== Number.parseInt(match[1]!, 16)) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.RequestFailed,
-      'User Spot creation content checksum does not match.'
-    );
-  }
-  if (
-    expectedEncodedSize !== undefined
-    && BigInt(payload.byteLength) !== expectedEncodedSize
-  ) {
+  const payload = Buffer.from(match[1]!, 'base64url');
+  if (BigInt(payload.byteLength) !== expectedEncodedSize) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestFailed,
       'Creation content encoded size does not match its Pending reservation.'
     );
   }
-  if (
-    expectedSha256 !== undefined
-    && !createHash('sha256').update(payload).digest().equals(Buffer.from(expectedSha256))
-  ) {
+  if (!createHash('sha256').update(payload).digest().equals(Buffer.from(expectedSha256))) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestFailed,
       'Creation content SHA-256 does not match its Pending reservation.'
@@ -1086,17 +1070,6 @@ function userSpotAuthorityPayload(
     ownerNodeRid: String(snapshot.allocation.descriptor.rid),
     ownerNodeGeneration: snapshot.allocation.descriptorLifecycleGeneration
   });
-}
-
-function crc32c(payload: Uint8Array): number {
-  let crc = 0xffff_ffff;
-  for (const value of payload) {
-    crc ^= value;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = (crc >>> 1) ^ (0x82f6_3b78 & -(crc & 1));
-    }
-  }
-  return (~crc) >>> 0;
 }
 
 function remoteUserSpotFailure(
