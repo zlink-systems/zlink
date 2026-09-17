@@ -31,10 +31,22 @@ test('runtime gate leaves actual browser E2E to the dedicated browser gate', () 
     },
     console: { log() {}, error() {} }
   });
-  const testFiles = commands.filter((args) => args.includes('--test')).map((args) => args.at(-1));
+  const testInvocations = commands.filter((args) => args.includes('--test'));
+  const testFiles = testInvocations.map((args) => args.at(-1));
   assert(testFiles.includes(__filename));
   assert(!testFiles.some((file) => file.startsWith(path.join(workspaceRoot, 'test', 'browser') + path.sep)));
   assert(!testFiles.some((file) => /^(sample-|tictactoe-|node-sample-client-bundle)/.test(path.basename(file))));
+  // inspectTap() below only understands TAP. TAP is Node 22's default reporter
+  // (what CI runs) but not every Node's -- a developer on a newer Node whose
+  // default reporter differs would see every file misreported as failed with
+  // "produced incomplete TAP" even though each passes on its own. Pinning the
+  // reporter keeps the gate's output format independent of the running Node.
+  for (const invocation of testInvocations) {
+    assert(
+      invocation.includes('--test-reporter=tap'),
+      `expected --test-reporter=tap so TAP parsing does not depend on Node's default reporter, got: ${invocation.join(' ')}`
+    );
+  }
   const manifest = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
   assert.equal(manifest.scripts['test:browser'], 'node --test test/browser/*.test.js');
   assert(!manifest.workspaces.some((entry) => entry.startsWith('samples/')));

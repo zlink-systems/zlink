@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { pathToFileURL } = require('node:url');
 const { buildSync } = require('esbuild');
 
 const nodeRoot = path.resolve(__dirname, '../..');
@@ -58,7 +59,7 @@ test('the UPM package has the layout Unity requires', () => {
 
 test('the committed browser bundle matches the current stream-connector source', async () => {
   const { syncUnityWebglPackage } = await import(
-    path.join(nodeRoot, 'scripts/sync-unity-webgl-package.mjs')
+    pathToFileURL(path.join(nodeRoot, 'scripts/sync-unity-webgl-package.mjs')).href
   );
   syncUnityWebglPackage({ check: true });
 });

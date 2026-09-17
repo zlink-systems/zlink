@@ -3,6 +3,9 @@
   "version": "0.17.0",
   "private": true,
   "description": "ZLink Framework Node.js/NestJS port workspace",
+  "engines": {
+    "node": "^20.0.0 || ^22.0.0"
+  },
   "scripts": {
     "clean": "node scripts/remove-output.js dist packages/*/dist",
     "build": "node scripts/use-bindings-dependency.mjs select && node node_modules/typescript/bin/tsc -b tsconfig.build.json && npm run build:browser",
