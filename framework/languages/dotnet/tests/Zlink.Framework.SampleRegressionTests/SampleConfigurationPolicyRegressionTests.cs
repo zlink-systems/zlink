@@ -151,12 +151,13 @@ public sealed partial class RegressionTests
     [Fact]
     public void PowerShellSampleRunnerCannotRemoveRedisBySharedPrefix()
     {
+        // Every per-sample run_sample.ps1 dot-sources this shared helper directly; there is
+        // no aggregate runner in front of it any more (e106104ffe), so the helper is the only
+        // place this contract can still be enforced.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
         var helper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
-        var aggregate = File.ReadAllText(Path.Combine(samplesRoot, "run_samples.ps1"));
 
         Assert.DoesNotContain("Remove-SampleRedisScope", helper, StringComparison.Ordinal);
-        Assert.DoesNotContain("Remove-SampleRedisScope", aggregate, StringComparison.Ordinal);
         Assert.Contains("Remove-SampleRedisContainer", helper, StringComparison.Ordinal);
         Assert.Matches(
             @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
@@ -538,40 +539,15 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void IntegratedSampleRunnerIncludesEveryCommonSample()
+    public void ZoneWorldPowerShellRunnerIsSelfContainedWithoutBash()
     {
-        var runner = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "samples", "run_samples.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "samples", "run_samples.ps1"));
-        var expectedSamples = new[]
-        {
-            "TicTacToe",
-            "Bingo",
-            "SupportChat",
-            "ShoppingMall",
-            "DeliveryDispatch",
-            "GameQuest",
-            "ZoneWorld"
-        };
-        var defaultSampleList = runner.Split('\n').Single(static line =>
-            line.StartsWith("SAMPLES=(", StringComparison.Ordinal));
-        var defaultPowerShellSampleList = powershellRunner.Split('\n').Single(static line =>
-            line.StartsWith("$knownSamples = @(", StringComparison.Ordinal));
-
-        foreach (var sample in expectedSamples)
-        {
-            Assert.Contains(sample, defaultSampleList, StringComparison.Ordinal);
-            Assert.Contains(sample, defaultPowerShellSampleList, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(Path.Combine(ResolveDotnetRoot(), "samples", sample, "run_sample.ps1")),
-                $"PowerShell runner is missing for {sample}.");
-        }
-
-        Assert.Contains("${SCRIPT_DIR}/${sample}/run_sample.sh", runner, StringComparison.Ordinal);
-        Assert.Contains("$ScriptDir \"$sample/run_sample.ps1\"", powershellRunner,
-            StringComparison.Ordinal);
-
+        // Prior to e106104ffe this test also asserted that the aggregate run_samples.sh /
+        // run_samples.ps1 listed every common sample; both files are gone (dropped per-language
+        // batch runners so a stalled sample no longer holds the whole run, #405) and every known
+        // sample name and its run_sample.ps1 is already exercised directly by
+        // DotnetSampleRunnersSeparateCheckedRedisAndApplicationPorts above. What is left here is
+        // ZoneWorld-specific: its PowerShell runner must stand on its own on native Windows,
+        // without shelling out to bash or the removed run_sample.sh.
         var zoneWorldPowerShellRunner = File.ReadAllText(Path.Combine(
             ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1"));
         Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
@@ -602,16 +578,20 @@ public sealed partial class RegressionTests
     [Fact]
     public void SampleRunnersFailWhenRoleCleanupRequiresSigkill()
     {
+        // The bash side of this contract used to be enforced by the aggregate run_samples.sh,
+        // which set ZLINK_SAMPLE_TEARDOWN_STATUS_FILE around each per-sample run and failed the
+        // whole invocation with status 137 when the file was non-empty. That file is gone
+        // (e106104ffe dropped the per-language batch runners, #405) and nothing else in the repo
+        // sets that variable or reads the resulting file, so a role that needs SIGKILL during
+        // shell-side cleanup no longer fails a bash run_sample.sh invocation or the gate
+        // (scripts/gate/framework-gate.sh calls run_sample.sh directly per sample). What remains
+        // current is the recording half still shared by every run_sample.sh through
+        // redis-common.sh, and the PowerShell side, which never depended on an aggregate: each
+        // run_sample.ps1 calls Stop-SampleProcesses directly and it throws on its own.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
-        var shellRunner = File.ReadAllText(Path.Combine(samplesRoot, "run_samples.sh"));
         var shellHelper = File.ReadAllText(Path.Combine(samplesRoot, "redis-common.sh"));
         var powershellHelper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
-        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("Sample role ${role} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).",
-            shellRunner, StringComparison.Ordinal);
-        Assert.True(shellRunner.IndexOf("[[ -s \"${teardown_status_file}\" ]]", StringComparison.Ordinal) <
-            shellRunner.IndexOf("cat \"${output_file}\"", StringComparison.Ordinal));
         Assert.Contains("builtin kill \"$@\"", shellHelper, StringComparison.Ordinal);
         Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper, StringComparison.Ordinal);
         Assert.Contains("$script:SampleProcessNames[$process.Id] = $Name", powershellHelper,
