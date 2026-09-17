@@ -22,6 +22,7 @@ ZLINK_CPP_BUILD_DIR=../build-redis-vcpkg ./run_cross_language_smoke.sh
 ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create ./run_cross_language_smoke.sh
 # 개별 셀: remote-actor-create-cpp-dotnet / -cpp-node / -cpp-java
 # 대조군:  remote-actor-create-dotnet-java
+# 격리 가드만: ZLINK_CPP_CROSS_LANGUAGE_STAGE=quarantine
 ```
 
 user-spot-join 12칸 행렬은 원격 Actor 생성 경로를 지나가지 않는다(#550). 대상 host는
@@ -33,10 +34,15 @@ user-spot-join 12칸 행렬은 원격 Actor 생성 경로를 지나가지 않는
 
 이 셀들은 아직 통과하지 않으며, 그래서 기본 실행에 넣지 않았다. `#549` 수정으로 .NET
 대상은 authority payload 거절 지점을 지나 Actor를 실제로 만들고, 그 뒤 예약 commit이
-fence된다. 남은 원인은 C++이 아니라 상대 runtime이 소유한다(자세한 내용은
-`run_cross_language_smoke.sh`의 `stage_cpp_source_dotnet_target_remote_actor_create`
-위 주석과 `remote-actor-create-dotnet-java` 대조군을 참고한다). 그 원인이 정리되면 이
-셀들을 기본 실행으로 옮긴다.
+fence된다. 남은 원인은 C++이 아니라 상대 runtime이 소유한다 — Java의 `inline-v1` 참조에
+CRC32C 구간이 없는 것(#559), 예약 row의 key 유도와 필드가 정해지지 않은 것(#560), 원격
+생성을 받을 수 있다고 알리는 것이 Actor factory인지 Entry Spot인지(#561), `entrySpotId`
+공개 시점이 둘로 갈리는 것(#562)이다.
+
+제외는 가드가 지킨다. 기본 실행은 마지막에 `run_quarantine_guard`를 돌려 알려진 실패 셀을
+모두 실행하고, **그중 하나라도 통과하면 스모크를 실패시킨다.** 통과하기 시작한 셀은 그
+변경에서 기본 실행으로 옮기고 `QUARANTINED_CELLS` 목록에서 지워야 한다. 목록의 각 항목은
+무엇을 기다리는지 issue 번호로 적어 둔다.
 
 ## 검증하는 행
 

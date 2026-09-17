@@ -1856,6 +1856,48 @@ stage_cpp_source_java_target_remote_actor_create() {
   RESULTS+=("remote Actor create: C++ requester -> Java target (Framework authority payload accepted, Actor placed on the foreign node)")
 }
 
+# --- quarantine guard for the remote-actor-create cells ----------------------
+# The cells above are excluded from the default run because they do not pass
+# yet. An exclusion with no expiry quietly becomes permanent, so the default
+# run asserts the exclusion instead of just honouring it: every quarantined
+# cell is executed, and the smoke FAILS when one of them passes. A cell that
+# starts passing has to be moved into the default run in the same change that
+# deletes it from this list.
+#
+# Each entry names the issue that owns the remaining cause.
+QUARANTINED_CELLS=(
+  "remote-actor-create-cpp-dotnet|#560 -- the Location Store creation-reservation row's key derivation and field set are unspecified, so .NET answers Stale to a reservation another runtime made"
+  "remote-actor-create-cpp-java|#559 -- Java's inline-v1 creation-intent reference carries no CRC32C segment, so it refuses every foreign reservation"
+  "remote-actor-create-dotnet-java|#559 -- the same Java defect with C++ out of the picture entirely; this cell is the control that shows the remaining causes are not C++'s"
+  "remote-actor-create-cpp-node|#561 and #562 -- the Node target registers an Actor factory but no Entry Spot, and publishes entrySpotId only when an Entry Spot type is registered; which of the two owns its refusal is not isolated yet"
+)
+
+run_quarantine_guard() {
+  local entry stage issue rc unexpected=0
+  for entry in "${QUARANTINED_CELLS[@]}"; do
+    stage="${entry%%|*}"
+    issue="${entry#*|}"
+    rc=0
+    # A child process keeps the cell's own RUN_DIR, EXIT trap and `exit 1`
+    # away from this run; only its exit status is read here.
+    env ZLINK_CPP_CROSS_LANGUAGE_STAGE="${stage}" ZLINK_CPP_CROSS_KEEP_RUN_DIR=0 \
+      bash "${SCRIPT_DIR}/run_cross_language_smoke.sh" \
+      >"${RUN_DIR}/quarantine-${stage}.log" 2>&1 || rc=$?
+    if [[ "${rc}" -eq 0 ]]; then
+      unexpected=1
+      echo "quarantine guard: '${stage}' now PASSES." >&2
+      echo "  Move it into the default run at the bottom of this script and delete its" >&2
+      echo "  entry from QUARANTINED_CELLS. It was waiting on ${issue}" >&2
+    else
+      echo "quarantined - ${stage} still fails as expected (waiting on ${issue})"
+    fi
+  done
+  if [[ "${unexpected}" -ne 0 ]]; then
+    echo "quarantine guard: the known-failing list is stale; see the lines above." >&2
+    exit 1
+  fi
+}
+
 stage_dotnet_source_java_target_remote_actor_create() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events requester_rid
@@ -2189,13 +2231,23 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
     exit 0
     ;;
   remote-actor-create)
+    # The raw cells, so a failure stops at its own assertion. Use the
+    # `quarantine` selector to ask whether they still fail as a set.
     stage_cpp_source_dotnet_target_remote_actor_create
     stage_cpp_source_node_target_remote_actor_create
     stage_cpp_source_java_target_remote_actor_create
+    stage_dotnet_source_java_target_remote_actor_create
     for result in "${RESULTS[@]}"; do
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=remote-actor-create result=passed"
+    exit 0
+    ;;
+  quarantine)
+    # Just the guard: runs every known-failing cell and reports whether each
+    # still fails. Fails when one of them passes.
+    run_quarantine_guard
+    echo "cross-language smoke stage=quarantine result=passed"
     exit 0
     ;;
   all)
@@ -2240,9 +2292,11 @@ stage_cpp_source_java_target_user_spot_join
 # The remote-actor-create cells are deliberately NOT part of this default run:
 # they still fail on divergences owned by the peer runtimes (see the block
 # comment above stage_cpp_source_dotnet_target_remote_actor_create). Run them
-# with ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create.
+# with ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create. The guard below
+# keeps that exclusion honest.
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"
 done
+run_quarantine_guard
 echo "cross-language smoke result=passed"
