@@ -5207,7 +5207,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         @Override
         public ZLinkBoundSession boundSession() {
-            return state.requireBoundSession();
+            return state.boundSessionOrUnbound();
         }
 
         @Override
