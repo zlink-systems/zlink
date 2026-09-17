@@ -82,6 +82,12 @@ NODE_USER_SPOT_JOIN_HOST="${REPO_ROOT}/framework/languages/node/cross-language/u
 JAVA_CROSS_LANGUAGE_ROOT="${REPO_ROOT}/framework/languages/java/cross-language"
 JAVA_HOST="$(resolve_executable \
   "${JAVA_CROSS_LANGUAGE_ROOT}/Host/build/install/zlink-cross-language-host/bin/zlink-cross-language-host")"
+# The Java host is an installDist launcher: it takes JAVA_HOME (else java on
+# PATH) at launch, not the JDK Gradle compiled it with. start_java asks the
+# owner of that decision for the toolchain JDK first, so a machine without it
+# stops with one message instead of an UnsupportedClassVersionError buried in a
+# role log (#517).
+source "${REPO_ROOT}/framework/languages/java/samples/gradle/zlink-jvm-runtime.sh"
 
 if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
   CORE_VERSION="$(sed -n 's/^LIBZLINK_VERSION=//p' "${REPO_ROOT}/VERSION")"
@@ -251,6 +257,7 @@ start_node_user_spot_join() {
 start_java() {
   local name="$1"
   shift
+  zlink_jvm_require_toolchain_runtime
   "${JAVA_HOST}" "$@" \
     --ready-file "${RUN_DIR}/${name}.ready" \
     --stop-file "${RUN_DIR}/${name}.stop" \

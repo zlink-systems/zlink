@@ -55,17 +55,27 @@ function Set-ZlinkSampleJavaRuntime {
     $baselineText = [System.IO.File]::ReadAllText($baselinePath)
     $versionMatch = [regex]::Match(
         $baselineText,
-        '(?m)^val zlinkJavaLanguageVersion = ([0-9]+)$')
+        '(?m)^val zlinkJavaLanguageVersion = ([0-9]+)[ \t]*\r?$')
     if (-not $versionMatch.Success) {
         throw "Java language version was not found in $baselinePath"
     }
     $requiredVersion = $versionMatch.Groups[1].Value
 
+    # The same places gradle/zlink-jvm-runtime.sh looks in, in the same order:
+    # JAVA_HOME, the java on PATH, the installations Gradle was configured with,
+    # and the directories Gradle auto-detects.
     $candidates = [System.Collections.Generic.List[string]]::new()
     if ($env:JAVA_HOME) {
         $candidates.Add($env:JAVA_HOME)
     }
-    $gradleProperties = Join-Path $env:USERPROFILE ".gradle/gradle.properties"
+    $pathJava = Get-Command java -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($pathJava) {
+        $candidates.Add((Split-Path -Parent (Split-Path -Parent $pathJava.Source)))
+    }
+    $userHome = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
+    $gradleHome = Join-Path $userHome ".gradle"
+    $gradleProperties = Join-Path $gradleHome "gradle.properties"
     if (Test-Path -LiteralPath $gradleProperties -PathType Leaf) {
         $installationLine = Select-String -LiteralPath $gradleProperties `
             -Pattern '^org\.gradle\.java\.installations\.paths=(.+)$' |
@@ -73,6 +83,33 @@ function Set-ZlinkSampleJavaRuntime {
         if ($installationLine) {
             foreach ($candidate in $installationLine.Matches[0].Groups[1].Value.Split(',')) {
                 $candidates.Add($candidate.Trim().Replace('\\', '\'))
+            }
+        }
+    }
+    $roots = [System.Collections.Generic.List[string]]::new()
+    $roots.Add((Join-Path $gradleHome "jdks"))
+    $roots.Add((Join-Path $userHome ".sdkman/candidates/java"))
+    $roots.Add("/usr/lib/jvm")
+    $roots.Add("/usr/java")
+    $roots.Add("/Library/Java/JavaVirtualMachines")
+    if ($env:LOCALAPPDATA) {
+        $roots.Add((Join-Path $env:LOCALAPPDATA "Programs/jdk"))
+    }
+    if ($env:ProgramFiles) {
+        foreach ($vendor in @("Java", "Eclipse Adoptium", "Microsoft")) {
+            $roots.Add((Join-Path $env:ProgramFiles $vendor))
+        }
+    }
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            continue
+        }
+        foreach ($entry in Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue) {
+            $candidates.Add($entry.FullName)
+            # macOS bundles keep the JDK one level down.
+            $bundleHome = Join-Path $entry.FullName "Contents/Home"
+            if (Test-Path -LiteralPath $bundleHome -PathType Container) {
+                $candidates.Add($bundleHome)
             }
         }
     }
@@ -87,11 +124,17 @@ function Set-ZlinkSampleJavaRuntime {
             [regex]::Escape($requiredVersion) + '(?:\.|\")'
         if ($releaseText -match $releasePattern) {
             $env:JAVA_HOME = [System.IO.Path]::GetFullPath($candidate)
-            $env:PATH = "$(Join-Path $env:JAVA_HOME 'bin');$env:PATH"
+            $javaBin = Join-Path $env:JAVA_HOME 'bin'
+            if (($env:PATH -split [System.IO.Path]::PathSeparator) -notcontains $javaBin) {
+                $env:PATH = "$javaBin$([System.IO.Path]::PathSeparator)$env:PATH"
+            }
             return
         }
     }
-    throw "JDK $requiredVersion was not found in JAVA_HOME or Gradle installations.paths"
+    throw ("JDK $requiredVersion was not found on this machine. " +
+        "Gradle compiles these projects with the Java $requiredVersion toolchain pinned in " +
+        "$baselinePath, so the installDist launchers need a JDK $requiredVersion runtime. " +
+        "Install JDK $requiredVersion, or set JAVA_HOME to an existing JDK $requiredVersion installation.")
 }
 
 function Invoke-ZlinkSampleExecutable {
@@ -295,7 +338,22 @@ function Invoke-ZlinkSampleGradleBuild {
                 throw "Missing standalone Gradle settings: $settingsSourcePath"
             }
             if (Test-Path -LiteralPath $settingsTargetPath) {
-                throw "Refusing to replace existing $settingsTargetPath"
+                # A run killed hard leaves the staged copy behind. The staged copy
+                # is ours only while it is a plain file byte-identical to the
+                # standalone source; anything else is the developer's own settings
+                # file and is never replaced.
+                $existingSettings = Get-Item -LiteralPath $settingsTargetPath -Force
+                $stagedCopy = ($existingSettings -is [System.IO.FileInfo]) -and
+                    -not ($existingSettings.Attributes.HasFlag(
+                        [System.IO.FileAttributes]::ReparsePoint)) -and
+                    (Get-FileHash -LiteralPath $settingsSourcePath -Algorithm SHA256).Hash -eq
+                        (Get-FileHash -LiteralPath $settingsTargetPath -Algorithm SHA256).Hash
+                if (-not $stagedCopy) {
+                    throw "Refusing to replace existing $settingsTargetPath"
+                }
+                [Console]::Error.WriteLine(
+                    "Taking over the $settingsTargetPath left by an interrupted run.")
+                Remove-Item -LiteralPath $settingsTargetPath -Force
             }
             Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath
             $temporarySettingsPath = $settingsTargetPath
