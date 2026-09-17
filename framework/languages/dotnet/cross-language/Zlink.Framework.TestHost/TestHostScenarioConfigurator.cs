@@ -411,7 +411,8 @@ internal static class TestHostScenarioConfigurator
                 options.MeshName ?? "cross.user-spot-join",
                 options.PeerRid
                 ?? throw new InvalidOperationException(
-                    "user-spot-target mode requires --peer-rid.")));
+                    "user-spot-target mode requires --peer-rid."),
+                options.PlacementWeight ?? 0));
     }
 
     private static void ConfigureUserSpotSource(
@@ -469,7 +470,9 @@ internal static class TestHostScenarioConfigurator
                 options.SpotId
                 ?? throw new InvalidOperationException(
                     "user-spot-source mode requires --spot-id."),
-                options.MeshName ?? "cross.user-spot-join"));
+                options.MeshName ?? "cross.user-spot-join",
+                provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
+                options.PlacementWeight ?? 100));
     }
 
     private static void ConfigureStreamRawNode(IServiceCollection services, TestHostOptions options)

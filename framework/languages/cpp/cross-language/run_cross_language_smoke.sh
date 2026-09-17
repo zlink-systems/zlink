@@ -1708,6 +1708,226 @@ stage_cpp_source_java_target_user_spot_join() {
   RESULTS+=("User-Spot Join: C++ source -> Java target (admission, joined lifecycle, target-owner probe)")
 }
 
+# --- remote Actor creation: C++ requester -> foreign placement target --------
+# The 12-cell user-spot-join matrix above never takes the remote Actor creation
+# path. Its target drops its placement weight to 0 the moment its fixed User
+# Spot exists, so the requester is the only candidate left and always places
+# the Actor on itself (#550) -- every preserved run records
+# `user-spot-source-actor-created|...|node=<the requester>`.
+#
+# These cells invert exactly that one knob: the foreign target keeps weight
+# 100 and the C++ requester runs with weight 0, so the requester cannot be a
+# candidate for its own Actor and the create MUST be admitted by the foreign
+# node. That is the only configuration that exercises the cross-language
+# Actor create wire, and it is the regression cell for #549 -- before that fix
+# the reservation record carried the Application request in the Framework
+# authority slot and every decoding target refused with
+# `protocol_error|Remote Actor creation target rejected the operation`.
+#
+# STATUS: these cells do NOT pass yet, which is why the default `all` run does
+# not include them. The #549 fix moves the .NET cell from "refused at the
+# authority payload" to "Actor materialized on the .NET target", and then the
+# reservation commit is fenced. What is left is owned by the peer runtimes,
+# not by C++, and the `remote-actor-create-dotnet-java` cell below is the
+# control that proves it -- it takes C++ out of the picture entirely and still
+# fails:
+#   * Java's `inline-v1:` creation-intent reference carries no CRC32C segment
+#     (ZLinkActorCreationCoordinator.java:957-972), while C++, .NET and Node
+#     all write `inline-v1:<crc32c hex8>:<base64url>`. Java therefore refuses
+#     every foreign reservation with "Actor create payload is invalid".
+#   * .NET's provider repository looks the reservation row up by reservation
+#     id (`creation-reservation:<reservationId>`), C++ writes it keyed by the
+#     object key, and Java keeps no such row at all. .NET therefore answers
+#     `Stale` to any completion of a foreign reservation.
+# Put these cells into the default run once those are settled.
+assert_remote_actor_create() {
+  local source_events="$1"
+  local requester_rid="$2"
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 90
+  if grep -qF "user-spot-source-actor-created|status=created|node=${requester_rid}" \
+    "${source_events}"; then
+    echo "remote Actor create stage: the Actor landed on the requester" \
+      "(${requester_rid}); the remote path was not exercised" >&2
+    grep -F "user-spot-source-actor-created" "${source_events}" >&2
+    exit 1
+  fi
+  grep -F "user-spot-source-actor-created" "${source_events}"
+}
+
+stage_cpp_source_dotnet_target_remote_actor_create() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file requester_rid
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/cpp-remote-create-source-dotnet.events"
+  target_events="${RUN_DIR}/dotnet-remote-create-target.events"
+  start_file="${RUN_DIR}/remote-actor-create-cpp-dotnet.start"
+  requester_rid="cpp-remote-actor-create-source"
+
+  start_redis remote-actor-create-redis-cpp-dotnet "${redis_port}"
+  start_dotnet dotnet-remote-create-target user-spot-target \
+    --mesh-name cross.user-spot-join --peer-rid "${requester_rid}" \
+    --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 100 \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-remote-create-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_cpp cpp-remote-create-source-dotnet user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid "${requester_rid}" \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 0 \
+    --event-file "${source_events}" --start-file "${start_file}" \
+    --ready-file "${RUN_DIR}/cpp-remote-create-source-dotnet.ready"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  assert_remote_actor_create "${source_events}" "${requester_rid}"
+  stop_all
+  RESULTS+=("remote Actor create: C++ requester -> .NET target (Framework authority payload accepted, Actor placed on the foreign node)")
+}
+
+stage_cpp_source_node_target_remote_actor_create() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file requester_rid
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/cpp-remote-create-source-node.events"
+  target_events="${RUN_DIR}/node-remote-create-target.events"
+  start_file="${RUN_DIR}/remote-actor-create-cpp-node.start"
+  requester_rid="cpp-remote-actor-create-source"
+
+  start_redis remote-actor-create-redis-cpp-node "${redis_port}"
+  start_node_user_spot_join node-remote-create-target user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid node-remote-actor-create-target \
+    --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 100 \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/node-remote-create-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_cpp cpp-remote-create-source-node user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid "${requester_rid}" \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 0 \
+    --event-file "${source_events}" --start-file "${start_file}" \
+    --ready-file "${RUN_DIR}/cpp-remote-create-source-node.ready"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  assert_remote_actor_create "${source_events}" "${requester_rid}"
+  stop_all
+  RESULTS+=("remote Actor create: C++ requester -> Node target (Framework authority payload accepted, Actor placed on the foreign node)")
+}
+
+stage_cpp_source_java_target_remote_actor_create() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file requester_rid
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/cpp-remote-create-source-java.events"
+  target_events="${RUN_DIR}/java-remote-create-target.events"
+  start_file="${RUN_DIR}/remote-actor-create-cpp-java.start"
+  requester_rid="cpp-remote-actor-create-source"
+
+  start_redis remote-actor-create-redis-cpp-java "${redis_port}"
+  start_java java-remote-create-target user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid java-remote-actor-create-target \
+    --peer-rid "${requester_rid}" --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 100 \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-remote-create-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_cpp cpp-remote-create-source-java user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid "${requester_rid}" \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 0 \
+    --event-file "${source_events}" --start-file "${start_file}" \
+    --ready-file "${RUN_DIR}/cpp-remote-create-source-java.ready"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  assert_remote_actor_create "${source_events}" "${requester_rid}"
+  stop_all
+  RESULTS+=("remote Actor create: C++ requester -> Java target (Framework authority payload accepted, Actor placed on the foreign node)")
+}
+
+# --- quarantine guard for the remote-actor-create cells ----------------------
+# The cells above are excluded from the default run because they do not pass
+# yet. An exclusion with no expiry quietly becomes permanent, so the default
+# run asserts the exclusion instead of just honouring it: every quarantined
+# cell is executed, and the smoke FAILS when one of them passes. A cell that
+# starts passing has to be moved into the default run in the same change that
+# deletes it from this list.
+#
+# Each entry names the issue that owns the remaining cause.
+QUARANTINED_CELLS=(
+  "remote-actor-create-cpp-dotnet|#560 -- the Location Store creation-reservation row's key derivation and field set are unspecified, so .NET answers Stale to a reservation another runtime made"
+  "remote-actor-create-cpp-java|#559 -- Java's inline-v1 creation-intent reference carries no CRC32C segment, so it refuses every foreign reservation"
+  "remote-actor-create-dotnet-java|#559 -- the same Java defect with C++ out of the picture entirely; this cell is the control that shows the remaining causes are not C++'s"
+  "remote-actor-create-cpp-node|#561 and #562 -- the Node target registers an Actor factory but no Entry Spot, and publishes entrySpotId only when an Entry Spot type is registered; which of the two owns its refusal is not isolated yet"
+)
+
+run_quarantine_guard() {
+  local entry stage issue rc unexpected=0
+  for entry in "${QUARANTINED_CELLS[@]}"; do
+    stage="${entry%%|*}"
+    issue="${entry#*|}"
+    rc=0
+    # A child process keeps the cell's own RUN_DIR, EXIT trap and `exit 1`
+    # away from this run; only its exit status is read here.
+    env ZLINK_CPP_CROSS_LANGUAGE_STAGE="${stage}" ZLINK_CPP_CROSS_KEEP_RUN_DIR=0 \
+      bash "${SCRIPT_DIR}/run_cross_language_smoke.sh" \
+      >"${RUN_DIR}/quarantine-${stage}.log" 2>&1 || rc=$?
+    if [[ "${rc}" -eq 0 ]]; then
+      unexpected=1
+      echo "quarantine guard: '${stage}' now PASSES." >&2
+      echo "  Move it into the default run at the bottom of this script and delete its" >&2
+      echo "  entry from QUARANTINED_CELLS. It was waiting on ${issue}" >&2
+    else
+      echo "quarantined - ${stage} still fails as expected (waiting on ${issue})"
+    fi
+  done
+  if [[ "${unexpected}" -ne 0 ]]; then
+    echo "quarantine guard: the known-failing list is stale; see the lines above." >&2
+    exit 1
+  fi
+}
+
+stage_dotnet_source_java_target_remote_actor_create() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events requester_rid
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/dotnet-remote-create-source-java.events"
+  target_events="${RUN_DIR}/java-remote-create-target-dotnet.events"
+  requester_rid="dotnet-remote-actor-create-source"
+
+  start_redis remote-actor-create-redis-dotnet-java "${redis_port}"
+  start_java java-remote-create-target-dotnet user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid java-remote-actor-create-target \
+    --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 100 \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-remote-create-target-dotnet.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_dotnet dotnet-remote-create-source-java user-spot-source \
+    --mesh-name cross.user-spot-join \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-remote-actor-create --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-remote-create-actor --placement-weight 0 \
+    --event-file "${source_events}"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  assert_remote_actor_create "${source_events}" "${requester_rid}"
+  stop_all
+  RESULTS+=("remote Actor create: .NET requester -> Java target (Actor placed on the foreign node)")
+}
+
 # --- entry-spot relocation: Java source -> .NET target ------------------------
 # Same scenario as stage_node_source_dotnet_target_relocation, but both sides
 # now use pure automatic (Location-Store-only) discovery -- confirmed by
@@ -1978,6 +2198,58 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
     echo "cross-language smoke stage=user-spot-join-cpp-java result=passed"
     exit 0
     ;;
+  remote-actor-create-cpp-dotnet)
+    stage_cpp_source_dotnet_target_remote_actor_create
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=remote-actor-create-cpp-dotnet result=passed"
+    exit 0
+    ;;
+  remote-actor-create-cpp-node)
+    stage_cpp_source_node_target_remote_actor_create
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=remote-actor-create-cpp-node result=passed"
+    exit 0
+    ;;
+  remote-actor-create-cpp-java)
+    stage_cpp_source_java_target_remote_actor_create
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=remote-actor-create-cpp-java result=passed"
+    exit 0
+    ;;
+  remote-actor-create-dotnet-java)
+    stage_dotnet_source_java_target_remote_actor_create
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=remote-actor-create-dotnet-java result=passed"
+    exit 0
+    ;;
+  remote-actor-create)
+    # The raw cells, so a failure stops at its own assertion. Use the
+    # `quarantine` selector to ask whether they still fail as a set.
+    stage_cpp_source_dotnet_target_remote_actor_create
+    stage_cpp_source_node_target_remote_actor_create
+    stage_cpp_source_java_target_remote_actor_create
+    stage_dotnet_source_java_target_remote_actor_create
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=remote-actor-create result=passed"
+    exit 0
+    ;;
+  quarantine)
+    # Just the guard: runs every known-failing cell and reports whether each
+    # still fails. Fails when one of them passes.
+    run_quarantine_guard
+    echo "cross-language smoke stage=quarantine result=passed"
+    exit 0
+    ;;
   all)
     ;;
   *)
@@ -2017,8 +2289,14 @@ stage_dotnet_source_cpp_target_user_spot_join
 stage_cpp_source_node_target_user_spot_join
 stage_java_source_cpp_target_user_spot_join
 stage_cpp_source_java_target_user_spot_join
+# The remote-actor-create cells are deliberately NOT part of this default run:
+# they still fail on divergences owned by the peer runtimes (see the block
+# comment above stage_cpp_source_dotnet_target_remote_actor_create). Run them
+# with ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create. The guard below
+# keeps that exclusion honest.
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"
 done
+run_quarantine_guard
 echo "cross-language smoke result=passed"
