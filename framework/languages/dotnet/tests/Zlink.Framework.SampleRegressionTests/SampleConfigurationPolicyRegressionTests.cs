@@ -29,7 +29,7 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourcePath);
+                var source = ReadSource(sourcePath);
                 foreach (Match match in hostBuilderPattern.Matches(source))
                 {
                     builderCount++;
@@ -89,7 +89,7 @@ public sealed partial class RegressionTests
 
         foreach (var sourceFile in sourceFiles)
         {
-            var source = File.ReadAllText(sourceFile);
+            var source = ReadSource(sourceFile);
             Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
             Assert.DoesNotContain("DirectoryFromEnvironment", source, StringComparison.Ordinal);
         }
@@ -111,7 +111,7 @@ public sealed partial class RegressionTests
 
         foreach (var sourceFile in sourceFiles)
         {
-            var source = File.ReadAllText(sourceFile);
+            var source = ReadSource(sourceFile);
             Assert.DoesNotContain("\"--node\"", source, StringComparison.Ordinal);
             Assert.DoesNotContain("\"--instance\"", source, StringComparison.Ordinal);
             Assert.DoesNotContain("\"--role\"", source, StringComparison.Ordinal);
@@ -135,7 +135,7 @@ public sealed partial class RegressionTests
     {
         var configurationRoot = Path.Combine(ResolveSampleRoot(sampleName), "Server", "Configuration");
         var loaders = Directory.EnumerateFiles(configurationRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText)
+            .Select(ReadSource)
             .Where(static source => source.Contains("\"--config\"", StringComparison.Ordinal))
             .ToArray();
 
@@ -155,7 +155,7 @@ public sealed partial class RegressionTests
         // no aggregate runner in front of it any more (e106104ffe), so the helper is the only
         // place this contract can still be enforced.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
-        var helper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
+        var helper = ReadSource(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
         Assert.DoesNotContain("Remove-SampleRedisScope", helper, StringComparison.Ordinal);
         Assert.Contains("Remove-SampleRedisContainer", helper, StringComparison.Ordinal);
@@ -168,8 +168,8 @@ public sealed partial class RegressionTests
     public void ZoneWorldRunnerExercisesPrefixUuidLifecycleWithProcessEvidence()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var runner = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
-        var reportHandler = File.ReadAllText(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
+        var runner = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var reportHandler = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
             "Handlers", "OpsReportHandlers.cs"));
 
         foreach (var id in new[] { "ZW-G1", "ZW-G2", "ZW-G3", "ZW-G4", "ZW-G5" })
@@ -220,8 +220,8 @@ public sealed partial class RegressionTests
     public void ZoneWorldRestartsUseTheZeroZoneReplacementConfiguration()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var shell = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
-        var powershell = File.ReadAllText(Path.Combine(sample, "run_sample.ps1"));
+        var shell = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var powershell = ReadSource(Path.Combine(sample, "run_sample.ps1"));
 
         // Every restart selects the node's own replacement configuration, not just zone-node-2's:
         // ZW-B4 picks the node to stop from what the client observed, so either node can restart.
@@ -247,7 +247,7 @@ public sealed partial class RegressionTests
         // cold-start claim loop, so a restarted node can never settle on one zone — a state
         // that is neither the two a cold start needs nor the none a replacement announces, and
         // one the bootstrap could not leave.
-        var bootstrap = File.ReadAllText(Path.Combine(
+        var bootstrap = ReadSource(Path.Combine(
             sample, "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "BotSpawner.cs"));
         Assert.Equal(1, Regex.Matches(bootstrap, @"settings\.AllowEmptyZoneSet").Count);
         Assert.True(
@@ -284,7 +284,7 @@ public sealed partial class RegressionTests
     private static IReadOnlyList<string> ZoneWorldReplacementConfigsThatClaimZones(string runner)
     {
         var offenders = new List<string>();
-        var lines = runner.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var lines = runner.Split('\n');
         for (var index = 0; index < lines.Length; index++)
         {
             var header = lines[index];
@@ -320,9 +320,9 @@ public sealed partial class RegressionTests
     public void ZoneWorldReplacementVerdictsUseDedicatedRunnerDrivenProbes()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var shell = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
-        var powershell = File.ReadAllText(Path.Combine(sample, "run_sample.ps1"));
-        var scenarios = File.ReadAllText(Path.Combine(sample, "Client", "Scenarios.cs"));
+        var shell = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var powershell = ReadSource(Path.Combine(sample, "run_sample.ps1"));
+        var scenarios = ReadSource(Path.Combine(sample, "Client", "Scenarios.cs"));
 
         var clientBatch = ZoneWorldScenarioIds(scenarios, "All");
         var runnerDriven = ZoneWorldScenarioIds(scenarios, "RunnerDriven");
@@ -411,8 +411,8 @@ public sealed partial class RegressionTests
     public void ZoneWorldScenariosUseConnectorWaitContractsDirectly()
     {
         var clientRoot = Path.Combine(ResolveSampleRoot("ZoneWorld"), "Client");
-        var support = File.ReadAllText(Path.Combine(clientRoot, "ScenarioSupport.cs"));
-        var scenarios = File.ReadAllText(Path.Combine(clientRoot, "Scenarios.cs"));
+        var support = ReadSource(Path.Combine(clientRoot, "ScenarioSupport.cs"));
+        var scenarios = ReadSource(Path.Combine(clientRoot, "Scenarios.cs"));
 
         Assert.DoesNotContain("WaitAsync<", support, StringComparison.Ordinal);
         Assert.DoesNotContain("MoveAndWait", support, StringComparison.Ordinal);
@@ -439,7 +439,7 @@ public sealed partial class RegressionTests
     public void ZoneWorldOpsReplaysNodeStateAcrossStreamSessionReplacement()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var registry = File.ReadAllText(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
+        var registry = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
             "Sessions", "OpsConsoleRegistry.cs"));
 
         Assert.Contains("Dictionary<string, NodeStatusNotify> _latestNodes", registry,
@@ -453,7 +453,7 @@ public sealed partial class RegressionTests
         Assert.Contains("Remove(console)", registry, StringComparison.Ordinal);
         Assert.Contains("ICollection<KeyValuePair<string, IZLinkSessionContext>>", registry,
             StringComparison.Ordinal);
-        Assert.Contains("await context.Client.Reply(new WatchNodesRes", File.ReadAllText(
+        Assert.Contains("await context.Client.Reply(new WatchNodesRes", ReadSource(
             Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink", "Handlers",
                 "OpsSessionHandlers.cs")), StringComparison.Ordinal);
         Assert.True(
@@ -464,7 +464,7 @@ public sealed partial class RegressionTests
     [Fact]
     public void LocalNugetDefaultsDoNotCrossPlatformBoundariesOrOverrideExplicitRoots()
     {
-        var props = File.ReadAllText(Path.Combine(ResolveDotnetRoot(), "Directory.Build.props"));
+        var props = ReadSource(Path.Combine(ResolveDotnetRoot(), "Directory.Build.props"));
 
         Assert.Contains(
             "'$(ZLinkLocalPackageRoot)' != ''\">$(ZLinkLocalPackageRoot)/nuget",
@@ -503,7 +503,7 @@ public sealed partial class RegressionTests
                      "run_sample.sh",
                      SearchOption.AllDirectories))
         {
-            var source = File.ReadAllText(runner);
+            var source = ReadSource(runner);
             foreach (var marker in forbidden)
                 Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
         }
@@ -526,7 +526,7 @@ public sealed partial class RegressionTests
 
         foreach (var sample in samples)
         {
-            var shellRunner = File.ReadAllText(Path.Combine(
+            var shellRunner = ReadSource(Path.Combine(
                 sampleRoot,
                 sample,
                 "run_sample.sh"));
@@ -552,7 +552,7 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("docker rm -fv", shellRunner,
                 StringComparison.Ordinal);
 
-            var powershellRunner = File.ReadAllText(Path.Combine(
+            var powershellRunner = ReadSource(Path.Combine(
                 sampleRoot,
                 sample,
                 "run_sample.ps1"));
@@ -562,7 +562,7 @@ public sealed partial class RegressionTests
                 StringComparison.Ordinal);
         }
 
-        var powershellHelper = File.ReadAllText(Path.Combine(
+        var powershellHelper = ReadSource(Path.Combine(
             sampleRoot,
             "sample_runner.ps1"));
         Assert.Contains("$applicationMinimumPort = 22100", powershellHelper,
@@ -589,7 +589,7 @@ public sealed partial class RegressionTests
             powershellHelper,
             StringComparison.Ordinal);
 
-        var shellRedisHelper = File.ReadAllText(Path.Combine(
+        var shellRedisHelper = ReadSource(Path.Combine(
             sampleRoot,
             "redis-common.sh"));
         Assert.Contains("local redis_min_port=22000", shellRedisHelper,
@@ -648,7 +648,7 @@ public sealed partial class RegressionTests
         // DotnetSampleRunnersSeparateCheckedRedisAndApplicationPorts above. What is left here is
         // ZoneWorld-specific: its PowerShell runner must stand on its own on native Windows,
         // without shelling out to bash or the removed run_sample.sh.
-        var zoneWorldPowerShellRunner = File.ReadAllText(Path.Combine(
+        var zoneWorldPowerShellRunner = ReadSource(Path.Combine(
             ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1"));
         Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("Start-SampleDotnetAssembly", zoneWorldPowerShellRunner, StringComparison.Ordinal);
@@ -689,8 +689,8 @@ public sealed partial class RegressionTests
         // status-file protocol went with it (#575). On PowerShell the rule lives in
         // Stop-SampleProcesses, which throws on its own.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
-        var shellHelper = File.ReadAllText(Path.Combine(samplesRoot, "redis-common.sh"));
-        var powershellHelper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
+        var shellHelper = ReadSource(Path.Combine(samplesRoot, "redis-common.sh"));
+        var powershellHelper = ReadSource(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
         Assert.Contains(
             "\"Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).\")",
@@ -712,7 +712,7 @@ public sealed partial class RegressionTests
         Assert.NotEmpty(shellRunners);
         foreach (var path in shellRunners)
         {
-            var runner = File.ReadAllText(path);
+            var runner = ReadSource(path);
             Assert.Contains("\ntrap zlink_sample_exit_trap EXIT\n", runner, StringComparison.Ordinal);
             Assert.DoesNotContain("\ntrap cleanup EXIT\n", runner, StringComparison.Ordinal);
             // A sample that drops the trap to print its marker after teardown still has to take
@@ -747,7 +747,7 @@ public sealed partial class RegressionTests
         Assert.Contains("throw ($teardownFailures -join [Environment]::NewLine)", powershellHelper,
             StringComparison.Ordinal);
 
-        var zoneWorldRunner = File.ReadAllText(Path.Combine(
+        var zoneWorldRunner = ReadSource(Path.Combine(
             samplesRoot, "ZoneWorld", "run_sample.ps1"));
         var cleanup = zoneWorldRunner[zoneWorldRunner.LastIndexOf("finally {", StringComparison.Ordinal)..];
         var configurationCleanup = cleanup.IndexOf("try { Remove-SampleConfigurationFiles",
@@ -767,10 +767,10 @@ public sealed partial class RegressionTests
     {
         var browserRoot = Path.GetFullPath(Path.Combine(
             ResolveDotnetRoot(), "..", "shared_sample", "zoneworld", "client"));
-        var runtime = File.ReadAllText(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
-        var liveTest = File.ReadAllText(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
-        var runner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
+        var runtime = ReadSource(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
+        var liveTest = ReadSource(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
+        var runner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
 
         Assert.Contains("fetch('/config.json'", runtime, StringComparison.Ordinal);
         Assert.DoesNotContain("import.meta.env", runtime, StringComparison.Ordinal);
@@ -795,7 +795,7 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourceFile);
+                var source = ReadSource(sourceFile);
                 Assert.DoesNotContain("class ScenarioAssert", source, StringComparison.Ordinal);
                 Assert.DoesNotContain("static class ScenarioAssert", source, StringComparison.Ordinal);
             }
@@ -812,7 +812,7 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourceFile);
+                var source = ReadSource(sourceFile);
                 Assert.DoesNotContain(".AsTask().GetAwaiter().GetResult()", source, StringComparison.Ordinal);
             }
     }
@@ -821,10 +821,10 @@ public sealed partial class RegressionTests
     public void ZoneWorldBotTimerAppliesBackpressureToActorMovement()
     {
         var zoneWorld = ResolveSampleRoot("ZoneWorld");
-        var spot = File.ReadAllText(Path.Combine(
+        var spot = ReadSource(Path.Combine(
             zoneWorld,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
-        var handlers = File.ReadAllText(Path.Combine(
+        var handlers = ReadSource(Path.Combine(
             zoneWorld,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "Handlers",
             "PlayerMoveHandlers.cs"));
@@ -843,10 +843,10 @@ public sealed partial class RegressionTests
     public void ZoneWorldBotEntryRecordsIdentityBeforeDeferredJoin()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var actor = File.ReadAllText(Path.Combine(
+        var actor = ReadSource(Path.Combine(
             sampleRoot,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "PlayerActor.cs"));
-        var entry = File.ReadAllText(Path.Combine(
+        var entry = ReadSource(Path.Combine(
             sampleRoot,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneEntrySpot.cs"));
 
@@ -861,7 +861,7 @@ public sealed partial class RegressionTests
     [Fact]
     public void ZoneWorldPhysicalDisconnectUsesFrameworkLifecycleNotification()
     {
-        var session = File.ReadAllText(Path.Combine(
+        var session = ReadSource(Path.Combine(
             ResolveSampleRoot("ZoneWorld"),
             "Server", "Gateway", "Infrastructure", "ZLink", "Sessions", "PlayerSession.cs"));
 

@@ -15,7 +15,7 @@ public sealed partial class RegressionTests
         Assert.Equal(5, hosts.Length);
         foreach (var host in hosts)
         {
-            var source = File.ReadAllText(host);
+            var source = ReadSource(host);
             Assert.Equal(1, source.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
             var expectedMesh = host.Contains("CustomerGateway", StringComparison.Ordinal)
                                || host.Contains("Tracking", StringComparison.Ordinal)
@@ -26,9 +26,9 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("AddSendHandler<", source, StringComparison.Ordinal);
         }
 
-        var dispatch = File.ReadAllText(Path.Combine(
+        var dispatch = ReadSource(Path.Combine(
             sampleRoot, "Server", "Dispatch", "DispatchServerHostFactory.cs"));
-        var tracking = File.ReadAllText(Path.Combine(
+        var tracking = ReadSource(Path.Combine(
             sampleRoot, "Server", "Tracking", "TrackingServerHostFactory.cs"));
         Assert.Contains("AddHandlerGroup(SampleNames.DispatchChannel)", dispatch, StringComparison.Ordinal);
         Assert.Contains("AddHandlerGroup(SampleNames.TrackingRouteChannel)", tracking, StringComparison.Ordinal);
@@ -48,8 +48,8 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_Client_Gate_Verifies_Status_Arrival_Order()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var scenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "DeliveryDispatchClientScenario.cs"));
-        var worker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
+        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "DeliveryDispatchClientScenario.cs"));
+        var worker = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
 
         Assert.Contains("WaitForSequence<DeliveryStatusNotify>()", scenario, StringComparison.Ordinal);
         Assert.Contains("ExpectNone<OfferDeliveryNotify>()", scenario, StringComparison.Ordinal);
@@ -66,7 +66,7 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_Offer_Deadline_Starts_After_Status_Publish()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var worker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
+        var worker = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
 
         var firstPublish = worker.IndexOf(
             "await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned",
@@ -95,10 +95,10 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_Runner_Uses_Isolated_Docker_Redis_And_Location_Store()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.ko.md"));
-        var topology = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
+        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
 
         Assert.DoesNotContain("if [[ -z \"${DELIVERYDISPATCH_REDIS_ENDPOINT:-}\" ]]", shellRunner,
             StringComparison.Ordinal);
@@ -162,7 +162,7 @@ public sealed partial class RegressionTests
         foreach (var hostFactory in Directory.EnumerateFiles(Path.Combine(sampleRoot, "Server"), "*HostFactory.cs",
                      SearchOption.AllDirectories))
         {
-            AssertLocationStoreHost(File.ReadAllText(hostFactory));
+            AssertLocationStoreHost(ReadSource(hostFactory));
         }
 
         Assert.Contains("전용 Docker Redis", readme, StringComparison.Ordinal);
@@ -176,26 +176,26 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_Contracts_Match_Common_Role_Model()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.ko.md"));
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var topology = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var courierBinder = File.ReadAllText(Path.Combine(
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var courierBinder = ReadSource(Path.Combine(
             sampleRoot, "Server", "CourierSession", "CourierSessionBinder.cs"));
-        var courierOffers = File.ReadAllText(Path.Combine(
+        var courierOffers = ReadSource(Path.Combine(
             sampleRoot, "Server", "Dispatch", "DispatchZLinkAdapters.cs"));
-        var customerSession = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CustomerGateway",
+        var customerSession = ReadSource(Path.Combine(sampleRoot, "Server", "CustomerGateway",
             "SubscribeDeliverySessionHandler.cs"));
-        var customerStatusHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CustomerGateway",
+        var customerStatusHandler = ReadSource(Path.Combine(sampleRoot, "Server", "CustomerGateway",
             "Spots", "EntrySpot", "Handlers", "DeliveryStatusUpdatedHandler.cs"));
-        var customerAccess = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CustomerGateway",
+        var customerAccess = ReadSource(Path.Combine(sampleRoot, "Server", "CustomerGateway",
             "CustomerActorAccess.cs"));
-        var courierEntrySpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CourierActorNode",
+        var courierEntrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "CourierActorNode",
             "Spots", "EntrySpot", "EntrySpot.cs"));
-        var customerEntrySpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CustomerGateway",
+        var customerEntrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "CustomerGateway",
             "Spots", "EntrySpot", "CustomerEntrySpot.cs"));
-        var clientScenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "DeliveryDispatchClientScenario.cs"));
+        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "DeliveryDispatchClientScenario.cs"));
 
         Assert.Contains("record AssignDeliveryMsg", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("record FindCourierActorReq", messages, StringComparison.Ordinal);
@@ -259,11 +259,11 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_CourierSession_Bind_Registers_Binder_And_Replies_To_Client()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var courierSessionBinder = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CourierSession",
+        var courierSessionBinder = ReadSource(Path.Combine(sampleRoot, "Server", "CourierSession",
             "CourierSessionBinder.cs"));
-        var courierSessionHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CourierSession",
+        var courierSessionHandler = ReadSource(Path.Combine(sampleRoot, "Server", "CourierSession",
             "BindCourierSessionHandler.cs"));
-        var courierSessionHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CourierSession",
+        var courierSessionHost = ReadSource(Path.Combine(sampleRoot, "Server", "CourierSession",
             "CourierSessionHostFactory.cs"));
 
         Assert.Contains(".GetOrCreate(courierId, SampleNames.CourierActorType)", courierSessionBinder,
@@ -281,11 +281,11 @@ public sealed partial class RegressionTests
     public void DeliveryDispatch_Dispatch_Uses_Readiness_Health_Without_Business_Request_Retry()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
-        var dispatchHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch",
+        var dispatchHost = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch",
             "DispatchServerHostFactory.cs"));
-        var dispatchAdapters = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch",
+        var dispatchAdapters = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch",
             "DispatchZLinkAdapters.cs"));
-        var dispatchWorker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch",
+        var dispatchWorker = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch",
             "DispatchWorker.cs"));
 
         Assert.Contains("IZLinkLocationReadiness", dispatchHost, StringComparison.Ordinal);
@@ -324,17 +324,17 @@ public sealed partial class RegressionTests
                 continue;
             }
 
-            Assert.DoesNotContain("Environment.GetEnvironmentVariable", File.ReadAllText(file),
+            Assert.DoesNotContain("Environment.GetEnvironmentVariable", ReadSource(file),
                 StringComparison.Ordinal);
         }
 
-        var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
+        var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         Assert.DoesNotContain("export DELIVERYDISPATCH_DISPATCH", runner, StringComparison.Ordinal);
         Assert.Contains("--config", runner, StringComparison.Ordinal);
         Assert.Contains("OfferDeadlineSweeper", dispatchWorker, StringComparison.Ordinal);
 
         // Nothing on the courier node may wait for the courier's decision.
-        var courierActor = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CourierActorNode",
+        var courierActor = ReadSource(Path.Combine(sampleRoot, "Server", "CourierActorNode",
             "CourierActor.cs"));
         Assert.DoesNotContain("TaskCompletionSource", courierActor, StringComparison.Ordinal);
         Assert.Contains("RequestAsync<DeliveryStatusChangedReq, DeliveryStatusChangedRes>", dispatchAdapters,

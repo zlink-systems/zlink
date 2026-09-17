@@ -11,7 +11,7 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
         foreach (var role in new[] { "Gateway", "Ops", "ZoneNode" })
         {
-            var source = File.ReadAllText(Path.Combine(sampleRoot, "Server", role, "Program.cs"));
+            var source = ReadSource(Path.Combine(sampleRoot, "Server", role, "Program.cs"));
             // A sample-only deadline equal to the owner lease TTL can expire
             // before Location observes a crash and retires its connection intent.
             Assert.DoesNotContain("DefaultRequestTimeout", source, StringComparison.Ordinal);
@@ -33,7 +33,7 @@ public sealed partial class RegressionTests
             "sample",
             "fixtures",
             "channel-topology.json");
-        using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        using var fixture = JsonDocument.Parse(ReadSource(fixturePath));
         var zoneWorld = fixture.RootElement
             .GetProperty("samples")
             .GetProperty("ZoneWorld");
@@ -66,19 +66,19 @@ public sealed partial class RegressionTests
 
         foreach (var participant in participants)
         {
-            var source = File.ReadAllText(participant);
+            var source = ReadSource(participant);
             Assert.Equal(1, source.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
             Assert.Contains("AddRouteMesh(ZoneWorldNames.MeshName)", source, StringComparison.Ordinal);
             Assert.DoesNotContain("AddRequestHandler<", source, StringComparison.Ordinal);
             Assert.DoesNotContain("AddSendHandler<", source, StringComparison.Ordinal);
         }
 
-        var zoneNode = File.ReadAllText(participants[2]);
-        var gateway = File.ReadAllText(participants[0]);
-        var ops = File.ReadAllText(participants[1]);
-        var settings = File.ReadAllText(Path.Combine(
+        var zoneNode = ReadSource(participants[2]);
+        var gateway = ReadSource(participants[0]);
+        var ops = ReadSource(participants[1]);
+        var settings = ReadSource(Path.Combine(
             sampleRoot, "Server", "Configuration", "ZoneWorldSettings.cs"));
-        var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
+        var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         Assert.Contains("Channel(ZoneWorldNames.ZoneChannel).Server()", zoneNode, StringComparison.Ordinal);
         Assert.DoesNotContain("Channel(ZoneWorldNames.ZoneChannel).Client()", gateway, StringComparison.Ordinal);
         Assert.DoesNotContain("Channel(ZoneWorldNames.ReportChannel).Client()", gateway, StringComparison.Ordinal);
@@ -115,7 +115,7 @@ public sealed partial class RegressionTests
 
         foreach (var participant in participants)
         {
-            var source = File.ReadAllText(participant);
+            var source = ReadSource(participant);
             Assert.Contains(
                 ".Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal)",
                 source,
@@ -126,7 +126,7 @@ public sealed partial class RegressionTests
                 StringComparison.Ordinal);
         }
 
-        var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
+        var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         Assert.Contains(
             "\"$@\" >>\"$LOG_DIR/$name.log\" 2>&1 &",
             runner,
@@ -137,7 +137,7 @@ public sealed partial class RegressionTests
     public void ZoneWorld_Uses_Global_Actor_Routes_After_Membership_Callbacks()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var playerSession = File.ReadAllText(Path.Combine(
+        var playerSession = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Gateway",
@@ -145,7 +145,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Sessions",
             "PlayerSession.cs"));
-        var botSpawner = File.ReadAllText(Path.Combine(
+        var botSpawner = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -153,7 +153,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Actors",
             "BotSpawner.cs"));
-        var spot = File.ReadAllText(Path.Combine(
+        var spot = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -161,7 +161,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Spots",
             "ZoneSpot.cs"));
-        var actorHandlers = File.ReadAllText(Path.Combine(
+        var actorHandlers = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -205,20 +205,20 @@ public sealed partial class RegressionTests
     public void ZoneWorld_Relocation_Gate_Requires_Owner_And_Message_Follow_Evidence()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var scenarios = File.ReadAllText(Path.Combine(sampleRoot, "Client", "Scenarios.cs"));
-        var support = File.ReadAllText(Path.Combine(sampleRoot, "Client", "ScenarioSupport.cs"));
-        var contracts = File.ReadAllText(Path.Combine(
+        var scenarios = ReadSource(Path.Combine(sampleRoot, "Client", "Scenarios.cs"));
+        var support = ReadSource(Path.Combine(sampleRoot, "Client", "ScenarioSupport.cs"));
+        var contracts = ReadSource(Path.Combine(
             sampleRoot, "Shared", "Contracts", "ZoneWorldMessages.cs"));
-        var gateway = File.ReadAllText(Path.Combine(
+        var gateway = ReadSource(Path.Combine(
             sampleRoot, "Server", "Gateway", "Infrastructure", "ZLink", "Sessions", "PlayerSession.cs"));
-        var entrySpot = File.ReadAllText(Path.Combine(
+        var entrySpot = ReadSource(Path.Combine(
             sampleRoot, "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneEntrySpot.cs"));
-        var movement = File.ReadAllText(Path.Combine(
+        var movement = ReadSource(Path.Combine(
             sampleRoot, "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "Handlers",
             "PlayerMoveHandlers.cs"));
-        var zoneSpot = File.ReadAllText(Path.Combine(
+        var zoneSpot = ReadSource(Path.Combine(
             sampleRoot, "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
-        var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
+        var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
 
         Assert.Contains("[\"ZW-B3\"] = B3ActorGenerationPreserved", scenarios, StringComparison.Ordinal);
         Assert.Contains("[\"ZW-B5\"] = B5MessageFollowOneWay", scenarios, StringComparison.Ordinal);
@@ -261,7 +261,7 @@ public sealed partial class RegressionTests
     public void ZoneWorld_Maintenance_Uses_Target_Admission_And_Same_Zone_Only()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var scenarios = File.ReadAllText(Path.Combine(sampleRoot, "Client", "Scenarios.cs"));
+        var scenarios = ReadSource(Path.Combine(sampleRoot, "Client", "Scenarios.cs"));
         Assert.Contains("[\"ZW-E2\"] = E2MaintenanceBlocksNewEntry", scenarios, StringComparison.Ordinal);
         Assert.Contains("[\"ZW-E3\"] = E3SameZoneMoveAllowed", scenarios, StringComparison.Ordinal);
         Assert.Contains("[\"ZW-E4\"] = E4SameNodeDifferentZoneRejected", scenarios, StringComparison.Ordinal);
@@ -274,12 +274,12 @@ public sealed partial class RegressionTests
     public void ZoneWorld_Uses_Capacity_Placement_Without_Zone_To_Node_Fixtures()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var topology = File.ReadAllText(Path.Combine(
+        var topology = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Configuration",
             "ZoneTopology.cs"));
-        var bootstrap = File.ReadAllText(Path.Combine(
+        var bootstrap = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -287,7 +287,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Actors",
             "BotSpawner.cs"));
-        var fanout = File.ReadAllText(Path.Combine(
+        var fanout = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -295,7 +295,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Handlers",
             "FanoutSubscribers.cs"));
-        var program = File.ReadAllText(Path.Combine(
+        var program = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "ZoneNode",
@@ -313,13 +313,13 @@ public sealed partial class RegressionTests
     public void ZoneWorld_Same_Zone_Move_Uses_Update_Position_Message_Boundary()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts",
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts",
             "ZoneWorldMessages.cs"));
-        var movement = File.ReadAllText(Path.Combine(sampleRoot, "Server", "ZoneNode",
+        var movement = ReadSource(Path.Combine(sampleRoot, "Server", "ZoneNode",
             "Infrastructure", "ZLink", "Spots", "Handlers", "PlayerMoveHandlers.cs"));
-        var handlers = File.ReadAllText(Path.Combine(sampleRoot, "Server", "ZoneNode",
+        var handlers = ReadSource(Path.Combine(sampleRoot, "Server", "ZoneNode",
             "Infrastructure", "ZLink", "Spots", "Handlers", "ZoneSpotHandlers.cs"));
-        var spot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "ZoneNode",
+        var spot = ReadSource(Path.Combine(sampleRoot, "Server", "ZoneNode",
             "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
 
         Assert.Contains("record UpdatePositionMsg", messages, StringComparison.Ordinal);
