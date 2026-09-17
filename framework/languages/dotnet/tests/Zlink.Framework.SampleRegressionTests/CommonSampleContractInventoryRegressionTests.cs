@@ -29,10 +29,10 @@ public sealed partial class RegressionTests
         var missing = new List<string>();
         foreach (var (sampleName, relativeContract) in contracts)
         {
-            var document = File.ReadAllText(Path.Combine(commonSampleRoot, relativeContract));
+            var document = ReadSource(Path.Combine(commonSampleRoot, relativeContract));
             var source = string.Join(
-                Environment.NewLine,
-                EnumerateSourceFiles(ResolveSampleRoot(sampleName)).Select(File.ReadAllText));
+                '\n',
+                EnumerateSourceFiles(ResolveSampleRoot(sampleName)).Select(ReadSource));
             foreach (Match match in declaration.Matches(document))
             {
                 var messageName = match.Groups["name"].Value;

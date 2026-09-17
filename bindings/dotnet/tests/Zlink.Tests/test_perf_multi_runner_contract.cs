@@ -10,7 +10,7 @@ public sealed class test_perf_multi_runner_contract
     public void build_dir_is_rejected_before_core_runtime_setup()
     {
         string runner = RunnerPath();
-        string source = File.ReadAllText(runner);
+        string source = ReadSource(runner);
         const string error = "--build-dir is not supported by the .NET multi perf runner";
 
         int rejection = source.IndexOf(error, StringComparison.Ordinal);
@@ -36,7 +36,7 @@ public sealed class test_perf_multi_runner_contract
     [Fact]
     public void reuse_skips_all_builds_and_validates_required_outputs()
     {
-        string source = File.ReadAllText(RunnerPath());
+        string source = ReadSource(RunnerPath());
         string buildBody = FunctionBody(source, "ensure_build_output", "validate_reuse_outputs");
         string reuseBody = FunctionBody(source, "validate_reuse_outputs", "prepare_core_runtime");
         string streamBody = FunctionBody(source, "ensure_stream_client", "normalize_platform");
@@ -80,7 +80,7 @@ public sealed class test_perf_multi_runner_contract
     [Fact]
     public void clean_build_removes_only_fixed_perf_project_outputs()
     {
-        string source = File.ReadAllText(RunnerPath());
+        string source = ReadSource(RunnerPath());
         string buildBody = FunctionBody(source, "ensure_build_output", "validate_reuse_outputs");
 
         Assert.Contains(
@@ -95,7 +95,7 @@ public sealed class test_perf_multi_runner_contract
     [Fact]
     public void stream_non_tcp_cap_is_resolved_once_for_server_and_client()
     {
-        string source = File.ReadAllText(RunnerPath());
+        string source = ReadSource(RunnerPath());
         string resolver = FunctionBody(source,
             "effective_clients_for_transport", "pattern_uses_control_pipe");
         int streamClientStart = source.IndexOf(
@@ -130,7 +130,7 @@ public sealed class test_perf_multi_runner_contract
         Assert.True(serverStart > resolution,
             "the effective client count must be resolved before the server starts");
 
-        string server = File.ReadAllText(StreamServerSourcePath());
+        string server = ReadSource(StreamServerSourcePath());
         Assert.Contains("int clientCount = ResolveMultiClients(options);",
             server, StringComparison.Ordinal);
         Assert.Contains("WaitConnectReadyCount(monitor, clientCount",
@@ -141,7 +141,7 @@ public sealed class test_perf_multi_runner_contract
     public void multi_pattern_names_are_unprefixed_and_legacy_prefix_is_rejected()
     {
         string runner = RunnerPath();
-        string source = File.ReadAllText(runner);
+        string source = ReadSource(runner);
 
         Assert.Contains("DEALER_DEALER,DEALER_ROUTER_SENDSEND", source,
             StringComparison.Ordinal);
@@ -165,10 +165,10 @@ public sealed class test_perf_multi_runner_contract
     [Fact]
     public void compatibility_runner_uses_explicit_suite_context()
     {
-        string adapter = File.ReadAllText(CompatibilityRunnerPath());
-        string singleAdapter = File.ReadAllText(SuiteCompatibilityRunnerPath(
+        string adapter = ReadSource(CompatibilityRunnerPath());
+        string singleAdapter = ReadSource(SuiteCompatibilityRunnerPath(
             "single"));
-        string multiAdapter = File.ReadAllText(SuiteCompatibilityRunnerPath(
+        string multiAdapter = ReadSource(SuiteCompatibilityRunnerPath(
             "multi"));
 
         Assert.Contains("ap.add_argument(\"--suite\"", adapter,
@@ -186,7 +186,7 @@ public sealed class test_perf_multi_runner_contract
     [Fact]
     public void reqrep_reply_result_is_not_changed_by_graceful_teardown()
     {
-        string source = File.ReadAllText(ReqRepSourcePath());
+        string source = ReadSource(ReqRepSourcePath());
         int replyStart = source.IndexOf(
             "private static bool ReplyReceived(Received received)",
             StringComparison.Ordinal);
@@ -214,6 +214,43 @@ public sealed class test_perf_multi_runner_contract
         Assert.Contains(
             "error.Result == ZlinkSubmitException.ErrorCode.NotFound",
             source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Reads a repository file for content assertions with line breaks normalised to
+    /// <c>\n</c>, because these assertions compare content, not the checkout's line endings
+    /// (#578). The runner, adapter and source needles below write their line breaks as
+    /// <c>\n</c>; a CRLF checkout must not change the verdict.
+    /// </summary>
+    private static string ReadSource(string path) =>
+        File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    [Fact]
+    public void content_assertions_ignore_the_checkout_line_endings()
+    {
+        const string needle = "\n}\n\nensure_build_output\n";
+        string lfText = ReadSource(RunnerPath());
+        Assert.Contains(needle, lfText, StringComparison.Ordinal);
+
+        DirectoryInfo tempRoot = Directory.CreateTempSubdirectory("zlink-perf-runner-eol-");
+        try
+        {
+            string lfCopy = Path.Combine(tempRoot.FullName, "lf.sh");
+            string crlfCopy = Path.Combine(tempRoot.FullName, "crlf.sh");
+            File.WriteAllText(lfCopy, lfText);
+            File.WriteAllText(crlfCopy, lfText.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+            Assert.Contains(needle, ReadSource(lfCopy), StringComparison.Ordinal);
+            Assert.Contains(needle, ReadSource(crlfCopy), StringComparison.Ordinal);
+            // Negative control: read unnormalised, the CRLF copy misses the needle. If this
+            // ever passes, ReadSource() is no longer load-bearing.
+            Assert.DoesNotContain(needle, File.ReadAllText(crlfCopy), StringComparison.Ordinal);
+            Assert.Contains(needle, File.ReadAllText(lfCopy), StringComparison.Ordinal);
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
     }
 
     private static string FunctionBody(string source, string name, string nextName)

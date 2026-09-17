@@ -16,7 +16,7 @@ public sealed partial class RegressionTests
 
         foreach (var host in hosts)
         {
-            var source = File.ReadAllText(host);
+            var source = ReadSource(host);
             Assert.Equal(1, source.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
             Assert.Contains("AddRouteMesh(SampleNames.MeshName)", source, StringComparison.Ordinal);
             Assert.Contains("AddHandlersFromAssemblyOf", source, StringComparison.Ordinal);
@@ -26,7 +26,7 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("AddClientServerChannel(", source, StringComparison.Ordinal);
         }
 
-        Assert.Contains("AddInstanceSpotFactory<PlayerQuestSpot>", File.ReadAllText(hosts[1]),
+        Assert.Contains("AddInstanceSpotFactory<PlayerQuestSpot>", ReadSource(hosts[1]),
             StringComparison.Ordinal);
     }
 
@@ -34,40 +34,40 @@ public sealed partial class RegressionTests
     public void GameQuest_Runner_Uses_Isolated_Docker_Redis_And_Stream_Actions()
     {
         var sampleRoot = ResolveSampleRoot("GameQuest");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Messages.cs"));
-        var clientScenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "GameQuestClientScenario.cs"));
-        var sessionHandlers = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Messages.cs"));
+        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "GameQuestClientScenario.cs"));
+        var sessionHandlers = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
             "GameQuestSessionHandlers.cs"));
-        var session = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
+        var session = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
             "GameQuestSession.cs"));
-        var playerSessionActor = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
+        var playerSessionActor = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Session",
             "PlayerSessionActor.cs"));
-        var topology = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleConfiguration.cs"));
-        var gameApiStore = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Infrastructure", "Store",
+        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleConfiguration.cs"));
+        var gameApiStore = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Infrastructure", "Store",
             "GameQuestStores.cs"));
-        var questStore = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission", "Infrastructure", "Store",
+        var questStore = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission", "Infrastructure", "Store",
             "QuestStores.cs"));
-        var questProcessor = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission", "Application",
+        var questProcessor = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission", "Application",
             "QuestEventProcessor.cs"));
-        var redisJsonStore = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "RedisJsonStore.cs"));
-        var gameApiProgram = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Program.cs"));
-        var missionProgram = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission", "Program.cs"));
+        var redisJsonStore = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "RedisJsonStore.cs"));
+        var gameApiProgram = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Program.cs"));
+        var missionProgram = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission", "Program.cs"));
         var gameplayIngress = missionProgram;
-        var playerQuestSpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission", "Infrastructure",
+        var playerQuestSpot = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission", "Infrastructure",
             "ZLink", "Spots", "PlayerQuestSpot", "PlayerQuestSpot.cs"));
-        var questDomain = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission", "Domain",
+        var questDomain = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission", "Domain",
             "QuestDomain.cs"));
-        var actionService = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Application",
+        var actionService = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Application",
             "GameplayActionService.cs"));
-        var eventDispatcher = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi", "Infrastructure",
+        var eventDispatcher = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi", "Infrastructure",
             "ZLink", "GameplayEventOwnerDispatcher.cs"));
-        var progressSynchronizer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "GameApi",
+        var progressSynchronizer = ReadSource(Path.Combine(sampleRoot, "Server", "GameApi",
             "Infrastructure", "Http", "HttpQuestProgressSynchronizer.cs"));
-        var progressNotifier = File.ReadAllText(Path.Combine(sampleRoot, "Server", "QuestMission",
+        var progressNotifier = ReadSource(Path.Combine(sampleRoot, "Server", "QuestMission",
             "Infrastructure", "ZLink", "GameApiQuestClients.cs"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.ko.md"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
 
         Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
         Assert.Contains("SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
@@ -264,7 +264,7 @@ public sealed partial class RegressionTests
 
         foreach (var domainFile in domainFiles)
         {
-            var source = File.ReadAllText(domainFile);
+            var source = ReadSource(domainFile);
             Assert.DoesNotContain("using GameQuest.Shared", source, StringComparison.Ordinal);
             Assert.DoesNotContain("using System.Text.Json", source, StringComparison.Ordinal);
             Assert.DoesNotContain("using Zlink.", source, StringComparison.Ordinal);
@@ -272,7 +272,7 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("using StackExchange.Redis", source, StringComparison.Ordinal);
         }
 
-        var mapper = File.ReadAllText(Path.Combine(
+        var mapper = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "QuestMission",
