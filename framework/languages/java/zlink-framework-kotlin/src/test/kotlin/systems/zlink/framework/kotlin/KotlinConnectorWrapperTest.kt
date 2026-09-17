@@ -25,6 +25,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -64,14 +65,17 @@ final class KotlinConnectorWrapperTest {
 
     @Test
     fun kotlinCompressionDslPreservesReceivedMessageLimit() {
+        //  The 20-argument constructor carries waitTimeout and typedCodec as
+        //  well; the earlier 19-argument shape this test used no longer exists.
         val connectorOptions = ZLinkStreamConnectorOptions(
             URI.create("tcp://127.0.0.1:7200"),
             ZLinkStreamDispatchMode.MANUAL,
             ofSeconds(1),
+            ofSeconds(5),
             1,
             ofSeconds(1),
             64 * 1024,
-            64 * 1024,
+            32 * 1024,
             true,
             ofSeconds(1),
             ofSeconds(5),
@@ -83,8 +87,12 @@ final class KotlinConnectorWrapperTest {
             ZLinkStreamCompression.LZ4,
             null,
             null,
+            null,
         )
 
+        assertEquals(32 * 1024, connectorOptions.maxReceivePayloadSize())
+        assertEquals(ZLinkStreamCompression.LZ4, connectorOptions.compression())
+        assertNotNull(connectorOptions.compressionCodec())
     }
     @Test
     fun kotlinRequestCompletionSurfaceUsesOnlyContractNames() {

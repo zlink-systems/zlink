@@ -25,8 +25,8 @@ import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
+import systems.zlink.stream.connector.ZLinkStreamPacketNameResolver;
 import systems.zlink.stream.connector.ZLinkStreamCodec;
-import systems.zlink.stream.connector.ZLinkStreamCompression;
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode;
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
 import systems.zlink.stream.connector.ZLinkStreamJson;
@@ -160,7 +160,10 @@ final class ConnectorCodecContractTest {
             Duration.ofSeconds(5),
             2.0,
             false,
-            ZLinkStreamCompression.LZ4);
+            //  The 15-argument overload ends with the packet name resolver.
+            //  Compression is not a parameter here and defaults to LZ4, which
+            //  is what this test asked for when it passed LZ4 in this position.
+            ZLinkStreamPacketNameResolver.defaultResolver());
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {

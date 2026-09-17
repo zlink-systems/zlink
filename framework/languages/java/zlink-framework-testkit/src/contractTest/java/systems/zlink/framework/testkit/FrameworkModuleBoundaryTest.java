@@ -79,8 +79,8 @@ final class FrameworkModuleBoundaryTest {
             List<Path> offenders = files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> path.toString().contains("/src/main/java/"))
-                .filter(path -> !path.toString().contains("/systems/zlink/framework/runtime/"))
+                .filter(path -> posixPath(path).contains("/src/main/java/"))
+                .filter(path -> !posixPath(path).contains("/systems/zlink/framework/runtime/"))
                 .filter(FrameworkModuleBoundaryTest::importsBindingRuntimePackage)
                 .toList();
 
@@ -152,8 +152,8 @@ final class FrameworkModuleBoundaryTest {
             List<String> offenders = files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> !path.toString().contains("/systems/zlink/framework/runtime/binding/"))
-                .filter(path -> !path.toString().contains(
+                .filter(path -> !posixPath(path).contains("/systems/zlink/framework/runtime/binding/"))
+                .filter(path -> !posixPath(path).contains(
                     "/systems/zlink/framework/runtime/internal/binding/"))
                 .flatMap(path -> bindingContractImports(path).stream())
                 .filter(line -> !allowedImports.contains(line))
@@ -210,6 +210,13 @@ final class FrameworkModuleBoundaryTest {
 
             assertTrue(offenders.isEmpty(), "reflection use in Java binding adapter: " + offenders);
         }
+    }
+
+    //  These filters match package paths written with forward slashes. On
+    //  Windows Path.toString() uses backslashes, so the exclusions never
+    //  matched and the excluded directories were scanned as offenders.
+    private static String posixPath(Path path) {
+        return path.toString().replace(java.io.File.separatorChar, '/');
     }
 
     private static boolean importsBindingRuntimePackage(Path path) {

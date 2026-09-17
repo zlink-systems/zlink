@@ -105,22 +105,15 @@ final class SampleReleaseGateContractTest {
     void requiredSamplesExposeExecutableEntryPoints() throws IOException {
         Path samplesRoot = samplesRoot();
 
-        assertTrue(Files.isRegularFile(samplesRoot.resolve("run_samples.sh")),
-            "missing aggregate sample runner");
-        assertTrue(Files.isExecutable(samplesRoot.resolve("run_samples.sh")),
-            "aggregate sample runner must be executable");
-        assertTrue(Files.isRegularFile(samplesRoot.resolve("run_samples.ps1")),
-            "missing aggregate PowerShell sample runner");
-        String aggregateRunner = Files.readString(samplesRoot.resolve("run_samples.sh"));
-        assertFalse(aggregateRunner.contains("export ZLINK_LIBRARY_PATH="),
-            "aggregate sample runner must preserve the caller's native library selection; "
-                + "an unset path uses the installed binding package");
-        assertTrue(aggregateRunner.contains("bash \"$script\""),
-            "aggregate sample runner must invoke non-executable sample scripts through Bash");
-        String aggregatePowerShellRunner = Files.readString(samplesRoot.resolve("run_samples.ps1"));
-        assertFalse(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH"),
-            "aggregate PowerShell sample runner must preserve the caller's native library selection; "
-                + "an unset path uses the installed binding package");
+        //  The per-language batch runners were removed on purpose: a stalled
+        //  sample held the whole language's run and made interference between
+        //  samples look like a defect in any one of them (#405). Samples run one
+        //  at a time through their own run_sample.sh / .ps1, which the rest of
+        //  this test and the two lock tests below still pin.
+        assertFalse(Files.exists(samplesRoot.resolve("run_samples.sh")),
+            "the aggregate sample runner was removed; samples run one at a time");
+        assertFalse(Files.exists(samplesRoot.resolve("run_samples.ps1")),
+            "the aggregate PowerShell sample runner was removed; samples run one at a time");
         String commonRunner = Files.readString(samplesRoot.resolve("runner-common.sh"));
         assertTrue(commonRunner.contains("cp -- \"${settings_source}\" \"${settings_target}\""),
             "POSIX sample runner must stage standalone settings under Gradle's standard filename");
@@ -402,10 +395,6 @@ final class SampleReleaseGateContractTest {
                     language + "/" + sample + " must use the shared Gradle flock wrapper");
             }
         }
-
-        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.sh"));
-        assertFalse(unlockedGradle.matcher(aggregateRunner).find(),
-            "aggregate Bash sample gate must use the shared Gradle flock wrapper");
     }
 
     @Test
@@ -443,11 +432,6 @@ final class SampleReleaseGateContractTest {
             }
         }
 
-        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.ps1"));
-        assertTrue(aggregateRunner.contains("Invoke-ZlinkSampleGradleBuild"),
-            "aggregate PowerShell sample gate must use the shared Gradle build lock");
-        assertFalse(aggregateRunner.contains("Invoke-Checked $Gradle"),
-            "aggregate PowerShell sample gate must not bypass the shared Gradle build lock");
     }
 
     @Test
