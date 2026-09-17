@@ -78,6 +78,7 @@ public final class BingoClientScenario {
 
         Messages.PlayerJoinedNotify join = client1SawClient2Join.toCompletableFuture().join().payload();
         ensure(join.getActorId().equals(client2Auth.getActorId()));
+        System.out.println("stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify");
         ensure(client1Started.toCompletableFuture().join().payload().getState().getStatus().equals("Running"));
         ensure(client2Started.toCompletableFuture().join().payload().getState().getStatus().equals("Running"));
 
