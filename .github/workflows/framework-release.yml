@@ -10,13 +10,18 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Framework language (dotnet uses release-dotnet.yml)'
+        description: >-
+          Framework language (dotnet uses release-dotnet.yml). 'assets' attaches
+          tutorial/samples zips to an existing framework-cpp/framework-node
+          release for 'version' without publishing anything.
         required: true
         default: all
         type: choice
-        options: [cpp, java, node, all]
+        options: [cpp, java, node, all, assets]
       version:
-        description: 'Target version; omitted uses framework/languages/<target>/VERSION'
+        description: >-
+          Target version; omitted uses framework/languages/<target>/VERSION.
+          Required when target=assets.
         required: false
         type: string
       publish_registry:
@@ -38,6 +43,7 @@ jobs:
       java_version: ${{ steps.version.outputs.java_version }}
       cpp_version: ${{ steps.version.outputs.cpp_version }}
       publish_registry: ${{ steps.version.outputs.publish_registry }}
+      asset_tags: ${{ steps.version.outputs.asset_tags }}
     steps:
       - uses: actions/checkout@v5
 
@@ -58,12 +64,30 @@ jobs:
               *) echo "Unsupported framework tag" >&2; exit 1 ;;
             esac
             publish_registry=true
+            case "${target}" in
+              cpp|node|all) asset_tags="[\"${GITHUB_REF_NAME}\"]" ;;
+              java) asset_tags="[]" ;;
+            esac
           else
             target="${REQUESTED_TARGET:-all}"
             version="${REQUESTED_VERSION}"
             publish_registry="${REQUESTED_PUBLISH}"
+            if [ "${target}" = "assets" ]; then
+              if [ -z "${version}" ]; then
+                echo "::error::target=assets requires the 'version' input (e.g. 0.18.0)" >&2
+                exit 1
+              fi
+              # release-cpp and release-unity are the only jobs that create a
+              # GitHub Release; this list is what release-assets attaches to.
+              asset_tags="[\"framework-cpp/v${version}\",\"framework-node/v${version}\"]"
+            else
+              asset_tags="[]"
+            fi
           fi
-          case "${target}" in cpp|java|node|all) ;; *) echo "Invalid target: ${target}" >&2; exit 1 ;; esac
+          case "${target}" in cpp|java|node|all|assets) ;; *) echo "Invalid target: ${target}" >&2; exit 1 ;; esac
+          # target=assets matches none of these language names, so the loop
+          # below is a no-op for it (by design: no publish job's `if` matches
+          # 'assets' either, so this dispatch mode can never trigger a publish).
           for language in cpp java node; do
             if [ "${target}" != "${language}" ] && [ "${target}" != "all" ]; then
               continue
@@ -88,6 +112,7 @@ jobs:
           done
           echo "target=${target}" >> "${GITHUB_OUTPUT}"
           echo "publish_registry=${publish_registry}" >> "${GITHUB_OUTPUT}"
+          echo "asset_tags=${asset_tags}" >> "${GITHUB_OUTPUT}"
 
   release-node:
     if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
@@ -233,6 +258,111 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/framework-node/com.zlink.stream-connector.webgl-*.tgz
+
+  # Only release-cpp and release-unity create a GitHub Release (Framework Java
+  # publishes to Maven Central only, Framework .NET to nuget.org via
+  # release-dotnet.yml — see doc/building/release-pipeline.ko.md §1). Whichever
+  # framework release ends up newest across the whole repo is what
+  # `releases/latest/download/...` resolves to (#639), so every release this
+  # workflow creates must carry all eight tutorial/samples zips, not just the
+  # one that happens to be latest today. `needs.resolve.outputs.asset_tags`
+  # already encodes which tags (if any) got a release this run, or — for the
+  # target=assets dispatch — which existing release(s) to back-fill.
+  release-assets:
+    name: Attach tutorial/samples zip assets (${{ matrix.tag }})
+    runs-on: ubuntu-24.04
+    needs:
+      - resolve
+      - release-cpp
+      - release-unity
+    if: >-
+      !cancelled() &&
+      needs.resolve.result == 'success' &&
+      contains(fromJSON('["success","skipped"]'), needs.release-cpp.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-unity.result) &&
+      needs.resolve.outputs.asset_tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.resolve.outputs.asset_tags) }}
+    permissions:
+      contents: write
+    steps:
+      # This job only attaches assets to a release that already exists. If the
+      # tag has no release yet, softprops/action-gh-release would create one —
+      # and a newly created release becomes GitHub's "latest" by default even
+      # if it is older than another release, which would point
+      # releases/latest/download at the wrong tree. Fail instead.
+      - name: Verify the release already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "${{ matrix.tag }}" --repo "${{ github.repository }}" >/dev/null
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.tag }}
+
+      # HEAD here is the checked-out tag (not the ref that triggered this run),
+      # so the zips carry that release's own pins (sync-version already wrote
+      # them into Directory.Build.props/package.json/settings.gradle.kts before
+      # the tag was cut).
+      - name: Pack tutorial and samples zips at the release tag
+        run: python3 scripts/tutorial/pack_tutorials.py dist/tutorials HEAD
+
+      - name: Verify all eight zips, and that Linux scripts are 755/LF
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          sys.path.insert(0, "scripts/tutorial")
+          from pack_tutorials import executable  # same table pack() itself uses
+
+          zips = sorted(pathlib.Path("dist/tutorials").glob("*.zip"))
+          if len(zips) != 8:
+              print(f"::error::expected 8 zips, found {len(zips)}: {[z.name for z in zips]}")
+              sys.exit(1)
+
+          bad = []
+          for zpath in zips:
+              with zipfile.ZipFile(zpath) as zf:
+                  for info in zf.infolist():
+                      if not executable(info.filename):
+                          continue
+                      mode = (info.external_attr >> 16) & 0o777
+                      if mode != 0o755:
+                          bad.append(f"{zpath.name}:{info.filename} mode={oct(mode)}")
+                      # `unzip` only honors `external_attr` as a POSIX mode when
+                      # the zip's "made by" host is Unix (create_system == 3);
+                      # this is the bit that stayed DOS when this ran on
+                      # Windows and made every gradlew/*.sh extract as 644.
+                      if info.create_system != 3:
+                          bad.append(f"{zpath.name}:{info.filename} create_system={info.create_system} (not Unix)")
+                      if b"\r\n" in zf.read(info):
+                          bad.append(f"{zpath.name}:{info.filename} has CRLF")
+
+          if bad:
+              print("::error::" + "; ".join(bad))
+              sys.exit(1)
+          print(f"verified {len(zips)} zips: 755/LF/create_system=Unix on every executable entry")
+          PY
+
+      - name: Verify the executable bit survives an actual unzip
+        run: |
+          set -euo pipefail
+          extract="${RUNNER_TEMP}/tutorial-java"
+          mkdir -p "${extract}"
+          unzip -q dist/tutorials/zlink-tutorial-java.zip -d "${extract}"
+          gradlew="${extract}/zlink-tutorial-java/gradlew"
+          test -x "${gradlew}"
+          ! grep -q $'\r' "${gradlew}"
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ matrix.tag }}
+          files: dist/tutorials/*.zip
+          fail_on_unmatched_files: true
 
   release-java:
     if: needs.resolve.outputs.target == 'java' || needs.resolve.outputs.target == 'all'
