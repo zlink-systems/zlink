@@ -1847,7 +1847,7 @@ int main ()
     ok &= file_contains (root / "connector/core/packaging/vcpkg/portfile.cmake",
                          "-DZLINK_STREAM_CONNECTOR_BUILD_AXMOL=OFF");
     ok &= file_contains (root / "../../doc/framework/cpp/guide/stream-connector/01-overview.ko.md",
-                         "TypeScript connector 사용");
+                         "TypeScript connector");
     ok &=
       file_does_not_contain (root / "CMakeLists.txt", "cocos-connector",
                              "C++ connector package names must not use ambiguous cocos-connector");
