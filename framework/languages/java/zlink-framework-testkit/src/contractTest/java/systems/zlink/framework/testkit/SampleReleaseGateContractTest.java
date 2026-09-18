@@ -169,14 +169,8 @@ final class SampleReleaseGateContractTest {
                 assertTrue(Files.isRegularFile(sampleRoot.resolve("run_sample.sh")),
                     "missing run_sample.sh for " + sampleName);
                 if (supportsPosixExecuteBits(sampleRoot.resolve("run_sample.sh"))) {
-                    if (sample.equals("TicTacToe")) {
-                        assertFalse(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
-                            "TicTacToe run_sample.sh must retain its non-executable release mode for "
-                                + sampleName);
-                    } else {
-                        assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
-                            "run_sample.sh must be executable for " + sampleName);
-                    }
+                    assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
+                        "run_sample.sh must be executable for " + sampleName);
                 }
                 String runner = readSource(sampleRoot.resolve("run_sample.sh"));
                 assertTrue(runner.contains("gradle_run")
