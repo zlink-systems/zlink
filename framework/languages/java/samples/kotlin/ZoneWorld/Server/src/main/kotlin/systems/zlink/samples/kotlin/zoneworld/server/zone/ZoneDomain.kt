@@ -167,7 +167,9 @@ class PlayerActor(
     }
 
     private fun mapFailure(kind: String) = when (kind) {
-        "UNAVAILABLE", "DEADLINE_EXCEEDED", "SHUTTING_DOWN" -> "Unavailable"
+        "UNAVAILABLE" -> "Unavailable"
+        "DEADLINE_EXCEEDED" -> "DeadlineExceeded"
+        "SHUTTING_DOWN" -> "ShuttingDown"
         "NOT_FOUND" -> "NotFound"
         "REJECTED" -> "Rejected"
         else -> "InternalFailure"

@@ -25,6 +25,7 @@ public final class ZoneBootstrap implements ApplicationRunner {
     private final NodeMaintenanceState maintenance;
     private final MaintenanceStore store;
     private final NodeCensus census;
+    private final ZoneStatusReporter reporter;
 
     public ZoneBootstrap(
         SampleTopology topology,
@@ -33,7 +34,8 @@ public final class ZoneBootstrap implements ApplicationRunner {
         ZLinkActorClient actorClient,
         NodeMaintenanceState maintenance,
         MaintenanceStore store,
-        NodeCensus census) {
+        NodeCensus census,
+        ZoneStatusReporter reporter) {
         this.topology = topology;
         this.spots = spots;
         this.actors = actors;
@@ -41,6 +43,17 @@ public final class ZoneBootstrap implements ApplicationRunner {
         this.maintenance = maintenance;
         this.store = store;
         this.census = census;
+        this.reporter = reporter;
+    }
+
+    // Ops learns a node's zone set only from the node's own status report (README §2.2). The
+    // report is sent once the zone set is settled and before topology=ready is printed, so the
+    // report an observer gates on never carries the pre-claim census; the periodic report and
+    // the maintenance-change report are the only other senders.
+    private void ready() {
+        reporter.reportNow().exceptionally(error -> null).toCompletableFuture().join();
+        System.out.println("topology=ready node=" + topology.nodeId()
+            + " zones=" + String.join(",", census.zoneIds()));
     }
 
     @Override
@@ -63,7 +76,7 @@ public final class ZoneBootstrap implements ApplicationRunner {
         // is neither the two a cold start needs nor the none a replacement announces, and a state
         // the loop below could never leave. Only a cold start claims.
         if (topology.allowsEmptyZoneSet()) {
-            System.out.println("topology=ready node=" + topology.nodeId() + " zones=");
+            ready();
             return;
         }
         for (int attempt = 0; census.zoneIds().size() != 2; attempt++) {
@@ -146,8 +159,7 @@ public final class ZoneBootstrap implements ApplicationRunner {
                     + ", dir=(" + bot.dirX() + "," + bot.dirY() + ")");
             }
         }
-        System.out.println("topology=ready node=" + topology.nodeId()
-            + " zones=" + String.join(",", census.zoneIds()));
+        ready();
     }
 
 }

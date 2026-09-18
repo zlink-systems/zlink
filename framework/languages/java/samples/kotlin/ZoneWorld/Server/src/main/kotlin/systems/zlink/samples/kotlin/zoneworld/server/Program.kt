@@ -163,7 +163,8 @@ class Program {
         maintenance: NodeMaintenanceState,
         store: MaintenanceStore,
         census: NodeCensus,
-    ) = ZoneBootstrap(topology, spots, actors, actorClient, maintenance, store, census)
+        reporter: ZoneStatusReporter,
+    ) = ZoneBootstrap(topology, spots, actors, actorClient, maintenance, store, census, reporter)
 
     @Bean
     @ConditionalOnExpression("'\${sample.role:}' == 'zone' && !\${sample.subscriber-only:false}")
