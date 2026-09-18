@@ -39,10 +39,12 @@ import { PingHandler } from './Sessions/ping-handler';
         // Rooms are addressed by id, not by host, so their current location is
         // kept here. Every node reads and writes the same store under the same
         // prefix.
-        builder.addLocationStore(new ZLinkRedisLocationStore({
-          url: 'redis://127.0.0.1:6379',
-          keyPrefix: 'zlink-tutorial-node:location'
-        }));
+        builder.addLocationStore(
+          new ZLinkRedisLocationStore({
+            url: 'redis://127.0.0.1:6379',
+            keyPrefix: 'zlink-tutorial-node:location'
+          })
+        );
         // --8<-- [end:location-store]
 
         // --8<-- [start:relocation-store]
@@ -65,10 +67,13 @@ import { PingHandler } from './Sessions/ping-handler';
         // as peers. The routing id names this node; without it the Framework assigns
         // a generated one, which a caller cannot type into a URL. A wildcard bind
         // host needs an advertise host of its own.
-        const mesh = builder.addRouteMesh(TutorialNames.mesh)
+        const mesh = builder
+          .addRouteMesh(TutorialNames.mesh)
           .listen('tcp://0.0.0.0:7701')
           .setAdvertiseHost('127.0.0.1')
-          .routingId(TutorialNames.serverRoutingId);
+          .routingId(
+            TutorialNames.serverRoutingId
+          );
         // --8<-- [end:mesh-register]
 
         // --8<-- [start:channel-register]
@@ -76,9 +81,17 @@ import { PingHandler } from './Sessions/ping-handler';
         // sitting in the same project but left out stays unreachable. The packet
         // name is given explicitly, and it is the name the caller's payload class
         // carries.
-        mesh.channel(TutorialNames.profileChannel).server()
-          .addRequestHandler(PacketNames.getPlayerProfile, GetPlayerProfileHandler)
-          .addSendHandler(PacketNames.recordLogin, RecordLoginHandler);
+        mesh
+          .channel(TutorialNames.profileChannel)
+          .server()
+          .addRequestHandler(
+            PacketNames.getPlayerProfile,
+            GetPlayerProfileHandler
+          )
+          .addSendHandler(
+            PacketNames.recordLogin,
+            RecordLoginHandler
+          );
         // --8<-- [end:channel-register]
 
         // --8<-- [start:node-direct-register]
@@ -102,9 +115,15 @@ import { PingHandler } from './Sessions/ping-handler';
         // The publisher endpoint is given here because this process runs without a
         // Location Store. With one registered, enableSubscriber() takes no argument
         // and finds every publisher of this channel instead.
-        builder.addFanoutChannel(TutorialNames.broadcastChannel)
+        builder
+          .addFanoutChannel(
+            TutorialNames.broadcastChannel
+          )
           .enableSubscriber('tcp://127.0.0.1:7712')
-          .addPublishHandler(PacketNames.maintenanceNotice, MaintenanceNoticeSubscriber);
+          .addPublishHandler(
+            PacketNames.maintenanceNotice,
+            MaintenanceNoticeSubscriber
+          );
         // --8<-- [end:fanout-subscribe]
 
         // --8<-- [start:object-server]
@@ -142,7 +161,8 @@ import { PingHandler } from './Sessions/ping-handler';
         // The port game clients connect to. One session type per stream node,
         // and actor dispatch must be on for a session to relay to its player.
         // The Node stream transport is a WebSocket, so the endpoint is ws://.
-        builder.addStreamNode(TutorialNames.clientStreamNode)
+        builder
+          .addStreamNode(TutorialNames.clientStreamNode)
           .enableActorDispatch()
           .bind('ws://0.0.0.0:7721')
           .registerSession(GameSessionFactory);

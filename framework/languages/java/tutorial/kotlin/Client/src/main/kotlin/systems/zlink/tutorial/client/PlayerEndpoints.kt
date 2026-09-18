@@ -23,11 +23,18 @@ class PlayerEndpoints(route: ZLinkRouteClient) {
 
     // --8<-- [start:channel-request-call]
     @GetMapping("/players/{playerId}/profile")
-    suspend fun profile(@PathVariable playerId: String): PlayerProfile =
+    suspend fun profile(
+        @PathVariable playerId: String,
+    ): PlayerProfile {
         // The target is a channel name. Which node answers is decided at call time.
         // The reply type is a reified type argument, not a Class passed at the end.
-        route.requestToChannel<PlayerProfile>("profile", GetPlayerProfile(playerId))
+        val request = GetPlayerProfile(playerId)
+        return route
+            .requestToChannel<PlayerProfile>(
+                "profile", request,
+            )
             .await()
+    }
     // --8<-- [end:channel-request-call]
 
     // --8<-- [start:channel-send-call]

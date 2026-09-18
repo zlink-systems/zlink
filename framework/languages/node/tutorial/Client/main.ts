@@ -64,19 +64,25 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
-        const mesh = builder.addRouteMesh(TutorialNames.mesh)
+        const mesh = builder
+          .addRouteMesh(TutorialNames.mesh)
           .listen('tcp://0.0.0.0:7702')
           .setAdvertiseHost('127.0.0.1');
 
         // client() means this node exposes no handler for the channel; it only calls.
-        mesh.channel(TutorialNames.profileChannel).client();
+        mesh
+          .channel(TutorialNames.profileChannel)
+          .client();
 
         // A mesh peer connection, not a channel one. The mesh picks a node that
         // serves the channel from among the peers it learns this way, so a channel
         // call never names a node. The routing id names which node is expected at
         // that endpoint. The node-direct call below reaches that node either way
         // here -- see README, "what differs from the .NET tutorial".
-        mesh.peerConnections().connect(TutorialNames.serverRoutingId, 'tcp://127.0.0.1:7701');
+        mesh.peerConnections().connect(
+          TutorialNames.serverRoutingId,
+          'tcp://127.0.0.1:7701'
+        );
         // --8<-- [end:channel-client-register]
 
         // --8<-- [start:clientserver-client-register]
@@ -142,14 +148,21 @@ function registerRoutes(
   players: ZLinkActorClient
 ): void {
   // --8<-- [start:channel-request-call]
-  map('GET', /^\/players\/([^/]+)\/profile$/, async ([playerId]) => {
-    // The target is a channel name. Which node answers is decided at call time.
-    const profile = await route
-      .requestToChannel(TutorialNames.profileChannel, new GetPlayerProfile(playerId))
-      .submit<PlayerProfile>();
+  map(
+    'GET',
+    /^\/players\/([^/]+)\/profile$/,
+    async ([playerId]) => {
+      // The target is a channel name. Which node answers is decided at call time.
+      const profile = await route
+        .requestToChannel(
+          TutorialNames.profileChannel,
+          new GetPlayerProfile(playerId)
+        )
+        .submit<PlayerProfile>();
 
-    return ok(profile);
-  });
+      return ok(profile);
+    }
+  );
   // --8<-- [end:channel-request-call]
 
   // --8<-- [start:channel-send-call]

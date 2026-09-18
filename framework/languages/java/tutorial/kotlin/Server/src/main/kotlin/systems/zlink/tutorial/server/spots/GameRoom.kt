@@ -22,7 +22,9 @@ import systems.zlink.tutorial.shared.RoomState
 // callback into a suspending one. Its type argument is the actor type the room
 // can admit; this room admits none, so it names the base type and rejects every
 // join. Actors are a later chapter.
-class GameRoom(override val context: ZLinkSpotContext) : ZLinkSuspendingSpot<ZLinkActor>() {
+class GameRoom(
+    override val context: ZLinkSpotContext,
+) : ZLinkSuspendingSpot<ZLinkActor>() {
 
     private val chat = mutableListOf<String>()
     private var title = "untitled"
@@ -32,15 +34,21 @@ class GameRoom(override val context: ZLinkSpotContext) : ZLinkSuspendingSpot<ZLi
         // Handler classes are named here rather than scanned, the same way the
         // channel registrations name their group. Each takes the target room as
         // its first argument.
-        context.handlers().addHandler<PostChatHandler>()
-        context.handlers().addHandler<GetRoomStateHandler>()
+        context.handlers()
+            .addHandler<PostChatHandler>()
+        context.handlers()
+            .addHandler<GetRoomStateHandler>()
         // --8<-- [end:spot-handlers]
     }
 
     // Runs before the room accepts any message. Rejecting here means the create
     // call fails and no room exists. Omit this method to accept every request.
-    override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
-        title = request.decode(OpenRoom::class.java).title
+    override suspend fun onCreateSuspending(
+        request: ZLinkMessage,
+    ): ZLinkSpotCreateResponse {
+        val body =
+            request.decode(OpenRoom::class.java)
+        title = body.title
         return ZLinkSpotCreateResponse.accept()
     }
 
@@ -49,19 +57,29 @@ class GameRoom(override val context: ZLinkSpotContext) : ZLinkSuspendingSpot<ZLi
     override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
-    ): ZLinkSpotActorJoinResult = ZLinkSpotActorJoinResult.reject()
-
-    override suspend fun onJoinedActorSuspending(actor: ZLinkActor) {
+    ): ZLinkSpotActorJoinResult {
+        return ZLinkSpotActorJoinResult.reject()
     }
 
-    override suspend fun onLeaveActorSuspending(actor: ZLinkActor) {
+    override suspend fun
+    onJoinedActorSuspending(
+        actor: ZLinkActor,
+    ) {
+    }
+
+    override suspend fun
+    onLeaveActorSuspending(
+        actor: ZLinkActor,
+    ) {
     }
 
     fun append(line: String) {
         chat.add(line)
     }
 
-    fun state(): RoomState = RoomState(title, chat.toList())
+    fun state(): RoomState {
+        return RoomState(title, chat.toList())
+    }
 }
 // --8<-- [end:spot-class]
 

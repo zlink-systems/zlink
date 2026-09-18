@@ -22,7 +22,8 @@ builder.Services.AddZLinkFramework(options =>
     // Rooms and players are addressed by id, not by host, so their current
     // location is kept here. Every node reads and writes the same store under
     // the same prefix.
-    options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
+    options.AddLocationStore(
+        new ZLinkRedisLocationStore(redis =>
     {
         redis.ConnectionString = "127.0.0.1:6379";
         redis.KeyPrefix = "zlink-tutorial";
@@ -51,15 +52,21 @@ builder.Services.AddZLinkFramework(options =>
     // a generated one, which a caller cannot type into a URL.
     var mesh = options.AddRouteMesh("game")
         .Listen("tcp://0.0.0.0:7201")
-        .SetRoutingId(RoutingId.From("game-server-1"));
+        .SetRoutingId(
+            RoutingId.From("game-server-1"));
     // --8<-- [end:mesh-register]
 
     // --8<-- [start:channel-register]
     // Only handlers exposed here can be called by other nodes. A handler class
     // sitting in the same assembly but left out stays unreachable.
     mesh.Channel("profile").Server()
-        .AddRequestHandler<GetPlayerProfileHandler, GetPlayerProfile, PlayerProfile>()
-        .AddSendHandler<RecordLoginHandler, RecordLogin>();
+        .AddRequestHandler<
+            GetPlayerProfileHandler,
+            GetPlayerProfile,
+            PlayerProfile>()
+        .AddSendHandler<
+            RecordLoginHandler,
+            RecordLogin>();
     // --8<-- [end:channel-register]
 
     // --8<-- [start:node-direct-register]
@@ -84,7 +91,9 @@ builder.Services.AddZLinkFramework(options =>
     // manual Connect alongside it is rejected at startup.
     options.AddFanoutChannel("broadcast")
         .EnableSubscriber()
-        .AddHandler<MaintenanceNoticeSubscriber, MaintenanceNotice>();
+        .AddHandler<
+            MaintenanceNoticeSubscriber,
+            MaintenanceNotice>();
     // --8<-- [end:fanout-subscribe]
 
     // --8<-- [start:object-server]

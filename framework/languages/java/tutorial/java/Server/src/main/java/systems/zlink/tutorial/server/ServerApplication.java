@@ -49,10 +49,15 @@ public class ServerApplication {
             // Rooms are addressed by id, not by host, so their current location is
             // kept here. Every node reads and writes the same store under the same
             // prefix.
-            options.addLocationStore(new ZLinkRedisLocationStore(
+            var locationOptions =
                 new ZLinkRedisLocationOptions()
-                    .setConnectionString("127.0.0.1:6379")
-                    .setKeyPrefix("zlink-tutorial-java:location:")));
+                    .setConnectionString(
+                        "127.0.0.1:6379")
+                    .setKeyPrefix(
+                        "zlink-tutorial-java:location:");
+            options.addLocationStore(
+                new ZLinkRedisLocationStore(
+                    locationOptions));
             // --8<-- [end:location-store]
 
             // --8<-- [start:relocation-store]
@@ -80,10 +85,12 @@ public class ServerApplication {
             // descriptor against the endpoint it dialed, so the bind address 0.0.0.0
             // has to be replaced by an address the caller actually used. Leave it out
             // and admission is refused, silently, as long as the process runs.
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("game")
+            ZLinkMeshNodeBuilder mesh = options
+                .addRouteMesh("game")
                 .listen("tcp://0.0.0.0:7501")
                 .setAdvertiseHost("127.0.0.1")
-                .setRoutingId(RoutingId.from("game-server-1"));
+                .setRoutingId(
+                    RoutingId.from("game-server-1"));
             // --8<-- [end:mesh-register]
 
             // --8<-- [start:channel-register]
@@ -94,7 +101,9 @@ public class ServerApplication {
                     GetPlayerProfileHandler.class,
                     Contracts.GetPlayerProfile.class,
                     Contracts.PlayerProfile.class)
-                .addSendHandler(RecordLoginHandler.class, Contracts.RecordLogin.class);
+                .addSendHandler(
+                    RecordLoginHandler.class,
+                    Contracts.RecordLogin.class);
             // --8<-- [end:channel-register]
 
             // --8<-- [start:node-direct-register]
@@ -136,7 +145,8 @@ public class ServerApplication {
             // A mesh node picks this role once. Keep the builder and reuse it,
             // because calling objects().server() a second time is rejected at
             // startup.
-            ZLinkMeshObjectServerBuilder objects = mesh.objects().server();
+            ZLinkMeshObjectServerBuilder objects =
+                mesh.objects().server();
             // --8<-- [end:object-server]
 
             // --8<-- [start:spot-register]
@@ -170,8 +180,10 @@ public class ServerApplication {
                 .bind("tcp://0.0.0.0:7521")
                 .enableActorDispatch()
                 .registerSession(GameSession.class)
-                .addSessionPacketHandler(PingHandler.class)
-                .addSessionPacketHandler(AuthenticateHandler.class);
+                .addSessionPacketHandler(
+                    PingHandler.class)
+                .addSessionPacketHandler(
+                    AuthenticateHandler.class);
             // --8<-- [end:stream-register]
         };
     }

@@ -238,144 +238,77 @@ even if they're replaced later — this backend boundary is explained separately
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
-**As code.** Declare one room, and write that room's progression logic.
+**As code.** The blocks below are the tutorial's real room-spot code, unedited — the mesh
+name and the room type name are the tutorial's own `"game"`/`"game-room"`, not this
+section's "Bingo room."
 
 === "C#/.NET"
 
     ```csharp
-    // Registration — one room mesh and a room type
-    var node = options.AddRouteMesh("game.room");
-    node.Listen("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.Channel("game.room").Server();
-    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:object-server"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:spot-register"
     ```
 
     ```csharp
-    // Bingo room progression code — no concurrency exists inside this.
-    public sealed class MarkNumberHandler
-        : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-    {
-        public ValueTask<MarkResult> HandleAsync(
-            BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-        {
-            // No lock
-            room.Board.Mark(request.Number);
-            room.LastActivity = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-        }
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Server/Spots/GameRoomHandlers.cs:spot-handlers"
     ```
 
 === "C++"
 
     ```cpp
-    // Registration — one room mesh and a room type
-    auto node = options.add_route_mesh ("game.room");
-    node.listen ("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.channel_name ("game.room").server ();
-    node.add_spot_factory<bingo_room_spot_t> (
-      "room",
-      [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-      [] (auto &factory) { factory.recreate_on_relocation (); });
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:object-server"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:spot-register"
     ```
 
     ```cpp
-    // Bingo room progression code — no concurrency exists inside this.
-    // A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
-    task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-    {
-        // No lock
-        _board.mark (request.number);
-        _last_activity = std::chrono::system_clock::now ();
-        co_return mark_result_t{_board.has_bingo ()};
-    }
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/game_room.hpp:spot-handlers"
     ```
 
 === "Java"
 
     ```java
-    // Registration — one room mesh and a room type
-    ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
-    node.listen("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.channelName("game.room").server();
-    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:object-server"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:spot-register"
     ```
 
     ```java
-    // Bingo room progression code — no concurrency exists inside this.
-    public final class MarkNumberHandler
-        implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        @Override
-        public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-            // No lock
-            room.board().mark(request.number());
-            room.setLastActivity(Instant.now());
-            return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
-        }
-    }
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/spots/GameRoom.java:spot-handlers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Registration — one room mesh and a room type
-    val node = options.addRouteMesh("game.room")
-    node.listen("tcp://0.0.0.0:9001")
-    // A mesh has at least 1 logical membership
-    node.channelName("game.room").server()
-    node.objects().server()
-        .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-            factory.recreateOnRelocation()
-        }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:object-server"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:spot-register"
     ```
 
     ```kotlin
-    // Bingo room progression code — no concurrency exists inside this.
-    class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-            // No lock
-            room.board.mark(request.number)
-            room.lastActivity = Instant.now()
-            return MarkResult(room.board.hasBingo())
-        }
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/spots/GameRoom.kt:spot-handlers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Registration — one room mesh and a room type
-    const node = builder.addRouteMesh('game.room');
-    node.listen('tcp://0.0.0.0:9001');
-    // A mesh has at least 1 logical membership
-    node.channel('game.room').server();
-    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:object-server"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:spot-register"
     ```
 
     ```typescript
-    // Bingo room progression code — no concurrency exists inside this.
-    export class MarkNumberHandler
-      implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-      async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-        // No lock
-        room.board.mark(request.number);
-        room.lastActivity = new Date();
-        return { bingo: room.board.hasBingo() };
-      }
-    }
+    --8<-- "framework/languages/node/tutorial/Server/Spots/game-room.ts:spot-handlers"
     ```
 
-Several players send requests at the same time and a timer runs in this room, yet there's no
-`lock`, no `Interlocked`, no Redis distributed lock. That's because the framework lines up
-every message for one room (requests, subscription events, timer ticks, actor packets) on
-**a single execution line and runs them in order.** Here, "serial" isn't codec serialization
-— it's **serialization of execution order** ([06 §3](21-spot.en.md)).
+Several players send chat messages and query state in this room at the same time, yet
+there's no `lock`, no `Interlocked`, no Redis distributed lock. That's because the framework
+lines up every message for one room (requests, subscription events, timer ticks, actor
+packets) on **a single execution line and runs them in order** — timer ticks and actor
+packets join that same line only once the room uses those features, and this tutorial code
+only handles chat messages and state queries. Here, "serial" isn't codec serialization —
+it's **serialization of execution order** ([06 §3](21-spot.en.md)).
 
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
@@ -421,61 +354,11 @@ request is only processed once the first finishes — it's not that another requ
 for as long as the lock is held; two requests simply can never touch the same state at the
 same time in the first place.
 
-**As code.** Where lock acquire/release used to sit, one call remains.
-
-=== "C#/.NET"
-
-    ```csharp
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-        .InstanceSpot("guild")
-        .InMesh("social")
-        .Async<JoinGuildRes>(ct);
-    ```
-
-=== "C++"
-
-    ```cpp
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-      .instance_spot ("guild")
-      .in_mesh ("social")
-      .async<join_guild_res_t> ();
-    ```
-
-=== "Java"
-
-    ```java
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    spots.requestToSpot(guildId, new JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes.class);
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    spots.requestToSpot(guildId, JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes::class.java)
-        .await()
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    await spots.requestToSpot(guildId, joinGuildReq(userId))
-      .instanceSpot('guild')
-      .inMesh('social')
-      .submit<JoinGuildRes>();
-    ```
-
-There's no runnable reference sample for this scenario yet — the code above applies the same
-API surface as GameQuest's `PlayerQuestSpot` registration/call approach to a guild.
+**As code.** Where lock acquire/release used to sit, one Instance Spot call remains — its
+shape matches the tutorial code in [Instance Spot](21-spot.en.md) (implemented only in the
+dotnet tutorial so far, which is why this section links instead of showing five language
+tabs). The guild scenario itself has no runnable reference sample yet — the same API
+surface in real use can be seen in GameQuest's `PlayerQuestSpot` registration/call approach.
 
 ### 2.3 Adding Real-Time Features to an Existing Web Service
 
@@ -531,88 +414,40 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** Where the distributed lock and sticky routing used to sit, the following code
-remains.
+**As code.** Where the distributed lock used to sit, one Instance Spot call remains — its
+shape matches the tutorial code in [Instance Spot](21-spot.en.md) (implemented only in the
+dotnet tutorial so far, so this section links instead of showing five language tabs). Where
+sticky routing used to sit, an actor's bound-session push remains — the blocks below are the
+tutorial's real code.
 
 === "C#/.NET"
 
     ```csharp
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    await spots.RequestToSpot(request.OrderId, request)
-        .InstanceSpot("order-workflow")
-        .InMesh("commerce")
-        .Async<StartOrderWorkflowRes>(ct);
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+    --8<-- "framework/languages/dotnet/tutorial/Server/Actors/PlayerHandlers.cs:actor-push"
     ```
 
 === "C++"
 
     ```cpp
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on order_id, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a start_order_workflow_req_t body.
-    co_await spots.request_to_spot (request.order_id, request)
-      .instance_spot ("order-workflow")
-      .in_mesh ("commerce")
-      .async<start_order_workflow_res_t> ();
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/lobby_spot.hpp:actor-push"
     ```
 
 === "Java"
 
     ```java
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    spots.requestToSpot(request.orderId(), request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes.class);
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    actor.context().boundSession().send(new OrderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/actors/ChangeNicknameHandler.java:actor-push"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    spots.requestToSpot(request.orderId, request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes::class.java)
-        .await()
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    actor.context().boundSession().send(OrderStatusChanged(orderId, status)).submit().await()
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/actors/PlayerHandlers.kt:actor-push"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on orderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    await spots.requestToSpot(request.orderId, request)
-      .instanceSpot('order-workflow')
-      .inMesh('commerce')
-      .submit<StartOrderWorkflowRes>();
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/node/tutorial/Server/Actors/player.ts:actor-push"
     ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -707,84 +542,10 @@ log pipeline was assembled **only** for entity-scoped ordered processing. If ord
 consistency were the entire goal, owner routing achieves that goal directly, with no
 pipeline.
 
-**As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
-
-=== "C#/.NET"
-
-    ```csharp
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    public sealed class StartOrderWorkflowHandler :
-        IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-    {
-        public ValueTask<StartOrderWorkflowRes> HandleAsync(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-            // Accesses spot state without a lock
-            => spot.StartOrderWorkflowAsync(request, ct);
-    }
-    ```
-
-=== "C++"
-
-    ```cpp
-    // Processing for the same order_id always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    // A C++ Spot handler is a Spot member function.
-    task_t<start_order_workflow_res_t>
-    order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-    {
-        // Accesses spot state without a lock
-        co_return co_await start_workflow (request);
-    }
-    ```
-
-=== "Java"
-
-    ```java
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    public final class StartOrderWorkflowHandler
-        implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        @Override
-        public CompletionStage<StartOrderWorkflowRes> handle(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-            // Accesses spot state without a lock
-            return workflow.startInSpot(spot, request);
-        }
-    }
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    class StartOrderWorkflowHandler :
-        ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        override suspend fun handle(
-            spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-            // Accesses spot state without a lock
-            workflow.startInSpot(spot, request)
-    }
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // Processing for the same orderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    export class StartOrderWorkflowHandler
-      implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-      async handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-        // Accesses spot state without a lock
-        return spot.start(request);
-      }
-    }
-    ```
+**As code.** Where the partition consumer used to sit, an owner Spot handler comes instead
+— a single Spot receiving every request for the same id, serially, is the same pattern shown
+in the tutorial code under [Instance Spot](21-spot.en.md) (implemented only in the dotnet
+tutorial so far, so this section links instead of showing five language tabs).
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
 the reference sample for this exact situation, built with no real-time push at all, just an
@@ -877,224 +638,62 @@ The framework handles what you'd otherwise have written by hand to build one ser
 The difference in the amount of code needed to wire up the same "inter-server
 request/response."
 
-**Directly with raw bindings (conceptual):**
+**Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
+direct implementation would require. All five languages face the same list, so it isn't
+split into language tabs.
+
+```text
+Location-store lookup, connecting the endpoint, reconnect management,
+correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+```
+
+**ZLink Framework** — the blocks below are the tutorial's real "profile" channel code
+(handler registration, server registration, client call). The only difference from a price
+lookup is that the target is a player profile lookup instead.
 
 === "C#/.NET"
 
     ```csharp
-    // Location-store lookup, connecting the endpoint, reconnect management,
-    // correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+    --8<-- "framework/languages/dotnet/tutorial/Server/Channel/GetPlayerProfileHandler.cs:channel-request-handler"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
     ```
 
 === "C++"
 
     ```cpp
-    // Location-store lookup, connecting the endpoint, reconnect management,
-    // correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+    --8<-- "framework/languages/cpp/tutorial/Server/channel/get_player_profile_handler.hpp:channel-request-handler"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
     ```
 
 === "Java"
 
     ```java
-    // Location-store lookup, connecting the endpoint, reconnect management,
-    // correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.java:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Location-store lookup, connecting the endpoint, reconnect management,
-    // correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Location-store lookup, connecting the endpoint, reconnect management,
-    // correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
-    ```
-
-**ZLink Framework:**
-
-=== "C#/.NET"
-
-    ```csharp
-    // Server: one handler
-    public sealed class GetPriceHandler
-        : IZLinkRequestHandler<PriceRequest, PriceReply>
-    {
-        public ValueTask<PriceReply> HandleAsync(
-            PriceRequest request, IZLinkMessageContext context, CancellationToken ct)
-            // 187.42m is a fixed demo value (a real lookup result in practice)
-            => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));
-    }
-
-    // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    builder.Services.AddZLinkFramework(options =>
-    {
-        // Scopes the communication range by MeshName.
-        options.AddRouteMesh("services")
-            // Opens this MeshNode's endpoint.
-            .Listen("tcp://0.0.0.0:7301")
-            .SetRoutingId(RoutingId.From("price-1"))
-            // Registers the price-handling membership.
-            .Channel("price")
-            .Server()
-            // Registers this channel's request handler.
-            .AddRequestHandler<GetPriceHandler>();
-    });
-
-    // Client: inject IZLinkRouteClient and call by ChannelName.
-    var reply = await client
-        .RequestToChannel(
-            // The ChannelName to look up process-locally
-            "price",
-            new PriceRequest("AAPL"))
-        // Sends, then waits for the reply asynchronously.
-        .Async<PriceReply>(ct);
-    ```
-
-=== "C++"
-
-    ```cpp
-    // Server: one handler
-    class get_price_handler_t
-    {
-      public:
-        using request_type = price_request_t;
-        using reply_type = price_reply_t;
-
-        reply_type handle (const price_request_t &request)
-        {
-            // 187.42 is a fixed demo value (a real lookup result in practice)
-            return price_reply_t{request.symbol, 187.42};
-        }
-    };
-
-    // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        // Scopes the communication range by MeshName.
-        options.add_route_mesh ("services")
-          // Opens this MeshNode's endpoint.
-          .listen ("tcp://0.0.0.0:7301")
-          .set_routing_id (routing_id_t::from ("price-1"))
-          // Registers the price-handling membership.
-          .channel_name ("price")
-          .server ()
-          .add_request_handler<get_price_handler_t, price_request_t, price_reply_t> ();
-    });
-
-    // Client: inject the route client and call by ChannelName.
-    auto reply = co_await client
-      .request_to_channel (
-        // The ChannelName to look up process-locally
-        "price",
-        price_request_t{"AAPL"})
-      // Sends, then waits for the reply asynchronously.
-      .async<price_reply_t> ();
-    ```
-
-=== "Java"
-
-    ```java
-    // Server: one handler
-    public final class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-        @Override
-        public CompletionStage<PriceReply> handle(PriceRequest request, ZLinkMessageContext context) {
-            return CompletableFuture.completedFuture(
-                // Fixed demo value (a real lookup result in practice)
-                new PriceReply(request.symbol(), new BigDecimal("187.42")));
-        }
-    }
-
-    // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    // Scopes the communication range by MeshName.
-    options.addRouteMesh("services")
-        // Opens this MeshNode's endpoint.
-        .listen("tcp://0.0.0.0:7301")
-        .setRoutingId(RoutingId.from("price-1"))
-        // Registers the price-handling membership.
-        .channelName("price")
-        .server()
-        .addRequestHandler(GetPriceHandler.class, PriceRequest.class, PriceReply.class);
-
-    // Client: inject the route client and call by ChannelName.
-    PriceReply reply = client
-        .requestToChannel(
-            // The ChannelName to look up process-locally
-            "price",
-            new PriceRequest("AAPL"))
-        // Sends, then waits for the reply asynchronously.
-        .submit(PriceReply.class)
-        .toCompletableFuture().join();
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // Server: one handler
-    class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-        override suspend fun handle(request: PriceRequest, context: ZLinkMessageContext): PriceReply =
-            // Fixed demo value (a real lookup result in practice)
-            PriceReply(request.symbol, BigDecimal("187.42"))
-    }
-
-    // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    // Scopes the communication range by MeshName.
-    options.addRouteMesh("services")
-        // Opens this MeshNode's endpoint.
-        .listen("tcp://0.0.0.0:7301")
-        .setRoutingId(RoutingId.from("price-1"))
-        // Registers the price-handling membership.
-        .channelName("price")
-        .server()
-        .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
-
-    // Client: inject the route client and call by ChannelName.
-    val reply = client
-        .requestToChannel(
-            // The ChannelName to look up process-locally
-            "price",
-            PriceRequest("AAPL"))
-        // Sends, then waits for the reply asynchronously.
-        .submit(PriceReply::class.java)
-        .await()
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // Server: one handler
-    @zlinkRequestHandler('price', PacketNames.priceRequest)
-    export class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-      async handle(request: PriceRequest): Promise<PriceReply> {
-        // 187.42 is a fixed demo value (a real lookup result in practice)
-        return { symbol: request.symbol, price: 187.42 };
-      }
-    }
-
-    // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    // Scopes the communication range by MeshName.
-    builder.addRouteMesh('services')
-      // Opens this MeshNode's endpoint.
-      .listen('tcp://0.0.0.0:7301')
-      .routingId('price-1')
-      // Registers the price-handling membership.
-      .channel('price')
-      .server()
-      .addRequestHandler(PacketNames.priceRequest, GetPriceHandler);
-
-    // Client: inject the route client and call by ChannelName.
-    const reply = await client
-      .requestToChannel(
-        // The ChannelName to look up process-locally
-        'price',
-        priceRequest('AAPL'))
-      // Sends, then waits for the reply asynchronously.
-      .submit<PriceReply>();
+    --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
     ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel
@@ -1113,147 +712,59 @@ framework you already use. On top of that, the only code you write is the **busi
 **DI · hosted service · handler · attribute** model.
 
 The point where the application meets this stack is **one registration spot.** This is where
-you declare the MeshNode, fanout, and STREAM node.
+you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
+together the tutorial's real registration code as-is — the mesh, channel, and fanout names
+are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
+`"events"`.
 
 === "C#/.NET"
 
     ```csharp
-    builder.Services.AddZLinkFramework(options =>
-    {
-        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
-        options.AddLocationStore(new ZLinkRedisLocationStore(...));
-
-        // MeshNode for inter-server request/send
-        options.AddRouteMesh("services")
-            .Listen("tcp://0.0.0.0:7301")
-            .SetRoutingId(RoutingId.From("service-a"))
-            // The logical membership to handle
-            .Channel("orders").Server();
-        options.AddFanoutChannel("events")
-            // classic event fan-out
-            .EnablePublisher("tcp://0.0.0.0:7302");
-        // SPOT/actor are also owned by a MeshNode
-        options.AddRouteMesh("game.room")
-            .Listen("tcp://0.0.0.0:7304")
-            .SetRoutingId(RoutingId.From("room-a"))
-            .Channel("game.room").Server();
-        options.AddStreamNode("gateway")
-            // The external client endpoint
-            .Bind("tcp://0.0.0.0:7400");
-    });
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:location-store"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
     ```
 
 === "C++"
 
     ```cpp
-    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
-        options.add_location_store (std::make_shared<redis_location_store_t> (...));
-
-        // MeshNode for inter-server request/send
-        options.add_route_mesh ("services")
-          .listen ("tcp://0.0.0.0:7301")
-          .set_routing_id (routing_id_t::from ("service-a"))
-          // The logical membership to handle
-          .channel_name ("orders").server ();
-        options.add_fanout_channel ("events")
-          // classic event fan-out
-          .enable_publisher ("tcp://0.0.0.0:7302");
-        // SPOT/actor are also owned by a MeshNode
-        options.add_route_mesh ("game.room")
-          .listen ("tcp://0.0.0.0:7304")
-          .set_routing_id (routing_id_t::from ("room-a"))
-          .channel_name ("game.room").server ();
-        options.add_stream_node ("gateway")
-          // The external client endpoint
-          .bind ("tcp://0.0.0.0:7400");
-    });
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
     ```
 
 === "Java"
 
     ```java
-    ZLinkFrameworkConfigurer zlink = options -> {
-        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
-        options.addLocationStore(new ZLinkRedisLocationStore(...));
-
-        // MeshNode for inter-server request/send
-        options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7301")
-            .setRoutingId(RoutingId.from("service-a"))
-            // The logical membership to handle
-            .channelName("orders").server();
-        options.addFanoutChannel("events")
-            // classic event fan-out
-            .enablePublisher("tcp://0.0.0.0:7302");
-        // SPOT/actor are also owned by a MeshNode
-        options.addRouteMesh("game.room")
-            .listen("tcp://0.0.0.0:7304")
-            .setRoutingId(RoutingId.from("room-a"))
-            .channelName("game.room").server();
-        options.addStreamNode("gateway")
-            // The external client endpoint
-            .bind("tcp://0.0.0.0:7400");
-    };
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val zlink = ZLinkFrameworkConfigurer { options ->
-        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
-        options.addLocationStore(ZLinkRedisLocationStore(...))
-
-        // MeshNode for inter-server request/send
-        options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7301")
-            .setRoutingId(RoutingId.from("service-a"))
-            // The logical membership to handle
-            .channelName("orders").server()
-        options.addFanoutChannel("events")
-            // classic event fan-out
-            .enablePublisher("tcp://0.0.0.0:7302")
-        // SPOT/actor are also owned by a MeshNode
-        options.addRouteMesh("game.room")
-            .listen("tcp://0.0.0.0:7304")
-            .setRoutingId(RoutingId.from("room-a"))
-            .channelName("game.room").server()
-        options.addStreamNode("gateway")
-            // The external client endpoint
-            .bind("tcp://0.0.0.0:7400")
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    ZLinkModule.forRootFactory({
-      useFactory: () => {
-        const builder = zlinkFramework();
-        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
-        builder.addLocationStore(new ZLinkRedisLocationStore(...));
-
-        // MeshNode for inter-server request/send
-        builder.addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7301')
-          .routingId('service-a')
-          // The logical membership to handle
-          .channel('orders').server();
-        builder.addFanoutChannel('events')
-          // classic event fan-out
-          .enablePublisher('tcp://0.0.0.0:7302');
-        // SPOT/actor are also owned by a MeshNode
-        builder.addRouteMesh('game.room')
-          .listen('tcp://0.0.0.0:7304')
-          .routingId('room-a')
-          .channel('game.room').server();
-        builder.addStreamNode('gateway')
-          // The external client endpoint
-          .bind('tcp://0.0.0.0:7400');
-
-        return builder.build();
-      }
-    })
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:stream-register"
     ```
 
 Topologies you used to assemble separately with gRPC+LB, a broker, and a WebSocket server all

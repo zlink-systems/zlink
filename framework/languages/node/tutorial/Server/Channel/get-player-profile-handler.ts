@@ -7,10 +7,18 @@ import type { GetPlayerProfile, PlayerProfile } from '../../Shared/contracts';
 // this channel may receive it; the caller does not pick one.
 @Injectable()
 export class GetPlayerProfileHandler
-implements ZLinkRequestHandler<GetPlayerProfile, PlayerProfile> {
-  async handle(request: GetPlayerProfile, context: ZLinkMessageContext): Promise<PlayerProfile> {
+implements ZLinkRequestHandler<
+  GetPlayerProfile, PlayerProfile> {
+  async handle(
+    request: GetPlayerProfile,
+    context: ZLinkMessageContext
+  ): Promise<PlayerProfile> {
     void context;
-    return { playerId: request.playerId, nickname: 'rookie', level: 1 };
+    return {
+      playerId: request.playerId,
+      nickname: 'rookie',
+      level: 1
+    };
   }
 }
 // --8<-- [end:channel-request-handler]

@@ -8,26 +8,36 @@ namespace Tutorial.Server.Spots;
 // type, so registering them again in Configure() is rejected at startup.
 
 // --8<-- [start:spot-handlers]
-public sealed class PostChatHandler : IZLinkSpotPacketHandler<GameRoom, PostChat>
+public sealed class PostChatHandler
+    : IZLinkSpotPacketHandler<
+        GameRoom, PostChat>
 {
     public ValueTask HandleAsync(
         GameRoom room,
         PostChat message,
         CancellationToken cancellationToken)
     {
-        room.Append($"{message.PlayerId}: {message.Text}");
+        var line = $"{message.PlayerId}: "
+            + message.Text;
+        room.Append(line);
         return ValueTask.CompletedTask;
     }
 }
 
 // The return value is the reply. This handler only reads.
 public sealed class GetRoomStateHandler
-    : IZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState>
+    : IZLinkSpotRequestHandler<
+        GameRoom, GetRoomState, RoomState>
 {
     public ValueTask<RoomState> HandleAsync(
         GameRoom room,
         GetRoomState request,
         CancellationToken cancellationToken)
-        => ValueTask.FromResult(new RoomState(room.Title, room.Chat.ToArray()));
+    {
+        var chat = room.Chat.ToArray();
+        var state = new RoomState(
+            room.Title, chat);
+        return ValueTask.FromResult(state);
+    }
 }
 // --8<-- [end:spot-handlers]

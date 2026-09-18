@@ -15,18 +15,29 @@ namespace fw = zlink::framework;
 class get_profile_http_handler_t
 {
   public:
-    explicit get_profile_http_handler_t (fw::route_client_t &routes) : _routes (routes) {}
-
-    fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
+    explicit get_profile_http_handler_t (
+      fw::route_client_t &routes)
+      : _routes (routes)
     {
-        const auto player_id = request.route_values.at ("playerId");
+    }
+
+    fw::task_t<fw::http_response_t>
+      handle (
+        const fw::http_request_t &request)
+    {
+        const auto player_id =
+          request.route_values.at ("playerId");
 
         // The target is a channel name. Which node answers is decided at call time.
         auto profile = co_await _routes
-                         .request_to_channel ("profile", get_player_profile_t{player_id})
-                         .async<player_profile_t> ();
+          .request_to_channel (
+            "profile",
+            get_player_profile_t{player_id})
+          .async<player_profile_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (profile).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (profile).dump ()};
     }
 
   private:
@@ -345,9 +356,11 @@ int main (int argc, char **argv)
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
+        zlink::routing_id_t client_rid =
+          zlink::routing_id_t::from ("game-client-1");
         auto mesh = options.add_route_mesh ("game")
                       .listen ("tcp://0.0.0.0:7402")
-                      .set_routing_id (zlink::routing_id_t::from ("game-client-1"))
+                      .set_routing_id (client_rid)
                       .set_advertise_host ("127.0.0.1");
 
         // client() means this node exposes no handler for the channel; it only calls.
@@ -357,8 +370,10 @@ int main (int argc, char **argv)
         // serves the channel from among the peers it learns this way, so a channel
         // call never names a node. The routing id is here so this node can also
         // address that one directly; connect(endpoint) alone would not allow that.
-        mesh.peer_connections ().connect (zlink::routing_id_t::from ("game-server-1"),
-                                          "tcp://127.0.0.1:7401");
+        zlink::routing_id_t server_routing_id =
+          zlink::routing_id_t::from ("game-server-1");
+        mesh.peer_connections ().connect (
+          server_routing_id, "tcp://127.0.0.1:7401");
         // --8<-- [end:channel-client-register]
 
         // --8<-- [start:clientserver-client-register]

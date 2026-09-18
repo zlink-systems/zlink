@@ -213,144 +213,75 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
-**코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 쓴다.
+**코드로 보면.** 아래는 tutorial이 실제로 등록하고 실행하는 room spot 코드 그대로다 —
+mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutorial의 `"game"`·`"game-room"`이다.
 
 === "C#/.NET"
 
     ```csharp
-    // 등록 — room mesh 하나와 room 타입
-    var node = options.AddRouteMesh("game.room");
-    node.Listen("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.Channel("game.room").Server();
-    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:object-server"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:spot-register"
     ```
 
     ```csharp
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    public sealed class MarkNumberHandler
-        : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-    {
-        public ValueTask<MarkResult> HandleAsync(
-            BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-        {
-            // lock 없음
-            room.Board.Mark(request.Number);
-            room.LastActivity = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-        }
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Server/Spots/GameRoomHandlers.cs:spot-handlers"
     ```
 
 === "C++"
 
     ```cpp
-    // 등록 — room mesh 하나와 room 타입
-    auto node = options.add_route_mesh ("game.room");
-    node.listen ("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channel_name ("game.room").server ();
-    node.add_spot_factory<bingo_room_spot_t> (
-      "room",
-      [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-      [] (auto &factory) { factory.recreate_on_relocation (); });
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:object-server"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:spot-register"
     ```
 
     ```cpp
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    // C++ Spot handler는 Spot member 함수다. Spot은 this로 받는다.
-    task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-    {
-        // lock 없음
-        _board.mark (request.number);
-        _last_activity = std::chrono::system_clock::now ();
-        co_return mark_result_t{_board.has_bingo ()};
-    }
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/game_room.hpp:spot-handlers"
     ```
 
 === "Java"
 
     ```java
-    // 등록 — room mesh 하나와 room 타입
-    ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
-    node.listen("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channelName("game.room").server();
-    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:object-server"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:spot-register"
     ```
 
     ```java
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    public final class MarkNumberHandler
-        implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        @Override
-        public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-            // lock 없음
-            room.board().mark(request.number());
-            room.setLastActivity(Instant.now());
-            return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
-        }
-    }
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/spots/GameRoom.java:spot-handlers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // 등록 — room mesh 하나와 room 타입
-    val node = options.addRouteMesh("game.room")
-    node.listen("tcp://0.0.0.0:9001")
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channelName("game.room").server()
-    node.objects().server()
-        .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-            factory.recreateOnRelocation()
-        }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:object-server"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:spot-register"
     ```
 
     ```kotlin
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-            // lock 없음
-            room.board.mark(request.number)
-            room.lastActivity = Instant.now()
-            return MarkResult(room.board.hasBingo())
-        }
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/spots/GameRoom.kt:spot-handlers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 등록 — room mesh 하나와 room 타입
-    const node = builder.addRouteMesh('game.room');
-    node.listen('tcp://0.0.0.0:9001');
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channel('game.room').server();
-    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:object-server"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:spot-register"
     ```
 
     ```typescript
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    export class MarkNumberHandler
-      implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-      async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-        // lock 없음
-        room.board.mark(request.number);
-        room.lastActivity = new Date();
-        return { bingo: room.board.hasBingo() };
-      }
-    }
+    --8<-- "framework/languages/node/tutorial/Server/Spots/game-room.ts:spot-handlers"
     ```
 
-여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
+여러 플레이어가 동시에 채팅을 보내고 상태를 조회하는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
 구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
-직렬화**다([06 §3](21-spot.ko.md)).
+실행하기 때문이다 — timer와 actor packet까지 같은 줄에 서는 것은 room이 그 기능을
+쓸 때의 이야기이고, 이 tutorial 코드는 채팅 메시지와 상태 조회만 다룬다. 여기서
+직렬은 codec 직렬화가 아니라 **실행 순서의 직렬화**다([06 §3](21-spot.ko.md)).
 
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
@@ -392,61 +323,12 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
 애초에 동시에 두 요청이 같은 상태를 만질 수 없다.
 
-**코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
-
-=== "C#/.NET"
-
-    ```csharp
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-        .InstanceSpot("guild")
-        .InMesh("social")
-        .Async<JoinGuildRes>(ct);
-    ```
-
-=== "C++"
-
-    ```cpp
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-      .instance_spot ("guild")
-      .in_mesh ("social")
-      .async<join_guild_res_t> ();
-    ```
-
-=== "Java"
-
-    ```java
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    spots.requestToSpot(guildId, new JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes.class);
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    spots.requestToSpot(guildId, JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes::class.java)
-        .await()
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    await spots.requestToSpot(guildId, joinGuildReq(userId))
-      .instanceSpot('guild')
-      .inMesh('social')
-      .submit<JoinGuildRes>();
-    ```
-
-이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
-`PlayerQuestSpot` 등록·호출 방식과 같은 API 표면을 길드에 적용한 것이다.
+**코드로 보면.** 락 획득·해제가 있던 자리에 Instance Spot 호출 한 줄이 남는다 —
+호출 모양은 [Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. 이 호출 패턴은
+지금 dotnet tutorial에만 구현되어 있어(cpp·Java·Kotlin·Node tutorial은 아직 Instance
+Spot을 갖추지 못했다), 이 장에서는 다섯 언어 탭 대신 링크로 대신한다. 길드 자체는
+아직 실행 가능한 기준 샘플이 없다 — 실제로 쓰이는 같은 API 표면은 GameQuest의
+`PlayerQuestSpot` 등록·호출 방식에서 볼 수 있다.
 
 ### 2.3 기존 웹 서비스의 실시간 기능 추가
 
@@ -495,87 +377,39 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
+**코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 한 줄로 줄어든다 — 모양은
+[Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다(dotnet tutorial에만 구현되어
+있어 이 장에서는 다섯 언어 탭 대신 링크로 대신한다). sticky 라우팅이 있던 자리는
+actor의 bound session push로 줄어든다 — 아래는 tutorial의 실제 코드다.
 
 === "C#/.NET"
 
     ```csharp
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    await spots.RequestToSpot(request.OrderId, request)
-        .InstanceSpot("order-workflow")
-        .InMesh("commerce")
-        .Async<StartOrderWorkflowRes>(ct);
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+    --8<-- "framework/languages/dotnet/tutorial/Server/Actors/PlayerHandlers.cs:actor-push"
     ```
 
 === "C++"
 
     ```cpp
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 order_id 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 start_order_workflow_req_t 바디다.
-    co_await spots.request_to_spot (request.order_id, request)
-      .instance_spot ("order-workflow")
-      .in_mesh ("commerce")
-      .async<start_order_workflow_res_t> ();
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/lobby_spot.hpp:actor-push"
     ```
 
 === "Java"
 
     ```java
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    spots.requestToSpot(request.orderId(), request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes.class);
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    actor.context().boundSession().send(new OrderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/actors/ChangeNicknameHandler.java:actor-push"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    spots.requestToSpot(request.orderId, request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes::class.java)
-        .await()
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    actor.context().boundSession().send(OrderStatusChanged(orderId, status)).submit().await()
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/actors/PlayerHandlers.kt:actor-push"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 orderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    await spots.requestToSpot(request.orderId, request)
-      .instanceSpot('order-workflow')
-      .inMesh('commerce')
-      .submit<StartOrderWorkflowRes>();
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/node/tutorial/Server/Actors/player.ts:actor-push"
     ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
@@ -660,84 +494,10 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 경우다. 순서와 정합성이 목적의 전부였다면, owner routing이 그 목적을 파이프라인 없이
 직접 달성한다.
 
-**코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다.
-
-=== "C#/.NET"
-
-    ```csharp
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
-    public sealed class StartOrderWorkflowHandler :
-        IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-    {
-        public ValueTask<StartOrderWorkflowRes> HandleAsync(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-            // spot 상태에 lock 없이 접근
-            => spot.StartOrderWorkflowAsync(request, ct);
-    }
-    ```
-
-=== "C++"
-
-    ```cpp
-    // 같은 order_id의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
-    // C++ Spot handler는 Spot member 함수다.
-    task_t<start_order_workflow_res_t>
-    order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-    {
-        // spot 상태에 lock 없이 접근
-        co_return co_await start_workflow (request);
-    }
-    ```
-
-=== "Java"
-
-    ```java
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
-    public final class StartOrderWorkflowHandler
-        implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        @Override
-        public CompletionStage<StartOrderWorkflowRes> handle(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-            // spot 상태에 lock 없이 접근
-            return workflow.startInSpot(spot, request);
-        }
-    }
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
-    class StartOrderWorkflowHandler :
-        ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        override suspend fun handle(
-            spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-            // spot 상태에 lock 없이 접근
-            workflow.startInSpot(spot, request)
-    }
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // 같은 orderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
-    export class StartOrderWorkflowHandler
-      implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-      async handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-        // spot 상태에 lock 없이 접근
-        return spot.start(request);
-      }
-    }
-    ```
+**코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다 — 같은 id로
+오는 요청을 하나의 Spot이 직렬로 받는 모양은 [Instance Spot](21-spot.ko.md) 절의
+tutorial 코드와 같다(dotnet tutorial에만 구현되어 있어 이 장에서는 다섯 언어 탭
+대신 링크로 대신한다).
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
 없이 HTTP API + 주문 workflow만으로 구성된 이 상황의 기준 샘플이다. 주문 상태
@@ -828,224 +588,61 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 
 같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
 
-**raw 바인딩으로 직접 (개념적):**
+**raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
+목록이다. 다섯 언어 모두 같은 목록이라 언어 탭으로 나누지 않는다.
+
+```text
+위치 저장소 조회, endpoint 연결, 재연결 관리,
+correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+```
+
+**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다(handler
+등록, 서버 등록, 클라이언트 호출). 대상이 가격 조회가 아니라 플레이어 프로필
+조회로 바뀐 것 말고는 같은 모양이다.
 
 === "C#/.NET"
 
     ```csharp
-    // 위치 저장소 조회, endpoint 연결, 재연결 관리,
-    // correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+    --8<-- "framework/languages/dotnet/tutorial/Server/Channel/GetPlayerProfileHandler.cs:channel-request-handler"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
     ```
 
 === "C++"
 
     ```cpp
-    // 위치 저장소 조회, endpoint 연결, 재연결 관리,
-    // correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+    --8<-- "framework/languages/cpp/tutorial/Server/channel/get_player_profile_handler.hpp:channel-request-handler"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
     ```
 
 === "Java"
 
     ```java
-    // 위치 저장소 조회, endpoint 연결, 재연결 관리,
-    // correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.java:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // 위치 저장소 조회, endpoint 연결, 재연결 관리,
-    // correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 위치 저장소 조회, endpoint 연결, 재연결 관리,
-    // correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
-    ```
-
-**ZLink Framework:**
-
-=== "C#/.NET"
-
-    ```csharp
-    // 서버: handler 하나
-    public sealed class GetPriceHandler
-        : IZLinkRequestHandler<PriceRequest, PriceReply>
-    {
-        public ValueTask<PriceReply> HandleAsync(
-            PriceRequest request, IZLinkMessageContext context, CancellationToken ct)
-            // 187.42m은 데모용 고정값(실제론 조회 결과)
-            => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));
-    }
-
-    // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-    builder.Services.AddZLinkFramework(options =>
-    {
-        // MeshName으로 통신 범위를 구분한다.
-        options.AddRouteMesh("services")
-            // 이 MeshNode의 endpoint를 연다.
-            .Listen("tcp://0.0.0.0:7301")
-            .SetRoutingId(RoutingId.From("price-1"))
-            // price 처리 membership을 등록한다.
-            .Channel("price")
-            .Server()
-            // 이 channel의 request handler를 등록한다.
-            .AddRequestHandler<GetPriceHandler>();
-    });
-
-    // 클라이언트: IZLinkRouteClient를 주입받아 ChannelName으로 호출한다.
-    var reply = await client
-        .RequestToChannel(
-            // process-local로 찾을 ChannelName
-            "price",
-            new PriceRequest("AAPL"))
-        // 송신한 뒤 reply를 비동기로 기다린다.
-        .Async<PriceReply>(ct);
-    ```
-
-=== "C++"
-
-    ```cpp
-    // 서버: handler 하나
-    class get_price_handler_t
-    {
-      public:
-        using request_type = price_request_t;
-        using reply_type = price_reply_t;
-
-        reply_type handle (const price_request_t &request)
-        {
-            // 187.42는 데모용 고정값(실제론 조회 결과)
-            return price_reply_t{request.symbol, 187.42};
-        }
-    };
-
-    // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        // MeshName으로 통신 범위를 구분한다.
-        options.add_route_mesh ("services")
-          // 이 MeshNode의 endpoint를 연다.
-          .listen ("tcp://0.0.0.0:7301")
-          .set_routing_id (routing_id_t::from ("price-1"))
-          // price 처리 membership을 등록한다.
-          .channel_name ("price")
-          .server ()
-          .add_request_handler<get_price_handler_t, price_request_t, price_reply_t> ();
-    });
-
-    // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
-    auto reply = co_await client
-      .request_to_channel (
-        // process-local로 찾을 ChannelName
-        "price",
-        price_request_t{"AAPL"})
-      // 송신한 뒤 reply를 비동기로 기다린다.
-      .async<price_reply_t> ();
-    ```
-
-=== "Java"
-
-    ```java
-    // 서버: handler 하나
-    public final class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-        @Override
-        public CompletionStage<PriceReply> handle(PriceRequest request, ZLinkMessageContext context) {
-            return CompletableFuture.completedFuture(
-                // 데모용 고정값(실제론 조회 결과)
-                new PriceReply(request.symbol(), new BigDecimal("187.42")));
-        }
-    }
-
-    // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-    // MeshName으로 통신 범위를 구분한다.
-    options.addRouteMesh("services")
-        // 이 MeshNode의 endpoint를 연다.
-        .listen("tcp://0.0.0.0:7301")
-        .setRoutingId(RoutingId.from("price-1"))
-        // price 처리 membership을 등록한다.
-        .channelName("price")
-        .server()
-        .addRequestHandler(GetPriceHandler.class, PriceRequest.class, PriceReply.class);
-
-    // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
-    PriceReply reply = client
-        .requestToChannel(
-            // process-local로 찾을 ChannelName
-            "price",
-            new PriceRequest("AAPL"))
-        // 송신한 뒤 reply를 비동기로 기다린다.
-        .submit(PriceReply.class)
-        .toCompletableFuture().join();
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // 서버: handler 하나
-    class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-        override suspend fun handle(request: PriceRequest, context: ZLinkMessageContext): PriceReply =
-            // 데모용 고정값(실제론 조회 결과)
-            PriceReply(request.symbol, BigDecimal("187.42"))
-    }
-
-    // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-    // MeshName으로 통신 범위를 구분한다.
-    options.addRouteMesh("services")
-        // 이 MeshNode의 endpoint를 연다.
-        .listen("tcp://0.0.0.0:7301")
-        .setRoutingId(RoutingId.from("price-1"))
-        // price 처리 membership을 등록한다.
-        .channelName("price")
-        .server()
-        .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
-
-    // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
-    val reply = client
-        .requestToChannel(
-            // process-local로 찾을 ChannelName
-            "price",
-            PriceRequest("AAPL"))
-        // 송신한 뒤 reply를 비동기로 기다린다.
-        .submit(PriceReply::class.java)
-        .await()
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // 서버: handler 하나
-    @zlinkRequestHandler('price', PacketNames.priceRequest)
-    export class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
-
-      async handle(request: PriceRequest): Promise<PriceReply> {
-        // 187.42는 데모용 고정값(실제론 조회 결과)
-        return { symbol: request.symbol, price: 187.42 };
-      }
-    }
-
-    // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-    // MeshName으로 통신 범위를 구분한다.
-    builder.addRouteMesh('services')
-      // 이 MeshNode의 endpoint를 연다.
-      .listen('tcp://0.0.0.0:7301')
-      .routingId('price-1')
-      // price 처리 membership을 등록한다.
-      .channel('price')
-      .server()
-      .addRequestHandler(PacketNames.priceRequest, GetPriceHandler);
-
-    // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
-    const reply = await client
-      .requestToChannel(
-        // process-local로 찾을 ChannelName
-        'price',
-        priceRequest('AAPL'))
-      // 송신한 뒤 reply를 비동기로 기다린다.
-      .submit<PriceReply>();
+    --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
     ```
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
@@ -1061,148 +658,59 @@ ZLink Framework를 `AddZLinkFramework`로 등록한다 — 엔진을 새로 들�
 작성하는 건 맨 위 **비즈니스 로직**(Spot · Actor · handler)뿐이고, Framework는 자신의
 기능을 **DI · hosted service · handler · attribute** 모델로 제공한다.
 
-application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다. 여기서 MeshNode,
-fanout과 STREAM node를 선언한다.
+application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다. 여기서 location
+store, MeshNode, fanout과 STREAM node를 선언한다. 아래는 tutorial의 실제 등록
+코드를 그대로 이어 붙인 것이다 — mesh·channel·fanout 이름은 `"services"`·
+`"orders"`·`"events"`가 아니라 tutorial의 `"game"`·`"profile"`·`"broadcast"`다.
 
 === "C#/.NET"
 
     ```csharp
-    builder.Services.AddZLinkFramework(options =>
-    {
-        // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
-        options.AddLocationStore(new ZLinkRedisLocationStore(...));
-
-        // 서버 간 request/send용 MeshNode
-        options.AddRouteMesh("services")
-            .Listen("tcp://0.0.0.0:7301")
-            .SetRoutingId(RoutingId.From("service-a"))
-            // 처리할 논리 membership
-            .Channel("orders").Server();
-        options.AddFanoutChannel("events")
-            // classic event fan-out
-            .EnablePublisher("tcp://0.0.0.0:7302");
-        // SPOT·actor도 MeshNode가 소유
-        options.AddRouteMesh("game.room")
-            .Listen("tcp://0.0.0.0:7304")
-            .SetRoutingId(RoutingId.From("room-a"))
-            .Channel("game.room").Server();
-        options.AddStreamNode("gateway")
-            // 외부 client endpoint
-            .Bind("tcp://0.0.0.0:7400");
-    });
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:location-store"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
     ```
 
 === "C++"
 
     ```cpp
-    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
-        options.add_location_store (std::make_shared<redis_location_store_t> (...));
-
-        // 서버 간 request/send용 MeshNode
-        options.add_route_mesh ("services")
-          .listen ("tcp://0.0.0.0:7301")
-          .set_routing_id (routing_id_t::from ("service-a"))
-          // 처리할 논리 membership
-          .channel_name ("orders").server ();
-        options.add_fanout_channel ("events")
-          // classic event fan-out
-          .enable_publisher ("tcp://0.0.0.0:7302");
-        // SPOT·actor도 MeshNode가 소유
-        options.add_route_mesh ("game.room")
-          .listen ("tcp://0.0.0.0:7304")
-          .set_routing_id (routing_id_t::from ("room-a"))
-          .channel_name ("game.room").server ();
-        options.add_stream_node ("gateway")
-          // 외부 client endpoint
-          .bind ("tcp://0.0.0.0:7400");
-    });
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
     ```
 
 === "Java"
 
     ```java
-    ZLinkFrameworkConfigurer zlink = options -> {
-        // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
-        options.addLocationStore(new ZLinkRedisLocationStore(...));
-
-        // 서버 간 request/send용 MeshNode
-        options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7301")
-            .setRoutingId(RoutingId.from("service-a"))
-            // 처리할 논리 membership
-            .channelName("orders").server();
-        options.addFanoutChannel("events")
-            // classic event fan-out
-            .enablePublisher("tcp://0.0.0.0:7302");
-        // SPOT·actor도 MeshNode가 소유
-        options.addRouteMesh("game.room")
-            .listen("tcp://0.0.0.0:7304")
-            .setRoutingId(RoutingId.from("room-a"))
-            .channelName("game.room").server();
-        options.addStreamNode("gateway")
-            // 외부 client endpoint
-            .bind("tcp://0.0.0.0:7400");
-    };
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val zlink = ZLinkFrameworkConfigurer { options ->
-        // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
-        options.addLocationStore(ZLinkRedisLocationStore(...))
-
-        // 서버 간 request/send용 MeshNode
-        options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7301")
-            .setRoutingId(RoutingId.from("service-a"))
-            // 처리할 논리 membership
-            .channelName("orders").server()
-        options.addFanoutChannel("events")
-            // classic event fan-out
-            .enablePublisher("tcp://0.0.0.0:7302")
-        // SPOT·actor도 MeshNode가 소유
-        options.addRouteMesh("game.room")
-            .listen("tcp://0.0.0.0:7304")
-            .setRoutingId(RoutingId.from("room-a"))
-            .channelName("game.room").server()
-        options.addStreamNode("gateway")
-            // 외부 client endpoint
-            .bind("tcp://0.0.0.0:7400")
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    ZLinkModule.forRootFactory({
-      useFactory: () => {
-        const builder = zlinkFramework();
-        // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
-        builder.addLocationStore(new ZLinkRedisLocationStore(...));
-
-        // 서버 간 request/send용 MeshNode
-        builder.addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7301')
-          .routingId('service-a')
-          // 처리할 논리 membership
-          .channel('orders').server();
-        builder.addFanoutChannel('events')
-          // classic event fan-out
-          .enablePublisher('tcp://0.0.0.0:7302');
-        // SPOT·actor도 MeshNode가 소유
-        builder.addRouteMesh('game.room')
-          .listen('tcp://0.0.0.0:7304')
-          .routingId('room-a')
-          .channel('game.room').server();
-        builder.addStreamNode('gateway')
-          // 외부 client endpoint
-          .bind('tcp://0.0.0.0:7400');
-
-        return builder.build();
-      }
-    })
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:stream-register"
     ```
 
 gRPC+LB, broker, WebSocket 서버로 각각 직접 구성하던 토폴로지들이 **같은 선언 모델

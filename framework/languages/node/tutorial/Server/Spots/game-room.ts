@@ -28,8 +28,11 @@ class GameRoom implements ZLinkSpot {
 
   // Runs before the room accepts any message. Rejecting here means the create
   // call fails and no room exists. Omit this method to accept every request.
-  async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
-    this.title = request.decode<OpenRoom>().title;
+  async onCreate(
+    request: ZLinkMessage
+  ): Promise<ZLinkSpotCreateResponse> {
+    const body = request.decode<OpenRoom>();
+    this.title = body.title;
     return { accepted: true };
   }
 
@@ -38,12 +41,16 @@ class GameRoom implements ZLinkSpot {
   }
 
   state(): RoomState {
-    return { title: this.title, chat: [...this.chat] };
+    return {
+      title: this.title,
+      chat: [...this.chat]
+    };
   }
 
   // No actor ever joins this room, so the three membership callbacks below say
   // so and do nothing else.
-  async onActorJoin(): Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin():
+      Promise<ZLinkSpotActorJoinResult> {
     return { accepted: false };
   }
 
@@ -57,18 +64,34 @@ class GameRoom implements ZLinkSpot {
 // Spot handlers live in their own classes and take the target room as the first
 // argument. The decorator names the room type and the packet, so nothing has to
 // be registered again in the module.
-@zlinkSpotPacketHandler({ spot: () => GameRoom, packetName: PacketNames.postChat })
-class PostChatHandler implements ZLinkSpotPacketHandler<GameRoom, PostChat> {
-  async handle(room: GameRoom, message: PostChat): Promise<void> {
-    room.append(`${message.playerId}: ${message.text}`);
+@zlinkSpotPacketHandler({
+  spot: () => GameRoom,
+  packetName: PacketNames.postChat
+})
+class PostChatHandler
+  implements ZLinkSpotPacketHandler<
+    GameRoom, PostChat> {
+  async handle(
+    room: GameRoom,
+    message: PostChat
+  ): Promise<void> {
+    const line =
+      `${message.playerId}: ${message.text}`;
+    room.append(line);
   }
 }
 
 // The return value is the reply. This handler only reads.
-@zlinkSpotPacketHandler({ spot: () => GameRoom, packetName: PacketNames.getRoomState })
+@zlinkSpotPacketHandler({
+  spot: () => GameRoom,
+  packetName: PacketNames.getRoomState
+})
 class GetRoomStateHandler
-  implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-  async handle(room: GameRoom): Promise<RoomState> {
+  implements ZLinkSpotRequestHandler<
+    GameRoom, GetRoomState, RoomState> {
+  async handle(
+    room: GameRoom
+  ): Promise<RoomState> {
     return room.state();
   }
 }
