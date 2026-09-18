@@ -17,7 +17,16 @@ import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import type { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
-import type { ZlinkStreamRuntimeMetrics } from './ZlinkStreamRuntimeMetrics';
+
+/**
+ * Spec stream-connector 32 §6: the wait between attempts is a value picked in
+ * [50%, 100%] of the base delay. Deterministic delays make every client that
+ * was connected to a server reconnect at the same instant, which is the moment
+ * the server is least able to take them.
+ */
+function randomizedDelay(baseDelayMs: number): number {
+  return Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
+}
 
 export class ZlinkStreamConnectorLifecycle {
   private receiveLoopAbort: AbortController | undefined;
@@ -27,7 +36,8 @@ export class ZlinkStreamConnectorLifecycle {
   private currentConnection: ZlinkStreamConnection | undefined;
   private connectionGeneration = 0;
   private currentState = ZlinkStreamConnectionState.Created;
-  private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private heartbeatTickRunning = false;
   private lastInboundAt = 0;
   private closeTask: Promise<void> | undefined;
   private connectTask: Promise<void> | undefined;
@@ -43,8 +53,7 @@ export class ZlinkStreamConnectorLifecycle {
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher,
     private readonly receivedMessages: ZlinkStreamReceivedMessages,
-    private readonly events: ZlinkStreamConnectorEvents,
-    private readonly metrics: ZlinkStreamRuntimeMetrics
+    private readonly events: ZlinkStreamConnectorEvents
   ) {}
 
   get isConnected(): boolean {
@@ -91,6 +100,9 @@ export class ZlinkStreamConnectorLifecycle {
       this.currentConnection = connection;
       this.connectionGeneration += 1;
       this.disconnectedPublished = false;
+      // Spec stream-connector 32 §10: the baseline for `receivedCount` is the
+      // moment a connection is established, so each new connection counts from 0.
+      this.receivedMessages.resetReceivedCounts();
       this.lastInboundAt = Date.now();
       await this.setState(ZlinkStreamConnectionState.Connected, undefined, signal);
       this.startHeartbeat();
@@ -102,7 +114,18 @@ export class ZlinkStreamConnectorLifecycle {
         throw new ZlinkStreamException(error);
       }
       const error = toStreamError(cause, ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.');
+      // Spec stream-connector 32 §6.2 and the §9 impact table: `ConnectTimeout`
+      // ends as `TransportError`, and the reason is recorded even when no
+      // connection was ever established — the TypeScript disconnect handler
+      // takes no argument and reads `closeReason`, so it has to be set before
+      // the handler runs.
+      this.closeReasonValue ??= 'TransportError';
       await this.setState(ZlinkStreamConnectionState.Disconnected, error, signal);
+      // Spec stream-connector 32 §6: once the attempts are spent the state is
+      // `Disconnected` and the registered disconnect handler runs. A caller
+      // that only subscribed to that handler learns about the failure here,
+      // not only through the rejected `connect`.
+      await this.publishDisconnectedOnce(signal);
       throw new ZlinkStreamException(error);
     }
   }
@@ -188,7 +211,8 @@ export class ZlinkStreamConnectorLifecycle {
     const result = await this.receiveDispatcher.readAndDispatch(
       connection,
       signal,
-      () => this.isCurrentConnection(connection, generation)
+      () => this.isCurrentConnection(connection, generation),
+      () => this.connectionForSend()
     );
     if (result.inbound && this.isCurrentConnection(connection, generation)) {
       this.lastInboundAt = Date.now();
@@ -200,27 +224,22 @@ export class ZlinkStreamConnectorLifecycle {
     let attempt = 0;
     let delayMs = this.options.reconnect.initialDelayMs;
     let lastError: ZlinkStreamError | undefined;
+    // Spec stream-connector 32 §6: `null` attempts means unlimited, so the loop
+    // has no upper bound and only a successful connect or a close leaves it.
     const maxAttempts = this.options.reconnect.enabled ? this.options.reconnect.maxAttempts : 1;
+    const unlimited = maxAttempts === null;
 
-    while (attempt < maxAttempts) {
+    while (unlimited || attempt < maxAttempts) {
       attempt += 1;
-      if (attempt > 1) {
-        this.metrics.reconnect();
-      }
-      const handshakeStartedAt = performance.now();
       try {
-        const connection = await this.options.transportFactory.connect(this.options, signal);
-        this.metrics.handshakeCompleted(handshakeStartedAt);
-        return connection;
+        return await this.options.transportFactory.connect(this.options, signal);
       } catch (cause) {
-        this.metrics.handshakeCompleted(handshakeStartedAt);
-        this.metrics.handshakeFailed(cause);
         lastError = toStreamError(cause, ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.');
-        if (!this.options.reconnect.enabled || attempt >= maxAttempts) {
+        if (!this.options.reconnect.enabled || (!unlimited && attempt >= maxAttempts)) {
           break;
         }
         await this.setState(ZlinkStreamConnectionState.Reconnecting, lastError, signal);
-        await delay(delayMs, signal);
+        await delay(randomizedDelay(delayMs), signal);
         delayMs = Math.min(
           this.options.reconnect.maxDelayMs,
           Math.ceil(delayMs * this.options.reconnect.backoffFactor)
@@ -237,9 +256,25 @@ export class ZlinkStreamConnectorLifecycle {
     if (!this.options.heartbeat.enabled) {
       return;
     }
-    this.heartbeatTimer = setInterval(() => {
-      void this.runHeartbeatTick();
+    // The interval fires on the clock, not on the previous tick. A transport
+    // whose write really awaits would let the next tick start on top of an
+    // unfinished one and put two pings on the wire out of step with the
+    // interval. A tick already in flight is the ping for this period, so the
+    // one the clock just asked for is dropped. The timer identity in the
+    // release guards a tick left over from a previous connection from clearing
+    // the flag a newer heartbeat holds.
+    const timer = setInterval(() => {
+      if (this.heartbeatTickRunning) {
+        return;
+      }
+      this.heartbeatTickRunning = true;
+      void this.runHeartbeatTick().finally(() => {
+        if (this.heartbeatTimer === timer) {
+          this.heartbeatTickRunning = false;
+        }
+      });
     }, this.options.heartbeat.intervalMs);
+    this.heartbeatTimer = timer;
   }
 
   private stopHeartbeat(): void {
@@ -247,6 +282,7 @@ export class ZlinkStreamConnectorLifecycle {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
+    this.heartbeatTickRunning = false;
   }
 
   // Spec stream-connector 32 §7: the receive loop runs in both dispatch modes.
@@ -382,8 +418,16 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.disconnectTask !== undefined) {
       return await this.disconnectTask;
     }
-    this.disconnectTask = this.disconnectOnce(error).finally(() => { this.disconnectTask = undefined; });
-    return await this.disconnectTask;
+    // `disconnectTask` covers the transport teardown and nothing else, because
+    // `connect` waits on it. Everything application code can hold open — the
+    // state handler, the disconnect handler — stays outside it: a disconnect
+    // handler that calls `connect` would otherwise wait for the task its own
+    // caller has not yet left, and one whose promise never settles would keep
+    // the `Promise.allSettled` in `publishDisconnected` from ever returning.
+    this.disconnectTask = this.tearDownConnection(error)
+      .finally(() => { this.disconnectTask = undefined; });
+    await this.disconnectTask;
+    await this.announceDisconnect(error);
   }
 
   private isCurrentConnection(connection: ZlinkStreamConnection | undefined, generation: number): boolean {
@@ -392,7 +436,8 @@ export class ZlinkStreamConnectorLifecycle {
       this.connectionGeneration === generation;
   }
 
-  private async disconnectOnce(error: ZlinkStreamError): Promise<void> {
+  /** Transport teardown only — no application callback runs from here. */
+  private async tearDownConnection(error: ZlinkStreamError): Promise<void> {
     this.stopHeartbeat();
     this.stopReceiveLoop();
     const connection = this.currentConnection;
@@ -403,21 +448,49 @@ export class ZlinkStreamConnectorLifecycle {
     } catch {
       // The original transport failure remains the connector-visible error.
     }
+  }
+
+  /**
+   * Runs once the teardown promise has settled, so a handler reached from here
+   * may call `connect` without waiting for a task its own caller still holds.
+   * The reconnect is queued before the notification is awaited for the same
+   * reason: spec stream-connector 32 §6 has reconnect on by default, and a
+   * handler that is slow — or whose promise never settles at all — must not
+   * cost the connector the attempt. The state is already `Disconnected` and the
+   * state handlers are already invoked by the time the queued microtask runs,
+   * because `setState` records the state and hands the change to the handlers
+   * before it awaits any of them.
+   */
+  private async announceDisconnect(error: ZlinkStreamError): Promise<void> {
     if (this.closeRequested) return;
-    await this.setState(ZlinkStreamConnectionState.Disconnected, error);
-    await this.publishDisconnectedOnce();
+    const announce = this.claimDisconnectedPublish();
+    const notified = (async (): Promise<void> => {
+      await this.setState(ZlinkStreamConnectionState.Disconnected, error);
+      if (announce) {
+        await this.events.publishDisconnected();
+      }
+    })();
     if (this.shouldReconnect()) {
       queueMicrotask(() => { void this.connect().catch(() => undefined); });
     }
+    await notified;
   }
 
   private shouldReconnect(): boolean {
     return this.options.reconnect.enabled && !this.closeRequested;
   }
 
-  private async publishDisconnectedOnce(signal?: AbortSignal): Promise<void> {
-    if (this.disconnectedPublished) return;
+  // Synchronous test-and-set, taken before any await, so the single disconnect
+  // notification the spec promises is claimed by exactly one caller even when
+  // the publishing itself is deferred.
+  private claimDisconnectedPublish(): boolean {
+    if (this.disconnectedPublished) return false;
     this.disconnectedPublished = true;
+    return true;
+  }
+
+  private async publishDisconnectedOnce(signal?: AbortSignal): Promise<void> {
+    if (!this.claimDisconnectedPublish()) return;
     await this.events.publishDisconnected(signal);
   }
 

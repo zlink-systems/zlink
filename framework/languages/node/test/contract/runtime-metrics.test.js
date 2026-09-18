@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
-const connector = require('../../packages/stream-connector/dist');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 
 function collector() {
@@ -272,76 +271,9 @@ test('RMETRIC-017 capacity instruments observe only the host capacity projection
   );
 });
 
-test('RMETRIC-016 connector owns reconnect attempt counting', async () => {
-  const { provider, records } = collector();
-  let attempts = 0;
-  const instance = connector.zlinkStreamConnectorFactory.create({
-    endpoint: 'ws://127.0.0.1:7999',
-    meterProvider: provider,
-    reconnect: { enabled: true, maxAttempts: 3, initialDelayMs: 1, maxDelayMs: 1 },
-    transportFactory: {
-      async connect() {
-        attempts += 1;
-        if (attempts < 3) throw new Error('retry');
-        return { async write() {}, async close() {} };
-      }
-    }
-  });
-  await instance.connect();
-  await instance.close();
-  assert.equal(attempts, 3);
-  assert.equal(records.filter((record) => record.name === 'zlink.stream.reconnects').length, 2);
-});
-
-test('RMETRIC-002 connector records handshake and frame bytes at the transport boundary', async () => {
-  const { provider, records } = collector();
-  const inbound = [];
-  const instance = connector.zlinkStreamConnectorFactory.create({
-    endpoint: 'ws://127.0.0.1:7999',
-    meterProvider: provider,
-    dispatchMode: 'manual',
-    transportFactory: {
-      async connect() {
-        return {
-          async write(frame) { inbound.push(frame); },
-          async read() { return inbound.shift(); },
-          async close() {}
-        };
-      }
-    }
-  });
-
-  await instance.connect();
-  instance.send({ value: 'probe' }).packetName('MetricProbe').submit();
-  await new Promise((resolve) => setImmediate(resolve));
-  const outbound = records.find((record) => record.name === 'zlink.stream.outbound.bytes');
-  await instance.dispatch();
-  await instance.close();
-
-  assert(records.some((record) => record.name === 'zlink.stream.handshake.duration'
-    && record.attributes.transport === 'ws'));
-  assert.equal(records.some((record) => record.name === 'zlink.stream.handshake.failures'), false);
-  assert.equal(outbound.value > 0, true);
-  assert.equal(outbound.attributes.transport, 'ws');
-  assert.equal(records.find((record) => record.name === 'zlink.stream.inbound.bytes').value, outbound.value);
-});
-
-test('RMETRIC-003 connector records failed handshake with closed labels', async () => {
-  const { provider, records } = collector();
-  const instance = connector.zlinkStreamConnectorFactory.create({
-    endpoint: 'wss://127.0.0.1:7999',
-    meterProvider: provider,
-    transportFactory: { async connect() { throw new Error('tls failed'); } }
-  });
-  await assert.rejects(() => instance.connect());
-  assert.deepEqual(records.find((record) => record.name === 'zlink.stream.handshake.failures'), {
-    name: 'zlink.stream.handshake.failures',
-    kind: 'counter',
-    value: 1,
-    attributes: { transport: 'wss', reason: 'transport_error' }
-  });
-});
-
+// Spec stream-connector 32 no longer asks the client connector to carry
+// instrumentation, so the connector has no meter provider option and emits no
+// `zlink.stream.*` records. What remains here is the server runtime catalog.
 test('RMETRIC-007 server catalog does not publish connector-only session bind metrics', async () => {
   const { provider, records } = collector();
   const metrics = new framework.ZLinkRuntimeMetrics(provider);

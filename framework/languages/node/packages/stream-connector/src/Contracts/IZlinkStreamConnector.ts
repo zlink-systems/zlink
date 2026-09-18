@@ -34,6 +34,21 @@ export interface ZlinkStreamConnector {
    * with {@link import('./ZlinkStreamEnums').ZlinkStreamErrorCode.ConfigurationError}.
    */
   setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
+  /**
+   * Asynchronous counterpart of {@link setDiagnosticsLevel} (spec
+   * stream-connector 32 §13). Both surfaces change the same value, and this
+   * one never replaces the synchronous surface: the synchronous call does not
+   * wait for a completion, so a caller whose idiom is an awaited completion
+   * uses this one instead. Rejects unknown values the same way.
+   */
+  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void>;
+  /**
+   * Number of packets received under `name` on the current connection (spec
+   * stream-connector 32 §10). Counts arrivals, so consuming a message through
+   * a handler or a wait surface never lowers it, and the dispatch mode does
+   * not change it. Restarts at 0 every time a connection is established.
+   */
+  receivedCount(name: string): number;
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onDisconnected(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable;
   onConnectionStateChanged(handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void): Disposable;
@@ -47,7 +62,13 @@ export interface ZlinkStreamConnector {
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;
-  waitFor<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamWaitCall<TPayload>;
-  expectNone<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamExpectNoneCall<TPayload>;
-  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamSequenceCall<TPayload>;
+  /**
+   * Wait surfaces (spec stream-connector 32 §10.1). Each takes the packet name
+   * the caller states explicitly, or the payload constructor the options'
+   * `nameResolver` turns into that name — TypeScript types are erased at
+   * runtime, so the type-driven path takes a constructor value.
+   */
+  waitFor<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamWaitCall<TPayload>;
+  expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload>;
+  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload>;
 }

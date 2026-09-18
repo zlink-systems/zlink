@@ -65,7 +65,7 @@ export class ZlinkStreamExpectNoneBuilder<TPayload> implements ZlinkStreamExpect
 }
 
 export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequenceCall<TPayload> {
-  private readonly predicates: Array<(payload: TPayload) => boolean> = [];
+  private readonly predicates: Array<(message: ZlinkStreamMessage<TPayload>) => boolean> = [];
   private timeoutMs: number | undefined;
   private executed = false;
 
@@ -74,7 +74,7 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
     private readonly name: string
   ) {}
 
-  expect(predicate: (payload: TPayload) => boolean): this {
+  expect(predicate: (message: ZlinkStreamMessage<TPayload>) => boolean): this {
     this.ensureConfigurable();
     this.predicates.push(predicate);
     return this;
@@ -87,20 +87,23 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
     return this;
   }
 
-  async run(signal?: AbortSignal): Promise<readonly TPayload[]> {
+  // Spec stream-connector 32 §10.1: the predicate reads the whole message, and
+  // the call answers with the messages themselves, so a caller can assert on the
+  // packet name and the metadata and not only on the payload.
+  async run(signal?: AbortSignal): Promise<readonly ZlinkStreamMessage<TPayload>[]> {
     this.markExecuted();
     if (this.predicates.length === 0) {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'waitForSequence requires at least one expectation.');
     }
     const timeoutMs = this.timeoutMs ?? this.connector.options.waitTimeoutMs;
     const deadline = Date.now() + timeoutMs;
-    const payloads: TPayload[] = [];
+    const messages: ZlinkStreamMessage<TPayload>[] = [];
     for (const predicate of this.predicates) {
       const message = await this.connector.waitForMessage<TPayload>(
         this.name,
         Math.max(0, deadline - Date.now()),
         (candidate) => {
-          if (!predicate(candidate.payload)) {
+          if (!predicate(candidate)) {
             throw connectorError(
               ZlinkStreamErrorCode.ValidationFailed,
               `Message '${this.name}' arrived out of the expected sequence.`
@@ -110,9 +113,9 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
         },
         signal
       );
-      payloads.push(message.payload);
+      messages.push(message);
     }
-    return payloads;
+    return messages;
   }
 
   private ensureConfigurable(): void {

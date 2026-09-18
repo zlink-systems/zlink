@@ -147,14 +147,18 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
         reject(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
+      // No missed-wakeup recheck belongs here. `read` takes a queued message,
+      // reads `error` and reads `closed` and then calls this, with no await in
+      // between, and a single event loop admits no second thread to arrive in
+      // that window. Arming the waiter after those reads is therefore already
+      // ordered against every path that could wake it: a message, a close or
+      // an error can only be observed by the listeners, which run later and
+      // call `wakeReader` themselves.
       this.readWaiter = () => {
         signal?.removeEventListener('abort', onAbort);
         this.readWaiter = undefined;
         resolve();
       };
-      if (this.hasQueuedMessage() || this.closed) {
-        this.wakeReader();
-      }
     });
   }
 

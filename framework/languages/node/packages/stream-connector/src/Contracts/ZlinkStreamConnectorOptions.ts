@@ -22,7 +22,6 @@ export interface ZlinkStreamConnectorOptions {
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
-  readonly meterProvider?: ZlinkStreamMeterProvider;
   /**
    * Initial diagnostics level (spec 26 §4); defaults to
    * {@link ZlinkStreamDiagnosticsLevel.Errors}, which preserves the current
@@ -32,17 +31,6 @@ export interface ZlinkStreamConnectorOptions {
    * by `ZlinkStreamConnector.diagnosticsLevel` / `setDiagnosticsLevel(...)`.
    */
   readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel;
-}
-
-export interface ZlinkStreamMeterProvider {
-  getMeter(name: string): {
-    createCounter(name: string, options?: { readonly unit?: string }): {
-      add(value: number, attributes?: Readonly<Record<string, string | number | boolean>>): void;
-    };
-    createHistogram(name: string, options?: { readonly unit?: string }): {
-      record(value: number, attributes?: Readonly<Record<string, string | number | boolean>>): void;
-    };
-  };
 }
 
 export interface ZlinkStreamHeartbeatOptions {
@@ -56,7 +44,11 @@ export interface ZlinkStreamReconnectOptions {
   readonly initialDelayMs?: number;
   readonly maxDelayMs?: number;
   readonly backoffFactor?: number;
-  readonly maxAttempts?: number;
+  /**
+   * `null` means unlimited (spec stream-connector 32 §6: the option has to be
+   * able to say "keep trying"); any other value must be a positive number.
+   */
+  readonly maxAttempts?: number | null;
 }
 
 export interface ZlinkStreamPacketNameResolver {
@@ -99,6 +91,5 @@ export interface RequiredZlinkStreamConnectorOptions {
   readonly nameResolver: ZlinkStreamPacketNameResolver;
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
-  readonly meterProvider?: ZlinkStreamMeterProvider;
   readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }

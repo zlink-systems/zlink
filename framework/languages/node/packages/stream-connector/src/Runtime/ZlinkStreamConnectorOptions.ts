@@ -6,6 +6,7 @@ import {
   ZlinkStreamDispatchMode,
   ZlinkStreamErrorCode,
   ZlinkStreamHeartbeatOptions,
+  ZlinkStreamPacketNameResolver,
   ZlinkStreamReconnectOptions
 } from '../Contracts';
 import { connectorError } from './ZlinkStreamSupport';
@@ -55,22 +56,44 @@ export function normalizeOptions(
       initialDelayMs: options.reconnect?.initialDelayMs ?? 250,
       maxDelayMs: options.reconnect?.maxDelayMs ?? 5000,
       backoffFactor: options.reconnect?.backoffFactor ?? 2.0,
-      maxAttempts: options.reconnect?.maxAttempts ?? 3
+      maxAttempts: options.reconnect?.maxAttempts === undefined ? 3 : options.reconnect.maxAttempts
     },
     maxSendPayloadSize: options.maxSendPayloadSize ?? 64 * 1024,
     maxReceivePayloadSize: options.maxReceivePayloadSize ?? 64 * 1024,
     dispatchMode: options.dispatchMode ?? ZlinkStreamDispatchMode.Manual,
     compression: options.compression ?? ZlinkStreamCompression.Lz4,
     compressionCodec: resolveCompressionCodec(options),
-    nameResolver: options.nameResolver ?? { resolve: (type) => type.name },
+    nameResolver: options.nameResolver ?? defaultPacketNameResolver,
     transportFactory: options.transportFactory ?? defaultTransportFactory,
     codec: options.codec,
-    meterProvider: options.meterProvider,
     // Spec 26 §4: the default diagnostics level is Errors, which preserves
     // the connector's established wire behavior.
     diagnosticsLevel: options.diagnosticsLevel ?? ZlinkStreamDiagnosticsLevel.Errors
   };
 }
+
+/**
+ * Spec stream-connector 32 §5 and the TypeScript projection §4: a payload type
+ * carries its packet name in a static `packetName` member, and that name wins
+ * over the type's own name.
+ *
+ * The `name` fallback is a convenience for a type that declares nothing, and it
+ * is NOT trustworthy in a browser build: a minifier renames the constructor, so
+ * the same type produces a different packet name after a build setting changes
+ * and the server stops finding the handler — exactly the "name that changes
+ * with the build environment" §5 forbids. A payload type that crosses the wire
+ * declares `static readonly packetName`; leaving it out is only safe while the
+ * bundle keeps class names.
+ */
+export const defaultPacketNameResolver: ZlinkStreamPacketNameResolver = {
+  resolve(payloadType: Function): string {
+    const declared = (payloadType as { readonly packetName?: unknown }).packetName;
+    if (typeof declared === 'string' && declared.length > 0) {
+      return declared;
+    }
+    return payloadType.name;
+  }
+};
 
 function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
   const compression = options.compression ?? ZlinkStreamCompression.Lz4;
@@ -120,7 +143,10 @@ function validateReconnect(options: ZlinkStreamReconnectOptions | undefined): vo
   if ((options?.backoffFactor ?? 2.0) < 1.0) {
     throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Reconnect BackoffFactor must be at least 1.0.');
   }
-  if ((options?.maxAttempts ?? 3) <= 0) {
+  // Spec stream-connector 32 §6: `null` is how this option says "unlimited".
+  // Only a stated number is range-checked.
+  const maxAttempts = options?.maxAttempts === undefined ? 3 : options.maxAttempts;
+  if (maxAttempts !== null && !(Number.isFinite(maxAttempts) && maxAttempts > 0)) {
     throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Reconnect MaxAttempts must be null or positive.');
   }
 }
