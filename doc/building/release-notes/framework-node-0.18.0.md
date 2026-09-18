@@ -21,7 +21,7 @@ The stream connector public API does not change. Three observable behaviors do.
 
 ## Fixes
 
-$E
+- On reconnect, the previous connection's unconsumed messages stayed queued, so `receivedCount` read 0 while `waitFor` handed back an old message. The counts and the queue are now cleared together, and a wait that observed the previous connection ends with `Disconnected` (spec §10). (#583)
 - Fixed the ZoneWorld sample failing repeatedly under WSL. Monitor event draining lived inside the receive loop, so it stopped whenever that loop parked. It now has its own loop. (#538)
 - Unified 145 independent file-read sites in the contract tests, each of which carried its own newline rule and disagreed on a CRLF checkout, into a single read path. (#582)
 - Moved the gate and contract assertions off the deleted aggregate runner onto the per-sample runners. (#588)
