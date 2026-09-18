@@ -38,6 +38,7 @@ public final class CourierSpotNodeApplication {
             options.addHandlersFromPackageOf(CourierSpotNodeApplication.class);
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            // --8<-- [start:doc-dd-node-register]
             ZLinkMeshNodeBuilder spotNode = options.addRouteMesh(SampleNames.CourierSpotDiscovery);
             spotNode.listen(selected.spotEndpoint())
                 .setRoutingId(RoutingId.from(selected.nodeName()));
@@ -53,6 +54,7 @@ public final class CourierSpotNodeApplication {
             // node needs a way to speak to the dispatch channel (common sample spec section 7.4).
             options.addClientServerChannel(SampleNames.DispatchChannel)
                 .client();
+            // --8<-- [end:doc-dd-node-register]
         };
     }
 

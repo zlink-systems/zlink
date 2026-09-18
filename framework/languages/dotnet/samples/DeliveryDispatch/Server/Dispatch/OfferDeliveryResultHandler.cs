@@ -23,6 +23,7 @@ internal sealed class OfferDeliveryResultHandler(
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-dd-decision-settle]
         var offer = offers.Settle(message.DeliveryId, message.Attempt);
         if (offer is null)
         {
@@ -41,5 +42,6 @@ internal sealed class OfferDeliveryResultHandler(
             message.Attempt,
             message.Accepted);
         await worker.SettleAsync(offer, message.Accepted, message.Reason, cancellationToken);
+        // --8<-- [end:doc-dd-decision-settle]
     }
 }

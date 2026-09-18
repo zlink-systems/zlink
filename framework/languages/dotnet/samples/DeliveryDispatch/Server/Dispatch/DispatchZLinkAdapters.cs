@@ -14,6 +14,7 @@ namespace DeliveryDispatch.Server.Dispatch;
 internal sealed class CourierOfferPort(
     Zlink.Framework.Contracts.Actors.IZLinkActorClient actors)
 {
+    // --8<-- [start:doc-dd-offer-send]
     public async ValueTask OfferAsync(
         AssignDeliveryMsg delivery,
         string courierId,
@@ -31,6 +32,7 @@ internal sealed class CourierOfferPort(
                     delivery.DropoffAddress))
             .Async(cancellationToken);
     }
+    // --8<-- [end:doc-dd-offer-send]
 }
 
 internal sealed class DeliveryStatusPublisher(IZLinkRouteClient channels)

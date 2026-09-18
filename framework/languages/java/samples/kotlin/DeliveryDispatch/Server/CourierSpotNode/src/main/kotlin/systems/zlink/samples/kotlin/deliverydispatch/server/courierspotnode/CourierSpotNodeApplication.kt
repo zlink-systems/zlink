@@ -34,6 +34,7 @@ class CourierSpotNodeApplication {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
+            // --8<-- [start:doc-dd-node-register]
             val spotNode = options.addRouteMesh(SampleNames.CourierSpotMesh)
             //  Fixed RID so Dispatch can name this courier node in its actor-route readiness row.
             //  An auto-assigned RID cannot be named, and peer status carries no endpoint.
@@ -58,6 +59,7 @@ class CourierSpotNodeApplication {
             // node needs a way to speak to the dispatch channel (common sample spec section 7.4).
             options.addClientServerChannel(SampleNames.DispatchChannel)
                 .client()
+            // --8<-- [end:doc-dd-node-register]
         }
 
     @Bean

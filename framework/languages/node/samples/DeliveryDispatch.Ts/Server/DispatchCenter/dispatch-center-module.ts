@@ -32,6 +32,7 @@ function createDispatchCenterModule() {
             .messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-dd-dispatch-register]
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
             .listen(config.dispatchSpotEndpoint).routingId(DeliveryDispatchNodeIds.dispatch);
           mesh.objects().client();
@@ -42,6 +43,7 @@ function createDispatchCenterModule() {
             .listen()
             .addHandlerGroup('dispatch');
           builder.addClientServerChannel(SampleNames.trackingChannel).client();
+          // --8<-- [end:doc-dd-dispatch-register]
           return builder.build();
         }
       })

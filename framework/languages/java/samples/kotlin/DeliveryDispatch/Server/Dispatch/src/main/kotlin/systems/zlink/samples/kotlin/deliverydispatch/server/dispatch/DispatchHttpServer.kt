@@ -26,6 +26,7 @@ class DispatchHttpServer(
         server.start()
     }
 
+    // --8<-- [start:doc-dd-http-create]
     private fun handleCreateDelivery(exchange: HttpExchange) {
         if (exchange.requestMethod != "POST") {
             exchange.writeJson(405, "")
@@ -38,6 +39,7 @@ class DispatchHttpServer(
             json.writeValueAsString(CreateDeliveryRes(request.deliveryId)),
         )
     }
+    // --8<-- [end:doc-dd-http-create]
 
     private fun handleServerAssertion(exchange: HttpExchange) {
         if (exchange.requestMethod != "POST") {

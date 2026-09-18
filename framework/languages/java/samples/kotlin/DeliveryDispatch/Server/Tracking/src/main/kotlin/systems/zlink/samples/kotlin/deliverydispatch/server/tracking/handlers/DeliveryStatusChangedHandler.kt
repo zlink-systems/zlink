@@ -21,6 +21,7 @@ class DeliveryStatusChangedHandler(
         request: DeliveryStatusChangedReq,
         context: ZLinkMessageContext,
     ): DeliveryStatusChangedRes {
+        // --8<-- [start:doc-dd-tracking-forward]
         evidenceStore.append(request)
         if (request.status.name == "Delivered") {
             println(
@@ -42,6 +43,7 @@ class DeliveryStatusChangedHandler(
             ),
         )
             .submit()
+        // --8<-- [end:doc-dd-tracking-forward]
         return DeliveryStatusChangedRes(request.deliveryId, request.status)
     }
 }

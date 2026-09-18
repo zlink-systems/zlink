@@ -27,6 +27,7 @@ class CourierDecisionActorHandler(
         context: ZLinkMessageContext,
         message: CourierDecisionMsg,
     ) {
+        // --8<-- [start:doc-dd-decision-send]
         val attempt = actor.takeOfferedAttempt(message.deliveryId)
         if (attempt == null) {
             System.err.println(
@@ -48,6 +49,7 @@ class CourierDecisionActorHandler(
                 ),
             )
             .submit()
+        // --8<-- [end:doc-dd-decision-send]
         println(
             "deliverydispatch courier-actor: decision delivery=${message.deliveryId} " +
                 "courier=${actor.actorId()} attempt=$attempt accepted=${message.accepted}",

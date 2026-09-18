@@ -44,6 +44,7 @@ public static class NodeHostFactory
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(NodeHostFactory));
+            // --8<-- [start:doc-dd-node-register]
             var mesh = options.AddRouteMesh(SampleNames.CourierMeshName)
                 .Listen(topology.MeshEndpoint)
                 .SetRoutingIdPrefix("courier-actor");
@@ -54,6 +55,7 @@ public static class NodeHostFactory
             // The courier's decision goes back to dispatch as its own one-way message, so this
             // node needs a way to speak to the dispatch channel (common sample spec §7.4).
             options.AddClientServerChannel(SampleNames.DispatchChannel).Client();
+            // --8<-- [end:doc-dd-node-register]
         });
 
         return builder.Build();

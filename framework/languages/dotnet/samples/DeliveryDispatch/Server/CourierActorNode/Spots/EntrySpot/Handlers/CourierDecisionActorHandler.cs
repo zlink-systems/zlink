@@ -24,6 +24,7 @@ internal sealed class CourierDecisionActorHandler(
         CourierDecisionMsg message,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-dd-decision-send]
         var attempt = actor.TakeOfferedAttempt(message.DeliveryId);
         if (attempt is null)
         {
@@ -43,6 +44,7 @@ internal sealed class CourierDecisionActorHandler(
                     message.Accepted,
                     message.Reason))
             .Async(cancellationToken);
+        // --8<-- [end:doc-dd-decision-send]
 
         logger.LogInformation(
             "deliverydispatch courier-actor: decision delivery={DeliveryId} courier={CourierId} attempt={Attempt} accepted={Accepted}",

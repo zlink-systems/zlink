@@ -27,6 +27,7 @@ class DispatchWorker(
     /** Who gets offered a delivery, and in what order. The worker's policy, not the node's. */
     private val candidates = listOf("courier-a", "courier-b")
 
+    // --8<-- [start:doc-dd-offer-start]
     /** The first offer. Records it, sends it, and returns — nobody is left waiting. */
     suspend fun dispatch(request: AssignDeliveryMsg) {
         val courierId = candidates[0]
@@ -34,6 +35,7 @@ class DispatchWorker(
         publishStatus(request, DeliveryStatus.Assigned, courierId)
         offer(request, courierId, attempt)
     }
+    // --8<-- [end:doc-dd-offer-start]
 
     /** A decision arrived. Accepted carries the delivery through; refused reassigns. */
     suspend fun settle(offer: DeliveryOffer, accepted: Boolean, reason: String?) {
@@ -58,6 +60,7 @@ class DispatchWorker(
      * lives here rather than on the courier node: a node that timed the offer and manufactured a
      * refusal would be hiding the dispatch policy (common sample spec section 7.4).
      */
+    // --8<-- [start:doc-dd-reassign]
     suspend fun reassign(offer: DeliveryOffer) {
         val nextIndex = offer.candidateIndex + 1
         if (nextIndex >= candidates.size) {
@@ -75,12 +78,14 @@ class DispatchWorker(
         publishStatus(offer.request, DeliveryStatus.Reassigned, courierId)
         offer(offer.request, courierId, attempt)
     }
+    // --8<-- [end:doc-dd-reassign]
 
     suspend fun assertServerEvidence(request: ServerAssertionReq): ServerAssertionRes =
         channels
             .requestToChannel(SampleNames.TrackingChannel, request)
             .submit(ServerAssertionRes::class.java).await()
 
+    // --8<-- [start:doc-dd-offer-send]
     /** The offer is a one-way send: the turn that sends it ends right there. */
     private suspend fun offer(request: AssignDeliveryMsg, courierId: String, attempt: Int) {
         actors
@@ -97,6 +102,7 @@ class DispatchWorker(
             .submit()
             .await()
     }
+    // --8<-- [end:doc-dd-offer-send]
 
     private suspend fun publishStatus(
         delivery: AssignDeliveryMsg,

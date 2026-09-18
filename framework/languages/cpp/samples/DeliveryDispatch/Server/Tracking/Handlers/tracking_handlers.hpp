@@ -30,6 +30,7 @@ class delivery_status_changed_handler_t
     zlink::framework::task_t<delivery_status_changed_res_t>
     handle (const delivery_status_changed_req_t &request)
     {
+        // --8<-- [start:doc-dd-tracking-forward]
         _evidence.append (request);
 
         auto actor_ref = co_await _actor_directory.find (request.customer_id);
@@ -45,6 +46,7 @@ class delivery_status_changed_handler_t
                                                         request.status, request.courier_id,
                                                         request.occurred_at_unix_ms})
           .async ();
+        // --8<-- [end:doc-dd-tracking-forward]
 
         if (request.status == delivery_status_t::delivered) {
             std::cerr << "deliverydispatch-tracking status=Delivered delivery="

@@ -11,6 +11,7 @@ internal sealed class DeliveryStatusUpdatedHandler(
     ILogger<DeliveryStatusUpdatedHandler> logger)
     : IZLinkEntrySpotActorSendHandler<CustomerEntrySpot, CustomerActor, DeliveryStatusUpdatedMsg>
 {
+    // --8<-- [start:doc-dd-customer-push]
     public async ValueTask HandleAsync(
         CustomerEntrySpot spot,
         CustomerActor actor,
@@ -30,4 +31,5 @@ internal sealed class DeliveryStatusUpdatedHandler(
             message.Status,
             message.DeliveryId);
     }
+    // --8<-- [end:doc-dd-customer-push]
 }

@@ -37,6 +37,7 @@ class courier_session_t final : public packet_stream_session_t
                   << "\n";
         auto &actors = stream.actors ();
         if (dispatch.packet_name == bind_courier_session_req_t::packet_name) {
+            // --8<-- [start:doc-dd-session-bind]
             const auto request = payload.parse_json<bind_courier_session_req_t> ();
             /* Global ActorId로 current owner를 찾거나 eligible node에 생성한다. Application은
              * courier id에서 physical NodeRid를 계산하지 않는다. */
@@ -61,6 +62,7 @@ class courier_session_t final : public packet_stream_session_t
             stream.reply_packet (reply).async ();
             std::cerr << "deliverydispatch-courier bound courier=" << request.courier_id
                       << "\n";
+            // --8<-- [end:doc-dd-session-bind]
             co_return;
         }
         if (dispatch.packet_name == courier_decision_msg_t::packet_name) {

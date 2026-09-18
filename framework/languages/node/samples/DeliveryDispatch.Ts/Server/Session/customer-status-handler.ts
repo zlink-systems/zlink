@@ -11,6 +11,7 @@ import type { ZLinkMessageContext } from '@zlink-systems/framework';
   packetName: PacketNames.deliveryStatusUpdated
 })
 class CustomerStatusHandler {
+  // --8<-- [start:doc-dd-customer-push]
   async handle(_spot: CustomerEntrySpot, actor: CustomerActor, _context: ZLinkMessageContext, message: DeliveryStatusUpdatedMsg): Promise<void> {
     if (!actor.accepts(message.deliveryId)) return;
     await actor.context.boundSession.send(new DeliveryStatusNotify(
@@ -23,6 +24,7 @@ class CustomerStatusHandler {
       console.log(`deliverydispatch-customer pushed status=Delivered delivery=${message.deliveryId}`);
     }
   }
+  // --8<-- [end:doc-dd-customer-push]
 }
 
 export { CustomerStatusHandler };

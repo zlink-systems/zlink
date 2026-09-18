@@ -21,6 +21,7 @@ class DeliveryStatusChangedHandler implements ZLinkRequestHandler<DeliveryStatus
 
   async handle(request: DeliveryStatusChangedReq, context: ZLinkMessageContext): Promise<DeliveryStatusChangedRes> {
     void context;
+    // --8<-- [start:doc-dd-tracking-forward]
     this.evidence.append(request);
     await this.actors.sendToActor(request.customerId, new DeliveryStatusUpdatedMsg(
       request.deliveryId,
@@ -29,6 +30,7 @@ class DeliveryStatusChangedHandler implements ZLinkRequestHandler<DeliveryStatus
       request.occurredAtUnixMs,
       request.courierId
     )).submit();
+    // --8<-- [end:doc-dd-tracking-forward]
     if (request.status === 'Delivered') {
       console.log(`deliverydispatch-tracking status=Delivered delivery=${request.deliveryId}`);
     }

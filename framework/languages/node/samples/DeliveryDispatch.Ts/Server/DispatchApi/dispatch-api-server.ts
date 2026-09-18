@@ -25,6 +25,7 @@ function startDispatchApi(
         sendJson(response, 200, { ready: true, role: 'dispatch' });
         return;
       }
+      // --8<-- [start:doc-dd-http-create]
       if (request.method === 'POST' && request.url === '/deliveries') {
         const body = await readJson<CreateDeliveryReq>(request);
         submitDispatch(channels, body);
@@ -32,6 +33,7 @@ function startDispatchApi(
         sendJson(response, 200, { deliveryId: body.deliveryId } satisfies CreateDeliveryRes);
         return;
       }
+      // --8<-- [end:doc-dd-http-create]
       if (request.method === 'POST' && request.url === '/self-check/assert') {
         const body = await readJson<ServerAssertionReq>(request);
         const success = evidence.hasExactSequence(body.successfulDeliveryId, [

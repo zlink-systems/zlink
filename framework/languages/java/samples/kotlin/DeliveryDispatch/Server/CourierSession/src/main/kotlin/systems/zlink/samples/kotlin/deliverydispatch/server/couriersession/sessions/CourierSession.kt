@@ -50,6 +50,7 @@ class CourierSession(
         actor.relay(dispatch, payload).await()
     }
 
+    // --8<-- [start:doc-dd-session-bind]
     private suspend fun handleBindCourierSessionReq(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
         val request = payload.decode(BindCourierSessionReq::class.java)
         val actorRef = findOrEnsureActor(request.courierId)
@@ -71,6 +72,7 @@ class CourierSession(
             .submit()
         println("deliverydispatch-courier bound courier=${request.courierId}")
     }
+    // --8<-- [end:doc-dd-session-bind]
 
     private suspend fun findOrEnsureActor(courierId: String): ActorRef =
         when (val result = actors.kotlin().getOrCreate(

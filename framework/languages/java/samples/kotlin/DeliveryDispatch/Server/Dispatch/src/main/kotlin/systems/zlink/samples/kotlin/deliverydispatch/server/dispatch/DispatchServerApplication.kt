@@ -36,6 +36,7 @@ class DispatchServerApplication {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
+            // --8<-- [start:doc-dd-dispatch-register]
             options.addClientServerChannel(SampleNames.CourierChannel)
                 .client()
             // The courier's decision comes back here as its own one-way message, so dispatch has
@@ -54,6 +55,7 @@ class DispatchServerApplication {
                 .listen(SampleTopology.DispatchSpotEndpoint)
                 .setRoutingIdPrefix("delivery-dispatch")
             courierRoutes.objects().client()
+            // --8<-- [end:doc-dd-dispatch-register]
         }
 
     @Bean
