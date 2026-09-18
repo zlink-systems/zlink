@@ -1,4 +1,4 @@
-# 10 — Packaging
+# Packaging
 
 [← Engine Adapters](09-engine-adapters.en.md) | [Table Of Contents](INDEX.en.md) | [Next: Performance Testing →](11-performance.en.md)
 

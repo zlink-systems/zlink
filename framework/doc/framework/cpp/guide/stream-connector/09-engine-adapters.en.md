@@ -1,4 +1,4 @@
-# 09 — Engine Adapters
+# Engine Adapters
 
 [← E2E Client](08-e2e-client.en.md) | [Table Of Contents](INDEX.en.md) | [Next: Packaging →](10-packaging.en.md)
 

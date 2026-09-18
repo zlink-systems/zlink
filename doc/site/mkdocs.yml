@@ -126,157 +126,27 @@ plugins:
           # 남는다. 반대로 nav를 한국어로 적으면 영어 화면에서 한국어가 남는다 —
           # 실제로 그렇게 갈라져서 영어 전환이 반쪽만 되고 있었다.
           nav_translations:
-            # 최상위 구획. `Samples`는 샘플 고르기와 공통 시나리오 목록을 한데 묶는다.
-            Home: 홈
-            Channel messaging: Channel 메시징
-            Spot: Spot
-            Actor: Actor
-            STREAM: STREAM
-            Session and Actor: Session과 Actor 연결
-            How channels work: Channel 동작 원리
-            Handlers and message processing: Handler와 메시지 처리
+            # **1차 메뉴만 한글로 낸다.** 하위 항목까지 번역하면 한글과 영어가
+            # 섞여 어느 쪽이 원래 이름인지 알기 어렵다. 문서 제목은 영어 그대로
+            # 두는 편이 찾기 쉽다.
+            #
+            # **영문 발음을 한글로 옮긴 것은 영문을 쓴다.** `레퍼런스`·`스펙`·
+            # `테스트`·`샘플`은 한국어 낱말이 아니라 영어를 소리대로 적은 것이다.
+            #
+            # 여기 없는 라벨은 한국어 화면에서도 영어로 남는다.
+
+            # 최상위
             Install: 설치
-            Quickstart: 퀵스타트
-            Samples: 샘플
-            Sample scenario contract: 샘플 시나리오 계약
-            Picking a sample: 샘플 고르기
-            Guide: 가이드
-            Reference: 레퍼런스
-            Spec: 스펙
-            Internals: 내부 구조
-            Overview: 개요
-            API Reference: API 레퍼런스
 
-            # Samples 최상위 구획. 샘플 이름은 고유명사라 번역하지 않는다 —
-            # 번역표에 없는 라벨은 그대로 남으므로 여기 적을 것도 없다.
-            "Event sourcing": 이벤트 소싱
-
-            # Framework 언어별 서버 가이드. 5개 언어가 같은 라벨을 공유한다.
-            # 구획 이름은 doc/plan/guide-rewrite.ko.md의 목차가 정한다.
-            Guide home: 가이드 홈
-            Contents: 목차
+            # 언어 안 구획
             Getting started: 시작
             Feature guide: 기능별 가이드
             How it works: 동작 원리
             Operations: 운영
-            Tests: 테스트
 
-            # 시작
-            Where ZLink fits: ZLink를 어디에 쓰나
-            Core concepts: 핵심 개념
-            Install and first run: 설치와 첫 실행
-
-            # 기능별 가이드
-            Location: Location
-            Monitoring: 모니터링
-
-            # 동작 원리
-            The execution model: 실행 모델
-            Backpressure: Backpressure
-            Activation and lifetime: 활성화와 수명
-            Actor membership: Actor membership
-            Timers and workers: Timer와 worker
-            Relocation: Relocation
-            How session binding works: Session 묶음의 동작 원리
-            How STREAM works: STREAM의 동작 원리
-
-            # 운영 · 샘플 · 레퍼런스
-            Operations and lifecycle: 운영과 lifecycle
-            Options: 옵션
-            Picking a sample: 샘플 고르기
-            E2E testing: E2E 테스트
-            Key type index: 주요 타입 사용 색인
-
-            # ZLink host — C++에만 있는 host 구성 요소
-            DI container: DI 컨테이너
-            Configuration: 구성
-            HTTP hosting: HTTP 호스팅
-            Execution and configuration model: 실행·구성 모델
-
-            "7. Actor and Spot": "7. Actor와 Spot"
-            "8. Session and Actor binding": "8. Session과 Actor binding"
-            "9. STREAM": "9. STREAM"
-            "10. Location": "10. Location"
-            "11. Monitoring": "11. Monitoring"
-
-            # Framework 공통 스펙.
+            # 공통 스펙
             Common spec: 공통 스펙
-            Conventions and glossary: 작성 기준과 공통 용어
-            Public contract governance: 공개 계약 관리
-            Messaging glossary: 메시징 용어집
-            Foundation contracts: 기반 계약
-            Framework overview: Framework 개요
-            Interaction model: 상호작용 모델
-            Message model: 메시지 모델
-            Async execution policy: 비동기 실행 정책
-            Channel and network: Channel과 network
-            Channel messaging: Channel 메시징
-            Object messaging: Object 메시징
-            Spot model: Spot 모델
-            Spot messaging: Spot 메시징
-            Actor model: Actor 모델
-            Spot and Actor membership: Spot과 Actor membership
-            Spot address messaging: Spot 주소 메시징
-            STREAM and session: STREAM과 session
-            STREAM server session: STREAM 서버 session
-            Location Store and relocation: Location Store와 relocation
-            Observability and shutdown: 관측과 종료
-            Runtime status and diagnostics: Runtime 상태와 운영 진단
-            Complete Actor and Spot relocation flow: Actor와 Spot relocation 전체 흐름
-            Failure handling and failover: 장애 대응과 failover
-            Framework error model: Framework 오류 모델
-            Core Byte HWM And Application Job Flow: Core byte HWM과 Application job flow
-            Complete Host relocation flow: Host relocation 전체 흐름
-            Implementation gap record: Framework 구현 차이 기록
-
-            # Framework 내부 구조. 숫자 접두사가 키를 유일하게 만든다 — 가이드의
-            # "8. Session and Actor binding"과 아래 "9."는 다른 항목이다.
-            Internals overview: 내부 구조 개요
-            "1. Layer boundary and identifier": "1. 계층 경계와 식별자"
-            "2. Spot and Actor execution serialization": "2. Spot·Actor 실행 직렬화"
-            "3. Application and infrastructure isolation": "3. application과 infrastructure 실행 분리"
-            "4. Operation completion": "4. operation 완료 확정"
-            "5. Message continuity during a move": "5. 이동 중 message 연속성"
-            "6. Target selection and route cache": "6. target 선택과 route cache"
-            "7. Receive and dispatch loop": "7. 수신과 dispatch 루프"
-            "8. Object kind and activation": "8. 객체 종류와 활성화"
-            "9. Session and Actor connection": "9. Session과 Actor 연결"
-            "10. Liveness and status publication": "10. Liveness와 상태 공개"
-            "11. Payload ownership and copy": "11. Payload 소유권과 복사"
-            "12. Service wire protocol": "12. Service wire protocol"
-            "13. Relocation handoff state transitions": "13. Relocation handoff 상태 전이"
-
-            # Core 가이드 · 스펙 · 내부 구조.
-            Transports: 트랜스포트
-            TLS Security: TLS 보안
-            Monitoring: 모니터링
-            Routing ID: 라우팅 ID
-            Performance: 성능
-            Thread Safety: 스레드 안전성
-            Socket Options: 소켓 옵션
-            Context: 컨텍스트
-            Message: 메시지
-            Events: 이벤트
-            Polling: 폴링
-            Errors: 에러
-            Operations: 운영
-            Utilities: 유틸리티
-            Architecture: 아키텍처
-            Threading Model: 스레딩 모델
-            Design Decisions: 설계 결정
-            POSD Module Structure: POSD 모듈 구조
-            Stream Socket: 스트림 소켓
-            Protocol ZMP: ZMP 프로토콜
-            Protocol Raw: Raw 프로토콜
-            I/O Thread: I/O 스레드
-            Result Enums: 결과 Enum
-            Sockets: 소켓
-            Protocol: 프로토콜
-            Systems: 시스템
-            Runtime Boundary: 런타임 경계
-            Connection Memory: 연결 메모리
-            Auto HWM: 자동 HWM
-            Source Layout: 소스 레이아웃
+            Sample scenario contract: 샘플 시나리오 계약
 
 # 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
 # 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
@@ -314,7 +184,7 @@ nav:
           - DI container: cpp/guide/server/40-di-container.md
           - Configuration: cpp/guide/server/41-configuration.md
           - HTTP hosting: cpp/guide/server/42-http-hosting.md
-          - Execution and configuration model: cpp/guide/server/43-execution-model.md
+          - Host execution model: cpp/guide/server/43-execution-model.md
       - Feature guide:
           - Channel messaging: cpp/guide/server/20-channel-messaging.md
           - Spot: cpp/guide/server/21-spot.md
@@ -324,16 +194,16 @@ nav:
           - Location: cpp/guide/server/25-location.md
           - Monitoring: cpp/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: cpp/guide/server/32-execution-model.md
+          - Execution model: cpp/guide/server/32-execution-model.md
           - Backpressure: cpp/guide/server/33-backpressure.md
           - Activation and lifetime: cpp/guide/server/34-activation-lifetime.md
           - Actor membership: cpp/guide/server/35-actor-membership.md
           - Timers and workers: cpp/guide/server/36-timer-worker.md
           - Relocation: cpp/guide/server/37-relocation.md
-          - How channels work: cpp/guide/server/30-channel-patterns.md
-          - Handlers and message processing: cpp/guide/server/31-handler-dispatch.md
-          - How STREAM works: cpp/guide/server/38-stream-boundary.md
-          - How session binding works: cpp/guide/server/39-session-binding.md
+          - Channel patterns: cpp/guide/server/30-channel-patterns.md
+          - Handler dispatch: cpp/guide/server/31-handler-dispatch.md
+          - STREAM boundary: cpp/guide/server/38-stream-boundary.md
+          - Session binding: cpp/guide/server/39-session-binding.md
           - Where ZLink fits: cpp/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
@@ -342,43 +212,43 @@ nav:
       - Tests: cpp/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: cpp/guide/stream-connector/README.md
-          - Stream Connector Overview: cpp/guide/stream-connector/01-overview.md
-          - Installation and the First Connection: cpp/guide/stream-connector/02-getting-started.md
-          - Connector Options: cpp/guide/stream-connector/03-connector-options.md
-          - Sending Packets: cpp/guide/stream-connector/04-sending.md
-          - Receiving Packets: cpp/guide/stream-connector/05-receiving.md
-          - Connection Lifecycle: cpp/guide/stream-connector/06-lifecycle.md
-          - Error Handling: cpp/guide/stream-connector/07-error-handling.md
-          - 08 — E2E Client: cpp/guide/stream-connector/08-e2e-client.md
-          - 09 — Engine Adapters: cpp/guide/stream-connector/09-engine-adapters.md
-          - 10 — Packaging: cpp/guide/stream-connector/10-packaging.md
-          - 11 — Performance Testing: cpp/guide/stream-connector/11-performance.md
+          - Overview: cpp/guide/stream-connector/01-overview.md
+          - Getting started: cpp/guide/stream-connector/02-getting-started.md
+          - Connector options: cpp/guide/stream-connector/03-connector-options.md
+          - Sending: cpp/guide/stream-connector/04-sending.md
+          - Receiving: cpp/guide/stream-connector/05-receiving.md
+          - Lifecycle: cpp/guide/stream-connector/06-lifecycle.md
+          - Error handling: cpp/guide/stream-connector/07-error-handling.md
+          - E2E client: cpp/guide/stream-connector/08-e2e-client.md
+          - Engine adapters: cpp/guide/stream-connector/09-engine-adapters.md
+          - Packaging: cpp/guide/stream-connector/10-packaging.md
+          - Performance testing: cpp/guide/stream-connector/11-performance.md
       - HTTP client:
           - Contents: cpp/guide/http-client/README.md
-          - 1. Overview: cpp/guide/http-client/01-overview.md
-          - 2. Getting Started: cpp/guide/http-client/02-getting-started.md
-          - 3. Client Configuration: cpp/guide/http-client/03-client-configuration.md
-          - 4. Making Requests: cpp/guide/http-client/04-making-requests.md
-          - 5. Request Body: cpp/guide/http-client/05-request-body.md
-          - 6. Handling Responses: cpp/guide/http-client/06-handling-responses.md
-          - 7. Async And Coroutines: cpp/guide/http-client/07-async-coroutines.md
-          - 8. Streaming: cpp/guide/http-client/08-streaming.md
-          - 9. Authentication And TLS: cpp/guide/http-client/09-authentication-tls.md
-          - 10. Redirect · Retry · Cookie: cpp/guide/http-client/10-redirects-retries-cookies.md
-          - 11. Proxy: cpp/guide/http-client/11-proxy.md
-          - 12. Compression: cpp/guide/http-client/12-compression.md
-          - 13. Error Handling: cpp/guide/http-client/13-error-handling.md
+          - Overview: cpp/guide/http-client/01-overview.md
+          - Getting started: cpp/guide/http-client/02-getting-started.md
+          - Client configuration: cpp/guide/http-client/03-client-configuration.md
+          - Making requests: cpp/guide/http-client/04-making-requests.md
+          - Request body: cpp/guide/http-client/05-request-body.md
+          - Handling responses: cpp/guide/http-client/06-handling-responses.md
+          - Async and coroutines: cpp/guide/http-client/07-async-coroutines.md
+          - Streaming: cpp/guide/http-client/08-streaming.md
+          - Authentication and TLS: cpp/guide/http-client/09-authentication-tls.md
+          - Redirect, retry, cookie: cpp/guide/http-client/10-redirects-retries-cookies.md
+          - Proxy: cpp/guide/http-client/11-proxy.md
+          - Compression: cpp/guide/http-client/12-compression.md
+          - Error handling: cpp/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: cpp/guide/server/13-interface-catalog.md
           - Reference home: cpp/reference/README.md
-          - 01. Host lifecycle: cpp/reference/01-host-lifecycle.md
-          - 02. Topology discovery: cpp/reference/02-topology-discovery.md
-          - 03. Messaging execution: cpp/reference/03-messaging-execution.md
-          - 04. Spot instance: cpp/reference/04-spot-instance.md
-          - 05. Actor relocation: cpp/reference/05-actor-relocation.md
-          - 06. Stream session: cpp/reference/06-stream-session.md
-          - 07. Location authority: cpp/reference/07-location-authority.md
-          - 08. Observability diagnostics: cpp/reference/08-observability-diagnostics.md
+          - Host lifecycle: cpp/reference/01-host-lifecycle.md
+          - Topology discovery: cpp/reference/02-topology-discovery.md
+          - Messaging execution: cpp/reference/03-messaging-execution.md
+          - Spot instance: cpp/reference/04-spot-instance.md
+          - Actor relocation: cpp/reference/05-actor-relocation.md
+          - Stream session: cpp/reference/06-stream-session.md
+          - Location authority: cpp/reference/07-location-authority.md
+          - Observability diagnostics: cpp/reference/08-observability-diagnostics.md
   - .NET:
       - Guide home: dotnet/guide/server/README.md
       - Getting started:
@@ -394,16 +264,16 @@ nav:
           - Location: dotnet/guide/server/25-location.md
           - Monitoring: dotnet/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: dotnet/guide/server/32-execution-model.md
+          - Execution model: dotnet/guide/server/32-execution-model.md
           - Backpressure: dotnet/guide/server/33-backpressure.md
           - Activation and lifetime: dotnet/guide/server/34-activation-lifetime.md
           - Actor membership: dotnet/guide/server/35-actor-membership.md
           - Timers and workers: dotnet/guide/server/36-timer-worker.md
           - Relocation: dotnet/guide/server/37-relocation.md
-          - How channels work: dotnet/guide/server/30-channel-patterns.md
-          - Handlers and message processing: dotnet/guide/server/31-handler-dispatch.md
-          - How STREAM works: dotnet/guide/server/38-stream-boundary.md
-          - How session binding works: dotnet/guide/server/39-session-binding.md
+          - Channel patterns: dotnet/guide/server/30-channel-patterns.md
+          - Handler dispatch: dotnet/guide/server/31-handler-dispatch.md
+          - STREAM boundary: dotnet/guide/server/38-stream-boundary.md
+          - Session binding: dotnet/guide/server/39-session-binding.md
           - Where ZLink fits: dotnet/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
@@ -412,41 +282,41 @@ nav:
       - Tests: dotnet/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: dotnet/guide/stream-connector/README.md
-          - Stream Connector Overview: dotnet/guide/stream-connector/01-overview.md
-          - Installation and the First Connection: dotnet/guide/stream-connector/02-getting-started.md
-          - Connector Options: dotnet/guide/stream-connector/03-connector-options.md
-          - Sending Packets: dotnet/guide/stream-connector/04-sending.md
-          - Receiving Packets: dotnet/guide/stream-connector/05-receiving.md
-          - Connection Lifecycle: dotnet/guide/stream-connector/06-lifecycle.md
-          - Error Handling: dotnet/guide/stream-connector/07-error-handling.md
+          - Overview: dotnet/guide/stream-connector/01-overview.md
+          - Getting started: dotnet/guide/stream-connector/02-getting-started.md
+          - Connector options: dotnet/guide/stream-connector/03-connector-options.md
+          - Sending: dotnet/guide/stream-connector/04-sending.md
+          - Receiving: dotnet/guide/stream-connector/05-receiving.md
+          - Lifecycle: dotnet/guide/stream-connector/06-lifecycle.md
+          - Error handling: dotnet/guide/stream-connector/07-error-handling.md
           - Unity (Native Build): dotnet/guide/stream-connector/08-unity.md
           - Godot C#: dotnet/guide/stream-connector/09-godot-csharp.md
       - HTTP client:
           - Contents: dotnet/guide/http-client/README.md
-          - 1. Overview: dotnet/guide/http-client/01-overview.md
-          - 2. Getting Started: dotnet/guide/http-client/02-getting-started.md
-          - 3. Client Configuration: dotnet/guide/http-client/03-client-configuration.md
-          - 4. Making Requests: dotnet/guide/http-client/04-making-requests.md
-          - 5. Request Body: dotnet/guide/http-client/05-request-body.md
-          - 6. Handling Responses: dotnet/guide/http-client/06-handling-responses.md
-          - 7. Async: dotnet/guide/http-client/07-async.md
-          - 8. Streaming: dotnet/guide/http-client/08-streaming.md
-          - 9. Authentication And TLS: dotnet/guide/http-client/09-authentication-tls.md
-          - 10. Redirect · Retry · Cookie: dotnet/guide/http-client/10-redirects-retries-cookies.md
-          - 11. Proxy: dotnet/guide/http-client/11-proxy.md
-          - 12. Compression: dotnet/guide/http-client/12-compression.md
-          - 13. Error Handling: dotnet/guide/http-client/13-error-handling.md
+          - Overview: dotnet/guide/http-client/01-overview.md
+          - Getting started: dotnet/guide/http-client/02-getting-started.md
+          - Client configuration: dotnet/guide/http-client/03-client-configuration.md
+          - Making requests: dotnet/guide/http-client/04-making-requests.md
+          - Request body: dotnet/guide/http-client/05-request-body.md
+          - Handling responses: dotnet/guide/http-client/06-handling-responses.md
+          - Async: dotnet/guide/http-client/07-async.md
+          - Streaming: dotnet/guide/http-client/08-streaming.md
+          - Authentication and TLS: dotnet/guide/http-client/09-authentication-tls.md
+          - Redirect, retry, cookie: dotnet/guide/http-client/10-redirects-retries-cookies.md
+          - Proxy: dotnet/guide/http-client/11-proxy.md
+          - Compression: dotnet/guide/http-client/12-compression.md
+          - Error handling: dotnet/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: dotnet/guide/server/13-interface-catalog.md
           - Reference home: dotnet/reference/README.md
-          - 01. Host lifecycle: dotnet/reference/01-host-lifecycle.md
-          - 02. Topology discovery: dotnet/reference/02-topology-discovery.md
-          - 03. Messaging execution: dotnet/reference/03-messaging-execution.md
-          - 04. Spot instance: dotnet/reference/04-spot-instance.md
-          - 05. Actor relocation: dotnet/reference/05-actor-relocation.md
-          - 06. Stream session: dotnet/reference/06-stream-session.md
-          - 07. Location authority: dotnet/reference/07-location-authority.md
-          - 08. Observability diagnostics: dotnet/reference/08-observability-diagnostics.md
+          - Host lifecycle: dotnet/reference/01-host-lifecycle.md
+          - Topology discovery: dotnet/reference/02-topology-discovery.md
+          - Messaging execution: dotnet/reference/03-messaging-execution.md
+          - Spot instance: dotnet/reference/04-spot-instance.md
+          - Actor relocation: dotnet/reference/05-actor-relocation.md
+          - Stream session: dotnet/reference/06-stream-session.md
+          - Location authority: dotnet/reference/07-location-authority.md
+          - Observability diagnostics: dotnet/reference/08-observability-diagnostics.md
   - Java:
       - Guide home: java/guide/server/README.md
       - Getting started:
@@ -462,16 +332,16 @@ nav:
           - Location: java/guide/server/25-location.md
           - Monitoring: java/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: java/guide/server/32-execution-model.md
+          - Execution model: java/guide/server/32-execution-model.md
           - Backpressure: java/guide/server/33-backpressure.md
           - Activation and lifetime: java/guide/server/34-activation-lifetime.md
           - Actor membership: java/guide/server/35-actor-membership.md
           - Timers and workers: java/guide/server/36-timer-worker.md
           - Relocation: java/guide/server/37-relocation.md
-          - How channels work: java/guide/server/30-channel-patterns.md
-          - Handlers and message processing: java/guide/server/31-handler-dispatch.md
-          - How STREAM works: java/guide/server/38-stream-boundary.md
-          - How session binding works: java/guide/server/39-session-binding.md
+          - Channel patterns: java/guide/server/30-channel-patterns.md
+          - Handler dispatch: java/guide/server/31-handler-dispatch.md
+          - STREAM boundary: java/guide/server/38-stream-boundary.md
+          - Session binding: java/guide/server/39-session-binding.md
           - Where ZLink fits: java/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: java/guide/server/12-operations.md
@@ -480,39 +350,39 @@ nav:
       - Tests: java/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: java/guide/stream-connector/README.md
-          - Stream Connector Overview: java/guide/stream-connector/01-overview.md
-          - Installation and the First Connection: java/guide/stream-connector/02-getting-started.md
-          - Connector Options: java/guide/stream-connector/03-connector-options.md
-          - Sending Packets: java/guide/stream-connector/04-sending.md
-          - Receiving Packets: java/guide/stream-connector/05-receiving.md
-          - Connection Lifecycle: java/guide/stream-connector/06-lifecycle.md
-          - Error Handling: java/guide/stream-connector/07-error-handling.md
+          - Overview: java/guide/stream-connector/01-overview.md
+          - Getting started: java/guide/stream-connector/02-getting-started.md
+          - Connector options: java/guide/stream-connector/03-connector-options.md
+          - Sending: java/guide/stream-connector/04-sending.md
+          - Receiving: java/guide/stream-connector/05-receiving.md
+          - Lifecycle: java/guide/stream-connector/06-lifecycle.md
+          - Error handling: java/guide/stream-connector/07-error-handling.md
       - HTTP client:
           - Contents: java/guide/http-client/README.md
-          - 1. Overview: java/guide/http-client/01-overview.md
-          - 2. Getting Started: java/guide/http-client/02-getting-started.md
-          - 3. Client Configuration: java/guide/http-client/03-client-configuration.md
-          - 4. Making Requests: java/guide/http-client/04-making-requests.md
-          - 5. Request Body: java/guide/http-client/05-request-body.md
-          - 6. Handling Responses: java/guide/http-client/06-handling-responses.md
-          - 7. Async: java/guide/http-client/07-async.md
-          - 8. Streaming: java/guide/http-client/08-streaming.md
-          - 9. Authentication And TLS: java/guide/http-client/09-authentication-tls.md
-          - 10. Redirect · Retry · Cookie: java/guide/http-client/10-redirects-retries-cookies.md
-          - 11. Proxy: java/guide/http-client/11-proxy.md
-          - 12. Compression: java/guide/http-client/12-compression.md
-          - 13. Error Handling: java/guide/http-client/13-error-handling.md
+          - Overview: java/guide/http-client/01-overview.md
+          - Getting started: java/guide/http-client/02-getting-started.md
+          - Client configuration: java/guide/http-client/03-client-configuration.md
+          - Making requests: java/guide/http-client/04-making-requests.md
+          - Request body: java/guide/http-client/05-request-body.md
+          - Handling responses: java/guide/http-client/06-handling-responses.md
+          - Async: java/guide/http-client/07-async.md
+          - Streaming: java/guide/http-client/08-streaming.md
+          - Authentication and TLS: java/guide/http-client/09-authentication-tls.md
+          - Redirect, retry, cookie: java/guide/http-client/10-redirects-retries-cookies.md
+          - Proxy: java/guide/http-client/11-proxy.md
+          - Compression: java/guide/http-client/12-compression.md
+          - Error handling: java/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: java/guide/server/13-interface-catalog.md
           - Reference home: java/reference/README.md
-          - 01. Host lifecycle: java/reference/01-host-lifecycle.md
-          - 02. Topology discovery: java/reference/02-topology-discovery.md
-          - 03. Messaging execution: java/reference/03-messaging-execution.md
-          - 04. Spot instance: java/reference/04-spot-instance.md
-          - 05. Actor relocation: java/reference/05-actor-relocation.md
-          - 06. Stream session: java/reference/06-stream-session.md
-          - 07. Location authority: java/reference/07-location-authority.md
-          - 08. Observability diagnostics: java/reference/08-observability-diagnostics.md
+          - Host lifecycle: java/reference/01-host-lifecycle.md
+          - Topology discovery: java/reference/02-topology-discovery.md
+          - Messaging execution: java/reference/03-messaging-execution.md
+          - Spot instance: java/reference/04-spot-instance.md
+          - Actor relocation: java/reference/05-actor-relocation.md
+          - Stream session: java/reference/06-stream-session.md
+          - Location authority: java/reference/07-location-authority.md
+          - Observability diagnostics: java/reference/08-observability-diagnostics.md
   - Kotlin:
       - Guide home: kotlin/guide/server/README.md
       - Getting started:
@@ -528,16 +398,16 @@ nav:
           - Location: kotlin/guide/server/25-location.md
           - Monitoring: kotlin/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: kotlin/guide/server/32-execution-model.md
+          - Execution model: kotlin/guide/server/32-execution-model.md
           - Backpressure: kotlin/guide/server/33-backpressure.md
           - Activation and lifetime: kotlin/guide/server/34-activation-lifetime.md
           - Actor membership: kotlin/guide/server/35-actor-membership.md
           - Timers and workers: kotlin/guide/server/36-timer-worker.md
           - Relocation: kotlin/guide/server/37-relocation.md
-          - How channels work: kotlin/guide/server/30-channel-patterns.md
-          - Handlers and message processing: kotlin/guide/server/31-handler-dispatch.md
-          - How STREAM works: kotlin/guide/server/38-stream-boundary.md
-          - How session binding works: kotlin/guide/server/39-session-binding.md
+          - Channel patterns: kotlin/guide/server/30-channel-patterns.md
+          - Handler dispatch: kotlin/guide/server/31-handler-dispatch.md
+          - STREAM boundary: kotlin/guide/server/38-stream-boundary.md
+          - Session binding: kotlin/guide/server/39-session-binding.md
           - Where ZLink fits: kotlin/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
@@ -546,39 +416,39 @@ nav:
       - Tests: kotlin/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: kotlin/guide/stream-connector/README.md
-          - Stream Connector Overview: kotlin/guide/stream-connector/01-overview.md
-          - Installation and the First Connection: kotlin/guide/stream-connector/02-getting-started.md
-          - Connector Options: kotlin/guide/stream-connector/03-connector-options.md
-          - Sending Packets: kotlin/guide/stream-connector/04-sending.md
-          - Receiving Packets: kotlin/guide/stream-connector/05-receiving.md
-          - Connection Lifecycle: kotlin/guide/stream-connector/06-lifecycle.md
-          - Error Handling: kotlin/guide/stream-connector/07-error-handling.md
+          - Overview: kotlin/guide/stream-connector/01-overview.md
+          - Getting started: kotlin/guide/stream-connector/02-getting-started.md
+          - Connector options: kotlin/guide/stream-connector/03-connector-options.md
+          - Sending: kotlin/guide/stream-connector/04-sending.md
+          - Receiving: kotlin/guide/stream-connector/05-receiving.md
+          - Lifecycle: kotlin/guide/stream-connector/06-lifecycle.md
+          - Error handling: kotlin/guide/stream-connector/07-error-handling.md
       - HTTP client:
           - Contents: kotlin/guide/http-client/README.md
-          - 1. Overview: kotlin/guide/http-client/01-overview.md
-          - 2. Getting Started: kotlin/guide/http-client/02-getting-started.md
-          - 3. Client Configuration: kotlin/guide/http-client/03-client-configuration.md
-          - 4. Making Requests: kotlin/guide/http-client/04-making-requests.md
-          - 5. Request Body: kotlin/guide/http-client/05-request-body.md
-          - 6. Handling Responses: kotlin/guide/http-client/06-handling-responses.md
-          - 7. Coroutines: kotlin/guide/http-client/07-coroutines.md
-          - 8. Streaming: kotlin/guide/http-client/08-streaming.md
-          - 9. Authentication And TLS: kotlin/guide/http-client/09-authentication-tls.md
-          - 10. Redirect · Retry · Cookie: kotlin/guide/http-client/10-redirects-retries-cookies.md
-          - 11. Proxy: kotlin/guide/http-client/11-proxy.md
-          - 12. Compression: kotlin/guide/http-client/12-compression.md
-          - 13. Error Handling: kotlin/guide/http-client/13-error-handling.md
+          - Overview: kotlin/guide/http-client/01-overview.md
+          - Getting started: kotlin/guide/http-client/02-getting-started.md
+          - Client configuration: kotlin/guide/http-client/03-client-configuration.md
+          - Making requests: kotlin/guide/http-client/04-making-requests.md
+          - Request body: kotlin/guide/http-client/05-request-body.md
+          - Handling responses: kotlin/guide/http-client/06-handling-responses.md
+          - Coroutines: kotlin/guide/http-client/07-coroutines.md
+          - Streaming: kotlin/guide/http-client/08-streaming.md
+          - Authentication and TLS: kotlin/guide/http-client/09-authentication-tls.md
+          - Redirect, retry, cookie: kotlin/guide/http-client/10-redirects-retries-cookies.md
+          - Proxy: kotlin/guide/http-client/11-proxy.md
+          - Compression: kotlin/guide/http-client/12-compression.md
+          - Error handling: kotlin/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: kotlin/guide/server/13-interface-catalog.md
           - Reference home: kotlin/reference/README.md
-          - 01. Host lifecycle: kotlin/reference/01-host-lifecycle.md
-          - 02. Topology discovery: kotlin/reference/02-topology-discovery.md
-          - 03. Messaging execution: kotlin/reference/03-messaging-execution.md
-          - 04. Spot instance: kotlin/reference/04-spot-instance.md
-          - 05. Actor relocation: kotlin/reference/05-actor-relocation.md
-          - 06. Stream session: kotlin/reference/06-stream-session.md
-          - 07. Location authority: kotlin/reference/07-location-authority.md
-          - 08. Observability diagnostics: kotlin/reference/08-observability-diagnostics.md
+          - Host lifecycle: kotlin/reference/01-host-lifecycle.md
+          - Topology discovery: kotlin/reference/02-topology-discovery.md
+          - Messaging execution: kotlin/reference/03-messaging-execution.md
+          - Spot instance: kotlin/reference/04-spot-instance.md
+          - Actor relocation: kotlin/reference/05-actor-relocation.md
+          - Stream session: kotlin/reference/06-stream-session.md
+          - Location authority: kotlin/reference/07-location-authority.md
+          - Observability diagnostics: kotlin/reference/08-observability-diagnostics.md
   - Node.js:
       - Guide home: node/guide/server/README.md
       - Getting started:
@@ -594,16 +464,16 @@ nav:
           - Location: node/guide/server/25-location.md
           - Monitoring: node/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: node/guide/server/32-execution-model.md
+          - Execution model: node/guide/server/32-execution-model.md
           - Backpressure: node/guide/server/33-backpressure.md
           - Activation and lifetime: node/guide/server/34-activation-lifetime.md
           - Actor membership: node/guide/server/35-actor-membership.md
           - Timers and workers: node/guide/server/36-timer-worker.md
           - Relocation: node/guide/server/37-relocation.md
-          - How channels work: node/guide/server/30-channel-patterns.md
-          - Handlers and message processing: node/guide/server/31-handler-dispatch.md
-          - How STREAM works: node/guide/server/38-stream-boundary.md
-          - How session binding works: node/guide/server/39-session-binding.md
+          - Channel patterns: node/guide/server/30-channel-patterns.md
+          - Handler dispatch: node/guide/server/31-handler-dispatch.md
+          - STREAM boundary: node/guide/server/38-stream-boundary.md
+          - Session binding: node/guide/server/39-session-binding.md
           - Where ZLink fits: node/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: node/guide/server/12-operations.md
@@ -612,53 +482,53 @@ nav:
       - Tests: node/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: node/guide/stream-connector/README.md
-          - Stream Connector Overview: node/guide/stream-connector/01-overview.md
-          - Installation and the First Connection: node/guide/stream-connector/02-getting-started.md
-          - Connector Options: node/guide/stream-connector/03-connector-options.md
-          - Sending Packets: node/guide/stream-connector/04-sending.md
-          - Receiving Packets: node/guide/stream-connector/05-receiving.md
-          - Connection Lifecycle: node/guide/stream-connector/06-lifecycle.md
-          - Error Handling: node/guide/stream-connector/07-error-handling.md
+          - Overview: node/guide/stream-connector/01-overview.md
+          - Getting started: node/guide/stream-connector/02-getting-started.md
+          - Connector options: node/guide/stream-connector/03-connector-options.md
+          - Sending: node/guide/stream-connector/04-sending.md
+          - Receiving: node/guide/stream-connector/05-receiving.md
+          - Lifecycle: node/guide/stream-connector/06-lifecycle.md
+          - Error handling: node/guide/stream-connector/07-error-handling.md
           - Browser: node/guide/stream-connector/08-browser.md
           - Unity WebGL: node/guide/stream-connector/09-unity-webgl.md
       - HTTP client:
           - Contents: node/guide/http-client/README.md
-          - 1. Overview: node/guide/http-client/01-overview.md
-          - 2. Getting Started: node/guide/http-client/02-getting-started.md
-          - 3. Client Configuration: node/guide/http-client/03-client-configuration.md
-          - 4. Making Requests: node/guide/http-client/04-making-requests.md
-          - 5. Request Body: node/guide/http-client/05-request-body.md
-          - 6. Handling Responses: node/guide/http-client/06-handling-responses.md
-          - 7. Async: node/guide/http-client/07-async.md
-          - 8. Streaming: node/guide/http-client/08-streaming.md
-          - 9. Authentication And TLS: node/guide/http-client/09-authentication-tls.md
-          - 10. Redirect · Retry · Cookie: node/guide/http-client/10-redirects-retries-cookies.md
-          - 11. Proxy: node/guide/http-client/11-proxy.md
-          - 12. Compression: node/guide/http-client/12-compression.md
-          - 13. Error Handling: node/guide/http-client/13-error-handling.md
+          - Overview: node/guide/http-client/01-overview.md
+          - Getting started: node/guide/http-client/02-getting-started.md
+          - Client configuration: node/guide/http-client/03-client-configuration.md
+          - Making requests: node/guide/http-client/04-making-requests.md
+          - Request body: node/guide/http-client/05-request-body.md
+          - Handling responses: node/guide/http-client/06-handling-responses.md
+          - Async: node/guide/http-client/07-async.md
+          - Streaming: node/guide/http-client/08-streaming.md
+          - Authentication and TLS: node/guide/http-client/09-authentication-tls.md
+          - Redirect, retry, cookie: node/guide/http-client/10-redirects-retries-cookies.md
+          - Proxy: node/guide/http-client/11-proxy.md
+          - Compression: node/guide/http-client/12-compression.md
+          - Error handling: node/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: node/guide/server/13-interface-catalog.md
           - Reference home: node/reference/README.md
-          - 01. Host lifecycle: node/reference/01-host-lifecycle.md
-          - 02. Topology discovery: node/reference/02-topology-discovery.md
-          - 03. Messaging execution: node/reference/03-messaging-execution.md
-          - 04. Spot instance: node/reference/04-spot-instance.md
-          - 05. Actor relocation: node/reference/05-actor-relocation.md
-          - 06. Stream session: node/reference/06-stream-session.md
-          - 07. Location authority: node/reference/07-location-authority.md
-          - 08. Observability diagnostics: node/reference/08-observability-diagnostics.md
-  - Samples:
-      - Bingo: common/sample/bingo/README.md
-      - TicTacToe: common/sample/tictactoe/README.md
-      - SupportChat: common/sample/supportchat/README.md
-      - DeliveryDispatch: common/sample/deliverydispatch/README.md
-      - ShoppingMall: common/sample/event/shoppingmall.md
-      - GameQuest: common/sample/event/gamequest.md
-      - ZoneWorld: common/sample/zoneworld/README.md
-      - Event sourcing: common/sample/event/README.md
+          - Host lifecycle: node/reference/01-host-lifecycle.md
+          - Topology discovery: node/reference/02-topology-discovery.md
+          - Messaging execution: node/reference/03-messaging-execution.md
+          - Spot instance: node/reference/04-spot-instance.md
+          - Actor relocation: node/reference/05-actor-relocation.md
+          - Stream session: node/reference/06-stream-session.md
+          - Location authority: node/reference/07-location-authority.md
+          - Observability diagnostics: node/reference/08-observability-diagnostics.md
   - Spec:
       - Common spec: common/README.md
-      - Sample scenario contract: common/sample/README.md
+      - Sample scenario contract:
+          - Overview: common/sample/README.md
+          - Bingo: common/sample/bingo/README.md
+          - TicTacToe: common/sample/tictactoe/README.md
+          - SupportChat: common/sample/supportchat/README.md
+          - DeliveryDispatch: common/sample/deliverydispatch/README.md
+          - ShoppingMall: common/sample/event/shoppingmall.md
+          - GameQuest: common/sample/event/gamequest.md
+          - ZoneWorld: common/sample/zoneworld/README.md
+          - Event sourcing: common/sample/event/README.md
       - Server spec: common/spec/server/README.md
       - Foundation:
           - Foundation overview: common/spec/server/00-foundation/README.md
@@ -698,7 +568,7 @@ nav:
           - Spot Address Messaging: common/spec/server/03-spot-actor/06-spot-address-messaging.md
           - Stage Wrapper On Spot: common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.md
           - Spot/Actor Routing: common/spec/server/03-spot-actor/08-routing.md
-          - 09. Object Kind And Activation: common/spec/server/03-spot-actor/09-object-lifecycle.md
+          - Object Kind And Activation: common/spec/server/03-spot-actor/09-object-lifecycle.md
           - Spot Timer: common/spec/server/03-spot-actor/10-spot-timer.md
       - Session:
           - Session overview: common/spec/server/04-session/README.md
@@ -733,53 +603,53 @@ nav:
               - Reference home: bindings/reference/c/README.md
           - .NET:
               - Reference home: bindings/reference/dotnet/README.md
-              - 01. Core: bindings/reference/dotnet/01-core.md
-              - 02. Messaging: bindings/reference/dotnet/02-messaging.md
-              - 03. Sockets: bindings/reference/dotnet/03-sockets.md
-              - 04. Eventing: bindings/reference/dotnet/04-eventing.md
-              - 05. Errors: bindings/reference/dotnet/05-errors.md
+              - Core: bindings/reference/dotnet/01-core.md
+              - Messaging: bindings/reference/dotnet/02-messaging.md
+              - Sockets: bindings/reference/dotnet/03-sockets.md
+              - Eventing: bindings/reference/dotnet/04-eventing.md
+              - Errors: bindings/reference/dotnet/05-errors.md
           - C++:
               - Reference home: bindings/reference/cpp/README.md
-              - 01. Core: bindings/reference/cpp/01-core.md
-              - 02. Messaging: bindings/reference/cpp/02-messaging.md
-              - 03. Sockets: bindings/reference/cpp/03-sockets.md
-              - 04. Eventing: bindings/reference/cpp/04-eventing.md
-              - 05. Errors: bindings/reference/cpp/05-errors.md
+              - Core: bindings/reference/cpp/01-core.md
+              - Messaging: bindings/reference/cpp/02-messaging.md
+              - Sockets: bindings/reference/cpp/03-sockets.md
+              - Eventing: bindings/reference/cpp/04-eventing.md
+              - Errors: bindings/reference/cpp/05-errors.md
           - Java:
               - Reference home: bindings/reference/java/README.md
-              - 01. Core: bindings/reference/java/01-core.md
-              - 02. Messaging: bindings/reference/java/02-messaging.md
-              - 03. Sockets: bindings/reference/java/03-sockets.md
-              - 04. Eventing: bindings/reference/java/04-eventing.md
-              - 05. Errors: bindings/reference/java/05-errors.md
+              - Core: bindings/reference/java/01-core.md
+              - Messaging: bindings/reference/java/02-messaging.md
+              - Sockets: bindings/reference/java/03-sockets.md
+              - Eventing: bindings/reference/java/04-eventing.md
+              - Errors: bindings/reference/java/05-errors.md
           - Node.js:
               - Reference home: bindings/reference/node/README.md
-              - 01. Core: bindings/reference/node/01-core.md
-              - 02. Messaging: bindings/reference/node/02-messaging.md
-              - 03. Sockets: bindings/reference/node/03-sockets.md
-              - 04. Eventing: bindings/reference/node/04-eventing.md
-              - 05. Errors: bindings/reference/node/05-errors.md
+              - Core: bindings/reference/node/01-core.md
+              - Messaging: bindings/reference/node/02-messaging.md
+              - Sockets: bindings/reference/node/03-sockets.md
+              - Eventing: bindings/reference/node/04-eventing.md
+              - Errors: bindings/reference/node/05-errors.md
           - Python:
               - Reference home: bindings/reference/python/README.md
-              - 01. Core: bindings/reference/python/01-core.md
-              - 02. Messaging: bindings/reference/python/02-messaging.md
-              - 03. Sockets: bindings/reference/python/03-sockets.md
-              - 04. Eventing: bindings/reference/python/04-eventing.md
-              - 05. Errors: bindings/reference/python/05-errors.md
+              - Core: bindings/reference/python/01-core.md
+              - Messaging: bindings/reference/python/02-messaging.md
+              - Sockets: bindings/reference/python/03-sockets.md
+              - Eventing: bindings/reference/python/04-eventing.md
+              - Errors: bindings/reference/python/05-errors.md
           - Go:
               - Reference home: bindings/reference/go/README.md
-              - 01. Core: bindings/reference/go/01-core.md
-              - 02. Messaging: bindings/reference/go/02-messaging.md
-              - 03. Sockets: bindings/reference/go/03-sockets.md
-              - 04. Eventing: bindings/reference/go/04-eventing.md
-              - 05. Errors: bindings/reference/go/05-errors.md
+              - Core: bindings/reference/go/01-core.md
+              - Messaging: bindings/reference/go/02-messaging.md
+              - Sockets: bindings/reference/go/03-sockets.md
+              - Eventing: bindings/reference/go/04-eventing.md
+              - Errors: bindings/reference/go/05-errors.md
           - Rust:
               - Reference home: bindings/reference/rust/README.md
-              - 01. Core: bindings/reference/rust/01-core.md
-              - 02. Messaging: bindings/reference/rust/02-messaging.md
-              - 03. Sockets: bindings/reference/rust/03-sockets.md
-              - 04. Eventing: bindings/reference/rust/04-eventing.md
-              - 05. Errors: bindings/reference/rust/05-errors.md
+              - Core: bindings/reference/rust/01-core.md
+              - Messaging: bindings/reference/rust/02-messaging.md
+              - Sockets: bindings/reference/rust/03-sockets.md
+              - Eventing: bindings/reference/rust/04-eventing.md
+              - Errors: bindings/reference/rust/05-errors.md
       - Spec:
           - Overview: bindings/spec/README.md
           - Async & Coroutine Policy: bindings/spec/async-coroutine-policy.md
@@ -821,24 +691,24 @@ nav:
               - Shared Scenarios: guide/scenarios.md
       - API Reference:
           - Reference home: reference/README.md
-          - 01. Context: reference/01-context.md
-          - 02. Message: reference/02-message.md
-          - 03. Socket lifecycle: reference/03-socket-lifecycle.md
-          - 04. Socket options and identity: reference/04-socket-options.md
-          - 05. Raw receive: reference/05-raw-receive.md
-          - 06. PAIR: reference/06-pair.md
-          - 07. PUB: reference/07-pub.md
-          - 08. SUB: reference/08-sub.md
-          - 09. XPUB: reference/09-xpub.md
-          - 10. XSUB: reference/10-xsub.md
-          - 11. DEALER: reference/11-dealer.md
-          - 12. ROUTER: reference/12-router.md
-          - 13. STREAM: reference/13-stream.md
-          - 14. Socket monitor: reference/14-socket-monitor.md
-          - 15. Polling and pollers: reference/15-polling.md
-          - 16. Timers: reference/16-timers.md
-          - 17. Utilities: reference/17-utilities.md
-          - 18. Errors, results, and version: reference/18-errors.md
+          - Context: reference/01-context.md
+          - Message: reference/02-message.md
+          - Socket lifecycle: reference/03-socket-lifecycle.md
+          - Socket options and identity: reference/04-socket-options.md
+          - Raw receive: reference/05-raw-receive.md
+          - PAIR: reference/06-pair.md
+          - PUB: reference/07-pub.md
+          - SUB: reference/08-sub.md
+          - XPUB: reference/09-xpub.md
+          - XSUB: reference/10-xsub.md
+          - DEALER: reference/11-dealer.md
+          - ROUTER: reference/12-router.md
+          - STREAM: reference/13-stream.md
+          - Socket monitor: reference/14-socket-monitor.md
+          - Polling and pollers: reference/15-polling.md
+          - Timers: reference/16-timers.md
+          - Utilities: reference/17-utilities.md
+          - Errors, results, and version: reference/18-errors.md
       - Spec:
           - Overview: spec/core/README.md
           - Public Contract Governance: spec/core/00-public-contract-governance.md
