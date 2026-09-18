@@ -72,6 +72,31 @@ function Get-ZlinkSamplePorts {
     }
 }
 
+function Close-ZlinkSampleRunDir {
+    <#
+        Single owner of every C++ sample runner's run-directory lifetime.
+
+        A passing run removes the directory, generated role config and all. A failing
+        run keeps it and prints the path, because the role stdout/stderr logs inside
+        it are the only evidence of why the run failed and a runner that deletes them
+        on the failure path leaves nothing to diagnose.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowNull()][string]$RunDir,
+        [Parameter(Mandatory = $true)][int]$Status,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    if ([string]::IsNullOrEmpty($RunDir) -or -not (Test-Path -LiteralPath $RunDir)) {
+        return
+    }
+    if ($Status -ne 0) {
+        Write-Host "$Label run directory preserved: $RunDir"
+        return
+    }
+    Remove-Item -Recurse -Force -LiteralPath $RunDir -ErrorAction SilentlyContinue
+}
+
 function Invoke-ZlinkSampleDockerCommand {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,

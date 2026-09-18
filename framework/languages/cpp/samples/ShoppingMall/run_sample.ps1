@@ -154,7 +154,7 @@ function Get-ProducedOrder([string]$Name) {
     return ($lines[0] -replace '^.* order=', '')
 }
 
-function Cleanup {
+function Cleanup([int]$Status) {
     foreach ($process in @($Processes)) {
         try {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }
@@ -163,7 +163,7 @@ function Cleanup {
         }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    Close-ZlinkSampleRunDir -RunDir $RunDir -Status $Status -Label "ShoppingMall"
 }
 
 $Succeeded = $false
@@ -257,7 +257,7 @@ try {
     Wait-PrefixExact "repeated external effect" @((Role-Logs "workflow-a") + (Role-Logs "workflow-b")) "shoppingmall-order external-effect-repeated order=" 0
     $Succeeded = $true
 } finally {
-    Cleanup
+    Cleanup $(if ($Succeeded) { 0 } else { 1 })
 }
 
 if (-not $Succeeded) { exit 1 }

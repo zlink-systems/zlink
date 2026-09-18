@@ -88,12 +88,12 @@ function Write-RoleConfig([string]$RoleName) {
     } } }
     $configuration | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $ConfigDir "$RoleName.json") -Encoding utf8
 }
-function Cleanup {
+function Cleanup([int]$Status) {
     foreach ($process in @($Processes)) {
         try { if (-not $process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }; [void]$process.WaitForExit(1000) } catch {}
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    Close-ZlinkSampleRunDir -RunDir $RunDir -Status $Status -Label "SupportChat"
 }
 
 $Succeeded = $false
@@ -136,7 +136,7 @@ try {
     $client.WaitForExit(); Remove-TrackedProcess $client
     if ($client.ExitCode -ne 0) { throw "SupportChat client failed with status $($client.ExitCode)." }
     $Succeeded = $true
-} finally { Cleanup }
+} finally { Cleanup $(if ($Succeeded) { 0 } else { 1 }) }
 
 if (-not $Succeeded) { exit 1 }
 Write-Host "supportchat-placement=completed"

@@ -229,10 +229,10 @@ cleanup() {
       sed -n '1,240p' "$log" >&2
     done
   fi
-  rm -rf "$RUN_DIR"
   if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
     code=1
   fi
+  zlink_sample_close_run_dir "$RUN_DIR" "$code" "TicTacToe"
   return "$code"
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT
