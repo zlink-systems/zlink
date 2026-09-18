@@ -21,6 +21,7 @@ The stream connector public surface changes.
 
 ## Fixes
 
+- ZoneWorld `ZW-G4` could pick a crash target zone that zone-node-2 did not own, so the runner timed out. ZoneNode now submits its status report only after claiming its zones, the client targets only a zone that zone-node-2 owns, and a `wait_log` failure in `run_sample.sh` now fails the run. (#647)
 - The gateway's first actor message right after a relocation was handed to an already-closed temporary queue, reported as delivered, and lost. Closing the temporary queue now also ends the admission-time placeholder (spec 08-routing §3). This is why ZoneWorld on Windows timed out waiting 30 s for `ZoneStateNotify`. (#632)
 - A message arriving after a same-node `JoinSpot` could be dispatched before the Join completion callback. The deferred-Join barrier now stays in front of the Actor across the dispatch re-target (spec 05 §4). (#644)
 - Fixed the ActorClient message-follow test failing intermittently in a full run with `one-way route is not connected`. The send path did not allow `VALIDATING_PREVIOUSLY_READY`, which left a race. (#533)
