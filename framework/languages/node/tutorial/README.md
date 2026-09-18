@@ -18,12 +18,12 @@ quickstart와 같이 npm registry의 패키지만 참조한다. 저장소 소스
 
 | 패키지 | 고정한 버전 | 근거 |
 |---|---|---|
-| `@zlink-systems/framework` | `0.16.0` | `npm view @zlink-systems/framework versions` → `0.10.0`부터 `0.16.0`까지 |
-| `@zlink-systems/framework-locations-redis` | `0.16.0` | 같은 목록. Spot 단계의 Location Store·Relocation Store 구현이다 |
-| `@zlink-systems/nestjs` | `0.16.0` | 같은 목록. `@zlink-systems/framework: '0.16.0'`을 정확히 고정해 의존한다 |
-| `@nestjs/common`·`@nestjs/core` | `10.4.22` | `@zlink-systems/nestjs@0.16.0`이 `^10.4.22`를 의존·peer 의존한다 |
-| `reflect-metadata` | `0.2.2` | `@zlink-systems/nestjs@0.16.0`의 `^0.2.2` 범위를 만족한다 |
-| `@zlink-systems/zlink` | 고정하지 않는다 | `@zlink-systems/framework@0.16.0`이 `1.2.0`을 정확히 고정한다. 전이 해석에 맡긴다 |
+| `@zlink-systems/framework` | `0.18.0` | `npm view @zlink-systems/framework versions` → `0.10.0`부터 `0.18.0`까지 |
+| `@zlink-systems/framework-locations-redis` | `0.18.0` | 같은 목록. Spot 단계의 Location Store·Relocation Store 구현이다 |
+| `@zlink-systems/nestjs` | `0.18.0` | 같은 목록. `@zlink-systems/framework: '0.18.0'`을 정확히 고정해 의존한다 |
+| `@nestjs/common`·`@nestjs/core` | `10.4.22` | `@zlink-systems/nestjs@0.18.0`이 `^10.4.22`를 의존·peer 의존한다 |
+| `reflect-metadata` | `0.2.2` | `@zlink-systems/nestjs@0.18.0`의 `^0.2.2` 범위를 만족한다 |
+| `@zlink-systems/zlink` | 고정하지 않는다 | `@zlink-systems/framework@0.18.0`이 `1.2.0`을 정확히 고정한다. 전이 해석에 맡긴다 |
 
 세 `@zlink-systems` 패키지 버전은 `scripts/local-package/sync-version.py`가
 `framework/languages/node/VERSION`에 맞춰 갱신한다. 손으로 고치지 않는다.

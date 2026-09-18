@@ -44,9 +44,19 @@ ZoneWorld의 언어별 디렉터리에는 Node server와 headless 검증 시나�
 자세한 connector 사용법은
 [TypeScript Stream Connector guide](../../../doc/framework/node/guide/stream-connector/README.ko.md)를 참고한다.
 
+## 전제
+
+- **Node.js 22 이상.** `@zlink-systems/zlink@1.2.0`이 `"engines": { "node": ">=22" }`를 선언한다.
+- **Docker.** 각 sample runner가 Redis container(`redis:7.2-alpine`)를 직접 만들고 끝나면 제거한다.
+  Docker daemon만 미리 떠 있으면 된다.
+- **Chromium이 필요한 샘플은 Playwright를 설치한다.** `ShoppingMall.Ts`를 뺀 나머지 여섯 샘플이
+  Chromium을 쓴다(위 표의 「client 실행 환경」 참고). 샘플 디렉터리에서 `npm run browser:install`을
+  한 번 실행하면 된다.
+
 ## 실행 준비
 
-저장소의 Node framework workspace에서 dependency와 Chromium을 준비한다.
+저장소 안에서 Node framework workspace를 함께 쓰는 경우, workspace root에서 dependency와 Chromium을
+한 번에 준비한다.
 
 ```bash
 cd framework/languages/node
@@ -55,8 +65,21 @@ npm run browser:install
 ```
 
 `package.json`이 참조하는 bindings local package가 없다면 먼저
-[local package 배포 안내](../../../../scripts/local-package/README.ko.md)에 따라 package를 만든다. 각
-sample runner는 자신이 사용하는 Docker Redis container를 만들고 종료할 때 제거한다.
+[local package 배포 안내](../../../../scripts/local-package/README.ko.md)에 따라 package를 만든다.
+
+이 디렉터리를 저장소 없이(`zlink-samples-node.zip`을 받아) 실행하는 경우, 각 샘플이
+`@zlink-systems/*`를 registry에서 그 샘플이 고정한 버전으로 받는다. workspace root가 없으므로
+샘플마다 따로 dependency를 설치한다.
+
+```bash
+cd Bingo.Ts
+npm install
+npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
+cd ..
+```
+
+경로의 `Bingo.Ts` 자리에 나머지 샘플 이름을 차례로 넣어 반복한다. 각 sample runner는 자신이
+사용하는 Docker Redis container를 만들고 종료할 때 제거한다.
 
 ## 실행
 

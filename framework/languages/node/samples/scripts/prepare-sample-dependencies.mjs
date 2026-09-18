@@ -11,7 +11,7 @@ const nodeRoot = path.dirname(samplesRoot);
 export function prepareSampleDependencies(sampleRoot) {
   const manifest = readJson(path.join(sampleRoot, 'package.json'));
   const localPackages = localPackageMap();
-  const repositoryMode = isRepositorySample(sampleRoot, localPackages)
+  const repositoryMode = isRepositorySample(localPackages)
     && process.env.ZLINK_NODE_SAMPLES_PACKAGE_MODE !== '1';
 
   if (!repositoryMode) {
@@ -28,9 +28,15 @@ export function prepareSampleDependencies(sampleRoot) {
   return 'repository';
 }
 
-function isRepositorySample(sampleRoot, localPackages) {
-  if (path.dirname(path.resolve(sampleRoot)) !== samplesRoot) return false;
-  const workspaceManifest = readJson(path.join(nodeRoot, 'package.json'));
+function isRepositorySample(localPackages) {
+  //  The positive, existence-checked marker for "this is the repository", not the
+  //  directory shape (a packed zip keeps the same samples/<Sample> shape as the
+  //  repository, so shape alone cannot tell them apart -- see #655). Outside the
+  //  repository nodeRoot is wherever the zip was unpacked and carries no
+  //  package.json at all, so the read must be guarded.
+  const workspaceManifestPath = path.join(nodeRoot, 'package.json');
+  if (!fs.existsSync(workspaceManifestPath)) return false;
+  const workspaceManifest = readJson(workspaceManifestPath);
   return workspaceManifest.name === '@zlink-systems/node-framework-workspace'
     && localPackages.has('@zlink-systems/framework');
 }
