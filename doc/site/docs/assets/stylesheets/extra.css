@@ -128,17 +128,15 @@
 /* archify 다이어그램을 담는 iframe.
 
    높이를 주지 않으면 브라우저가 기본값 150px을 쓴다. 문서에는 `width:100%`만 적혀
-   있어 그림이 잘린 채 나왔다. 그림마다 비율이 다르므로 화면 높이에 맞춰 잡고
-   위아래로 한계를 둔다. */
+   있어 그림이 잘린 채 나왔다. 그림마다 비율이 달라 높이를 하나로 정할 수 없으므로
+   실제 높이는 `zlink-diagram.js`가 안쪽 문서를 재서 넣는다. 여기 적는 값은 그 전까지의
+   자리와, 재지 못했을 때의 기본값이다. */
 .md-typeset iframe.zlink-diagram {
   display: block;
-  height: clamp(18rem, 46vh, 32rem);
+  height: 20rem;
   margin-bottom: 0.3rem;
   border-radius: 0.2rem;
   background-color: var(--md-code-bg-color);
-}
-@media screen and (max-width: 44.9375em) {
-  .md-typeset iframe.zlink-diagram { height: clamp(14rem, 52vh, 22rem); }
 }
 
 /* 헤더의 언어 선택기. 로케일(한국어/English) 선택기와 같은 `md-select` 마크업이라
