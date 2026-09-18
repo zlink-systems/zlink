@@ -21,6 +21,8 @@ Stream connector의 공개 표면이 바뀝니다.
 
 ## 수정
 
+- relocation 직후 gateway가 보낸 첫 actor message가 이미 닫힌 임시 큐에 넘겨져 배달된 것으로 보고되고 사라지던 것을 고쳤습니다. 임시 큐를 닫는 시점에 admission 자리표시도 함께 끝냅니다(스펙 08-routing §3). Windows에서 ZoneWorld가 `ZoneStateNotify`를 30초 기다리다 실패하던 원인입니다. (#632)
+- 같은 노드 안의 `JoinSpot` 뒤 도착한 message가 Join 완료 콜백보다 먼저 dispatch되던 것을 고쳤습니다. dispatch 대상이 바뀌어도 deferred-Join barrier가 Actor 앞에 남습니다(스펙 05 §4). (#644)
 - ActorClient의 message-follow 시험이 전체 실행에서 이따금 `one-way route is not connected`로 실패하던 것을 고쳤습니다. 송신 경로가 `VALIDATING_PREVIOUSLY_READY`를 허용하지 않아 생긴 경합입니다. (#533)
 - 예약 record의 inline-v1 참조에 CRC32C 구간이 없어 다른 언어의 예약을 모두 거절하던 것을 고쳤습니다. (#559)
 - 수신 큐 배출(`ZLinkStreamDispatchQueue.drainAsync`)이 항목마다 자기를 다시 불러 큐가 길어지면 `StackOverflowError`로 끝나던 것을 고쳤습니다. 이제 반복문으로 배출합니다. (#604)
