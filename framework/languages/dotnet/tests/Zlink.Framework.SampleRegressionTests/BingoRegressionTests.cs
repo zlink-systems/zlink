@@ -16,15 +16,15 @@ public sealed partial class RegressionTests
             Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs")
         };
 
-        var api = File.ReadAllText(hosts[0]);
-        var matchmaking = File.ReadAllText(hosts[1]);
-        var play = File.ReadAllText(hosts[2]);
-        var names = File.ReadAllText(Path.Combine(
+        var api = ReadSource(hosts[0]);
+        var matchmaking = ReadSource(hosts[1]);
+        var play = ReadSource(hosts[2]);
+        var names = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Configuration",
             "SampleNames.cs"));
-        var matchHandler = File.ReadAllText(Path.Combine(
+        var matchHandler = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Api",
@@ -48,8 +48,8 @@ public sealed partial class RegressionTests
     public void Bingo_Registers_Stateful_Actor_Relocation_Adapter()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var host = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"));
-        var adapter = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
+        var host = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"));
+        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
             "Actors", "PlayerActorRelocationAdapter.cs"));
 
         Assert.Contains("PreserveStateWith<PlayerActorRelocationAdapter>()", host,
@@ -63,15 +63,15 @@ public sealed partial class RegressionTests
     public void Bingo_Registers_Application_Signaled_Room_Relocation_And_Join_Dedupe()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var host = File.ReadAllText(Path.Combine(
+        var host = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"));
-        var roomAdapter = File.ReadAllText(Path.Combine(
+        var roomAdapter = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots",
             "BingoRoomSpot", "BingoRoomRelocationAdapter.cs"));
-        var actor = File.ReadAllText(Path.Combine(
+        var actor = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Actors",
             "PlayerActor.cs"));
-        var actorAdapter = File.ReadAllText(Path.Combine(
+        var actorAdapter = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Actors",
             "PlayerActorRelocationAdapter.cs"));
 
@@ -106,7 +106,7 @@ public sealed partial class RegressionTests
     public void Bingo_Client_Gate_Verifies_Submitted_Cards_And_Matching_Draw_State()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var scenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
+        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
 
         Assert.Contains("client1Card.State.Players.Count == 2", scenario, StringComparison.Ordinal);
         Assert.Contains("client1Card.State.Players.All(static player => player.Card.Count == 9)", scenario,
@@ -118,7 +118,7 @@ public sealed partial class RegressionTests
         Assert.Contains("connector.Request(new ObserveBingoEventsReq", scenario, StringComparison.Ordinal);
         Assert.Contains(".Async<ObserveBingoEventsRes>(cancellationToken)", scenario, StringComparison.Ordinal);
         Assert.Contains("WaitFor<BingoGameStartedNotify>()", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("State = new BingoRoomState()", File.ReadAllText(Path.Combine(
+        Assert.DoesNotContain("State = new BingoRoomState()", ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Play",
@@ -134,13 +134,13 @@ public sealed partial class RegressionTests
     public void Bingo_Creates_A_New_Room_Through_Framework_Placement()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var handler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Api", "Handlers",
+        var handler = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "Handlers",
             "MatchBingoHandler.cs"));
-        var matchmaker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Matchmaking",
+        var matchmaker = ReadSource(Path.Combine(sampleRoot, "Server", "Matchmaking",
             "Infrastructure", "ZLink", "BingoMatchmakerHandlers.cs"));
-        var observer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+        var observer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
             "ZLink", "Spots", "EntrySpot", "Handlers", "ObserveBingoEventsHandler.cs"));
-        var mapper = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+        var mapper = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
             "ZLink", "Spots", "BingoRoomSpot", "BingoRoomSettingsPayloadMapper.cs"));
 
         Assert.Contains("RequestToSpot(", handler, StringComparison.Ordinal);
@@ -162,7 +162,7 @@ public sealed partial class RegressionTests
     public void Bingo_Placement_Phase_Is_Gated_By_A_Reversed_Play_Start_Order()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
+        var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
 
         var playBStart = runner.IndexOf(
             "start_server play-b",
@@ -187,11 +187,11 @@ public sealed partial class RegressionTests
     public void Bingo_Player_Records_Are_Loaded_And_Reported_Through_Yielding_Room_Lifecycle()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var contracts = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "bingo_messages.proto"));
-        var room = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
+        var contracts = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "bingo_messages.proto"));
+        var room = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
             "Spots", "BingoRoomSpot", "BingoRoom.cs"));
-        var apiHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
-        var scenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
+        var apiHost = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
+        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
 
         Assert.Contains("message GetPlayerRecordReq", contracts, StringComparison.Ordinal);
         Assert.Contains("message ReportBingoResultReq", contracts, StringComparison.Ordinal);
@@ -207,11 +207,11 @@ public sealed partial class RegressionTests
     public void Bingo_Client_Contract_Uses_Optional_Auth_Fields_And_No_Unlisted_Notifies()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var contracts = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts",
+        var contracts = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts",
             "bingo_messages.proto"));
-        var playerActor = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play",
+        var playerActor = ReadSource(Path.Combine(sampleRoot, "Server", "Play",
             "Infrastructure", "ZLink", "Actors", "PlayerActor.cs"));
-        var entrySpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play",
+        var entrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "Play",
             "Infrastructure", "ZLink", "Spots", "EntrySpot", "BingoEntrySpot.cs"));
 
         Assert.Contains("optional string actor_id = 2", contracts, StringComparison.Ordinal);
@@ -227,9 +227,9 @@ public sealed partial class RegressionTests
     public void Bingo_Runner_Uses_Isolated_Docker_Redis()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.md"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.md"));
 
         Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
         Assert.Contains("BINGO_REDIS_KEY_PREFIX=\"bingo:dotnet:${RUN_ID}:\"", shellRunner, StringComparison.Ordinal);

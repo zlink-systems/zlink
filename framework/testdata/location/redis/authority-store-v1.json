@@ -150,7 +150,7 @@
       "descriptorLifecycleGeneration": "7",
       "capacityDelta": "1",
       "pendingCreationReservationId": "00112233445566778899aabbccddeeff",
-      "pendingCreationReference": "inline-v1:00000000:",
+      "pendingCreationReference": "inline-v1:",
       "pendingCreationSha256": "5a00000000000000000000000000000000000000000000000000000000000000",
       "pendingCreationEncodedSize": "0"
     },

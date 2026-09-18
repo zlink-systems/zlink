@@ -1,9 +1,0 @@
-{
-  "name": "@zlink-systems/e2e-observability-ops-workflow",
-  "version": "0.10.0",
-  "private": true,
-  "main": "dist/Server/ActorNode/main.js",
-  "scripts": {
-    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
-  }
-}

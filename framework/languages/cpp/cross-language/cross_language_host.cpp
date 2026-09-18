@@ -923,8 +923,7 @@ inline void from_json (const nlohmann::json &json, user_spot_discovery_probe_res
 
 /* Spot/Actor instances are built by framework factories that receive only a
  * context, so the event sink and this node's own routing id travel through
- * file-scope pointers -- the same convention the C++ e2e relocation node
- * (e2e/DiscoveryRegistryHa/Server/Relocation/main.cpp) uses. */
+ * file-scope pointers. */
 event_sink_t *g_user_spot_sink = nullptr;
 std::string g_user_spot_node_rid;
 
@@ -1253,11 +1252,13 @@ class user_spot_target_service_t final : public fw::hosted_service_t
     user_spot_target_service_t (std::string mesh_name,
                                 std::string spot_id,
                                 std::string actor_id,
-                                std::string source_node_rid) :
+                                std::string source_node_rid,
+                                int placement_weight) :
         _mesh_name (std::move (mesh_name)),
         _spot_id (std::move (spot_id)),
         _actor_id (std::move (actor_id)),
-        _source_node_rid (std::move (source_node_rid))
+        _source_node_rid (std::move (source_node_rid)),
+        _placement_weight (placement_weight)
     {
     }
 
@@ -1304,8 +1305,10 @@ class user_spot_target_service_t final : public fw::hosted_service_t
 
         /* The fixed target Spot exists now. Exclude this node from the source
          * Actor's Entry-Spot placement so the join is a real cross-node
-         * admission rather than a local self-join. */
-        runtime_options.placement_weight (0);
+         * admission rather than a local self-join. A cell that wants the
+         * opposite -- the create itself travelling to this node -- starts the
+         * target with --placement-weight 100 and the source with 0. */
+        runtime_options.placement_weight (_placement_weight);
         sink.append ("user-spot-created|spot=" + _spot_id + "|nodeRid=" + target_node_rid
                      + "|state=" + state_name);
         write_ready ();
@@ -1402,6 +1405,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
     std::string _spot_id;
     std::string _actor_id;
     std::string _source_node_rid;
+    int _placement_weight = 0;
     std::atomic<bool> _stopping{false};
     std::thread _discovery;
     std::thread _probe;
@@ -1416,11 +1420,13 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     user_spot_source_service_t (std::string mesh_name,
                                 std::string spot_id,
                                 std::string actor_id,
-                                std::string start_file) :
+                                std::string start_file,
+                                int placement_weight) :
         _mesh_name (std::move (mesh_name)),
         _spot_id (std::move (spot_id)),
         _actor_id (std::move (actor_id)),
-        _start_file (std::move (start_file))
+        _start_file (std::move (start_file)),
+        _placement_weight (placement_weight)
     {
     }
 
@@ -1430,10 +1436,12 @@ class user_spot_source_service_t final : public fw::hosted_service_t
         auto &actor_manager = services.get_required<fw::actor_manager_t> ();
         auto &actors = services.get_required<fw::actor_client_t> ();
         auto &mesh_runtime = services.get_required<fw::route_mesh_runtime_t> ();
+        auto &runtime_options = services.get_required<fw::route_mesh_runtime_options_t> ();
         write_ready ();
-        _worker = std::thread ([this, &sink, &actor_manager, &actors, &mesh_runtime] {
-            run (sink, actor_manager, actors, mesh_runtime);
-        });
+        _worker =
+          std::thread ([this, &sink, &actor_manager, &actors, &mesh_runtime, &runtime_options] {
+              run (sink, actor_manager, actors, mesh_runtime, runtime_options);
+          });
         co_return;
     }
 
@@ -1449,7 +1457,8 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     void run (event_sink_t &sink,
               fw::actor_manager_t &actor_manager,
               fw::actor_client_t &actors,
-              fw::route_mesh_runtime_t &mesh_runtime)
+              fw::route_mesh_runtime_t &mesh_runtime,
+              fw::route_mesh_runtime_options_t &runtime_options)
     {
         const auto discovery_deadline =
           std::chrono::steady_clock::now () + std::chrono::seconds (60);
@@ -1480,6 +1489,17 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                 }
                 std::this_thread::sleep_for (std::chrono::milliseconds (25));
             }
+        }
+
+        /* --placement-weight 0 removes this node from the candidate set of its
+         * own Actor placement, so the create must be admitted by a node of
+         * another language.  The descriptor update is written to the Location
+         * Store before the call returns, and the same Store answers the
+         * placement query below, so there is no window to race with. */
+        if (_placement_weight != 100) {
+            runtime_options.placement_weight (_placement_weight);
+            sink.append ("user-spot-source-placement-weight|weight="
+                         + std::to_string (_placement_weight));
         }
 
         auto created = actor_manager.get_or_create (fw::actor_id_t (_actor_id), cross_lang_actor_type)
@@ -1539,6 +1559,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     std::string _spot_id;
     std::string _actor_id;
     std::string _start_file;
+    int _placement_weight = 100;
     std::atomic<bool> _stopping{false};
     std::thread _worker;
 };
@@ -1679,8 +1700,11 @@ int main (int argc, char **argv)
                 auto mesh = options.add_route_mesh (mesh_name);
                 mesh.listen (require ("bind-endpoint"))
                   .set_routing_id (zlink::routing_id_t::from (g_user_spot_node_rid))
-                  /* The target drops to zero once its fixed Spot exists, so
-                   * the source always wins the Actor's initial placement. */
+                  /* Both roles start eligible: this node's own framework Entry
+                   * Spot is itself placed through the Location Store, and a
+                   * node that is ineligible at startup cannot create it.  Each
+                   * role applies its --placement-weight afterwards, once that
+                   * Spot exists. */
                   .set_placement_weight (100);
                 mesh.channel_name (mesh_name).server ();
                 mesh.add_route_request_handler<user_spot_discovery_probe_handler_t,
@@ -1805,15 +1829,17 @@ int main (int argc, char **argv)
         }
         if (mode == "user-spot-target") {
             /* Ready is written by the service itself, after the fixed User
-             * Spot exists and the placement weight has dropped to zero. */
+             * Spot exists and --placement-weight has been applied. */
             app.add_hosted_service (std::make_unique<user_spot_target_service_t> (
               require ("mesh-name"), require ("spot-id"),
-              option ("actor-id", "cross-lang-user-spot-actor"), option ("peer-rid")));
+              option ("actor-id", "cross-lang-user-spot-actor"), option ("peer-rid"),
+              std::stoi (option ("placement-weight", "0"))));
         }
         if (mode == "user-spot-source") {
             app.add_hosted_service (std::make_unique<user_spot_source_service_t> (
               require ("mesh-name"), require ("spot-id"),
-              option ("actor-id", "cross-lang-user-spot-actor"), option ("start-file")));
+              option ("actor-id", "cross-lang-user-spot-actor"), option ("start-file"),
+              std::stoi (option ("placement-weight", "100"))));
         }
         if (mode == "channel-server" || mode == "channel-subscriber"
             || mode == "stream-server" || mode == "spot-route-server") {

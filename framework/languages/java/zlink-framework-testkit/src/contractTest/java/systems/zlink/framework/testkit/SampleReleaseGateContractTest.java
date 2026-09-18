@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 final class SampleReleaseGateContractTest {
     private static final Set<String> REQUIRED_LANGUAGES = Set.of("java", "kotlin");
@@ -101,30 +102,52 @@ final class SampleReleaseGateContractTest {
         "(?s)\\.(?:publish|publishToSpot|publishToFanout)\\s*\\(\\s*"
             + "(?:new\\s+)?(?:[A-Za-z0-9_]+\\.)*"
             + "[A-Z][A-Za-z0-9]*(?:Req|Res|Msg|Notify)\\s*\\(");
+    //  #530: the assertions below pin sample text with '\n' written into the literal, so a
+    //  CRLF checkout used to decide the verdict instead of the content. readSource() owns the
+    //  rule now, and this test drives a real sample file through it in both line endings.
+    @Test
+    void contentAssertionsIgnoreTheCheckoutLineEndings(@TempDir Path tempDir) throws IOException {
+        String needle = "plugins {\n    base\n}";
+        Path original = samplesRoot().resolve("java").resolve("Bingo").resolve("build.gradle.kts");
+        String lfText = readSource(original);
+        assertTrue(lfText.contains(needle),
+            "fixture must be the sample file the release gate pins");
+
+        Path lfCopy = tempDir.resolve("lf.gradle.kts");
+        Path crlfCopy = tempDir.resolve("crlf.gradle.kts");
+        Files.writeString(lfCopy, lfText);
+        Files.writeString(crlfCopy, lfText.replace("\n", "\r\n"));
+
+        assertAll(
+            () -> assertTrue(readSource(lfCopy).contains(needle),
+                "an LF checkout must satisfy the content assertion"),
+            () -> assertTrue(readSource(crlfCopy).contains(needle),
+                "a CRLF checkout must satisfy the same content assertion"),
+            //  Negative control: without the rule the CRLF copy misses the needle, which is the
+            //  failure #530 reported. If this ever passes, readSource() is no longer load-bearing.
+            () -> assertFalse(Files.readString(crlfCopy).contains(needle),
+                "reading a CRLF file unnormalised must still miss the needle"),
+            () -> assertTrue(Files.readString(lfCopy).contains(needle),
+                "reading an LF file unnormalised must find the needle"));
+    }
+
     @Test
     void requiredSamplesExposeExecutableEntryPoints() throws IOException {
         Path samplesRoot = samplesRoot();
 
-        assertTrue(Files.isRegularFile(samplesRoot.resolve("run_samples.sh")),
-            "missing aggregate sample runner");
-        assertTrue(Files.isExecutable(samplesRoot.resolve("run_samples.sh")),
-            "aggregate sample runner must be executable");
-        assertTrue(Files.isRegularFile(samplesRoot.resolve("run_samples.ps1")),
-            "missing aggregate PowerShell sample runner");
-        String aggregateRunner = Files.readString(samplesRoot.resolve("run_samples.sh"));
-        assertFalse(aggregateRunner.contains("export ZLINK_LIBRARY_PATH="),
-            "aggregate sample runner must preserve the caller's native library selection; "
-                + "an unset path uses the installed binding package");
-        assertTrue(aggregateRunner.contains("bash \"$script\""),
-            "aggregate sample runner must invoke non-executable sample scripts through Bash");
-        String aggregatePowerShellRunner = Files.readString(samplesRoot.resolve("run_samples.ps1"));
-        assertFalse(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH"),
-            "aggregate PowerShell sample runner must preserve the caller's native library selection; "
-                + "an unset path uses the installed binding package");
-        String commonRunner = Files.readString(samplesRoot.resolve("runner-common.sh"));
+        //  The per-language batch runners were removed on purpose: a stalled
+        //  sample held the whole language's run and made interference between
+        //  samples look like a defect in any one of them (#405). Samples run one
+        //  at a time through their own run_sample.sh / .ps1, which the rest of
+        //  this test and the two lock tests below still pin.
+        assertFalse(Files.exists(samplesRoot.resolve("run_samples.sh")),
+            "the aggregate sample runner was removed; samples run one at a time");
+        assertFalse(Files.exists(samplesRoot.resolve("run_samples.ps1")),
+            "the aggregate PowerShell sample runner was removed; samples run one at a time");
+        String commonRunner = readSource(samplesRoot.resolve("runner-common.sh"));
         assertTrue(commonRunner.contains("cp -- \"${settings_source}\" \"${settings_target}\""),
             "POSIX sample runner must stage standalone settings under Gradle's standard filename");
-        String commonPowerShellRunner = Files.readString(samplesRoot.resolve("redis-common.ps1"));
+        String commonPowerShellRunner = readSource(samplesRoot.resolve("redis-common.ps1"));
         assertTrue(commonPowerShellRunner.contains(
                 "Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath"),
             "PowerShell sample runner must stage standalone settings under Gradle's standard filename");
@@ -155,13 +178,13 @@ final class SampleReleaseGateContractTest {
                             "run_sample.sh must be executable for " + sampleName);
                     }
                 }
-                String runner = Files.readString(sampleRoot.resolve("run_sample.sh"));
+                String runner = readSource(sampleRoot.resolve("run_sample.sh"));
                 assertTrue(runner.contains("gradle_run")
                         || runner.contains("zlink_sample_gradle_standalone standalone.settings.gradle.kts"),
                     "run_sample.sh must use standalone settings for " + sampleName);
                 Path powerShellRunnerPath = sampleRoot.resolve("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = readSource(powerShellRunnerPath);
                     assertTrue(powerShellRunner.contains(
                             "-SettingsPath \"standalone.settings.gradle.kts\""),
                         "run_sample.ps1 must use standalone settings for " + sampleName);
@@ -178,7 +201,7 @@ final class SampleReleaseGateContractTest {
     @Test
     void redisBackedSamplesCreateOneDedicatedContainerPerRun() throws IOException {
         Path commonRunner = samplesRoot().resolve("runner-common.sh");
-        String helper = Files.readString(commonRunner);
+        String helper = readSource(commonRunner);
         for (String needle : List.of(
                 "docker create",
                 "--tmpfs /data",
@@ -204,7 +227,7 @@ final class SampleReleaseGateContractTest {
                     .filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().equals("run_sample.sh"))
                     .toList()) {
-                String source = Files.readString(runner);
+                String source = readSource(runner);
                 assertFalse(source.contains("docker rm -fv"),
                     runner + " must delegate exact-ID Redis cleanup to the shared helper");
                 for (String line : source.lines().toList()) {
@@ -231,7 +254,7 @@ final class SampleReleaseGateContractTest {
                 "Bash sample helper must define " + poolBoundary);
         }
 
-        String powerShellHelper = Files.readString(samplesRoot().resolve("redis-common.ps1"));
+        String powerShellHelper = readSource(samplesRoot().resolve("redis-common.ps1"));
         for (String needle : List.of(
                 "ProcessStartInfo",
                 "WaitForExit",
@@ -288,7 +311,7 @@ final class SampleReleaseGateContractTest {
         for (String language : REQUIRED_LANGUAGES) {
             for (String sample : bashSamples) {
                 Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
-                String runner = Files.readString(runnerPath);
+                String runner = readSource(runnerPath);
                 String expectedScope = "zlink-redis-" + language + "-sample-"
                     + sample.toLowerCase(Locale.ROOT);
                 assertTrue(runner.contains("zlink_redis_start_scoped_assign"),
@@ -309,7 +332,7 @@ final class SampleReleaseGateContractTest {
 
                 Path powerShellRunnerPath = runnerPath.resolveSibling("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = readSource(powerShellRunnerPath);
                     assertTrue(powerShellRunner.contains("Start-ZlinkSampleRedis")
                             && powerShellRunner.contains("Remove-ZlinkSampleRedis"),
                         language + "/" + sample
@@ -336,7 +359,7 @@ final class SampleReleaseGateContractTest {
         for (String language : REQUIRED_LANGUAGES) {
             for (String sample : samples) {
                 Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
-                String runner = Files.readString(runnerPath);
+                String runner = readSource(runnerPath);
                 boolean usesCommonAllocator = runner.contains("zlink_sample_reserve_ports")
                     || runner.contains("zlink_sample_reserve_endpoints");
 
@@ -354,7 +377,7 @@ final class SampleReleaseGateContractTest {
 
                 Path powerShellRunnerPath = runnerPath.resolveSibling("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = readSource(powerShellRunnerPath);
                     String powerShellLanguage = language.equals("java") ? "Java" : "Kotlin";
                     boolean usesPowerShellCommonAllocator = powerShellRunner.contains(
                             "Get-ZlinkSampleApplicationPorts -Language " + powerShellLanguage)
@@ -380,7 +403,7 @@ final class SampleReleaseGateContractTest {
     @Test
     void bashSampleBuildsUseOneSharedGradleLock() throws IOException {
         Path commonRunner = samplesRoot().resolve("runner-common.sh");
-        String helper = Files.readString(commonRunner);
+        String helper = readSource(commonRunner);
         for (String needle : List.of(
                 "zlink_sample_gradle_locked",
                 "/tmp/zlink-framework-java-kotlin-sample-gradle.lock",
@@ -397,20 +420,16 @@ final class SampleReleaseGateContractTest {
         for (String language : REQUIRED_LANGUAGES) {
             for (String sample : samples) {
                 Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
-                String runner = Files.readString(runnerPath);
+                String runner = readSource(runnerPath);
                 assertFalse(unlockedGradle.matcher(runner).find(),
                     language + "/" + sample + " must use the shared Gradle flock wrapper");
             }
         }
-
-        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.sh"));
-        assertFalse(unlockedGradle.matcher(aggregateRunner).find(),
-            "aggregate Bash sample gate must use the shared Gradle flock wrapper");
     }
 
     @Test
     void powerShellSampleBuildsUseOneSharedGradleLock() throws IOException {
-        String helper = Files.readString(samplesRoot().resolve("redis-common.ps1"));
+        String helper = readSource(samplesRoot().resolve("redis-common.ps1"));
         for (String needle : List.of(
                 "Invoke-ZlinkSampleGradleBuild",
                 "zlink-framework-java-kotlin-sample-gradle.lock",
@@ -421,7 +440,7 @@ final class SampleReleaseGateContractTest {
 
         Pattern unlockedDirectBuild = Pattern.compile(
             "(?im)^\\s*&\\s+(?:\\$Gradle|\\./gradlew)"
-                + "(?:[^\\r\\n]*`\\r?\\n)*[^\\r\\n]*"
+                + "(?:[^\\n]*`\\n)*[^\\n]*"
                 + "(?:installDist|frameworkJar|contractTest|fakeBackendTest|:jar)");
         List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
             .distinct()
@@ -433,7 +452,7 @@ final class SampleReleaseGateContractTest {
                 if (!Files.isRegularFile(runnerPath)) {
                     continue;
                 }
-                String runner = Files.readString(runnerPath);
+                String runner = readSource(runnerPath);
                 assertTrue(runner.contains("Invoke-ZlinkSampleGradleBuild"),
                     language + "/" + sample
                         + " PowerShell runner must use the shared Gradle build lock");
@@ -443,11 +462,6 @@ final class SampleReleaseGateContractTest {
             }
         }
 
-        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.ps1"));
-        assertTrue(aggregateRunner.contains("Invoke-ZlinkSampleGradleBuild"),
-            "aggregate PowerShell sample gate must use the shared Gradle build lock");
-        assertFalse(aggregateRunner.contains("Invoke-Checked $Gradle"),
-            "aggregate PowerShell sample gate must not bypass the shared Gradle build lock");
     }
 
     @Test
@@ -563,13 +577,13 @@ final class SampleReleaseGateContractTest {
             assertSourceDoesNotContain(javaSupportChat, ".java", obsoleteName);
             assertSourceDoesNotContain(kotlinSupportChat, ".kt", obsoleteName);
         }
-        String javaSupportContracts = Files.readString(javaSupportChat.resolve(
+        String javaSupportContracts = readSource(javaSupportChat.resolve(
             "Shared/src/main/java/systems/zlink/samples/supportchat/shared/contracts/Messages.java"));
         assertTrue(javaSupportContracts.contains("record SendChatMessageReq(String text)")
                 && javaSupportContracts.contains("record SetTypingMsg(boolean isTyping)")
                 && javaSupportContracts.contains("record CloseConversationReq(String reason)"),
             "Java conversation-scoped payloads must route ConversationId through metadata");
-        String kotlinSupportContracts = Files.readString(kotlinSupportChat.resolve(
+        String kotlinSupportContracts = readSource(kotlinSupportChat.resolve(
             "Shared/src/main/kotlin/systems/zlink/samples/kotlin/supportchat/shared/contracts/Messages.kt"));
         assertTrue(Pattern.compile("(?s)data class SendChatMessageReq\\(\\s*val text: String,?\\s*\\)")
                 .matcher(kotlinSupportContracts).find()
@@ -625,23 +639,11 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
-    void sampleAndE2eWireCallSitesUseDirectionSuffixes() throws IOException {
-        Path javaSpotService = frameworkJavaRoot().resolve("e2e/SpotService");
-        assertSourceContains(javaSpotService.resolve("Client"), ".java",
-            ".request(new Contracts.LeaveActorReq(");
-        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
-            "@ZLinkSpotActorRequest(packetName = \"LeaveActorReq\")");
-        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
-            "new Contracts.LeaveActorRes(");
-        assertSourceDoesNotContain(javaSpotService, ".java",
-            ".send(new Contracts.LeaveActorReq(");
-
+    void sampleWireCallSitesUseDirectionSuffixes() throws IOException {
         Map<Path, List<String>> offenders = new LinkedHashMap<>();
         for (Path root : List.of(
                 samplesRoot().resolve("java"),
-                samplesRoot().resolve("kotlin"),
-                frameworkJavaRoot().resolve("e2e"),
-                frameworkJavaRoot().resolve("e2e-kotlin"))) {
+                samplesRoot().resolve("kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files.filter(Files::isRegularFile)
                     .filter(SampleReleaseGateContractTest::isSampleSource)
@@ -659,7 +661,7 @@ final class SampleReleaseGateContractTest {
     void zoneWorldRunnersRequireReplacementAndLifecycleContinuityEvidence() throws IOException {
         for (String language : List.of("java", "kotlin")) {
             Path sampleRoot = samplesRoot().resolve(language).resolve("ZoneWorld");
-            String script = Files.readString(sampleRoot.resolve("run_sample.sh"));
+            String script = readSource(sampleRoot.resolve("run_sample.sh"));
 
             for (String requiredText : List.of(
                     "run_with_stop ZW-C2 TERM",
@@ -671,6 +673,11 @@ final class SampleReleaseGateContractTest {
                     "checks_all ZW-D1-spots 'zone spot: announcement delivered'",
                     "old=\"$rid2\"; kill_node zone-node-2 TERM",
                     "wait_log_while_running zone-node-replacement topology=ready",
+                    // A ZoneNode never prints its own RID; only the Ops node status report
+                    // carries it (#545). Reading it anywhere else silently yields the empty
+                    // string and ZW-G1/ZW-G2-rid/ZW-G3 then fail on every platform.
+                    "wait_log ops \"node status observed\\. node=$node, rid=zn-\"",
+                    "tail -n +\"$first\" \"$LOG_DIR/ops.log\"",
                     "[[ \"$new\" != \"$old\" ]] && run_client ZW-G3-fresh",
                     "scenario ZW-G3-fresh owner=$new ",
                     "pass ZW-G3",
@@ -681,6 +688,24 @@ final class SampleReleaseGateContractTest {
                 assertTrue(script.contains(requiredText),
                     language + "/ZoneWorld runner must prove continuity marker '" + requiredText + "'");
             }
+
+            String powerShellScript = readSource(sampleRoot.resolve("run_sample.ps1"));
+            assertTrue(powerShellScript.contains("Get-CurrentLogPath \"ops\""),
+                language + "/ZoneWorld PowerShell runner must observe the RID in the Ops report");
+            for (String forbiddenText : List.of(
+                    "sed -nE 's/.*\\brid=(zn-[0-9a-f-]+)\\b.*/\\1/p'",
+                    "routing_id zone-node-replacement")) {
+                assertFalse(script.contains(forbiddenText),
+                    language + "/ZoneWorld runner must not read a ZoneNode's own log for its RID: '"
+                        + forbiddenText + "'");
+            }
+            for (String forbiddenText : List.of(
+                    "'\\brid=(zn-[0-9a-f-]+)\\b'",
+                    "Get-RoutingId \"zone-node-replacement\"")) {
+                assertFalse(powerShellScript.contains(forbiddenText),
+                    language + "/ZoneWorld PowerShell runner must not read a ZoneNode's own log"
+                        + " for its RID: '" + forbiddenText + "'");
+            }
         }
     }
 
@@ -689,8 +714,8 @@ final class SampleReleaseGateContractTest {
         for (String language : REQUIRED_LANGUAGES) {
             for (String sample : List.of("TicTacToe", "Bingo")) {
                 Path sampleRoot = samplesRoot().resolve(language).resolve(sample);
-                String script = Files.readString(sampleRoot.resolve("run_sample.sh"));
-                String powerShellScript = Files.readString(sampleRoot.resolve("run_sample.ps1"));
+                String script = readSource(sampleRoot.resolve("run_sample.sh"));
+                String powerShellScript = readSource(sampleRoot.resolve("run_sample.ps1"));
                 assertFalse(script.matches("(?s).*\\n\\s*gradle\\s+run\\s+--quiet\\s*\\n?.*"),
                     language + "/" + sample + " must start the same role entry points as the .NET sample");
                 assertTrue(script.contains(":Client:run")
@@ -756,9 +781,9 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
-    void kotlinSamplesAndE2eUseAddHandlerReifiedRegistrationOnly() throws IOException {
+    void kotlinSamplesUseAddHandlerReifiedRegistrationOnly() throws IOException {
         Map<Path, List<String>> offenders = new LinkedHashMap<>();
-        for (Path root : List.of(samplesRoot().resolve("kotlin"), frameworkJavaRoot().resolve("e2e-kotlin"))) {
+        for (Path root : List.of(samplesRoot().resolve("kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files
                     .filter(Files::isRegularFile)
@@ -771,7 +796,7 @@ final class SampleReleaseGateContractTest {
         }
 
         assertTrue(offenders.isEmpty(),
-            "Kotlin sample/e2e spot handler registration must use only "
+            "Kotlin sample spot handler registration must use only "
                 + "context.handlers().addHandler<MyHandler>(): " + offenders);
     }
 
@@ -898,7 +923,7 @@ final class SampleReleaseGateContractTest {
             "destroy를 자동으로 실행한다");
 
         for (Path doc : docs) {
-            String content = Files.readString(doc);
+            String content = readSource(doc);
             for (String needle : forbidden) {
                 if (content.contains(needle)) {
                     offenders.add(frameworkJavaRoot().relativize(doc) + ": " + needle);
@@ -906,7 +931,7 @@ final class SampleReleaseGateContractTest {
             }
         }
 
-        String actorExact = Files.readString(frameworkJavaRoot().resolve(
+        String actorExact = readSource(frameworkJavaRoot().resolve(
             "../../doc/framework/common/spec/server/languages/java/interfaces/actors.ko.md"));
         assertTrue(actorExact.contains(
                 "destroy(systems.zlink.framework.actors.ActorRef)"),
@@ -2483,6 +2508,14 @@ final class SampleReleaseGateContractTest {
             sample + " session disconnect must not leave rooms or destroy actors");
     }
 
+    /**
+     * Reads a repository file for content assertions with line breaks normalised to {@code \n},
+     * because this test compares content, not the checkout's line endings.
+     */
+    private static String readSource(Path path) throws IOException {
+        return Files.readString(path).replace("\r\n", "\n");
+    }
+
     private static Path samplesRoot() {
         return frameworkJavaRoot().resolve("samples");
     }
@@ -2549,7 +2582,7 @@ final class SampleReleaseGateContractTest {
         String sample,
         String sourceRoot,
         String relativePath) throws IOException {
-        return Files.readString(samplesRoot()
+        return readSource(samplesRoot()
             .resolve("java")
             .resolve(sample)
             .resolve(sourceRoot)
@@ -2564,7 +2597,7 @@ final class SampleReleaseGateContractTest {
         String sample,
         String sourceRoot,
         String relativePath) throws IOException {
-        return Files.readString(samplesRoot()
+        return readSource(samplesRoot()
             .resolve("kotlin")
             .resolve(sample)
             .resolve(sourceRoot)
@@ -2582,7 +2615,7 @@ final class SampleReleaseGateContractTest {
             .resolve(sample)
             .resolve(sourceRoot)
             .resolve(relativePath);
-        return Files.isRegularFile(file) && Files.readString(file).contains(needle);
+        return Files.isRegularFile(file) && readSource(file).contains(needle);
     }
 
     private static String sampleFile(
@@ -2590,7 +2623,7 @@ final class SampleReleaseGateContractTest {
         String sample,
         String sourceRoot,
         String relativePath) throws IOException {
-        return Files.readString(samplesRoot()
+        return readSource(samplesRoot()
             .resolve(language)
             .resolve(sample)
             .resolve(sourceRoot)
@@ -2717,7 +2750,7 @@ final class SampleReleaseGateContractTest {
 
     private static boolean sourceContains(Path path, String text) {
         try {
-            return Files.readString(path).contains(text);
+            return readSource(path).contains(text);
         } catch (IOException ex) {
             throw new IllegalStateException("failed to read " + path, ex);
         }
@@ -2733,7 +2766,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> forbiddenDirectServerStarts(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return List.of(
                     "ZLinkFramework.start",
                     "ZLinkRegistry.start",
@@ -2748,7 +2781,7 @@ final class SampleReleaseGateContractTest {
 
     private static boolean isNotSpringBootHostFactory(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return !content.contains("@SpringBootApplication")
                 || !content.contains("SpringApplicationBuilder");
         } catch (IOException ex) {
@@ -2758,7 +2791,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> forbiddenLines(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return FORBIDDEN_SAMPLE_PATTERNS.stream()
                 .filter(content::contains)
                 .toList();
@@ -2769,7 +2802,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> forbiddenKotlinHandlerRegistrations(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return FORBIDDEN_KOTLIN_HANDLER_REGISTRATION
                 .matcher(content)
                 .results()
@@ -2782,7 +2815,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> javaManualSpotHandlerRegistrations(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return JAVA_MANUAL_SPOT_HANDLER_REGISTRATION
                 .matcher(content)
                 .results()
@@ -2795,7 +2828,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> kotlinManualSpotHandlerRegistrations(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             return KOTLIN_MANUAL_SPOT_HANDLER_REGISTRATION
                 .matcher(content)
                 .results()
@@ -2808,7 +2841,7 @@ final class SampleReleaseGateContractTest {
 
     private static List<String> wireCallSiteViolations(Path path) {
         try {
-            String content = Files.readString(path);
+            String content = readSource(path);
             List<String> violations = new ArrayList<>();
             for (Pattern pattern : List.of(
                     ONE_WAY_CALL_WITH_REQUEST_SUFFIX,

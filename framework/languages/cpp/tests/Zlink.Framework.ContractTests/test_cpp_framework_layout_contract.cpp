@@ -416,7 +416,7 @@ bool path_contains_segment (const std::filesystem::path &path, const std::string
 bool redesigned_cpp_contract_symbols_do_not_regress (const std::filesystem::path &root)
 {
     bool ok = true;
-    const std::filesystem::path scan_roots[] = {root / "framework", root / "tests", root / "e2e",
+    const std::filesystem::path scan_roots[] = {root / "framework", root / "tests",
                                                 root / "samples"};
     const std::vector<std::string> forbidden = {std::string ("add_actor_") + "packet",
                                                 std::string ("route_request_") + "call_t",
@@ -710,12 +710,12 @@ bool sample_application_code_uses_message_codec (const std::filesystem::path &ro
     return ok;
 }
 
-/* 공통 정책 sample-e2e-configuration-policy.ko.md §2.2, §8: sample과 E2E 애플리케이션 코드가
+/* 공통 정책 sample-e2e-configuration-policy.ko.md §2.2, §8: sample 애플리케이션 코드가
  * 직접 읽을 수 있는 환경 변수는 0개다. 설정은 role별 설정 파일과 typed binding으로만 들어온다. */
-bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::path &root)
+bool sample_code_does_not_read_the_environment (const std::filesystem::path &root)
 {
     bool ok = true;
-    for (const auto *tree : {"samples", "e2e"}) {
+    for (const auto *tree : {"samples"}) {
         const auto tree_root = root / tree;
         if (!std::filesystem::exists (tree_root)) {
             continue;
@@ -747,7 +747,7 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
                        || line.find ("${TICTACTOE_") != std::string::npos)
                       && line.find (":-") != std::string::npos);
                 if (reads_environment) {
-                    std::cerr << "sample/e2e application code must take configuration from its "
+                    std::cerr << "sample application code must take configuration from its "
                                  "config file, not the environment: "
                               << entry.path () << ":" << line_no << "\n";
                     ok = false;
@@ -761,7 +761,7 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
 bool runner_generated_config_files_are_private_and_cleaned (const std::filesystem::path &root)
 {
     bool ok = true;
-    for (const auto *tree : {"samples", "e2e"}) {
+    for (const auto *tree : {"samples"}) {
         const auto tree_root = root / tree;
         for (const auto &entry : layout_recursive_directory_entries (tree_root)) {
             if (!entry.is_regular_file () || entry.path ().extension () != ".sh") {
@@ -789,8 +789,7 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
 bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::path &root)
 {
     bool ok = true;
-    const std::filesystem::path runner_roots[] = {
-      root / "e2e", root / "samples", root / "cross-language"};
+    const std::filesystem::path runner_roots[] = {root / "samples", root / "cross-language"};
     for (const auto &runner_root : runner_roots) {
         for (const auto &entry : layout_recursive_directory_entries (runner_root)) {
             if (!entry.is_regular_file () || entry.path ().extension () != ".sh")
@@ -809,133 +808,6 @@ bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::pat
                 != std::string::npos) {
                 std::cerr << "C++ runner dependency path bypasses the selected BUILD_DIR: "
                           << entry.path () << '\n';
-                ok = false;
-            }
-        }
-    }
-    return ok;
-}
-
-/* 공통 설정 정책 §2.1과 Config 11 §2: server 역할은 설정 값으로 한 실행 파일을
- * 전환하지 않고 역할별 진입점으로 구성한다. Client 시나리오도 역할 host와 분리한다. */
-bool observability_ops_uses_role_specific_entrypoints (const std::filesystem::path &root)
-{
-    const auto scenario = root / "e2e/ObservabilityOps";
-    bool ok = true;
-    for (const auto &relative : {
-           "Server/Session/main.cpp",
-           "Server/Play/main.cpp",
-           "Server/OrderWorkflow/main.cpp",
-           "Client/main.cpp",
-           "Client/Scenarios/obs_a1_scenario.hpp",
-         }) {
-        if (!std::filesystem::is_regular_file (scenario / relative)) {
-            std::cerr << "ObservabilityOps requires a role-specific entrypoint: "
-                      << (scenario / relative) << '\n';
-            ok = false;
-        }
-    }
-
-    const auto &cmake = layout_file_contents (root / "CMakeLists.txt").text;
-    for (const auto *target : {
-           "zlink_cpp_e2e_observability_ops_session",
-           "zlink_cpp_e2e_observability_ops_play",
-           "zlink_cpp_e2e_observability_ops_order_workflow",
-           "zlink_cpp_e2e_observability_ops_client",
-         }) {
-        if (cmake.find (target) == std::string::npos) {
-            std::cerr << "ObservabilityOps CMake target is missing: " << target << '\n';
-            ok = false;
-        }
-    }
-
-    const auto &runner = layout_file_contents (scenario / "run_e2e.sh").text;
-    if (runner.find ("zlink_cpp_e2e_observability_ops_server") != std::string::npos
-        || runner.find ('\"' + std::string ("role") + '\"') != std::string::npos) {
-        std::cerr
-          << "ObservabilityOps must not select server roles through one binary/config key\n";
-        ok = false;
-    }
-    return ok;
-}
-
-bool spot_actor_transfer_uses_role_specific_entrypoints (const std::filesystem::path &root)
-{
-    const auto scenario = root / "e2e/SpotActorTransfer";
-    bool ok = true;
-    for (const auto &relative : {"Server/ActorNode/main.cpp", "Server/Session/main.cpp"}) {
-        if (!std::filesystem::is_regular_file (scenario / relative)) {
-            std::cerr << "SpotActorTransfer requires a role-specific entrypoint: "
-                      << (scenario / relative) << '\n';
-            ok = false;
-        }
-    }
-    const auto &cmake = layout_file_contents (root / "CMakeLists.txt").text;
-    for (const auto *target : {"zlink_cpp_e2e_spot_actor_transfer_actor_node",
-                               "zlink_cpp_e2e_spot_actor_transfer_session"}) {
-        if (cmake.find (target) == std::string::npos) {
-            std::cerr << "SpotActorTransfer CMake target is missing: " << target << '\n';
-            ok = false;
-        }
-    }
-    const auto &runner = layout_file_contents (scenario / "run_e2e.sh").text;
-    if (runner.find ('\"' + std::string ("role") + '\"') != std::string::npos
-        || runner.find ("zlink_cpp_e2e_spot_actor_transfer_node") != std::string::npos) {
-        std::cerr << "SpotActorTransfer must not select ActorNode/Session through config\n";
-        ok = false;
-    }
-    return ok;
-}
-
-/* 공통 E2E README §2.5: 계약 시나리오 ID 하나는 실행과 단언을 소유하는 client
- * scenario 파일 하나에 대응한다. ID 상수만 둔 placeholder는 이 계약을 충족하지 않는다. */
-bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::path &root)
-{
-    struct config_scenarios_t
-    {
-        const char *directory;
-        std::vector<const char *> ids;
-    };
-    const std::vector<config_scenarios_t> configs{
-      {"ToActorMessaging", {"TA-A1", "TA-A2", "TA-A3", "TA-A4", "TA-B1", "TA-B2", "TA-B3"}},
-      {"DiscoveryRegistryHa",
-       {"SF-A1", "SF-A2", "SF-B1", "SF-B2", "SF-C1", "SF-C2", "SF-D1", "SF-D2", "SF-D3", "SF-E1"}},
-      {"SpotActorTransfer",
-       {"ST-A1", "ST-A2", "ST-A3", "ST-B1", "ST-B2", "ST-B3", "ST-B4", "ST-C1", "ST-C2", "ST-C3",
-        "ST-D1", "ST-D2", "ST-E1", "ST-E2", "ST-F1", "ST-F2", "ST-F3", "ST-F4", "ST-F5", "ST-F6"}},
-      {"ObservabilityOps",
-       {"OBS-A1", "OBS-A2", "OBS-A3", "OBS-A4", "OBS-B1", "OBS-B2", "OBS-B3", "OBS-B4", "OBS-C1",
-        "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5"}},
-    };
-
-    bool ok = true;
-    for (const auto &config : configs) {
-        const auto client_root = root / "e2e" / config.directory / "Client";
-        const auto &main_content = layout_file_contents (client_root / "main.cpp").text;
-        for (const auto *id : config.ids) {
-            std::string key;
-            for (const char value : std::string (id)) {
-                key.push_back (value == '-' ? '_' : static_cast<char> (std::tolower (value)));
-            }
-            const auto filename = key + "_scenario.hpp";
-            const auto symbol = "run_" + key + "_scenario";
-            const auto path = client_root / "Scenarios" / filename;
-            if (!std::filesystem::is_regular_file (path)) {
-                std::cerr << config.directory << " requires client scenario file for " << id << ": "
-                          << path << '\n';
-                ok = false;
-                continue;
-            }
-            const auto &scenario = layout_file_contents (path).text;
-            if (scenario.find (id) == std::string::npos
-                || scenario.find (symbol) == std::string::npos) {
-                std::cerr << path << " must own " << id << " execution through " << symbol << '\n';
-                ok = false;
-            }
-            if (main_content.find (filename) == std::string::npos
-                || main_content.find (symbol) == std::string::npos) {
-                std::cerr << client_root / "main.cpp" << " must dispatch " << id << " through "
-                          << symbol << '\n';
                 ok = false;
             }
         }
@@ -1995,22 +1867,9 @@ int main ()
     ok &= location_store_public_surface_hides_domain_repositories (root);
     ok &= sample_application_code_uses_message_codec (root);
     ok &= sample_server_code_does_not_block_on_task_result (root);
-    ok &= sample_and_e2e_code_does_not_read_the_environment (root);
+    ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
     ok &= cpp_runners_prefer_the_selected_build_directory (root);
-    ok &= observability_ops_uses_role_specific_entrypoints (root);
-    ok &= spot_actor_transfer_uses_role_specific_entrypoints (root);
-    ok &= affected_e2e_clients_own_each_scenario_in_a_file (root);
-    ok &= file_does_not_contain (root / "e2e/run_e2e_all.sh", "exec env E2E_START_ORDER=",
-                                 "the aggregate E2E runner must pass start order as a runner "
-                                 "option, not an environment variable");
-    ok &= file_contains (root / "e2e/RuntimeMonitoring/run_e2e.sh",
-                         "$CLIENT\" --config=\"$CONFIG_DIR/client.json\"");
-    ok &= file_contains (root / "e2e/RuntimeMonitoring/Client/Support/client_options.hpp",
-                         "RuntimeMonitoring client requires --config=<path>");
-    ok &= file_does_not_contain (
-      root / "e2e/RuntimeMonitoring/Client/Support/client_options.hpp",
-      "--log-dir=", "RuntimeMonitoring client file paths and topology must come from typed config");
     ok &= redesigned_cpp_contract_symbols_do_not_regress (root);
     ok &= contract_headers_have_compile_coverage (root, "framework/include", "");
     ok &= contract_headers_have_compile_coverage (root, "connector/core/include", "");

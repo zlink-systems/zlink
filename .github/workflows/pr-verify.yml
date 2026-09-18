@@ -245,6 +245,20 @@ jobs:
             :zlink-framework-spring-boot-starter:test \
             :zlink-framework-core:compileIntegrationTestJava
 
+      # 샘플은 `samples/` composite build라 루트 빌드가 등록만 하고 task를 돌리지 않는다.
+      # 그래서 public API가 바뀌면 샘플 호출부가 컴파일되지 않는 채로 남는다(issue #515:
+      # `ZLinkStreamConnectorOptions`에서 구성 요소가 빠진 것을 클라이언트 5개가 따라가지
+      # 못했다). 여기서는 컴파일만 한다 — 샘플 실행은 framework-gate.sh가 소유한다.
+      - name: Compile the Java and Kotlin samples
+        working-directory: framework/languages/java
+        run: |
+          set -euo pipefail
+          export ZLINK_JAVA_BINDINGS_SOURCE="${GITHUB_WORKSPACE}/bindings/java"
+          export ZLINK_CORE_SOURCE=local
+          export ZLINK_CORE_INCLUDE_DIR="${GITHUB_WORKSPACE}/core/include"
+          export ZLINK_CORE_LIB_DIR="${GITHUB_WORKSPACE}/core/build/lib"
+          ./gradlew --no-daemon --max-workers=2 -p samples classes
+
       - name: Upload test reports on failure
         if: failure()
         uses: actions/upload-artifact@v4

@@ -31,7 +31,8 @@ internal sealed record TestHostOptions(
     string? RedisKeyPrefix,
     string? ActorId,
     string? SpotId,
-    int? PayloadBytes)
+    int? PayloadBytes,
+    int? PlacementWeight)
 {
     public static TestHostOptions Parse(string[] args)
     {
@@ -94,6 +95,7 @@ internal sealed record TestHostOptions(
         public string? ActorId { get; set; }
         public string? SpotId { get; set; }
         public int? PayloadBytes { get; set; }
+        public int? PlacementWeight { get; set; }
 
         public void Apply(string argument, Func<string> readValue)
         {
@@ -191,6 +193,9 @@ internal sealed record TestHostOptions(
                 case "--payload-bytes":
                     PayloadBytes = int.Parse(readValue(), CultureInfo.InvariantCulture);
                     break;
+                case "--placement-weight":
+                    PlacementWeight = int.Parse(readValue(), CultureInfo.InvariantCulture);
+                    break;
             }
         }
 
@@ -227,7 +232,8 @@ internal sealed record TestHostOptions(
                 RedisKeyPrefix,
                 ActorId,
                 SpotId,
-                PayloadBytes);
+                PayloadBytes,
+                PlacementWeight);
         }
     }
 }

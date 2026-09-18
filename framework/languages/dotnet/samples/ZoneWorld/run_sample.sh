@@ -87,7 +87,7 @@ cleanup() {
   fi
   zlink_sample_copy_evidence "$RUN_DIR" "ZoneWorld"
 }
-trap cleanup EXIT
+trap zlink_sample_exit_trap EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run ZoneWorld (it provisions a dedicated Redis container)." >&2
@@ -110,7 +110,7 @@ import socket
 sockets = []
 chosen = set()
 try:
-    while len(sockets) < 9:
+    while len(sockets) < 10:
         port = random.randint(22100, 23999)
         if port in chosen:
             continue
@@ -163,25 +163,23 @@ for index in (1, 2, 3):
         "subscriberOnly": index == 3,
     })
 
-# The replacement reuses the application NodeId but has a different socket endpoint.
-# Framework gives every process lifecycle a new prefix-based RID.
-write("zone-node-crash-replacement", "zoneNode", {
-    "nodeId": "zone-node-2",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
-    "faultTickZone": None,
-    "disableBots": True,
-    "subscriberOnly": False,
-    # 7.5 — crash 교체는 이전 owner의 object를 복원하지 않는다. zone 0개로 ready가 된다.
-    "allowEmptyZoneSet": True,
-})
-
-write("zone-node-replacement", "zoneNode", {
-    "nodeId": "zone-node-2",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
-    "faultTickZone": None,
-    "disableBots": False,
-    "subscriberOnly": False,
-})
+# 다시 띄운 ZoneNode는 zone을 되찾지 않는다(README "ZoneNode를 멈추고 다시 띄우는 시나리오의
+# 고정값", §7.5). Ready owner 장애는 자동 replacement가 아니므로 이전 incarnation이 소유하던
+# zone object는 그대로 남는다. 멈춘 방식이 정상 종료든 급정지든 재기동은 zone 0개로 ready가
+# 되는 replacement 구성 하나만 쓴다. replacement는 같은 NodeId를 유지하되 자기 replacement
+# endpoint로 새 RID를 게시한다 — Framework가 process 실행마다 새 prefix 기반 RID를 준다.
+for index, replacement_port in ((1, ports[9]), (2, ports[3])):
+    write(f"zone-node-{index}-replacement", "zoneNode", {
+        "nodeId": f"zone-node-{index}",
+        "meshEndpoint": f"tcp://127.0.0.1:{replacement_port}",
+        "faultTickZone": None,
+        # A replacement spawns no bots. The bots of a crashed node's zones are Actors its
+        # process owned, and those stay registered to the dead incarnation exactly as the zones
+        # do, so a replacement that tried to spawn them would fail on a dead owner lease.
+        "disableBots": True,
+        "subscriberOnly": False,
+        "allowEmptyZoneSet": True,
+    })
 
 write("ops", "ops", {
     "streamEndpoint": f"ws://127.0.0.1:{ports[4]}",
@@ -264,11 +262,12 @@ start_zone_node() {
   local config_name="${2:-$name}"
   local first_new_line first_new_ops_line first_peer_line
   local local_rid peer_rid
-  # A restarted zone-node-2 uses the replacement endpoint. Reusing the original
-  # config would publish a new RID on the retired socket and would not exercise
-  # the different-endpoint replacement contract.
-  if [[ "$name" == "zone-node-2" && "$config_name" == "$name" ]]; then
-    config_name="zone-node-replacement"
+  # Every restart is a replacement: it keeps the NodeId, publishes a new RID on its own
+  # replacement endpoint, and reaches ready with no zones. A Ready owner failure is not an
+  # automatic replacement, so the zones the dead incarnation owned stay where they are and
+  # reusing the cold-start config would make the new process demand two zones it can never get.
+  if [[ "$config_name" == "$name" ]]; then
+    config_name="$name-replacement"
   fi
   first_new_line="$(next_log_line "$LOG_DIR/$name.log")"
   first_new_ops_line="$(next_log_line "$LOG_DIR/ops.log")"
@@ -639,8 +638,8 @@ if [[ "$G4_CHILD" == "1" ]]; then
   first_replacement_ops_line="$(next_log_line "$LOG_DIR/ops.log")"
   # crash 교체는 이전 owner의 zone을 되찾지 않는다 — ZoneWorld 스펙 7.5는 "새 object를
   # 수용할 수 있게 되는 것"이지 "이전 Ready owner가 소유하던 object의 자동 복원·재생성이
-  # 아니다"라고 정한다. 그래서 zone 0개로 ready가 되는 전용 config를 쓴다.
-  start_zone_node zone-node-2 zone-node-crash-replacement
+  # 아니다"라고 정한다. 재기동 경로가 쓰는 replacement 구성이 바로 그 구성이다.
+  start_zone_node zone-node-2
   crash_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
   if ! is_zone_node_rid "$crash_rid" || [[ "$crash_rid" == "$old_rid" ]]; then
     g_fail ZW-G4 "crash replacement did not publish a new canonical zn-UUIDv4 RID"
@@ -908,11 +907,22 @@ run_client_with_stop ZW-C3 zone-node-2 crash
 
 # ZW-E5: the operator closes a node, the node restarts, and it comes back still closed —
 # the desired state lives in the store, not in a message.
+#
+# The judging connection opens before the stop. It accepts the replacement as ready only after
+# it has seen the old process leave on that same connection, because a node status payload
+# carries no incarnation token. Running the client after the restart leaves it waiting for a
+# transition that already happened.
 if [[ "$SCENARIO" == "all" || "$SCENARIO" == *"ZW-E5"* ]]; then
   run_client ZW-E5-arm || status=1
-  stop_node zone-node-2
-  start_zone_node zone-node-2
-  run_client ZW-E5 || status=1
+  e5_first_line="$(next_log_line "$LOG_DIR/client.log")"
+  run_client ZW-E5 &
+  e5_client_pid=$!
+  if wait_for_log_after client "scenario ZW-E5 restore armed" "$e5_first_line" 600; then
+    stop_node zone-node-2
+    wait_for_log_after client "scenario ZW-E5 replacement waiting" "$e5_first_line" 600 || true
+    start_zone_node zone-node-2
+  fi
+  wait "$e5_client_pid" || status=1
 fi
 
 # ZW-D1: one publish, no node list, and it comes out of *both* nodes' fanout subscribers and
@@ -981,13 +991,20 @@ if scenario_selected ZW-G3 && [[ "$G4_CHILD" == "0" ]]; then
   old_rid="$node2_mesh_rid"
   graceful_stop_node zone-node-2
   first_replacement_ops_line=$(($(wc -l <"$LOG_DIR/ops.log") + 1))
-  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-replacement.json"
-  wait_for_log zone-node-replacement "topology=ready" 600
+  start zone-node-2-replacement "$SERVER_BIN" \
+    --config "$CONFIG_DIR/zone-node-2-replacement.json"
+  wait_for_log zone-node-2-replacement "topology=ready" 600
   wait_for_log_after ops "node status observed. node=zone-node-2, rid=zn-" \
     "$first_replacement_ops_line" 600
   replacement_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
+  # The fresh-object half of the verdict is a mesh placement probe, not a spawn into the fixed
+  # ZW-A1 zone: the crash scenarios above leave every zone registered to a dead incarnation, so
+  # a spawn probe would judge those instead of the replacement (§7.5, same probe as ZW-G4).
+  first_fresh_line="$(next_log_line "$LOG_DIR/client.log")"
   if is_zone_node_rid "$replacement_rid" && [[ "$replacement_rid" != "$old_rid" ]] \
-      && run_client ZW-A1; then
+      && run_client ZW-G3-fresh \
+      && tail -n +"$first_fresh_line" "$LOG_DIR/client.log" \
+        | grep -Fq "scenario ZW-G3-fresh owner=$replacement_rid "; then
     g_pass ZW-G3
   else
     g_fail ZW-G3 "normal replacement did not publish a new RID and accept a fresh object"

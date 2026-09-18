@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 
-declare -Ag ZLINK_SAMPLE_STOPPED_ROLES=()
-declare -Ag ZLINK_SAMPLE_REPORTED_SIGKILLS=()
-
-zlink_sample_in_cleanup() {
-  local function_name=""
-  for function_name in "${FUNCNAME[@]:1}"; do
-    [[ "${function_name}" == "cleanup" ]] && return 0
-  done
-  return 1
-}
+# A role that has to be SIGKILLed to stop is a sample failure, not a teardown
+# detail. `zlink_sample_stop_processes` is the only place that escalates a role from
+# SIGTERM to SIGKILL, so it names the roles it had to force and
+# `zlink_sample_assert_graceful_teardown` turns that into the run's verdict;
+# `sample_runner.ps1`'s `Stop-SampleProcesses` states the same rule for PowerShell.
+declare -ag ZLINK_SAMPLE_FORCED_TEARDOWN_ROLES=()
 
 zlink_sample_role_name_for_pid() {
   local pid="$1"
@@ -30,59 +26,15 @@ zlink_sample_role_name_for_pid() {
   printf 'pid-%s\n' "${pid}"
 }
 
-kill() {
-  local signal="${1:-}"
-  local pid="${2:-}"
-  local in_cleanup=0
-  if zlink_sample_in_cleanup; then in_cleanup=1; fi
-  if [[ "${pid}" =~ ^[0-9]+$ && -n "${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE:-}" ]]; then
-    if [[ "${signal}" == "-TERM" || "${signal}" == "-SIGTERM" || "${signal}" == "-15" ]]; then
-      local role=""
-      local status=0
-      role="$(zlink_sample_role_name_for_pid "${pid}")"
-      builtin kill "$@" || status=$?
-      if (( status == 0 )); then
-        ZLINK_SAMPLE_STOPPED_ROLES["${pid}"]="${role}"
-      fi
-      return "${status}"
-    elif [[ ( "${signal}" == "-9" || "${signal}" == "-KILL" || "${signal}" == "-SIGKILL" ) &&
-            ( -n "${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}" || "${in_cleanup}" == "1" ) ]]; then
-      local role="${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}"
-      local status=0
-      if [[ -z "${role}" ]]; then
-        role="$(zlink_sample_role_name_for_pid "${pid}")"
-      fi
-      builtin kill "$@" || status=$?
-      if (( status == 0 )); then
-        printf '%s\t%s\n' "${pid}" "${role}" >>"${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE}"
-        ZLINK_SAMPLE_REPORTED_SIGKILLS["${pid}"]=1
-      fi
-      return "${status}"
-    fi
-  fi
-  builtin kill "$@"
-}
-
-wait() {
-  local pid="${1:-}"
-  local status=0
-  local in_cleanup=0
-  if zlink_sample_in_cleanup; then in_cleanup=1; fi
-  builtin wait "$@" || status=$?
-  if [[ ( "${status}" == "137" || "${status}" == "-9" ) &&
-        "${pid}" =~ ^[0-9]+$ && -n "${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE:-}" &&
-        ( -n "${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}" || "${in_cleanup}" == "1" ) &&
-        -z "${ZLINK_SAMPLE_REPORTED_SIGKILLS[${pid}]:-}" ]]; then
-    local role="${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-pid-${pid}}"
-    printf '%s\t%s\n' "${pid}" "${role}" >>"${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE}"
-    ZLINK_SAMPLE_REPORTED_SIGKILLS["${pid}"]=1
-  fi
-  return "${status}"
-}
-
 zlink_sample_stop_processes() {
   local pids=("$@")
-  local i pid any_alive
+  local i pid any_alive status
+  local -A roles=()
+  # /proc entries disappear as the roles exit, so name them while they are alive.
+  for pid in "${pids[@]}"; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    roles["${pid}"]="$(zlink_sample_role_name_for_pid "${pid}")"
+  done
   for ((i=${#pids[@]}-1; i>=0; i--)); do
     pid="${pids[$i]}"
     if kill -0 "${pid}" 2>/dev/null; then
@@ -109,8 +61,37 @@ zlink_sample_stop_processes() {
     fi
   done
   for pid in "${pids[@]}"; do
-    wait "${pid}" 2>/dev/null || true
+    status=0
+    wait "${pid}" 2>/dev/null || status=$?
+    if [[ "${status}" == "137" ]]; then
+      ZLINK_SAMPLE_FORCED_TEARDOWN_ROLES+=(
+        "Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).")
+    fi
   done
+}
+
+# The run's verdict on teardown. Bash keeps the shell's exit status across an EXIT
+# trap unless the trap itself exits, so `cleanup` cannot report a forced kill by
+# returning non-zero; the failure has to be an explicit `exit` from here. The
+# diagnostic is printed here rather than where the kill happens so that it survives
+# a sample that redirects its cleanup output.
+zlink_sample_assert_graceful_teardown() {
+  local failure=""
+  (( ${#ZLINK_SAMPLE_FORCED_TEARDOWN_ROLES[@]} > 0 )) || return 0
+  for failure in "${ZLINK_SAMPLE_FORCED_TEARDOWN_ROLES[@]}"; do
+    printf '%s\n' "${failure}" >&2
+  done
+  exit 137
+}
+
+# Every sample installs this as its EXIT trap instead of its own `cleanup`, so the
+# teardown verdict is stated once for all of them. Samples that tear down early and
+# then drop the trap call `zlink_sample_assert_graceful_teardown` themselves.
+zlink_sample_exit_trap() {
+  local status=$?
+  cleanup
+  zlink_sample_assert_graceful_teardown
+  exit "${status}"
 }
 
 remove_owned_pid() {

@@ -16,6 +16,38 @@ ZLINK_CPP_BUILD_DIR=../build-redis-vcpkg ./run_cross_language_smoke.sh
 - Node 피어: `node_peer_host.js` (Node workspace의 배포된 `packages/*/dist` 사용)
 - 실행 로그를 남기려면 `ZLINK_CPP_CROSS_KEEP_RUN_DIR=1`
 
+## 원격 Actor 생성 셀 (`remote-actor-create`, 기본 실행에서 제외)
+
+```bash
+ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create ./run_cross_language_smoke.sh
+# 개별 셀: remote-actor-create-cpp-dotnet / -cpp-node / -cpp-java
+# 대조군:  remote-actor-create-dotnet-java (#559 이후 통과하므로 기본 실행에 있다)
+# 격리 가드만: ZLINK_CPP_CROSS_LANGUAGE_STAGE=quarantine
+```
+
+user-spot-join 12칸 행렬은 원격 Actor 생성 경로를 지나가지 않는다(#550). 대상 host는
+자기 User Spot을 만든 뒤 placement weight를 `0`으로 낮추므로, 요청하는 쪽에는 후보가
+자기 자신만 남는다. 위 셀은 그 한 값만 뒤집는다 — 대상은 `--placement-weight 100`으로
+남고 요청하는 쪽은 `--placement-weight 0`이 되므로, 생성 요청은 반드시 다른 언어 노드가
+받는다. 두 host 모두 자기 framework Entry Spot을 Location Store로 배치하므로, weight는
+구성 시점이 아니라 그 Spot이 만들어진 뒤 runtime에 적용한다.
+
+`#549` 수정으로 .NET 대상은 authority payload 거절 지점을 지나 Actor를 실제로 만들고, 그
+뒤 예약 commit이 fence된다. `#559`가 `requestContentReference` 형식을 정하면서 대조군
+`remote-actor-create-dotnet-java`가 통과해 기본 실행으로 옮겨졌다 — 다른 runtime이 만든
+예약을 Java 대상이 완료할 수 있다는 뜻이다.
+
+나머지 세 셀은 아직 통과하지 않아 기본 실행에 넣지 않는다. 남은 원인은 상대 runtime이나
+예약 record 규칙이 소유한다 — 예약 row의 key 유도와 필드가 정해지지 않은 것(#560), 원격
+생성을 받을 수 있다고 알리는 것이 Actor factory인지 Entry Spot인지(#561), `entrySpotId`
+공개 시점이 둘로 갈리는 것(#562)이다. C++이 요청하는 두 셀(`-cpp-dotnet`, `-cpp-java`)은
+모두 #560을 기다린다.
+
+제외는 가드가 지킨다. 기본 실행은 마지막에 `run_quarantine_guard`를 돌려 알려진 실패 셀을
+모두 실행하고, **그중 하나라도 통과하면 스모크를 실패시킨다.** 통과하기 시작한 셀은 그
+변경에서 기본 실행으로 옮기고 `QUARANTINED_CELLS` 목록에서 지워야 한다. 목록의 각 항목은
+무엇을 기다리는지 issue 번호로 적어 둔다.
+
 ## 검증하는 행
 
 | feature | producer | consumer | 확인 marker |

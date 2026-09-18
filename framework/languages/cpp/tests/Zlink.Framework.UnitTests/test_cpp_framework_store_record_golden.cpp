@@ -39,6 +39,7 @@
 // above, that does pull in zlink::framework (see the CMakeLists.txt target).
 #include "runtime/locations/base64.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/sha256.hpp"
 #include <zlink/locations/redis.hpp>
@@ -361,6 +362,53 @@ int main ()
         checked_base64_payload = true;
     }
     assert (checked_base64_payload);
+
+    // 21-location-runtime.md#2.4: pendingCreation.requestContentReference is
+    // `inline-v1:{base64url}` and no other form is recognized; the node that
+    // runs the creation verifies the decoded bytes against the same record's
+    // requestEncodedSize and requestSha256. Drive the production codec with
+    // the fixture's accepted and rejected vectors so this language
+    // demonstrates rejection as well as acceptance.
+    {
+        const auto &creation = root.at ("creationContentReference");
+        const auto sha_bytes = [] (const std::string &hex) {
+            const auto raw = from_hex (hex);
+            assert (raw.size () == 32);
+            std::array<std::byte, 32> digest{};
+            for (std::size_t index = 0; index < digest.size (); ++index)
+                digest[index] = static_cast<std::byte> (raw[index]);
+            return digest;
+        };
+        bool checked_accepted = false;
+        for (const auto &item : creation.at ("accepted")) {
+            const auto payload = zlink::framework::runtime::decode_inline_creation_content (
+              item.at ("reference").get<std::string> (),
+              sha_bytes (item.at ("requestSha256").get<std::string> ()),
+              item.at ("requestEncodedSize").get<std::uint64_t> ());
+            assert (payload.has_value ());
+            std::vector<std::uint8_t> raw;
+            raw.reserve (payload->size ());
+            for (const auto value : *payload)
+                raw.push_back (std::to_integer<std::uint8_t> (value));
+            assert (to_hex (raw.data (), raw.size ())
+                    == item.at ("payloadHex").get<std::string> ());
+            assert (zlink::framework::runtime::encode_inline_creation_content (*payload)
+                    == item.at ("reference").get<std::string> ());
+            checked_accepted = true;
+        }
+        assert (checked_accepted);
+        bool checked_rejected = false;
+        for (const auto &item : creation.at ("rejected")) {
+            const auto payload = zlink::framework::runtime::decode_inline_creation_content (
+              item.at ("reference").get<std::string> (),
+              sha_bytes (item.at ("requestSha256").get<std::string> ()),
+              item.at ("requestEncodedSize").get<std::uint64_t> ());
+            assert (!payload.has_value ()
+                    && "the fixture's rejected creation references must not decode");
+            checked_rejected = true;
+        }
+        assert (checked_rejected);
+    }
 
     // Production sha256.hpp cross-check, independent of this file's
     // from-scratch sha256() above: every key-derivation vector must also

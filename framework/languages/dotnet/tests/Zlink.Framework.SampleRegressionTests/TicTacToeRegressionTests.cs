@@ -10,9 +10,9 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var sourceFiles = Directory.GetFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
             .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Select(File.ReadAllText)
+            .Select(ReadSource)
             .ToArray();
-        var combined = string.Join(Environment.NewLine, sourceFiles);
+        var combined = string.Join('\n', sourceFiles);
 
         Assert.Equal(2,
             combined.Split("DisableImplicitHandlerAutoRegistration()", StringSplitOptions.None).Length - 1);
@@ -47,21 +47,21 @@ public sealed partial class RegressionTests
     public void TicTacToe_Separates_Manual_Object_Mesh_And_Api_ClientServer_Channel()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var apiServer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Api", "ApiServer.cs"));
-        var playServer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
-        var createGame = File.ReadAllText(Path.Combine(
+        var apiServer = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServer.cs"));
+        var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
+        var createGame = ReadSource(Path.Combine(
             sampleRoot, "Server", "Api", "Handlers", "CreateGameHttpHandler.cs"));
-        var authenticate = File.ReadAllText(Path.Combine(
+        var authenticate = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Sessions", "Handlers",
             "AuthenticatePlaySessionHandler.cs"));
-        var entrySpot = File.ReadAllText(Path.Combine(
+        var entrySpot = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots", "EntrySpot",
             "PlayEntrySpot.cs"));
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var settings = File.ReadAllText(Path.Combine(
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var settings = ReadSource(Path.Combine(
             sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
 
         Assert.Equal(1, apiServer.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
         Assert.Equal(1, playServer.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
@@ -105,7 +105,7 @@ public sealed partial class RegressionTests
         Assert.Contains("Decode<PlayerActorCreateReq>().Player", entrySpot,
             StringComparison.Ordinal);
         Assert.DoesNotContain(".Request(player)", authenticate, StringComparison.Ordinal);
-        var game = File.ReadAllText(Path.Combine(
+        var game = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots", "TicTacToeGameSpot",
             "TicTacToeGame.cs"));
         Assert.Contains("Context.Outbound.Publish(", game, StringComparison.Ordinal);
@@ -162,15 +162,15 @@ public sealed partial class RegressionTests
     public void TicTacToe_Server_Assemblies_Preserve_Role_Boundaries()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var configurationProject = File.ReadAllText(
+        var configurationProject = ReadSource(
             Path.Combine(
                 sampleRoot,
                 "Server",
                 "Configuration",
                 "TicTacToe.Server.Configuration.csproj"));
-        var apiProject = File.ReadAllText(
+        var apiProject = ReadSource(
             Path.Combine(sampleRoot, "Server", "Api", "TicTacToe.Server.Api.csproj"));
-        var playProject = File.ReadAllText(
+        var playProject = ReadSource(
             Path.Combine(sampleRoot, "Server", "Play", "TicTacToe.Server.Play.csproj"));
 
         Assert.Contains("<EnableDefaultCompileItems>false</EnableDefaultCompileItems>",
@@ -197,8 +197,8 @@ public sealed partial class RegressionTests
     public void TicTacToe_Registers_Stateful_Actor_Relocation_Adapter()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var host = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
-        var adapter = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
+        var host = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
+        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
             "Actors", "PlayActorRelocationAdapter.cs"));
 
         Assert.Contains("PreserveStateWith<PlayActorRelocationAdapter>()", host,
@@ -212,10 +212,10 @@ public sealed partial class RegressionTests
     public void TicTacToe_Runner_Uses_Isolated_Docker_Redis()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var settings = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.md"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var settings = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.md"));
 
         Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
         Assert.Contains("TICTACTOE_REDIS_KEY_PREFIX=\"tictactoe:dotnet:${RUN_ID}:\"", shellRunner,
@@ -321,8 +321,8 @@ public sealed partial class RegressionTests
     public void TicTacToe_Runner_Verifies_Client_And_Server_Evidence()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
 
         // Common sample §10.1 names the client self-check evidence and exact
         // server lifecycle counts; generic stream diagnostics are not evidence.
@@ -364,7 +364,7 @@ public sealed partial class RegressionTests
         Assert.Contains("Select-String -Pattern \"dispatch-error\" -List", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("Select-String -Pattern \"dispatch-error\" -Quiet", powershellRunner,
             StringComparison.Ordinal);
-        var leaveHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+        var leaveHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
             "ZLink", "Spots", "TicTacToeGameSpot", "Handlers", "PlayActorLeaveGameHandler.cs"));
         Assert.Contains("LeaveGameMsg", leaveHandler, StringComparison.Ordinal);
         Assert.Contains("tictactoe-lifecycle leave-completed actor=", leaveHandler, StringComparison.Ordinal);
@@ -374,8 +374,8 @@ public sealed partial class RegressionTests
     public void TicTacToe_Framework_LocationStore_Uses_The_Sample_Redis_Prefix()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var settings = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
-        var playServer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
+        var settings = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
+        var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
 
         Assert.Contains("string RedisKeyPrefix", settings, StringComparison.Ordinal);
         Assert.Contains("RequireString(section, nameof(RedisKeyPrefix))", settings, StringComparison.Ordinal);
@@ -387,9 +387,9 @@ public sealed partial class RegressionTests
     public void TicTacToe_ClientScenario_Matches_Common_Flow()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var clientScenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "TicTacToeClientScenario.cs"));
-        var authenticateHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "TicTacToeClientScenario.cs"));
+        var authenticateHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
             "ZLink", "Sessions", "Handlers", "AuthenticatePlaySessionHandler.cs"));
 
         Assert.Contains("record LeaveGameMsg", messages, StringComparison.Ordinal);
@@ -419,9 +419,9 @@ public sealed partial class RegressionTests
     public void TicTacToe_Docs_Match_ScaleOut_RoomRoute_Flow()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.md"));
-        var clientReadme = File.ReadAllText(Path.Combine(sampleRoot, "Client", "README.md"));
-        var samplesReadme = File.ReadAllText(Path.Combine(ResolveSamplesRoot(), "README.md"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.md"));
+        var clientReadme = ReadSource(Path.Combine(sampleRoot, "Client", "README.md"));
+        var samplesReadme = ReadSource(Path.Combine(ResolveSamplesRoot(), "README.md"));
 
         Assert.Contains("two API roles", readme, StringComparison.Ordinal);
         Assert.Contains("two Play roles", readme, StringComparison.Ordinal);
@@ -476,7 +476,7 @@ public sealed partial class RegressionTests
         var dotnetRoot = Directory.GetParent(samplesRoot)!.FullName;
         var sampleRoot = Path.Combine(samplesRoot, "TicTacToe.SessionGateway");
         var solution = Path.Combine(dotnetRoot, "Zlink.Framework.sln");
-        var solutionText = File.ReadAllText(solution);
+        var solutionText = ReadSource(solution);
 
         Assert.False(
             Directory.Exists(sampleRoot),
@@ -521,7 +521,7 @@ public sealed partial class RegressionTests
                 StringComparison.Ordinal))
             .Where(file =>
             {
-                var text = File.ReadAllText(file);
+                var text = ReadSource(file);
                 return manualRegistrationTokens.Any(token => text.Contains(token, StringComparison.Ordinal));
             })
             .ToArray();

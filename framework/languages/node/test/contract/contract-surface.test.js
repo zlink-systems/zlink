@@ -949,7 +949,6 @@ test('old public contract names from the redesign rename table do not re-enter n
   for (const file of readTextFiles([
     path.join(workspaceRoot, 'packages', 'framework'),
     path.join(workspaceRoot, 'test'),
-    path.join(workspaceRoot, 'e2e'),
     path.join(workspaceRoot, 'samples')
   ])) {
     const relativePath = path.relative(workspaceRoot, file).split(path.sep).join('/');

@@ -14,6 +14,9 @@ import {
   type StreamSocket
 } from '@zlink-systems/zlink';
 import {
+  DefaultZLinkActorContext
+} from "../../packages/framework/src/runtime/actors/actor-context";
+import {
   ServiceWireCommand,
   ServiceWireFlag
 } from '../../../../runtime/protocol/generated/node/service_wire_constants';
@@ -7121,3 +7124,30 @@ function missingRenewal() {
     storeNow: new Date()
   };
 }
+
+test('an unbound actor session fails at the send terminal, not while building the call', async () => {
+  // Spec 04-actor-model §8.1: an operation needing a bound session with no
+  // valid binding fails, and the failure surfaces at the call's terminal like
+  // every other call failure. send() used to throw, so a caller could not await
+  // the rejection the way .NET and the JVM do.
+  const context = new DefaultZLinkActorContext(
+    { actorId: 'actor-unbound' } as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined
+  );
+
+  const call = context.boundSession.send({});
+  assert.ok(call, 'building the call must not throw');
+  assert.equal(call.metadata('trace-id', 't1'), call);
+
+  await assert.rejects(
+    () => call.submit(),
+    (error: Error) => /not bound/i.test(error.message)
+  );
+  await assert.rejects(
+    () => context.boundSession.disconnect(),
+    (error: Error) => /not bound/i.test(error.message)
+  );
+});

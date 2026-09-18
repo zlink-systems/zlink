@@ -91,6 +91,7 @@ class BingoClientScenario {
         ensure(join.roomId == client1Match.roomId)
         ensure(join.state.players.map { player -> player.actorId }.toSet() ==
             setOf(client1Auth.actorId, client2Auth.actorId))
+        println("stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify")
         client2NoSelfJoin.await()
         ensure(client1Started.await().payload().state.status == "Running")
         ensure(client2Started.await().payload().state.status == "Running")

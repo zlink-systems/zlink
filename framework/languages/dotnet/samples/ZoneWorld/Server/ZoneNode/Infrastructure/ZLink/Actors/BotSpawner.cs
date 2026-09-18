@@ -31,11 +31,32 @@ internal sealed class ZoneNodeBootstrap(
     ILogger<ZoneNodeBootstrap> logger) : IHostedService
 {
     private const int StartupRetryAttempts = 120;
+    private const int ReplacementReadyAttempts = 8;
     private static readonly TimeSpan StartupRetryDelay = TimeSpan.FromMilliseconds(250);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await RestoreMaintenanceAsync(cancellationToken);
+
+        // A replacement claims no Zone. Only the initial cold start claims: a Ready owner
+        // failure is not an automatic replacement, so the Zones the previous incarnation owned
+        // stay registered to it, and the Zones a graceful stop released belong to the next cold
+        // start rather than to the process coming back. Claiming here would also let a
+        // replacement settle on one Zone — neither the two a cold start needs nor the none a
+        // replacement announces — and that is a state this bootstrap cannot leave.
+        if (settings.AllowEmptyZoneSet)
+        {
+            for (var attempt = 0; attempt < ReplacementReadyAttempts; attempt++)
+                await Task.Delay(StartupRetryDelay, cancellationToken);
+            if (census.ZoneIds.Count != 0)
+                throw new InvalidOperationException(
+                    "A replacement must reach ready with no Zone of its own. "
+                    + $"node={maintenance.OwnNodeId}; zones={string.Join(',', census.ZoneIds)}");
+            logger.LogInformation(
+                "topology=ready node={NodeId} zones=",
+                maintenance.OwnNodeId);
+            return;
+        }
 
         // Every eligible process requests the same four global ZoneIds. Placement capacity,
         // not NodeId, distributes two Spot owners to each process. A process that fills its
@@ -54,10 +75,9 @@ internal sealed class ZoneNodeBootstrap(
                 if (!claimed.Contains(zoneId) && !claimOrder.Contains(zoneId))
                     claimOrder.Add(zoneId);
 
-            // GetOrCreate can initially observe an object that is still registered to the
-            // process the runner just crashed. Re-issuing the canonical create operation is
-            // what lets this replacement claim the Zone after that owner expires; merely
-            // waiting on the local census would never trigger a new placement decision.
+            // Re-issuing the canonical create operation every round is what lets this process
+            // claim a Zone as soon as capacity frees up; merely waiting on the local census
+            // would never trigger a new placement decision.
             foreach (var zoneId in claimOrder)
             {
                 if (await EnsureZoneAsync(zoneId, cancellationToken))
@@ -65,10 +85,6 @@ internal sealed class ZoneNodeBootstrap(
                 if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed)) break;
             }
 
-            if (settings.AllowEmptyZoneSet
-                && census.ZoneIds.Count == 0
-                && attempt >= 8)
-                break;
             if (attempt + 1 >= StartupRetryAttempts)
                 throw new InvalidOperationException(
                     $"Zone Spot capacity did not settle at two local owners. node={maintenance.OwnNodeId}; "
@@ -76,17 +92,6 @@ internal sealed class ZoneNodeBootstrap(
             await Task.Delay(StartupRetryDelay, cancellationToken);
         }
         var zones = census.ZoneIds;
-
-        // A crash replacement must not claim the dead Ready owner's Zone objects. It still
-        // advertises the Actor factory and can accept brand-new objects; the G4 runner probes
-        // that exact boundary through the replacement RID.
-        if (settings.AllowEmptyZoneSet && zones.Count == 0)
-        {
-            logger.LogInformation(
-                "topology=ready node={NodeId} zones=",
-                maintenance.OwnNodeId);
-            return;
-        }
 
         if (!settings.DisableBots)
             foreach (var route in zones.SelectMany(BotPatrolPolicy.RoutesOf))
@@ -107,33 +112,31 @@ internal sealed class ZoneNodeBootstrap(
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
 
+    /// <summary>
+    /// One claim attempt for one Zone. The claim loop in <see cref="StartAsync"/> owns the
+    /// retry budget (§3, `250 ms` × `120`) and the startup failure, so a Zone this attempt
+    /// could not take is simply not claimed: another node may still be starting, or the Zone
+    /// belongs to an owner that is gone and whose object Framework never reassigns (§7.5).
+    /// Retrying here as well would spend the whole budget on the first such Zone and never let
+    /// the claim loop reach its own decision.
+    /// </summary>
     private async Task<bool> EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
     {
-        for (var attempt = 0; ; attempt++)
+        try
         {
-            try
-            {
-                var result = await spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
-                    .InMesh(ZoneWorldNames.MeshName)
-                    .Request(ZLinkMessage.Empty)
-                    .Async(cancellationToken);
-                if (result.State is not ZLinkSpotCreateState.Rejected)
-                {
-                    logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
-                    return result.State is ZLinkSpotCreateState.Created;
-                }
-            }
-            catch (ZLinkFrameworkException exception)
-                when (exception.Kind is (ZLinkFrameworkErrorKind.Unavailable
-                          or ZLinkFrameworkErrorKind.DeadlineExceeded)
-                      && attempt + 1 < StartupRetryAttempts)
-            {
-            }
-
-            if (attempt + 1 >= StartupRetryAttempts)
-                throw new InvalidOperationException(
-                    $"Zone Spot creation did not settle. zone={zoneId}");
-            await Task.Delay(StartupRetryDelay, cancellationToken);
+            var result = await spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
+                .InMesh(ZoneWorldNames.MeshName)
+                .Request(ZLinkMessage.Empty)
+                .Async(cancellationToken);
+            if (result.State is ZLinkSpotCreateState.Rejected) return false;
+            logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
+            return result.State is ZLinkSpotCreateState.Created;
+        }
+        catch (ZLinkFrameworkException exception)
+            when (exception.Kind is ZLinkFrameworkErrorKind.Unavailable
+                      or ZLinkFrameworkErrorKind.DeadlineExceeded)
+        {
+            return false;
         }
     }
 

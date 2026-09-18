@@ -645,6 +645,45 @@ public sealed class RouteMeshRuntimeServiceTests
         Assert.True(recovered.Status.Placement.IsAvailable);
     }
 
+    [Fact]
+    public async Task Runtime_Placement_Weight_Change_Publishes_Without_A_Poll_Tick()
+    {
+        // Peers place new objects from the published descriptor, so a runtime
+        // placement weight change must reach the Location Store when it is
+        // made, not on the next polling tick. Polling is 30 s here: only the
+        // mutation waking the publishing loop can satisfy the wait below.
+        await using var fixture = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            pollingInterval: TimeSpan.FromSeconds(30));
+        Assert.Equal(100, await fixture.ReadPublishedPlacementWeightAsync());
+
+        fixture.RuntimeOptions.Mesh(RuntimeFixture.MeshName).PlacementWeight = 0;
+
+        Assert.True(
+            await fixture.WaitForPublishedPlacementWeightAsync(
+                0,
+                TimeSpan.FromSeconds(5)),
+            "The placement weight change did not reach the Location Store "
+            + "before the next polling tick.");
+    }
+
+    [Fact]
+    public async Task Unmutated_Placement_Weight_Is_Never_Reported_As_Published()
+    {
+        // Negative control for the test above: with no mutation the same wait
+        // must report failure, so a pass there can only come from the
+        // published descriptor actually changing.
+        await using var fixture = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            pollingInterval: TimeSpan.FromSeconds(30));
+
+        Assert.False(
+            await fixture.WaitForPublishedPlacementWeightAsync(
+                0,
+                TimeSpan.FromSeconds(1)));
+        Assert.Equal(100, await fixture.ReadPublishedPlacementWeightAsync());
+    }
+
     private static async Task<ZLinkRouteMeshStatus> WaitForStatusAsync(
         IZLinkRouteMeshRuntime runtime,
         Func<ZLinkRouteMeshStatus, bool> predicate,
@@ -736,13 +775,16 @@ public sealed class RouteMeshRuntimeServiceTests
             int placementWeight = 100,
             bool registerServerChannel = false,
             int channelWeight = 100,
-            RoutingId? routingId = null)
+            RoutingId? routingId = null,
+            TimeSpan? pollingInterval = null)
         {
             listenEndpoint ??= $"inproc://route-runtime-{Guid.NewGuid():N}";
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
                 options.UseTestLocationStore();
+                if (pollingInterval is { } interval)
+                    options.ConfigureLocations().PollingInterval = interval;
                 var node = options.AddRouteMesh(MeshName)
                     .Listen(listenEndpoint)
                     .SetPlacementWeight(placementWeight);
@@ -858,6 +900,32 @@ public sealed class RouteMeshRuntimeServiceTests
             var result = await _locations.RemoveDescriptorAsync(
                 new ZLinkMeshNodeDescriptorKey(MeshName, rid));
             Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
+        }
+
+        /// <summary>
+        /// Placement weight of the local descriptor as a peer reading the
+        /// Location Store sees it.
+        /// </summary>
+        internal async Task<int> ReadPublishedPlacementWeightAsync()
+        {
+            var page = await _locations.Store.ListMeshNodesAsync(MeshName, default);
+            return page.Items
+                .Single(row => row.Rid.Equals(LocalNodeRid))
+                .PlacementWeight;
+        }
+
+        internal async Task<bool> WaitForPublishedPlacementWeightAsync(
+            int weight,
+            TimeSpan deadline)
+        {
+            var started = Stopwatch.GetTimestamp();
+            do
+            {
+                if (await ReadPublishedPlacementWeightAsync() == weight)
+                    return true;
+                await Task.Delay(10);
+            } while (Stopwatch.GetElapsedTime(started) < deadline);
+            return await ReadPublishedPlacementWeightAsync() == weight;
         }
 
         internal void ReportLocationFailure() =>

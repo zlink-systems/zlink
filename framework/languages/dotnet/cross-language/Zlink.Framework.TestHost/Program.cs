@@ -421,7 +421,8 @@ internal sealed class UserSpotTargetHostedService(
     string spotId,
     string actorId,
     string meshName,
-    string sourceNodeRid) : IHostedService
+    string sourceNodeRid,
+    int placementWeight) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -434,8 +435,10 @@ internal sealed class UserSpotTargetHostedService(
         var targetNodeRid = created.Spot.NodeRid.ToString();
         // The fixed target Spot now exists locally. Exclude this node from the
         // source Actor's subsequent Entry-Spot placement; this mode
-        // intentionally registers no Entry Spot.
-        runtimeOptions.Mesh(meshName).PlacementWeight = 0;
+        // intentionally registers no Entry Spot. A cell that wants the create
+        // itself to travel here passes --placement-weight 100 instead, and
+        // gives the source --placement-weight 0.
+        runtimeOptions.Mesh(meshName).PlacementWeight = placementWeight;
         sink.Append(
             $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}");
         _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
@@ -520,7 +523,9 @@ internal sealed class UserSpotSourceHostedService(
     TestHostEventSink sink,
     string actorId,
     string spotId,
-    string meshName) : IHostedService
+    string meshName,
+    IZLinkRouteMeshRuntimeOptions runtimeOptions,
+    int placementWeight) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -538,6 +543,16 @@ internal sealed class UserSpotSourceHostedService(
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
         }
         sink.Append("user-spot-source-peer-ready|ready=true");
+
+        // --placement-weight 0 takes this node out of the candidate set of its
+        // own Actor placement, so the create must be admitted by the foreign
+        // node. The descriptor update reaches the Location Store before the
+        // placement query below reads it back.
+        if (placementWeight != 100)
+        {
+            runtimeOptions.Mesh(meshName).PlacementWeight = placementWeight;
+            sink.Append($"user-spot-source-placement-weight|weight={placementWeight}");
+        }
 
         var created = await actors
             .GetOrCreate(actorId, RelocationEntrySpot.ActorType)

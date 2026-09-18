@@ -111,13 +111,30 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal([1, 2, 3, 4], decoded.Payload.ToArray());
 
         var reference = ZLinkInlineCreationIntentCodec.Encode(encoded);
+        var digest = System.Security.Cryptography.SHA256.HashData(encoded);
         Assert.StartsWith("inline-v1:", reference, StringComparison.Ordinal);
+        Assert.DoesNotContain(":", reference["inline-v1:".Length..], StringComparison.Ordinal);
         Assert.True(ZLinkInlineCreationIntentCodec.TryDecode(
             reference,
+            digest,
+            encoded.Length,
             out var restored));
         Assert.Equal(encoded, restored);
+        // Flipping the first encoded character always changes the first
+        // decoded byte, so the record's SHA-256 is what refuses it -- no
+        // checksum segment is involved.
+        var body = reference["inline-v1:".Length..];
         Assert.False(ZLinkInlineCreationIntentCodec.TryDecode(
-            reference[..^1] + (reference[^1] == 'A' ? "B" : "A"),
+            "inline-v1:" + (body[0] == 'A' ? 'B' : 'A') + body[1..],
+            digest,
+            encoded.Length,
+            out _));
+        // 21-location-runtime.md#2.4: the checksum-bearing form is not
+        // recognized even when the record's own integrity values match.
+        Assert.False(ZLinkInlineCreationIntentCodec.TryDecode(
+            "inline-v1:00000000:" + reference["inline-v1:".Length..],
+            digest,
+            encoded.Length,
             out _));
     }
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.16.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.17.0 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
@@ -44,8 +44,7 @@ option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
 
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
-option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/run_samples.sh enables it)" OFF)
-option(ZLINK_FRAMEWORK_CPP_BUILD_E2E "Build C++ framework scenario e2e apps (opt-in; the e2e run scripts enable it)" OFF)
+option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
 option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
 option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT "Build Stream Connector e2e client helpers" ON)
@@ -430,31 +429,58 @@ if(OpenSSL_FOUND)
 else()
   set(ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY "")
 endif()
-find_program(ZLINK_OPENSSL_EXECUTABLE openssl)
-if(OpenSSL_FOUND AND ZLINK_OPENSSL_EXECUTABLE)
-  set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
-  set(ZLINK_HTTP_CLIENT_TEST_CERT
-    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
-  set(ZLINK_HTTP_CLIENT_TEST_KEY
-    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
-  file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
-  execute_process(
-    COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
-      req -x509 -newkey rsa:2048 -nodes -days 7
-      -subj /CN=localhost
-      -addext subjectAltName=DNS:localhost
-      -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
-      -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
-    RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
-    OUTPUT_QUIET
-    ERROR_QUIET)
-  if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0)
-    message(WARNING
-      "Could not generate HTTP client HTTPS test certificate; HTTPS e2e test will be disabled.")
-  endif()
-  if(EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}" AND
-      EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
+# The HTTPS test certificate is only needed when the http-client-https contract test is
+# actually going to be built (see test_cpp_http_client below, which is registered only under
+# ZLINK_FRAMEWORK_CPP_BUILD_TESTS). Tying this block to the same condition means the rule reads
+# as one sentence: if the HTTPS contract tests are being built, the openssl CLI and a generated
+# certificate are required. A library consumer configuring with
+# ZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF must not need the openssl CLI at all.
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  find_program(ZLINK_OPENSSL_EXECUTABLE openssl)
+  # The http-client-https ctest label is unconditionally required by
+  # verify_ctest_label_contract.cmake whenever tests are built, so once the OpenSSL library is
+  # available (HTTPS client support is being compiled in), the openssl CLI and a successfully
+  # generated test certificate are hard requirements, not best-effort conveniences. Failing here
+  # with the real cause (missing tool, or the tool failed) is more legible than warning and
+  # continuing: continuing left the label contract test to fail several steps later with "label
+  # http-client-https selects no tests", which reads like a label-taxonomy bug rather than a
+  # missing local tool.
+  if(OpenSSL_FOUND)
+    if(NOT ZLINK_OPENSSL_EXECUTABLE)
+      message(FATAL_ERROR
+        "OpenSSL library was found (HTTPS client support is being built), but the 'openssl' "
+        "command-line executable is not on PATH. It is required to generate the test "
+        "certificate used by the http-client-https contract tests. Install the OpenSSL CLI "
+        "(it ships with most OpenSSL distributions, including vcpkg's openssl port) and make "
+        "sure it is on PATH, then re-run configure.")
+    endif()
+    set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
+    set(ZLINK_HTTP_CLIENT_TEST_CERT
+      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
+    set(ZLINK_HTTP_CLIENT_TEST_KEY
+      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
+    file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
+    execute_process(
+      COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
+        req -x509 -newkey rsa:2048 -nodes -days 7
+        -subj /CN=localhost
+        -addext subjectAltName=DNS:localhost
+        -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
+        -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+      RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
+      OUTPUT_VARIABLE ZLINK_HTTP_CLIENT_CERT_OUTPUT
+      ERROR_VARIABLE ZLINK_HTTP_CLIENT_CERT_ERROR)
+    if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0
+        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
+      message(FATAL_ERROR
+        "Failed to generate the HTTP client HTTPS test certificate with "
+        "'${ZLINK_OPENSSL_EXECUTABLE}' (exit code ${ZLINK_HTTP_CLIENT_CERT_RESULT}). "
+        "The http-client-https contract tests require this certificate.\n"
+        "openssl stdout:\n${ZLINK_HTTP_CLIENT_CERT_OUTPUT}\n"
+        "openssl stderr:\n${ZLINK_HTTP_CLIENT_CERT_ERROR}")
+    endif()
     set(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL ON)
   endif()
 endif()
@@ -1600,12 +1626,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_target_contract
     LABELS "framework-contract"
     TIMEOUT 60)
-  zlink_framework_cpp_add_test(
-    NAME test_cpp_framework_common_e2e_inventory
-    COMMAND bash
-      ${CMAKE_CURRENT_LIST_DIR}/e2e/verify_common_inventory.sh
-    LABELS "framework-contract;framework-e2e"
-    TIMEOUT 30)
   set(ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
     -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
     -D ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR})
@@ -2275,486 +2295,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_package)
-endif()
-
-if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
-  add_executable(zlink_cpp_e2e_store_failure_provider
-    e2e/DiscoveryRegistryHa/Server/Provider/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_store_failure_provider PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_store_failure_provider PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_store_failure_consumer
-    e2e/DiscoveryRegistryHa/Server/Consumer/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_store_failure_consumer PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_store_failure_consumer PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_store_failure_client
-    e2e/DiscoveryRegistryHa/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_store_failure_client PRIVATE
-    zlink::http_client)
-  target_include_directories(zlink_cpp_e2e_store_failure_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  # Track F (SF-F2/F3/F7/F11): a separate relocation-capable participant for
-  # DiscoveryRegistryHa. Tracks A-E (provider/consumer above) never place a
-  # stateful Actor/Spot, so this role exists purely for Track F and does not
-  # change anything Tracks A-E build or run.
-  add_executable(zlink_cpp_e2e_store_failure_relocation_node
-    e2e/DiscoveryRegistryHa/Server/Relocation/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_store_failure_relocation_node PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_store_failure_relocation_node PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_provider
-    e2e/RegistryMessaging/Server/Provider/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_provider PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_provider PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_workflow
-    e2e/RegistryMessaging/Server/Workflow/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_workflow PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_workflow PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_consumer
-    e2e/RegistryMessaging/Server/Consumer/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_consumer PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_consumer PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_object_client
-    e2e/RegistryMessaging/Server/ObjectClient/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_object_client PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_object_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_global_object_node
-    e2e/RegistryMessaging/Server/GlobalObjectNode/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registry_messaging_client
-    e2e/RegistryMessaging/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registry_messaging_client PRIVATE
-    zlink::framework
-    zlink::http_client
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_registry_messaging_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_spot_service_play
-    e2e/SpotService/Server/Play/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_play PRIVATE
-    zlink::framework_locations_redis
-    zlink::http_client)
-
-  add_executable(zlink_cpp_e2e_spot_service_session
-    e2e/SpotService/Server/Session/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_session PRIVATE
-    zlink::framework_locations_redis
-    zlink::http_client)
-
-  add_executable(zlink_cpp_e2e_spot_service_gateway
-    e2e/SpotService/Server/Gateway/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_gateway PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-
-  add_executable(zlink_cpp_e2e_spot_service_multinode
-    e2e/SpotService/Server/MultiNode/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_multinode PRIVATE
-    zlink::framework_locations_redis
-    zlink::http_client)
-
-  add_executable(zlink_cpp_e2e_spot_service_multinode_requester
-    e2e/SpotService/Server/MultiNodeRequester/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_multinode_requester PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-
-  add_executable(zlink_cpp_e2e_spot_service_client
-    e2e/SpotService/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_service_client PRIVATE
-    zlink::http_client
-    zlink::stream_e2e_client)
-
-  add_executable(zlink_cpp_e2e_automatic_turn_dispatch_delay
-    e2e/AutomaticTurnDispatch/Server/Delay/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_delay PRIVATE
-    zlink::framework)
-  target_include_directories(zlink_cpp_e2e_automatic_turn_dispatch_delay PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_automatic_turn_dispatch_external_api
-    e2e/AutomaticTurnDispatch/Server/ExternalApi/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_external_api PRIVATE
-    zlink::framework)
-  zlink_framework_cpp_add_boost_headers(
-    zlink_cpp_e2e_automatic_turn_dispatch_external_api)
-
-  add_executable(zlink_cpp_e2e_automatic_turn_dispatch_play
-    e2e/AutomaticTurnDispatch/Server/Play/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_play PRIVATE
-    zlink::framework_locations_redis
-    zlink::http_client)
-  target_include_directories(zlink_cpp_e2e_automatic_turn_dispatch_play PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_automatic_turn_dispatch_session
-    e2e/AutomaticTurnDispatch/Server/Session/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_session PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_automatic_turn_dispatch_session PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_automatic_turn_dispatch_client
-    e2e/AutomaticTurnDispatch/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_client PRIVATE
-    zlink::framework
-    zlink::stream_e2e_client)
-  target_include_directories(zlink_cpp_e2e_automatic_turn_dispatch_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_library(zlink_cpp_e2e_observability_ops_host STATIC
-    e2e/ObservabilityOps/Server/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_observability_ops_host PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_observability_ops_host PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_observability_ops_session
-    e2e/ObservabilityOps/Server/Session/main.cpp)
-  add_executable(zlink_cpp_e2e_observability_ops_play
-    e2e/ObservabilityOps/Server/Play/main.cpp)
-  add_executable(zlink_cpp_e2e_observability_ops_order_workflow
-    e2e/ObservabilityOps/Server/OrderWorkflow/main.cpp)
-  foreach(observability_target IN ITEMS
-      zlink_cpp_e2e_observability_ops_session
-      zlink_cpp_e2e_observability_ops_play
-      zlink_cpp_e2e_observability_ops_order_workflow)
-    target_link_libraries(${observability_target} PRIVATE
-      zlink_cpp_e2e_observability_ops_host
-      zlink::framework_locations_redis)
-    target_include_directories(${observability_target} PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  endforeach()
-
-  add_library(zlink_cpp_e2e_observability_ops_client_runner STATIC
-    e2e/ObservabilityOps/Trigger/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_observability_ops_client_runner PRIVATE
-    zlink::framework
-    zlink::stream_e2e_client)
-  target_include_directories(zlink_cpp_e2e_observability_ops_client_runner PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_observability_ops_client
-    e2e/ObservabilityOps/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_observability_ops_client PRIVATE
-    zlink_cpp_e2e_observability_ops_client_runner
-    zlink::framework
-    zlink::stream_e2e_client)
-  target_include_directories(zlink_cpp_e2e_observability_ops_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_pubsub_publisher
-    e2e/PubSub/Server/Publisher/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_pubsub_publisher PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_pubsub_publisher PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_pubsub_subscriber
-    e2e/PubSub/Server/Subscriber/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_pubsub_subscriber PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_pubsub_subscriber PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_pubsub_client
-    e2e/PubSub/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_pubsub_client PRIVATE
-    zlink::framework)
-  target_include_directories(zlink_cpp_e2e_pubsub_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_zlink_protobuf_schema(zlink_cpp_e2e_registration_codec_proto
-    ${ZLINK_FRAMEWORK_CPP_DIR}/e2e/RegistrationCodec/Shared/registration_codec.proto)
-  add_executable(zlink_cpp_e2e_registration_codec_server
-    e2e/RegistrationCodec/Server/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registration_codec_server PRIVATE
-    zlink::framework
-    zlink_cpp_e2e_registration_codec_proto
-    zlink::framework_codec_protobuf
-    zlink::framework_codec_messagepack)
-  target_include_directories(zlink_cpp_e2e_registration_codec_server PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registration_codec_invalid_duplicate
-    e2e/RegistrationCodec/Server/InvalidDuplicate/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registration_codec_invalid_duplicate PRIVATE
-    zlink::framework
-    zlink_cpp_e2e_registration_codec_proto
-    zlink::framework_codec_protobuf
-    zlink::framework_codec_messagepack)
-  target_include_directories(zlink_cpp_e2e_registration_codec_invalid_duplicate PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registration_codec_json_only_peer
-    e2e/RegistrationCodec/Server/JsonOnlyPeer/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registration_codec_json_only_peer PRIVATE
-    zlink::framework
-    zlink_cpp_e2e_registration_codec_proto
-    zlink::framework_codec_protobuf
-    zlink::framework_codec_messagepack)
-  target_include_directories(zlink_cpp_e2e_registration_codec_json_only_peer PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registration_codec_codec_requester
-    e2e/RegistrationCodec/Server/CodecRequester/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registration_codec_codec_requester PRIVATE
-    zlink::framework
-    zlink_cpp_e2e_registration_codec_proto
-    zlink::framework_codec_protobuf
-    zlink::framework_codec_messagepack)
-  target_include_directories(zlink_cpp_e2e_registration_codec_codec_requester PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_registration_codec_client
-    e2e/RegistrationCodec/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_registration_codec_client PRIVATE
-    zlink::http_client)
-  target_include_directories(zlink_cpp_e2e_registration_codec_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_library(zlink_cpp_e2e_spot_actor_transfer_host STATIC
-    e2e/SpotActorTransfer/Server/ActorNode/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_actor_transfer_host PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_spot_actor_transfer_host PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_spot_actor_transfer_actor_node
-    e2e/SpotActorTransfer/Server/ActorNode/entrypoint.cpp)
-  add_executable(zlink_cpp_e2e_spot_actor_transfer_session
-    e2e/SpotActorTransfer/Server/Session/main.cpp)
-  foreach(transfer_target IN ITEMS
-      zlink_cpp_e2e_spot_actor_transfer_actor_node
-      zlink_cpp_e2e_spot_actor_transfer_session)
-    target_link_libraries(${transfer_target} PRIVATE
-      zlink_cpp_e2e_spot_actor_transfer_host
-      zlink::framework
-      zlink::framework_locations_redis)
-    target_include_directories(${transfer_target} PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  endforeach()
-
-  add_executable(zlink_cpp_e2e_spot_actor_transfer_client
-    e2e/SpotActorTransfer/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_spot_actor_transfer_client PRIVATE
-    zlink::http_client
-    zlink::stream_connector)
-
-  add_executable(zlink_cpp_e2e_to_actor_messaging_actor
-    e2e/ToActorMessaging/Server/Actor/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_to_actor_messaging_actor PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_to_actor_messaging_actor PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_to_actor_messaging_caller
-    e2e/ToActorMessaging/Server/Caller/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_to_actor_messaging_caller PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_to_actor_messaging_caller PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_to_actor_messaging_session
-    e2e/ToActorMessaging/Server/Session/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_to_actor_messaging_session PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_to_actor_messaging_session PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_to_actor_messaging_client
-    e2e/ToActorMessaging/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_to_actor_messaging_client PRIVATE
-    zlink::http_client
-    zlink::stream_connector)
-  target_include_directories(zlink_cpp_e2e_to_actor_messaging_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_resilience_lifecycle_provider
-    e2e/ResilienceLifecycle/Server/Provider/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_resilience_lifecycle_provider PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_resilience_lifecycle_provider PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_resilience_lifecycle_consumer
-    e2e/ResilienceLifecycle/Server/Consumer/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_resilience_lifecycle_consumer PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_resilience_lifecycle_consumer PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_resilience_lifecycle_client
-    e2e/ResilienceLifecycle/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_resilience_lifecycle_client PRIVATE
-    zlink::http_client
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_resilience_lifecycle_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_runtime_monitoring_client
-    e2e/RuntimeMonitoring/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_runtime_monitoring_client PRIVATE
-    zlink::http_client)
-
-  add_executable(zlink_cpp_e2e_runtime_monitoring_service
-    e2e/RuntimeMonitoring/Server/Service/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_runtime_monitoring_service PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_runtime_monitoring_service PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_runtime_monitoring_filtered_service
-    e2e/RuntimeMonitoring/Server/FilteredService/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_runtime_monitoring_filtered_service PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_runtime_monitoring_filtered_service PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_runtime_monitoring_throwing_service
-    e2e/RuntimeMonitoring/Server/ThrowingService/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_runtime_monitoring_throwing_service PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_runtime_monitoring_throwing_service PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_runtime_monitoring_trigger
-    e2e/RuntimeMonitoring/Server/Trigger/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_runtime_monitoring_trigger PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    OpenSSL::Crypto)
-  target_include_directories(zlink_cpp_e2e_runtime_monitoring_trigger PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  # Trigger support headers include Boost directly; keep it on the same tree
-  # as the framework objects.
-  zlink_framework_cpp_add_boost_headers(zlink_cpp_e2e_runtime_monitoring_trigger)
-
-  add_executable(zlink_cpp_e2e_submit_admission_role
-    e2e/SubmitAdmission/Server/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_submit_admission_role PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::stream_connector)
-  target_include_directories(zlink_cpp_e2e_submit_admission_role PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_instance_spot_role
-    e2e/InstanceSpot/Server/role.cpp)
-  target_link_libraries(zlink_cpp_e2e_instance_spot_role PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_instance_spot_role PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_instance_spot_client
-    e2e/InstanceSpot/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_instance_spot_client PRIVATE
-    zlink::http_client)
-  target_include_directories(zlink_cpp_e2e_instance_spot_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_channel_egress_role
-    e2e/ChannelEgressRouting/Server/role.cpp)
-  target_link_libraries(zlink_cpp_e2e_channel_egress_role PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis)
-  target_include_directories(zlink_cpp_e2e_channel_egress_role PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  add_executable(zlink_cpp_e2e_channel_egress_client
-    e2e/ChannelEgressRouting/Client/main.cpp)
-  target_link_libraries(zlink_cpp_e2e_channel_egress_client PRIVATE
-    zlink::http_client)
-  target_include_directories(zlink_cpp_e2e_channel_egress_client PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-
-  # These executables still exercise the removed SpotMesh/SpotNode host surface.
-  # Keep them available as explicit migration targets, but do not make a normal
-  # framework build compile the retired topology.
-  set_target_properties(
-    zlink_cpp_e2e_spot_service_play
-    zlink_cpp_e2e_spot_service_session
-    zlink_cpp_e2e_spot_service_gateway
-    zlink_cpp_e2e_spot_service_multinode
-    zlink_cpp_e2e_spot_service_multinode_requester
-    zlink_cpp_e2e_automatic_turn_dispatch_play
-    zlink_cpp_e2e_automatic_turn_dispatch_session
-    zlink_cpp_e2e_observability_ops_host
-    zlink_cpp_e2e_observability_ops_session
-    zlink_cpp_e2e_observability_ops_play
-    zlink_cpp_e2e_observability_ops_order_workflow
-    zlink_cpp_e2e_spot_actor_transfer_host
-    zlink_cpp_e2e_spot_actor_transfer_actor_node
-    zlink_cpp_e2e_spot_actor_transfer_session
-    zlink_cpp_e2e_store_failure_relocation_node
-    zlink_cpp_e2e_to_actor_messaging_actor
-    zlink_cpp_e2e_to_actor_messaging_caller
-    zlink_cpp_e2e_to_actor_messaging_session
-    zlink_cpp_e2e_runtime_monitoring_service
-    zlink_cpp_e2e_runtime_monitoring_filtered_service
-    zlink_cpp_e2e_runtime_monitoring_throwing_service
-    PROPERTIES EXCLUDE_FROM_ALL TRUE)
-
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)

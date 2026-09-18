@@ -1,11 +1,11 @@
 # Framework archives are static; dependencies retain the triplet's linkage.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# SHA512 of the published framework-cpp/v0.16.0 source unit (cmake/prepare-source-archive.cmake).
+# SHA512 of the published framework-cpp/v0.17.0 source unit (cmake/prepare-source-archive.cmake).
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
-    SHA512 dc462e6136631b8cde136bd7f933740ad27972691ee8076a9762380ba697392e6408dde7e386ba970d37735b6c93e746564ba866af73b333f8e4328771801c3c
+    SHA512 0ad72dfffaa67d8e26aca8a565d1cc64758c68cb8b31d7665670e86e9348910c08a6b440d75ebdecfaab025a09eeab7bb9b258739a797c2cef39c4e9d58845e4
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 if(NOT EXISTS "${SOURCE_PATH}/runtime/protocol/generated/cpp/service_wire_constants.hpp")
@@ -39,7 +39,6 @@ vcpkg_cmake_configure(
         -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF
-        -DZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
         -DZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT=ON
         -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF

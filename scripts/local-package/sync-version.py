@@ -934,21 +934,9 @@ def synchronize(
         1,
     )
     sync.regex(
-        "framework/languages/java/e2e/SubmitAdmission/Role/build.gradle.kts",
-        rf'(\.orElse\("){SEMVER}("\))',
-        rf"\g<1>{binding_version}\2",
-        1,
-    )
-    sync.regex(
         "framework/languages/java/samples/gradle/zlink-sample-dependencies.settings.gradle.kts",
         rf'(val bindingsVersion = providers\.gradleProperty\("zlink\.bindingsVersion"\)\s*\.orElse\("){SEMVER}("\))',
         rf"\g<1>{binding_version}\2",
-        1,
-    )
-    sync.regex(
-        "framework/languages/java/e2e/SubmitAdmission/run_e2e.sh",
-        rf"Core {SEMVER} package",
-        f"Core {core_version} package",
         1,
     )
     binding_version = bindings["node"]

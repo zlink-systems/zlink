@@ -1,4 +1,5 @@
 using Xunit;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -15,11 +16,7 @@ public sealed partial class RegressionTests
     [Fact]
     public void FrameworkHostBuildersRemoveDefaultConfigurationProviders()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         var hostBuilderPattern = new Regex(
             @"(?:WebApplication|Host)\.Create(?:Application|Default)?Builder\(",
             RegexOptions.CultureInvariant);
@@ -32,7 +29,7 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourcePath);
+                var source = ReadSource(sourcePath);
                 foreach (Match match in hostBuilderPattern.Matches(source))
                 {
                     builderCount++;
@@ -75,89 +72,6 @@ public sealed partial class RegressionTests
         }
     }
 
-    [Fact]
-    public void DynamicDotnetLaunchersUsePrebuiltProjectsAndUniqueConfigurationArtifacts()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var launchers = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains(
-                $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Select(path => (Path: path, Source: File.ReadAllText(path)))
-            .Where(static file => file.Source.Contains("ArgumentList.Add(\"run\")", StringComparison.Ordinal))
-            .ToArray();
-
-        Assert.NotEmpty(launchers);
-        foreach (var (path, source) in launchers)
-            foreach (Match match in Regex.Matches(source, "ArgumentList\\.Add\\(\\\"run\\\"\\)"))
-            {
-                var boundary = Math.Min(source.Length, match.Index + 280);
-                var launch = source[match.Index..boundary];
-                var noBuildIndex = launch.IndexOf(
-                    "ArgumentList.Add(\"--no-build\")",
-                    StringComparison.Ordinal);
-                var projectIndex = launch.IndexOf(
-                    "ArgumentList.Add(\"--project\")",
-                    StringComparison.Ordinal);
-                Assert.True(
-                    noBuildIndex >= 0 && projectIndex >= 0 && noBuildIndex < projectIndex,
-                    $"{path} must launch the project already built by its runner.");
-            }
-
-        var pubSubLauncher = File.ReadAllText(Path.Combine(
-            e2eRoot, "PubSub", "Client", "Support", "ServerProcessLauncher.cs"));
-        Assert.Contains(
-            "CreateServerStartInfo(options.PublisherProject, \"pub-restart\"",
-            pubSubLauncher,
-            StringComparison.Ordinal);
-
-        var locationLauncher = File.ReadAllText(Path.Combine(
-            e2eRoot, "LocationMessaging", "Client", "Support", "DynamicClusterLauncher.cs"));
-        Assert.Contains("scenarioConfigDir", locationLauncher, StringComparison.Ordinal);
-        Assert.Contains("scenarioLogDir", locationLauncher, StringComparison.Ordinal);
-        Assert.Contains("var processName = $\"{scenarioName}-{name}\"", locationLauncher,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void DynamicServerReadinessUsesTheThreeSecondLocalBound()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var pubSub = File.ReadAllText(Path.Combine(
-            e2eRoot, "PubSub", "Client", "Support", "StateObservation.cs"));
-        Assert.Contains("ReadinessTimeout = TimeSpan.FromSeconds(3)", pubSub, StringComparison.Ordinal);
-        Assert.Contains("ReadinessPollInterval = TimeSpan.FromMilliseconds(100)", pubSub,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("TimeSpan.FromSeconds(20)", pubSub, StringComparison.Ordinal);
-        Assert.DoesNotContain("ContinueWith", pubSub, StringComparison.Ordinal);
-
-        foreach (var path in new[]
-                 {
-                     Path.Combine(e2eRoot, "ResilienceLifecycle", "Client", "Support",
-                         "ResilienceProcessManager.cs"),
-                     Path.Combine(e2eRoot, "StoreFailure", "Client", "Support",
-                         "StoreFailureProcessManager.cs"),
-                     Path.Combine(e2eRoot, "LocationMessaging", "Client", "Support",
-                         "DynamicClusterLauncher.cs")
-                 })
-        {
-            var source = File.ReadAllText(path);
-            Assert.Contains("ReadinessTimeout = TimeSpan.FromSeconds(3)", source, StringComparison.Ordinal);
-            Assert.Contains("ReadinessPollInterval = TimeSpan.FromMilliseconds(100)", source,
-                StringComparison.Ordinal);
-            Assert.DoesNotContain("for (var i = 0; i < 120", source, StringComparison.Ordinal);
-            Assert.Contains("error.Kind is ZLinkFrameworkErrorKind.Unavailable", source, StringComparison.Ordinal);
-            Assert.Contains("or ZLinkFrameworkErrorKind.DeadlineExceeded", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("error.RetryAdvice", source, StringComparison.Ordinal);
-        }
-
-        var monitoring = File.ReadAllText(Path.Combine(
-            e2eRoot, "RuntimeMonitoring", "Client", "Scenarios", "MonD1FailureRecoveryScenario.cs"));
-        Assert.Contains("for (var attempt = 0; attempt < 30; attempt++)", monitoring,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("for (var attempt = 0; attempt < 100; attempt++)", monitoring,
-            StringComparison.Ordinal);
-    }
-
     [Theory]
     [InlineData("Bingo")]
     [InlineData("DeliveryDispatch")]
@@ -175,7 +89,7 @@ public sealed partial class RegressionTests
 
         foreach (var sourceFile in sourceFiles)
         {
-            var source = File.ReadAllText(sourceFile);
+            var source = ReadSource(sourceFile);
             Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
             Assert.DoesNotContain("DirectoryFromEnvironment", source, StringComparison.Ordinal);
         }
@@ -197,7 +111,7 @@ public sealed partial class RegressionTests
 
         foreach (var sourceFile in sourceFiles)
         {
-            var source = File.ReadAllText(sourceFile);
+            var source = ReadSource(sourceFile);
             Assert.DoesNotContain("\"--node\"", source, StringComparison.Ordinal);
             Assert.DoesNotContain("\"--instance\"", source, StringComparison.Ordinal);
             Assert.DoesNotContain("\"--role\"", source, StringComparison.Ordinal);
@@ -221,7 +135,7 @@ public sealed partial class RegressionTests
     {
         var configurationRoot = Path.Combine(ResolveSampleRoot(sampleName), "Server", "Configuration");
         var loaders = Directory.EnumerateFiles(configurationRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText)
+            .Select(ReadSource)
             .Where(static source => source.Contains("\"--config\"", StringComparison.Ordinal))
             .ToArray();
 
@@ -235,50 +149,15 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void AllE2eApplicationsUseTypedFileConfigurationWithoutEnvironmentAccess()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var sourceFiles = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
-
-        foreach (var sourceFile in sourceFiles)
-        {
-            var source = File.ReadAllText(sourceFile);
-            Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("Environment.SetEnvironmentVariable", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("AddEnvironmentVariables", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("StartsWith(\"--\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("TrimStart('-')", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("WriteArguments", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--redis-endpoint\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--redis-key-prefix\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--log-dir\"", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"--role\"", source, StringComparison.Ordinal);
-        }
-
-        var runners = Directory.EnumerateFiles(e2eRoot, "run_e2e.sh", SearchOption.AllDirectories);
-        foreach (var runner in runners)
-        {
-            var source = File.ReadAllText(runner);
-            Assert.Contains("umask 077", source, StringComparison.Ordinal);
-            Assert.Contains("CONFIG_DIR=\"$(mktemp -d)\"", source, StringComparison.Ordinal);
-            Assert.Contains("rm -rf \"$CONFIG_DIR\"", source, StringComparison.Ordinal);
-            Assert.Contains("write_role_config.py", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("env ZLINK_E2E_RID", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("ZLINK_DEBUG_FRAMEWORK_", source, StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
     public void PowerShellSampleRunnerCannotRemoveRedisBySharedPrefix()
     {
+        // Every per-sample run_sample.ps1 dot-sources this shared helper directly; there is
+        // no aggregate runner in front of it any more (e106104ffe), so the helper is the only
+        // place this contract can still be enforced.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
-        var helper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
-        var aggregate = File.ReadAllText(Path.Combine(samplesRoot, "run_samples.ps1"));
+        var helper = ReadSource(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
         Assert.DoesNotContain("Remove-SampleRedisScope", helper, StringComparison.Ordinal);
-        Assert.DoesNotContain("Remove-SampleRedisScope", aggregate, StringComparison.Ordinal);
         Assert.Contains("Remove-SampleRedisContainer", helper, StringComparison.Ordinal);
         Assert.Matches(
             @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
@@ -286,48 +165,11 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void SpotServiceScenariosDoNotRetryConnectOrRequests()
-    {
-        var scenarios = Path.Combine(ResolveDotnetRoot(), "e2e", "SpotService", "Client", "Scenarios");
-        var source = string.Join('\n', Directory.EnumerateFiles(scenarios, "*.cs")
-            .Select(File.ReadAllText));
-
-        Assert.DoesNotContain("Actor auth did not become routable", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Last error:", source, StringComparison.Ordinal);
-
-        var reconnect = File.ReadAllText(Path.Combine(scenarios, "SmD8StreamReconnectRecoveryScenario.cs"));
-        var slowHandler = File.ReadAllText(Path.Combine(ResolveDotnetRoot(), "e2e", "SpotService", "Server",
-            "Play", "Handlers", "PlayActorHandlers.cs"));
-        Assert.DoesNotContain("Task.Delay", reconnect, StringComparison.Ordinal);
-        Assert.Contains("actor-slow-ping-started", reconnect, StringComparison.Ordinal);
-        Assert.Contains("actor-slow-ping-started", slowHandler, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ServerConfigurationErrorsDoNotAdvertiseRemovedCliOptions()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        foreach (var configuration in new[]
-                 {
-                     "LocationMessaging", "RuntimeMonitoring", "RegistrationCodec",
-                     "SpotService", "StoreFailure", "ResilienceLifecycle"
-                 })
-        {
-            var serverRoot = Path.Combine(e2eRoot, configuration, "Server");
-            var source = string.Join('\n', Directory.EnumerateFiles(serverRoot, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                               && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-                .Select(File.ReadAllText));
-            Assert.DoesNotMatch("\\\"--(?!config(?:\\\"|=))", source);
-        }
-    }
-
-    [Fact]
     public void ZoneWorldRunnerExercisesPrefixUuidLifecycleWithProcessEvidence()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var runner = File.ReadAllText(Path.Combine(sample, "run_sample.sh"));
-        var reportHandler = File.ReadAllText(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
+        var runner = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var reportHandler = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
             "Handlers", "OpsReportHandlers.cs"));
 
         foreach (var id in new[] { "ZW-G1", "ZW-G2", "ZW-G3", "ZW-G4", "ZW-G5" })
@@ -343,7 +185,7 @@ public sealed partial class RegressionTests
         Assert.Contains("$0\" --g4-child ZW-G4", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G3", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G5", runner, StringComparison.Ordinal);
-        Assert.Contains("config_name=\"zone-node-replacement\"", runner, StringComparison.Ordinal);
+        Assert.Contains("config_name=\"$name-replacement\"", runner, StringComparison.Ordinal);
         Assert.Contains("start \"$name\" \"$SERVER_BIN\" --config \"$CONFIG_DIR/$config_name.json\"", runner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("stop_node zone-node-replacement", runner, StringComparison.Ordinal);
@@ -366,12 +208,211 @@ public sealed partial class RegressionTests
         Assert.Contains("route.SourceNodeRid", reportHandler, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A Ready owner failure is not an automatic replacement, so the Zone Spots a killed
+    /// ZoneNode owned stay registered to the dead incarnation. A process that comes back with
+    /// the same NodeId therefore has to announce readiness with no zones — the ZoneWorld
+    /// README fixes that for every restart, graceful or abrupt. A restart that reused the
+    /// cold-start configuration would demand two zones it can never obtain and burn its whole
+    /// claim budget, which is what ZW-B4, ZW-C2, ZW-C3 and ZW-E5 hit (#555).
+    /// </summary>
+    [Fact]
+    public void ZoneWorldRestartsUseTheZeroZoneReplacementConfiguration()
+    {
+        var sample = ResolveSampleRoot("ZoneWorld");
+        var shell = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var powershell = ReadSource(Path.Combine(sample, "run_sample.ps1"));
+
+        // Every restart selects the node's own replacement configuration, not just zone-node-2's:
+        // ZW-B4 picks the node to stop from what the client observed, so either node can restart.
+        Assert.Contains("config_name=\"$name-replacement\"", shell, StringComparison.Ordinal);
+        Assert.Contains("$ConfigName = \"$Name-replacement\"", powershell, StringComparison.Ordinal);
+        // One replacement configuration, not a separate crash variant: the stop kind does not
+        // change what a restarted node may claim.
+        Assert.DoesNotContain("crash-replacement", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("crash-replacement", powershell, StringComparison.Ordinal);
+
+        // Positive: no replacement configuration in either runner asks for a zone.
+        Assert.Empty(ZoneWorldReplacementConfigsThatClaimZones(shell));
+        Assert.Empty(ZoneWorldReplacementConfigsThatClaimZones(powershell));
+
+        // Negative control: the same check reports the pre-fix shape, where the replacement
+        // configuration carried no empty-zone-set intent.
+        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
+            shell.Replace("\"allowEmptyZoneSet\": True,", string.Empty, StringComparison.Ordinal)));
+        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
+            powershell.Replace("allowEmptyZoneSet = $true", string.Empty, StringComparison.Ordinal)));
+
+        // A replacement claims nothing at all. The empty-zone-set branch returns before the
+        // cold-start claim loop, so a restarted node can never settle on one zone — a state
+        // that is neither the two a cold start needs nor the none a replacement announces, and
+        // one the bootstrap could not leave.
+        var bootstrap = ReadSource(Path.Combine(
+            sample, "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "BotSpawner.cs"));
+        Assert.Equal(1, Regex.Matches(bootstrap, @"settings\.AllowEmptyZoneSet").Count);
+        Assert.True(
+            bootstrap.IndexOf("if (settings.AllowEmptyZoneSet)", StringComparison.Ordinal)
+            < bootstrap.IndexOf("EnsureZoneAsync(zoneId", StringComparison.Ordinal),
+            "the replacement path must return before the cold-start claim loop");
+
+        // ZW-E5 judges the restart from a connection opened before the stop: a node status
+        // payload carries no incarnation token, so the replacement counts as ready only after
+        // that same connection observed the old process leave. Both runners launch the client
+        // first and only then take the node away.
+        var shellLaunch = shell.IndexOf("run_client ZW-E5 &", StringComparison.Ordinal);
+        Assert.True(shellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
+        Assert.True(
+            shellLaunch
+            < shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal));
+        Assert.True(
+            shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal)
+            < shell.IndexOf("scenario ZW-E5 replacement waiting", StringComparison.Ordinal));
+        var powershellLaunch = powershell.IndexOf(
+            "Start-ZoneWorldClient \"ZW-E5\"", StringComparison.Ordinal);
+        Assert.True(powershellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
+        Assert.True(
+            powershellLaunch
+            < powershell.IndexOf(
+                "Stop-ZoneWorldNode \"zone-node-2\"", powershellLaunch, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Returns the header line of every ZoneNode replacement configuration a runner writes
+    /// without turning the empty zone set on. An empty result is the contract; a non-empty one
+    /// names the configuration that would make a restarted node demand zones.
+    /// </summary>
+    private static IReadOnlyList<string> ZoneWorldReplacementConfigsThatClaimZones(string runner)
+    {
+        var offenders = new List<string>();
+        var lines = runner.Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var header = lines[index];
+            if (!header.Contains("-replacement\"", StringComparison.Ordinal)) continue;
+            if (!header.Contains("write(", StringComparison.Ordinal)
+                && !header.Contains("Write-ZoneWorldConfig", StringComparison.Ordinal)) continue;
+
+            var body = new StringBuilder();
+            for (var line = index + 1; line < lines.Length; line++)
+            {
+                var text = lines[line].Trim();
+                if (text is "}" or "})") break;
+                body.Append(text);
+            }
+
+            if (!body.ToString().Contains("allowEmptyZoneSet", StringComparison.OrdinalIgnoreCase))
+                offenders.Add(header.Trim());
+        }
+
+        return offenders;
+    }
+
+    /// <summary>
+    /// ZW-G3 and ZW-G4 judge a replacement process, and the fresh-object half of that verdict
+    /// has to come from a probe the runner owns. Borrowing a client-batch scenario imports
+    /// whatever that scenario needs: ZW-G3 borrowed ZW-A1, whose spawn zone is fixed at
+    /// zone-nw, so in the lane where ZW-B4 stopped zone-node-1 and ZW-C3 stopped zone-node-2
+    /// every zone was registered to a dead incarnation and ZW-G3 failed for something it does
+    /// not assert (#567). The dedicated probe places an Actor in the mesh, so it needs a live
+    /// node and not a live zone.
+    /// </summary>
+    [Fact]
+    public void ZoneWorldReplacementVerdictsUseDedicatedRunnerDrivenProbes()
+    {
+        var sample = ResolveSampleRoot("ZoneWorld");
+        var shell = ReadSource(Path.Combine(sample, "run_sample.sh"));
+        var powershell = ReadSource(Path.Combine(sample, "run_sample.ps1"));
+        var scenarios = ReadSource(Path.Combine(sample, "Client", "Scenarios.cs"));
+
+        var clientBatch = ZoneWorldScenarioIds(scenarios, "All");
+        var runnerDriven = ZoneWorldScenarioIds(scenarios, "RunnerDriven");
+        Assert.Contains("ZW-A1", clientBatch);
+        Assert.Contains("ZW-G3-fresh", runnerDriven);
+        Assert.Contains("ZW-G4-fresh", runnerDriven);
+
+        // Positive: neither runner decides anything with a scenario out of the client batch.
+        Assert.Empty(ZoneWorldBorrowedClientBatchScenarios(shell, clientBatch, runnerDriven));
+        Assert.Empty(ZoneWorldBorrowedClientBatchScenarios(powershell, clientBatch, runnerDriven));
+
+        // Negative control: the pre-fix shape, where ZW-G3 reached its verdict through the
+        // fixed-spawn-zone scenario, is reported by the same check.
+        Assert.Equal(
+            new[] { "ZW-A1" },
+            ZoneWorldBorrowedClientBatchScenarios(
+                shell.Replace("run_client ZW-G3-fresh", "run_client ZW-A1", StringComparison.Ordinal),
+                clientBatch,
+                runnerDriven));
+        Assert.Equal(
+            new[] { "ZW-A1" },
+            ZoneWorldBorrowedClientBatchScenarios(
+                powershell.Replace(
+                    "Invoke-ZoneWorldClient \"ZW-G3-fresh\"",
+                    "Invoke-ZoneWorldClient \"ZW-A1\"",
+                    StringComparison.Ordinal),
+                clientBatch,
+                runnerDriven));
+
+        // The verdict is unchanged: the fresh object still has to land on the RID the
+        // replacement itself published.
+        Assert.Contains("scenario ZW-G3-fresh owner=$replacement_rid ", shell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G4-fresh owner=$crash_rid ", shell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G3-fresh owner=$replacementRid ", powershell, StringComparison.Ordinal);
+        Assert.Contains("scenario ZW-G4-fresh owner=$crashRid ", powershell, StringComparison.Ordinal);
+
+        // One probe body serves both scenarios, and it places into the mesh rather than
+        // spawning into a zone.
+        var probe = ZoneWorldMethodBody(scenarios, "ReplacementAcceptsFreshObject");
+        Assert.Contains("CreateFreshActorAsync", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("JoinWorld", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZoneId", probe, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns every scenario id a ZoneWorld runner drives that belongs to the client's own
+    /// batch instead of the runner-driven table. An empty result is the contract; a non-empty
+    /// one names the borrowed scenario whose preconditions the runner silently inherited.
+    /// </summary>
+    private static IReadOnlyList<string> ZoneWorldBorrowedClientBatchScenarios(
+        string runner,
+        IReadOnlyCollection<string> clientBatch,
+        IReadOnlyCollection<string> runnerDriven) =>
+        Regex.Matches(
+                runner,
+                @"(?:run_client|Invoke-ZoneWorldClient|Start-ZoneWorldClient)\s+""?(ZW-[A-Za-z0-9-]+)""?")
+            .Select(match => match.Groups[1].Value)
+            .Where(id => clientBatch.Contains(id) && !runnerDriven.Contains(id))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>Returns the scenario ids registered in one of the client's dispatch tables.</summary>
+    private static IReadOnlyList<string> ZoneWorldScenarioIds(string scenarios, string table)
+    {
+        var start = scenarios.IndexOf($" {table} =>", StringComparison.Ordinal);
+        Assert.True(start > 0, $"Scenarios.{table} must exist");
+        var end = scenarios.IndexOf("};", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"Scenarios.{table} must be a dictionary initializer");
+        return Regex.Matches(scenarios[start..end], @"\[""(ZW-[A-Za-z0-9-]+)""\]")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+    }
+
+    /// <summary>Returns the source text of one method of the scenario client.</summary>
+    private static string ZoneWorldMethodBody(string scenarios, string method)
+    {
+        var start = scenarios.IndexOf($"ValueTask {method}(", StringComparison.Ordinal);
+        Assert.True(start > 0, $"{method} must exist");
+        var end = scenarios.IndexOf("\n    }", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{method} must be a complete method");
+        return scenarios[start..end];
+    }
+
     [Fact]
     public void ZoneWorldScenariosUseConnectorWaitContractsDirectly()
     {
         var clientRoot = Path.Combine(ResolveSampleRoot("ZoneWorld"), "Client");
-        var support = File.ReadAllText(Path.Combine(clientRoot, "ScenarioSupport.cs"));
-        var scenarios = File.ReadAllText(Path.Combine(clientRoot, "Scenarios.cs"));
+        var support = ReadSource(Path.Combine(clientRoot, "ScenarioSupport.cs"));
+        var scenarios = ReadSource(Path.Combine(clientRoot, "Scenarios.cs"));
 
         Assert.DoesNotContain("WaitAsync<", support, StringComparison.Ordinal);
         Assert.DoesNotContain("MoveAndWait", support, StringComparison.Ordinal);
@@ -398,7 +439,7 @@ public sealed partial class RegressionTests
     public void ZoneWorldOpsReplaysNodeStateAcrossStreamSessionReplacement()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var registry = File.ReadAllText(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
+        var registry = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
             "Sessions", "OpsConsoleRegistry.cs"));
 
         Assert.Contains("Dictionary<string, NodeStatusNotify> _latestNodes", registry,
@@ -412,7 +453,7 @@ public sealed partial class RegressionTests
         Assert.Contains("Remove(console)", registry, StringComparison.Ordinal);
         Assert.Contains("ICollection<KeyValuePair<string, IZLinkSessionContext>>", registry,
             StringComparison.Ordinal);
-        Assert.Contains("await context.Client.Reply(new WatchNodesRes", File.ReadAllText(
+        Assert.Contains("await context.Client.Reply(new WatchNodesRes", ReadSource(
             Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink", "Handlers",
                 "OpsSessionHandlers.cs")), StringComparison.Ordinal);
         Assert.True(
@@ -421,103 +462,9 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void AutomaticTurnDispatchScenariosOwnTheirVerificationFlows()
-    {
-        var clientRoot = Path.Combine(ResolveDotnetRoot(), "e2e", "AutomaticTurnDispatch", "Client");
-        var scenarios = Path.Combine(clientRoot, "Scenarios");
-        Assert.False(File.Exists(Path.Combine(scenarios, "ExecutionTurnScenarioSuite.cs")));
-
-        var context = File.ReadAllText(Path.Combine(scenarios, "ExecutionTurnScenarioContext.cs"));
-        Assert.DoesNotMatch("Td[A-G][0-9]+Async", context);
-        Assert.DoesNotMatch("(?:public|internal)\\s+IZlinkStreamConnector\\s+\\w+", context);
-
-        var scenarioFiles = Directory.EnumerateFiles(scenarios, "Td*.cs").OrderBy(path => path).ToArray();
-        Assert.Equal(30, scenarioFiles.Length);
-        foreach (var path in scenarioFiles)
-        {
-            var source = File.ReadAllText(path);
-            Assert.DoesNotMatch("=>\\s*(?:Td\\w+|\\w+Probe)\\.RunAsync", source);
-            Assert.DoesNotMatch("RunAsync\\([^)]*\\)\\s*=>", source);
-        }
-
-        var program = File.ReadAllText(Path.Combine(clientRoot, "Program.cs"));
-        foreach (var probe in Directory.EnumerateFiles(scenarios, "*Probe.cs"))
-            Assert.Contains(Path.GetFileNameWithoutExtension(probe), program, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void E2eRunnersFailTheFirstExecutionInsteadOfRetryingBindFailures()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        foreach (var runnerPath in new[]
-                 {
-                     Path.Combine(e2eRoot, "run_e2e_all.sh"),
-                     Path.Combine(e2eRoot, "SpotService", "run_e2e.sh")
-                 })
-        {
-            var runner = File.ReadAllText(runnerPath);
-            Assert.DoesNotContain("BIND_RETRY_PATTERN", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("retry after transient bind failure", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("retrying child", runner, StringComparison.Ordinal);
-            Assert.DoesNotContain("--max-attempts", runner, StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
-    public void SpotActorTransferSourceDownAssertionCannotBeCaughtAsTransportFailure()
-    {
-        var scenario = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "e2e", "SpotActorTransfer", "Client", "Scenarios",
-            "StC1SourceDownBeforeCommitScenario.cs"));
-
-        Assert.DoesNotContain("TimeoutException or InvalidOperationException", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("Task.Delay", scenario, StringComparison.Ordinal);
-        Assert.Contains("if (response is not null)", scenario, StringComparison.Ordinal);
-        Assert.Contains("ZlinkStreamAssert.Ensure(response.Accepted", scenario, StringComparison.Ordinal);
-        Assert.Contains("pending_admission_expired actor={actorId}", scenario, StringComparison.Ordinal);
-        Assert.Contains("WaitRuntimeEvidenceAsync(context.NodeB, 30000", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("DrainAsync(context.NodeB)", scenario, StringComparison.Ordinal);
-
-        var clientRoot = Path.Combine(ResolveDotnetRoot(), "e2e", "SpotActorTransfer", "Client");
-        var clientSource = string.Join('\n', Directory.EnumerateFiles(clientRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText));
-        Assert.DoesNotContain("WaitBoundPushAsync", clientSource, StringComparison.Ordinal);
-        Assert.DoesNotContain(".PacketName(nameof(", clientSource, StringComparison.Ordinal);
-        Assert.Contains(".WaitFor<BoundPushNotify>()", clientSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void E2eOptionalConstructorSettingsHaveExplicitDefaults()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var optionRecords = Directory.EnumerateFiles(e2eRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Select(path => (Path: path, Source: File.ReadAllText(path)))
-            .Where(static file => file.Source.Contains("E2eConfiguration.Load<", StringComparison.Ordinal))
-            .SelectMany(static file => Regex.Matches(
-                    file.Source,
-                    @"(?:internal|public)\s+sealed\s+record\s+\w+Options\s*\((?<parameters>.*?)\)\s*(?:\{|;)",
-                    RegexOptions.Singleline)
-                .Select(match => (file.Path, Parameters: match.Groups["parameters"].Value)));
-
-        foreach (var (path, parameters) in optionRecords)
-        {
-            var missingDefaults = Regex.Matches(
-                    parameters,
-                    @"\b[\w<>]+\?\s+\w+\s*(?=,|$)",
-                    RegexOptions.Multiline)
-                .Select(static match => match.Value)
-                .ToArray();
-            Assert.True(
-                missingDefaults.Length == 0,
-                $"{path} has nullable constructor settings without '= null': {string.Join(", ", missingDefaults)}");
-        }
-    }
-
-    [Fact]
     public void LocalNugetDefaultsDoNotCrossPlatformBoundariesOrOverrideExplicitRoots()
     {
-        var props = File.ReadAllText(Path.Combine(ResolveDotnetRoot(), "Directory.Build.props"));
+        var props = ReadSource(Path.Combine(ResolveDotnetRoot(), "Directory.Build.props"));
 
         Assert.Contains(
             "'$(ZLinkLocalPackageRoot)' != ''\">$(ZLinkLocalPackageRoot)/nuget",
@@ -556,7 +503,7 @@ public sealed partial class RegressionTests
                      "run_sample.sh",
                      SearchOption.AllDirectories))
         {
-            var source = File.ReadAllText(runner);
+            var source = ReadSource(runner);
             foreach (var marker in forbidden)
                 Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
         }
@@ -579,7 +526,7 @@ public sealed partial class RegressionTests
 
         foreach (var sample in samples)
         {
-            var shellRunner = File.ReadAllText(Path.Combine(
+            var shellRunner = ReadSource(Path.Combine(
                 sampleRoot,
                 sample,
                 "run_sample.sh"));
@@ -605,7 +552,7 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("docker rm -fv", shellRunner,
                 StringComparison.Ordinal);
 
-            var powershellRunner = File.ReadAllText(Path.Combine(
+            var powershellRunner = ReadSource(Path.Combine(
                 sampleRoot,
                 sample,
                 "run_sample.ps1"));
@@ -615,7 +562,7 @@ public sealed partial class RegressionTests
                 StringComparison.Ordinal);
         }
 
-        var powershellHelper = File.ReadAllText(Path.Combine(
+        var powershellHelper = ReadSource(Path.Combine(
             sampleRoot,
             "sample_runner.ps1"));
         Assert.Contains("$applicationMinimumPort = 22100", powershellHelper,
@@ -642,7 +589,7 @@ public sealed partial class RegressionTests
             powershellHelper,
             StringComparison.Ordinal);
 
-        var shellRedisHelper = File.ReadAllText(Path.Combine(
+        var shellRedisHelper = ReadSource(Path.Combine(
             sampleRoot,
             "redis-common.sh"));
         Assert.Contains("local redis_min_port=22000", shellRedisHelper,
@@ -692,41 +639,16 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void IntegratedSampleRunnerIncludesEveryCommonSample()
+    public void ZoneWorldPowerShellRunnerIsSelfContainedWithoutBash()
     {
-        var runner = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "samples", "run_samples.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(
-            ResolveDotnetRoot(), "samples", "run_samples.ps1"));
-        var expectedSamples = new[]
-        {
-            "TicTacToe",
-            "Bingo",
-            "SupportChat",
-            "ShoppingMall",
-            "DeliveryDispatch",
-            "GameQuest",
-            "ZoneWorld"
-        };
-        var defaultSampleList = runner.Split('\n').Single(static line =>
-            line.StartsWith("SAMPLES=(", StringComparison.Ordinal));
-        var defaultPowerShellSampleList = powershellRunner.Split('\n').Single(static line =>
-            line.StartsWith("$knownSamples = @(", StringComparison.Ordinal));
-
-        foreach (var sample in expectedSamples)
-        {
-            Assert.Contains(sample, defaultSampleList, StringComparison.Ordinal);
-            Assert.Contains(sample, defaultPowerShellSampleList, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(Path.Combine(ResolveDotnetRoot(), "samples", sample, "run_sample.ps1")),
-                $"PowerShell runner is missing for {sample}.");
-        }
-
-        Assert.Contains("${SCRIPT_DIR}/${sample}/run_sample.sh", runner, StringComparison.Ordinal);
-        Assert.Contains("$ScriptDir \"$sample/run_sample.ps1\"", powershellRunner,
-            StringComparison.Ordinal);
-
-        var zoneWorldPowerShellRunner = File.ReadAllText(Path.Combine(
+        // Prior to e106104ffe this test also asserted that the aggregate run_samples.sh /
+        // run_samples.ps1 listed every common sample; both files are gone (dropped per-language
+        // batch runners so a stalled sample no longer holds the whole run, #405) and every known
+        // sample name and its run_sample.ps1 is already exercised directly by
+        // DotnetSampleRunnersSeparateCheckedRedisAndApplicationPorts above. What is left here is
+        // ZoneWorld-specific: its PowerShell runner must stand on its own on native Windows,
+        // without shelling out to bash or the removed run_sample.sh.
+        var zoneWorldPowerShellRunner = ReadSource(Path.Combine(
             ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1"));
         Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("Start-SampleDotnetAssembly", zoneWorldPowerShellRunner, StringComparison.Ordinal);
@@ -756,18 +678,54 @@ public sealed partial class RegressionTests
     [Fact]
     public void SampleRunnersFailWhenRoleCleanupRequiresSigkill()
     {
+        // Both sides state the same rule in the one place that escalates a role from the
+        // graceful stop to a forced kill. On bash that is zlink_sample_stop_processes in
+        // redis-common.sh, whose verdict is zlink_sample_assert_graceful_teardown; because bash
+        // keeps the shell's exit status across an EXIT trap unless the trap itself exits, every
+        // run_sample.sh installs zlink_sample_exit_trap rather than its own cleanup, and the two
+        // samples that tear down early and drop the trap call the assertion themselves. The
+        // aggregate run_samples.sh that used to carry the bash half through
+        // ZLINK_SAMPLE_TEARDOWN_STATUS_FILE is gone (e106104ffe, #405), and that env-var and
+        // status-file protocol went with it (#575). On PowerShell the rule lives in
+        // Stop-SampleProcesses, which throws on its own.
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
-        var shellRunner = File.ReadAllText(Path.Combine(samplesRoot, "run_samples.sh"));
-        var shellHelper = File.ReadAllText(Path.Combine(samplesRoot, "redis-common.sh"));
-        var powershellHelper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
+        var shellHelper = ReadSource(Path.Combine(samplesRoot, "redis-common.sh"));
+        var powershellHelper = ReadSource(Path.Combine(samplesRoot, "sample_runner.ps1"));
 
-        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("Sample role ${role} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).",
-            shellRunner, StringComparison.Ordinal);
-        Assert.True(shellRunner.IndexOf("[[ -s \"${teardown_status_file}\" ]]", StringComparison.Ordinal) <
-            shellRunner.IndexOf("cat \"${output_file}\"", StringComparison.Ordinal));
-        Assert.Contains("builtin kill \"$@\"", shellHelper, StringComparison.Ordinal);
-        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).\")",
+            shellHelper, StringComparison.Ordinal);
+        Assert.Contains("zlink_sample_assert_graceful_teardown() {", shellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("  exit 137\n}", shellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "zlink_sample_exit_trap() {\n  local status=$?\n  cleanup\n" +
+            "  zlink_sample_assert_graceful_teardown\n  exit \"${status}\"\n}",
+            shellHelper, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper,
+            StringComparison.Ordinal);
+
+        var shellRunners = Directory
+            .EnumerateFiles(samplesRoot, "run_sample.sh", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.NotEmpty(shellRunners);
+        foreach (var path in shellRunners)
+        {
+            var runner = ReadSource(path);
+            Assert.Contains("\ntrap zlink_sample_exit_trap EXIT\n", runner, StringComparison.Ordinal);
+            Assert.DoesNotContain("\ntrap cleanup EXIT\n", runner, StringComparison.Ordinal);
+            // A sample that drops the trap to print its marker after teardown still has to take
+            // the verdict, otherwise the forced kill is observed and nothing acts on it.
+            if (runner.Contains("\ntrap - EXIT\n", StringComparison.Ordinal))
+            {
+                Assert.True(
+                    runner.IndexOf("\ntrap - EXIT\n", StringComparison.Ordinal) <
+                    runner.IndexOf("\nzlink_sample_assert_graceful_teardown\n", StringComparison.Ordinal),
+                    $"{path} drops its EXIT trap without asserting graceful teardown.");
+            }
+        }
+
         Assert.Contains("$script:SampleProcessNames[$process.Id] = $Name", powershellHelper,
             StringComparison.Ordinal);
         Assert.Contains("$process.ExitCode -eq 137 -or $process.ExitCode -eq -9", powershellHelper,
@@ -789,7 +747,7 @@ public sealed partial class RegressionTests
         Assert.Contains("throw ($teardownFailures -join [Environment]::NewLine)", powershellHelper,
             StringComparison.Ordinal);
 
-        var zoneWorldRunner = File.ReadAllText(Path.Combine(
+        var zoneWorldRunner = ReadSource(Path.Combine(
             samplesRoot, "ZoneWorld", "run_sample.ps1"));
         var cleanup = zoneWorldRunner[zoneWorldRunner.LastIndexOf("finally {", StringComparison.Ordinal)..];
         var configurationCleanup = cleanup.IndexOf("try { Remove-SampleConfigurationFiles",
@@ -809,10 +767,10 @@ public sealed partial class RegressionTests
     {
         var browserRoot = Path.GetFullPath(Path.Combine(
             ResolveDotnetRoot(), "..", "shared_sample", "zoneworld", "client"));
-        var runtime = File.ReadAllText(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
-        var liveTest = File.ReadAllText(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
-        var runner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
+        var runtime = ReadSource(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
+        var liveTest = ReadSource(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
+        var runner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
 
         Assert.Contains("fetch('/config.json'", runtime, StringComparison.Ordinal);
         Assert.DoesNotContain("import.meta.env", runtime, StringComparison.Ordinal);
@@ -827,13 +785,9 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void SampleAndE2eClientsUseTheConnectorAssertionSurface()
+    public void SampleClientsUseTheConnectorAssertionSurface()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
             foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
                          .Where(static path => path.Contains(
@@ -841,20 +795,16 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourceFile);
+                var source = ReadSource(sourceFile);
                 Assert.DoesNotContain("class ScenarioAssert", source, StringComparison.Ordinal);
                 Assert.DoesNotContain("static class ScenarioAssert", source, StringComparison.Ordinal);
             }
     }
 
     [Fact]
-    public void SampleAndE2eClientsDoNotSynchronouslyUnwrapAsyncOperations()
+    public void SampleClientsDoNotSynchronouslyUnwrapAsyncOperations()
     {
-        var roots = new[]
-        {
-            Path.Combine(ResolveDotnetRoot(), "samples"),
-            Path.Combine(ResolveDotnetRoot(), "e2e")
-        };
+        var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
             foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
                          .Where(static path => path.Contains(
@@ -862,7 +812,7 @@ public sealed partial class RegressionTests
                          .Where(static path => !path.Contains(
                              $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
             {
-                var source = File.ReadAllText(sourceFile);
+                var source = ReadSource(sourceFile);
                 Assert.DoesNotContain(".AsTask().GetAwaiter().GetResult()", source, StringComparison.Ordinal);
             }
     }
@@ -871,10 +821,10 @@ public sealed partial class RegressionTests
     public void ZoneWorldBotTimerAppliesBackpressureToActorMovement()
     {
         var zoneWorld = ResolveSampleRoot("ZoneWorld");
-        var spot = File.ReadAllText(Path.Combine(
+        var spot = ReadSource(Path.Combine(
             zoneWorld,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
-        var handlers = File.ReadAllText(Path.Combine(
+        var handlers = ReadSource(Path.Combine(
             zoneWorld,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "Handlers",
             "PlayerMoveHandlers.cs"));
@@ -893,10 +843,10 @@ public sealed partial class RegressionTests
     public void ZoneWorldBotEntryRecordsIdentityBeforeDeferredJoin()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var actor = File.ReadAllText(Path.Combine(
+        var actor = ReadSource(Path.Combine(
             sampleRoot,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "PlayerActor.cs"));
-        var entry = File.ReadAllText(Path.Combine(
+        var entry = ReadSource(Path.Combine(
             sampleRoot,
             "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneEntrySpot.cs"));
 
@@ -911,7 +861,7 @@ public sealed partial class RegressionTests
     [Fact]
     public void ZoneWorldPhysicalDisconnectUsesFrameworkLifecycleNotification()
     {
-        var session = File.ReadAllText(Path.Combine(
+        var session = ReadSource(Path.Combine(
             ResolveSampleRoot("ZoneWorld"),
             "Server", "Gateway", "Infrastructure", "ZLink", "Sessions", "PlayerSession.cs"));
 
@@ -919,27 +869,5 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("Context.Actors.Bound.ToArray()", session, StringComparison.Ordinal);
         Assert.DoesNotContain("NotifyDisconnectedAsync(cancellationToken)", session,
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void EveryE2eScenarioStartsWithItsVerificationPurpose()
-    {
-        var e2eRoot = Path.Combine(ResolveDotnetRoot(), "e2e");
-        var scenarioFiles = Directory.EnumerateFiles(
-                e2eRoot,
-                "*Scenario.cs",
-                SearchOption.AllDirectories)
-            .Where(static path => path.Contains(
-                $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}Scenarios{Path.DirectorySeparatorChar}"))
-            .ToArray();
-
-        Assert.NotEmpty(scenarioFiles);
-        foreach (var scenarioFile in scenarioFiles)
-        {
-            var firstLine = File.ReadLines(scenarioFile).FirstOrDefault();
-            Assert.True(
-                firstLine?.StartsWith("// Verifies ", StringComparison.Ordinal) == true,
-                $"{scenarioFile} must start with a short verification-purpose comment.");
-        }
     }
 }

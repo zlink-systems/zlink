@@ -7,7 +7,8 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkActorJoinEntrySpotCall,
   ZLinkActorJoinSpotCall,
-  ZLinkBoundSession
+  ZLinkBoundSession,
+  ZLinkBoundSessionSendCall
 } from '../../contracts';
 import {
   ZLinkEncodedPayload,
@@ -434,22 +435,37 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
   }
 }
 
+// Spec 04-actor-model §8.1: an operation needing a bound session with no valid
+// binding fails, and the failure surfaces at the call's terminal like every
+// other call failure — not thrown while the call is being built. send() used to
+// throw, so a caller could not await the rejection the way the other languages
+// do.
 class UnboundZLinkSession implements ZLinkBoundSession {
-  send(): never {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
-      'Actor session is not bound.',
-      true
-    );
+  send(): ZLinkBoundSessionSendCall {
+    return new UnboundZLinkSessionSendCall();
   }
 
   async disconnect(): Promise<void> {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
-      'Actor session is not bound.',
-      true
-    );
+    throw unboundSessionFailure();
   }
+}
+
+class UnboundZLinkSessionSendCall implements ZLinkBoundSessionSendCall {
+  metadata(): this {
+    return this;
+  }
+
+  async submit(): Promise<void> {
+    throw unboundSessionFailure();
+  }
+}
+
+function unboundSessionFailure(): Error {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+    'Actor session is not bound.',
+    true
+  );
 }
 
 function encodeJoinRequest(

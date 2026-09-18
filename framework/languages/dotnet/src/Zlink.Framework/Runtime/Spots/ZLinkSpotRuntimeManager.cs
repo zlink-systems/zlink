@@ -503,13 +503,22 @@ internal sealed class ZLinkSpotRuntimeManager(
             if (_leaseTracker is null)
                 throw new ZLinkConfigurationException(
                     "Remote User Spot creation requires the owner lease tracker.");
+            //  A lost owner ends the operation here. The authority record is
+            //  never released and no other node takes the object over
+            //  (05-location-relocation/06-failure-failover-policy §4.2, §4.4),
+            //  so re-running the reservation reads the same record back. Only
+            //  `null` means "the record moved on and the reservation can run
+            //  again"; this answer is terminal for the caller's deadline.
             if (!await _leaseTracker.IsOwnerTokenLiveAsync(
                     new ZLinkLocationOwnerToken(
                         current.OwnerId,
                         current.OwnerLeaseGeneration),
                     cancellationToken)
                 .ConfigureAwait(false))
-                return null;
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"User Spot '{spotId}' owner lease is not live.",
+                    ZLinkRetryAdvice.RetryAfterStateChange);
             if (current.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
                 || !string.Equals(
                     current.Allocation.StableType,

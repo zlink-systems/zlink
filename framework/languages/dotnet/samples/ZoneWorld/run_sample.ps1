@@ -77,7 +77,7 @@ function Invoke-ZoneWorldChild {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $powerShell = (Get-Process -Id $PID).Path
+    $powerShell = Get-ZlinkSampleSelfShellPath
     $child = Start-SampleProcess -Name $Name -FilePath $powerShell -LogDirectory $LogDir `
         -Arguments (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath) + $Arguments)
     try {
@@ -268,8 +268,12 @@ function Start-ZoneWorldNode {
     )
 
     if (-not $ConfigName) { $ConfigName = $Name }
-    if ($Name -eq "zone-node-2" -and $ConfigName -eq $Name) {
-        $ConfigName = "zone-node-replacement"
+    # Every restart is a replacement: it keeps the NodeId, publishes a new RID on its own
+    # replacement endpoint, and reaches ready with no zones. A Ready owner failure is not an
+    # automatic replacement, so the zones the dead incarnation owned stay where they are and
+    # reusing the cold-start config would make the new process demand two zones it can never get.
+    if ($ConfigName -eq $Name) {
+        $ConfigName = "$Name-replacement"
     }
     $firstNodeLine = 1
     $firstNodeErrorLine = 1
@@ -467,7 +471,7 @@ try {
         Invoke-SampleDotnetBuild $project
     }
 
-    $ports = @(New-SamplePorts -Count 9)
+    $ports = @(New-SamplePorts -Count 10)
     $GatewayEndpoint = "ws://127.0.0.1:$($ports[6])"
     $OpsEndpoint = "ws://127.0.0.1:$($ports[4])"
     $BrowserPreviewPort = $ports[8]
@@ -492,13 +496,21 @@ try {
             subscriberOnly = $index -eq 3
         }
     }
-    Write-ZoneWorldConfig "zone-node-crash-replacement" "zoneNode" @{
-        nodeId = "zone-node-2"; meshEndpoint = "tcp://127.0.0.1:$($ports[3])"
-        faultTickZone = $null; disableBots = $true; subscriberOnly = $false; allowEmptyZoneSet = $true
-    }
-    Write-ZoneWorldConfig "zone-node-replacement" "zoneNode" @{
-        nodeId = "zone-node-2"; meshEndpoint = "tcp://127.0.0.1:$($ports[3])"
-        faultTickZone = $null; disableBots = $false; subscriberOnly = $false
+    # 다시 띄운 ZoneNode는 zone을 되찾지 않는다(README "ZoneNode를 멈추고 다시 띄우는 시나리오의
+    # 고정값", §7.5). 멈춘 방식과 무관하게 재기동은 zone 0개로 ready가 되는 replacement 구성
+    # 하나만 쓴다. replacement는 같은 NodeId를 유지하되 자기 replacement endpoint로 새 RID를
+    # 게시한다.
+    foreach ($replacement in @(
+        @{ Index = 1; Port = $ports[9] },
+        @{ Index = 2; Port = $ports[3] })) {
+        Write-ZoneWorldConfig "zone-node-$($replacement.Index)-replacement" "zoneNode" @{
+            nodeId = "zone-node-$($replacement.Index)"
+            meshEndpoint = "tcp://127.0.0.1:$($replacement.Port)"
+            # A replacement spawns no bots: the bots of a crashed node's zones stay registered
+            # to the dead incarnation exactly as the zones do.
+            faultTickZone = $null; disableBots = $true; subscriberOnly = $false
+            allowEmptyZoneSet = $true
+        }
     }
     Write-ZoneWorldConfig "ops" "ops" @{
         streamEndpoint = $OpsEndpoint; meshEndpoint = "tcp://127.0.0.1:$($ports[5])"
@@ -618,7 +630,7 @@ try {
         Stop-ZoneWorldNode "zone-node-2"
         Complete-ZoneWorldClient $run
         $firstReplacementOpsLine = Get-ZoneWorldNextLogLine "ops"
-        Start-ZoneWorldNode "zone-node-2" "zone-node-crash-replacement"
+        Start-ZoneWorldNode "zone-node-2"
         $crashRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstReplacementOpsLine
         if (-not (Test-ZoneWorldRoutingId $crashRid) -or $crashRid -eq $oldRid) {
             throw "ZW-G4 crash replacement did not publish a new canonical RID."
@@ -782,13 +794,20 @@ try {
         $oldRid = $node2Rid
         Stop-ZoneWorldNode "zone-node-2" -Graceful
         $firstOpsLine = Get-ZoneWorldNextLogLine "ops"
-        Start-ZoneWorldRole "zone-node-replacement" $ZoneNodeProject "zone-node-replacement" | Out-Null
-        Wait-ZoneWorldLog "zone-node-replacement" "topology=ready" -Attempts 600
+        Start-ZoneWorldRole "zone-node-2-replacement" $ZoneNodeProject "zone-node-2-replacement" | Out-Null
+        Wait-ZoneWorldLog "zone-node-2-replacement" "topology=ready" -Attempts 600
         Wait-ZoneWorldLog "ops" "node status observed. node=zone-node-2, rid=zn-" -FirstLine $firstOpsLine -Attempts 600
         $replacementRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstOpsLine
         $passed = (Test-ZoneWorldRoutingId $replacementRid) -and $replacementRid -ne $oldRid
+        # The fresh-object half of the verdict is a mesh placement probe, not a spawn into the
+        # fixed ZW-A1 zone: the crash scenarios above leave every zone registered to a dead
+        # incarnation, so a spawn probe would judge those instead of the replacement
+        # (§7.5, the same probe ZW-G4 uses).
         if ($passed) {
-            try { Invoke-ZoneWorldClient "ZW-A1" } catch { $passed = $false }
+            try { Invoke-ZoneWorldClient "ZW-G3-fresh" } catch { $passed = $false }
+        }
+        if ($passed) {
+            $passed = [bool](Select-String -LiteralPath $ClientLog -SimpleMatch "scenario ZW-G3-fresh owner=$replacementRid " -Quiet)
         }
         Add-ZoneWorldVerdict "ZW-G3" $passed "Normal replacement did not publish a new RID and accept a fresh object."
     }

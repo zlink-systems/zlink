@@ -17,7 +17,7 @@ public sealed partial class RegressionTests
 
         foreach (var host in hosts)
         {
-            var source = File.ReadAllText(host);
+            var source = ReadSource(host);
             Assert.Equal(1, source.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
             Assert.Contains("AddRouteMesh(SampleNames.MeshName)", source, StringComparison.Ordinal);
             Assert.DoesNotContain("AddRequestHandler<", source, StringComparison.Ordinal);
@@ -25,11 +25,11 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("mesh.Channel(SampleNames.MeshName)", source, StringComparison.Ordinal);
         }
 
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Server()", File.ReadAllText(hosts[0]),
+        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Server()", ReadSource(hosts[0]),
             StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", File.ReadAllText(hosts[1]),
+        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", ReadSource(hosts[1]),
             StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", File.ReadAllText(hosts[2]),
+        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", ReadSource(hosts[2]),
             StringComparison.Ordinal);
     }
 
@@ -37,7 +37,7 @@ public sealed partial class RegressionTests
     public void SupportChat_Local_Actor_Directory_Does_Not_Cache_Location_Ownership()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var actorDirectory = File.ReadAllText(Path.Combine(
+        var actorDirectory = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Support",
@@ -45,7 +45,7 @@ public sealed partial class RegressionTests
             "ZLink",
             "Actors",
             "SupportActorDirectory.cs"));
-        var entrySpot = File.ReadAllText(Path.Combine(
+        var entrySpot = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Support",
@@ -64,7 +64,7 @@ public sealed partial class RegressionTests
     public void SupportChat_Client_Gate_Exercises_All_Required_Rejections()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var scenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
+        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
 
         Assert.Equal(
             7,
@@ -80,9 +80,9 @@ public sealed partial class RegressionTests
     public void SupportChat_Typing_Uses_The_Common_One_Way_Message()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var scenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
-        var handler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support",
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
+        var handler = ReadSource(Path.Combine(sampleRoot, "Server", "Support",
             "Infrastructure", "ZLink", "Spots", "ConversationSpot", "Handlers", "SetTypingHandler.cs"));
 
         Assert.Contains("record SetTypingMsg", messages, StringComparison.Ordinal);
@@ -98,8 +98,8 @@ public sealed partial class RegressionTests
     public void SupportChat_Registers_Stateful_Actor_Relocation_Adapter()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var host = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
-        var adapter = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
+        var host = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
+        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
             "Actors", "SupportUserActorRelocationAdapter.cs"));
 
         Assert.Contains("PreserveStateWith<SupportUserActorRelocationAdapter>()", host,
@@ -113,35 +113,35 @@ public sealed partial class RegressionTests
     public void SupportChat_Runner_Uses_Isolated_Docker_Redis_And_Location_Store()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.ko.md"));
-        var apiHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
-        var sessionHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs"));
-        var supportHost = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
-        var topology = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
-        var sharedMessages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var serverContracts = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SupportServerContracts.cs"));
-        var assignment = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Application",
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
+        var apiHost = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
+        var sessionHost = ReadSource(Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs"));
+        var supportHost = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
+        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
+        var sharedMessages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var serverContracts = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SupportServerContracts.cs"));
+        var assignment = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Application",
             "ConversationAssignment", "AgentAssignmentService.cs"));
-        var availability = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Application",
+        var availability = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Application",
             "ConversationAssignment", "AgentAvailabilityDirectory.cs"));
-        var availableHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
+        var availableHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Spots", "EntrySpot", "Handlers", "SetAgentAvailableHandler.cs"));
-        var session = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Session", "Sessions",
+        var session = ReadSource(Path.Combine(sampleRoot, "Server", "Session", "Sessions",
             "SupportChatSession.cs"));
-        var supportActor = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
+        var supportActor = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Actors", "SupportUserActor.cs"));
-        var relocationAdapter = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
+        var relocationAdapter = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Actors", "SupportUserActorRelocationAdapter.cs"));
-        var joinConversationHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
+        var joinConversationHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Spots", "EntrySpot", "Handlers", "JoinConversationActorHandler.cs"));
-        var entrySpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
+        var entrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
             "Spots", "EntrySpot", "SupportEntrySpot.cs"));
-        var conversationSpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
+        var conversationSpot = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Spots", "ConversationSpot", "ConversationSpot.cs"));
-        var clientScenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
-        var openConversation = File.ReadAllText(Path.Combine(
+        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
+        var openConversation = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Api",

@@ -57,8 +57,9 @@ public static class Scenarios
             ["ZW-E5-arm"] = E5Arm,
             ["ZW-E5"] = E5MaintenanceRestored,
             ["ZW-G2"] = G2ReverseStartedNodeOperations,
+            ["ZW-G3-fresh"] = (options, ct) => ReplacementAcceptsFreshObject("g3", options, ct),
             ["ZW-G4"] = G4CrashEndsCurrentOperationUnavailable,
-            ["ZW-G4-fresh"] = G4FreshReplacementAcceptsObject
+            ["ZW-G4-fresh"] = (options, ct) => ReplacementAcceptsFreshObject("g4", options, ct)
         };
 
     // Zone state observation waits for one ZoneStateNotify after a join or move. The same
@@ -1284,7 +1285,16 @@ public static class Scenarios
             "B8 rejoin reaches the already relocated Actor instead of creating a replacement");
     }
 
-    private static async ValueTask G4FreshReplacementAcceptsObject(
+    /// <summary>
+    /// "A replacement accepts a freshly placed object", for both replacement scenarios.
+    /// The probe creates Actors in the mesh, so the object it places needs a live node and not a
+    /// live zone: by the time ZW-G3 and ZW-G4 run, the crash scenarios before them have left
+    /// zones registered to dead incarnations, and a spawn-into-zone-nw probe would be judging
+    /// those instead of the replacement (§7.5). The runner reads the owner RID back out of the
+    /// printed line, so the scenario id is part of the message.
+    /// </summary>
+    private static async ValueTask ReplacementAcceptsFreshObject(
+        string scenario,
         ClientOptions options,
         CancellationToken ct)
     {
@@ -1293,11 +1303,12 @@ public static class Scenarios
             ct);
         for (var attempt = 0; attempt < 16; attempt++)
         {
-            var created = await probes.CreateFreshActorAsync(Unique("g4-fresh"), ct);
+            var created = await probes.CreateFreshActorAsync(Unique($"{scenario}-fresh"), ct);
             ZlinkStreamAssert.Ensure(created.Error is null, "fresh Actor creation succeeded");
             ZlinkStreamAssert.Ensure(created.ObjectGeneration > 0, "fresh Actor has an object generation");
             Console.WriteLine(
-                $"scenario ZW-G4-fresh owner={created.OwnerNodeRid} actor={created.ActorId}");
+                $"scenario ZW-{scenario.ToUpperInvariant()}-fresh"
+                + $" owner={created.OwnerNodeRid} actor={created.ActorId}");
         }
     }
 

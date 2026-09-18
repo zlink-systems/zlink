@@ -5114,11 +5114,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
-                    const auto creation_payload =
-                      runtime::decode_inline_creation_content (pending->request_content_reference);
-                    if (!creation_payload
-                        || pending->request_encoded_size != creation_payload->size ()
-                        || pending->request_sha256 != runtime::sha256 (*creation_payload)) {
+                    const auto creation_payload = runtime::decode_inline_creation_content (
+                      pending->request_content_reference, pending->request_sha256,
+                      pending->request_encoded_size);
+                    if (!creation_payload) {
                         terminal (105,
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::requestFailed),

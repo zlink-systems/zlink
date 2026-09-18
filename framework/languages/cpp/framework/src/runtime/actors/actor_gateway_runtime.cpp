@@ -659,12 +659,18 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                                                    "actor session is disconnected");
         }
         if (found == _state->actors_by_id.end () || !found->second.bound) {
+            /* No record means no binding anywhere: a local bind and a remote
+             * bound-session route both create one before a send can reach here
+             * (record_bound_session_route_transition). Relaying such a send
+             * completed the call and dropped the frame, while the other four
+             * languages failed. Spec 04-actor-model §8.1 makes an operation
+             * needing a bound session with no valid binding InvalidOperation. */
             if (!remote_sender) {
                 return result_t<void>::failure (framework_error_kind_t::not_configured,
                                                 "actor session is not bound");
             }
-            header = stream_header_t (stream_message_kind_t::send, codec,
-                                      stream_header_flags_t::none, std::nullopt, packet_name);
+            return result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                            "actor has no bound session");
         } else if (!actor_types_compatible (found->second.ref, *_actor_ref)) {
             return result_t<void>::failure (framework_error_kind_t::type_mismatch,
                                             "actor id is already bound to another type");

@@ -69,6 +69,9 @@ const ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
+const ZLINK_STREAM_MONITOR_IDLE_MIN_DELAY_MS = 1;
+const ZLINK_STREAM_MONITOR_IDLE_MAX_DELAY_MS = 20;
+const ZLINK_STREAM_MONITOR_IDLE_MAX_STEPS = 7;
 
 interface ZLinkStreamLivenessClock {
   now(): number;
@@ -884,6 +887,7 @@ export class ZLinkStreamSessionNodeRuntime {
   private stopped = false;
   private readonly receiveAbortController = new AbortController();
   private receiveLoop: Promise<void> | undefined;
+  private monitorLoop: Promise<void> | undefined;
   private readonly receiveWake = new ZLinkStreamReceiveWake();
   private receiveWorkSinceYield = 0;
   constructor(
@@ -894,7 +898,8 @@ export class ZLinkStreamSessionNodeRuntime {
     if (this.stopped || this.receiveLoop !== undefined) {
       return;
     }
-    this.options.monitor?.onEvent(event => this.onMonitorEvent(event));
+    const monitor = this.options.monitor;
+    monitor?.onEvent(event => this.onMonitorEvent(event));
     const running = this.runReceiveLoop(this.receiveAbortController.signal)
       .catch((error) => {
         if (!this.stopped) {
@@ -902,6 +907,14 @@ export class ZLinkStreamSessionNodeRuntime {
         }
       });
     this.receiveLoop = running;
+    if (monitor !== undefined) {
+      this.monitorLoop = this.runMonitorLoop(monitor, this.receiveAbortController.signal)
+        .catch((error) => {
+          if (!this.stopped) {
+            this.options.onError?.(error);
+          }
+        });
+    }
   }
 
   markConnected(routingId: unknown, localAddr?: string, remoteAddr?: string): void {
@@ -924,6 +937,7 @@ export class ZLinkStreamSessionNodeRuntime {
     this.wakeReceiveLoop();
     try {
       await this.receiveLoop;
+      await this.monitorLoop;
       const sessions = [...this.sessions.values()];
       this.sessions.clear();
       for (const packet of this.availablePackets.splice(0)) packet.close();
@@ -945,9 +959,51 @@ export class ZLinkStreamSessionNodeRuntime {
     await Promise.allSettled([...this.sessions.values()].map((session) => session.drainClose()));
   }
 
+  // Spec server 04-session §2/§7: a session exists once the handshake succeeds,
+  // and connect/disconnect callbacks are its base surface. A stream node learns
+  // of both from the socket monitor, which is a source of its own with no
+  // event-loop readiness callback. Draining it from the receive loop would tie
+  // a connection event to inbound traffic, so a session that never sends - a
+  // push-only console - would stay unknown to the node until it happened to
+  // write something. The .NET runtime already drains the monitor in its own
+  // loop (ZLinkStreamNodeRuntime.RunMonitorLoopAsync); this is the same rule.
+  private async runMonitorLoop(
+    monitor: ZLinkBackendSocketMonitor,
+    signal: AbortSignal
+  ): Promise<void> {
+    let misses = 0;
+    while (!this.isReceiveStopped(signal)) {
+      if (monitor.drain() > 0) {
+        misses = 0;
+        // Yield so a burst of monitor events cannot starve the event loop.
+        await this.monitorIdleDelay(0, signal);
+        continue;
+      }
+      misses = Math.min(misses + 1, ZLINK_STREAM_MONITOR_IDLE_MAX_STEPS);
+      await this.monitorIdleDelay(monitorIdleDelayMs(misses), signal);
+    }
+  }
+
+  private monitorIdleDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, delayMs);
+      // The bound socket already holds the event loop open for this node. The
+      // idle poll must not become a second reason for a process to stay alive.
+      timer.unref();
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
   private async runReceiveLoop(signal: AbortSignal): Promise<void> {
     while (!this.isReceiveStopped(signal)) {
-      this.drainMonitorEvents();
       let permit: ApplicationJobPermitPort | undefined;
       let packet: ZLinkBackendStreamPacket | undefined;
       let packetTransferred = false;
@@ -1076,10 +1132,6 @@ export class ZLinkStreamSessionNodeRuntime {
   private recyclePacket(packet: ZLinkBackendStreamPacket): void {
     packet.close();
     if (!this.stopped) this.availablePackets.push(packet);
-  }
-
-  private drainMonitorEvents(): void {
-    this.options.monitor?.drain();
   }
 
   private handleMalformedPacket(
@@ -1385,6 +1437,11 @@ export class ZLinkStreamSessionNodeRuntime {
     this.sessions.set(sessionId, created);
     return created;
   }
+}
+
+function monitorIdleDelayMs(misses: number): number {
+  const scaled = ZLINK_STREAM_MONITOR_IDLE_MIN_DELAY_MS * 2 ** (misses - 1);
+  return Math.min(scaled, ZLINK_STREAM_MONITOR_IDLE_MAX_DELAY_MS);
 }
 
 function streamMonitorEndpointKey(localAddr: string | undefined, remoteAddr: string | undefined): string {

@@ -30,7 +30,7 @@ cleanup() {
     echo "runDir=${RUN_DIR}"
   fi
 }
-trap cleanup EXIT
+trap zlink_sample_exit_trap EXIT
 
 read -r -a PORTS <<<"$(python3 - <<'PY'
 import random

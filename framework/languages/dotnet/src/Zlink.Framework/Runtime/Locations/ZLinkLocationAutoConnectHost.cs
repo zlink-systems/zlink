@@ -528,52 +528,65 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             : null;
     }
 
+    /// <summary>
+    /// The one place a runtime mutation of the local descriptor lands: it
+    /// applies the mutation on the owning reconciler and wakes that
+    /// capability's publishing loop, so the new descriptor revision reaches
+    /// the Location Store without waiting for the next polling tick. Peers
+    /// read the store, so a deferred publication is a window in which they
+    /// still act on the superseded descriptor.
+    /// </summary>
+    private void MutateLocalDescriptor(
+        ZLinkLocationAutoConnectType type,
+        string meshName,
+        ZLinkLocationRole role,
+        Action<ZLinkAutoConnectReconciler> mutation)
+    {
+        var key = (
+            type,
+            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+            role);
+        if (!_localReconcilers.TryGetValue(key, out var reconciler)) return;
+
+        mutation(reconciler);
+        if (_localLoops.TryGetValue(key, out var loop))
+            loop.Wake();
+    }
+
     internal void SetLocalWeight(
         ZLinkLocationAutoConnectType type,
         string meshName,
         ZLinkLocationRole role,
-        uint weight)
-    {
-        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
-        if (_localReconcilers.TryGetValue((type, meshKey, role), out var reconciler))
-            reconciler.SetLocalWeight(weight);
-    }
+        uint weight) =>
+        MutateLocalDescriptor(
+            type,
+            meshName,
+            role,
+            reconciler => reconciler.SetLocalWeight(weight));
 
-    internal void SetLocalPlacementWeight(string meshName, int weight)
-    {
-        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
-        if (_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
-                out var reconciler))
-            reconciler.SetLocalPlacementWeight(weight);
-    }
+    internal void SetLocalPlacementWeight(string meshName, int weight) =>
+        MutateLocalDescriptor(
+            ZLinkLocationAutoConnectType.SpotMesh,
+            meshName,
+            ZLinkLocationRole.Spot,
+            reconciler => reconciler.SetLocalPlacementWeight(weight));
 
-    internal void SetLocalActivationConcurrency(string meshName, int active)
-    {
-        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
-        if (!_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
-                out var reconciler))
-            return;
-
-        reconciler.SetLocalActivationConcurrency(active);
-        if (_localLoops.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
-                out var loop))
-            loop.Wake();
-    }
+    internal void SetLocalActivationConcurrency(string meshName, int active) =>
+        MutateLocalDescriptor(
+            ZLinkLocationAutoConnectType.SpotMesh,
+            meshName,
+            ZLinkLocationRole.Spot,
+            reconciler => reconciler.SetLocalActivationConcurrency(active));
 
     internal void SetLocalChannelWeight(
         string meshName,
         string channelName,
-        int weight)
-    {
-        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
-        if (_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
-                out var reconciler))
-            reconciler.SetLocalChannelWeight(channelName, weight);
-    }
+        int weight) =>
+        MutateLocalDescriptor(
+            ZLinkLocationAutoConnectType.SpotMesh,
+            meshName,
+            ZLinkLocationRole.Spot,
+            reconciler => reconciler.SetLocalChannelWeight(channelName, weight));
 
     internal void SetClientServerWeight(string channelName, int weight)
     {

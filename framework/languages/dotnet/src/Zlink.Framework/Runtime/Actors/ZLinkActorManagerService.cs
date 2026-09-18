@@ -573,11 +573,19 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
     {
         while (true)
         {
+            //  A lost owner ends the operation here, for the same reason the
+            //  User Spot join does: the authority record stays put and no
+            //  other node takes the Actor over
+            //  (05-location-relocation/06-failure-failover-policy §4.2, §4.4).
+            //  `null` stays reserved for "the record moved on".
             if (!await HasLiveOwnerAsync(
                     current,
                     cancellationToken)
                 .ConfigureAwait(false))
-                return null;
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{actorId}' owner lease is not live.",
+                    ZLinkRetryAdvice.RetryAfterStateChange);
             if (current.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
                 || !string.Equals(current.Allocation.StableType, actorType, StringComparison.Ordinal)
                 || !ZLinkActorAuthorityPayloadCodec.TryDecode(current.Payload.Span, out var authority))

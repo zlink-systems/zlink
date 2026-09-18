@@ -25,6 +25,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -68,11 +69,13 @@ final class KotlinConnectorWrapperTest {
 
     @Test
     fun kotlinCompressionDslPreservesReceivedMessageLimit() {
+        //  수신 한도를 기본값과 다르게 두어야 복사가 그 값을 보존하는지 볼 수 있다.
+        //  `ZLinkStreamConnectorOptions`의 구성 요소 순서를 그대로 따른다.
         val connectorOptions = ZLinkStreamConnectorOptions(
             URI.create("tcp://127.0.0.1:7200"),
             ZLinkStreamDispatchMode.MANUAL,
             ofSeconds(1),
-            ofSeconds(1),
+            ofSeconds(5),
             1,
             ofSeconds(1),
             64 * 1024,
@@ -89,10 +92,11 @@ final class KotlinConnectorWrapperTest {
             null,
             null,
             null,
+            null,
         )
 
-        //  Java spec 03 12: an extension that copies options preserves every
-        //  option currently defined, the receive limit included.
+        //  Java spec 03 12: 옵션을 복사하는 확장은 지금 정의된 옵션을 모두 보존한다.
+        //  수신 한도도 그중 하나다.
         assertEquals(32 * 1024, connectorOptions.maxReceivePayloadSize())
         assertEquals(
             32 * 1024,
@@ -102,6 +106,8 @@ final class KotlinConnectorWrapperTest {
             32 * 1024,
             connectorOptions.withDefaultStreamCompression().maxReceivePayloadSize(),
         )
+        assertEquals(ZLinkStreamCompression.LZ4, connectorOptions.compression())
+        assertNotNull(connectorOptions.compressionCodec())
     }
     @Test
     fun kotlinRequestCompletionSurfaceUsesOnlyContractNames() {

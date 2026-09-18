@@ -235,8 +235,8 @@ sample.session-node=a
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Client completion marker was not found."
     }
-    if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
-        throw "Client inbound stream evidence was not found."
+    if (-not (Select-String -Path $clientLog -Pattern "stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify" -Quiet)) {
+        throw "Client push-receipt evidence was not found."
     }
     if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "Message flow evidence was not found."

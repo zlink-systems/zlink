@@ -604,9 +604,22 @@ Bind, rebind, disconnect, and request correlation are defined by
 | The Actor is sealed before commit. | Ends with `Unavailable`. |
 | An operation needing a bound session has no valid binding. | Ends with `InvalidOperation`. It's an ordering issue — a binding must be made first. |
 
+<a id="where-a-bound-session-failure-surfaces"></a>
+That row covers both never having made a binding and a binding that was made
+and has since closed. Either way no valid binding exists now, so an operation
+needing a bound session fails. Observability still separates the two: a closed
+session must be recognisable as the peer having gone away.
+
+A bound-session failure surfaces where every other call failure does: at the
+call's terminal, observable through the language's asynchronous completion, not
+thrown by the accessor that creates the call. An accessor that throws first
+gives the same contract a different surface in each language.
+
 If there's no handler, decoding fails, or the application handler returns an
 exception, a request returns an error via a recoverable reply route. A
-one-way message records the error in the runtime observability path.
+one-way message records the error in the runtime observability path. A one-way
+failure that ends in that record does not make later calls on the Actor fail;
+the Actor stays usable.
 
 During drain, new Actor creation and membership assignment are blocked.
 Already-accepted Actor turns and control transactions proceed to the

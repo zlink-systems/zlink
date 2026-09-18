@@ -539,9 +539,11 @@ async function userSpotJoinTarget() {
   // Match the reciprocal .NET target: after its fixed User Spot is created,
   // it must not be eligible for the source's Entry-Spot actor placement.
   // Keep the actor factory so this target can materialize the actor after the
-  // User-Spot join transfers ownership.
+  // User-Spot join transfers ownership. A cell that wants the create itself to
+  // travel here passes --placement-weight 100 and gives the source 0 instead.
   const runtimeOptions = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false });
-  runtimeOptions.mesh(meshName).placementWeight = 0;
+  runtimeOptions.mesh(meshName).placementWeight =
+    Number.parseInt(args['placement-weight'] ?? '0', 10);
   writeReady();
 
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });

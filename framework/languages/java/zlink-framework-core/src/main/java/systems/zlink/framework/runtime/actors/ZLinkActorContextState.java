@@ -177,6 +177,19 @@ final class ZLinkActorContextState {
         return boundSession;
     }
 
+    /**
+     * The session the Actor context hands to application code.
+     *
+     * <p>Spec 04-actor-model §8.1 puts a bound-session failure at the call's
+     * terminal, like every other call failure, rather than in the accessor that
+     * creates the call. With no binding this returns a session whose send and
+     * disconnect complete with {@code InvalidOperation}, so the caller observes
+     * it through the completion stage instead of a throw at the accessor.
+     */
+    ZLinkBoundSession boundSessionOrUnbound() {
+        return boundSession == null ? new ZLinkUnboundSession(actorId) : boundSession;
+    }
+
     ZLinkSpot<?> requireSpot() {
         if (spot == null) {
             throw new ZLinkConfigurationException("actor has not joined a user Spot");

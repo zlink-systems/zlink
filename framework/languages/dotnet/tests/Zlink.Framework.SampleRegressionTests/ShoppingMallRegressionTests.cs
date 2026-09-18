@@ -16,7 +16,7 @@ public sealed partial class RegressionTests
 
         foreach (var host in hosts)
         {
-            var source = File.ReadAllText(host);
+            var source = ReadSource(host);
             Assert.Equal(1, source.Split("AddRouteMesh(", StringSplitOptions.None).Length - 1);
             Assert.Contains("AddRouteMesh(SampleNames.MeshName)", source, StringComparison.Ordinal);
             Assert.Contains("AddHandlersFromAssemblyOf", source, StringComparison.Ordinal);
@@ -24,8 +24,8 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("AddSendHandler<", source, StringComparison.Ordinal);
         }
 
-        var api = File.ReadAllText(hosts[0]);
-        var workflow = File.ReadAllText(hosts[1]);
+        var api = ReadSource(hosts[0]);
+        var workflow = ReadSource(hosts[1]);
         Assert.Contains("mesh.Objects().Client()", api, StringComparison.Ordinal);
         Assert.Contains("AddInstanceSpotFactory<OrderWorkflowSpot>", workflow,
             StringComparison.Ordinal);
@@ -37,28 +37,28 @@ public sealed partial class RegressionTests
     public void ShoppingMall_Runner_Uses_Isolated_Docker_Redis_And_Redis_Stores()
     {
         var sampleRoot = ResolveSampleRoot("ShoppingMall");
-        var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
-        var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var topology = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Configuration", "SampleNames.cs"));
-        var commerceApi = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CommerceApi", "Program.cs"));
-        var commerceWorkflowPorts = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CommerceApi", "Ports",
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleNames.cs"));
+        var commerceApi = ReadSource(Path.Combine(sampleRoot, "Server", "CommerceApi", "Program.cs"));
+        var commerceWorkflowPorts = ReadSource(Path.Combine(sampleRoot, "Server", "CommerceApi", "Ports",
             "Outbound", "WorkflowPorts.cs"));
-        var commerceWorkflowRouter = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CommerceApi",
+        var commerceWorkflowRouter = ReadSource(Path.Combine(sampleRoot, "Server", "CommerceApi",
             "Infrastructure", "ZLink", "ZLinkOrderWorkflowRouter.cs"));
-        var workflowHostFactory = File.ReadAllText(Path.Combine(sampleRoot, "Server", "OrderWorkflow",
+        var workflowHostFactory = ReadSource(Path.Combine(sampleRoot, "Server", "OrderWorkflow",
             "OrderWorkflowServerHostFactory.cs"));
-        var workflowService = File.ReadAllText(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Application",
+        var workflowService = ReadSource(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Application",
             "OrderWorkflow", "OrderWorkflowService.cs"));
-        var workflowSelfCheck = File.ReadAllText(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Application",
+        var workflowSelfCheck = ReadSource(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Application",
             "SelfCheck", "OrderWorkflowSelfCheckService.cs"));
-        var workflowSpot = File.ReadAllText(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Infrastructure",
+        var workflowSpot = ReadSource(Path.Combine(sampleRoot, "Server", "OrderWorkflow", "Infrastructure",
             "ZLink", "Spots", "OrderWorkflowSpot", "OrderWorkflowSpot.cs"));
-        var startUseCase = File.ReadAllText(Path.Combine(sampleRoot, "Server", "CommerceApi", "Application",
+        var startUseCase = ReadSource(Path.Combine(sampleRoot, "Server", "CommerceApi", "Application",
             "OrderWorkflow", "StartOrderUseCase.cs"));
-        var messages = File.ReadAllText(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var clientScenario = File.ReadAllText(Path.Combine(sampleRoot, "Client", "ShoppingMallClientScenario.cs"));
-        var stores = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Shared", "Store", "RedisCommerceStores.cs"));
-        var readme = File.ReadAllText(Path.Combine(sampleRoot, "README.ko.md"));
+        var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
+        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "ShoppingMallClientScenario.cs"));
+        var stores = ReadSource(Path.Combine(sampleRoot, "Server", "Shared", "Store", "RedisCommerceStores.cs"));
+        var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
 
         Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
         Assert.Contains("SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
@@ -285,14 +285,14 @@ public sealed partial class RegressionTests
 
         foreach (var domainFile in domainFiles)
         {
-            var source = File.ReadAllText(domainFile);
+            var source = ReadSource(domainFile);
             Assert.DoesNotContain("using ShoppingMall.Shared", source, StringComparison.Ordinal);
             Assert.DoesNotContain("using ShoppingMall.Server.Configuration", source, StringComparison.Ordinal);
             Assert.DoesNotContain("using System.Text.Json", source, StringComparison.Ordinal);
             Assert.DoesNotContain("JsonDerivedType", source, StringComparison.Ordinal);
         }
 
-        var mapper = File.ReadAllText(Path.Combine(
+        var mapper = ReadSource(Path.Combine(
             sampleRoot,
             "Server",
             "Shared",

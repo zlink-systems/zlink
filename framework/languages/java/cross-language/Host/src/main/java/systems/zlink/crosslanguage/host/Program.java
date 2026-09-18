@@ -436,8 +436,11 @@ public final class Program {
             String targetNodeRid = created.spot().nodeRid().toString();
             // The fixed target Spot exists now. Exclude this node from the
             // source Actor's Entry-Spot placement so the join is a real
-            // cross-node admission rather than a local self-join.
-            runtimeOptions.mesh(meshName).setPlacementWeight(0);
+            // cross-node admission rather than a local self-join. A cell that
+            // wants the create itself to travel here passes
+            // --placement-weight 100 and gives the source 0 instead.
+            runtimeOptions.mesh(meshName).setPlacementWeight(
+                Integer.parseInt(args.option("placement-weight", "0")));
             sink.append("user-spot-created|spot=" + created.spot().spotId()
                 + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name());
             // ApplicationRunners run before main() writes the ready file, and

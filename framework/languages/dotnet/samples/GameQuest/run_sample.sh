@@ -30,7 +30,7 @@ cleanup() {
     echo "runDir=${RUN_DIR}"
   fi
 }
-trap cleanup EXIT
+trap zlink_sample_exit_trap EXIT
 
 dotnet build "${SCRIPT_DIR}/GameQuest.csproj" --maxcpucount:1
 
@@ -357,4 +357,5 @@ wait_log_contains "${LOG_DIR}/client.log" "gamequest-server-evidence=completed"
 RUN_SUCCEEDED=1
 cleanup >/dev/null 2>&1
 trap - EXIT
+zlink_sample_assert_graceful_teardown
 echo "gamequest-placement=completed"

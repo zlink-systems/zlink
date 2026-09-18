@@ -457,6 +457,28 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
+    //  Spec 04-actor-model §8.1: a one-way failure that ends in the
+    //  observability record leaves the Actor usable. The record says the
+    //  failure was dropped, so the Actor's next call must not inherit it.
+    @Test
+    void aDroppedOneWayHandlerExceptionLeavesTheActorUsable() throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-poison", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            backend.entrySpot.raiseActorReadable(
+                actorSendParts("actor-poison", "throw-send", "boom"));
+
+            backend.entrySpot.raiseActorReadable(
+                actorRequestParts("actor-poison", "request", "after-drop", 71, NO_BIND));
+
+            ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
+            DecodedFrame frame = decodeFrame(reply.parts().get(0));
+            assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header().kind());
+        }
+    }
+
     @Test
     void entrySpotActorDispatchNoBindMissingActorRepliesNoBindError() throws Exception {
         TestBackend backend = startBackend();
@@ -1286,6 +1308,13 @@ final class EntrySpotActorDispatchTests {
         @Override
         public CompletionStage<Void> handle(ProbeEntrySpot spot, ProbeRequest request) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ProbeActorThrowSendHandler {
+        @ZLinkSpotActorSend(packetName = "throw-send")
+        public CompletionStage<Void> handle(ProbeActor actor, ProbeRequest request) {
+            throw new IllegalStateException(request.value());
         }
     }
 
