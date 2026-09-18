@@ -37,6 +37,7 @@ internal sealed class TicTacToeGame(
         Context.Handlers.AddHandler<PlayActorPlaceMarkHandler>(nameof(PlaceMarkReq));
     }
 
+    // --8<-- [start:doc-ttt-game-join]
     public async ValueTask OnJoinedActorAsync(
         PlayActor actor,
         CancellationToken cancellationToken)
@@ -59,6 +60,7 @@ internal sealed class TicTacToeGame(
             actor.ActorId,
             _roomId);
     }
+    // --8<-- [end:doc-ttt-game-join]
 
     public ValueTask OnLeaveActorAsync(
         PlayActor actor,
@@ -122,6 +124,7 @@ internal sealed class TicTacToeGame(
         return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
     }
 
+    // --8<-- [start:doc-ttt-timer-register]
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
         // Registers the periodic Spot timer handler explicitly for this room.
@@ -130,6 +133,7 @@ internal sealed class TicTacToeGame(
             GameTickPeriod,
             cancellationToken: cancellationToken);
     }
+    // --8<-- [end:doc-ttt-timer-register]
 
     public async ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
@@ -199,6 +203,7 @@ internal sealed class TicTacToeGame(
         await BroadcastAsync(change.State, null, cancellationToken);
     }
 
+    // --8<-- [start:doc-ttt-leave-game]
     public async ValueTask LeaveGameAsync(
         PlayActor actor,
         string roomId,
@@ -215,7 +220,9 @@ internal sealed class TicTacToeGame(
         actor.MarkForDestroyAfterRoomLeave();
         await Context.LeaveActorAsync(actor, cancellationToken);
     }
+    // --8<-- [end:doc-ttt-leave-game]
 
+    // --8<-- [start:doc-ttt-broadcast]
     private async ValueTask BroadcastAsync(
         GameState state,
         string? excludedActorId,
@@ -232,6 +239,7 @@ internal sealed class TicTacToeGame(
                 await actor.Context.BoundSession.Send(message).Async(cancellationToken);
             });
     }
+    // --8<-- [end:doc-ttt-broadcast]
 
     private async ValueTask NotifyPlayerJoinedAsync(
         PlayActor joinedActor,

@@ -6,6 +6,7 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
+// --8<-- [start:doc-ttt-milestone-handler]
 internal sealed class PlayerWinMilestoneEventHandler(
     ILogger<PlayerWinMilestoneEventHandler> logger)
     : IZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent>
@@ -26,3 +27,4 @@ internal sealed class PlayerWinMilestoneEventHandler(
         await spot.NotifyMilestoneAsync(message, cancellationToken);
     }
 }
+// --8<-- [end:doc-ttt-milestone-handler]

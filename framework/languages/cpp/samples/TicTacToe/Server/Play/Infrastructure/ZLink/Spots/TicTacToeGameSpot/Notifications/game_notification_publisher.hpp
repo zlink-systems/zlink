@@ -19,6 +19,7 @@ class game_notification_publisher_t
     {
     }
 
+    // --8<-- [start:doc-ttt-broadcast]
     template <typename TNotify>
     task_t<void>
     publish (const TNotify &notify,
@@ -32,6 +33,7 @@ class game_notification_publisher_t
         }
         co_return;
     }
+    // --8<-- [end:doc-ttt-broadcast]
 
   private:
     const std::map<std::string, player_actor_t *> &_actors;

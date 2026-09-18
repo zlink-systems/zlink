@@ -9,6 +9,7 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerInfo
 
 // --8<-- [start:doc-relocation-adapter]
 class PlayActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayActor> {
+    // --8<-- [start:doc-ttt-actor-capture]
     override fun capture(
         actor: PlayActor,
         cancellation: ZLinkRelocationCancellation,
@@ -22,6 +23,7 @@ class PlayActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayActor> {
             ),
         ),
     )
+    // --8<-- [end:doc-ttt-actor-capture]
 
     override fun restore(
         actor: PlayActor,

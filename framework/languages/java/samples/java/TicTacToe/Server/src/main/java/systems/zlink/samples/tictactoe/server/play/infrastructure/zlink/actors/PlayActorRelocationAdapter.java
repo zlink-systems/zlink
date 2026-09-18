@@ -13,6 +13,7 @@ public final class PlayActorRelocationAdapter
     implements ZLinkActorRelocationAdapter<PlayActor> {
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    // --8<-- [start:doc-ttt-actor-capture]
     @Override
     public CompletionStage<byte[]> capture(
         PlayActor actor,
@@ -28,6 +29,7 @@ public final class PlayActorRelocationAdapter
             return CompletableFuture.failedFuture(error);
         }
     }
+    // --8<-- [end:doc-ttt-actor-capture]
 
     @Override
     public CompletionStage<Void> restore(

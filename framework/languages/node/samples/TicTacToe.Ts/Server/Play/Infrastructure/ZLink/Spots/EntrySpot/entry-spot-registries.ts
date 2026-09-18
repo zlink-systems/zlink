@@ -25,6 +25,7 @@ class MilestoneObserverRegistry {
     this.subscriptions.delete(actorId);
   }
 
+  // --8<-- [start:doc-ttt-milestone-notify]
   async notify(event: PlayerWinMilestoneEvent): Promise<void> {
     const payload = winMilestoneNotify(event);
     for (const actorId of this.subscriptions) {
@@ -35,6 +36,7 @@ class MilestoneObserverRegistry {
       }
     }
   }
+  // --8<-- [end:doc-ttt-milestone-notify]
 }
 
 export { MilestoneObserverRegistry };

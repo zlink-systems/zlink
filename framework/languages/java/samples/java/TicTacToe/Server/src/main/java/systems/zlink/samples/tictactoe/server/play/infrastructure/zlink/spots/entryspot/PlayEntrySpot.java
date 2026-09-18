@@ -59,6 +59,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
             ZLinkActorCreateResponse.accept());
     }
 
+    // --8<-- [start:doc-ttt-entry-destroy]
     @Override
     public CompletionStage<Void> onJoinedActor(PlayActor actor) {
         if (actor.destroyAfterEntrySpotJoin()) {
@@ -68,6 +69,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
         }
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-ttt-entry-destroy]
 
     @Override
     public CompletionStage<Void> onLeaveActor(PlayActor actor) {
@@ -87,6 +89,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
         return new ObserveMilestoneRes(true);
     }
 
+    // --8<-- [start:doc-ttt-milestone-notify]
     public void notifyMilestone(PlayerWinMilestoneEvent event) {
         WinMilestoneNotify payload = new WinMilestoneNotify(
             event.roomId(),
@@ -99,6 +102,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
                 .submit();
         }
     }
+    // --8<-- [end:doc-ttt-milestone-notify]
 
     private void rememberObserver(PlayActor actor) {
         milestoneObservers.removeIf(existing -> existing.actorId().equals(actor.actorId()));

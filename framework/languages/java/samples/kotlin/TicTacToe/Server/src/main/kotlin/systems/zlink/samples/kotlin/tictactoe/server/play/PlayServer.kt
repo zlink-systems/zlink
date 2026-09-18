@@ -25,6 +25,7 @@ object PlayServer {
             options.configureDispatch {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
+            // --8<-- [start:doc-ttt-play-register]
             val apiClient = options.addClientServerChannel(SampleNames.ApiChannel).client()
             settings.apiChannelEndpoints.forEach { endpoint ->
                 // Api A와 Api B를 모두 수동 등록하고 request마다 가용 endpoint를 선택한다.
@@ -60,5 +61,6 @@ object PlayServer {
                 .registerSession(PlaySession::class.java)
                 // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
                 .addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)
+            // --8<-- [end:doc-ttt-play-register]
         }
 }

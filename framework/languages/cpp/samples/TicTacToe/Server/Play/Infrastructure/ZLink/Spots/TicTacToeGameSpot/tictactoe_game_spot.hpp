@@ -67,6 +67,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         co_return spot_create_response_t::accept ();
     }
 
+    // --8<-- [start:doc-ttt-timer-register]
     task_t<void> on_initialize () override
     {
         using namespace std::chrono_literals;
@@ -74,6 +75,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
           _context.add_timer<tictactoe_game_timer_handler_t> ("game-tick", 1s);
         co_return;
     }
+    // --8<-- [end:doc-ttt-timer-register]
 
     task_t<void> on_closing (
       const spot_closing_context_t &,
@@ -110,6 +112,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
                      const message_context_t &,
                      const leave_game_msg_t &request);
 
+    // --8<-- [start:doc-ttt-game-join]
     task_t<void> on_actor_joined (player_actor_t &actor) override
     {
         const auto pending = _pending_joins.find (actor.actor_id);
@@ -137,6 +140,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         co_await publisher.publish (state_notify, actor.actor_id);
         co_return;
     }
+    // --8<-- [end:doc-ttt-game-join]
 
     task_t<void> on_leave_actor (player_actor_t &actor) override
     {

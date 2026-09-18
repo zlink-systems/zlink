@@ -52,6 +52,7 @@ internal sealed class PlayEntrySpot(
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
     }
 
+    // --8<-- [start:doc-ttt-entry-destroy]
     public async ValueTask OnJoinedActorAsync(
         PlayActor actor,
         CancellationToken cancellationToken)
@@ -71,6 +72,7 @@ internal sealed class PlayEntrySpot(
             "tictactoe-lifecycle actor-destroy-complete actor={ActorId}",
             actor.ActorId);
     }
+    // --8<-- [end:doc-ttt-entry-destroy]
 
     public ValueTask OnLeaveActorAsync(
         PlayActor actor,
@@ -129,6 +131,7 @@ internal sealed class PlayEntrySpot(
             _observers.Remove(actor.ActorId);
         }
 
+        // --8<-- [start:doc-ttt-milestone-notify]
         public async ValueTask NotifyAsync(
             PlayerWinMilestoneEvent milestone,
             CancellationToken cancellationToken)
@@ -144,6 +147,7 @@ internal sealed class PlayEntrySpot(
                 await observer.Context.BoundSession.Send(notify)
                     .Async(cancellationToken);
         }
+        // --8<-- [end:doc-ttt-milestone-notify]
     }
 }
 // --8<-- [end:doc-entry-spot]

@@ -46,12 +46,14 @@ class PlayEntrySpot(
         return ZLinkActorCreateResponse.accept()
     }
 
+    // --8<-- [start:doc-ttt-entry-destroy]
     override suspend fun onJoinedActorSuspending(actor: PlayActor) {
         if (actor.destroyAfterEntrySpotJoin) {
             context.destroyActor(actor).await()
             logger.info("tictactoe-lifecycle actor-destroy-complete actor={}", actor.actorId)
         }
     }
+    // --8<-- [end:doc-ttt-entry-destroy]
 
     override suspend fun onLeaveActorSuspending(actor: PlayActor) {
         milestoneObservers.removeIf { it.actorId == actor.actorId }
@@ -67,6 +69,7 @@ class PlayEntrySpot(
         return ObserveMilestoneRes(true)
     }
 
+    // --8<-- [start:doc-ttt-milestone-notify]
     fun notifyMilestone(event: PlayerWinMilestoneEvent) {
         val payload = WinMilestoneNotify(
             roomId = event.roomId,
@@ -80,6 +83,7 @@ class PlayEntrySpot(
                 .submit()
         }
     }
+    // --8<-- [end:doc-ttt-milestone-notify]
 
     private fun rememberObserver(actor: PlayActor) {
         milestoneObservers.removeIf { it.actorId == actor.actorId }

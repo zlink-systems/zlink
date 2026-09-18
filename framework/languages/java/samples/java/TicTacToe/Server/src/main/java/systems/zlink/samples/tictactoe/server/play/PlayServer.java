@@ -24,6 +24,7 @@ public final class PlayServer {
             SampleLogging.configure(settings, "play");
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.DETAILED);
+            // --8<-- [start:doc-ttt-play-register]
             var apiClient = options.addClientServerChannel(SampleNames.ApiChannel)
                 .client();
             for (String endpoint : settings.apiChannelEndpoints()) {
@@ -57,6 +58,7 @@ public final class PlayServer {
                 .registerSession(PlaySession.class)
                 // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
                 .addSessionPacketHandler(AuthenticatePlaySessionHandler.class);
+            // --8<-- [end:doc-ttt-play-register]
         };
     }
 }

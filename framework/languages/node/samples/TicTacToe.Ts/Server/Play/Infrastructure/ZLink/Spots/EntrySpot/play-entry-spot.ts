@@ -66,6 +66,7 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     return { accepted: true };
   }
 
+  // --8<-- [start:doc-ttt-entry-destroy]
   async onJoinedActor(actor: PlayActor): Promise<void> {
     this.milestoneObservers.track(actor);
     if (actor.destroyAfterEntrySpotJoin) {
@@ -85,6 +86,7 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
       console.log(`tictactoe-lifecycle actor-destroy-complete actor=${actor.actorId}`);
     });
   }
+  // --8<-- [end:doc-ttt-entry-destroy]
 }
 // --8<-- [end:doc-entry-spot]
 

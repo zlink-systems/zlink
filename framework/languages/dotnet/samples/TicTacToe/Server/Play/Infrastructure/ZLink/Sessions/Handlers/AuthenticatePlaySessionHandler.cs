@@ -55,6 +55,7 @@ internal sealed class AuthenticatePlaySessionHandler(
             "play stream: creating actor before dispatch. sessionId={SessionId}, actor={ActorId}",
             context.SessionId,
             player.ActorId);
+        // --8<-- [start:doc-ttt-session-bind]
         var result = await actors.GetOrCreate(player.ActorId, SampleTypes.PlayerActor)
             .Request(new PlayerActorCreateReq(player)).Async(cancellationToken);
         var playerActor = result switch
@@ -70,6 +71,7 @@ internal sealed class AuthenticatePlaySessionHandler(
         var boundActor = await context.Actors.BindOrGetAsync(
             playerActor,
             cancellationToken);
+        // --8<-- [end:doc-ttt-session-bind]
 
         // ActorRef equality covers the actor id, object generation, mesh and owner
         // route. Keep that exact-identity check on the server; AuthenticateRes only

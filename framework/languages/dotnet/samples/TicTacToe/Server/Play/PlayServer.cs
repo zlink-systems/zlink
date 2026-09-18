@@ -50,6 +50,7 @@ internal sealed class PlayServer(SampleSettings settings)
             }));
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            // --8<-- [start:doc-ttt-play-register]
             options.AddStreamNode(SampleNodes.ClientStream)
                 .Bind(settings.PlayEndpoint)
                 .EnableActorDispatch()
@@ -73,6 +74,7 @@ internal sealed class PlayServer(SampleSettings settings)
                     SampleTypes.PlayerActor, factory => factory.PreserveStateWith<PlayActorRelocationAdapter>())
                 .AddSpotFactory<TicTacToeGame>(
                     SampleTypes.GameSpot, factory => factory.DisableRelocation());
+            // --8<-- [end:doc-ttt-play-register]
             mesh.Channel(SampleTopics.PlayerMilestoneChannel).Server();
             foreach (var endpoint in settings.PeerMeshEndpoints)
                 mesh.PeerConnections.Connect(

@@ -12,6 +12,7 @@ interface PlayActorTransferState {
 
 // --8<-- [start:doc-relocation-adapter]
 class PlayActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayActor> {
+  // --8<-- [start:doc-ttt-actor-capture]
   async capture(actor: PlayActor): Promise<Uint8Array> {
     return new TextEncoder().encode(JSON.stringify({
       displayName: actor.displayName,
@@ -22,6 +23,7 @@ class PlayActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayActo
       destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin
     } satisfies PlayActorTransferState));
   }
+  // --8<-- [end:doc-ttt-actor-capture]
 
   async restore(actor: PlayActor, payload: Uint8Array): Promise<void> {
     const restored = JSON.parse(new TextDecoder().decode(payload)) as PlayActorTransferState;

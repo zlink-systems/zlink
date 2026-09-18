@@ -72,6 +72,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     this.context.handlers.addHandler(PlayActorLeaveGameHandler);
     // send: internal notification delivery targets an Actor in this Room Spot.
     this.context.handlers.addHandler(DeliverPlayNotificationHandler);
+    // --8<-- [start:doc-ttt-timer-register]
     // timer: the Room Spot owns the public timer registration and its policy.
     this.gameTick = await this.context.addTimer(
       'game-tick',
@@ -82,6 +83,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
         stopOnUnhandledException: true
       }
     );
+    // --8<-- [end:doc-ttt-timer-register]
   }
 
   async onInitialize(): Promise<void> {
@@ -112,6 +114,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     }
   }
 
+  // --8<-- [start:doc-ttt-game-join]
   async onJoinedActor(actor: PlayActor): Promise<void> {
     const actorId = actor.actorId;
     this.actors.set(actorId, actor);
@@ -139,6 +142,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     }
     console.log(`game spot: actor joined. actor=${actorId} roomId=${this.roomId}`);
   }
+  // --8<-- [end:doc-ttt-game-join]
 
   async onLeaveActor(actor: PlayActor): Promise<void> {
     this.requireMatch().players.delete(actor.actorId);
@@ -155,11 +159,13 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     const before = match.snapshot();
     const change = match.placeMark(actorId, cell);
     const state = change.state;
+    // --8<-- [start:doc-ttt-broadcast]
     for (const joined of match.players.values()) {
       if (joined.actorId !== actorId) {
         await this.notifyActor(this.requireActorId(joined.actorId), gameStateNotify(state));
       }
     }
+    // --8<-- [end:doc-ttt-broadcast]
     await this.publishWinMilestone(actorId, before, state);
     return placeMarkRes(state);
   }

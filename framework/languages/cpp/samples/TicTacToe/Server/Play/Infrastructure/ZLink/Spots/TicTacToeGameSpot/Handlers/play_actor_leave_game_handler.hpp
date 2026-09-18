@@ -6,6 +6,7 @@
 namespace zlink::samples::tictactoe
 {
 
+// --8<-- [start:doc-ttt-leave-game]
 inline void tictactoe_game_spot_t::leave_game (const player_actor_t &actor,
                                                const message_context_t &,
                                                const leave_game_msg_t &request)
@@ -23,5 +24,6 @@ inline void tictactoe_game_spot_t::leave_game (const player_actor_t &actor,
                                  const_cast<player_actor_t &> (actor));
     std::cout << "tictactoe-lifecycle leave-completed actor=" << actor.actor_id << std::endl;
 }
+// --8<-- [end:doc-ttt-leave-game]
 
 } // namespace zlink::samples::tictactoe

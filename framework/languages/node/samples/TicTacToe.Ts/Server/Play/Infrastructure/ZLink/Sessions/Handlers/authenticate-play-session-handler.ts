@@ -35,6 +35,7 @@ class AuthenticatePlaySessionHandler {
         authenticatePlayerReq(request.accessToken)
       )
       .submit<AuthenticatePlayerRes>();
+    // --8<-- [start:doc-ttt-session-bind]
     const created = await this.actors
       .getOrCreate(authenticated.player.actorId, SampleNames.playerActorType)
       .inMesh(SampleNames.playSpotNode)
@@ -45,6 +46,7 @@ class AuthenticatePlaySessionHandler {
     }
     const actorRef = created.actor;
     await context.actors.bindOrGet(actorRef);
+    // --8<-- [end:doc-ttt-session-bind]
     if (created.status === 'existing') {
       // Keep the exact ActorRef as server-only evidence. AuthenticateRes exposes
       // PlayerInfo only, so the client cannot choose or forge an Actor route.

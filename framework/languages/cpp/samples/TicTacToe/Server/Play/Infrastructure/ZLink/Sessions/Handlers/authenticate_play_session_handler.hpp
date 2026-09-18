@@ -48,6 +48,7 @@ class authenticate_play_session_handler_t
                                                           "Player authentication failed.");
         }
 
+        // --8<-- [start:doc-ttt-session-bind]
         /* 공통 sample spec §13: 인증 응답의 PlayerInfo.ActorId로 actor를 만들고, 같은
          * PlayerInfo를 actor 생성 payload로 실어 보낸다(별도 EnsurePlayerActor 계약 없음). */
         const auto &player = authenticated.player;
@@ -59,6 +60,7 @@ class authenticate_play_session_handler_t
                                                           "Player actor could not be located.");
         }
         auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
+        // --8<-- [end:doc-ttt-session-bind]
         bool first_player_x_binding = false;
         {
             std::lock_guard lock (bound_actors_mutex);
