@@ -7,9 +7,9 @@
     그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#3-bingo--온라인-게임-서버-구축)가 이 샘플이 무엇을 보여 주는지
-소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름, 각 흐름에
-등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다. 이 장에는 계약을
-소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
+소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,
+각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
+이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
 [Bingo 시나리오](../../../common/sample/bingo/README.ko.md)가 소유하며, 이 장은 그것을 다시
 적지 않는다.
 
@@ -90,8 +90,8 @@ Protobuf schema가 정하며, 이 샘플만 payload가 Protobuf다.
     --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Session/bingo-session-module.ts:doc-bingo-session-register"
     ```
 
-stream node에 session type을 등록하고 actor dispatch를 켜면, 인증된 session에 묶인 Actor로
-packet이 전달된다. mesh와 channel 등록에 상대 endpoint가 없다 — 어느 node가 어느 이름을 맡는지는
+stream node에 session type을 등록하면 인증된 session에 묶인 Actor로 packet이 전달된다 — managed
+언어는 actor dispatch를 함께 켠다. mesh와 channel 등록에 상대 endpoint가 없다 — 어느 node가 어느 이름을 맡는지는
 Location Store가 해석한다([Location](25-location.ko.md)).
 
 Play는 Entry Spot, player Actor factory, room Spot factory를 같은 mesh에 등록한다.
@@ -579,8 +579,8 @@ bound session으로 보내는 경로는
 ## 8. reward의 Logical Multicast
 
 승자가 확정되면 room은 종료 push를 보낸 뒤 reward event를 publish한다. 관전자는 다른 Play
-node에 있을 수 있으므로 특정 Spot을 가리켜 보내지 않고, channel과 topic으로 범위를 정해
-발행한다.
+node에 있을 수 있으므로 특정 Spot을 가리켜 보내지 않고, topic으로 범위를 정해 발행한다 —
+managed 언어는 channel 이름을 함께 적는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ 크게 보기</a></p>

@@ -22,8 +22,8 @@ Location Store resolves both the connections between servers and the location of
 game proceeds as authentication → matching → room join → card submission → timer draws and pushes →
 winner and reward publish → cleanup, and the sections of this chapter follow the same order.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.html" title="Bingo sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-bingo.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-bingo-en.html" title="Bingo sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-bingo-en.html" target="_blank">↗ View larger</a></p>
 
 This layout uses more framework features than any other sample because each flow needs a different
 one. Binding a player to a single connection uses session binding; reserving a waiting room uses an
@@ -94,8 +94,8 @@ STREAM connections, calls objects in the Play mesh, and calls the API channel.
     --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Session/bingo-session-module.ts:doc-bingo-session-register"
     ```
 
-Registering the session type on the stream node and enabling actor dispatch makes packets flow to the
-Actor bound to an authenticated session. The mesh and channel registrations carry no remote endpoint —
+Registering the session type on the stream node makes packets flow to the Actor bound to an
+authenticated session — the managed languages also enable actor dispatch there. The mesh and channel registrations carry no remote endpoint —
 which node serves which name is resolved by the Location Store ([Location](25-location.en.md)).
 
 Play registers the Entry Spot, the player Actor factory and the room Spot factory on the same mesh.
@@ -151,8 +151,8 @@ differences between the kinds are covered by
 The first packet the client sends is an authentication request. Session has API verify the token,
 creates or finds the player Actor by its global id, and binds that Actor to the current session.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding.html" title="Authentication and binding" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/sample-bingo-auth-binding.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding-en.html" title="Authentication and binding" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-auth-binding-en.html" target="_blank">↗ View larger</a></p>
 
 The session handler sends a request to the API channel and, if the result is valid, obtains the
 Actor from the Play mesh. The Actor's creation payload travels with that call.
@@ -296,8 +296,8 @@ A matching request is relayed to the bound Actor and arrives at the Entry Spot's
 handler. The handler asks API for a match, reserves a room join with the `RoomId` it receives, and
 replies.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start.html" title="Matching and game start" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/sample-bingo-matching-start.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start-en.html" title="Matching and game start" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-matching-start-en.html" target="_blank">↗ View larger</a></p>
 
 === "C#/.NET"
 
@@ -493,8 +493,8 @@ serialization boundary of one Spot by [The Execution Model](32-execution-model.e
 Once both players have submitted cards, the room's timer starts drawing. Each tick draws one number,
 marks both cards, and pushes the updated state to both players.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw.html" title="Cards, draws and the winner decision" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/sample-bingo-card-draw.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw-en.html" title="Cards, draws and the winner decision" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-card-draw-en.html" target="_blank">↗ View larger</a></p>
 
 The timer handler runs inside the room Spot's turn, so it never overlaps the card submission handler.
 
@@ -589,10 +589,10 @@ session by [How Session Binding Works](39-session-binding.en.md).
 
 Once the winner is decided, the room sends the end-of-game pushes and then publishes the reward event.
 An observer may be on a different Play node, so the room does not address a particular Spot; it
-publishes with a channel and a topic that set the scope.
+publishes with a topic that sets the scope — the managed languages name the channel as well.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward observation" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-reward-observe-en.html" target="_blank">↗ View larger</a></p>
 
 === "C#/.NET"
 
@@ -689,8 +689,8 @@ When the game ends, the room removes the player Actors. Each Actor returns to th
 the Entry Spot checks the destroy mark and destroys the Actor. The room does not destroy the Actor
 itself because its leave callback gives the turn back with `Yield` while it reports the result to API.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup.html" title="End-of-game cleanup" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/sample-bingo-end-cleanup.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup-en.html" title="End-of-game cleanup" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-end-cleanup-en.html" target="_blank">↗ View larger</a></p>
 
 === "C#/.NET"
 
