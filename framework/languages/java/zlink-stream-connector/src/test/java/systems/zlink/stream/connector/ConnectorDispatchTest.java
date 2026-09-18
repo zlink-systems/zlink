@@ -6,11 +6,14 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
@@ -160,6 +163,91 @@ final class ConnectorDispatchTest {
         //  The message did arrive, so spec 32 10 keeps it counted even
         //  though the cancelled waiter could not take it.
         assertEquals(1, queue.receivedCount("Push"));
+    }
+
+    /**
+     * Spec 32 7: a {@code Manual} queue grows until the user pumps, so the
+     * drain has to survive a queue longer than the stack. Draining by
+     * recursion overflowed here, because a handler that finishes
+     * synchronously hands back an already completed stage and the
+     * continuation runs on the same stack.
+     *
+     * <p>The depth is well past what a default stack holds, and the recorded
+     * order is asserted so a fix cannot buy depth by giving up the delivery
+     * order that spec 32 7 pins to the pumping thread.
+     */
+    @Test
+    void drainRunsAQueueDeeperThanTheStackInOrder() {
+        int depth = 20_000;
+        ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
+        List<Integer> order = new ArrayList<>();
+        for (int index = 0; index < depth; index++) {
+            int position = index;
+            //  A synchronous item: its stage is already completed when the
+            //  drain receives it. That is the shape that recursed.
+            queue.add(() -> order.add(position));
+        }
+
+        queue.drainAsync().toCompletableFuture().join();
+
+        assertEquals(depth, order.size());
+        assertEquals(0, queue.size());
+        for (int index = 0; index < depth; index++) {
+            assertEquals(index, order.get(index));
+        }
+    }
+
+    /**
+     * The drain must still stop at the first failure and report it, which is
+     * what the recursive chain did. Spec 32 7 has the connector run the
+     * registered handlers; it does not have it swallow their failures.
+     */
+    @Test
+    void drainStopsAtTheFirstFailedItemAndKeepsTheRest() {
+        ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
+        AtomicInteger handled = new AtomicInteger();
+        RuntimeException failure = new IllegalStateException("handler failed");
+        queue.add(handled::incrementAndGet);
+        queue.addAsync(() -> CompletableFuture.failedFuture(failure));
+        queue.add(handled::incrementAndGet);
+
+        CompletableFuture<Void> drained = queue.drainAsync().toCompletableFuture();
+
+        assertTrue(drained.isCompletedExceptionally());
+        assertEquals(1, handled.get());
+        assertEquals(1, queue.size());
+        assertSame(
+            failure,
+            assertThrows(CompletionException.class, drained::join).getCause());
+    }
+
+    /**
+     * An item whose stage completes later must not be overtaken: the drain
+     * resumes only after that stage finishes, and it resumes on whichever
+     * thread completed it, so a pumping thread keeps running its own items.
+     */
+    @Test
+    void drainResumesOnlyAfterAPendingItemCompletes() {
+        ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
+        List<String> order = new ArrayList<>();
+        CompletableFuture<Void> gate = new CompletableFuture<>();
+        queue.add(() -> order.add("first"));
+        queue.addAsync(() -> {
+            order.add("pending");
+            return gate;
+        });
+        queue.add(() -> order.add("last"));
+
+        CompletableFuture<Void> drained = queue.drainAsync().toCompletableFuture();
+
+        assertEquals(List.of("first", "pending"), order);
+        assertFalse(drained.isDone());
+
+        gate.complete(null);
+
+        assertTrue(drained.isDone());
+        assertEquals(List.of("first", "pending", "last"), order);
+        assertEquals(0, queue.size());
     }
 
     @Test
