@@ -47,7 +47,7 @@ final class ZLinkActorDispatchSerials {
     // Spec 05 §4 lets no Actor payload run before the completion callback
     // ended, so the barrier must stay in front of the Actor across that
     // re-target: every later dispatch target starts behind it.
-    private final Map<String, CompletionStage<Void>> lifecycleBarriers =
+    private final Map<String, CompletableFuture<Void>> lifecycleBarriers =
         new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
@@ -180,6 +180,7 @@ final class ZLinkActorDispatchSerials {
 
     void remove(String actorId) {
         inStateLane(() -> {
+            releaseLifecycleBarrierHold(actorId);
             ZLinkActorDispatchTarget target = actorTargets.remove(actorId);
             if (target != null) {
                 target.removeActorQueue(actorId);
@@ -359,6 +360,10 @@ final class ZLinkActorDispatchSerials {
             setup = inStateLane(() -> {
                 CompletionStage<Void> existing = teardowns.get(actorId);
                 if (existing == null) {
+                    //  Teardown ends the Actor's dispatch registration, so a
+                    //  hold that a re-target installed must not keep the
+                    //  cleanup turn behind a barrier that no longer matters.
+                    releaseLifecycleBarrierHold(actorId);
                     CompletableFuture<Void> createdTerminal = new CompletableFuture<>();
                     teardowns.put(actorId, createdTerminal);
                     ZLinkActorDispatchTarget target = actorTargets.get(actorId);
@@ -398,6 +403,14 @@ final class ZLinkActorDispatchSerials {
             released.complete(null);
         });
         return barrier;
+    }
+
+    /** State-lane only: releases the hold of a pending lifecycle barrier. */
+    private void releaseLifecycleBarrierHold(String actorId) {
+        CompletableFuture<Void> released = lifecycleBarriers.remove(actorId);
+        if (released != null) {
+            released.complete(null);
+        }
     }
 
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySeal(
