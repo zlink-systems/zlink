@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.16.0
+// Package version: 0.17.0
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -1133,7 +1133,7 @@ var ZlinkStreamConnectorBundle = (() => {
   }
   function validatePayload(payloadLength, maxPayloadSize) {
     if (payloadLength > maxPayloadSize) {
-      throw connectorError("frameTooLarge" /* FrameTooLarge */, "Payload exceeds MaxSendPayloadSize.");
+      throw connectorError("validationFailed" /* ValidationFailed */, "Payload exceeds MaxSendPayloadSize.");
     }
   }
 
