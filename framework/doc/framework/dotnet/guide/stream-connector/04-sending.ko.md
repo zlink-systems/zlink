@@ -120,8 +120,8 @@ Protobuf는 선택 package가 구현을 제공한다.
 
 ## 7. 크기 한도
 
-송신 payload가 한도를 넘으면 **transport에 쓰기 전에** 실패한다. 연결은 그대로 유지되므로 그
-호출만 실패하고 다른 packet은 영향을 받지 않는다. 압축을 지정한 송신은 압축한 결과를 한도와
+송신 payload가 한도를 넘으면 **transport에 쓰기 전에** `ValidationFailed`로 실패한다. 연결은
+그대로 유지되므로 그 호출만 실패하고 다른 packet은 영향을 받지 않는다. 압축을 지정한 송신은 압축한 결과를 한도와
 비교한다.
 
 64KB보다 큰 payload를 정상적으로 주고받아야 하면 [Connector 옵션](03-connector-options.ko.md)에서

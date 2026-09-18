@@ -314,7 +314,7 @@ payload.
 
 ## 7. Size Limits
 
-A send payload over the limit fails **before the write to the transport**. The connection stays, so
+A send payload over the limit fails with `ValidationFailed` **before the write to the transport**. The connection stays, so
 only that call fails and other packets are unaffected. A send that asked for compression is
 compared against the limit after compression.
 
