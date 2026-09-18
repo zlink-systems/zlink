@@ -532,23 +532,19 @@ try {
     Wait-ZoneWorldLog "ops" "Application started."
 
     if ($B8Child) {
-        $python = Get-Command python -ErrorAction SilentlyContinue
-        if ($null -eq $python) { $python = Get-Command py -ErrorAction SilentlyContinue }
-        if ($null -eq $python) { throw "Python is required for the ZW-B8 fault proxy." }
+        $python = Get-ZlinkSamplePythonCommand
         foreach ($proxy in @(
             @{ Name = "session-route-proxy-zone-node-1"; Port = $ports[0] },
             @{ Name = "session-route-proxy-zone-node-2"; Port = $ports[1] },
             @{ Name = "session-route-proxy-gateway"; Port = $ports[7] }
         )) {
-            $arguments = @()
-            if ($python.Name -eq "py.exe") { $arguments += "-3" }
-            $arguments += @(
+            $arguments = @($python.Arguments) + @(
                 (Join-Path $ScriptDir "Support/session_route_block_proxy.py"),
                 "--listen-host", "127.0.0.1", "--listen-port", "$($proxy.Port)",
                 "--target-host", "127.0.0.2", "--target-port", "$($proxy.Port)",
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44")
             )
-            Start-SampleProcess $proxy.Name $python.Source $LogDir -Arguments $arguments | Out-Null
+            Start-SampleProcess $proxy.Name $python.Path $LogDir -Arguments $arguments | Out-Null
             Wait-ZoneWorldLog $proxy.Name "proxy-ready"
         }
     }

@@ -1,5 +1,9 @@
 Set-StrictMode -Version Latest
 
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+    $IsWindows = $env:OS -eq "Windows_NT"
+}
+
 $script:ZlinkCppSampleRedisPortMin = 20000
 $script:ZlinkCppSampleRedisPortMax = 20099
 $script:ZlinkCppSampleAppPortMin = 20100
@@ -298,4 +302,71 @@ function Get-ZlinkSampleSelfShellPath {
     if ($onPath) { return $onPath.Source }
 
     throw "Could not locate the current PowerShell host executable ($exeName) to relaunch a child lane."
+}
+
+function Get-ZlinkSamplePythonCommand {
+    <#
+        Resolves a working Python 3 interpreter for ZoneWorld's ZW-B8 fault proxy.
+
+        A bare PATH lookup is not enough on Windows, for three separate reasons:
+        - The python.org installer leaves "Add python.exe to PATH" unchecked by default,
+          so a perfectly good per-user install is invisible to Get-Command.
+        - The `py` launcher is installed to a directory of its own, and needs "-3" to
+          select an interpreter rather than reading a shebang.
+        - Windows 11 ships App Execution Alias stubs named python.exe/python3.exe under
+          %LOCALAPPDATA%\Microsoft\WindowsApps, on PATH by default. They resolve, they
+          launch, and then they refuse to run anything (exit 9009) and send the user to
+          the Store. Finding an executable therefore does not mean finding Python.
+
+        So candidates are gathered in preference order -- PATH, then the `py` launcher,
+        then the standard per-user and machine install roots, newest version first --
+        and each one only counts once it has actually reported a Python 3 version.
+    #>
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $addCandidate = {
+        param([string]$Path, [string[]]$Arguments)
+        if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            $candidates.Add([pscustomobject]@{ Path = $Path; Arguments = $Arguments })
+        }
+    }
+
+    foreach ($name in @("python3", "python")) {
+        foreach ($command in @(Get-Command $name -CommandType Application -ErrorAction SilentlyContinue)) {
+            & $addCandidate $command.Source @()
+        }
+    }
+    foreach ($command in @(Get-Command "py" -CommandType Application -ErrorAction SilentlyContinue)) {
+        & $addCandidate $command.Source @("-3")
+    }
+
+    if ($IsWindows) {
+        foreach ($launcher in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
+            (Join-Path $env:WINDIR "py.exe"))) {
+            & $addCandidate $launcher @("-3")
+        }
+        foreach ($root in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python"),
+            $env:ProgramFiles,
+            ${env:ProgramFiles(x86)})) {
+            if ([string]::IsNullOrWhiteSpace($root)) { continue }
+            Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
+                Sort-Object -Property @{ Expression = { [int]($_.Name -replace '\D', '') } } -Descending |
+                ForEach-Object { & $addCandidate (Join-Path $_.FullName "python.exe") @() }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $version = $null
+        try {
+            $version = (& $candidate.Path @(@($candidate.Arguments) + @("--version")) 2>&1 | Out-String)
+        } catch {
+            continue
+        }
+        if ($LASTEXITCODE -eq 0 -and $version -match "Python 3\.") {
+            return $candidate
+        }
+    }
+
+    return $null
 }
