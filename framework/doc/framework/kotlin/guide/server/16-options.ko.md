@@ -1,5 +1,5 @@
 ---
-title: "옵션과 기본값 · C#/.NET"
+title: "옵션과 기본값 · Kotlin"
 ---
 
 <!-- generated:start -->
@@ -14,7 +14,7 @@ title: "옵션과 기본값 · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C++](../../../cpp/guide/server/16-options.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/16-options.ko.md) · [Kotlin](../../../kotlin/guide/server/16-options.ko.md) · [Node/TypeScript](../../../node/guide/server/16-options.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/16-options.ko.md) · [C#/.NET](../../../dotnet/guide/server/16-options.ko.md) · [Java](../../../java/guide/server/16-options.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/16-options.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
@@ -37,15 +37,15 @@ title: "옵션과 기본값 · C#/.NET"
 | node builder | 그 MeshNode · channel · STREAM node 하나 | host 시작 전 |
 | runtime option | 실행 중에 바꿀 수 있는 값 | 실행 중([§9](#9-실행-중-바꿀-수-있는-값)) |
 
-```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureNetwork().BindHost = "0.0.0.0";   // 루트 옵션
-    var mesh = options.AddRouteMesh("play")            // node builder
-        .Listen("tcp://0.0.0.0:5555")
-        .SetPlacementWeight(100);
-    mesh.Channel("room").Server();
-});
+```kotlin
+val configurer = ZLinkFrameworkConfigurer { options ->
+    options.configureNetwork().setBindHost("0.0.0.0")   // 루트 옵션
+    options.routeMesh("play") {                         // node builder
+        listen("tcp://0.0.0.0:5555")
+        setPlacementWeight(100)
+        channelName("room") { server() }
+    }
+}
 ```
 
 host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못된 조합은 첫 호출까지 미루지
@@ -56,14 +56,14 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | codec 등록 | payload 직렬화 형식 | 내장 JSON |
-| `BindHost` | listener가 bind할 주소 | `127.0.0.1` |
-| `AdvertiseHost` | 상대에게 알릴 주소 | 지정 안 함 — bind 주소를 사용 |
-| `DefaultRequestTimeout` | request가 응답을 기다리는 상한 | 30초 |
-| `SessionReplacementCallbackTimeout` | session 교체 callback이 끝나기를 기다리는 상한 | 30초 |
+| `bindHost` | listener가 bind할 주소 | `127.0.0.1` |
+| `advertiseHost` | 상대에게 알릴 주소 | 지정 안 함 — bind 주소를 사용 |
+| `defaultRequestTimeout` | request가 응답을 기다리는 상한 | 30초 |
+| `sessionReplacementCallbackTimeout` | session 교체 callback이 끝나기를 기다리는 상한 | 30초 |
 | stream compression | STREAM payload 압축 | LZ4 사용 |
-| worker `MinThreads` · `MaxThreads` | CPU worker 풀의 스레드 수 | 0 · 프로세서 수의 두 배 |
-| worker `IdleTimeout` | 유휴 스레드를 정리하기까지의 시간 | 30초 |
-| `ApplicationVersion` · `MaintenanceWave` | rolling update가 비교할 버전과 점검 묶음 | 0 · 지정 안 함 |
+| worker `MinThreads` · `maxThreads` | CPU worker 풀의 스레드 수 | 0 · 프로세서 수의 두 배 |
+| worker `idleTimeout` | 유휴 스레드를 정리하기까지의 시간 | 30초 |
+| `applicationVersion` · `maintenanceWave` | rolling update가 비교할 버전과 점검 묶음 | 0 · 지정 안 함 |
 | handler 탐색 · filter · metadata 정책 | 등록 대상과 전달 허용 key | 등록한 것만 |
 | location store · relocation store | 위치 결정과 상태 이전 저장소 | 없으면 단일 node 구성 |
 
@@ -71,7 +71,7 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
   주소와 광고 주소를 각각 지정한다.
 - **STREAM 압축은 켜진 상태로 시작한다.** 끄려면 압축 설정에서 명시적으로 끈다.
 - **CPU worker 풀에는 대기열 상한이 없다.** 유입을 제한하는 것은 Application job queue다(§3).
-  `DefaultRequestTimeout`은 `0` 이하를 거부한다.
+  `defaultRequestTimeout`은 `0` 이하를 거부한다.
 
 ## 3. Core HWM과 Application job queue 상한
 
@@ -81,13 +81,13 @@ Core HWM은 ordinary queue가 보유한 byte를, Application job queue는 handle
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Core budget 계산에 전달할 memory limit hint | 지정 안 함 |
-| `CoreHwmBudgetBytes` | profile 계산보다 우선하는 manual Core budget | 지정 안 함 |
+| `coreHwmMemoryLimitBytes` | Core budget 계산에 전달할 memory limit hint | 지정 안 함 |
+| `coreHwmBudgetBytes` | profile 계산보다 우선하는 manual Core budget | 지정 안 함 |
 | `CoreHwmProfile` | Core Auto-budget profile | `Balanced` |
 | `ApplicationJobQueueProfile` | job 상한을 계산할 profile | `Balanced` |
-| `MaxQueuedApplicationJobs` | profile 계산을 대체하는 정확한 job 상한 | 지정 안 함 |
-| `ApplicationJobQueuePauseThresholdPercent` | 유입을 멈추는 사용률 | 80 |
-| `ApplicationJobQueueResumeThresholdPercent` | 유입을 다시 여는 사용률 | 60 |
+| `maxQueuedApplicationJobs` | profile 계산을 대체하는 정확한 job 상한 | 지정 안 함 |
+| `applicationJobQueuePauseThresholdPercent` | 유입을 멈추는 사용률 | 80 |
+| `applicationJobQueueResumeThresholdPercent` | 유입을 다시 여는 사용률 | 60 |
 
 Memory limit과 Core budget은 양수만 허용한다. Manual job 상한의 범위는 `1..2,147,483,647`이며
 `0`은 무제한이 아니라 시작 단계 설정 오류다. 사용률은 각각 `1..100`과 `0..99`이고 다시 여는 값이
@@ -98,9 +98,9 @@ Memory limit과 Core budget은 양수만 허용한다. Manual job 상한의 범�
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| 기록 수준 | `Off` · `Errors` · `Normal` · `Detailed` | `Errors` |
+| 기록 수준 | `off` · `errors` · `Normal` · `Detailed` | `errors` |
 | `TraceSampleRate` | 정상 흐름을 기록할 비율. 범위는 `0.0..1.0` | 1.0 |
-| `IncludeMessageSizes` | payload byte 크기를 함께 남길지 | 남기지 않음 |
+| `includeMessageSizes` | payload byte 크기를 함께 남길지 | 남기지 않음 |
 
 handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 정한다. request는 보낸 쪽에 오류
 응답을 보내고, send와 publish는 기록을 남기고 버린다. 응답 경로가 없는 send와 publish에는
@@ -109,22 +109,22 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 !!! warning "message 크기 기록의 기본값은 JVM에서만 다르다"
 
-    Java와 Kotlin은 `IncludeMessageSizes`가 켜진 상태로 시작하고 나머지 언어는 꺼진 상태로
+    Java와 Kotlin은 `includeMessageSizes`가 켜진 상태로 시작하고 나머지 언어는 꺼진 상태로
     시작한다. 언어를 섞은 구성에서 기록의 양을 맞추려면 값을 명시한다.
 
 ## 5. MeshNode 옵션
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `Listen` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
-| `BindHost` · `AdvertiseHost` | 이 node만의 bind · 광고 주소 | 루트 값 |
-| `RoutingId` · `RoutingIdPrefix` | 이 node의 식별자 | 자동 생성 |
-| `ObjectRole` | Spot · Actor 배치 참여 여부 | 아래 주의 |
-| `PlacementWeight` | 새 배치 대상으로 선택되는 비중. 범위는 `0..10000` | 100 |
-| `ActorLimit` · `SpotLimit` | 이 node가 동시에 담을 수 있는 상한 | `0` — 제한 없음 |
+| `listen` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
+| `bindHost` · `advertiseHost` | 이 node만의 bind · 광고 주소 | 루트 값 |
+| `RoutingId` · `routingIdPrefix` | 이 node의 식별자 | 자동 생성 |
+| `objectRole` | Spot · Actor 배치 참여 여부 | 아래 주의 |
+| `placementWeight` | 새 배치 대상으로 선택되는 비중. 범위는 `0..10000` | 100 |
+| `ActorLimit` · `spotLimit` | 이 node가 동시에 담을 수 있는 상한 | `0` — 제한 없음 |
 | `ActivationConcurrency` | 동시에 진행할 cold activation 수 | 128 |
-| `InstanceSpotIdleTimeout` | 유휴 Instance Spot을 정리하기까지의 시간 | `0` — 정리하지 않음 |
-| `DefaultRequestTimeout` | 이 node에서 나가는 request의 상한 | 루트 값(30초) |
+| `instanceSpotIdleTimeout` | 유휴 Instance Spot을 정리하기까지의 시간 | `0` — 정리하지 않음 |
+| `defaultRequestTimeout` | 이 node에서 나가는 request의 상한 | 루트 값(30초) |
 | peer connection | 수동으로 연결할 상대 | 없음 — location store가 찾아낸다 |
 
 두 limit의 `0`은 제한 없음이고 양수는 `1..2,147,483,647`이다. `ActivationConcurrency`는 반대로
@@ -132,18 +132,18 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 !!! warning "배치 참여의 기본값은 C++만 다르다"
 
-    C++은 `ObjectRole`을 지정하지 않으면 배치를 받는 `Server`로 시작하고 나머지 언어는
+    C++은 `objectRole`을 지정하지 않으면 배치를 받는 `Server`로 시작하고 나머지 언어는
     배치에 참여하지 않는다. Spot과 Actor를 두지 않을 node라면 C++에서는 역할을 명시한다.
 
 ## 6. 송신 대기와 socket 상한
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `SendTimeout` | 보낼 자리가 나기를 기다리는 상한 | 1초 |
-| `ReceiveTimeout` | 받는 방향의 대기 상한 | 지정 안 함 |
-| `SendHighWaterMark` · `ReceiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
+| `sendTimeout` | 보낼 자리가 나기를 기다리는 상한 | 1초 |
+| `receiveTimeout` | 받는 방향의 대기 상한 | 지정 안 함 |
+| `sendHighWaterMark` · `receiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
 
-상한에 도달하면 보내는 쪽이 `SendTimeout`까지 기다리고, 끝까지 자리가 나지 않으면 그 호출은
+상한에 도달하면 보내는 쪽이 `sendTimeout`까지 기다리고, 끝까지 자리가 나지 않으면 그 호출은
 deadline 초과로 끝난다. 자동으로 다시 보내지 않으므로 재시도 여부는 application이 정한다.
 **MeshNode 사이의 연결에는 message 크기 상한 설정이 없다** — 그 상한은 STREAM node와
 ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
@@ -158,23 +158,23 @@ ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `OwnerLeaseRenewInterval` | 소유권을 갱신하는 주기 | 5초 |
-| `OwnerLeaseTtl` | 갱신이 끊긴 소유권이 만료되는 시간 | 15초 |
-| `OwnerLeaseRenewTimeout` | 갱신 시도 하나의 상한 | 3초 |
-| `OwnerLeaseFencingMargin` | 만료 전에 권한을 반납하는 여유 | 5초 |
-| `PollingInterval` | 변경 알림이 없는 store를 다시 읽는 주기 | 1초 |
-| `StoreFailureGrace` | store 장애를 견디는 기간 | 30초 |
-| `RouteCacheMaxAge` | 조회한 위치를 재사용하는 기간 | 15초 |
-| `MessageFollowDuration` | 이전 owner가 새 owner로 message를 전달하는 기간 | 30초 |
-| `SessionRelocationSealTimeout` | session 경로 갱신을 기다리는 상한 | 3초 |
+| `ownerLeaseRenewInterval` | 소유권을 갱신하는 주기 | 5초 |
+| `ownerLeaseTtl` | 갱신이 끊긴 소유권이 만료되는 시간 | 15초 |
+| `ownerLeaseRenewTimeout` | 갱신 시도 하나의 상한 | 3초 |
+| `ownerLeaseFencingMargin` | 만료 전에 권한을 반납하는 여유 | 5초 |
+| `pollingInterval` | 변경 알림이 없는 store를 다시 읽는 주기 | 1초 |
+| `storeFailureGrace` | store 장애를 견디는 기간 | 30초 |
+| `routeCacheMaxAge` | 조회한 위치를 재사용하는 기간 | 15초 |
+| `messageFollowDuration` | 이전 owner가 새 owner로 message를 전달하는 기간 | 30초 |
+| `sessionRelocationSealTimeout` | session 경로 갱신을 기다리는 상한 | 3초 |
 | `RelocationPayloadChunkLimit` | relocation payload chunk 하나의 크기 상한 | 256 KiB |
 | `RelocationInFlightPayloadBudget` | 연결 하나가 동시에 전송하는 chunk byte 상한 | 16 MiB |
 | `RelocationNodeInFlightPayloadBudget` | 같은 상한의 node 전체 값 | `0` — 적용하지 않음 |
-| `RelocationCutoverWaitTimeout` | cutover를 기다리는 시간 | 1초 |
+| `relocationCutoverWaitTimeout` | cutover를 기다리는 시간 | 1초 |
 
 **lease 값은 함께 움직인다.** `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout`이
 `OwnerLeaseTtl - OwnerLeaseFencingMargin`보다 작아야 한다. 기본값은 8초와 10초로 이 관계를
-만족하며 갱신이 한 번 실패해도 소유권이 유지된다. `RouteCacheMaxAge`는 `MessageFollowDuration`
+만족하며 갱신이 한 번 실패해도 소유권이 유지된다. `routeCacheMaxAge`는 `messageFollowDuration`
 보다 5초 이상 작아야 하고, 각각 `0`이면 경로 캐시와 message 전달을 끈다. 위치 결정과 이전
 동작은 [Location](25-location.ko.md)과 [Relocation](37-relocation.ko.md)이 다룬다.
 
@@ -182,14 +182,14 @@ ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `Bind` | client가 접속할 주소 | 지정해야 한다 |
-| `BindHost` · `AdvertiseHost` | bind · 광고 주소 | 루트 값 |
+| `bind` | client가 접속할 주소 | 지정해야 한다 |
+| `bindHost` · `advertiseHost` | bind · 광고 주소 | 루트 값 |
 | session 등록 | 연결마다 만들 session 타입 | 지정해야 한다 |
-| `MaxMessageSize` | client가 보내는 message 하나의 byte 상한 | 64 KiB |
+| `maxMessageSize` | client가 보내는 message 하나의 byte 상한 | 64 KiB |
 | TLS 설정 | 서버 인증서와 client 인증서 요구 여부 | 평문, client 인증서를 요구하지 않음 |
 | Actor dispatch | 들어온 packet을 bind된 Actor로 전달 | 꺼져 있음 |
 
-`MaxMessageSize`는 client에서 server로 오는 방향에만 적용하고 `0`은 상한을 두지 않는다는 뜻이다.
+`maxMessageSize`는 client에서 server로 오는 방향에만 적용하고 `0`은 상한을 두지 않는다는 뜻이다.
 크기를 넘긴 message는 handler에 일부도 전달하지 않고 server가 연결을 끊는다. Actor dispatch는
 STREAM node마다 한 번만 활성화하며 두 번 호출하면 오류가 난다. 어느 mesh에서 Actor를 찾을지는
 인자가 아니라 global ActorId가 정하므로 mesh 이름을 함께 지정하지 않는다. 등록 코드는
@@ -204,9 +204,9 @@ STREAM node마다 한 번만 활성화하며 두 번 호출하면 오류가 난�
 | channel weight | 이 node가 새 request · send 대상으로 선택되는 비중 |
 | placement weight | 새 Spot · Actor가 이 node에 배치되는 비중 |
 
-```csharp
-runtime.Mesh("play").PlacementWeight = 0;
-runtime.Channel("room").Weight = 0;
+```kotlin
+runtimeOptions.mesh("play").setPlacementWeight(0)
+runtimeOptions.channel("room").weight(0)
 ```
 
 두 값의 범위는 `0..10000`이고 기본값은 100이다. `0`으로 두면 **새 배정만 멈춘다** — 이미 있는
@@ -219,9 +219,9 @@ object와 연결은 유지된다. 무중단 배포에서 이 node로 새 트래�
 
 | 값 | 빠뜨렸을 때 |
 | --- | --- |
-| MeshNode의 `Listen` 주소 | 시작 단계에서 설정 오류 |
+| MeshNode의 `listen` 주소 | 시작 단계에서 설정 오류 |
 | MeshNode의 channel 역할 또는 object 역할 하나 이상 | 시작 단계에서 설정 오류 |
-| STREAM node의 `Bind` 주소와 session 타입 | 시작 단계에서 설정 오류 |
+| STREAM node의 `bind` 주소와 session 타입 | 시작 단계에서 설정 오류 |
 | Spot · Actor factory의 relocation 정책 정확히 하나 | 시작 단계에서 설정 오류 |
 | 상태를 옮기는 factory나 Instance Spot이 있을 때의 relocation store | 시작 단계에서 설정 오류 |
 | 여러 node를 사용할 때의 location store | 연결할 상대를 찾지 못한다 |

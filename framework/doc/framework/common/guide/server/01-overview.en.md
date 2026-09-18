@@ -1356,13 +1356,20 @@ part of this map.
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
-- **Entry server** — receives an external request over ASP.NET Core HTTP and delegates to
-  the domain server.
-- **Domain server** — MeshNode channel membership + SPOT (state unit) + session relay +
-  stream node.
-- **Location store** — manages server address information. The dotted lines are connections
-  that find an endpoint through a store lookup.
-- **Client app** — sends requests over HTTP, and receives real-time state over stream.
+- **API server** — takes the HTTP request and hands it to the domain server. There are two
+  ways to hand it over. A request one handler can settle calls a node handler over a
+  **ClientServer channel**; a request a unit of state must take goes to an Instance Spot over
+  a **RouteMesh channel**.
+- **Session server** — takes the client's real-time connection. The STREAM node receives the
+  message, the session relay passes it over a **RouteMesh channel**, and the actor in the user
+  spot an entry spot assigned handles it.
+- **Domain server** — node handlers and spots hold the state and process requests serially.
+- **Location store** — manages server address information. The dotted lines are store lookups
+  that find an endpoint, not a data path.
+
+**A STREAM node can live in the domain server, but that is not the usual shape.** Connection
+count and state throughput grow separately, so it commonly sits in its own server, the way the
+HTTP entry does.
 
 ## 6. Who This Guide Is for, and Its Scope
 

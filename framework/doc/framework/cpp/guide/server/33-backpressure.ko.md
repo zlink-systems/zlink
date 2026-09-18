@@ -236,7 +236,6 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 | — | 실제로 적용되는 값은 **보내는 경로마다 다르다**(아래) | — |
 | `SendHighWaterMark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
 | `ReceiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
-| `max_message_size` | 받아들일 message 하나의 최대 크기 | `configure_router_socket()` |
 | `SendHighWaterMark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | root inbound-dispatch 설정 |
 | `ApplicationJobQueueProfile` · `max_queued_application_jobs` · pause/resume threshold | host instance의 queued application job 상한과 flow 전이 경계 | root inbound-dispatch 설정 |
@@ -267,8 +266,6 @@ admission이나 replay가 없다. 이 modifier는 reply에 적용하지 않는�
 한도가 상대 쪽 흐름으로 이어진다. 값을 정할 때는 다음을 확인한다.
 
 - **올리면** 순간 폭주를 더 흡수하고, **내리면** 혼잡이 더 일찍 드러난다.
-- **`max_message_size`를 유한하게 둔다.** 무제한이면 message 한 건이 상한을 얼마든지 넘을 수
-  있어 queue가 차지할 memory의 최악값을 계산할 수 없다.
 - **이 값은 socket 방향별 physical queue에 적용되는 manual 상한이다.** Core context 전체
   budget이나 Application job queue 상한으로 해석하지 않는다.
 - **high-water mark를 올리는 것이 기본 대응은 아니다.** 상한을 키우면 혼잡이 memory로
@@ -359,8 +356,7 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 
 상한에 도달하면 새 ordinary ingress는 가장 오래 기다린 source부터 permit 반환을 기다린다. Batch와
 1:N local dispatch도 확보한 permit보다 많은 handler job을 먼저 만들지 않는다. Receive 전에 식별할 수
-있는 terminal reply·error completion은 이 permit을 사용하지 않으며, `max_message_size`는 두 HWM과
-독립된 단일 message 상한이다.
+있는 terminal reply·error completion은 이 permit을 사용하지 않는다.
 
 ## 5. 정체 발생 확인 방법
 

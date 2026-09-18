@@ -577,10 +577,17 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology.html" target="_blank">↗ 크게 보기</a></p>
 
-- **진입 서버** - ASP.NET Core HTTP로 외부 요청을 받아 domain 서버에 위임한다.
-- **도메인 서버** - MeshNode channel membership + SPOT(상태 단위) + session relay + stream node.
-- **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회를 통해 endpoint를 찾는 연결이다.
-- **클라이언트 앱** - HTTP로 요청을 보내고, stream으로 실시간 상태를 받는다.
+- **API 서버** - HTTP 요청을 받아 도메인 서버로 넘긴다. 넘기는 길은 둘이다. handler 하나가
+  처리하면 되는 요청은 **ClientServer channel**로 node handler를 부르고, 상태 단위가 받아야
+  하는 요청은 **RouteMesh channel**로 Instance Spot에 보낸다.
+- **세션 서버** - client의 실시간 연결을 받는다. STREAM node가 받은 메시지를 session relay가
+  **RouteMesh channel**로 넘기면, entry spot이 배정한 user spot의 actor가 처리한다.
+- **도메인 서버** - node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다.
+- **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며
+  데이터 경로가 아니다.
+
+**STREAM node를 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다.** 연결 수와 상태
+처리량이 따로 늘기 때문에, HTTP 입구처럼 별도 서버로 두는 구성이 흔하다.
 
 ## 6. 가이드의 대상과 범위
 

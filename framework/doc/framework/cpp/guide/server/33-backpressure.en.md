@@ -250,7 +250,6 @@ is neither cancelled nor rolled back.
 | — | The value actually applied **differs by send path** (below) | — |
 | `SendHighWaterMark` | Bytes that can be held **to send**, per peer. `0` means unlimited | `configure_router_socket()` |
 | `ReceiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `configure_router_socket()` |
-| `max_message_size` | The max size of one message that will be accepted | `configure_router_socket()` |
 | `SendHighWaterMark` · `linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `ConfigureSpotPublisher()` |
 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | root inbound-dispatch configuration |
 | `ApplicationJobQueueProfile` · `max_queued_application_jobs` · pause/resume thresholds | The host instance's queued-application-job limit and flow-transition boundaries | root inbound-dispatch configuration |

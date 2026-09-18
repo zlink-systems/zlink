@@ -10,7 +10,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · C++"
 # 14. 샘플 고르기 — 내 문제에 가까운 예제부터
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 16. Options — 설정 목록과 기본값](16-options.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
+[가이드 홈](README.ko.md) | [이전: 옵션과 기본값](16-options.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

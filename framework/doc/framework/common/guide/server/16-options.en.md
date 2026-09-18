@@ -1,22 +1,4 @@
----
-title: "Options and Defaults · C#/.NET"
----
-
-<!-- generated:start -->
-<!-- This file is generated from `common/guide/server/16-options.en.md`. Do not edit directly.
-     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
-<!-- generated:end -->
-
 # Options and Defaults
-
-<!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md) | [Next: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md)
-<!-- framework-adapter-nav:end -->
-
-<!-- language-switch:start -->
-View in another language — [C++](../../../cpp/guide/server/16-options.en.md) · **C#/.NET** · [Java](../../../java/guide/server/16-options.en.md) · [Kotlin](../../../kotlin/guide/server/16-options.en.md) · [Node/TypeScript](../../../node/guide/server/16-options.en.md)
-{ .zlink-langswitch }
-<!-- language-switch:end -->
 
 !!! info "What you get from this chapter"
 
@@ -39,16 +21,64 @@ set it.
 | Node builder | That one MeshNode, channel, or STREAM node | Before the host starts |
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
-```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
-    var mesh = options.AddRouteMesh("play")            // node builder
-        .Listen("tcp://0.0.0.0:5555")
-        .SetPlacementWeight(100);
-    mesh.Channel("room").Server();
-});
-```
+=== "C++"
+
+    ```cpp
+    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.configure_network ().set_bind_host ("0.0.0.0");   // root option
+        auto mesh = options.add_route_mesh ("play");              // node builder
+        mesh.listen ("tcp://0.0.0.0:5555").set_placement_weight (100);
+        mesh.channel_name ("room").server ();
+    });
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    builder.Services.AddZLinkFramework(options =>
+    {
+        options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
+        var mesh = options.AddRouteMesh("play")            // node builder
+            .Listen("tcp://0.0.0.0:5555")
+            .SetPlacementWeight(100);
+        mesh.Channel("room").Server();
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    ZLinkFrameworkConfigurer configurer = options -> {
+        options.configureNetwork().setBindHost("0.0.0.0");         // root option
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play");  // node builder
+        mesh.listen("tcp://0.0.0.0:5555").setPlacementWeight(100);
+        mesh.channelName("room").server();
+    };
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    val configurer = ZLinkFrameworkConfigurer { options ->
+        options.configureNetwork().setBindHost("0.0.0.0")   // root option
+        options.routeMesh("play") {                         // node builder
+            listen("tcp://0.0.0.0:5555")
+            setPlacementWeight(100)
+            channelName("room") { server() }
+        }
+    }
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    const builder = zlinkFramework();
+    builder.configureNetwork().bindHost = '0.0.0.0';   // root option
+    const mesh = builder.addRouteMesh('play')          // node builder
+      .listen('tcp://0.0.0.0:5555')
+      .setPlacementWeight(100);
+    mesh.channel('room').server();
+    ```
 
 There is no surface that calls a builder again after the host has started. An invalid
 combination is not deferred to the first call — it **ends as a configuration error during
@@ -217,10 +247,40 @@ host starts.
 | Channel weight | Share of new requests and sends this node is selected for |
 | Placement weight | Share of new Spots and Actors placed on this node |
 
-```csharp
-runtime.Mesh("play").PlacementWeight = 0;
-runtime.Channel("room").Weight = 0;
-```
+=== "C++"
+
+    ```cpp
+    runtime_options.placement_weight (0);
+    runtime_options.channel ("room").weight (0);
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    runtime.Mesh("play").PlacementWeight = 0;
+    runtime.Channel("room").Weight = 0;
+    ```
+
+=== "Java"
+
+    ```java
+    runtimeOptions.mesh("play").setPlacementWeight(0);
+    runtimeOptions.channel("room").weight(0);
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    runtimeOptions.mesh("play").setPlacementWeight(0)
+    runtimeOptions.channel("room").weight(0)
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    runtimeOptions.mesh('play').placementWeight = 0;
+    runtimeOptions.channel('room').weight = 0;
+    ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**
 — existing objects and connections are kept. In a zero-downtime rollout, use it to keep new

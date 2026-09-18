@@ -109,7 +109,7 @@ worker 호출을 어떤 종결자로 닫느냐가 **기다리는 동안 그 Spot
 - 무엇이 한 줄에 서는가 — [실행 모델](32-execution-model.ko.md)
 - 도착이 처리보다 빠를 때 — [Backpressure](33-backpressure.ko.md)
 - timer가 이동을 만났을 때 — [Relocation](37-relocation.ko.md)
-- 옵션의 정확한 이름과 기본값 — 언어별 `16. Options` 장
+- 옵션의 정확한 이름과 기본값 — 언어별 [16. Options](16-options.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

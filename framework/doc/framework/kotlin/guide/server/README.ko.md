@@ -145,10 +145,11 @@ endpoint와 실시간 연결이 함께 동작한다.
 | 20 | [Session 묶음의 동작 원리](39-session-binding.ko.md) | 묶는 개수, 경로 갱신, 끊김 통지, 실패 |
 | 21 | [ZLink를 어디에 쓰나](17-alternative.ko.md) | 사용처, 문제 신호, 기술 선택 경계, 라이선스 |
 | 22 | [운영과 lifecycle](12-operations.ko.md) | 런타임 메트릭, relocate, drain, readiness 연결 |
-| 23 | [샘플 고르기](14-samples.ko.md) | 어떤 샘플을 먼저 볼지 고르고 실행하는 방법 |
-| 24 | [E2E 테스트](15-e2e-testing.ko.md) | client library로 시스템 전체를 검증하기 |
-| 25 | [주요 타입 사용 색인](13-interface-catalog.ko.md) | 계약 인터페이스를 검증 코드로 색인 |
-| 26 | [모니터링](26-monitoring.ko.md) | 재작성 대기 — 상태 snapshot과 진단 |
+| 23 | [Options](16-options.ko.md) | 옵션 목록, 기본값과 바꾸는 시점 |
+| 24 | [샘플 고르기](14-samples.ko.md) | 어떤 샘플을 먼저 볼지 고르고 실행하는 방법 |
+| 25 | [E2E 테스트](15-e2e-testing.ko.md) | client library로 시스템 전체를 검증하기 |
+| 26 | [주요 타입 사용 색인](13-interface-catalog.ko.md) | 계약 인터페이스를 검증 코드로 색인 |
+| 27 | [모니터링](26-monitoring.ko.md) | 재작성 대기 — 상태 snapshot과 진단 |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 읽는 순서는 이 표가 정한다.
 

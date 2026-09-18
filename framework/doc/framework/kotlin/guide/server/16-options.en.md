@@ -1,5 +1,5 @@
 ---
-title: "Options and Defaults · C#/.NET"
+title: "Options and Defaults · Kotlin"
 ---
 
 <!-- generated:start -->
@@ -14,7 +14,7 @@ title: "Options and Defaults · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C++](../../../cpp/guide/server/16-options.en.md) · **C#/.NET** · [Java](../../../java/guide/server/16-options.en.md) · [Kotlin](../../../kotlin/guide/server/16-options.en.md) · [Node/TypeScript](../../../node/guide/server/16-options.en.md)
+View in another language — [C++](../../../cpp/guide/server/16-options.en.md) · [C#/.NET](../../../dotnet/guide/server/16-options.en.md) · [Java](../../../java/guide/server/16-options.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/16-options.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
@@ -39,15 +39,15 @@ set it.
 | Node builder | That one MeshNode, channel, or STREAM node | Before the host starts |
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
-```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
-    var mesh = options.AddRouteMesh("play")            // node builder
-        .Listen("tcp://0.0.0.0:5555")
-        .SetPlacementWeight(100);
-    mesh.Channel("room").Server();
-});
+```kotlin
+val configurer = ZLinkFrameworkConfigurer { options ->
+    options.configureNetwork().setBindHost("0.0.0.0")   // root option
+    options.routeMesh("play") {                         // node builder
+        listen("tcp://0.0.0.0:5555")
+        setPlacementWeight(100)
+        channelName("room") { server() }
+    }
+}
 ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -59,14 +59,14 @@ startup.**
 | Option | What it sets | Default |
 | --- | --- | --- |
 | Codec registration | Payload serialization format | Built-in JSON |
-| `BindHost` | The address a listener binds | `127.0.0.1` |
-| `AdvertiseHost` | The address given to peers | Not set — the bind address is used |
-| `DefaultRequestTimeout` | How long a request waits for its reply | 30 seconds |
-| `SessionReplacementCallbackTimeout` | How long a session replacement callback may run | 30 seconds |
+| `bindHost` | The address a listener binds | `127.0.0.1` |
+| `advertiseHost` | The address given to peers | Not set — the bind address is used |
+| `defaultRequestTimeout` | How long a request waits for its reply | 30 seconds |
+| `sessionReplacementCallbackTimeout` | How long a session replacement callback may run | 30 seconds |
 | Stream compression | STREAM payload compression | LZ4 in use |
-| Worker `MinThreads` · `MaxThreads` | Thread count of the CPU worker pool | 0 · twice the processor count |
-| Worker `IdleTimeout` | How long an idle thread is kept | 30 seconds |
-| `ApplicationVersion` · `MaintenanceWave` | Version and maintenance group a rolling update compares | 0 · not set |
+| Worker `MinThreads` · `maxThreads` | Thread count of the CPU worker pool | 0 · twice the processor count |
+| Worker `idleTimeout` | How long an idle thread is kept | 30 seconds |
+| `applicationVersion` · `maintenanceWave` | Version and maintenance group a rolling update compares | 0 · not set |
 | Handler discovery, filters, metadata policy | What is registered and which keys may pass | Only what is registered |
 | Location store · relocation store | Stores for placement and state transfer | Single-node setup when absent |
 
@@ -74,7 +74,7 @@ startup.**
   separately when a node or client on another host has to connect.
 - **STREAM compression starts enabled.** Turn it off explicitly in the compression settings.
 - **The CPU worker pool has no queue limit.** The Application job queue is what limits intake
-  (§3). `DefaultRequestTimeout` rejects values of `0` or below.
+  (§3). `defaultRequestTimeout` rejects values of `0` or below.
 
 ## 3. Core HWM and Application Job Queue Limits
 
@@ -84,13 +84,13 @@ by [Backpressure](33-backpressure.en.md#1-core-hwm-and-the-application-job-queue
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Memory limit hint passed to the Core budget calculation | Not set |
-| `CoreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | Not set |
+| `coreHwmMemoryLimitBytes` | Memory limit hint passed to the Core budget calculation | Not set |
+| `coreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | Not set |
 | `CoreHwmProfile` | Core auto-budget profile | `Balanced` |
 | `ApplicationJobQueueProfile` | Profile used to compute the job limit | `Balanced` |
-| `MaxQueuedApplicationJobs` | Exact job limit that replaces the profile calculation | Not set |
-| `ApplicationJobQueuePauseThresholdPercent` | Usage at which intake pauses | 80 |
-| `ApplicationJobQueueResumeThresholdPercent` | Usage at which intake resumes | 60 |
+| `maxQueuedApplicationJobs` | Exact job limit that replaces the profile calculation | Not set |
+| `applicationJobQueuePauseThresholdPercent` | Usage at which intake pauses | 80 |
+| `applicationJobQueueResumeThresholdPercent` | Usage at which intake resumes | 60 |
 
 The memory limit and the Core budget accept positive values only. The manual job limit ranges
 over `1..2,147,483,647`, and `0` is not unlimited but a startup configuration error. The two
@@ -102,9 +102,9 @@ jobs per processor.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| Recording level | `Off` · `Errors` · `Normal` · `Detailed` | `Errors` |
+| Recording level | `off` · `errors` · `Normal` · `Detailed` | `errors` |
 | `TraceSampleRate` | Share of normal flows recorded, ranging over `0.0..1.0` | 1.0 |
-| `IncludeMessageSizes` | Whether payload byte sizes are recorded too | Not recorded |
+| `includeMessageSizes` | Whether payload byte sizes are recorded too | Not recorded |
 
 What happens to a packet that arrives with no handler is set in the same place. A request gets
 an error reply, while a send and a publish are recorded and dropped. The error-reply action
@@ -114,7 +114,7 @@ exist in C++, where only the default behavior applies. What each level records i
 
 !!! warning "The default for message size recording differs only on the JVM"
 
-    Java and Kotlin start with `IncludeMessageSizes` enabled, while the other languages start
+    Java and Kotlin start with `includeMessageSizes` enabled, while the other languages start
     with it disabled. State the value explicitly to keep the volume of records aligned across a
     mixed-language deployment.
 
@@ -122,15 +122,15 @@ exist in C++, where only the default behavior applies. What each level records i
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `Listen` | This node's own address for peers to connect to | Must be set |
-| `BindHost` · `AdvertiseHost` | Bind and advertised address for this node alone | The root value |
-| `RoutingId` · `RoutingIdPrefix` | This node's identifier | Generated |
-| `ObjectRole` | Whether the node takes part in placement | See the note below |
-| `PlacementWeight` | Share of new placements, ranging over `0..10000` | 100 |
-| `ActorLimit` · `SpotLimit` | How many this node may hold at once | `0` — no limit |
+| `listen` | This node's own address for peers to connect to | Must be set |
+| `bindHost` · `advertiseHost` | Bind and advertised address for this node alone | The root value |
+| `RoutingId` · `routingIdPrefix` | This node's identifier | Generated |
+| `objectRole` | Whether the node takes part in placement | See the note below |
+| `placementWeight` | Share of new placements, ranging over `0..10000` | 100 |
+| `ActorLimit` · `spotLimit` | How many this node may hold at once | `0` — no limit |
 | `ActivationConcurrency` | Cold activations that may proceed at once | 128 |
-| `InstanceSpotIdleTimeout` | How long an idle Instance Spot is kept | `0` — never removed |
-| `DefaultRequestTimeout` | Limit for requests leaving this node | The root value (30 seconds) |
+| `instanceSpotIdleTimeout` | How long an idle Instance Spot is kept | `0` — never removed |
+| `defaultRequestTimeout` | Limit for requests leaving this node | The root value (30 seconds) |
 | Peer connection | Peers to connect to manually | None — the location store finds them |
 
 For both limits, `0` means no limit and a positive value ranges over `1..2,147,483,647`.
@@ -139,7 +139,7 @@ rather than the number of objects.
 
 !!! warning "The placement default differs only in C++"
 
-    C++ starts as a `Server` that receives placements when `ObjectRole` is left unset, while the
+    C++ starts as a `Server` that receives placements when `objectRole` is left unset, while the
     other languages take no part in placement. State the role explicitly in C++ for a node that
     is to hold no Spot or Actor.
 
@@ -147,11 +147,11 @@ rather than the number of objects.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `SendTimeout` | How long a send waits for room | 1 second |
-| `ReceiveTimeout` | Wait limit in the receive direction | Not set |
-| `SendHighWaterMark` · `ReceiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
+| `sendTimeout` | How long a send waits for room | 1 second |
+| `receiveTimeout` | Wait limit in the receive direction | Not set |
+| `sendHighWaterMark` · `receiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
 
-Once a limit is reached, the sender waits up to `SendTimeout`, and the call ends as a deadline
+Once a limit is reached, the sender waits up to `sendTimeout`, and the call ends as a deadline
 overrun if no room ever appears. Nothing is sent again automatically, so the application decides
 whether to retry. **Connections between MeshNodes have no message size limit setting** — that
 limit belongs to the STREAM node and the ClientServer listener
@@ -168,24 +168,24 @@ limit belongs to the STREAM node and the ClientServer listener
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `OwnerLeaseRenewInterval` | How often ownership is renewed | 5 seconds |
-| `OwnerLeaseTtl` | When ownership without renewal expires | 15 seconds |
-| `OwnerLeaseRenewTimeout` | Limit for one renewal attempt | 3 seconds |
-| `OwnerLeaseFencingMargin` | Margin for releasing authority before expiry | 5 seconds |
-| `PollingInterval` | How often a store without change notification is re-read | 1 second |
-| `StoreFailureGrace` | How long a store failure is tolerated | 30 seconds |
-| `RouteCacheMaxAge` | How long a resolved location is reused | 15 seconds |
-| `MessageFollowDuration` | How long the former owner forwards messages to the new owner | 30 seconds |
-| `SessionRelocationSealTimeout` | Limit for waiting on a session route update | 3 seconds |
+| `ownerLeaseRenewInterval` | How often ownership is renewed | 5 seconds |
+| `ownerLeaseTtl` | When ownership without renewal expires | 15 seconds |
+| `ownerLeaseRenewTimeout` | Limit for one renewal attempt | 3 seconds |
+| `ownerLeaseFencingMargin` | Margin for releasing authority before expiry | 5 seconds |
+| `pollingInterval` | How often a store without change notification is re-read | 1 second |
+| `storeFailureGrace` | How long a store failure is tolerated | 30 seconds |
+| `routeCacheMaxAge` | How long a resolved location is reused | 15 seconds |
+| `messageFollowDuration` | How long the former owner forwards messages to the new owner | 30 seconds |
+| `sessionRelocationSealTimeout` | Limit for waiting on a session route update | 3 seconds |
 | `RelocationPayloadChunkLimit` | Size limit of one relocation payload chunk | 256 KiB |
 | `RelocationInFlightPayloadBudget` | Chunk bytes in flight on one connection | 16 MiB |
 | `RelocationNodeInFlightPayloadBudget` | The same limit across the whole node | `0` — not applied |
-| `RelocationCutoverWaitTimeout` | How long the cutover is awaited | 1 second |
+| `relocationCutoverWaitTimeout` | How long the cutover is awaited | 1 second |
 
 **The lease values move together.** `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout` must be
 smaller than `OwnerLeaseTtl - OwnerLeaseFencingMargin`. The defaults satisfy this at 8 seconds
-against 10 seconds, so ownership survives one failed renewal. `RouteCacheMaxAge` must be at
-least five seconds shorter than `MessageFollowDuration`, and `0` for either turns off the route
+against 10 seconds, so ownership survives one failed renewal. `routeCacheMaxAge` must be at
+least five seconds shorter than `messageFollowDuration`, and `0` for either turns off the route
 cache and message forwarding respectively. Placement and transfer behavior are covered by
 [Location](25-location.en.md) and [Relocation](37-relocation.en.md).
 
@@ -193,14 +193,14 @@ cache and message forwarding respectively. Placement and transfer behavior are c
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `Bind` | The address clients connect to | Must be set |
-| `BindHost` · `AdvertiseHost` | Bind and advertised address | The root value |
+| `bind` | The address clients connect to | Must be set |
+| `bindHost` · `advertiseHost` | Bind and advertised address | The root value |
 | Session registration | The session type created per connection | Must be set |
-| `MaxMessageSize` | Byte limit of one message sent by a client | 64 KiB |
+| `maxMessageSize` | Byte limit of one message sent by a client | 64 KiB |
 | TLS settings | Server certificate and whether a client certificate is required | Plaintext, no client certificate required |
 | Actor dispatch | Forwarding an incoming packet to the bound Actor | Off |
 
-`MaxMessageSize` applies only in the client-to-server direction, and `0` means no limit is
+`maxMessageSize` applies only in the client-to-server direction, and `0` means no limit is
 imposed. A message over the limit does not reach the handler even in part, and the server closes
 the connection. Actor dispatch is enabled once per STREAM node, and a second call is an error.
 Which mesh the Actor is found in is decided by the global ActorId rather than an argument, so no
@@ -217,9 +217,9 @@ host starts.
 | Channel weight | Share of new requests and sends this node is selected for |
 | Placement weight | Share of new Spots and Actors placed on this node |
 
-```csharp
-runtime.Mesh("play").PlacementWeight = 0;
-runtime.Channel("room").Weight = 0;
+```kotlin
+runtimeOptions.mesh("play").setPlacementWeight(0)
+runtimeOptions.channel("room").weight(0)
 ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**
@@ -234,9 +234,9 @@ the one intended.
 
 | Value | When it is missing |
 | --- | --- |
-| The MeshNode `Listen` address | Configuration error at startup |
+| The MeshNode `listen` address | Configuration error at startup |
 | At least one channel role or object role on the MeshNode | Configuration error at startup |
-| The STREAM node `Bind` address and session type | Configuration error at startup |
+| The STREAM node `bind` address and session type | Configuration error at startup |
 | Exactly one relocation policy per Spot or Actor factory | Configuration error at startup |
 | A relocation store when a state-carrying factory or an Instance Spot exists | Configuration error at startup |
 | A location store when several nodes are used | Peers cannot be found |

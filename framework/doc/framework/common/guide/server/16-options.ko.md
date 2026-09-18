@@ -1,22 +1,4 @@
----
-title: "옵션과 기본값 · C#/.NET"
----
-
-<!-- generated:start -->
-<!-- 이 파일은 `common/guide/server/16-options.ko.md`에서 생성한다. 직접 고치지 않는다.
-     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
-<!-- generated:end -->
-
 # 옵션과 기본값
-
-<!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 12. 운영 — 런타임 메트릭 · graceful drain · readiness](12-operations.ko.md) | [다음: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md)
-<!-- framework-adapter-nav:end -->
-
-<!-- language-switch:start -->
-다른 언어로 보기 — [C++](../../../cpp/guide/server/16-options.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/16-options.ko.md) · [Kotlin](../../../kotlin/guide/server/16-options.ko.md) · [Node/TypeScript](../../../node/guide/server/16-options.ko.md)
-{ .zlink-langswitch }
-<!-- language-switch:end -->
 
 !!! info "이 장을 읽고 나면"
 
@@ -37,16 +19,64 @@ title: "옵션과 기본값 · C#/.NET"
 | node builder | 그 MeshNode · channel · STREAM node 하나 | host 시작 전 |
 | runtime option | 실행 중에 바꿀 수 있는 값 | 실행 중([§9](#9-실행-중-바꿀-수-있는-값)) |
 
-```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureNetwork().BindHost = "0.0.0.0";   // 루트 옵션
-    var mesh = options.AddRouteMesh("play")            // node builder
-        .Listen("tcp://0.0.0.0:5555")
-        .SetPlacementWeight(100);
-    mesh.Channel("room").Server();
-});
-```
+=== "C++"
+
+    ```cpp
+    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.configure_network ().set_bind_host ("0.0.0.0");   // 루트 옵션
+        auto mesh = options.add_route_mesh ("play");              // node builder
+        mesh.listen ("tcp://0.0.0.0:5555").set_placement_weight (100);
+        mesh.channel_name ("room").server ();
+    });
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    builder.Services.AddZLinkFramework(options =>
+    {
+        options.ConfigureNetwork().BindHost = "0.0.0.0";   // 루트 옵션
+        var mesh = options.AddRouteMesh("play")            // node builder
+            .Listen("tcp://0.0.0.0:5555")
+            .SetPlacementWeight(100);
+        mesh.Channel("room").Server();
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    ZLinkFrameworkConfigurer configurer = options -> {
+        options.configureNetwork().setBindHost("0.0.0.0");         // 루트 옵션
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play");  // node builder
+        mesh.listen("tcp://0.0.0.0:5555").setPlacementWeight(100);
+        mesh.channelName("room").server();
+    };
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    val configurer = ZLinkFrameworkConfigurer { options ->
+        options.configureNetwork().setBindHost("0.0.0.0")   // 루트 옵션
+        options.routeMesh("play") {                         // node builder
+            listen("tcp://0.0.0.0:5555")
+            setPlacementWeight(100)
+            channelName("room") { server() }
+        }
+    }
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    const builder = zlinkFramework();
+    builder.configureNetwork().bindHost = '0.0.0.0';   // 루트 옵션
+    const mesh = builder.addRouteMesh('play')          // node builder
+      .listen('tcp://0.0.0.0:5555')
+      .setPlacementWeight(100);
+    mesh.channel('room').server();
+    ```
 
 host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못된 조합은 첫 호출까지 미루지
 않고 **시작 단계에서 설정 오류로 끝난다.**
@@ -204,10 +234,40 @@ STREAM node마다 한 번만 활성화하며 두 번 호출하면 오류가 난�
 | channel weight | 이 node가 새 request · send 대상으로 선택되는 비중 |
 | placement weight | 새 Spot · Actor가 이 node에 배치되는 비중 |
 
-```csharp
-runtime.Mesh("play").PlacementWeight = 0;
-runtime.Channel("room").Weight = 0;
-```
+=== "C++"
+
+    ```cpp
+    runtime_options.placement_weight (0);
+    runtime_options.channel ("room").weight (0);
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    runtime.Mesh("play").PlacementWeight = 0;
+    runtime.Channel("room").Weight = 0;
+    ```
+
+=== "Java"
+
+    ```java
+    runtimeOptions.mesh("play").setPlacementWeight(0);
+    runtimeOptions.channel("room").weight(0);
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    runtimeOptions.mesh("play").setPlacementWeight(0)
+    runtimeOptions.channel("room").weight(0)
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    runtimeOptions.mesh('play').placementWeight = 0;
+    runtimeOptions.channel('room').weight = 0;
+    ```
 
 두 값의 범위는 `0..10000`이고 기본값은 100이다. `0`으로 두면 **새 배정만 멈춘다** — 이미 있는
 object와 연결은 유지된다. 무중단 배포에서 이 node로 새 트래픽이 가지 않게 한 뒤 relocation을

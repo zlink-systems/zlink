@@ -10,7 +10,7 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · Kot
 # 12. 운영 — 런타임 메트릭 · graceful drain · readiness
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 17. ZLink의 적용 범위 — 내부 서비스 통신과 실시간 상태 서버](17-alternative.ko.md) | [다음: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md)
+[가이드 홈](README.ko.md) | [이전: 17. ZLink의 적용 범위 — 내부 서비스 통신과 실시간 상태 서버](17-alternative.ko.md) | [다음: 옵션과 기본값](16-options.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

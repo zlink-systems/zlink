@@ -10,7 +10,7 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
 # 14. Picking a Sample — Start with the Example Closest to Your Problem
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
+[Guide Home](README.en.md) | [Previous: Options and Defaults](16-options.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
