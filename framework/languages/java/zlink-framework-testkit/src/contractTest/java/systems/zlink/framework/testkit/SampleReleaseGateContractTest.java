@@ -710,6 +710,112 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
+    void zoneWorldRestartsUseTheZeroZoneReplacementConfiguration() throws IOException {
+        for (String language : List.of("java", "kotlin")) {
+            Path sampleRoot = samplesRoot().resolve(language).resolve("ZoneWorld");
+            String shell = readSource(sampleRoot.resolve("run_sample.sh"));
+            String powerShell = readSource(sampleRoot.resolve("run_sample.ps1"));
+
+            // Every restart selects the node's own replacement configuration. ZW-B4 picks the
+            // node it stops from what the client observed, so either node can be the one that
+            // comes back, and zone-node-1 has no cold-start restart to fall back to.
+            assertTrue(shell.contains("config_name=\"$name-replacement\""),
+                language + "/ZoneWorld runner must restart a node with its own replacement"
+                    + " configuration");
+            assertTrue(powerShell.contains("$ConfigName = \"$Name-replacement\""),
+                language + "/ZoneWorld PowerShell runner must restart a node with its own"
+                    + " replacement configuration");
+
+            // One replacement configuration per node, not a separate crash variant: the stop
+            // kind does not change what a restarted node may claim.
+            assertFalse(shell.contains("crash-replacement"),
+                language + "/ZoneWorld runner must not keep a crash-only replacement");
+            assertFalse(powerShell.contains("crash-replacement"),
+                language + "/ZoneWorld PowerShell runner must not keep a crash-only replacement");
+
+            // A restart that never reaches ready is the scenario's own verdict. Without this the
+            // Bash runner printed every scenario as passed and only the teardown wait noticed.
+            assertTrue(
+                shell.contains("fail \"$id\" \"replacement did not reach topology ready\""),
+                language + "/ZoneWorld runner must fail the scenario whose restart never"
+                    + " reached topology ready");
+            assertTrue(
+                powerShell.contains(
+                    "Add-Verdict $Id $false \"replacement did not reach topology ready\""),
+                language + "/ZoneWorld PowerShell runner must fail the scenario whose restart"
+                    + " never reached topology ready");
+
+            // Positive: both nodes have a replacement configuration and neither asks for a zone.
+            assertTrue(zoneWorldReplacementConfigViolations(shell).isEmpty(),
+                language + "/ZoneWorld runner replacement configurations: "
+                    + zoneWorldReplacementConfigViolations(shell));
+            assertTrue(zoneWorldReplacementConfigViolations(powerShell).isEmpty(),
+                language + "/ZoneWorld PowerShell runner replacement configurations: "
+                    + zoneWorldReplacementConfigViolations(powerShell));
+
+            // Negative control: the same scan reports the pre-fix shape, where a replacement
+            // configuration carried no empty-zone-set intent and a restart claimed zones again.
+            assertFalse(
+                zoneWorldReplacementConfigViolations(shell.replace(" 0 false true true", " 0"))
+                    .isEmpty(),
+                language + "/ZoneWorld replacement scan must report a zone-claiming restart");
+            assertFalse(
+                zoneWorldReplacementConfigViolations(
+                    powerShell.replace(" 0 $false $true $true", " 0")).isEmpty(),
+                language + "/ZoneWorld PowerShell replacement scan must report a zone-claiming"
+                    + " restart");
+
+            // A replacement claims nothing at all: the empty-zone-set branch announces ready and
+            // returns before the cold-start claim loop. A replacement that claimed could settle
+            // on one zone, which is neither the two a cold start needs nor the none it announces,
+            // and the loop has no exit from that state.
+            Path bootstrapPath = language.equals("java")
+                ? sampleRoot.resolve("Server/src/main/java/systems/zlink/samples/zoneworld"
+                    + "/server/zone/ZoneBootstrap.java")
+                : sampleRoot.resolve("Server/src/main/kotlin/systems/zlink/samples/kotlin"
+                    + "/zoneworld/server/zone/ZoneOperations.kt");
+            String bootstrap = readSource(bootstrapPath);
+            assertTrue(
+                bootstrap.split("allowsEmptyZoneSet\\(\\)", -1).length - 1 == 1,
+                language + "/ZoneWorld bootstrap must decide the replacement path exactly once");
+            assertTrue(
+                bootstrap.indexOf("if (topology.allowsEmptyZoneSet())")
+                    < bootstrap.indexOf("spots.getOrCreate("),
+                language + "/ZoneWorld bootstrap replacement path must return before the"
+                    + " cold-start claim loop");
+        }
+    }
+
+    /**
+     * Returns what is wrong with the ZoneNode replacement configurations a ZoneWorld runner
+     * writes: a configuration that does not allow an empty zone set (a restart that would repeat
+     * the cold-start claim), or a node with no replacement configuration at all.
+     */
+    private static List<String> zoneWorldReplacementConfigViolations(String runner) {
+        boolean shell = runner.contains("write_server_config ");
+        String writer = shell ? "write_server_config " : "Write-ServerConfig ";
+        String zeroZoneTail = shell ? " 0 false true true" : " 0 $false $true $true";
+        List<String> written = new ArrayList<>();
+        List<String> violations = new ArrayList<>();
+        for (String line : runner.split("\n")) {
+            String statement = line.strip();
+            if (!statement.startsWith(writer) || !statement.contains("-replacement")) {
+                continue;
+            }
+            written.add(statement);
+            if (!statement.contains(zeroZoneTail)) {
+                violations.add("replacement configuration claims zones: " + statement);
+            }
+        }
+        for (String node : List.of("zone-node-1-replacement", "zone-node-2-replacement")) {
+            if (written.stream().noneMatch(statement -> statement.contains(node))) {
+                violations.add("no zero-zone replacement configuration for " + node);
+            }
+        }
+        return violations;
+    }
+
+    @Test
     void roleBasedSamplesDoNotCollapseIntoSingleGradleRun() throws IOException {
         for (String language : REQUIRED_LANGUAGES) {
             for (String sample : List.of("TicTacToe", "Bingo")) {
