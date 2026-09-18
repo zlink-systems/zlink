@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Overall topology",
-    "subtitle": "entry server · domain server · location store",
+    "subtitle": "API server · session server · domain server · location store",
     "output": "01-topology-en.html",
     "legend": {
       "mode": "hidden"
@@ -16,9 +16,9 @@
       160
     ],
     "cols": 4,
-    "gapX": 86,
+    "gapX": 96,
     "gapY": 84,
-    "cellW": 120,
+    "cellW": 128,
     "cellH": 60
   },
   "components": [
@@ -32,61 +32,75 @@
     {
       "id": "http",
       "type": "external",
-      "label": "ASP.NET Core HTTP",
-      "sublabel": "POST /games",
+      "label": "HTTP endpoint",
       "row": 0,
-      "col": 1
+      "col": 1,
+      "sublabel": "POST /games"
     },
     {
       "id": "apic",
       "type": "frontend",
-      "label": "route client",
+      "label": "channel client",
       "row": 1,
       "col": 1
     },
     {
-      "id": "cores",
-      "type": "frontend",
-      "label": "MeshNode",
-      "sublabel": "channel member",
-      "row": 1,
-      "col": 2
-    },
-    {
-      "id": "spotn",
-      "type": "backend",
-      "label": "SPOT node",
-      "sublabel": "entry + room spots",
-      "row": 1,
-      "col": 3
-    },
-    {
       "id": "streamn",
       "type": "database",
-      "label": "stream node",
+      "label": "STREAM node",
       "row": 2,
-      "col": 2
+      "col": 1
     },
     {
-      "id": "actorg",
+      "id": "relay",
       "type": "messagebus",
       "label": "session relay",
       "row": 2,
+      "col": 2
+    },
+    {
+      "id": "nodeh",
+      "type": "frontend",
+      "label": "node handler",
+      "row": 0,
       "col": 3
+    },
+    {
+      "id": "ispot",
+      "type": "backend",
+      "label": "Instance Spot",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "espot",
+      "type": "backend",
+      "label": "entry spot",
+      "row": 2,
+      "col": 3,
+      "sublabel": "assigns"
+    },
+    {
+      "id": "uspot",
+      "type": "backend",
+      "label": "user spot",
+      "row": 3,
+      "col": 3,
+      "sublabel": "actor"
     },
     {
       "id": "store",
       "type": "external",
       "label": "Location store",
-      "sublabel": "descriptor rows",
       "row": 3,
-      "col": 1
+      "col": 0,
+      "sublabel": "descriptor rows"
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Entry server (e.g. Api)",
+      "label": "API server (e.g. Api)",
       "wraps": [
         "http",
         "apic"
@@ -94,12 +108,20 @@
     },
     {
       "kind": "region",
+      "label": "Session server (e.g. Session)",
+      "wraps": [
+        "streamn",
+        "relay"
+      ]
+    },
+    {
+      "kind": "region",
       "label": "Domain server (e.g. Play)",
       "wraps": [
-        "cores",
-        "spotn",
-        "streamn",
-        "actorg"
+        "nodeh",
+        "ispot",
+        "espot",
+        "uspot"
       ]
     }
   ],
@@ -117,44 +139,54 @@
     },
     {
       "from": "apic",
-      "to": "cores",
-      "label": "2 channel request",
+      "to": "nodeh",
+      "label": "2a ClientServer channel",
       "variant": "emphasis",
       "labelDy": -22
     },
     {
-      "from": "cores",
-      "to": "spotn",
-      "variant": "default"
+      "from": "apic",
+      "to": "ispot",
+      "label": "2b RouteMesh channel",
+      "variant": "emphasis",
+      "labelDy": -22
     },
     {
       "from": "client",
       "to": "streamn",
-      "label": "3 stream real-time connect",
+      "label": "3 STREAM connection",
       "variant": "emphasis"
     },
     {
       "from": "streamn",
-      "to": "actorg",
+      "to": "relay",
       "label": "relay",
       "variant": "default"
     },
     {
-      "from": "actorg",
-      "to": "spotn",
-      "variant": "default"
+      "from": "relay",
+      "to": "espot",
+      "label": "4 RouteMesh channel",
+      "variant": "emphasis"
+    },
+    {
+      "from": "relay",
+      "to": "uspot",
+      "label": "the actor handles it",
+      "variant": "default",
+      "labelDy": 22
     },
     {
       "from": "apic",
       "to": "store",
-      "label": "address resolution",
+      "label": "address lookup",
       "variant": "dashed",
       "labelDy": 22
     },
     {
-      "from": "cores",
+      "from": "streamn",
       "to": "store",
-      "label": "registration",
+      "label": "register",
       "variant": "dashed"
     }
   ],
@@ -163,16 +195,23 @@
       "dot": "cyan",
       "title": "Layout",
       "items": [
-        "Entry server: receives an external request over ASP.NET Core HTTP and delegates to the domain server",
-        "Domain server: MeshNode channel membership + SPOT + session relay + stream node",
-        "Client app: requests over HTTP, receives real-time state over stream"
+        "API server: takes the HTTP request and either calls a node handler over a ClientServer channel or asks an Instance Spot over a RouteMesh channel",
+        "Session server: the STREAM node takes the client connection, relays the session, and passes it to a spot's actor over a RouteMesh channel",
+        "Domain server: node handlers and spots hold the state and process requests serially"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Why STREAM sits apart",
+      "items": [
+        "A STREAM node can live in the domain server, but that is not the usual shape — connection count and state throughput grow separately"
       ]
     },
     {
       "dot": "slate",
       "title": "Location store = discovery only",
       "items": [
-        "Manages only server address info — the dotted lines are connections that find an endpoint via a store lookup (not a data path)"
+        "It keeps server addresses only. The dashed lines are store lookups that find an endpoint, not a data path"
       ]
     }
   ]

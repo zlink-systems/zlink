@@ -29,8 +29,8 @@ cleanup() {
     if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then cleanup_failed=1; fi
   done
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true; fi
-  rm -rf "$RUN_DIR"
   [[ "$cleanup_failed" -eq 0 || "$code" -ne 0 ]] || code=1
+  zlink_sample_close_run_dir "$RUN_DIR" "$code" "SupportChat"
   return "$code"
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT

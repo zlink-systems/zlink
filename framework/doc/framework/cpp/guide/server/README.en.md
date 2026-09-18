@@ -48,7 +48,7 @@ There's one common shape — role-specific server processes talk in typed messag
 client receives state changes over a real-time connection (stream).
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
-        title="Servers talk in typed messages by role; clients receive over a stream" loading="lazy" style="width:100%;border:0"></iframe>
+        title="Servers talk in typed messages by role; clients receive over a stream" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
 
 Each server process is an independent executable connected to the others over TCP. HTTP
@@ -257,7 +257,7 @@ and come back to chapter 4.
 Every diagram in this guide uses the same visual language — color maps to concept.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
-        title="The five kinds in the diagram" loading="lazy" style="width:100%;border:0"></iframe>
+        title="The five kinds in the diagram" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
 
 Several chapters draw the same TicTacToe/Bingo topology, and only the zoomed-in location

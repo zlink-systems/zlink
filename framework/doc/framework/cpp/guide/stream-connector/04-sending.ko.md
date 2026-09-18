@@ -1,173 +1,137 @@
-# 04 — 패킷 송신
-
-[← Connector 옵션](03-connector-options.ko.md) | [목차](INDEX.ko.md) | [다음: 패킷 수신 →](05-receiving.ko.md)
-
+---
+title: "packet 송신 · C++"
 ---
 
-## send — 단방향 송신
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/stream-connector/04-sending.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-`send()`는 reply를 기다리지 않는 단방향 패킷을 보낸다.
+# packet 송신
+
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [이전: Connector 옵션](03-connector-options.ko.md) | [다음: packet 수신](05-receiving.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/04-sending.ko.md) · [Java](../../../java/guide/stream-connector/04-sending.ko.md) · [Kotlin](../../../kotlin/guide/stream-connector/04-sending.ko.md) · [Node/TypeScript](../../../node/guide/stream-connector/04-sending.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    응답을 기다리는 송신과 기다리지 않는 송신을 구분해 보내고, packet 이름과 metadata를
+    원하는 값으로 정할 수 있다.
+
+송신 호출은 값을 바로 보내지 않고 builder를 돌려준다. 이름·metadata·압축·timeout을 정한 뒤
+**종결자를 호출해야 전송이 시작된다.** 종결자를 호출하지 않은 builder는 아무 일도 하지 않는다.
+
+## 1. send — 응답을 기다리지 않는 송신
+
+위치 갱신이나 입력처럼 서버의 답이 필요 없는 packet은 send로 보낸다. 종결자는 전송의 완료와
+실패만 전달하며, 서버가 그 packet으로 무엇을 했는지는 담지 않는다.
 
 ```cpp
-struct position_update_t {
-    float x, y, z;
-    float timestamp;
-};
+connector.send (position_update_t{102.5f, 0.0f, -44.3f})
+  .packet_name ("player.position")
+  .submit ();
+```
 
-auto result = connector
-    .send(position_update_t{102.5f, 0.0f, -44.3f, 1718500000.0f})
-    .packet_name("player.position")
-    .submit();
+## 2. request — 응답을 기다리는 송신
 
-if (!result) {
-    // result.error_code()
+로그인이나 조회처럼 서버의 답이 필요한 packet은 request로 보낸다. 응답은 packet 이름이 아니라
+request마다 부여되는 sequence로 맞춰지므로, 여러 request를 동시에 보내도 응답이 도착하는 순서와
+무관하게 각각 완료된다.
+
+호출마다 timeout을 지정할 수 있고, 지정하지 않으면 connector의 기본 request timeout을 사용한다.
+
+```cpp
+auto reply = connector.request (login_request_t{"player-1", "tok-abc123"})
+               .packet_name ("auth.login")
+               .timeout (std::chrono::seconds (5))
+               .submit<login_reply_t> ();
+
+if (reply) {
+    auto session_id = reply.value ().session_id;
 }
 ```
 
-callback 방식:
+연결이 끊기면 대기 중이던 request는 모두 실패한다. 재연결한 뒤에도 자동으로 다시 보내지 않으므로,
+다시 보내야 하는 request는 application이 판단해 보낸다.
+
+## 3. packet 이름 결정
+
+서버는 packet 이름으로 handler를 고른다. 이름은 다음 순서로 정해진다.
+
+1. 호출자가 builder에 명시한 이름
+2. payload 타입에 붙인 이름
+3. payload 타입의 단순 이름
+
+namespace나 package 한정자는 붙지 않는다. 컴파일러가 만드는 이름처럼 빌드 환경에 따라 달라지는
+값도 사용하지 않는다 — 같은 타입을 보내도 서버가 handler를 찾지 못하기 때문이다.
+
+같은 이름을 여러 곳에서 보낸다면 타입에 이름을 붙여 두는 편이 낫다. 그러면 호출하는 자리마다
+이름을 반복하지 않는다.
 
 ```cpp
-connector
-    .send(position_update_t{102.5f, 0.0f, -44.3f, 1718500000.0f})
-    .packet_name("player.position")
-    .submit([](zlink::stream_connector::result_t<void> result) {
-        if (!result) {
-            // send 실패 처리
-        }
-    });
-```
-
-## request — 요청/응답
-
-`request(...)`는 서버 응답을 기다린다. 응답 타입은 `submit<TReply>()`에서 선언한다. reply는 sequence로 매칭되므로 동시에 여러 request를 보내도 순서와 무관하게 각각 완료된다.
-
-```cpp
-struct match_join_request_t {
-    std::string match_id;
-    std::string player_id;
+struct order_changed_t {
+    static constexpr const char *packet_name = "order.changed";
+    std::string order_id;
 };
-
-struct match_join_reply_t {
-    int32_t slot;
-    std::string team;
-    int32_t player_count;
-};
-
-auto reply = connector
-    .request(match_join_request_t{"match-7f3a", "player-1"})
-    .packet_name("match.join")
-    .timeout(std::chrono::seconds{5})
-    .submit<match_join_reply_t>();
-
-if (!reply) {
-    if (reply.error_code() == zlink::stream_connector::error_code_t::request_timeout) {
-        // 서버 응답 없음
-    }
-    return;
-}
-
-auto slot = reply.value().slot;
 ```
 
-callback 방식:
+외부 protocol과 연동하느라 이미 encode한 payload를 보낼 때만 호출 자리에서 이름을 명시한다.
+
+## 4. metadata
+
+metadata는 packet에 붙이는 key-value다. trace id, locale, client 버전처럼 payload에 넣기 애매한
+작은 값을 위한 자리다. 전송 시점의 값이 그대로 복사되므로, 보낸 뒤 원본을 고쳐도 전송된 packet은
+바뀌지 않는다.
 
 ```cpp
-connector
-    .request(match_join_request_t{"match-7f3a", "player-1"})
-    .packet_name("match.join")
-    .submit<match_join_reply_t>([](zlink::stream_connector::result_t<match_join_reply_t> result) {
-        if (!result) { return; }
-        // result.value().slot
-    });
+connector.send (chat_message_t{"room-42", "hello"})
+  .metadata ("x-locale", "ko-KR")
+  .metadata ("x-client-version", "2.4.1")
+  .submit ();
 ```
 
-## packet_name 결정 우선순위
+metadata 전체는 1024 bytes를 넘을 수 없고 이 한도는 option으로 조절하지 않는다. 같은 key를 두 번
+담거나 빈 key를 담은 packet도 거부된다. 큰 값은 payload로 보낸다.
 
-1. `.packet_name("이름")`으로 명시한 경우 그 값을 사용한다.
-2. 없으면 DTO의 `static constexpr const char* packet_name`을 사용한다.
-3. 없으면 C++ type name fallback을 사용한다.
+## 5. 압축 요청
+
+압축 알고리즘은 connector를 만들 때 정하지만, 그 설정만으로 모든 packet이 압축되지는 않는다.
+**압축을 명시한 송신만 압축한다.** 지도 청크처럼 큰 payload에만 지정하면 작은 packet에 압축
+비용을 치르지 않는다.
 
 ```cpp
-struct inventory_update_t {
-    static constexpr const char* packet_name = "inventory.update";
-    // ...
-};
-
-// packet_name 생략 시 "inventory.update"가 자동 사용됨
-connector.send(inventory_update_t{}).submit();
+connector.send (world_chunk_t{chunk_data})
+  .packet_name ("world.chunk")
+  .compress ()
+  .submit ();
 ```
 
-## metadata
+압축을 끈 구성에서 압축을 지정하면 그 송신은 실패한다. 압축은 payload에만 적용하고 header에는
+적용하지 않는다.
 
-packet에 키-값 메타데이터를 붙인다. 라우팅, 추적, 버전 정보 등에 사용한다.
+## 6. codec
 
-```cpp
-connector
-    .send(chat_message_t{"room-42", "안녕하세요"})
-    .packet_name("chat.send")
-    .metadata("x-locale", "ko-KR")
-    .metadata("x-client-version", "2.4.1")
-    .submit();
-```
+payload를 bytes로 바꾸는 codec은 connector를 만들 때 하나를 정한다. 호출마다 codec을 고르는
+표면은 없으므로, 송신 코드는 payload 타입과 이름만 다룬다. 기본 codec은 JSON이고 MessagePack과
+Protobuf는 선택 package가 구현을 제공한다.
 
-`metadata_t` 객체로 한 번에 설정할 수도 있다.
+이미 encode된 bytes를 그대로 보내야 하는 연동에서는 payload가 지정한 codec 번호를 그대로 사용한다.
 
-```cpp
-zlink::stream_connector::metadata_t meta;
-meta.with("x-locale", "ko-KR").with("x-client-version", "2.4.1");
+## 7. 크기 한도
 
-connector.send(msg).metadata(std::move(meta)).submit();
-```
+송신 payload가 한도를 넘으면 **transport에 쓰기 전에** 실패한다. 연결은 그대로 유지되므로 그
+호출만 실패하고 다른 packet은 영향을 받지 않는다. 압축을 지정한 송신은 압축한 결과를 한도와
+비교한다.
 
-## 압축
+64KB보다 큰 payload를 정상적으로 주고받아야 하면 [Connector 옵션](03-connector-options.ko.md)에서
+송신 한도를 명시적으로 키운다.
 
-패킷 단위로 LZ4 압축을 요청한다. 압축 feature가 build에 없으면 이 호출은 무시된다.
+## 8. 다음 장
 
-```cpp
-connector
-    .send(large_map_chunk_t{chunk_data})
-    .packet_name("world.chunk")
-    .compress()
-    .submit();
-```
-
-## codec
-
-기본 codec은 JSON이다. raw bytes를 직접 보내야 하는 경우에만 raw packet을 직접 만든다.
-MessagePack이나 Protobuf는 stream connector 전용 feature가 아니라 framework codec extension으로 등록한다.
-
-```cpp
-connector
-    .send(inventory_update_t{})
-    .submit();
-```
-
-codec_t 값:
-
-| 값 | 의미 |
-|----|------|
-| `raw` | raw bytes. payload 필드에 직접 넣어야 함 |
-| `json` | JSON (기본값) |
-| `message_pack` | framework MessagePack codec extension이 등록한 패킷 |
-| `protobuf` | framework Protobuf codec extension이 등록한 패킷 |
-
-## raw packet 직접 만들기
-
-DTO 없이 `packet_t`를 직접 만들 수 있다.
-
-```cpp
-zlink::stream_connector::packet_t packet;
-packet.name    = "debug.ping";
-packet.payload = {0x01, 0x02, 0x03};
-packet.codec   = zlink::stream_connector::codec_t::raw;
-
-connector.send(std::move(packet)).submit();
-```
-
-## 크기 제한
-
-`max_send_payload_size`(기본 64 KB)와 `max_metadata_size`(기본 8 KB)를 넘으면
-`frame_too_large` 오류를 반환한다. 오류가 반환되는 시점은 transport write 전이다.
-
-서버에서 받는 push와 reply payload에는 `max_receive_payload_size`(기본 64 KB)가 적용된다. 큰
-payload를 받을 수 있는 connector는 옵션에서 이 값을 명시적으로 올린다.
+- 서버가 보내는 packet 받기 — [packet 수신](05-receiving.ko.md)
+- 송신이 실패하는 자리와 코드 — [오류 처리](07-error-handling.ko.md)

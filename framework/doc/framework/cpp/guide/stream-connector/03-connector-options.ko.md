@@ -1,154 +1,180 @@
-# 03 — Connector 옵션
-
-[← 시작하기](02-getting-started.ko.md) | [목차](INDEX.ko.md) | [다음: 패킷 송신 →](04-sending.ko.md)
-
+---
+title: "Connector 옵션 · C++"
 ---
 
-`connector_options_t`는 connector를 만들 때 전달하는 설정 구조체다.
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/stream-connector/03-connector-options.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
+
+# Connector 옵션
+
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [이전: 설치와 첫 연결](02-getting-started.ko.md) | [다음: packet 송신](04-sending.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/03-connector-options.ko.md) · [Java](../../../java/guide/stream-connector/03-connector-options.ko.md) · [Kotlin](../../../kotlin/guide/stream-connector/03-connector-options.ko.md) · [Node/TypeScript](../../../node/guide/stream-connector/03-connector-options.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    connector를 만들 때 정하는 값과 그 기본값을 알고, 잘못된 구성이 언제 거부되는지 안다.
+
+option은 connector를 만들 때 한 번 전달한다. 만들어진 connector는 그 값을 복사해 두고, 읽기
+표면으로 지금 사용 중인 값을 그대로 돌려준다. 실행 중에 바꿀 수 있는 값은 진단 수준이다.
+
+## 1. option을 정하는 자리
+
+지정하지 않은 항목은 기본값을 사용한다. 최소 구성은 endpoint 하나다.
 
 ```cpp
-zlink::stream_connector::connector_options_t options;
-auto connector = zlink::stream_connector::connector_factory_t::create(options);
-```
+namespace sc = zlink::stream_connector;
 
-## endpoint
-
-```cpp
-options.endpoint = "tcp://game.example.com:7000";
+sc::connector_options_t options;
 options.endpoint = "wss://game.example.com:443/stream";
+options.connect_timeout = std::chrono::seconds (5);
+options.request_timeout = std::chrono::seconds (10);
+options.reconnect.max_attempts = 5;
+options.dispatch_mode = sc::dispatch_mode_t::manual;
+
+auto connector = sc::connector_factory_t::create (options);
 ```
 
-scheme이 transport를 결정한다. 지원 scheme은 `tcp`, `tls`, `ws`, `wss`다.
+## 2. 기본값
 
-| scheme | transport | 필요 build feature |
-|--------|-----------|--------------------|
-| `tcp://host:port` | TCP | 항상 포함 |
-| `tls://host:port` | TLS over TCP | `WITH_TLS` |
-| `ws://host:port/path` | WebSocket | `WITH_WEBSOCKET` |
-| `wss://host:port/path` | WebSocket over TLS | `WITH_WEBSOCKET` + `WITH_TLS` |
+| 항목 | 기본값 |
+|---|---|
+| connect timeout | 5초 |
+| request timeout | 30초 |
+| 대기 표면 timeout | 5초 |
+| heartbeat | 켜짐 — 주기 1초, timeout 5초 |
+| 자동 재연결 | 켜짐 — 초기 지연 250ms, 최대 지연 5초, backoff 계수 2.0, 최대 시도 3회 |
+| 수신 callback 실행 시점 | 직접 pump하는 쪽 |
+| codec | JSON |
+| 압축 | Lz4 |
+| 송신·수신 payload 한도 | 각 64KB |
+| TLS 인증서 검증 | 켜짐 |
+| 진단 수준 | 오류만 기록 |
 
-build에 없는 transport를 사용하면 `connect()`가 `unsupported_codec` 오류를 반환하지 않고, 현재는 `configuration_error`를 반환한다.
+언어마다 이름은 달라도 기본값은 같다. 게임 엔진에서도 데스크톱 도구에서도 같은 구성이 같게
+동작해야 하기 때문이다.
 
-## transport
+## 3. endpoint와 transport
 
-endpoint scheme으로 자동 설정된다. scheme과 별도로 명시할 수도 있다.
+endpoint scheme이 transport를 정한다. `ws://` endpoint 하나만 지정한 구성은 추가 설정 없이
+WebSocket으로 연결한다.
+
+transport를 따로 지정하는 option은 scheme을 덮어쓰는 자리가 아니라 **두 값이 맞는지 확인하는
+자리**다. 지정한 transport가 endpoint scheme과 어긋나면 구성 오류로 실패한다. 브라우저 계열에서
+`tcp://`나 `tls://`를 지정한 경우도 같다.
+
+## 4. timeout
+
+timeout은 각각 다른 작업을 제한한다.
+
+- connect timeout — 한 번의 연결 시도가 끝나야 하는 시간
+- request timeout — 응답이 도착해야 하는 시간. 호출마다 덮어쓸 수 있다
+- 대기 표면 timeout — 특정 packet이 도착하기를 기다리는 시간. 호출마다 덮어쓸 수 있다
+
+request timeout이 지나면 그 request만 실패하고 연결은 그대로 유지된다. 늦게 도착한 응답은
+이미 제거된 request를 다시 완료시키지 않는다.
+
+## 5. heartbeat
+
+heartbeat는 연결이 살아 있는지 주기적으로 확인한다. 켜져 있으면 지정 주기마다 control packet을
+보내고, 지정 timeout 동안 들어오는 frame이 하나도 없으면 연결이 끊긴 것으로 처리한 뒤 재연결
+정책을 적용한다.
+
+heartbeat를 꺼도 서버가 보낸 ping에는 응답한다. 끈 것은 이쪽에서 보내는 주기이지 응답 의무가
+아니다.
+
+## 6. 자동 재연결
+
+자동 재연결은 기본으로 켜져 있다. 시도 사이의 지연은 초기 지연에서 시작해 시도마다 backoff 계수를
+곱하고 최대 지연에서 멈춘다. 실제로 기다리는 시간은 그 값의 50%에서 100% 사이에서 고른다 — 서버가
+한 번 끊겼을 때 연결되어 있던 client가 모두 같은 시점에 다시 연결하면 그 순간 서버의 부하가 가장
+크기 때문이다.
+
+연결이 복구될 때까지 계속 시도하는 client는 큰 수를 적는 대신 **무제한**을 지정한다. 그래야 시도
+횟수가 유한한 구성과 구분된다.
 
 ```cpp
-options.transport = zlink::stream_connector::transport_t::websocket_secure;
+options.reconnect.max_attempts = std::nullopt;   // 빈 값이 무제한이다
 ```
 
-## timeout
+재연결 동작과 끊김 handler는 [연결 생명주기](06-lifecycle.ko.md)가 다룬다.
+
+## 7. 수신 callback 실행 시점
+
+기본 설정에서 수신 callback은 receive 경로에서 바로 실행되지 않고 내부 큐에 들어가며,
+application이 pump를 호출한 실행 문맥에서 실행된다. 게임 엔진 객체를 main thread 밖에서 다룰 수
+없기 때문에 이 값이 기본이다.
+
+즉시 실행으로 바꾸면 pump 없이 receive 경로에서 실행된다. 이때 느린 handler는 receive 경로를
+막으므로 뒤따르는 수신 처리가 그만큼 늦어진다. CLI나 도구처럼 main thread 제약이 없는 곳에서
+사용한다.
+
+두 설정의 차이와 등록·해제는 [packet 수신](05-receiving.ko.md)이 다룬다.
+
+## 8. codec과 압축
+
+payload를 bytes로 바꾸는 codec은 connector를 만들 때 하나를 주입하고, 지정하지 않으면 JSON을
+사용한다. 메시지 타입마다 codec을 등록하거나 호출마다 codec을 고르는 표면은 없다. payload
+타입에서 packet 이름을 정하는 규칙도 같은 자리에서 주입한다.
+
+압축 알고리즘도 connector를 만들 때 한 번 정한다. 기본값을 Lz4로 두었다고 해서 모든 packet이
+압축되지는 않는다. **압축을 명시한 송신만 압축한다.** 압축을 끈 구성에서 압축을 명시하면 그
+호출이 실패하고, 압축된 frame을 받으면 압축 해제 오류로 거부한다.
+
+서버가 압축해 보낸 packet은 handler를 호출하기 전에 connector가 압축을 해제한다.
+
+## 9. payload와 metadata 한도
+
+송신과 수신 payload 한도는 각각 64KB이며 option으로 조절한다. 압축한 frame을 받으면 wire의 압축된
+payload와 압축을 해제한 결과를 각각 수신 한도와 비교한다. 64KB보다 큰 payload를 주고받는
+application은 이 값을 명시적으로 키운다.
+
+metadata의 한도는 전체 1024 bytes이고 **option으로 조절하지 않는다.** metadata는 trace id·locale·
+tenant id처럼 작은 값을 위한 자리이며, 큰 데이터는 payload로 보낸다.
+
+## 10. TLS 인증서 검증
+
+TLS와 WSS는 인증서 chain과 host 이름을 검증한다. 검증을 생략하는 option이 있지만 기본값은 꺼짐이며,
+테스트의 자체 서명 인증서에만 사용한다. 운영 구성에서 이 값을 켜면 서버 인증서를 신뢰하지 않고
+통과시킨다.
+
+## 11. 진단 수준
+
+진단 수준은 connector가 흐름 추적 정보를 얼마나 만들고 검증할지 정한다. 기본값은 오류만 기록하는
+수준이다. 가장 낮은 수준으로 두면 보내는 frame에 흐름 식별자를 만들지 않고, 받은 frame의 흐름
+필드도 길이만 확인한 뒤 값 검증과 전달을 생략한다. request의 상관관계 식별자는 수준과 무관하게
+유지되므로, 낮춰도 응답이 어긋나지 않는다.
+
+이 값은 connector를 다시 만들지 않고 실행 중에 읽고 바꾼다. 바꾼 값은 그 뒤의 처리 지점부터
+적용되며 이미 만들어진 frame에는 소급 적용하지 않는다.
 
 ```cpp
-options.connect_timeout   = std::chrono::seconds{5};   // connect 시도 전체 제한
-options.request_timeout   = std::chrono::seconds{30};  // request 기본 제한
-options.wait_timeout      = std::chrono::seconds{5};   // wait_for 기본 제한
+connector.set_diagnostics_level (sc::diagnostics_level_t::off);
+auto level = connector.diagnostics_level ();
 ```
 
-`request_timeout`은 `request().submit()`의 기본값이고, `wait_timeout`은 `wait_for().submit()`의 기본값이다. 호출마다 `.timeout()`으로 덮어사용할 수 있다.
+바꾸는 표면은 완료를 기다리지 않는다. 값 하나를 바꾸는 작업이라 기다릴 완료가 없고, 수신 callback
+안에서 호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
 
-## heartbeat
+## 12. 검증 시점
 
-```cpp
-options.heartbeat.enabled  = true;
-options.heartbeat.interval = std::chrono::seconds{10}; // idle 상태에서 ping 간격
-options.heartbeat.timeout  = std::chrono::seconds{30}; // 이 시간 동안 응답 없으면 disconnected
-```
+**option은 전 항목을 검증한다.** 일부만 확인하면 나머지 항목의 잘못된 값이 조용히 무시되고,
+호출자는 구성 실수와 연결 실패를 구분하지 못한다.
 
-heartbeat는 `$zlink.heartbeat.ping` / `$zlink.heartbeat.pong` control frame을 사용한다. 이 frame은 `on<packet_t>()` callback으로 전달되지 않는다.
+검증은 그 언어가 실패를 알릴 수 있는 가장 이른 곳에서 이뤄진다. 실패를 돌려줄 통로가 있는 언어는
+connector를 만들 때 검증하고, 생성 표면에 그 통로가 없는 언어는 연결을 시도할 때 검증한다.
+어느 쪽이든 **연결이 이뤄지기 전에** 거부하며, 검증을 통과하지 못한 구성으로는 연결되지 않는다.
 
-## reconnect
+| 위반 | 실패 |
+|---|---|
+| 값 하나가 허용 범위를 벗어남(음수 timeout, 0인 payload 한도 등) | 검증 실패 |
+| 항목 사이가 맞지 않음(endpoint scheme과 transport 충돌, 환경이 지원하지 않는 transport, 압축을 끈 구성에 압축 codec 지정) | 구성 오류 |
 
-```cpp
-options.reconnect.enabled       = true;
-options.reconnect.initial_delay = std::chrono::milliseconds{250};
-options.reconnect.max_delay     = std::chrono::seconds{5};
-options.reconnect.backoff_factor = 2.0;
-options.reconnect.max_attempts  = 3; // std::nullopt이면 제한 없음
-```
-
-첫 연결 실패와 연결 끊김 모두 reconnect를 시도한다. 재시도 중에는 `reconnecting` 상태 이벤트가 발행된다. 모든 시도가 실패하면 `disconnected`로 전환된다.
-
-## dispatch_mode
-
-```cpp
-options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;    // 기본값
-options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
-```
-
-- `manual`: `on<T>()` callback은 `dispatch()`를 호출할 때 실행된다. 게임 엔진의 frame loop와 맞출 때 사용한다.
-- `immediate`: callback은 connector receive path에서 즉시 실행된다. CLI, tool, e2e client에 적합하다.
-
-자세한 내용은 [05 — 패킷 수신](05-receiving.ko.md)을 참고한다.
-
-## compression
-
-```cpp
-options.compression = zlink::stream_connector::compression_t::lz4; // 기본값
-options.compression_codec = zlink::stream_connector::lz4_compression_codec();
-```
-
-connector가 compressed frame을 보낼 때와 받을 때 사용할 codec 설정이다. 기본값은 LZ4다.
-이 기본값은 모든 frame을 자동으로 압축한다는 뜻이 아니다. 호출마다 `.compress()`로
-패킷 단위 압축을 요청한 frame만 압축된다.
-
-server framework와 connector는 같은 compression codec을 사용해야 한다. custom codec을
-사용하는 경우에도 built-in LZ4와 같은 option 경로로 설정한다.
-
-```cpp
-options.compression = zlink::stream_connector::compression_t::lz4;
-options.compression_codec = std::make_shared<my_compression_codec_t>();
-```
-
-압축을 명시적으로 끄면 `.compress()`를 호출한 send/request는 송신 단계에서 실패하고,
-compressed frame을 받으면 수신 단계에서 복원 오류로 처리된다.
-
-```cpp
-options.compression = zlink::stream_connector::compression_t::none;
-options.compression_codec.reset();
-```
-
-## payload/metadata 크기 제한
-
-```cpp
-options.max_send_payload_size    = 64 * 1024; // 기본 64 KB
-options.max_receive_payload_size = 64 * 1024; // 기본 64 KB
-options.max_metadata_size        = 8 * 1024;  // 기본 8 KB
-```
-
-`max_send_payload_size`는 `send()`와 `request()`가 보낼 payload 크기를 제한한다. 이 한도를
-넘으면 transport write 전에 `frame_too_large` 오류를 반환한다.
-
-`max_receive_payload_size`는 서버에서 받은 stream frame의 encoded payload 크기를 제한한다. 이
-한도를 넘는 frame은 payload buffer를 만들기 전에 `frame_too_large` 오류로 거부한다. 서버가 더
-큰 push 또는 reply를 보낼 수 있는 환경이라면 이 값을 명시적으로 올린다.
-
-`max_metadata_size`는 송신 metadata와 수신 frame header 크기에 모두 적용된다. metadata가 큰
-프로토콜을 사용하는 경우 payload 상한과 별도로 조정한다.
-
-## TLS 인증서 검증
-
-```cpp
-options.skip_server_certificate_validation = false; // 기본값 (검증함)
-```
-
-개발 환경에서 자체 서명 인증서를 사용할 때만 `true`로 설정한다. 프로덕션에서는 사용하지 않는다.
-
-## 전체 예시
-
-```cpp
-namespace zsc = zlink::stream_connector;
-
-zsc::connector_options_t options;
-options.endpoint                 = "wss://game.example.com:443/stream";
-options.connect_timeout          = std::chrono::seconds{5};
-options.request_timeout          = std::chrono::seconds{10};
-options.wait_timeout             = std::chrono::seconds{5};
-options.heartbeat.interval       = std::chrono::seconds{15};
-options.heartbeat.timeout        = std::chrono::seconds{45};
-options.reconnect.max_attempts   = 5;
-options.reconnect.max_delay      = std::chrono::seconds{10};
-options.dispatch_mode            = zsc::dispatch_mode_t::manual;
-
-auto connector = zsc::connector_factory_t::create(options);
-```
+두 오류를 받는 방법과 코드를 읽는 방법은 [오류 처리](07-error-handling.ko.md)가 다룬다.

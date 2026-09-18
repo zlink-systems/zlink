@@ -1,6 +1,6 @@
-# 03 — Godot C#
+# Godot C#
 
-[← Table Of Contents](INDEX.en.md) | [Previous: Unity](02-unity.en.md)
+[← Table Of Contents](INDEX.en.md) | [Previous: Unity](08-unity.en.md)
 
 ---
 
@@ -42,11 +42,12 @@ public partial class ZlinkStreamClientNode : Node
             Endpoint = new Uri("wss://example.com/stream")
         });
 
-        _connector.ConnectionStateChanged += (change, _) =>
+        //  Disposing the returned value unregisters it. Here it ends with the connector.
+        _connector.OnConnectionStateChanged((change, _) =>
         {
             GD.Print($"ZLink stream state: {change.Current}");
             return ValueTask.CompletedTask;
-        };
+        });
 
         _connector.On("game.update", (message, _) =>
         {

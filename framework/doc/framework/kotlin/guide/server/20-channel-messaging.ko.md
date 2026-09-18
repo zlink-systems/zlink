@@ -116,7 +116,7 @@ RouteMesh는 **무엇을 지정하느냐**에 따라 호출이 달라진다. 지
 
 ### 3.1 동작
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional.html" title="RouteMesh — 양쪽이 서로 호출한다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional.html" title="RouteMesh — 양쪽이 서로 호출한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-routemesh-bidirectional.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 mesh에 참여한 node는 서로 호출할 수 있다. A가 `profile` channel을 담당하고 B가
@@ -186,7 +186,7 @@ curl -X POST http://127.0.0.1:5080/players/p1/logins
     이름·Spot id·Actor id 같은 논리 이름을 사용한다 — Framework가 현재 담당을 고르므로 application은
     node RID를 보관하지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-node-direct.html" title="업무 호출은 이름, 운영 호출은 node RID" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-node-direct.html" title="업무 호출은 이름, 운영 호출은 node RID" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-node-direct.html" target="_blank">↗ 크게 보기</a></p>
 
 #### 받는 쪽 — mesh에 바로 등록한다
@@ -254,7 +254,7 @@ channel 이름이 들어온다.
 둘은 mesh의 어느 node에서든 실행될 수 있고, 실행 중에 다른 node로 옮겨 갈 수도 있다. **그
 대상이 지금 어느 node에 있는지는 RouteMesh가 찾는다.** 호출하는 쪽은 id만 준다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-spot-actor-routing.html" title="Spot·Actor는 id가 있는 곳으로 간다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-spot-actor-routing.html" title="Spot·Actor는 id가 있는 곳으로 간다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-spot-actor-routing.html" target="_blank">↗ 크게 보기</a></p>
 
 답을 기다리지 않는 호출은 id와 message만 준다.
@@ -270,8 +270,8 @@ channel 이름이 들어온다.
 --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/RoomEndpoints.kt:spot-request-call"
 ```
 
-이것이 channel 호출과 다른 점이다. channel은 담당 node 중 **하나를 고르지만**, Spot·Actor는
-**그 id의 대상이 있는 곳으로** 간다. 그래서 정해진 대상이 받아야 하는 메시지는 channel이
+이것이 channel 호출과 다른 점이다. channel은 담당 node 중 **아무 하나**를 고르고, Spot·Actor는
+**그 id의 대상이 있는 곳**으로 간다. 그래서 정해진 대상이 받아야 하는 메시지는 channel이
 아니라 이 경로를 사용한다.
 
 등록, lifecycle, 상태 관리, 위치 이동은 [Spot](21-spot.ko.md)과
@@ -283,7 +283,7 @@ handler 작성 방법은 RouteMesh와 같다. 등록 방법만 다르다.
 
 ### 4.1 동작
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway.html" title="ClientServer — 호출은 한 방향이다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway.html" title="ClientServer — 호출은 한 방향이다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-clientserver-oneway.html" target="_blank">↗ 크게 보기</a></p>
 
 server만 주소를 공개하고, 연결도 client가 시작한다. **server는 client를 대상으로 새 호출을
@@ -328,7 +328,7 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 
 ### 5.1 동작
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic.html" title="Fanout — 구독한 node 전부가 받는다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic.html" title="Fanout — 구독한 node 전부가 받는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-fanout-topic.html" target="_blank">↗ 크게 보기</a></p>
 
 발행하는 쪽은 받을 node를 지정하지 않는다. `publish` 한 번이 그 **topic**을 구독한 node

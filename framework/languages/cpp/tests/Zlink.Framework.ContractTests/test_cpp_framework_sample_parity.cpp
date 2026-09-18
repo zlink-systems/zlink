@@ -34,6 +34,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace
 {
 
@@ -106,6 +110,26 @@ std::string relative_sample_path (const std::filesystem::path &path)
 {
     return std::filesystem::relative (path, cpp_language_root () / "samples").generic_string ();
 }
+
+#ifdef _WIN32
+std::filesystem::path running_executable_directory ()
+{
+    std::wstring buffer (MAX_PATH, L'\0');
+    for (;;) {
+        const auto written =
+          ::GetModuleFileNameW (nullptr, buffer.data (), static_cast<DWORD> (buffer.size ()));
+        if (written == 0) {
+            return {};
+        }
+        if (written < buffer.size ()) {
+            buffer.resize (written);
+            break;
+        }
+        buffer.resize (buffer.size () * 2);
+    }
+    return std::filesystem::path (buffer).parent_path ();
+}
+#endif
 
 // Local tooling (e.g. a JetBrains `.idea` directory) can create gitignored directories under
 // `samples/` on a developer machine. Those are not part of the repository's sample set, so the
@@ -515,6 +539,22 @@ TEST (CppFrameworkSampleParity, DocumentedSampleRolesDoNotBuildProbeProcesses)
     EXPECT_FALSE (
       std::filesystem::exists (cpp_language_root () / "samples/DeliveryDispatch/Probe/main.cpp"));
 }
+
+#ifdef _WIN32
+TEST (CppFrameworkSampleParity, WindowsBuildTreeStagesTheCoreRuntimeBesideItsExecutables)
+{
+    /* Windows has no RPATH. A sample role started by its own run_sample.ps1 gets
+     * no PATH from CTest, so the Core runtime has to sit next to the executables
+     * this build produces. Without it the loader kills the role before main and
+     * the runner only ever sees a readiness line that never arrives. This test
+     * runs from the same output directory as those roles. */
+    const auto directory = running_executable_directory ();
+    ASSERT_FALSE (directory.empty ());
+    EXPECT_TRUE (std::filesystem::exists (directory / "zlink.dll"))
+      << "the Core runtime is missing from " << directory.string ()
+      << "; every executable built there fails to start with STATUS_DLL_NOT_FOUND";
+}
+#endif
 
 TEST (CppFrameworkSampleParity, TicTacToeTurnTimeoutIsADomainTerminalState)
 {
@@ -1111,9 +1151,6 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
       << "C++ sample overview must name the TicTacToe full self-check";
     EXPECT_NE (top_level_readme.find ("samples/Bingo/run_sample.sh"), std::string::npos)
       << "C++ sample overview must name the Bingo full self-check";
-    EXPECT_NE (top_level_readme.find ("DeliveryDispatch 샘플은 현재 Linux 또는 WSL용"),
-               std::string::npos)
-      << "C++ sample overview must describe DeliveryDispatch runner availability";
 
     const auto tictactoe_runner = read_text_file (cpp_root / "samples/TicTacToe/run_sample.sh");
     EXPECT_NE (tictactoe_runner.find ("full client/server self-check completed"), std::string::npos)

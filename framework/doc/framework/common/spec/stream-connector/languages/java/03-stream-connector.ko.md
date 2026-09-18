@@ -560,9 +560,12 @@ class ZLinkKotlinStreamConnector {
         payload: Any,
         replyType: KClass<TReply>,
     ): ZLinkKotlinRequestCall<TReply>
+    fun closeReason(): ZLinkStreamCloseReason?
     fun <TPayload> waitFor(): ZLinkStreamTypedWaitCall<TPayload>
     fun <TPayload> waitFor(name: String): ZLinkStreamTypedWaitCall<TPayload>
+    fun <TPayload> expectNone(): ZLinkStreamTypedExpectNoneCall<TPayload>
     fun <TPayload> expectNone(name: String): ZLinkStreamTypedExpectNoneCall<TPayload>
+    fun <TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload>
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
     fun errors(): Flow<ZLinkStreamError>
@@ -615,6 +618,14 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 }
 
 ```
+
+**종료 사유는 wrapper에서 직접 읽는다.** Java connector의 `Optional<ZLinkStreamCloseReason>`을
+Kotlin의 nullable로 옮긴다. 한 번도 끊긴 적이 없으면 `null`이다. wrapper만 사용하는 코드도
+사유에 닿아야 하므로 Java connector를 꺼내 읽도록 두지 않는다.
+
+**대기 표면 셋은 이름을 명시하는 길과 payload type에서 결정하는 길을 모두 제공한다.** 이름을
+주지 않으면 `TPayload`의 이름 결정 규칙(§5)이 정한다. `waitFor`만 두 길을 갖고 `expectNone`과
+`waitForSequence`가 이름을 요구하면, 같은 시험 안에서 세 표면의 호출 형태가 갈린다.
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**

@@ -1,140 +1,140 @@
-# 07 — Error Handling
-
-[← Connection Lifecycle](06-lifecycle.en.md) | [Table Of Contents](INDEX.en.md) | [Next: E2E Client →](08-e2e-client.en.md)
-
+---
+title: "Error Handling · C++"
 ---
 
-## result_t\<T\>
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/stream-connector/07-error-handling.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-Every synchronous API returns a `result_t<T>`. No exception is thrown.
+# Error Handling
+
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: 08 — E2E Client](08-e2e-client.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/07-error-handling.en.md) · [Java](../../../java/guide/stream-connector/07-error-handling.en.md) · [Kotlin](../../../kotlin/guide/stream-connector/07-error-handling.en.md) · [Node/TypeScript](../../../node/guide/stream-connector/07-error-handling.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can read the error code of a failed call and judge what that code means for the connection,
+    so you can choose between retrying, recovering, and stopping.
+
+The connector's error codes form a **closed set**. An implementation neither adds nor removes a
+value, so once a handling is written per code, no new code appears to leave a branch missing. This
+chapter covers how those codes reach the caller and what each one means.
+
+## 1. Where Errors Arrive
+
+The delivery differs by surface while the meaning stays the same. A surface that awaits completion
+reports the failure there, a surface that takes a callback reports it through a result object, and
+an error that belongs to no request is delivered as an error event. **In every case the receiver can
+read the code.**
 
 ```cpp
-auto reply = connector.request(request).submit<match_join_reply_t>();
+// A build with exceptions off uses the core as it is, so failures come back as values.
+auto reply = connector.request (login_request_t{"player-1", "tok-abc123"})
+               .submit<login_reply_t> ();
 
 if (!reply) {
-    // failure
-    auto code = reply.error_code();
-    auto msg  = reply.error() ? reply.error()->message : "";
-    return;
-}
-
-auto value = reply.value(); // T&&
-```
-
-| Expression | Meaning |
-|--------|------|
-| `if (result)` | check success |
-| `result.value()` | the success value (UB if called on a failed state) |
-| `result.error_code()` | the `error_code_t` enum value |
-| `result.error()` | `const error_t*`. Includes the message. nullptr on success |
-
-## The error_code_t List
-
-| Code | Meaning | Main API Where It Occurs |
-|------|------|--------------|
-| `disconnected` | Operation called with no connection, or a transport drop | send, request, wait, dispatch |
-| `configuration_error` | Invalid settings like endpoint, packet name, timeout | connect, send, request |
-| `validation_failed` | The request argument is outside the contract range | send, request |
-| `request_timeout` / `wait_timeout` | The reply or wait-target packet didn't arrive within the timeout | request, wait_for |
-| `connect_timeout` | The connect attempt didn't complete within `connect_timeout` | connect |
-| `frame_decode_failed` | The received frame can't be parsed to the STREAM contract | receive loop |
-| `frame_too_large` | The send payload or metadata exceeds the configured limit | send, request |
-| `send_failed` | The connection is open, but the packet write failed | send, request |
-| `unsupported_codec` | Using a codec not in the build | send, request |
-| `compression_failed` | The payload can't be compressed with the configured compression codec | send, request |
-| `tls_validation_failed` | TLS server certificate verification failed | connect (TLS/WSS) |
-| `decompression_failed` | The compressed payload can't be restored with the configured compression codec | receive loop |
-| `user_callback_failed` | An exception occurred inside the `on<T>()` callback | dispatch |
-| `remote_error` | The server responded with an error frame | request |
-| `closed` | A pending operation ended because `close()` was called | every pending operation |
-| `canceled` | The operation ended due to coroutine task destruction or explicit cancellation | e2e client awaiter |
-
-## Handling By Pattern
-
-### Retry On Timeout
-
-```cpp
-auto reply = connector
-    .request(query)
-    .timeout(std::chrono::seconds{5})
-    .submit<match_data_t>();
-
-if (!reply && reply.error_code() == zsc::error_code_t::request_timeout) {
-    // retry or fall back
-}
-```
-
-### Handling disconnected
-
-If `send()` or `request()` returns `disconnected`, a reconnect is in progress or has already failed.
-Subscribe to status events and retry after the reconnect completes.
-
-```cpp
-connector.on_connection_state_changed([&](const zsc::connection_state_changed_t& ev) {
-    if (ev.state == zsc::connection_state_t::connected) {
-        // retry pending work after the reconnect succeeds
+    if (reply.error_code () == sc::error_code_t::request_timeout) {
+        retry_login ();
     }
+}
+```
+
+**A standard exception of the language is never thrown as it is.** The standard types for a bad
+argument or a bad state have no place to carry a code, so the caller cannot tell a configuration
+error from a validation failure. A language that delivers errors as exceptions uses a dedicated
+exception type that carries the code, and a build with exceptions off delivers the same code as a
+result value.
+
+## 2. Errors That Belong to No Request
+
+A frame that could not be decoded, or a server error unrelated to any request, has no call waiting
+for it, so it is delivered as an error event. This handler also returns a value that can be
+released.
+
+```cpp
+auto errors = connector.on_error ([] (const sc::error_t &error) {
+    log_error (error.code, error.message);
 });
 ```
 
-### remote_error
+## 3. Error Codes
 
-Occurs when the server returns an error frame.
+| Code | Meaning |
+|---|---|
+| `disconnected` | There is no connection, or it dropped |
+| `configuration_error` | The configuration is wrong — endpoint scheme against transport, a transport the runtime does not support |
+| `ValidationFailed` | A pre-send check, an option range check, or an observation condition of a wait surface did not hold |
+| `request_timeout` | The wait for an answer ran out of time |
+| `ConnectTimeout` | The wait for a connection ran out of time |
+| `FrameDecodeFailed` | A frame or header could not be decoded |
+| `FrameTooLarge` | A received payload exceeded the receive limit |
+| `send_failed` | The transmission failed |
+| `CompressionFailed` | Compression failed |
+| `DecompressionFailed` | Decompression failed |
+| `TlsValidationFailed` | TLS validation failed |
+| `UserCallbackFailed` | A user callback failed |
+| `RemoteError` | The server answered with an error |
 
-```cpp
-if (!reply && reply.error_code() == zsc::error_code_t::remote_error) {
-    auto msg = reply.error() ? reply.error()->message : "unknown";
-    // msg: the error message the server sent
-}
-```
+**The two codes for running out of time mean different things.** A request that ran out of time did
+not receive its answer; a wait surface that ran out of time observed something other than what was
+expected. That is why the second is reported as a validation failure — the caller has to handle the
+two cases differently.
 
-### Preventing frame_too_large
+To return a domain error as a normal answer, the server uses a successful answer with its own
+payload rather than an error answer. The payload of an error answer is always JSON carrying a code
+and a message, whatever the codec setting is.
 
-```cpp
-// use compress() when the payload could be large
-connector
-    .send(large_payload_t{data})
-    .compress()
-    .submit();
+## 4. What an Error Means for the Connection
 
-// or raise the limit in the options
-options.max_send_payload_size = 512 * 1024;
-options.max_receive_payload_size = 512 * 1024;
-```
+A failure that ends only the current call and a failure that ends the connection call for different
+handling.
 
-If compression is explicitly off and `.compress()` is called, `compression_failed` occurs. In the
-same state, receiving a compressed frame results in `decompression_failed`, and the error message
-reveals that a compression codec wasn't configured. Even a decompressed payload that again exceeds
-`max_receive_payload_size` is treated as `frame_too_large`.
+| Code | Current call | Connection | Automatic reconnect |
+|---|---|---|---|
+| `configuration_error` · `ValidationFailed` | fails | kept | no |
+| `request_timeout` | only that request fails | kept | no |
+| `ConnectTimeout` · `TlsValidationFailed` | connect fails | disconnected | applies the attempt policy |
+| `disconnected` · `send_failed` | the call in progress fails | disconnected if the transport dropped | applies it when enabled |
+| `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends | applies it when enabled |
+| `CompressionFailed` | only that send fails | kept | no |
+| `DecompressionFailed` | only that received packet or pending request fails | kept | no |
+| `UserCallbackFailed` · `RemoteError` | delivered as an error event or to the related call | kept | no |
 
-## The Throwing Adapter
+Where the connection ends, the close reason is recorded as a transport error. Reading the close
+reason is covered by [Connection Lifecycle](06-lifecycle.en.md).
 
-If you need a helper that throws an exception instead of `result_t<T>`, use
-`zlink/stream_connector_throwing.hpp`.
+## 5. Common Handling
 
-```cpp
-#include <zlink/stream_connector_throwing.hpp>
+**No connection.** A send that fails as no connection means reconnection is in progress or has
+already been given up. Register a connection-state handler and send again once the connection is
+back. Packets whose value expires with time are not sent again.
 
-// Returns TReply on success, or throws zlink::stream_connector::stream_error on failure
-auto reply = zlink::stream_connector_throwing::request<match_join_reply_t>(
-    connector, request);
-```
+**Answer timed out.** Only that request failed and the connection stayed, so the same request can be
+sent again. The server may have processed it already and only the answer was late, so a request that
+must not be processed twice is made recognizable on the server side.
 
-The throwing adapter is an optional surface for server framework or tool code. A game engine client
-uses the core `result_t<T>` API directly.
+**Receive limit exceeded.** A received payload over the receive limit is not delivered and the
+connection ends. If the server is configured to send larger packets, raise the receive limit in
+[Connector Options](03-connector-options.en.md).
 
-## A Success-Only Happy Path Pattern
+**Server error answer.** An error answer from the server fails that request, and one that matches no
+request is delivered as an error event. The connection is kept, so other packets are unaffected.
 
-```cpp
-auto connected = connector.connect();
-if (!connected) { return; }
+## 6. A Code That Does Not Occur on Every Runtime
 
-auto auth = connector
-    .request(auth_request_t{"player-1", "tok-abc123"})
-    .submit<auth_reply_t>();
-if (!auth) { return; }
+TLS validation failure does not occur on a browser runtime, because the browser's WebSocket API does
+not distinguish a TLS failure from an ordinary connection failure. The code stays in the set and is
+simply unused there, so a branch written per code does not change from runtime to runtime.
 
-connector
-    .send(enter_world_t{auth.value().session_id, "zone-12"})
-    .submit();
-```
+## 7. Related Chapters
+
+- Finding out why a connection ended — [Connection Lifecycle](06-lifecycle.en.md)
+- Limits and when they are validated — [Connector Options](03-connector-options.en.md)
+- Where a send fails — [Sending Packets](04-sending.en.md)

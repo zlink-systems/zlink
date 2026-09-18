@@ -38,7 +38,7 @@ The shape they share is that server processes for each role talk in typed
 messages, and the client receives state changes over a real-time connection.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
-        title="Servers for each role talk in typed messages and the client receives over STREAM" loading="lazy" style="width:100%;border:0"></iframe>
+        title="Servers for each role talk in typed messages and the client receives over STREAM" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
 
 ---
@@ -151,10 +151,11 @@ endpoints and real-time connections run in the same process.
 | 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
 | 21 | [Where ZLink Applies](17-alternative.en.md) | Where it fits, the signals, the boundary, the license |
 | 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
-| 23 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
-| 24 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
-| 25 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
-| 26 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
+| 23 | [Options](16-options.en.md) | The options, their defaults, and when to change them |
+| 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
+| 25 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
+| 26 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
+| 27 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
 
 The file number identifies the same chapter regardless of language. This table owns the
 reading order.
@@ -177,7 +178,7 @@ Every diagram in this guide uses the same visual language — the color is the
 concept.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
-        title="The five kinds that appear in the diagrams" loading="lazy" style="width:100%;border:0"></iframe>
+        title="The five kinds that appear in the diagrams" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
 
 Several chapters draw the same topology; what changes from chapter to chapter is

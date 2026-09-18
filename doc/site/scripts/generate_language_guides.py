@@ -82,6 +82,7 @@ STRINGS = {
         ),
         "switch_label": "다른 언어로 보기",
         "guide_home": "가이드 홈",
+        "section_home": "목차",
         "prev": "이전",
         "next": "다음",
         "chapter_ref": re.compile(r"`(\d\d)\. ([^`]+)` 장"),
@@ -101,6 +102,7 @@ STRINGS = {
         ),
         "switch_label": "View in another language",
         "guide_home": "Guide Home",
+        "section_home": "Contents",
         "prev": "Previous",
         "next": "Next",
         "chapter_ref": re.compile(r"`(\d\d)\. ([^`]+)` chapter"),
@@ -237,14 +239,18 @@ def redirect_missing(text: str, lang_dir: str, suffix: str, section: str) -> str
     return STRINGS[suffix]["redirect_ext"].sub(repl, text)
 
 
-def nav_block(order: list[str], name: str, titles: dict[str, str], suffix: str) -> str:
+def nav_block(order: list[str], name: str, titles: dict[str, str], suffix: str,
+              section: str) -> str:
     """그 언어의 읽는 순서 기준 앞뒤 장 nav."""
     try:
         index = order.index(name)
     except ValueError:
         return ""
     s = STRINGS[suffix]
-    parts = [f"[{s['guide_home']}](README.{suffix}.md)"]
+    #  서버 가이드의 README는 그 언어의 가이드 홈이고, client 라이브러리의 README는
+    #  그 절의 목차다. 같은 화면에 두 종류의 "홈"이 나오지 않게 이름을 나눈다.
+    label = s["guide_home"] if section == "server" else s["section_home"]
+    parts = [f"[{label}](README.{suffix}.md)"]
     if index > 0:
         prev = order[index - 1]
         parts.append(f"[{s['prev']}: {titles.get(prev, prev)}]({prev})")
@@ -328,7 +334,7 @@ def generate_locale(suffix: str, check_only: bool,
                        + s["banner"].format(source=src.name, section=section) + "\n"
                        + insert_after_title(
                            body,
-                           nav_block(order, src.name, titles, suffix)
+                           nav_block(order, src.name, titles, suffix, section)
                            + language_switch(lang_dir, src.name, suffix, section)))
             content = re.sub(r"\n{3,}", "\n\n", content).rstrip() + "\n"
 

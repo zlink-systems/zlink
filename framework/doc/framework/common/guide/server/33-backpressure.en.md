@@ -43,7 +43,7 @@ started and is awaiting asynchronous I/O therefore does not reacquire the queue 
 A framework-side owner keeps the record payload valid until its required terminal outcome, but
 it does not continue to occupy Core HWM budget.
 
-<iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/04-flow-en.html" target="_blank">↗ View larger</a></p>
 
 When the application job queue reaches its limit, every ordinary ingress record other than a
@@ -400,7 +400,6 @@ is neither cancelled nor rolled back.
 | — | The value actually applied **differs by send path** (below) | — |
 | `SendHighWaterMark` | Bytes that can be held **to send**, per peer. `0` means unlimited | `ConfigureRouterSocket()` |
 | `ReceiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `ConfigureRouterSocket()` |
-| `MaxMessageSize` | The max size of one message that will be accepted | `ConfigureRouterSocket()` |
 | `SendHighWaterMark` · `Linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `ConfigureSpotPublisher()` |
 | `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | root inbound-dispatch configuration |
 | `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` · pause/resume thresholds | The host instance's queued-application-job limit and flow-transition boundaries | root inbound-dispatch configuration |

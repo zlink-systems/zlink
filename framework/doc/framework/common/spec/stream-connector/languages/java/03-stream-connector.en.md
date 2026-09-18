@@ -646,9 +646,12 @@ class ZLinkKotlinStreamConnector {
         payload: Any,
         replyType: KClass<TReply>,
     ): ZLinkKotlinRequestCall<TReply>
+    fun closeReason(): ZLinkStreamCloseReason?
     fun <TPayload> waitFor(): ZLinkStreamTypedWaitCall<TPayload>
     fun <TPayload> waitFor(name: String): ZLinkStreamTypedWaitCall<TPayload>
+    fun <TPayload> expectNone(): ZLinkStreamTypedExpectNoneCall<TPayload>
     fun <TPayload> expectNone(name: String): ZLinkStreamTypedExpectNoneCall<TPayload>
+    fun <TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload>
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
     fun errors(): Flow<ZLinkStreamError>
@@ -701,6 +704,16 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 }
 
 ```
+
+**The close reason is read from the wrapper itself.** The Java
+connector's `Optional<ZLinkStreamCloseReason>` becomes a Kotlin nullable; it
+is `null` when the connection has never ended. Code that uses only the wrapper
+must reach the reason, so it is not left to pull the Java connector out.
+
+**All three wait surfaces offer both the named path and the payload-type
+path.** With no name, the name resolution rules for `TPayload` (§5) settle it.
+If only `waitFor` has both paths while `expectNone` and `waitForSequence`
+demand a name, the three surfaces are called differently inside one test.
 
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options

@@ -50,7 +50,7 @@ TLS를 켜면 인증서와 key 경로를 함께 지정한다. client 인증서 �
 
 ## 2. 오류가 가는 곳
 
-<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch.html" title="연결 하나가 지나는 자리" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch.html" title="연결 하나가 지나는 자리" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/38-stream-dispatch.html" target="_blank">↗ 크게 보기</a></p>
 
 **session 오류 callback은 그 session에 귀속되는 transport 오류만 받는다.** 나머지는 다음

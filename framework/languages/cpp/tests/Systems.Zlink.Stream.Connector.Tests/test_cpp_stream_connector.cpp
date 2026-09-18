@@ -1345,11 +1345,7 @@ int main ()
         frame_options.max_receive_payload_size = 4;
         const auto oversized_header =
           static_cast<std::size_t> (std::numeric_limits<std::uint16_t>::max ()) + 1;
-        if (zlink::stream_connector::detail::frame_codec_t::validate_frame_size (
-              oversized_header, 1, frame_options)
-            || zlink::stream_connector::detail::frame_codec_t::validate_frame_size (1, 3,
-                                                                                    frame_options)
-            || zlink::stream_connector::detail::frame_codec_t::validate_receive_frame_size (
+        if (zlink::stream_connector::detail::frame_codec_t::validate_receive_frame_size (
               oversized_header, 1, frame_options)
             || zlink::stream_connector::detail::frame_codec_t::validate_receive_frame_size (
               1, 5, frame_options)
@@ -1362,6 +1358,27 @@ int main ()
                    .error_code ()
                  != zlink::stream_connector::error_code_t::frame_too_large) {
             return 73;
+        }
+        /* stream-connector 32 §4.7 and §9: a send payload over
+         * max_send_payload_size fails before the transport write and is
+         * reported as validation_failed, the same code .NET reports from
+         * ZlinkStreamFrameCodec.ValidateSendPayload. frame_too_large names the
+         * receive bound (§9) and must never appear on the send path. */
+        const std::vector<std::uint8_t> send_header{0x01};
+        const std::vector<std::uint8_t> over_limit_payload (
+          frame_options.max_send_payload_size + 1, 0x7f);
+        const auto over_limit = zlink::stream_connector::detail::frame_codec_t::encode (
+          send_header, over_limit_payload, frame_options);
+        if (over_limit
+            || over_limit.error_code ()
+                 != zlink::stream_connector::error_code_t::validation_failed) {
+            return 181;
+        }
+        const std::vector<std::uint8_t> at_limit_payload (frame_options.max_send_payload_size,
+                                                          0x7f);
+        if (!zlink::stream_connector::detail::frame_codec_t::encode (
+              send_header, at_limit_payload, frame_options)) {
+            return 182;
         }
     }
 
@@ -2423,9 +2440,12 @@ int main ()
           zlink::stream_connector::packet_t{.name = "async.validation",
                                             .payload = zlink::message_t::from ("too-large")},
           [&] (zlink::stream_connector::result_t<void> result) {
+              /* stream-connector 32 §4.7/§9: over the send payload bound is a
+               * pre-write validation failure, not the receive-side
+               * frame_too_large. */
               async_validation_seen =
                 !result
-                && result.error_code () == zlink::stream_connector::error_code_t::frame_too_large;
+                && result.error_code () == zlink::stream_connector::error_code_t::validation_failed;
           });
         if (!eventually ([&] { return async_validation_seen.load (); })) {
             return 161;
@@ -2484,7 +2504,7 @@ int main ()
                  result) {
               async_request_validation_seen =
                 !result
-                && result.error_code () == zlink::stream_connector::error_code_t::frame_too_large;
+                && result.error_code () == zlink::stream_connector::error_code_t::validation_failed;
           });
         if (!eventually ([&] { return async_request_validation_seen.load (); })) {
             return 165;

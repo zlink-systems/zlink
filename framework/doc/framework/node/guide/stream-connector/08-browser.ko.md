@@ -1,6 +1,6 @@
-# 02 — 브라우저
+# 브라우저
 
-[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Unity WebGL →](03-unity-webgl.ko.md)
+[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Unity WebGL →](09-unity-webgl.ko.md)
 
 ---
 

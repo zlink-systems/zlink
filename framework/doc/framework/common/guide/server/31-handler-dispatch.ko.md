@@ -117,7 +117,7 @@ record로 남는다([모니터링](26-monitoring.ko.md)).
 웹 framework의 HTTP middleware는 HTTP 파이프라인 전용이라 handler에는 적용되지 않는다.
 로그·검증·권한 확인·측정처럼 여러 handler에 같은 코드가 반복될 일은 filter로 모은다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/31-filter-scope.html" title="filter는 node가 받는 message를 감싼다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/31-filter-scope.html" title="filter는 node가 받는 message를 감싼다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/31-filter-scope.html" target="_blank">↗ 크게 보기</a></p>
 
 filter는 **node가 받는 message**만 감싼다. 그래서, 같은 코드를

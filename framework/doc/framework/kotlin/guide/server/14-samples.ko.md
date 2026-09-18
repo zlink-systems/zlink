@@ -10,7 +10,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 # 14. 샘플 고르기 — 내 문제에 가까운 예제부터
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 12. 운영 — 런타임 메트릭 · graceful drain · readiness](12-operations.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
+[가이드 홈](README.ko.md) | [이전: 옵션과 기본값](16-options.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -60,7 +60,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 조회**는 아니다. Managed language에서는 handler도 scan 없이 구성 코드에서 직접 등록하는 유일한
 sample이다. C++은 모든 sample에서 handler를 직접 등록하지만, 수동 연결은 TicTacToe에서만 사용한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe.html" title="TicTacToe 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe.html" title="TicTacToe 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-tictactoe.html" target="_blank">↗ 크게 보기</a></p>
 
 별도 Session 서버가 없어 각 `Play`가 stream session·actor·Entry Spot·room Spot을 함께
@@ -84,7 +84,7 @@ location store 자동 연결이 하나의 흐름 안에서 차례로 나온다.
 진행은 방을 소유한 서버가 처리한다. 다른 장르를 만들더라도 역할 분리와 연결 구조는 이
 모양에서 크게 벗어나지 않으므로, 새 서비스의 출발점으로 삼기 좋다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.html" title="Bingo 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.html" title="Bingo 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-bingo.html" target="_blank">↗ 크게 보기</a></p>
 
 `Session`은 client 연결과 actor bind를, `Play`는 player actor와 room User
@@ -115,7 +115,7 @@ conversation Spot에 대응하고, 참여자·메시지 순서·typing 상태·�
 
 이 도메인의 기술적 어려움은 **상담원 한 명이 여러 고객을 동시에 응대**한다는 데서 나온다.
 고객은 대화 하나만 가지므로 자기 actor가 곧 그 대화의 참여자다. 상담원은 그럴 수 없다 —
-framework에서 **한 actor는 동시에 한 Spot에만 속하고**, 새 Spot에 join하면 이전 Spot에서
+framework에서 **한 actor는 동시에 한 Spot에만 속한다.** 새 Spot에 join하면 이전 Spot에서
 leave되기 때문이다. 상담원 actor 하나로는 대화 세 건에 동시에 들어가 있을 수 없다.
 
 그래서 상담원 쪽 actor를 두 종류로 나눈다.
@@ -128,7 +128,7 @@ leave되기 때문이다. 상담원 actor 하나로는 대화 세 건에 동시�
 **연결은 하나인데 actor는 여러 개다.** 상담원 client는 stream 연결 하나만 유지하고, 그
 session에 roster actor와 대화별 conversation actor를 함께 bind한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.html" title="SupportChat 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.html" title="SupportChat 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-supportchat.html" target="_blank">↗ 크게 보기</a></p>
 
 들어오는 방향은 **`ConversationId`를 stream 메시지의 metadata에 실어** 구분한다. Session
@@ -156,7 +156,7 @@ session이 bind되어 대화 상태가 그대로 이어지고, 일정 시간 메
 framework의 어느 기능에 대응되는지** 보여 주는 것이다. 택시 호출, 현장 출동, 방문 서비스도
 같은 구조다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-delivery.html" target="_blank">↗ 크게 보기</a></p>
 
 외부 경계는 그대로 웹 기술을 사용한다. 고객은 HTTP로 배송을 만들고 stream으로 상태를 받는다.
@@ -174,7 +174,7 @@ actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배
 진행하며 실패하면 보상한다. 바깥 HTTP는 `CommerceApi`가 종단하고 주문 상태는 직접 바꾸지
 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall.html" title="ShoppingMall 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall.html" title="ShoppingMall 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-shoppingmall.html" target="_blank">↗ 크게 보기</a></p>
 
 이 샘플에서 owner Spot의 이득은 처리량이 아니다. **재시도와 중단에 안전한 다단계 처리를
@@ -195,7 +195,7 @@ client가 "퀘스트를 깼으니 보상을 달라"고 말하게 두면 조작�
 전부 `PlayerId` owner Spot에서 일어난다. 같은 player의 이벤트는 owner 하나가 순서대로
 처리하고, 진행 상황은 projection을 통해 연결로 push된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest.html" title="GameQuest 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest.html" title="GameQuest 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-gamequest.html" target="_blank">↗ 크게 보기</a></p>
 
 ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행은 꼬여도 재동기화라는
@@ -217,7 +217,7 @@ Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 ac
 join하고, owner가 다르면 relocation이 일어나지만 client 연결은 유지된다. bound session이
 없는 봇 actor도 Spot timer로 같은 경계 이동을 한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.html" title="ZoneWorld 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.html" title="ZoneWorld 샘플 토폴로지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-zoneworld.html" target="_blank">↗ 크게 보기</a></p>
 
 이 샘플의 교육 목표는 **"여러 node에 무언가를 한다"가 상황마다 다른 표면을 요구한다**는

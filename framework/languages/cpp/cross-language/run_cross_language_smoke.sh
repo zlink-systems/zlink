@@ -369,16 +369,22 @@ stage_cpp_publisher_dotnet_subscriber() {
   port="$(free_port)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/dotnet-subscriber.events"
+  # The publisher only repeats for a bounded window, so the peer process must
+  # already be up when it starts: start the subscriber first and wait for its
+  # ready file, the same order stage_node_publisher_cpp_subscriber uses.
+  # Otherwise the window has to cover the peer runtime's start-up time, which
+  # is not a property this stage can assert.
+  start_dotnet dotnet-subscriber channel-subscriber \
+    --channel-name profiles.events \
+    --publisher-endpoint "${endpoint}" \
+    --event-file "${events}"
+  wait_for_ready "${RUN_DIR}/dotnet-subscriber.ready" 90
   start_cpp cpp-publisher channel-publisher \
     --channel-name profiles.events \
     --publisher-endpoint "${endpoint}" \
     --topic profile.changed \
     --value cpp-publish \
     --event-file "${RUN_DIR}/cpp-publisher.events"
-  start_dotnet dotnet-subscriber channel-subscriber \
-    --channel-name profiles.events \
-    --publisher-endpoint "${endpoint}" \
-    --event-file "${events}"
   wait_for_line "${events}" "profile.changed:cpp-publish" 90
   stop_all
   RESULTS+=("flow-wire: C++ fanout publisher -> .NET subscriber (envelope + topic)")
@@ -495,16 +501,19 @@ stage_cpp_publisher_node_subscriber() {
   port="$(free_port)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/node-subscriber.events"
+  # Same order as the .NET subscriber stage: the peer is up before the
+  # bounded publish window opens.
+  start_node node-subscriber channel-subscriber \
+    --channel-name profiles.events \
+    --publisher-endpoint "${endpoint}" \
+    --event-file "${events}"
+  wait_for_ready "${RUN_DIR}/node-subscriber.ready" 90
   start_cpp cpp-publisher-node channel-publisher \
     --channel-name profiles.events \
     --publisher-endpoint "${endpoint}" \
     --topic profile.changed \
     --value cpp-publish-node \
     --event-file "${RUN_DIR}/cpp-publisher-node.events"
-  start_node node-subscriber channel-subscriber \
-    --channel-name profiles.events \
-    --publisher-endpoint "${endpoint}" \
-    --event-file "${events}"
   wait_for_line "${events}" "profile.changed:cpp-publish-node" 90
   stop_all
   RESULTS+=("flow-wire: C++ fanout publisher -> Node subscriber (envelope + topic)")

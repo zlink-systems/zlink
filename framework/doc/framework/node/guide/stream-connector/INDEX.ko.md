@@ -5,8 +5,8 @@ TypeScript STREAM client connector(`@zlink-systems/stream-connector`)의 공식 
 | 문서 | 내용 |
 |------|------|
 | [01 — 개요](01-overview.ko.md) | 대상 실행 환경, package와 transport |
-| [02 — 브라우저](02-browser.ko.md) | 연결, codec 주입, dispatch와 flow 전달 |
-| [03 — Unity WebGL](03-unity-webgl.ko.md) | `com.zlink.stream-connector.webgl` UPM 어댑터 설치와 main thread pump |
+| [02 — 브라우저](08-browser.ko.md) | 연결, codec 주입, dispatch와 flow 전달 |
+| [03 — Unity WebGL](09-unity-webgl.ko.md) | `com.zlink.stream-connector.webgl` UPM 어댑터 설치와 main thread pump |
 
 정확한 옵션, call builder와 오류 타입은
 [TypeScript 공개 계약](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md)이

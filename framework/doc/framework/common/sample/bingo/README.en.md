@@ -64,7 +64,7 @@ another node.
 The only role the Client connects to directly is Session. API, Matchmaking, and Play communicate
 over server-to-server channels and RouteMesh.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology-en.html" title="System composition and topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-topology-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Connection | Role |
@@ -391,7 +391,7 @@ boundaries omitted from the diagram.
 
 ### 7.1 Authentication And Binding
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding-en.html" title="Authentication and binding" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding-en.html" title="Authentication and binding" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-auth-binding-en.html" target="_blank">↗ View larger</a></p>
 
 1. The Client sends `AuthenticateReq` over the Session STREAM.
@@ -407,7 +407,7 @@ relocation, the Framework updates the binding route.
 
 ### 7.2 Matching And Game Start
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start-en.html" title="Matching and game start" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start-en.html" title="Matching and game start" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-matching-start-en.html" target="_blank">↗ View larger</a></p>
 
 1. `player-1` sends `MatchBingoReq`.
@@ -436,7 +436,7 @@ The Observer doesn't look up the player record.
 
 ### 7.3 Card, Draw, And Winner Decision
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw-en.html" title="Card, draw, and winner decision" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw-en.html" title="Card, draw, and winner decision" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-card-draw-en.html" target="_blank">↗ View larger</a></p>
 
 1. Once both players confirm the start push, they each submit a different deterministic card.
@@ -454,7 +454,7 @@ implement game rules either.
 
 ### 7.4 Reward Observation
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe-en.html" target="_blank">↗ View larger</a></p>
 
 The game room first confirms the end result, submits the player push, and then publishes
@@ -498,7 +498,7 @@ Player Actor cleanup after the game ends runs in a separate order.
 - Disconnect cleanup alone doesn't trigger actor destroy.
 - A stream disconnect cleans up the bound session but doesn't immediately destroy the actor.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup-en.html" title="Disconnect and end cleanup" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup-en.html" title="Disconnect and end cleanup" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-end-cleanup-en.html" target="_blank">↗ View larger</a></p>
 
 1. The Room records state so cleanup only starts once.
@@ -547,7 +547,7 @@ Language-specific package, namespace, file extension, and build module represent
 But merging roles or moving them to a different layer in only one language, reinterpreting the
 structure, isn't allowed.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure-en.html" title="Bingo implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure-en.html" title="Bingo implementation structure" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language |

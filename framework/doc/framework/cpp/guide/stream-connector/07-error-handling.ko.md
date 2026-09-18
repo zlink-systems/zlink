@@ -1,137 +1,134 @@
-# 07 — 오류 처리
-
-[← 연결 생명주기](06-lifecycle.ko.md) | [목차](INDEX.ko.md) | [다음: E2E 클라이언트 →](08-e2e-client.ko.md)
-
+---
+title: "오류 처리 · C++"
 ---
 
-## result_t\<T\>
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/stream-connector/07-error-handling.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-모든 동기 API는 `result_t<T>`를 반환한다. exception을 던지지 않는다.
+# 오류 처리
+
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 08 — E2E 클라이언트](08-e2e-client.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/07-error-handling.ko.md) · [Java](../../../java/guide/stream-connector/07-error-handling.ko.md) · [Kotlin](../../../kotlin/guide/stream-connector/07-error-handling.ko.md) · [Node/TypeScript](../../../node/guide/stream-connector/07-error-handling.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    실패한 호출에서 오류 코드를 읽고, 그 코드가 연결에 어떤 영향을 주는지 판단해
+    재시도·복구·중단을 고를 수 있다.
+
+connector의 오류 코드는 **닫힌 집합**이다. 구현이 코드를 더 만들거나 빼지 않으므로, 코드마다
+처리를 정해 두면 새 코드가 나타나 분기를 빠뜨리는 일이 없다. 이 장은 그 코드를 받는 방법과
+코드별 의미를 다룬다.
+
+## 1. 오류를 받는 자리
+
+전달 방식은 표면에 따라 다르되 의미는 같다. 완료를 기다리는 표면은 실패를 그 자리에서 전달하고,
+callback을 받는 표면은 결과 객체로 전달하며, 어느 request에도 속하지 않는 오류는 오류 이벤트로
+전달한다. **어느 방식이든 받는 쪽이 코드를 읽을 수 있다.**
 
 ```cpp
-auto reply = connector.request(request).submit<match_join_reply_t>();
+// 예외가 꺼진 빌드가 core를 그대로 사용하므로 실패는 값으로 돌아온다.
+auto reply = connector.request (login_request_t{"player-1", "tok-abc123"})
+               .submit<login_reply_t> ();
 
 if (!reply) {
-    // 실패
-    auto code = reply.error_code();
-    auto msg  = reply.error() ? reply.error()->message : "";
-    return;
-}
-
-auto value = reply.value(); // T&&
-```
-
-| 표현식 | 의미 |
-|--------|------|
-| `if (result)` | 성공 여부 확인 |
-| `result.value()` | 성공 값 (실패 상태에서 호출하면 UB) |
-| `result.error_code()` | `error_code_t` 열거값 |
-| `result.error()` | `const error_t*`. 메시지 포함. 성공 시 nullptr |
-
-## error_code_t 목록
-
-| 코드 | 의미 | 주요 발생 API |
-|------|------|--------------|
-| `disconnected` | 연결이 없는 상태에서 operation 호출 또는 transport 끊김 | send, request, wait, dispatch |
-| `configuration_error` | endpoint, packet name, timeout 같은 설정이 잘못됨 | connect, send, request |
-| `validation_failed` | 요청 인자가 계약 범위를 벗어남 | send, request |
-| `request_timeout` / `wait_timeout` | reply나 wait 대상 packet이 timeout 안에 도착하지 않음 | request, wait_for |
-| `connect_timeout` | connect 시도가 `connect_timeout` 안에 완료되지 않음 | connect |
-| `frame_decode_failed` | 수신 frame을 STREAM 계약에 맞게 파싱할 수 없음 | receive loop |
-| `frame_too_large` | send payload 또는 metadata가 설정 한도를 넘음 | send, request |
-| `send_failed` | 연결은 열려 있지만 packet write가 실패함 | send, request |
-| `unsupported_codec` | build에 없는 codec을 사용함 | send, request |
-| `compression_failed` | 설정된 compression codec으로 payload를 압축할 수 없음 | send, request |
-| `tls_validation_failed` | TLS 서버 인증서 검증 실패 | connect (TLS/WSS) |
-| `decompression_failed` | 설정된 compression codec으로 compressed payload를 복원할 수 없음 | receive loop |
-| `user_callback_failed` | `on<T>()` callback 안에서 예외가 발생함 | dispatch |
-| `remote_error` | 서버가 error frame을 응답함 | request |
-| `closed` | `close()`를 호출해 pending operation이 종료됨 | 모든 pending operation |
-| `canceled` | coroutine task 파괴나 명시 취소로 operation이 종료됨 | e2e client awaiter |
-
-## 패턴별 처리
-
-### timeout 재시도
-
-```cpp
-auto reply = connector
-    .request(query)
-    .timeout(std::chrono::seconds{5})
-    .submit<match_data_t>();
-
-if (!reply && reply.error_code() == zsc::error_code_t::request_timeout) {
-    // 재시도 또는 fallback
-}
-```
-
-### disconnected 처리
-
-`send()`나 `request()`가 `disconnected`를 반환하면 reconnect가 진행 중이거나 이미 실패한 상태다. 상태 이벤트를 구독해 reconnect 완료 후 재시도한다.
-
-```cpp
-connector.on_connection_state_changed([&](const zsc::connection_state_changed_t& ev) {
-    if (ev.state == zsc::connection_state_t::connected) {
-        // reconnect 성공 후 pending 작업 재시도
+    if (reply.error_code () == sc::error_code_t::request_timeout) {
+        retry_login ();
     }
+}
+```
+
+**언어의 표준 예외를 그대로 던지지 않는다.** 인자 오류나 상태 오류를 나타내는 표준 타입에는
+코드를 담을 자리가 없어, 호출자가 구성 오류인지 검증 실패인지 판정하지 못하기 때문이다. 오류를
+예외로 전달하는 언어는 코드를 담는 전용 예외 타입을 사용하고, 예외를 끈 빌드는 결과 값으로
+같은 코드를 전달한다.
+
+## 2. request에 속하지 않는 오류
+
+frame을 해석하지 못했거나 서버가 request와 무관하게 보낸 오류는 기다리는 호출이 없으므로 오류
+이벤트로 전달한다. 이 handler도 해제할 수 있는 값을 돌려준다.
+
+```cpp
+auto errors = connector.on_error ([] (const sc::error_t &error) {
+    log_error (error.code, error.message);
 });
 ```
 
-### remote_error
+## 3. 오류 코드
 
-서버가 error frame을 돌려보낼 때 발생한다.
+| 코드 | 의미 |
+|---|---|
+| `disconnected` | 연결이 없거나 끊겼다 |
+| `configuration_error` | 구성이 잘못됐다. endpoint scheme과 transport 충돌, 환경이 지원하지 않는 transport 등 |
+| `ValidationFailed` | 전송 전 검증, option 값 범위 검증, 대기 표면의 관측 조건이 어긋났다 |
+| `request_timeout` | 응답을 기다리다 시간이 초과됐다 |
+| `ConnectTimeout` | 연결을 기다리다 시간이 초과됐다 |
+| `FrameDecodeFailed` | frame이나 header를 해석하지 못했다 |
+| `FrameTooLarge` | 받은 payload가 수신 한도를 넘었다 |
+| `send_failed` | 전송에 실패했다 |
+| `CompressionFailed` | 압축에 실패했다 |
+| `DecompressionFailed` | 압축 해제에 실패했다 |
+| `TlsValidationFailed` | TLS 검증에 실패했다 |
+| `UserCallbackFailed` | 사용자 callback이 실패했다 |
+| `RemoteError` | 서버가 오류 응답을 보냈다 |
 
-```cpp
-if (!reply && reply.error_code() == zsc::error_code_t::remote_error) {
-    auto msg = reply.error() ? reply.error()->message : "unknown";
-    // msg: 서버에서 보낸 오류 메시지
-}
-```
+**기다리다 시간이 초과된 두 코드는 뜻이 다르다.** 응답을 기다린 request의 초과는 요청이 답을
+받지 못한 것이고, 대기 표면의 초과는 관측이 어긋난 것이다. 후자를 검증 실패로 전달하는 이유가
+여기 있다 — 호출자가 두 상황을 다르게 처리해야 한다.
 
-### frame_too_large 예방
+서버가 도메인 오류를 정상 응답으로 돌려주려면 오류 응답이 아니라 성공 응답과 자기 payload를
+사용한다. 오류 응답의 payload는 codec 설정과 무관하게 항상 코드와 message를 담은 JSON이다.
 
-```cpp
-// payload가 클 수 있는 경우 compress() 사용
-connector
-    .send(large_payload_t{data})
-    .compress()
-    .submit();
+## 4. 오류가 연결에 미치는 영향
 
-// 또는 options에서 한도 올리기
-options.max_send_payload_size = 512 * 1024;
-options.max_receive_payload_size = 512 * 1024;
-```
+같은 실패라도 그 호출만 실패하는 것과 연결이 끝나는 것은 대응이 다르다.
 
-compression을 명시적으로 끈 상태에서 `.compress()`를 호출하면 `compression_failed`가
-난다. 같은 상태에서 compressed frame을 받으면 `decompression_failed`가 나며, 오류 메시지는
-compression codec이 설정되지 않았다는 뜻을 드러낸다. 압축을 풀어 나온 payload도
-`max_receive_payload_size`를 다시 넘으면 `frame_too_large`로 처리된다.
+| 코드 | 현재 호출 | 연결 | 자동 재연결 |
+|---|---|---|---|
+| `configuration_error` · `ValidationFailed` | 실패 | 유지 | 하지 않는다 |
+| `request_timeout` | 그 request만 실패 | 유지 | 하지 않는다 |
+| `ConnectTimeout` · `TlsValidationFailed` | 연결 실패 | 끊김 | 시도 정책을 적용한다 |
+| `disconnected` · `send_failed` | 진행 중인 호출 실패 | transport가 끊겼으면 끊김 | 켜져 있으면 적용한다 |
+| `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료 | 켜져 있으면 적용한다 |
+| `CompressionFailed` | 그 송신만 실패 | 유지 | 하지 않는다 |
+| `DecompressionFailed` | 그 수신 packet 또는 대기 중인 request만 실패 | 유지 | 하지 않는다 |
+| `UserCallbackFailed` · `RemoteError` | 오류 이벤트나 관련 호출로 전달 | 유지 | 하지 않는다 |
 
-## throwing adapter
+연결이 끝나는 쪽은 종료 사유가 transport 오류로 남는다. 종료 사유를 읽는 방법은
+[연결 생명주기](06-lifecycle.ko.md)가 다룬다.
 
-`result_t<T>` 대신 예외를 던지는 helper가 필요하다면 `zlink/stream_connector_throwing.hpp`를 사용한다.
+## 5. 자주 만나는 처리
 
-```cpp
-#include <zlink/stream_connector_throwing.hpp>
+**연결 없음.** 송신이 연결 없음으로 실패하면 재연결이 진행 중이거나 이미 포기한 상태다. 연결
+상태 handler를 등록해 두고 다시 연결된 뒤에 보낸다. 값이 오래되어 의미가 없어지는 packet은
+다시 보내지 않는다.
 
-// 성공하면 TReply를 반환, 실패하면 zlink::stream_connector::stream_error 예외
-auto reply = zlink::stream_connector_throwing::request<match_join_reply_t>(
-    connector, request);
-```
+**응답 시간 초과.** 그 request만 실패하고 연결은 유지되므로, 같은 request를 다시 보내도 된다.
+다만 서버가 이미 처리한 뒤 응답만 늦어졌을 수 있으므로, 두 번 처리되면 안 되는 요청은 서버 쪽에서
+같은 요청을 구분할 수 있게 만든다.
 
-throwing adapter는 server framework나 tool 코드를 위한 선택 표면이다. 게임 엔진 client에서는 core `result_t<T>` API를 직접 사용한다.
+**수신 한도 초과.** 받은 payload가 수신 한도를 넘으면 그 frame을 전달하지 않고 연결이 끝난다.
+서버가 더 큰 packet을 보낼 수 있는 구성이라면
+[Connector 옵션](03-connector-options.ko.md)에서 수신 한도를 키운다.
 
-## 오류 없이 성공만 진행하는 pattern
+**서버 오류 응답.** 서버가 오류 응답을 보내면 그 request가 실패하고, 어느 request에도 맞지 않으면
+오류 이벤트로 전달한다. 연결은 그대로 유지되므로 다른 packet은 영향을 받지 않는다.
 
-```cpp
-auto connected = connector.connect();
-if (!connected) { return; }
+## 6. 런타임에 따라 나지 않는 코드
 
-auto auth = connector
-    .request(auth_request_t{"player-1", "tok-abc123"})
-    .submit<auth_reply_t>();
-if (!auth) { return; }
+브라우저 런타임에서는 TLS 검증 실패가 발생하지 않는다. 브라우저의 WebSocket API가 TLS 실패를
+일반 연결 실패와 구분해 주지 않기 때문이다. 코드는 집합에 그대로 남고 그 런타임에서 쓰이지 않을
+뿐이므로, 코드별 처리를 적어 둔 분기는 런타임마다 달라지지 않는다.
 
-connector
-    .send(enter_world_t{auth.value().session_id, "zone-12"})
-    .submit();
-```
+## 7. 관련 장
+
+- 연결이 끝난 이유 확인 — [연결 생명주기](06-lifecycle.ko.md)
+- 한도와 검증 시점 — [Connector 옵션](03-connector-options.ko.md)
+- 송신 실패가 나는 자리 — [packet 송신](04-sending.ko.md)

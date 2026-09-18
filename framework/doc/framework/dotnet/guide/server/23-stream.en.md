@@ -39,7 +39,7 @@ neither condition.
 STREAM narrows that boundary to a single connection. The client needs one address and the packet
 names, and it never learns how many nodes the mesh has.
 
-<iframe class="zlink-diagram" src="/common/diagrams/23-stream-boundary-en.html" title="STREAM is the mesh outer edge" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/23-stream-boundary-en.html" title="STREAM is the mesh outer edge" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/23-stream-boundary-en.html" target="_blank">↗ View larger</a></p>
 
 **One session object stands for one connection.** Packets arriving on that connection are handled

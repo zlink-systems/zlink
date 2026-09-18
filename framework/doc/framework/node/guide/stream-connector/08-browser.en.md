@@ -1,6 +1,6 @@
-# 02 — Browser
+# Browser
 
-[← Table Of Contents](INDEX.en.md) | [Previous: Overview](01-overview.en.md) | [Next: Unity WebGL →](03-unity-webgl.en.md)
+[← Table Of Contents](INDEX.en.md) | [Previous: Overview](01-overview.en.md) | [Next: Unity WebGL →](09-unity-webgl.en.md)
 
 ---
 

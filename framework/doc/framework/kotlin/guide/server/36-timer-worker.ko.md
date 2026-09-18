@@ -29,8 +29,8 @@ title: "Timer와 worker · Kotlin"
 
 ## 1. Timer — 주기 실행
 
-Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 **그 Spot의 실행 queue에 들어가므로**
-handler 안에서 Spot 상태를 그대로 다룬다. 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
+Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+**handler 안에서 Spot 상태를 그대로 다룬다.** 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
 
 이름은 같은 Spot 안에서 유일하다. 주기가 `0` 이하이면 등록 시점에 설정 오류다.
 
@@ -70,7 +70,7 @@ timer handler가 받는 tick은 예정 대비 지연과 건너뛴 tick 수를 �
 지연이 커지는 것은 그 Spot의 줄이 밀린다는 신호다. handler가 그 값을 읽어 부하를 보고하면
 운영에서 원인을 찾을 자리가 생긴다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker.html" title="timer는 줄에 서고, worker는 줄 밖에서 돈다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker.html" title="timer는 줄에 서고, worker는 줄 밖에서 돈다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 2. Worker — 줄 밖에서 실행하기
@@ -109,7 +109,7 @@ worker 호출을 어떤 종결자로 닫느냐가 **기다리는 동안 그 Spot
 - 무엇이 한 줄에 서는가 — [실행 모델](32-execution-model.ko.md)
 - 도착이 처리보다 빠를 때 — [Backpressure](33-backpressure.ko.md)
 - timer가 이동을 만났을 때 — [Relocation](37-relocation.ko.md)
-- 옵션의 정확한 이름과 기본값 — 언어별 `16. Options` 장
+- 옵션의 정확한 이름과 기본값 — 언어별 [16. Options](16-options.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

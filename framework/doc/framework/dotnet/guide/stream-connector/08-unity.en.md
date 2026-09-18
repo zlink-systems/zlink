@@ -1,6 +1,6 @@
-# 02 — Unity (Native Build)
+# Unity (Native Build)
 
-[← Table Of Contents](INDEX.en.md) | [Previous: Overview](01-overview.en.md) | [Next: Godot C# →](03-godot-csharp.en.md)
+[← Table Of Contents](INDEX.en.md) | [Previous: Overview](01-overview.en.md) | [Next: Godot C# →](09-godot-csharp.en.md)
 
 ---
 
@@ -12,7 +12,7 @@ dedicated Unity connector package. Unity also uses the general `.NET` connector 
 > it can't open an OS socket and can't use the `.NET` connector. WebGL calls the TypeScript
 > connector through jslib interop, using the `com.zlink.stream-connector.webgl` UPM adapter, whose
 > C# surface is the one this document describes. See the
-> [Unity WebGL guide](../../../node/guide/stream-connector/03-unity-webgl.en.md).
+> [Unity WebGL guide](../../../node/guide/stream-connector/09-unity-webgl.en.md).
 
 ## Basic Principle
 
@@ -52,11 +52,12 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
             Endpoint = new Uri("wss://example.com/stream")
         });
 
-        _connector.ConnectionStateChanged += (change, _) =>
+        //  Disposing the returned value unregisters it. Here it ends with the connector.
+        _connector.OnConnectionStateChanged((change, _) =>
         {
             Debug.Log($"ZLink stream state: {change.Current}");
             return ValueTask.CompletedTask;
-        };
+        });
 
         _connector.On("game.update", (message, _) =>
         {

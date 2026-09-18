@@ -91,7 +91,7 @@ headless runner는 server별 self-check를 실행하며, 브라우저 client는 
 기본 topology는 Client와 server component의 배치와 연결만 표현한다. Redis와 maintenance
 store는 resource 표에서 설명하며 이동·publish 시간 순서는 §7 sequence diagram에서 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology.html" title="ZoneWorld topology — Client · Server 배치와 연결" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology.html" title="ZoneWorld topology — Client · Server 배치와 연결" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Gateway만 player-facing game STREAM을 제공하고 Ops만 control STREAM을 제공한다.
@@ -433,7 +433,7 @@ join을 `Defer()`로 등록하고 현재 handler를 정상 종료하며, join �
 admission까지 완료**가 이 시나리오의 규범 의미이며, admission 이전 상태(cache 등)로
 JoinWorldRes terminal을 만드는 구현은 비적합이다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move.html" title="입장과 같은 zone 이동 — JoinWorld · Move" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move.html" title="입장과 같은 zone 이동 — JoinWorld · Move" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-join-move.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 7.2 경계 이동과 relocation
@@ -442,7 +442,7 @@ target zone owner가 같으면 membership만 바뀌고, 다르면 같은 Player 
 materialize되는 relocation이 발생한다. Application은 두 경우를 NodeId로 구분하지 않는다.
 두 경우 모두 request/reply인 `EnterZoneReq`와 `EnterZoneRes`를 사용한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation.html" title="경계 이동과 relocation" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation.html" title="경계 이동과 relocation" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 Relocation은 ActorId와 ObjectGeneration을 유지하고 owner generation만 바꾼다. relocation 중
@@ -480,7 +480,7 @@ WatchNodesRes의 Registered와 Connected는 서로 다른 관측값이다. Conne
 관찰의 peer state에서 얻고, Registered는 Framework topology status가 등록 신호를 노출하지
 않으므로 ZoneNode의 explicit report에서 얻는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops.html" title="Ops 관찰, announce와 maintenance" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops.html" title="Ops 관찰, announce와 maintenance" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-ops.html" target="_blank">↗ 크게 보기</a></p>
 
 Target zone owner가 maintenance=true이면 target Zone Spot의 OnActorJoin admission이
@@ -516,7 +516,7 @@ self-check 항목으로 관측한다.
 같은 책임으로 유지한다. headless scenario와 browser client의 파일 위치는 달라도 Gateway, ZoneNode와
 Ops의 경계, zone state owner와 relocation adapter의 위치는 바꾸지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure.html" title="구현 구조 — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |

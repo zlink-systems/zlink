@@ -45,7 +45,7 @@ C++ 코드에서 어떤 실행 모델과 수명주기로 나타나는지 설명�
 **실행 모델 비교** — 같은 3개 요청이 두 핸들러에서 어떻게 도는가:
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-dispatch-concurrency.html"
-        title="노드 핸들러는 동시, SPOT 핸들러는 직렬" loading="lazy" style="width:100%;border:0"></iframe>
+        title="노드 핸들러는 동시, SPOT 핸들러는 직렬" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-dispatch-concurrency.html" target="_blank">↗ 크게 보기</a></p>
 
 노드 핸들러는 요청마다 다른 worker 가 **동시에** 처리하니 핸들러에 가변 상태를 두면
@@ -98,14 +98,14 @@ handler 완료 전까지 다음 callback 을 시작하지 않는다.
 수천 개를 떠받친다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-coroutine-pool.html"
-        title="event 하나에 코루틴 하나, 스레드는 풀이 나눠 쓴다" loading="lazy" style="width:100%;border:0"></iframe>
+        title="event 하나에 코루틴 하나, 스레드는 풀이 나눠 쓴다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-coroutine-pool.html" target="_blank">↗ 크게 보기</a></p>
 
 아래 타임라인은 같은 흐름을 시간순으로 본 것이다 — A 가 `co_await` 로 suspend 되면
 같은 스레드가 즉시 B 를 처리하고, A 는 응답이 오면 resume 된다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-suspend-resume.html"
-        title="suspend한 사이에 worker가 다른 핸들러를 처리한다" loading="lazy" style="width:100%;border:0"></iframe>
+        title="suspend한 사이에 worker가 다른 핸들러를 처리한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-suspend-resume.html" target="_blank">↗ 크게 보기</a></p>
 
 그래서 비동기 호출을 콜백 없이 **동기식 코드처럼 위에서 아래로** 사용하면서도, worker
@@ -118,7 +118,7 @@ handler 완료 전까지 다음 callback 을 시작하지 않는다.
 블로킹이고 반환값이 종료 코드다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-app-lifecycle.html"
-        title="app_t의 세 단계 — 구성, 서비스, 종료" loading="lazy" style="width:100%;border:0"></iframe>
+        title="app_t의 세 단계 — 구성, 서비스, 종료" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-app-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 - **구성 단계** — `run` 전에 모든 선언을 끝낸다. 잘못된 구성은 구성 시점이나 `run`

@@ -116,6 +116,32 @@ else()
   set(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
 endif()
+# Linux and macOS link the Core runtime with an RPATH, so a binary this build
+# produces resolves libzlink wherever it runs from. Windows has no RPATH: the
+# loader looks next to the image and on PATH. vcpkg's app-local deployment
+# already puts every vcpkg dependency next to each built executable, but Core's
+# zlink.dll comes from the local package prefix instead, so nothing staged it.
+# The only Windows path that worked was CTest, which prepends the Core prefix to
+# PATH for the tests it launches; a sample started by its own run_sample.ps1 died
+# with STATUS_DLL_NOT_FOUND before main, leaving an empty role log and a
+# readiness timeout. Stage the runtime into the executable output directory so
+# the build tree is self-contained however a binary in it is started.
+if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+  get_property(ZLINK_FRAMEWORK_CPP_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+  if(ZLINK_FRAMEWORK_CPP_MULTI_CONFIG)
+    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
+  else()
+    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR "${CMAKE_BINARY_DIR}")
+  endif()
+  add_custom_target(zlink_framework_cpp_stage_native_runtime ALL
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR}"
+    COMMENT "Staging the Core runtime next to the build tree executables"
+    VERBATIM)
+endif()
 if(NOT TARGET zlink::cpp)
   list(PREPEND CMAKE_PREFIX_PATH
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}"
@@ -2314,13 +2340,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
-  add_subdirectory(samples/Bingo)
-  add_subdirectory(samples/TicTacToe)
-  add_subdirectory(samples/DeliveryDispatch)
-  add_subdirectory(samples/GameQuest)
-  add_subdirectory(samples/ShoppingMall)
-  add_subdirectory(samples/SupportChat)
-  add_subdirectory(samples/ZoneWorld)
+  set(ZLINK_FRAMEWORK_CPP_SAMPLE_NAMES
+    Bingo TicTacToe DeliveryDispatch GameQuest ShoppingMall SupportChat ZoneWorld)
+  foreach(sample_name IN LISTS ZLINK_FRAMEWORK_CPP_SAMPLE_NAMES)
+    add_subdirectory(samples/${sample_name})
+  endforeach()
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     if(WIN32)
@@ -2391,4 +2415,27 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     TIMEOUT 120
     PROPERTIES
       DEPENDS "${ZLINK_FRAMEWORK_CPP_TESTS}")
+endif()
+
+# Anything this build tree produces on Windows is started directly -- by a
+# sample's own run_sample.ps1, by CTest, or by a debugger -- and the loader
+# resolves the Core runtime next to the image or not at all. Make every target
+# wait for the staged copy so a partial build (`--build --target <sample>`,
+# which is exactly what a sample runner issues) stages it too, not only a full
+# build of ALL.
+if(TARGET zlink_framework_cpp_stage_native_runtime)
+  set(ZLINK_FRAMEWORK_CPP_STAGED_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
+  foreach(sample_name IN LISTS ZLINK_FRAMEWORK_CPP_SAMPLE_NAMES)
+    list(APPEND ZLINK_FRAMEWORK_CPP_STAGED_DIRECTORIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/samples/${sample_name}")
+  endforeach()
+  foreach(staged_directory IN LISTS ZLINK_FRAMEWORK_CPP_STAGED_DIRECTORIES)
+    get_property(staged_targets DIRECTORY "${staged_directory}"
+      PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(staged_target IN LISTS staged_targets)
+      if(NOT staged_target STREQUAL "zlink_framework_cpp_stage_native_runtime")
+        add_dependencies(${staged_target} zlink_framework_cpp_stage_native_runtime)
+      endif()
+    endforeach()
+  endforeach()
 endif()

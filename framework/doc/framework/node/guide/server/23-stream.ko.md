@@ -36,7 +36,7 @@ Framework를 참조해야 한다. 플레이어의 기기에서 실행되는 clie
 STREAM은 그 경계를 하나의 연결로 좁힌다. client는 주소 하나와 packet 이름만 알면 되고, mesh가
 몇 개의 node로 되어 있는지는 모른다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/23-stream-boundary.html" title="STREAM은 mesh의 바깥 경계다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/23-stream-boundary.html" title="STREAM은 mesh의 바깥 경계다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/23-stream-boundary.html" target="_blank">↗ 크게 보기</a></p>
 
 **연결 하나에 session 객체 하나가 대응한다.** 그 연결로 들어온 packet은 그 session에서 한 번에

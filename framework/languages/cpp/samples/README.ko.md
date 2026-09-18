@@ -56,9 +56,6 @@ Linux 또는 WSL에서는 저장소 root에서 다음과 같이 호출한다.
 
 위 두 줄은 각각 한 샘플의 호출이다. 한 번에 하나씩 실행한다.
 
-DeliveryDispatch 샘플은 현재 Linux 또는 WSL용 `run_sample.sh`로 전체 client/server 흐름을
-검증한다.
-
 Windows PowerShell에서는 같은 샘플을 다음과 같이 호출한다.
 
 ```powershell

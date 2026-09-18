@@ -1,44 +1,37 @@
-# 02 — 시작하기
-
-[← 개요](01-overview.ko.md) | [목차](INDEX.ko.md) | [다음: Connector 옵션 →](03-connector-options.ko.md)
-
+---
+title: "설치와 첫 연결 · C++"
 ---
 
-## 설치
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/stream-connector/02-getting-started.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-### vcpkg
+# 설치와 첫 연결
 
-```bash
-vcpkg install zlink-stream-connector
-```
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [이전: Stream Connector 개요](01-overview.ko.md) | [다음: Connector 옵션](03-connector-options.ko.md)
+<!-- framework-adapter-nav:end -->
 
-TLS와 WebSocket을 함께 설치하려면 feature를 지정한다.
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/02-getting-started.ko.md) · [Java](../../../java/guide/stream-connector/02-getting-started.ko.md) · [Kotlin](../../../kotlin/guide/stream-connector/02-getting-started.ko.md) · [Node/TypeScript](../../../node/guide/stream-connector/02-getting-started.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    connector package를 프로젝트에 추가하고, 서버에 연결해 첫 packet을 주고받을 수 있다.
+    이 장의 연결 코드는 `framework/languages/<언어>/tutorial/StreamClient`에서 그대로 실행된다.
+
+connector는 서버 framework와 별도로 배포되므로, client project는 connector package 하나만
+참조한다. 이 장은 설치부터 첫 응답까지를 한 번에 따라 한다. 옵션 전체와 기본값은
+[Connector 옵션](03-connector-options.ko.md)이 다룬다.
+
+## 1. 설치
 
 ```bash
 vcpkg install "zlink-stream-connector[tls,websocket]"
 ```
-
-### Conan
-
-```bash
-conan install --requires "zlink-stream-connector/0.10.0" \
-  -o "zlink-stream-connector/*:with_tls=True" \
-  -o "zlink-stream-connector/*:with_websocket=True"
-```
-
-### CMake FetchContent
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(zlink_stream_connector
-    GIT_REPOSITORY https://github.com/zlink-systems/zlink.git
-    GIT_TAG        main
-    SOURCE_SUBDIR  framework/languages/cpp/connector/core
-)
-FetchContent_MakeAvailable(zlink_stream_connector)
-```
-
-## CMake 연결
 
 ```cmake
 find_package(zlink-stream-connector CONFIG REQUIRED)
@@ -46,112 +39,63 @@ find_package(zlink-stream-connector CONFIG REQUIRED)
 target_link_libraries(my_game PRIVATE zlink::stream_connector)
 ```
 
-e2e client도 함께 사용한다면:
+## 2. 연결과 첫 request
 
-```cmake
-find_package(zlink-stream-e2e-client CONFIG REQUIRED)
-
-target_link_libraries(my_scenario_test PRIVATE
-    zlink::stream_connector
-    zlink::stream_e2e_client
-)
-```
-
-## 첫 연결
+connector는 endpoint와 timeout을 담은 option으로 만든다. 연결이 끝나야 packet을 보낼 수 있으므로
+연결을 먼저 기다린다. request는 서버 응답이 도착할 때까지 기다린 뒤 응답 payload를 돌려준다.
 
 ```cpp
-#include <zlink/stream_connector.hpp>
-
-namespace zsc = zlink::stream_connector;
-
-int main()
-{
-    zsc::connector_options_t options;
-    options.endpoint = "tcp://game.example.com:7000";
-
-    auto connector = zsc::connector_factory_t::create(options);
-
-    auto connected = connector.connect();
-    if (!connected) {
-        // connected.error_code()로 실패 원인 확인
-        return 1;
-    }
-
-    // 연결 성공 후 패킷 송수신
-    connector.close();
-    return 0;
-}
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:stream-client"
 ```
 
-## send — 단방향 송신
+!!! warning "브라우저 계열 client는 `ws://`로 붙는다"
 
-```cpp
-struct chat_message_t {
-    std::string room_id;
-    std::string text;
-};
+    네이티브 빌드는 `tcp://`·`tls://`·`ws://`·`wss://`를 모두 사용한다. 브라우저 계열은
+    OS 소켓을 열 수 없으므로 `ws://`나 `wss://`만 사용하며, 서버 쪽 endpoint도 같은 scheme이어야
+    한다.
 
-connector.send(chat_message_t{"room-42", "안녕하세요"})
-    .packet_name("chat.send")
-    .submit();
+## 3. 실행 결과
+
+```bash
+dotnet run --project StreamClient/StreamClient.csproj
+# connected: True
+# round trip: 56ms
 ```
 
-`submit()`은 `result_t<void>`를 반환한다. callback 방식도 사용할 수 있다.
+`connected`가 참이면 연결이 맺어진 것이다. 왕복 시간은 client가 보낸 시각을 서버가 그대로
+돌려주어 잰 값이다.
+
+## 4. 응답이 필요 없는 송신
+
+응답을 기다리지 않는 packet은 send로 보낸다. 종결자를 호출해야 실제로 전송이 시작되고, 종결자는
+전송이 실패하면 그 사실만 전달한다. 서버가 무엇을 했는지 알아야 하면 request를 사용한다.
 
 ```cpp
-connector.send(chat_message_t{"room-42", "안녕하세요"})
-    .packet_name("chat.send")
-    .submit([](zsc::result_t<void> result) {
-        if (!result) {
-            // result.error_code()
-        }
-    });
+connector.send (chat_message_t{"room-42", "hello"})
+  .packet_name ("chat.send")   // 생략하면 payload 타입에서 이름을 정한다
+  .submit ();
 ```
 
-## request — 요청/응답
+## 5. 서버가 먼저 보내는 packet 받기
+
+서버가 먼저 보내는 packet은 handler를 등록해 받는다. 등록하면 해제할 수 있는 값이 돌아오고, 그
+값이 살아 있는 동안 handler가 유지된다. 기본 설정에서는 handler가 수신 시점에 바로 실행되지 않고,
+application이 pump를 호출한 실행 문맥에서 실행된다. 게임 loop라면 frame마다 한 번 호출한다.
 
 ```cpp
-struct login_request_t {
-    std::string player_id;
-    std::string token;
-};
+auto subscription = connector.on<leaderboard_update_t> (
+  [] (const sc::message_t<leaderboard_update_t> &message) {
+      std::cout << message.payload.rank << std::endl;
+  });
 
-struct login_reply_t {
-    int64_t session_id;
-    std::string server_time;
-};
-
-auto reply = connector
-    .request(login_request_t{"player-1", "tok-abc123"})
-    .packet_name("auth.login")
-    .submit<login_reply_t>();
-
-if (!reply) {
-    // reply.error_code() == zsc::error_code_t::request_timeout 등
-    return;
-}
-
-auto session = reply.value().session_id;
-```
-
-## push 수신 — on()
-
-서버가 보내는 push packet은 `on<T>()`으로 등록한 callback으로 받는다. manual dispatch mode에서는 `dispatch()`를 호출할 때 callback이 실행된다.
-
-```cpp
-connector.on<chat_pushed_t>([](const chat_pushed_t& msg) {
-    // msg.room_id, msg.text
-});
-
-// game loop에서
 while (running) {
-    connector.dispatch();
-    // ...
+    connector.dispatch ();   // 쌓여 있던 handler를 실행하고 돌아온다
+    render_frame ();
 }
 ```
 
-## 다음 단계
+## 6. 다음 장
 
-- callback thread 규칙과 dispatch mode → [05 — 패킷 수신](05-receiving.ko.md)
-- 연결 옵션 (heartbeat, reconnect, TLS 설정) → [03 — Connector 옵션](03-connector-options.ko.md)
-- e2e client coroutine 흐름 → [08 — E2E 클라이언트](08-e2e-client.ko.md)
+- 옵션 전체와 기본값 — [Connector 옵션](03-connector-options.ko.md)
+- packet 이름·metadata·압축 — [packet 송신](04-sending.ko.md)
+- 수신 큐와 대기 표면 — [packet 수신](05-receiving.ko.md)

@@ -1,6 +1,6 @@
-# 02 — Unity (네이티브 빌드)
+# Unity (네이티브 빌드)
 
-[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Godot C# →](03-godot-csharp.ko.md)
+[← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Godot C# →](09-godot-csharp.ko.md)
 
 ---
 
@@ -11,7 +11,7 @@ Unity 전용 connector package는 따로 두지 않는다. Unity도 일반 `.NET
 > **WebGL 빌드는 이 문서의 대상이 아니다.** Unity WebGL은 브라우저 샌드박스에서 실행되므로
 > OS 소켓을 열 수 없고, `.NET` connector를 사용할 수 없다. WebGL은 `com.zlink.stream-connector.webgl`
 > UPM 어댑터를 통해 TypeScript connector를 jslib interop으로 호출하며, C# 표면은 이 문서와 같다.
-> [Unity WebGL 가이드](../../../node/guide/stream-connector/03-unity-webgl.ko.md)를 본다.
+> [Unity WebGL 가이드](../../../node/guide/stream-connector/09-unity-webgl.ko.md)를 본다.
 
 ## 기본 원칙
 
@@ -51,11 +51,12 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
             Endpoint = new Uri("wss://example.com/stream")
         });
 
-        _connector.ConnectionStateChanged += (change, _) =>
+        //  돌려주는 값을 Dispose하면 등록이 풀린다. 여기서는 connector와 함께 끝난다.
+        _connector.OnConnectionStateChanged((change, _) =>
         {
             Debug.Log($"ZLink stream state: {change.Current}");
             return ValueTask.CompletedTask;
-        };
+        });
 
         _connector.On("game.update", (message, _) =>
         {

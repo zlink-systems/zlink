@@ -1,20 +1,25 @@
 # C++ Stream Connector
 
-> **⚠️ 이 가이드는 최신이 아니다.** 현재 리뷰·정비가 끝난 가이드는
-> [`.NET` 가이드](../../../dotnet/README.ko.md) 하나뿐이다. 이 문서는 그 이전 상태이며,
-> **`.NET` 가이드가 완성되면 이 문서를 삭제하고 그것을 기준으로 다시 사용한다.**
->
-> **계약을 확인할 때는 이 문서를 믿지 말고 [spec 트리](../../../common/spec/server/README.ko.md)를 본다.**
+C++ STREAM client connector의 가이드다. 네이티브 빌드 게임 엔진(Unreal ·
+Godot · Cocos)과 데스크톱·서버 애플리케이션, 그리고 e2e 시험 도구가 대상이다.
 
-C++ STREAM client connector 제품군의 문서 진입점이다. **네이티브 빌드 게임 엔진**(Unreal,
-Godot GDExtension, Axmol), 일반 C++ 애플리케이션, 서버 e2e/perf client가 대상이다.
+| 순서 | 문서 | 내용 |
+|----|------|------|
+| 1 | [Stream Connector 개요](01-overview.ko.md) | 무엇에 쓰고 어디서 도는가, 서버 framework와의 경계 |
+| 2 | [설치와 첫 연결](02-getting-started.ko.md) | 패키지 설치, 최소 연결, 첫 송신과 수신 |
+| 3 | [Connector 옵션](03-connector-options.ko.md) | 옵션 목록과 기본값, 값이 검증되는 시점 |
+| 4 | [packet 송신](04-sending.ko.md) | send와 request, packet 이름이 정해지는 순서, codec |
+| 5 | [packet 수신](05-receiving.ko.md) | 등록과 해제, dispatch mode, 수신 큐와 개수 |
+| 6 | [연결 생명주기](06-lifecycle.ko.md) | 연결 상태, 재연결, heartbeat, 종료 사유 |
+| 7 | [오류 처리](07-error-handling.ko.md) | 닫힌 오류 코드 집합과 언어별 전달 방식 |
+| 8 | [e2e client](08-e2e-client.ko.md) | 시험과 도구에서 사용하는 예외 기반 어댑터 |
+| 9 | [엔진 어댑터](09-engine-adapters.ko.md) | Unreal · Godot · Cocos 어댑터 |
+| 10 | [배포](10-packaging.ko.md) | 빌드 구성과 배포 산출물 |
+| 11 | [성능](11-performance.ko.md) | 측정 지점과 조정할 수 있는 값 |
 
-| 문서 | 내용 |
-|------|------|
-| [가이드 INDEX](INDEX.ko.md) | 개요, 시작하기, 옵션, 송수신, lifecycle, 엔진 어댑터, 패키징, 성능 |
-| [core — async runtime](core/guide/async-runtime.ko.md) | no-exception·no-coroutine core runtime |
-| [e2e-client — coroutine client](e2e-client/guide/coroutine-client.ko.md) | 서버 e2e/perf용 coroutine helper |
-| [Stream Connector 공통 스펙](../../../common/spec/stream-connector/32-stream-connector.ko.md) | **정본** — 대상 환경, transport, wire 계약 |
+파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 
-> **웹(WASM) 빌드에는 이 connector를 사용할 수 없다.** Cocos Creator web과 Godot Web은
-> [Node.js/TypeScript connector](../../../node/guide/stream-connector/README.ko.md)를 사용한다.
+## 관련 문서
+
+- 공개 계약: [C++ 공개 계약](../../../common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md)
+- 서버 가이드: [C++ 서버 가이드](../server/README.ko.md)

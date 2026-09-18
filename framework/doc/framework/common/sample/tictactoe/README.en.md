@@ -101,7 +101,7 @@ The basic topology shows only the structural connections of the Client and serve
 Redis Location Store and Relocation Store are explained in the resource table, and the time order
 of HTTP, stream, join, and publish is placed in the §7 sequence diagrams.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology-en.html" title="System composition and topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Api A/B are object clients, sending the room-create request to a Play object server.
@@ -370,7 +370,7 @@ the Framework Spot manager to create a Room Spot. The Spot manager issues the Ro
 the owner. The Api returns RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and GameName in
 `CreateGameHttpRes`. The room owner doesn't change based on the Play ingress the client uses.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth-en.html" title="Room creation and authentication" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth-en.html" title="Room creation and authentication" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-create-auth-en.html" target="_blank">↗ View larger</a></p>
 
 A join failure is reported by `JoinGameFailedNotify` on the current session. Sending `JoinGameMsg`
@@ -383,7 +383,7 @@ wrong turn, an occupied cell, and a finished room are Application callback rejec
 in a typed `Rejected` error response; only transport, route, and protocol failures end with other
 Framework `ErrorKind` values. The final state's status and winner must be the same on both clients.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark-en.html" title="Making a move and the final state" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark-en.html" title="Making a move and the final state" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-place-mark-en.html" target="_blank">↗ View larger</a></p>
 
 ### 7.3 The Wins 100 Milestone
@@ -393,7 +393,7 @@ The fake user source provides the host's Wins as 99. When the host wins this gam
 at the local Entry Spot of a Play ingress different from the host's, then waits for
 `WinMilestoneNotify`.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone-en.html" title="The Wins 100 milestone" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone-en.html" title="The Wins 100 milestone" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-milestone-en.html" target="_blank">↗ View larger</a></p>
 
 Multicast publish completion doesn't mean the subscriber handler finished processing, or that the
@@ -417,7 +417,7 @@ the Entry Spot calls `destroyActor`. `LeaveGameMsg` is one-way, so client-side s
 doesn't prove destroy completion. For each Actor, the runner separately checks that the Room leave
 callback ran and destruction at the Entry Spot completed.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect-en.html" title="Disconnect and destroy" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect-en.html" title="Disconnect and destroy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-disconnect-en.html" target="_blank">↗ View larger</a></p>
 
 This diagram shows one Player's reconnect and subsequent leave path. The host and guest each run
@@ -430,7 +430,7 @@ logical components below with the same responsibilities. Api owns HTTP and the u
 owns the stream and game state. That both Play processes provide the same capability is also kept
 in per-language samples.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure-en.html" title="TicTacToe implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure-en.html" title="TicTacToe implementation structure" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |

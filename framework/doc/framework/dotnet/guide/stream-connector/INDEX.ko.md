@@ -8,8 +8,8 @@
 | 문서 | 내용 |
 |------|------|
 | [01 — 개요](01-overview.ko.md) | 대상 실행 환경, 배포 단위, 엔진별 담당 connector |
-| [02 — Unity (네이티브 빌드)](02-unity.ko.md) | `MonoBehaviour`에서 `Dispatch.Async()` 펌프, 일시 정지, 코루틴 프로젝트 |
-| [03 — Godot C#](03-godot-csharp.ko.md) | `Node._Process`에서 펌프, signal 연동, 종료 처리 |
+| [02 — Unity (네이티브 빌드)](08-unity.ko.md) | `MonoBehaviour`에서 `Dispatch.Async()` 펌프, 일시 정지, 코루틴 프로젝트 |
+| [03 — Godot C#](09-godot-csharp.ko.md) | `Node._Process`에서 펌프, signal 연동, 종료 처리 |
 
 connector의 API 표면(옵션, send/request, codec, 오류)은
 [.NET 공개 계약](../../../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md)과

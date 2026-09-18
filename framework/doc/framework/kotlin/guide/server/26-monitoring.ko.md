@@ -37,7 +37,7 @@ runtime의 사건을 handler로 받는 표면은 없다. 관측은 다음 표면
 | message 하나가 어디서 어떻게 끝났는가 | 진단 기록(trace·log) | [진단 수준 정하기](#4-진단-수준-정하기) |
 | 동시 접속 수·queue 깊이 같은 수치 | 계기(meter) | [운영과 lifecycle](12-operations.ko.md#1-런타임-메트릭) |
 
-<iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths.html" title="관측 표면의 종류" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths.html" title="관측 표면의 종류" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/26-observation-paths.html" target="_blank">↗ 크게 보기</a></p>
 
 소비하는 방식이 서로 다르다. **상태 표면**은 지금 값을 읽거나 변화를 순서대로 받을 때,

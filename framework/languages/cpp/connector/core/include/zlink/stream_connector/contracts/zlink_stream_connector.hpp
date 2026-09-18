@@ -105,7 +105,7 @@ class connector_t
     /// Starts closing the stream connection and returns before completion is delivered.
     void close (std::function<void (result_t<void>)> callback);
 
-    /// Runs one pending On(...) callback when manual dispatch mode is used.
+    /// Runs every pending On(...) callback when manual dispatch mode is used.
     ///
     /// In manual mode, received push packets do not invoke registered callbacks until dispatch()
     /// is called. wait_for(...) consumes matching received packets directly and does not require

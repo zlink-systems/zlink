@@ -149,7 +149,7 @@ function Cleanup([int]$Status) {
         } catch { $Status = 1 }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    Close-ZlinkSampleRunDir -RunDir $RunDir -Status $Status -Label "DeliveryDispatch"
     return $Status
 }
 

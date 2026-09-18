@@ -49,7 +49,7 @@ completely different.
 **Comparing the execution models** — how the same 3 requests run through each handler:
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-dispatch-concurrency-en.html"
-        title="Node handlers run concurrently, SPOT handlers run serially" loading="lazy" style="width:100%;border:0"></iframe>
+        title="Node handlers run concurrently, SPOT handlers run serially" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-dispatch-concurrency-en.html" target="_blank">↗ Open larger</a></p>
 
 A node handler is processed **concurrently** by a different worker per request, so
@@ -105,14 +105,14 @@ worker threads, and a coroutine stuck at `co_await` **releases** its thread (it'
 blocking). So a handful of threads carry thousands of waiting coroutines.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-coroutine-pool-en.html"
-        title="One coroutine per event; threads come from a shared pool" loading="lazy" style="width:100%;border:0"></iframe>
+        title="One coroutine per event; threads come from a shared pool" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-coroutine-pool-en.html" target="_blank">↗ Open larger</a></p>
 
 The timeline below views the same flow chronologically -- when A suspends via `co_await`,
 the same thread processes B right away, and A resumes once its response arrives.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-suspend-resume-en.html"
-        title="While one handler is suspended, the worker runs another" loading="lazy" style="width:100%;border:0"></iframe>
+        title="While one handler is suspended, the worker runs another" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-suspend-resume-en.html" target="_blank">↗ Open larger</a></p>
 
 So async calls are written **top to bottom, like synchronous code**, with no callbacks,
@@ -125,7 +125,7 @@ code with `.result()` puts an entire thread to sleep, so it's forbidden inside a
 blocking, and its return value is the exit code.
 
 <iframe class="zlink-diagram" src="/common/diagrams/43-app-lifecycle-en.html"
-        title="The three stages of app_t — configure, serve, stop" loading="lazy" style="width:100%;border:0"></iframe>
+        title="The three stages of app_t — configure, serve, stop" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/43-app-lifecycle-en.html" target="_blank">↗ Open larger</a></p>
 
 - **Configure phase** — finish every declaration before `run`. An invalid configuration
