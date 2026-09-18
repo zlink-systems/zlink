@@ -191,9 +191,9 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 여러 플레이어가 동시에 채팅을 보내고 상태를 조회하는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
 구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다 — timer와 actor packet까지 같은 줄에 서는 것은 room이 그 기능을
-쓸 때의 이야기이고, 이 tutorial 코드는 채팅 메시지와 상태 조회만 다룬다. 여기서
-직렬은 codec 직렬화가 아니라 **실행 순서의 직렬화**다([06 §3](21-spot.ko.md)).
+실행하기 때문이다 — timer와 actor packet도 같은 큐에 서지만, 이 tutorial 코드는
+채팅 메시지와 상태 조회만 다룬다. 여기서 직렬은 codec 직렬화가 아니라 **실행
+순서의 직렬화**다([06 §3](21-spot.ko.md)).
 
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
@@ -236,9 +236,7 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 애초에 동시에 두 요청이 같은 상태를 만질 수 없다.
 
 **코드로 보면.** 락 획득·해제가 있던 자리에 Instance Spot 호출 한 줄이 남는다 —
-호출 모양은 [Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. 이 호출 패턴은
-지금 dotnet tutorial에만 구현되어 있어(cpp·Java·Kotlin·Node tutorial은 아직 Instance
-Spot을 갖추지 못했다), 이 장에서는 다섯 언어 탭 대신 링크로 대신한다. 길드 자체는
+호출 모양은 [Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. 길드 자체는
 아직 실행 가능한 기준 샘플이 없다 — 실제로 쓰이는 같은 API 표면은 GameQuest의
 `PlayerQuestSpot` 등록·호출 방식에서 볼 수 있다.
 
@@ -290,8 +288,7 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
 **코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 한 줄로 줄어든다 — 모양은
-[Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다(dotnet tutorial에만 구현되어
-있어 이 장에서는 다섯 언어 탭 대신 링크로 대신한다). sticky 라우팅이 있던 자리는
+[Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. sticky 라우팅이 있던 자리는
 actor의 bound session push로 줄어든다 — 아래는 tutorial의 실제 코드다.
 
 ```typescript
@@ -382,8 +379,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 
 **코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다 — 같은 id로
 오는 요청을 하나의 Spot이 직렬로 받는 모양은 [Instance Spot](21-spot.ko.md) 절의
-tutorial 코드와 같다(dotnet tutorial에만 구현되어 있어 이 장에서는 다섯 언어 탭
-대신 링크로 대신한다).
+tutorial 코드와 같다.
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
 없이 HTTP API + 주문 workflow만으로 구성된 이 상황의 기준 샘플이다. 주문 상태

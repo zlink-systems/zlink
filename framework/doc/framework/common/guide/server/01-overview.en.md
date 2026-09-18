@@ -306,9 +306,9 @@ Several players send chat messages and query state in this room at the same time
 there's no `lock`, no `Interlocked`, no Redis distributed lock. That's because the framework
 lines up every message for one room (requests, subscription events, timer ticks, actor
 packets) on **a single execution line and runs them in order** — timer ticks and actor
-packets join that same line only once the room uses those features, and this tutorial code
-only handles chat messages and state queries. Here, "serial" isn't codec serialization —
-it's **serialization of execution order** ([06 §3](21-spot.en.md)).
+packets join that same queue too, but this tutorial code only handles chat messages and
+state queries. Here, "serial" isn't codec serialization — it's **serialization of
+execution order** ([06 §3](21-spot.en.md)).
 
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
@@ -355,10 +355,9 @@ for as long as the lock is held; two requests simply can never touch the same st
 same time in the first place.
 
 **As code.** Where lock acquire/release used to sit, one Instance Spot call remains — its
-shape matches the tutorial code in [Instance Spot](21-spot.en.md) (implemented only in the
-dotnet tutorial so far, which is why this section links instead of showing five language
-tabs). The guild scenario itself has no runnable reference sample yet — the same API
-surface in real use can be seen in GameQuest's `PlayerQuestSpot` registration/call approach.
+shape matches the tutorial code in [Instance Spot](21-spot.en.md). The guild scenario
+itself has no runnable reference sample yet — the same API surface in real use can be seen
+in GameQuest's `PlayerQuestSpot` registration/call approach.
 
 ### 2.3 Adding Real-Time Features to an Existing Web Service
 
@@ -415,10 +414,9 @@ real-time connections instead of shell servers, and **direct runtime connections
 inter-server delivery. The **location store is the only new infrastructure.**
 
 **As code.** Where the distributed lock used to sit, one Instance Spot call remains — its
-shape matches the tutorial code in [Instance Spot](21-spot.en.md) (implemented only in the
-dotnet tutorial so far, so this section links instead of showing five language tabs). Where
-sticky routing used to sit, an actor's bound-session push remains — the blocks below are the
-tutorial's real code.
+shape matches the tutorial code in [Instance Spot](21-spot.en.md). Where sticky routing
+used to sit, an actor's bound-session push remains — the blocks below are the tutorial's
+real code.
 
 === "C#/.NET"
 
@@ -544,8 +542,7 @@ pipeline.
 
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead
 — a single Spot receiving every request for the same id, serially, is the same pattern shown
-in the tutorial code under [Instance Spot](21-spot.en.md) (implemented only in the dotnet
-tutorial so far, so this section links instead of showing five language tabs).
+in the tutorial code under [Instance Spot](21-spot.en.md).
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
 the reference sample for this exact situation, built with no real-time push at all, just an
