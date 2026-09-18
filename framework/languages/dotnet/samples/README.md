@@ -40,8 +40,11 @@ options.AddFanoutChannel("events")
 
 ## Running Samples
 
-Each sample root owns `run_sample.sh` and `run_sample.ps1`; run one sample per
-invocation so a stalled sample cannot hold up the rest of the run:
+Each sample root owns `run_sample.sh` and `run_sample.ps1`, and one invocation
+runs one sample. The
+[common sample document](../../../doc/framework/common/sample/README.ko.md)
+owns this rule in its "The Sample Run Script And Redis Isolation Standard"
+section; what follows is only the command for this language.
 
 ```bash
 ./framework/languages/dotnet/samples/TicTacToe/run_sample.sh
@@ -50,6 +53,10 @@ invocation so a stalled sample cannot hold up the rest of the run:
 ```powershell
 .\framework\languages\dotnet\samples\TicTacToe\run_sample.ps1
 ```
+
+There are seven .NET samples, so checking them all takes seven invocations.
+Substitute `Bingo`, `DeliveryDispatch`, `GameQuest`, `ShoppingMall`,
+`SupportChat`, `TicTacToe`, and `ZoneWorld` in turn, one at a time.
 
 The runner creates
 role-specific configuration files, starts each role as a separate process,

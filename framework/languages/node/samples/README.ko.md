@@ -60,35 +60,32 @@ sample runner는 자신이 사용하는 Docker Redis container를 만들고 종�
 
 ## 실행
 
-샘플 하나를 실행하려면 Node framework workspace에서 해당 runner를 호출한다.
+샘플마다 `run_sample.sh`와 `run_sample.ps1`이 있고, 한 번의 호출은 샘플 하나를 실행한다.
+실행 방법의 기준은
+[공통 sample 문서](../../../doc/framework/common/sample/README.ko.md)의
+「샘플 실행 스크립트와 Redis 격리 기준」 절이 소유한다.
+
+Linux 또는 WSL에서는 Node framework workspace에서 다음과 같이 호출한다.
 
 ```bash
 cd framework/languages/node
 ./samples/Bingo.Ts/run_sample.sh
 ```
 
-지원하는 일곱 샘플을 순서대로 실행하려면 통합 runner를 사용한다.
-
-```bash
-./samples/run_samples.sh
-```
-
-예를 들어 Bingo의 전체 client 흐름은
-[`bingo-client-scenario.ts`](Bingo.Ts/Client/bingo-client-scenario.ts)에서 확인할 수 있다.
-
-일부 샘플만 실행할 때는 디렉터리 이름을 인자로 넘긴다.
-
-```bash
-./samples/run_samples.sh Bingo.Ts SupportChat.Ts ZoneWorld
-```
-
-Windows PowerShell에서도 같은 책임을 가진 runner를 사용한다.
+Windows PowerShell에서는 같은 샘플을 다음과 같이 호출한다.
 
 ```powershell
 Set-Location framework/languages/node
 ./samples/Bingo.Ts/run_sample.ps1
-./samples/run_samples.ps1
 ```
+
+Node 샘플은 일곱 개이므로 전부 확인하려면 호출도 일곱 번이다. 경로의 `Bingo.Ts` 자리에
+`Bingo.Ts`, `DeliveryDispatch.Ts`, `GameQuest.Ts`, `ShoppingMall.Ts`, `SupportChat.Ts`,
+`TicTacToe.Ts`, `ZoneWorld`를 차례로 넣어 한 번에 하나씩 실행한다. ZoneWorld 디렉터리에만
+`.Ts` 접미사가 없다.
+
+예를 들어 Bingo의 전체 client 흐름은
+[`bingo-client-scenario.ts`](Bingo.Ts/Client/bingo-client-scenario.ts)에서 확인할 수 있다.
 
 Runner는 역할별 설정 파일 생성, 서버 시작, readiness 확인, client self-check와 정리를 담당한다.
 Framework host는 endpoint, Redis, routing ID, timeout과 로그 설정을 파일에서 typed configuration으로
