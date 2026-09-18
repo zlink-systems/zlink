@@ -2539,3 +2539,42 @@ test('an unfinished heartbeat tick suppresses the tick the interval asks for nex
   }
   await instance.close();
 });
+
+// Spec stream-connector 32 §7: `close` runs the disconnect handler and returns
+// without waiting for it. A handler that calls `close` would otherwise wait for
+// the `closeTask` its own caller is still inside, and the two would wait for
+// each other. The same shape as the `dispatch` and `connect` cases of #583.
+test('a disconnect handler may call close without waiting on the close that ran it', async () => {
+  // Deliberately outside the shared cleanup: `close` is the subject here, and
+  // the cleanup's own close would re-enter it. Heartbeat is off, so this
+  // connector holds no timer once the scenario is done with it.
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  let handlerEntered = false;
+  let nestedSettled = false;
+  let nestedFailure;
+  instance.onDisconnected(async () => {
+    handlerEntered = true;
+    // Settled through callbacks rather than a bare await, so that a build
+    // without the fix leaves a pending promise nobody reports as unhandled.
+    await instance.close().then(
+      () => { nestedSettled = true; },
+      (error) => { nestedSettled = true; nestedFailure = error; }
+    );
+  });
+
+  await instance.connect();
+  await withTimeout(instance.close(), 2000, 'close called from inside a disconnect handler');
+
+  // The handler ran before `close` returned; only its completion was left
+  // unwaited for.
+  assert.equal(handlerEntered, true);
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+  await waitFor(() => nestedSettled, 2000);
+  assert.equal(nestedFailure, undefined);
+});

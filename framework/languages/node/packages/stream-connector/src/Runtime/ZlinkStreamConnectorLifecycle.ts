@@ -173,7 +173,7 @@ export class ZlinkStreamConnectorLifecycle {
     }
     this.pendingRequests.failAll({ code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' });
     await this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
-    await this.publishDisconnectedOnce(signal);
+    this.publishDisconnectedWithoutWaiting(signal);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
   }
@@ -492,6 +492,33 @@ export class ZlinkStreamConnectorLifecycle {
   private async publishDisconnectedOnce(signal?: AbortSignal): Promise<void> {
     if (!this.claimDisconnectedPublish()) return;
     await this.events.publishDisconnected(signal);
+  }
+
+  /**
+   * Spec stream-connector 32 §7: the connector runs the registered handler, it
+   * does not wait for it to finish. `close` returns once its own work is done —
+   * the drain, the transport close, the pending requests — having run the
+   * disconnect handler but without looking at whether that handler has ended.
+   *
+   * Starting the publish without awaiting it still runs every handler right
+   * here: an `async` function body runs synchronously up to its first `await`,
+   * and `publishDisconnected` reaches each handler before that point. So the
+   * handler has run by the time `close` returns, which is what the spec asks
+   * for, while a handler that calls `close` no longer waits for the very
+   * `closeTask` it is running inside. Java and C++ hand the handler to a queue
+   * and return the same way.
+   *
+   * `claimDisconnectedPublish` is taken by the same call and before any await,
+   * so deferring the completion never turns the one notification into two.
+   *
+   * Nothing awaits the promise, so a rejection would reach the process as an
+   * unhandled rejection and kill it. Handler failures are already contained
+   * where they were before this call stopped waiting — the `Promise.allSettled`
+   * in `publishDisconnected` — and this `catch` covers what is left rather than
+   * reporting the same failure a second time on the error surface.
+   */
+  private publishDisconnectedWithoutWaiting(signal?: AbortSignal): void {
+    void this.publishDisconnectedOnce(signal).catch(() => undefined);
   }
 
   private async setState(
