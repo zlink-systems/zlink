@@ -27,9 +27,21 @@ interface QueuedMessage {
   readonly signal?: AbortSignal;
 }
 
+/**
+ * A registered wait surface plus what to call when the connection it is
+ * watching ends before its predicate matched. `onConnectionEnded` is how
+ * {@link ZlinkStreamReceivedMessages.resetForNewConnection} fails a wait left
+ * over from the connection a reconnect just replaced (spec stream-connector
+ * 32 §10.1, Java `ZLinkStreamDispatchQueue.resetForNewConnection` parity).
+ */
+interface RegisteredObserver {
+  readonly consume: EncodedMessageObserver;
+  readonly onConnectionEnded: () => void;
+}
+
 export class ZlinkStreamReceivedMessages {
   private readonly handlers = new Map<string, Set<EncodedMessageHandler>>();
-  private readonly observers = new Map<string, Set<EncodedMessageObserver>>();
+  private readonly observers = new Map<string, Set<RegisteredObserver>>();
   // A handler can be registered after messages for another name arrive, so the
   // queue is not a simple FIFO. Tombstones let us remove a deliverable entry
   // without shifting every later message on the hot receive path.
@@ -85,22 +97,33 @@ export class ZlinkStreamReceivedMessages {
    * `Manual` needs no dispatch pump to complete a wait. The queue is scanned in
    * a microtask so a message that arrived before the wait started is still
    * observed, and so the caller has its subscription in hand by then.
+   *
+   * @param onConnectionEnded Called, instead of {@link observer}, when
+   *   {@link resetForNewConnection} abandons this registration because the
+   *   connection it was watching ended before a message matched (spec
+   *   stream-connector 32 §10.1: "연결이 끝나 대기를 이어갈 수 없으면
+   *   `Disconnected`다").
    */
-  observe(name: string, observer: EncodedMessageObserver): Disposable {
+  observe(
+    name: string,
+    observer: EncodedMessageObserver,
+    onConnectionEnded: () => void
+  ): Disposable {
     validateName(name);
     let set = this.observers.get(name);
     if (set === undefined) {
       set = new Set();
       this.observers.set(name, set);
     }
-    set.add(observer);
+    const registration: RegisteredObserver = { consume: observer, onConnectionEnded };
+    set.add(registration);
     queueMicrotask(() => {
-      if (this.observers.get(name)?.has(observer) === true) {
-        this.offerQueued(name, observer);
+      if (this.observers.get(name)?.has(registration) === true) {
+        this.offerQueued(name, registration);
       }
     });
     return subscription(() => {
-      set.delete(observer);
+      set.delete(registration);
       if (set.size === 0 && this.observers.get(name) === set) {
         this.observers.delete(name);
       }
@@ -112,15 +135,47 @@ export class ZlinkStreamReceivedMessages {
     return this.receivedCounts.get(name) ?? 0;
   }
 
-  /** A newly established connection counts from 0 again (spec §10). */
-  resetReceivedCounts(): void {
+  /**
+   * Rebaselines the queue for a connection that was just established. Spec
+   * stream-connector 32 §10 (line ~649): the reference point is the moment a
+   * connection is established, so counts restart at 0 and whatever the
+   * previous connection left unconsumed goes with it — keeping the queue
+   * while only the counts reset would let counts and queue describe two
+   * different connections, and let `waitFor` hand back a packet from before
+   * the drop as if the new connection had delivered it.
+   *
+   * `ZlinkStreamMessage`/`ZlinkStreamEncodedPayload` are plain data (name,
+   * metadata, a `Uint8Array` payload) with no dispose/close of their own —
+   * unlike Java's queued frames, which `closeMessage` releases — so dropping
+   * the queue's references is the whole of the release here.
+   *
+   * @param replacesAnEarlierConnection False for the very first connection:
+   *   there is no earlier queue or wait to abandon yet. True for a reconnect,
+   *   which also fails every wait surface still registered from the
+   *   connection that just ended with `Disconnected` (Java
+   *   `ZLinkStreamDispatchQueue.resetForNewConnection` parity) — that
+   *   registration was watching a queue this call just discarded, so letting
+   *   it keep watching would silently rebind it to the new connection.
+   */
+  resetForNewConnection(replacesAnEarlierConnection: boolean): void {
     this.receivedCounts.clear();
+    this.queue.length = 0;
+    this.queueHead = 0;
+    this.queuedCount = 0;
+    if (!replacesAnEarlierConnection || this.observers.size === 0) {
+      return;
+    }
+    const abandoned = [...this.observers.values()].flatMap((set) => [...set]);
+    this.observers.clear();
+    for (const registration of abandoned) {
+      registration.onConnectionEnded();
+    }
   }
 
   enqueue(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal): void {
     this.receivedCounts.set(message.name, (this.receivedCounts.get(message.name) ?? 0) + 1);
-    for (const observer of [...this.observers.get(message.name) ?? []]) {
-      if (observer(message)) {
+    for (const registration of [...this.observers.get(message.name) ?? []]) {
+      if (registration.consume(message)) {
         return;
       }
     }
@@ -150,13 +205,13 @@ export class ZlinkStreamReceivedMessages {
     await this.drainTask;
   }
 
-  private offerQueued(name: string, observer: EncodedMessageObserver): void {
+  private offerQueued(name: string, registration: RegisteredObserver): void {
     for (let index = this.queueHead; index < this.queue.length; index += 1) {
       const queued = this.queue[index];
       if (queued === undefined || queued.message.name !== name) {
         continue;
       }
-      if (!observer(queued.message)) {
+      if (!registration.consume(queued.message)) {
         continue;
       }
       this.removeAt(index);

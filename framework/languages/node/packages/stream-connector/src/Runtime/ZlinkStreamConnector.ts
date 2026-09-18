@@ -296,7 +296,10 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
           finish(cause);
         }
         return true;
-      });
+      }, () => finish(connectorError(
+        ZlinkStreamErrorCode.Disconnected,
+        `The connection this wait for '${name}' observed has ended.`
+      )));
     });
   }
 
