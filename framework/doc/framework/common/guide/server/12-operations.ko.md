@@ -477,7 +477,7 @@ topology는 location runtime query로 조회한다.
     auto object_peer_ready = co_await readiness.is_peer_ready ("play", location_role_t::spot);
 
     // status.store_healthy · status.owner_lease_healthy · object_peer_ready · page.items를
-    // 운영 endpoint의 응답으로 조립한다.
+    // 운영 endpoint의 응답으로 직접 만든다.
     ```
 
 === "Java"
@@ -493,7 +493,7 @@ topology는 location runtime query로 조회한다.
         .toCompletableFuture().join();
 
     // status.storeHealthy() · status.ownerLeaseHealthy() · objectPeerReady · page.items()를
-    // 운영 endpoint의 응답으로 조립한다.
+    // 운영 endpoint의 응답으로 직접 만든다.
     ```
 
 === "Kotlin"
@@ -507,7 +507,7 @@ topology는 location runtime query로 조회한다.
     val objectPeerReady = readiness.isPeerReady("play", ZLinkLocationRole.SPOT, null).await()
 
     // status.storeHealthy() · status.ownerLeaseHealthy() · objectPeerReady · page.items()를
-    // 운영 endpoint의 응답으로 조립한다.
+    // 운영 endpoint의 응답으로 직접 만든다.
     ```
 
 === "Node/TypeScript"
@@ -519,7 +519,7 @@ topology는 location runtime query로 조회한다.
     const objectPeerReady = await readiness.isPeerReady('play', ZLinkLocationRole.Spot);
 
     // status.storeHealthy · status.ownerLeaseHealthy · objectPeerReady · page.items를
-    // 운영 endpoint의 응답으로 조립한다.
+    // 운영 endpoint의 응답으로 직접 만든다.
     ```
 
 

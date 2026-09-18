@@ -318,7 +318,7 @@ auto page = co_await query.list_topology (
 auto object_peer_ready = co_await readiness.is_peer_ready ("play", location_role_t::spot);
 
 // status.store_healthy · status.owner_lease_healthy · object_peer_ready · page.items를
-// 운영 endpoint의 응답으로 조립한다.
+// 운영 endpoint의 응답으로 직접 만든다.
 ```
 
 운영 query는 health와 사람이 확인할 topology만 반환한다. Store key, authority version, owner token과

@@ -10,7 +10,7 @@ title: "Error Handling · C#/.NET"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: 02 — Unity (Native Build)](08-unity.en.md)
+[Guide Home](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: Unity (Native Build)](08-unity.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

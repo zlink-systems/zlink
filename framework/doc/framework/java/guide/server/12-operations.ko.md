@@ -320,7 +320,7 @@ boolean objectPeerReady = readiness
     .toCompletableFuture().join();
 
 // status.storeHealthy() · status.ownerLeaseHealthy() · objectPeerReady · page.items()를
-// 운영 endpoint의 응답으로 조립한다.
+// 운영 endpoint의 응답으로 직접 만든다.
 ```
 
 운영 query는 health와 사람이 확인할 topology만 반환한다. Store key, authority version, owner token과

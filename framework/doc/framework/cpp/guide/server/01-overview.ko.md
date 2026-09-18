@@ -409,7 +409,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 
 ```cpp
 // 같은 order_id의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 조립하지 않는다.
+// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
 // C++ Spot handler는 Spot member 함수다.
 task_t<start_order_workflow_res_t>
 order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)

@@ -10,7 +10,7 @@ title: "오류 처리 · Node/TypeScript"
 # 오류 처리
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 02 — 브라우저](08-browser.ko.md)
+[가이드 홈](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 브라우저](08-browser.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

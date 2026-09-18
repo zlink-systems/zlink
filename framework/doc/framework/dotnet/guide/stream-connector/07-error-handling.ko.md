@@ -10,7 +10,7 @@ title: "오류 처리 · C#/.NET"
 # 오류 처리
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 02 — Unity (네이티브 빌드)](08-unity.ko.md)
+[가이드 홈](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: Unity (네이티브 빌드)](08-unity.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

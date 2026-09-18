@@ -410,7 +410,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 
 ```csharp
 // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 조립하지 않는다.
+// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
 public sealed class StartOrderWorkflowHandler :
     IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
 {
