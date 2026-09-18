@@ -55,8 +55,8 @@ cleanup_sample() {
 }
 trap cleanup_sample EXIT
 
-read -r mesh1 mesh2 replacement_mesh ops_stream ops_mesh gateway_stream gateway_mesh spare_mesh preview_port \
-  <<<"$(zlink_sample_reserve_ports 9)"
+read -r mesh1 mesh2 replacement_mesh1 replacement_mesh2 ops_stream ops_mesh gateway_stream gateway_mesh \
+  spare_mesh preview_port <<<"$(zlink_sample_reserve_ports 10)"
 zlink_redis_start_scoped_assign redis_container_id redis_port \
   "zlink-redis-java-sample-zoneworld" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 redis_endpoint="127.0.0.1:${redis_port}"
@@ -79,8 +79,11 @@ write_server_config() {
 write_server_config "$CONFIG_DIR/zone-node-1.properties" zone zone-node-1 "$mesh1" 0 false false false '*'
 write_server_config "$CONFIG_DIR/zone-node-2.properties" zone zone-node-2 "$mesh2" 0
 write_server_config "$CONFIG_DIR/zone-node-3.properties" zone zone-node-3 "$spare_mesh" 0 true true true
-write_server_config "$CONFIG_DIR/zone-node-replacement.properties" zone zone-node-2 "$replacement_mesh" 0
-write_server_config "$CONFIG_DIR/zone-node-crash-replacement.properties" zone zone-node-2 "$replacement_mesh" 0 false true true
+# One replacement configuration per node, and it is the only configuration a restart uses.
+# A stopped owner's zones stay with the incarnation that owned them, so a restarted node
+# reaches ready with no zones and spawns no bots, whether it was stopped or killed.
+write_server_config "$CONFIG_DIR/zone-node-1-replacement.properties" zone zone-node-1 "$replacement_mesh1" 0 false true true
+write_server_config "$CONFIG_DIR/zone-node-2-replacement.properties" zone zone-node-2 "$replacement_mesh2" 0 false true true
 write_server_config "$CONFIG_DIR/ops.properties" ops ops "$ops_mesh" "$ops_stream"
 write_server_config "$CONFIG_DIR/gateway.properties" gateway gateway "$gateway_mesh" "$gateway_stream"
 
@@ -166,10 +169,13 @@ client_config() {
 run_client() { local id=$1 config; config="$(client_config "$id")"; "$CLIENT_BIN" --config "$config" 2>&1 | tee -a "$LOG_DIR/client.log"; return "${PIPESTATUS[0]}"; }
 
 start_zone() {
-  local name=$1 config first
-  config=${2:-$name}
+  local name=$1 config_name first
+  # Every restart is a replacement: same NodeId, a new RID on the node's own replacement
+  # endpoint, ready with no zones. The stop kind does not change that, so the configuration
+  # follows from the node name alone.
+  config_name="$name-replacement"
   first="$(next_line "$LOG_DIR/$name.log")"
-  start "$name" "$SERVER_BIN" --config "$CONFIG_DIR/$config.properties"
+  start "$name" "$SERVER_BIN" --config "$CONFIG_DIR/$config_name.properties"
   wait_log_while_running "$name" 'topology=ready' "$first" "${node_pid[$name]}" 900 || return 1
   wait_log_while_running "$name" 'node status report submitted' "$first" "${node_pid[$name]}" 900
 }
@@ -246,7 +252,7 @@ if [[ "$G4_CHILD" == 1 ]]; then
   kill_node zone-node-2 KILL
   wait "$client_pid" || exit 1
   tail -n +"$first" "$LOG_DIR/client.log" | grep -Fxq 'scenario ZW-G4 passed' || exit 1
-  ops_first="$(next_line "$LOG_DIR/ops.log")"; start_zone zone-node-2 zone-node-crash-replacement
+  ops_first="$(next_line "$LOG_DIR/ops.log")"; start_zone zone-node-2
   new="$(routing_id zone-node-2 "$ops_first")"
   first="$(next_line "$LOG_DIR/client.log")"
   if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-G4-fresh \
@@ -274,7 +280,9 @@ run_with_stop() {
   if ! wait_log_while_running client "scenario $id armed node=" "$first" "$pid" 900; then wait "$pid" || true; fail "$id" "client did not arm"; return; fi
   line="$(tail -n +"$first" "$LOG_DIR/client.log" | grep "scenario $id armed node=" | tail -1)"; node=${line##*node=}
   kill_node "$node" "$mode"; wait "$pid" || fail "$id" "client verdict failed after stop"
-  if [[ "$node" == zone-node-2 ]]; then start_zone zone-node-2 zone-node-crash-replacement; else start_zone "$node"; fi
+  # The restart is part of the scenario's verdict. Without this the runner reported every
+  # scenario as passed and only the teardown wait noticed the node that never came back.
+  if ! start_zone "$node"; then fail "$id" "replacement did not reach topology ready"; fi
 }
 run_with_stop ZW-B4 KILL
 run_with_stop ZW-C2 TERM
@@ -289,7 +297,7 @@ if selected ZW-E5; then
     kill_node zone-node-2 KILL
     if ! wait_log_while_running client 'scenario ZW-E5 replacement waiting' "$first" "$client_pid" 900; then
       wait "$client_pid" || true; fail ZW-E5 "client did not observe the stopped node"
-    elif start_zone zone-node-2 zone-node-crash-replacement; then
+    elif start_zone zone-node-2; then
       wait "$client_pid" || fail ZW-E5 "maintenance not restored"
     else
       fail ZW-E5 "replacement did not reach topology ready"
@@ -339,7 +347,7 @@ fi
 if selected ZW-G3; then
   old="$rid2"; kill_node zone-node-2 TERM
   ops_first="$(next_line "$LOG_DIR/ops.log")"
-  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-crash-replacement.properties"
+  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2-replacement.properties"
   if wait_log_while_running zone-node-replacement topology=ready 1 "${node_pid[zone-node-replacement]}" 900; then
     new="$(routing_id zone-node-2 "$ops_first")"
     first="$(next_line "$LOG_DIR/client.log")"
