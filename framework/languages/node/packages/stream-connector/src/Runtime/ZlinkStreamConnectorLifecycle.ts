@@ -100,9 +100,15 @@ export class ZlinkStreamConnectorLifecycle {
       this.currentConnection = connection;
       this.connectionGeneration += 1;
       this.disconnectedPublished = false;
-      // Spec stream-connector 32 §10: the baseline for `receivedCount` is the
-      // moment a connection is established, so each new connection counts from 0.
-      this.receivedMessages.resetReceivedCounts();
+      // Spec stream-connector 32 §10 (line ~649): the baseline for
+      // `receivedCount` is the moment a connection is established, so each
+      // new connection counts from 0 and whatever the previous connection
+      // left unconsumed — queued messages and the wait surfaces still
+      // watching for them — is dropped with it. `connectionGeneration` was
+      // just incremented above, so `> 1` is exactly "this is not the first
+      // connection" — the fact Java's `resetForNewConnection` takes as
+      // `replacesAnEarlierConnection`; no separate flag is needed to track it.
+      this.receivedMessages.resetForNewConnection(this.connectionGeneration > 1);
       this.lastInboundAt = Date.now();
       await this.setState(ZlinkStreamConnectionState.Connected, undefined, signal);
       this.startHeartbeat();
