@@ -17,7 +17,7 @@ Actor는 반드시 어떤 Spot에 속한다. 만들어진 직후에는 **Entry S
 User Spot으로 옮겨 간다. Entry Spot은 Object Server가 시작할 때 Framework가 만드는 Spot이고,
 아직 어느 방에도 속하지 않은 Actor의 기본 자리다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/22-actor-membership.html" title="Actor는 Spot 안에서 산다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/22-actor-membership.html" title="Actor는 Spot 안에서 산다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/22-actor-membership.html" target="_blank">↗ 크게 보기</a></p>
 
 **그래서 handler가 Spot과 Actor를 함께 받는다.** actor id로 보낸 메시지는 그 Actor가 지금

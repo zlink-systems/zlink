@@ -162,7 +162,7 @@ factory에 등록한 adapter가 담아 옮긴다. 무엇이 남고 절차가 어
 [Relocation](37-relocation.ko.md#4-execution-mode가-정하는-이동-단위)이 그 구분을 다룬다.
 운영에서 이것이 중요한 이유는 **묶음이 클수록 한 번에 멈추는 범위가 넓기** 때문이다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-relocation.html" title="execution mode별 relocation 이전 단위 — SpotWide vs PerActor" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/12-relocation.html" title="execution mode별 relocation 이전 단위 — SpotWide vs PerActor" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 Actor를 각각 옮기는 User Spot은 Spot 자체가 옮길 상태를 갖지 않으므로, 그 factory는
@@ -386,7 +386,7 @@ Framework runtime은 host의 **수명주기 서비스**로 시작·종료에 묶
 channel·SPOT·STREAM runtime은 startup에서 등록한 역할을 보고 생성되어 shutdown에서
 정리된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle.html" title="Host lifecycle — 구성·서비스·종료" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle.html" title="Host lifecycle — 구성·서비스·종료" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 - **구성 단계** — `app.Run()` 전에 모든 선언을 끝낸다. 잘못된 구성은 host

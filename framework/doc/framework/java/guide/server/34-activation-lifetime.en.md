@@ -42,7 +42,7 @@ created, in Actor membership, and in how they are closed.
 | Closing from the application | Not offered | Through a close call or from its own context | From its own handler or timer context |
 | Where it is used | The default place for an Actor that belongs to no User Spot yet | Rooms, stages, zones | A unit that handles requests per id, such as a matchmaking worker |
 
-<iframe class="zlink-diagram" src="/common/diagrams/34-spot-kinds-en.html" title="Three kinds of Spot — what creates them" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/34-spot-kinds-en.html" title="Three kinds of Spot — what creates them" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/34-spot-kinds-en.html" target="_blank">↗ View larger</a></p>
 
 An Instance Spot has no create call of its own. Name the instance type on the first message and

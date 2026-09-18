@@ -187,7 +187,7 @@ All four calls use the same mesh connection. **Only the first needs a channel re
 
 ### 3.1 How It Works
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional-en.html" title="RouteMesh — both sides call each other" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional-en.html" title="RouteMesh — both sides call each other" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-routemesh-bidirectional-en.html" target="_blank">↗ View larger</a></p>
 
 Nodes that joined the same mesh can call each other. When A serves the `profile` channel and B
@@ -343,7 +343,7 @@ call fails.
     id, an Actor id — because the Framework picks the current server and the application keeps no
     node RID.
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-node-direct-en.html" title="A business call names a name, an ops call names a node RID" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-node-direct-en.html" title="A business call names a name, an ops call names a node RID" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-node-direct-en.html" target="_blank">↗ View larger</a></p>
 
 #### The Receiving Side — Registered Straight onto the Mesh
@@ -517,7 +517,7 @@ an execution unit found by id, holding per-entity state such as one player or on
 Both can run on any node of the mesh, and may move to another node while running. **RouteMesh
 finds which node that target is on right now.** The caller gives only the id.
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-spot-actor-routing-en.html" title="A Spot or Actor call goes where the id is" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-spot-actor-routing-en.html" title="A Spot or Actor call goes where the id is" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-spot-actor-routing-en.html" target="_blank">↗ View larger</a></p>
 
 A call that does not wait for an answer gives only the id and the message.
@@ -598,7 +598,7 @@ Writing a handler is the same as for RouteMesh. Only the registration differs.
 
 ### 4.1 How It Works
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway-en.html" title="ClientServer — calls run one way" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway-en.html" title="ClientServer — calls run one way" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-clientserver-oneway-en.html" target="_blank">↗ View larger</a></p>
 
 Only the server publishes an address, and the client starts the connection too. **A server never
@@ -699,7 +699,7 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 
 ### 5.1 How It Works
 
-<iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic-en.html" title="Fanout — every subscribed node receives it" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic-en.html" title="Fanout — every subscribed node receives it" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-fanout-topic-en.html" target="_blank">↗ View larger</a></p>
 
 The publishing side does not name the nodes that will receive. One `publish` is delivered to every

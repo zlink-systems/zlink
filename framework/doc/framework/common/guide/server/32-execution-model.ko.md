@@ -37,7 +37,7 @@ Instance Spot에 Actor membership이나 Logical Multicast 구독을 등록하려
 | User Spot `PerActor` | Actor별, Spot lane별로 각각 직렬화한다. 서로 다른 lane은 동시에 실행할 수 있다 | Actor가 각자 소유한다. lane 사이에 공유하는 상태는 외부 저장소에 둔다 |
 | Instance Spot | Spot queue의 handler와 timer를 직렬화한다. Actor queue가 없다 | Spot instance가 소유한다 |
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spot.html" title="Spot 실행 모델 — SpotWide와 PerActor" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot.html" title="Spot 실행 모델 — SpotWide와 PerActor" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/06-spot.html" target="_blank">↗ 크게 보기</a></p>
 
 Execution mode는 factory를 등록할 때 고정하며 실행 중에는 바꾸지 않는다.
@@ -47,7 +47,7 @@ Execution mode는 factory를 등록할 때 고정하며 실행 중에는 바꾸�
 기본값은 `SpotWide`다. 그 Spot으로 향하는 모든 callback이 — 다른 Actor의 message도, timer도,
 lifecycle callback도 — 공통 gate 하나를 지나 한 lane에서 turn 하나씩 실행된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree.html" title="SpotWide — 락 없는 순차 실행" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree.html" title="SpotWide — 락 없는 순차 실행" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/06-spotwide-lockfree.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 순간에 실행되는 turn이 없으므로 **handler는 Spot과 member Actor의 상태를 락 없이 평범한

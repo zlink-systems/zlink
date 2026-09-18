@@ -28,7 +28,7 @@ title: "Session 묶음의 동작 원리 · Java"
 
 ## 1. 묶을 수 있는 개수 — session은 여럿, Actor는 하나
 
-<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session은 여럿을 묶고, Actor는 하나에만 묶인다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session은 여럿을 묶고, Actor는 하나에만 묶인다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/39-binding-shape.html" target="_blank">↗ 크게 보기</a></p>
 
 **session 하나는 여러 Actor를 동시에 묶을 수 있다.** 한 연결이 플레이어 Actor와 파티 Actor를

@@ -37,7 +37,7 @@ handler 하나를 등록하면 메시지 디코딩·routing·인코딩은 framew
 상태 변화를 받는 것이다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology.html"
-        title="역할별 서버가 typed 메시지로 통신하고, client는 STREAM으로 받는다" loading="lazy" style="width:100%;border:0"></iframe>
+        title="역할별 서버가 typed 메시지로 통신하고, client는 STREAM으로 받는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 ---
@@ -169,7 +169,7 @@ coroutine idiom을 추가하는 얇은 레이어다. 그래서 이 가이드는 
 이 가이드의 다이어그램은 같은 시각 언어를 사용한다 — 색이 곧 개념이다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds.html"
-        title="구성도에 나오는 다섯 가지" loading="lazy" style="width:100%;border:0"></iframe>
+        title="구성도에 나오는 다섯 가지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-element-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 여러 장이 같은 토폴로지를 그리며, 장마다 확대하는 위치만 바뀐다.

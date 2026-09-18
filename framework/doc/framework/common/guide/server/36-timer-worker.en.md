@@ -80,7 +80,7 @@ skipped as fields.
 A growing delay is the signal that the Spot's line is backing up. A handler that reads the value
 and reports the load gives operations a place to look for the cause.
 
-<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer joins the line; a worker runs outside it" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer joins the line; a worker runs outside it" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker-en.html" target="_blank">↗ View larger</a></p>
 
 ## 2. Workers — Running Outside the Line

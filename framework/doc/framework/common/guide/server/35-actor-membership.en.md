@@ -26,7 +26,7 @@ notified.
 The way back to the Entry Spot has no admission step, because that is the default membership —
 [Activation and Lifetime](34-activation-lifetime.en.md) covers the callbacks per kind.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A join is a reservation; it runs after the handler ends" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A join is a reservation; it runs after the handler ends" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join-en.html" target="_blank">↗ View larger</a></p>
 
 ## 2. Reserving a Join — It Runs After the Handler Ends

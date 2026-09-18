@@ -96,7 +96,7 @@ The base topology only expresses the placement of Client and server components a
 connections. Redis and the maintenance store are described in the resource table, and the time
 order of movement/publish is described in the §7 sequence diagrams.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology-en.html" title="System configuration and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology-en.html" title="System configuration and topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Only Gateway provides the player-facing game STREAM, and only Ops provides the control STREAM.
@@ -447,7 +447,7 @@ means target zone admission has completed** is the normative meaning in this sce
 implementation that produces the JoinWorldRes terminal from pre-admission state (such as a
 cache) is non-conforming.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move-en.html" title="Joining and moving within the same zone" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move-en.html" title="Joining and moving within the same zone" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-join-move-en.html" target="_blank">↗ View larger</a></p>
 
 ### 7.2 Border Crossing And Relocation
@@ -456,7 +456,7 @@ If the target zone owner is the same, only membership changes; if different, the
 materializes at the target owner, which is a relocation. The Application doesn't distinguish the
 two cases by NodeId — both use the `EnterZoneReq`/`EnterZoneRes` request/reply pair.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation-en.html" title="Border crossing and relocation" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation-en.html" title="Border crossing and relocation" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-relocation-en.html" target="_blank">↗ View larger</a></p>
 
 Relocation keeps the ActorId and ObjectGeneration and only changes the owner generation. A
@@ -496,7 +496,7 @@ observations: Connected comes from the peer state of the runtime status observat
 Registered comes from ZoneNode's explicit report, since the Framework topology status doesn't
 expose a registration signal.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops-en.html" title="Ops observation, announce, and maintenance" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops-en.html" title="Ops observation, announce, and maintenance" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-ops-en.html" target="_blank">↗ View larger</a></p>
 
 If the target zone owner has `maintenance=true`, the target Zone Spot's `OnActorJoin` admission
@@ -535,7 +535,7 @@ logical components below with the same responsibilities. The headless scenario a
 can live in different file locations, but the boundaries of Gateway, ZoneNode, and Ops, and the
 placement of the zone state owner and relocation adapter, don't change.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure-en.html" title="Implementation structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure-en.html" title="Implementation structure — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-zoneworld-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |

@@ -95,7 +95,7 @@ RID를 security identity처럼 사용하는 경로는 허용하지 않는다.
 Relocation Store는 resource 표에서 설명하며 HTTP, stream, join과 publish의 시간 순서는 §7
 sequence diagram에 둔다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology.html" title="시스템 구성과 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Api A/B는 object client이며 room create request를 Play object server로 보낸다.
@@ -357,7 +357,7 @@ Room Spot 생성을 요청한다. Spot manager가 RoomId를 발급하고 owner�
 `CreateGameHttpRes`로 RoomId, RequiredLevel, PlayEndpoints, PlayNodes와 GameName을 반환한다. Client가
 어떤 Play ingress를 사용해도 room owner는 바뀌지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth.html" title="Room 생성과 인증·입장" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth.html" title="Room 생성과 인증·입장" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-create-auth.html" target="_blank">↗ 크게 보기</a></p>
 
 Join failure는 current session에 보내는 `JoinGameFailedNotify`로 알린다. 인증 전에
@@ -370,7 +370,7 @@ request client는 PlaceMarkRes를 받고 상대 client는 GameStateNotify를 받
 끝난다. Transport·route·protocol 실패만 Framework의 다른 `ErrorKind`로 끝난다. 최종 state의
 status와 winner는 양쪽 client에서 같아야 한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark.html" title="수 두기와 최종 state" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark.html" title="수 두기와 최종 state" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-place-mark.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 7.3 Wins 100 milestone
@@ -379,7 +379,7 @@ Fake user source는 host의 Wins를 99로 제공한다. host가 이번 game에�
 Room Spot이 PlayerWinMilestoneEvent를 publish한다. Observer는 host와 다른 Play ingress의
 local Entry Spot에서 topic subscription을 완료한 뒤 WinMilestoneNotify를 기다린다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone.html" title="Wins 100 milestone" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone.html" title="Wins 100 milestone" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-milestone.html" target="_blank">↗ 크게 보기</a></p>
 
 Multicast publish 완료는 subscriber handler의 처리 완료나 game win 확정을 뜻하지 않는다.
@@ -401,7 +401,7 @@ Spot이 `destroyActor`를 호출한다. `LeaveGameMsg`는 one-way이므로 clien
 완료를 판단하지 않는다. Runner는 각 Actor에서 Room leave callback이 실행되고 Entry Spot의 destroy가
 끝났는지 별도로 확인한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect.html" title="Disconnect와 destroy" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect.html" title="Disconnect와 destroy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-disconnect.html" target="_blank">↗ 크게 보기</a></p>
 
 이 diagram은 한 Player의 reconnect와 이어지는 leave 경로를 나타낸다. host와 guest는 각각 같은
@@ -413,7 +413,7 @@ leave 경로를 실행하며, Runner는 두 Actor의 evidence를 따로 확인�
 책임으로 구현한다. Api는 HTTP와 user source를, Play는 stream과 game state를 소유한다. 두 Play
 process가 같은 capability를 제공한다는 점도 언어별 sample에서 유지한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure.html" title="TicTacToe 구현 구조" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure.html" title="TicTacToe 구현 구조" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |

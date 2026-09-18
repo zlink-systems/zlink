@@ -53,7 +53,7 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 `ChannelName`으로 메시지를 전송하면 framework가 그 순간 요청을 받을 수 있는 node 중
 하나를 선택해 전달한다 — 이 선택을 **select-one**이라 한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select.html" title="channel — 이름으로 부르기 (select-one)" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select.html" title="channel — 이름으로 부르기 (select-one)" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-channel-select.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 `orders` channel을 맡은 node가 셋이면 호출마다 그중 하나가 선택된다. 호출자는
@@ -114,7 +114,7 @@ id로 주소를 지정한다는 점이 channel과 다르다. `"orders"` channel�
 spot이 있는 node가 메시지를 받아 그 spot에게 전달한다. 그 node가
 어디인지는 [앞에서 본](#1-channel--서버-간-연결) 위치 투명성 그대로 framework가 찾는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.html" title="spot — 상태 소유·순서 처리" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.html" title="spot — 상태 소유·순서 처리" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-spot-queue.html" target="_blank">↗ 크게 보기</a></p>
 
 spot은 MeshNode의 **Object role**에 등록한다. 같은 MeshNode의 Channel role과는
@@ -132,7 +132,7 @@ actor는 **ID로 식별되는 상태 보유 객체**다. 같은 ID로 온 메시
 인스턴스가 처리한다. actor는 항상 어떤 spot에 속하며, 외부 client 연결과 묶는 방법은
 [다음 절](#4-stream--외부-client-연결)에서 이어진다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.html" title="actor — id로 식별" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.html" title="actor — id로 식별" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-actor-route.html" target="_blank">↗ 크게 보기</a></p>
 
 상세는 [Actor](22-actor.ko.md)와 [Actor membership](35-actor-membership.ko.md).
@@ -148,7 +148,7 @@ session을 [actor](#3-actor--id로-식별되는-상태-객체)에 **bind**하면
 메시지를 session이 직접 처리하지 않고 bind된 actor로 relay한다. 반대 방향도 같아서
 actor가 보내는 push는 그 actor에 bind된 session을 통해 client로 나간다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-stream.html" title="stream — 외부 client 연결" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-stream.html" title="stream — 외부 client 연결" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-stream.html" target="_blank">↗ 크게 보기</a></p>
 
 그래서 **연결을 받는 node와 도메인 로직을 실행하는 node를 나눌 수 있다.** session은
@@ -171,7 +171,7 @@ actor는 spot에 속하고, spot은 node에 속한다. relocation은 이 소속 
 그 spot이 다른 node에 있으면, join이 받아들여지는 순간 actor가 상태와 대기 중인 작업을
 그대로 들고 그 node로 옮겨간다. application이 요청해서 일어나는 이동이다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-relocation.html" title="relocation — actor가 다른 node의 spot에 join" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-relocation.html" title="relocation — actor가 다른 node의 spot에 join" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 join 호출이 지정하는 것은 **`room-42`라는 spot id뿐**이고, 대상 node를 지정하는 인자는
@@ -184,7 +184,7 @@ actor P를 그 node로 옮긴다. 그래서 node A와 node B라는 이름은 app
 옮긴다. application이 개별 join을 요청하지 않아도 framework가 처리하며, 완료된 뒤
 원래 host를 종료할 수 있다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.html" title="host relocate — spot과 actor를 통째로 이전" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.html" title="host relocate — spot과 actor를 통째로 이전" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-host-relocate.html" target="_blank">↗ 크게 보기</a></p>
 
 상태를 보유한 서버는 그 상태 때문에 임의로 종료할 수 없어서, 점검이나 배포를 하려면

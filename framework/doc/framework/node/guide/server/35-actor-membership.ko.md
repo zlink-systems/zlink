@@ -43,7 +43,7 @@ Actor가 User Spot에 들어간다는 것은 **그 Actor의 callback이 실행�
 Entry Spot으로 돌아가는 길에는 승인 절차가 없다. 기본 membership이기 때문이다 —
 [활성화와 수명](34-activation-lifetime.ko.md)이 종류별 callback을 다룬다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="join은 예약이고, 실행은 handler가 끝난 뒤다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="join은 예약이고, 실행은 handler가 끝난 뒤다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 2. 예약 등록 — handler가 끝난 뒤에 실행된다

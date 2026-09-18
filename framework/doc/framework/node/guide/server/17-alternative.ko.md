@@ -77,7 +77,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
 등장하지만 — 그걸 받쳐 주는 공통 framework는 없어서, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 - **① zone 분할.** 월드를 지리적 구역으로 나눠 구역마다 서버(node)가
@@ -129,7 +129,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
 
 위 "기존 방식" 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 초록(굵은 테두리)이 SPOT 계열 primitive다. 위 "기존 방식" 그림과 대조되는 지점은
@@ -174,7 +174,7 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 [internals/backend-dependency-policy](../../internals/backend-dependency-policy.ko.md)가
 별도로 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
@@ -236,12 +236,12 @@ export class MarkNumberHandler
 
 **기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 길드로 온 요청은 항상 같은 GuildSpot의 queue를 통과하므로, 두 번째 요청은 첫
@@ -295,13 +295,13 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 
 **기존 방식** — 실시간 기능을 위한 구성 요소(주황)가 본체만큼 추가된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 주황 조각이 전부 사라지고, node·actor·spot 위치정보를 제공하는
 location store 하나가 남는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 사라진다. 순서는
@@ -356,14 +356,14 @@ stateful stream processor(Kafka Streams/Flink)로 상태를 소비자 곁에 두
 
 **기존 방식** — 순서 처리를 위한 파이프라인 조각(주황)이 본체만큼 추가된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.html" title="주문 처리 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.html" title="주문 처리 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — Kafka를 대체하는 것이 아니다. **주문 처리 경로에서** 파이프라인
 조각(주황)이 사라지고, Kafka는 자기 본연의 자리 — 확정된 사실을 독립 시스템들에
 전파하고 replay가 필요한 이벤트를 보존하는 durable log — 로 남는다(회색).
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 두 그림에서 Kafka의 색이 바뀐다. 처리 경로 **안에서** 순서를 담당하던
@@ -529,7 +529,7 @@ gRPC의 RPC 지연 자체는 추가 인프라 없이도 목표치를 만족한�
 L7 분배는 연결이 아니라 요청 하나하나를 보고 나누는 방식이다 — mesh sidecar나
 client-side LB가 이 역할을 한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute.html" title="L7 분배 — 요청 하나하나를 나눈다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute.html" title="L7 분배 — 요청 하나하나를 나눈다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-l7-distribute.html" target="_blank">↗ 크게 보기</a></p>
 
 즉 "gRPC를 사용한다"는 실제로 **gRPC + L7 LB(보통 mesh) + 서비스 위치 조회 + event broker +
@@ -537,10 +537,10 @@ proto pipeline**을 함께 운영한다는 뜻이다.
 
 ### 6.2 배치 구조 비교
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh.html" title="기존 방식 — gRPC + service mesh + broker + WS edge" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh.html" title="기존 방식 — gRPC + service mesh + broker + WS edge" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-classic-mesh.html" target="_blank">↗ 크게 보기</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel.html" title="ZLink 방식 — framework + location store" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel.html" title="ZLink 방식 — framework + location store" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-zlink-channel.html" target="_blank">↗ 크게 보기</a></p>
 
 Envoy sidecar와 mesh control plane(서비스 위치 조회·L7 LB·mTLS) 자리가 framework와
@@ -550,10 +550,10 @@ location store 한 겹으로 들어온다. broker와 WS edge는 요구가 단순
 
 ### 6.3 한 번의 호출이 지나는 경로
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path.html" title="sidecar 경로 — Envoy local → Envoy remote 두 홉" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path.html" title="sidecar 경로 — Envoy local → Envoy remote 두 홉" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-sidecar-path.html" target="_blank">↗ 크게 보기</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path.html" title="channel 경로 — sidecar 없이 직접 호출" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path.html" title="channel 경로 — sidecar 없이 직접 호출" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-channel-path.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 6.4 ZLink에서 사라지는 구성 요소
@@ -598,10 +598,10 @@ Orleans·Akka는 **actor primitive 하나에** 깊이 집중한다. 그런데 �
 
 ### 7.2 배치 구조 비교
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster.html" title="Orleans/Akka — actor cluster + 별도 edge" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster.html" title="Orleans/Akka — actor cluster + 별도 edge" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-orleans-cluster.html" target="_blank">↗ 크게 보기</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated.html" title="ZLink — 통합 스택" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated.html" title="ZLink — 통합 스택" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-zlink-integrated.html" target="_blank">↗ 크게 보기</a></p>
 
 client 연결·서비스 메시징·actor 상태를 한 framework가 함께 제공한다.

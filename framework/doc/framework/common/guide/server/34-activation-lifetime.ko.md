@@ -23,7 +23,7 @@ Spot은 종류와 무관하게 id와 상태를 가지고 callback을 순서대�
 | application이 닫기 | 제공하지 않는다 | 닫는 호출이나 자기 context에서 닫는다 | 자기 handler·timer context에서 닫는다 |
 | 주로 사용하는 자리 | 아직 User Spot에 속하지 않은 Actor의 기본 위치 | room, stage, zone | matchmaking worker처럼 id 단위로 요청을 처리하는 단위 |
 
-<iframe class="zlink-diagram" src="/common/diagrams/34-spot-kinds.html" title="세 종류의 Spot — 무엇이 만드는가" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/34-spot-kinds.html" title="세 종류의 Spot — 무엇이 만드는가" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/34-spot-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 Instance Spot에는 만드는 호출이 따로 없다. 첫 메시지에 instance type을 적으면 Framework가 있던

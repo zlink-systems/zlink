@@ -82,7 +82,7 @@ fall into patterns the industry has names for. Boxes like login/auth, gateway, a
 repeatedly no matter which pattern you pick — but since there's no common framework backing
 them, a team picks its genre's pattern and rebuilds that structure from the socket up.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-existing-en.html" target="_blank">↗ View larger</a></p>
 
 - **① Zone-sharding.** The world is split into geographic regions, one server (node) owns
@@ -144,7 +144,7 @@ There's no need to rebuild from the socket for each one.
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Green (bold border) is the SPOT-family primitive. This is exactly where it contrasts with
@@ -191,7 +191,7 @@ internal implementation, not exposed on the public API, and application code doe
 even if they're replaced later — this backend boundary is explained separately by
 [internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
 **As code.** Declare one room, and write that room's progression logic.
@@ -257,13 +257,13 @@ execution unit.
 
 **The existing approach** — lock acquire/release makes a round trip on every request.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
 address the request will arrive at.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 A request for the same guild always passes through the same GuildSpot's queue, so the second
@@ -324,13 +324,13 @@ pushes — both ways shows the difference right in the picture.
 **The existing approach** — the components for the real-time feature (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — every orange piece disappears, leaving one location store that
 provides node/actor/spot location information.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 The sticky LB, the pub/sub broker, and the distributed lock —
@@ -393,7 +393,7 @@ pieces right in the picture.
 **The existing approach** — the pipeline pieces for ordered processing (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — this doesn't replace Kafka. **On the order-processing path**, the
@@ -401,7 +401,7 @@ pipeline pieces (orange) disappear, and Kafka stays in its natural role (gray) �
 confirmed facts to independent systems and preserving events that need replay, as a durable
 log.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 The key thing across the two pictures is that Kafka's color changes. Kafka (orange), which
@@ -582,7 +582,7 @@ infrastructure.
 L7 distribution splits work by looking at each individual request, not the connection — a
 mesh sidecar or client-side LB plays this role.
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute-en.html" title="L7 distribution — split request by request" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute-en.html" title="L7 distribution — split request by request" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-l7-distribute-en.html" target="_blank">↗ View larger</a></p>
 
 In other words, "using gRPC" really means running **gRPC + an L7 LB (usually a mesh) +
@@ -590,10 +590,10 @@ service-location lookup + an event broker + a proto pipeline** together.
 
 ### 6.2 Deployment Shape Comparison
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh-en.html" title="Classic — gRPC + service mesh + broker + WS edge" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh-en.html" title="Classic — gRPC + service mesh + broker + WS edge" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-classic-mesh-en.html" target="_blank">↗ View larger</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel-en.html" title="ZLink — framework + location store" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel-en.html" title="ZLink — framework + location store" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-zlink-channel-en.html" target="_blank">↗ View larger</a></p>
 
 The Envoy sidecar and mesh control plane (service-location lookup, L7 LB, mTLS) give way to
@@ -604,10 +604,10 @@ policy, you keep them as-is.
 
 ### 6.3 The Path One Call Takes
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path-en.html" title="Sidecar path — Envoy local to Envoy remote, two hops" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path-en.html" title="Sidecar path — Envoy local to Envoy remote, two hops" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-sidecar-path-en.html" target="_blank">↗ View larger</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path-en.html" title="channel path — direct call, no sidecar" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path-en.html" title="channel path — direct call, no sidecar" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-channel-path-en.html" target="_blank">↗ View larger</a></p>
 
 ### 6.4 Components That Go Away with ZLink
@@ -657,10 +657,10 @@ actor yourself.
 
 ### 7.2 Deployment Shape Comparison
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster-en.html" title="Orleans/Akka — actor cluster with separate edge" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster-en.html" title="Orleans/Akka — actor cluster with separate edge" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-orleans-cluster-en.html" target="_blank">↗ View larger</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated-en.html" title="ZLink — integrated stack" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated-en.html" title="ZLink — integrated stack" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-zlink-integrated-en.html" target="_blank">↗ View larger</a></p>
 
 Client connections, service messaging, and actor state are provided together — collapse

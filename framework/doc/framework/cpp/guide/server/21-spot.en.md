@@ -40,7 +40,7 @@ nodes.
 A Spot has an id. Messages sent to the same id always arrive at the same Spot, and inside that
 Spot they run **one at a time**. A Spot's fields therefore need no lock.
 
-<iframe class="zlink-diagram" src="/common/diagrams/21-spot-placement-en.html" title="A Spot is created on one of the nodes that registered it" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/21-spot-placement-en.html" title="A Spot is created on one of the nodes that registered it" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/21-spot-placement-en.html" target="_blank">↗ View larger</a></p>
 
 Neither the creator nor the caller picks a node. That much matches a channel; what differs is

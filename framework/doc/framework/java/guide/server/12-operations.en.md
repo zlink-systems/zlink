@@ -174,7 +174,7 @@ What is bundled into one unit is decided by the Spot kind and the execution mode
 operations it matters for one reason. **The larger the bundle, the wider the range that pauses at
 once.**
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-relocation-en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/12-relocation-en.html" title="Relocation move unit per execution mode" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-relocation-en.html" target="_blank">↗ View larger</a></p>
 
 A User Spot whose Actors move individually is a shell that carries no state itself, so its factory
@@ -391,7 +391,7 @@ The Framework runtime is tied to the host's start/stop as its **lifecycle servic
 channel/SPOT/STREAM runtime is created based on the roles registered at startup, and cleaned
 up at shutdown.
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle-en.html" title="Host lifecycle — configure, serving, stopping" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle-en.html" title="Host lifecycle — configure, serving, stopping" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-lifecycle-en.html" target="_blank">↗ View larger</a></p>
 
 - **Configuration phase** — finish every declaration before `app.Run()`. A bad configuration

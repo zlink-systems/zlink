@@ -70,7 +70,7 @@ In a small system where the delivery and the courier's response finish within a 
 a status table and a unique key are enough. Once a separate stream, worker, and external effects
 appear, the following additional responsibilities must be coordinated.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-existing-en.html" title="Conventional web approach — delivery/dispatch comparison" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-existing-en.html" title="Conventional web approach — delivery/dispatch comparison" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 In this comparison configuration, the queue, registry, timeout job, and event bus are separate
@@ -93,7 +93,7 @@ connections. The Store and evidence are described in the resource table and are 
 server components in the diagram. The time order of requests, responses, and timeouts is owned by
 the §7 sequence diagrams.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-topology-en.html" title="System configuration and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-topology-en.html" title="System configuration and topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Dispatch provides the HTTP edge and the dispatch worker.
@@ -292,7 +292,7 @@ binding response. Once `CreateDeliveryReq` is accepted, Dispatch records Attempt
 offer to A. While waiting for the courier's response, the Dispatch handler doesn't occupy an
 execution turn.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success-en.html" title="Normal flow — offer, accept, status push" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success-en.html" title="Normal flow — offer, accept, status push" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-success-en.html" target="_blank">↗ View larger</a></p>
 
 Confirm that `DeliveryStatusNotify` arrives in the order Assigned, Accepted, PickedUp, Delivered,
@@ -306,7 +306,7 @@ If A doesn't send a decision within the deadline after receiving `OfferDeliveryM
 Dispatch sweeper marks the current record Expired and selects B as the next candidate. A's late
 decision doesn't match the current Attempt=2, so it's discarded.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign-en.html" title="Timeout reassignment — promotion to Attempt=2" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign-en.html" title="Timeout reassignment — promotion to Attempt=2" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-reassign-en.html" target="_blank">↗ View larger</a></p>
 
 A decision that arrives after attempt 2 starts is recorded as a stale decision and has no status
@@ -333,7 +333,7 @@ actual directory and type representation can differ per language, but the bounda
 `Program` composes the host and public endpoints; business decisions live in `Application` and
 `Domain`, and Framework wiring lives in `Infrastructure`.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-structure-en.html" title="DeliveryDispatch implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-structure-en.html" title="DeliveryDispatch implementation structure" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |

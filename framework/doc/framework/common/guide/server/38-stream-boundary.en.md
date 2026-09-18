@@ -35,7 +35,7 @@ created**.
 
 ## 2. Where an Error Goes
 
-<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch-en.html" title="What one connection passes through" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch-en.html" title="What one connection passes through" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/38-stream-dispatch-en.html" target="_blank">↗ View larger</a></p>
 
 **The session error callback receives only transport errors that belong to that session.** The

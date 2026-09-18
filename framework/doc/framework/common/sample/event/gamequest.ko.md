@@ -56,7 +56,7 @@ ingest와 지급 transaction을 추가해야 하며 이 sample의 완료 기준�
 stateless web backend에서는 room/field가 gameplay event를 ingest API로 보내고, log partition,
 consumer, cache, DB lock, projection과 presence가 player별 순서와 push를 나누어 담당한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web.html" title="기존 stateless web 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web.html" title="기존 stateless web 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-existing-web.html" target="_blank">↗ 크게 보기</a></p>
 
 GameQuest는 진행 tier에서 PlayerId를 global SpotId로 사용해 owner turn을 Framework에 맡긴다.
@@ -79,7 +79,7 @@ tier는 유실을 fact 재계산으로 흡수한다는 점이 다르다. 두 sam
 기본 topology는 Client와 server component의 연결만 보여 준다. QuestEventStore,
 QuestReadModelStore, GameplayStateStore와 QuestDefinition은 resource 표에서 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology.html" title="시스템 구성과 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 GameApi는 session actor와 gameplay edge를 소유하고 connection을 분산한다. QuestMission은
@@ -309,7 +309,7 @@ message QuestReconciled {
 첫 PlayerId event가 도착하면 Instance intent가 Missing PlayerQuestSpot을 준비한다. owner
 Spot은 stream replay로 aggregate를 복원한 뒤 event를 평가한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow.html" title="정상 progress와 completion" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow.html" title="정상 progress와 completion" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-progress-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 `KillMonsterReq/Res`의 response는 GameApi가 action을 접수해 만든 EventId를 반환한다.
@@ -324,7 +324,7 @@ stream과 projection을 갱신한 뒤 보낸다. one-way send 완료는 target h
 sourceEventId를 확인하고 domain event를 다시 append하지 않는다. reconnect에서는 같은
 PlayerId session actor를 binding하고 GetQuestProgressReq로 projection을 확인한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow.html" title="중복과 reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow.html" title="중복과 reconnect" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-reconnect-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Session binding이 없는 동안의 notify는 성공 조건이 아니다. 상태는 event store에 기록되고
@@ -336,7 +336,7 @@ GameplayStateStore fact가 증가했지만 GameplayMsg가 유실된 경우 Clien
 SyncQuestProgressReq를 보낸다. Spot은 authoritative fact를 읽어 현재 fold와 비교하고
 필요한 QuestReconciled event를 append한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow.html" title="reset/reconcile와 failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow.html" title="reset/reconcile와 failure boundary" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-reconcile-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Ready owner process가 종료되면 현재 Spot operation은 Unavailable로 끝난다. Framework는
@@ -350,7 +350,7 @@ authority release까지 완료된 뒤의 새 Instance intent는 새 generation�
 책임으로 구현한다. 실제 directory와 type 표현은 달라도 `GameApi`가 edge와 session을, `QuestMission`이
 player별 state를 소유하는 경계는 바꾸지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure.html" title="구현 구조 — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |

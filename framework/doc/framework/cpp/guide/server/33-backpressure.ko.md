@@ -56,7 +56,7 @@ Application Job Queue permit은 receive·claim 직전에 얻고 실제 사용자
 Record payload는 필요한 terminal까지 Framework 쪽 owner가 유지하지만 Core HWM budget을 계속
 점유하지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/04-flow.html" title="Backpressure 경로 — 송신에서 수신까지, 응답은 점선으로" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/04-flow.html" title="Backpressure 경로 — 송신에서 수신까지, 응답은 점선으로" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/04-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Application job queue 상한에 도달하면 receive 전에 terminal reply·error completion으로 식별할 수 있는

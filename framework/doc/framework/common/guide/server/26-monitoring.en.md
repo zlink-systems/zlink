@@ -22,7 +22,7 @@ surfaces below.
 | Where and how one message ended | Diagnostic records (traces, logs) | [Setting the Diagnostics Level](#4-setting-the-diagnostics-level) |
 | Numbers such as concurrent users and queue depth | Meters | [Operations and Lifecycle](12-operations.en.md#1-runtime-metrics) |
 
-<iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths-en.html" title="The kinds of observation surface" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths-en.html" title="The kinds of observation surface" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/26-observation-paths-en.html" target="_blank">↗ View larger</a></p>
 
 They are consumed differently. **The status surface** is for reading the current value or

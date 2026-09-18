@@ -65,7 +65,7 @@ Unavailable 경계를 따른다.
 unique key만으로 충분하다. 별도 stream, worker와 외부 effect가 생기면 다음 책임을 추가로
 조정해야 한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-existing.html" title="기존 웹 방식 — 배송·배차 비교 구성" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-existing.html" title="기존 웹 방식 — 배송·배차 비교 구성" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 이 비교 구성에서 queue, registry, timeout job과 event bus는 별도 component다. DeliveryDispatch는
@@ -86,7 +86,7 @@ Actor routing과 session binding을 맡는 방식으로 책임의 경계를 바�
 resource 표에서 설명하며 diagram의 server component로 배치하지 않는다. request, response와
 timeout의 시간 순서는 §7 sequence diagram이 소유한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-topology.html" title="시스템 구성과 topology — 구조적 연결" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-topology.html" title="시스템 구성과 topology — 구조적 연결" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Dispatch는 HTTP edge와 배차 worker를 제공한다.
@@ -282,7 +282,7 @@ application state이며 transport identity가 아니다. ActorRef, NodeRid와 se
 CreateDeliveryReq가 접수되면 Dispatch는 Attempt = 1을 기록하고 A에게 제안을 보낸다.
 배송원 응답을 기다리는 동안 Dispatch handler는 실행 줄을 점유하지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success.html" title="정상 흐름 — 배차·수락·상태 push" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success.html" title="정상 흐름 — 배차·수락·상태 push" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-success.html" target="_blank">↗ 크게 보기</a></p>
 
 DeliveryStatusNotify가 Assigned, Accepted, PickedUp, Delivered 순서로 도착하고 각 payload의
@@ -295,7 +295,7 @@ A가 `OfferDeliveryMsg`(attempt=1)을 받은 뒤 deadline 안에 결정을 보�
 sweeper가 현재 기록을 Expired로 바꾸고 B를 다음 후보로 선택한다. 이전 A의 늦은 결정은
 현재 Attempt=2와 일치하지 않으므로 버린다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign.html" title="Timeout 재배정 — Attempt=2 승격" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign.html" title="Timeout 재배정 — Attempt=2 승격" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-reassign.html" target="_blank">↗ 크게 보기</a></p>
 
 A decision that arrives after attempt 2 starts is recorded as a stale decision and has no status
@@ -319,7 +319,7 @@ type 표현은 언어별로 달라도 `Client`, `Shared`, `Server`의 경계와 
 않는다. `Program`은 host와 public endpoint를 구성하고, 업무 판단은 `Application`과 `Domain`,
 Framework 연결은 `Infrastructure`에 둔다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-structure.html" title="구현 구조 — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |

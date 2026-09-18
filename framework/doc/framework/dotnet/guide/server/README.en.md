@@ -38,7 +38,7 @@ The shape they share is that server processes for each role talk in typed
 messages, and the client receives state changes over a real-time connection.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
-        title="Servers for each role talk in typed messages and the client receives over STREAM" loading="lazy" style="width:100%;border:0"></iframe>
+        title="Servers for each role talk in typed messages and the client receives over STREAM" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
 
 ---
@@ -169,7 +169,7 @@ Every diagram in this guide uses the same visual language — the color is the
 concept.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
-        title="The five kinds that appear in the diagrams" loading="lazy" style="width:100%;border:0"></iframe>
+        title="The five kinds that appear in the diagrams" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
 
 Several chapters draw the same topology; what changes from chapter to chapter is

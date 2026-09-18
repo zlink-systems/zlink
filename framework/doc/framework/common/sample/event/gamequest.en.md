@@ -59,7 +59,7 @@ In a stateless web backend, a room/field sends gameplay events to an ingest API,
 partitioning, consumers, cache, DB locks, projection, and presence separately handle per-player
 ordering and push.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web-en.html" title="Existing stateless web approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web-en.html" title="Existing stateless web approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-existing-web-en.html" target="_blank">↗ View larger</a></p>
 
 GameQuest uses the PlayerId as the global SpotId in the progress tier, leaving the owner turn to the
@@ -83,7 +83,7 @@ The basic topology shows only the connections between the Client and server comp
 QuestEventStore, QuestReadModelStore, GameplayStateStore, and QuestDefinition are explained in the
 resource table.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology-en.html" title="System composition and topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-topology-en.html" target="_blank">↗ View larger</a></p>
 
 GameApi owns the session actor and the gameplay edge, distributing connections. QuestMission
@@ -314,7 +314,7 @@ The starting state is GameApi having completed STREAM readiness and the Client h
 JoinSessionRes. When the first PlayerId event arrives, the Instance intent prepares the missing
 PlayerQuestSpot. The owner Spot restores the aggregate via stream replay, then evaluates the event.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow-en.html" title="Normal progress and completion" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow-en.html" title="Normal progress and completion" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-progress-flow-en.html" target="_blank">↗ View larger</a></p>
 
 `KillMonsterReq/Res`'s response returns the EventId GameApi built after accepting the action.
@@ -330,7 +330,7 @@ The same IdempotencyKey is converted to the same source EventId. PlayerQuestSpot
 already-stored sourceEventId and doesn't re-append the domain event. On reconnect, the same PlayerId
 session actor is bound, and progress is confirmed via GetQuestProgressReq.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow-en.html" title="Duplication and reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow-en.html" title="Duplication and reconnect" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-reconnect-flow-en.html" target="_blank">↗ View larger</a></p>
 
 A notify sent while there's no session binding isn't a success condition. The state is recorded in
@@ -342,7 +342,7 @@ If GameplayStateStore facts increased but a GameplayMsg was lost, the Client or 
 trigger sends SyncQuestProgressReq. The Spot reads the authoritative facts, compares them against
 the current fold, and appends the needed QuestReconciled event.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow-en.html" title="Reset/reconcile and the failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow-en.html" title="Reset/reconcile and the failure boundary" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-reconcile-flow-en.html" target="_blank">↗ View larger</a></p>
 
 If the Ready owner process terminates, the current Spot operation ends as Unavailable. The Framework
@@ -357,7 +357,7 @@ logical components below with the same responsibilities. Even if the actual dire
 representation differ, the boundary where `GameApi` owns the edge and session while `QuestMission`
 owns per-player state doesn't change.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure-en.html" title="Implementation structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure-en.html" title="Implementation structure — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-gamequest-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |

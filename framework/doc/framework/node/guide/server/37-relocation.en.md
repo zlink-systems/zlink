@@ -44,7 +44,7 @@ Nothing the calling side was using changes.
 **State in transit does not pass through the Location Store.** The departing node sends it to the
 destination node directly over the mesh connection.
 
-<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move-en.html" title="The logical id stays; only the execution site moves" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move-en.html" title="The logical id stays; only the execution site moves" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move-en.html" target="_blank">↗ View larger</a></p>
 
 ## 2. The Application's Part — the Adapter
