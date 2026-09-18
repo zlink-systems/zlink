@@ -80,6 +80,11 @@ Object Server MeshNode는 같은 diagnostic prefix로 Entry Spot을 식별하는
 Entry Spot ID의 발급, 형식과 충돌 처리 규칙을 소유한다. [Spot 모델](01-spot-model.ko.md)의
 Entry Spot 설명은 이 절을 가리킨다.
 
+Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
+ID를 발급하고 descriptor에 싣는다. Entry Spot type 등록은 이 Spot이 실행할 application
+handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 원격 생성 요청을
+받을 수 있는지도 이 등록으로 갈리지 않는다.
+
 ```text
 MeshNode RID:   <prefix>-<node-uuid-v4>
 Entry Spot ID: <prefix>-entry-<lowercase-canonical-uuid-v4>
@@ -463,6 +468,8 @@ runtime snapshot과 event)만으로 다음을 확인한다.
 - Automatic RID가 prefix와 lowercase canonical UUID v4 형식을 따르고 active conflict에서 두 번째 claim
   없이 startup configuration error로 실패한다.
 - Replacement lifecycle이 새 RID를 사용한다.
+- Entry Spot type을 등록하지 않은 Object Server node의 descriptor에도 `entrySpotId`가 있고,
+  `Server`가 아닌 node의 descriptor에는 없다.
 - Entry Spot ID가 MeshNode와 같은 diagnostic prefix, 별도로 생성한 UUID v4를 사용하며 descriptor가
   lifecycle mapping을 공개한다.
 - Replacement lifecycle이 새 Entry Spot ID를 발급하고 Entry Spot authority 충돌에서 즉시 실패한다.

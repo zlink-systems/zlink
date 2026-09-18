@@ -90,6 +90,12 @@ identifying a Spot) with the same diagnostic prefix. This section owns the issua
 handling rules for the Entry Spot ID. The Entry Spot description in
 [Spot Model](01-spot-model.en.md) points here.
 
+An Object Server MeshNode issues the Entry Spot ID and publishes it on its descriptor
+whether or not the application registered an Entry Spot type. Registering an Entry Spot
+type only chooses the application handler this Spot runs; it doesn't change whether the
+descriptor carries `entrySpotId`, and it doesn't decide whether the node can serve a
+remote creation request.
+
 ```text
 MeshNode RID:   <prefix>-<node-uuid-v4>
 Entry Spot ID: <prefix>-entry-<lowercase-canonical-uuid-v4>
@@ -523,6 +529,9 @@ runtime snapshot and event).
 - Automatic RID follows the prefix and lowercase canonical UUID v4 format,
   and fails with a startup configuration error on active conflict without a
   second claim.
+- An Object Server node that registered no Entry Spot type still carries
+  `entrySpotId` on its descriptor, and a node whose role isn't `Server` carries
+  none.
 - A replacement lifecycle uses a new RID.
 - The Entry Spot ID uses the same diagnostic prefix as the MeshNode and a
   separately generated UUID v4, and the descriptor publishes the
