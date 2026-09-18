@@ -9,10 +9,12 @@ Kotlin tutorial이 같은 Gradle build 안 `../kotlin/`에 있다. 두 언어는
 
 ## 전제
 
-- **JDK 25.** 배포된 `zlink-framework-*` 0.16.0의 class file major version이 69다.
-  이보다 낮은 JVM은 `UnsupportedClassVersionError`로 적재를 거부한다. Gradle toolchain을
-  25로 고정해 두었고, **`installDist`로 만든 실행 script는 `JAVA_HOME`을 그대로 쓰므로
-  실행 시점의 `JAVA_HOME`도 JDK 25여야 한다.** JDK 22를 가리킨 채 실행하면 다음을 낸다.
+- **JDK 25.** 배포된 `zlink-framework-*`(버전은
+  [`../gradle/libs.versions.toml`](../gradle/libs.versions.toml)의 `zlinkFramework` 참고)의
+  class file major version이 69다. 이보다 낮은 JVM은 `UnsupportedClassVersionError`로 적재를
+  거부한다. Gradle toolchain을 25로 고정해 두었고, **`installDist`로 만든 실행 script는
+  `JAVA_HOME`을 그대로 쓰므로 실행 시점의 `JAVA_HOME`도 JDK 25여야 한다.** JDK 22를 가리킨 채
+  실행하면 다음을 낸다.
 
   ```
   UnsupportedClassVersionError: systems/zlink/tutorial/server/ServerApplication
@@ -21,8 +23,28 @@ Kotlin tutorial이 같은 Gradle build 안 `../kotlin/`에 있다. 두 언어는
   class file versions up to 66.0
   ```
 
-- **Windows에서 별도 설정이 필요 없다.** `zlink-framework-core` 0.16.0의 POM이 binding
-  `systems.zlink:zlink:1.2.1`을 가리키고, 그 jar는 Windows native를 함께 싣는다.
+  이 Gradle 프로젝트는 JDK를 자동으로 내려받는 toolchain resolver(예:
+  `org.gradle.toolchains.foojay-resolver-convention`)를 설정하지 않는다. JDK 25가 없는
+  장비에서는 `installDist`가 다음으로 즉시 실패한다.
+
+  ```
+  > No matching toolchain found for requested specification: {languageVersion=25, ...}
+  ```
+
+  [Temurin 25](https://adoptium.net/)를 받아 설치하고 `JAVA_HOME`을 그 경로로 두면 된다
+  (Gradle이 `JAVA_HOME`을 toolchain 후보로 인식한다).
+
+  ```bash
+  # Linux/WSL
+  export JAVA_HOME=/path/to/jdk-25.0.4.1+1
+  # Windows PowerShell
+  $env:JAVA_HOME = "C:\path\to\jdk-25.0.4.1+1"
+  ```
+
+- **Windows에서 별도 설정이 필요 없다.** `zlink-framework-core`의 POM이 binding
+  `systems.zlink:zlink`을 가리키고(버전은 `zlink-framework-core`의 POM이 정한다.
+  `../gradle/libs.versions.toml`은 이 값을 적지 않는다), 그 jar는 Windows native를 함께
+  싣는다.
 
   ```
   native/linux-x86_64/libzlink.so.0

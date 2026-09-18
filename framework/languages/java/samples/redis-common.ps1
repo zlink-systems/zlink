@@ -25,29 +25,6 @@ function ConvertTo-ZlinkSampleProcessArgument {
     return '"' + [regex]::Replace($Value, '(\\*)"', '$1$1\"') + '"'
 }
 
-function Optimize-ZlinkSampleWindowsLaunchers {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    if (-not $IsWindows) {
-        return
-    }
-    Get-ChildItem -Path $Root -Filter "*.bat" -Recurse -File |
-        Where-Object { $_.FullName -match '[\\/]build[\\/]install[\\/][^\\/]+[\\/]bin[\\/]' } |
-        ForEach-Object {
-            $content = [System.IO.File]::ReadAllText($_.FullName)
-            $optimized = [regex]::Replace(
-                $content,
-                '(?m)^set CLASSPATH=.*$',
-                'set CLASSPATH=%APP_HOME%\lib\*')
-            if ($optimized -ne $content) {
-                [System.IO.File]::WriteAllText(
-                    $_.FullName,
-                    $optimized,
-                    [System.Text.UTF8Encoding]::new($false))
-            }
-        }
-}
-
 function Set-ZlinkSampleJavaRuntime {
     param([Parameter(Mandatory = $true)][string]$SamplesRoot)
 

@@ -23,8 +23,14 @@ Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
 
 ## 전제
 
-- **JDK 25 이상.** `zlink-framework-core` 0.16.0의 class file 버전이 69(Java 25)다.
-  이 프로그램은 Temurin 25.0.4.1로 빌드하고 실행했다.
+- **JDK 25 이상.** 배포된 `zlink-framework-core`(버전은
+  [`../gradle/libs.versions.toml`](../gradle/libs.versions.toml)의 `zlinkFramework` 참고)의
+  class file 버전이 69(Java 25)다. 이 프로그램은 Temurin 25.0.4.1로 빌드하고 실행했다.
+  이 Gradle 프로젝트는 JDK를 자동으로 내려받는 toolchain resolver(예:
+  `org.gradle.toolchains.foojay-resolver-convention`)를 설정하지 않는다. JDK 25가 없는
+  장비에서는 `installDist`가 `No matching toolchain found`로 즉시 실패한다.
+  [Temurin 25](https://adoptium.net/)를 받아 설치하고 `JAVA_HOME`을 그 경로로 두면
+  Gradle이 toolchain 후보로 인식한다.
 - Gradle 9.3 (wrapper 포함).
 - **Redis가 필요하다.** `127.0.0.1:6379`, 키 prefix는 `zlink-tutorial-kotlin:`다. Spot
   단계가 쓴다 — 방은 host가 아니라 id로 불리므로 지금 어느 node에 있는지를 Location Store에서
@@ -34,8 +40,8 @@ Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
 
 ### Windows에서 실행할 때
 
-**별도 설정이 필요 없다.** `zlink-framework-core` 0.16.0의 POM이 binding
-`systems.zlink:zlink:1.2.1`을 가리키고, 그 jar는 Windows native를 함께 싣는다.
+**별도 설정이 필요 없다.** `zlink-framework-core`의 POM이 binding `systems.zlink:zlink`을
+가리키고, 그 jar는 Windows native를 함께 싣는다.
 
 ```
 $ unzip -l zlink-1.2.1.jar | grep native/

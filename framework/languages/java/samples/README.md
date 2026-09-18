@@ -1,9 +1,32 @@
 # ZLink Java And Kotlin Samples
 
-This directory contains Java and Kotlin samples for the public 0.10.0 framework
-contract. Java samples are under `java/`, Kotlin samples are under `kotlin/`,
-and both languages implement the same seven sample scenarios defined by the
+This directory contains Java and Kotlin samples for the published
+`zlink-framework-*` package version (see `gradle/zlink-sample-dependencies.settings.gradle.kts`'s
+`zlink.frameworkVersion` default). Java samples are under `java/`, Kotlin
+samples are under `kotlin/`, and both languages implement the same seven
+sample scenarios defined by the
 [common sample documents](../../../doc/framework/common/sample/README.ko.md).
+
+## Prerequisites
+
+- **JDK 25.** Gradle toolchain is pinned to 25
+  (`gradle/zlink-jvm-baseline.settings.gradle.kts`). No Gradle toolchain
+  auto-download resolver (such as
+  `org.gradle.toolchains.foojay-resolver-convention`) is configured; the run
+  scripts locate an existing JDK 25 themselves (`JAVA_HOME`, `PATH`,
+  `~/.gradle/jdks`, and other common install locations - see
+  `gradle/zlink-jvm-runtime.sh` / `Set-ZlinkSampleJavaRuntime` in
+  `redis-common.ps1`) and fail with one message naming the missing version if
+  none match. Install [Temurin 25](https://adoptium.net/) yourself and point
+  `JAVA_HOME` at it, or a plain `installDist`/`build` (outside the run
+  scripts) fails immediately with `No matching toolchain found`.
+- **Docker and Redis.** Each sample run script starts and removes its own
+  Redis container (`redis-common.ps1` / `runner-common.sh`); Docker must be
+  running first.
+- **Python 3.** Every Linux `run_sample.sh` and the Windows ZoneWorld runner
+  (`ZoneWorld/run_sample.ps1`, the ZW-B8 fault proxy) invoke `python3`
+  (Linux) or a resolved `python` (Windows); see `PythonResolution.Tests.ps1`
+  for how Windows resolution is checked.
 
 ## Samples
 
