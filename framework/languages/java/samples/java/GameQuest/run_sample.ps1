@@ -91,9 +91,9 @@ function Start-Role([string]$Role, [string]$Project, [string]$Name, [string]$Con
         $startInfo.CreateNoWindow = $true
         $process = [System.Diagnostics.Process]::Start($startInfo)
     } else {
-        $process = Start-Process -FilePath $filePath -ArgumentList $argumentList `
-            -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
-            -RedirectStandardError "$log.err" -PassThru
+        $process = Start-ZlinkSampleProcess -FilePath $filePath -ArgumentList $argumentList `
+            -WorkingDirectory $SampleDir -RedirectStandardOutput $log `
+            -RedirectStandardError "$log.err"
     }
     $Processes.Add($process)
     $RoleProcesses[$Role] = $process

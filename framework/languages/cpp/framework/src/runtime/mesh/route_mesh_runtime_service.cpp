@@ -5,6 +5,7 @@
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
@@ -479,7 +480,7 @@ void route_mesh_runtime_service_t::start ()
                 state->publish_application_claim_change (*hub);
                 state->poll_location (*hub);
                 state->poll_location_descriptors (*hub);
-                std::this_thread::sleep_for (std::chrono::milliseconds (10));
+                zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
             }
         });
     }

@@ -94,7 +94,7 @@ function Start-Role {
     param([string]$ScriptPath, [string]$LogName, [string]$ConfigPath)
     $logPath = Join-Path $LogDir $LogName
     $errorLogPath = Join-Path $LogDir ($LogName + ".err.log")
-    $process = Start-Process -FilePath $ScriptPath -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $ScriptPath -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath
     $Processes.Add($process)
 }
 

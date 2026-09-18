@@ -1,6 +1,5 @@
 package systems.zlink.quickstart.client;
 
-import java.util.concurrent.CompletionStage;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -44,10 +43,13 @@ class HelloController {
     }
 
     @GetMapping("/hello/{name}")
-    CompletionStage<String> hello(@PathVariable String name) {
+    String hello(@PathVariable String name) {
         // The target is a single ChannelName; which node handles it is not specified.
+        // submit_sync blocks this application thread until the reply arrives. A request
+        // handler runs on an application thread, not a runtime execution context, so
+        // blocking here is allowed.
         return route.requestToChannel("greeting", new Hello(name))
-            .submit(Greeting.class)
-            .thenApply(Greeting::text);
+            .submit_sync(Greeting.class)
+            .text();
     }
 }

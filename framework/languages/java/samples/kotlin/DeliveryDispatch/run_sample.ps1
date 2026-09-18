@@ -102,7 +102,7 @@ function Start-Role {
     param([string]$Project, [string]$ScriptName, [string]$ConfigPath, [string]$LogName)
     $bin = Join-Path $SampleDir "$Project/build/install/$ScriptName/bin/$ScriptName"
     if ($IsWindows) { $bin = "$bin.bat" }
-    $process = Start-Process -FilePath $bin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $bin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err")
     $Processes.Add($process)
 }
 

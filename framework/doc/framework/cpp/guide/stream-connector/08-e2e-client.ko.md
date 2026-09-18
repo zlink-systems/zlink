@@ -1,4 +1,4 @@
-# 08 — E2E 클라이언트
+# E2E 클라이언트
 
 [← 오류 처리](07-error-handling.ko.md) | [목차](INDEX.ko.md) | [다음: 엔진 어댑터 →](09-engine-adapters.ko.md)
 

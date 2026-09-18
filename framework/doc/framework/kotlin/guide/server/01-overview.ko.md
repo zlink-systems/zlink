@@ -575,9 +575,12 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology.html" target="_blank">↗ 크게 보기</a></p>
 
-- **API 서버** - HTTP 요청을 받아 도메인 서버로 넘긴다. 넘기는 길은 둘이다. handler 하나가
-  처리하면 되는 요청은 **ClientServer channel**로 node handler를 부르고, 상태 단위가 받아야
-  하는 요청은 **RouteMesh channel**로 Instance Spot에 보낸다.
+- **API 서버** - HTTP 요청을 받아 도메인 서버로 넘긴다. 넘기는 길은 client 종류에 따라 달라진다.
+    - **channel client** — 이름으로 호출한다. handler 하나가 처리하면 되는 요청은
+      **ClientServer channel**로 node handler를 부르고, 상태 단위가 받아야 하는 요청은
+      **RouteMesh channel**로 Instance Spot에 보낸다.
+    - **spot client** — id로 Spot을 호출한다.
+    - **actor client** — id로 Actor를 호출한다.
 - **세션 서버** - client의 실시간 연결을 받는다. STREAM node가 받은 메시지를 session relay가
   **RouteMesh channel**로 넘기면, entry spot이 배정한 user spot의 actor가 처리한다.
 - **도메인 서버** - node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다.

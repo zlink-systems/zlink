@@ -58,6 +58,14 @@ public final class ZoneBootstrap implements ApplicationRunner {
         for (String nodeId : java.util.List.of("zone-node-1", "zone-node-2")) {
             maintenance.apply(nodeId, store.get(nodeId));
         }
+        // A replacement keeps the NodeId and claims nothing. A stopped owner's zone objects stay
+        // with the incarnation that owned them, so claiming here could settle on one zone — which
+        // is neither the two a cold start needs nor the none a replacement announces, and a state
+        // the loop below could never leave. Only a cold start claims.
+        if (topology.allowsEmptyZoneSet()) {
+            System.out.println("topology=ready node=" + topology.nodeId() + " zones=");
+            return;
+        }
         for (int attempt = 0; census.zoneIds().size() != 2; attempt++) {
             java.util.List<String> claimed = census.zoneIds();
             java.util.List<String> adjacentOrder = new java.util.ArrayList<>();
@@ -106,7 +114,6 @@ public final class ZoneBootstrap implements ApplicationRunner {
                     if (!census.zoneIds().equals(claimed)) break;
                 }
             }
-            if (topology.allowsEmptyZoneSet() && census.zoneIds().isEmpty() && attempt >= 8) break;
             if (attempt >= 119) throw new IllegalStateException(
                 "Zone Spot capacity did not settle. node=" + topology.nodeId()
                     + " zones=" + census.zoneIds());

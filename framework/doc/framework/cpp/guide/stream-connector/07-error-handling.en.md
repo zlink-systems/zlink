@@ -10,7 +10,7 @@ title: "Error Handling · C++"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: 08 — E2E Client](08-e2e-client.en.md)
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: E2E Client](08-e2e-client.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

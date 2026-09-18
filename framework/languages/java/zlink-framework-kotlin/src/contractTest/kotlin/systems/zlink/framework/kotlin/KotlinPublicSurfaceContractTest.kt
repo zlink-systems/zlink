@@ -532,9 +532,17 @@ class KotlinPublicSurfaceContractTest {
                 "onDisconnected" to 1, "onConnectionStateChanged" to 1,
                 "connect" to 1,
                 "close" to 1, "dispatch" to 1, "send" to 2, "request" to 2,
-                // stream-connector/languages/java/03-stream-connector.ko.md:460-463 declares
-                // waitFor, expectNone and waitForSequence on the Kotlin connector.
-                "waitFor" to 2, "expectNone" to 1, "waitForSequence" to 1,
+                // Common spec 32 §6.2 requires a close-reason read surface in
+                // every language; the Kotlin list in
+                // stream-connector/languages/java/03-stream-connector.ko.md §12
+                // names it, so the wrapper carries it rather than making the
+                // caller unwrap the Java connector.
+                "closeReason" to 1,
+                // stream-connector/languages/java/03-stream-connector.ko.md §12
+                // declares waitFor, expectNone and waitForSequence on the Kotlin
+                // connector, and common spec 32 §10.1 requires each of the three
+                // to offer both the named path and the payload-type path.
+                "waitFor" to 2, "expectNone" to 2, "waitForSequence" to 2,
                 "messages" to 1, "errors" to 1,
             ),
         )
@@ -602,7 +610,17 @@ class KotlinPublicSurfaceContractTest {
             //  Re-pinned after merging main: this branch also changes the connector
             //  surface (the suspending setDiagnosticsLevel pair among others), so the
             //  merged surface is not the one main pinned. The value below is measured.
-            "ZLinkKotlinStreamConnector" to "86e827b8ff2c9d69361ab49311dc7036a059cded44c6914177e0ef18f86a6403",
+            //
+            //  Re-pinned again for #600, which added the three members the Kotlin
+            //  surface list in
+            //  stream-connector/languages/java/03-stream-connector.ko.md §12 names:
+            //    closeReason ()L…/ZLinkStreamCloseReason;
+            //    expectNone ()L…/ZLinkStreamTypedExpectNoneCall;
+            //    waitForSequence ()L…/ZLinkStreamTypedSequenceCall;
+            //  Measured both ways: the 29 signatures hash to the value below, and
+            //  dropping those three walks it back to the 86e827b8… this pin held
+            //  before #600, so nothing else moved.
+            "ZLinkKotlinStreamConnector" to "116f64143e82413d00fa07fcc332a291f74062d49ed873675f52c5574688853d",
             "ZLinkKotlinLifecycleCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
             "ZLinkKotlinSendCall" to "dca3ddd35276a190fa5f79289f2771312f7305178cc1260a31fa00e1a99b8e44",
             "ZLinkStreamTypedWaitCall" to "6385a73bc528712e6d0f31512ba8f29c1951b2c347c48b6001f03c34e80d84f4",

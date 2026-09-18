@@ -621,10 +621,13 @@ part of this map.
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
-- **API server** — takes the HTTP request and hands it to the domain server. There are two
-  ways to hand it over. A request one handler can settle calls a node handler over a
-  **ClientServer channel**; a request a unit of state must take goes to an Instance Spot over
-  a **RouteMesh channel**.
+- **API server** — takes the HTTP request and hands it to the domain server. Which way it
+  goes depends on the client.
+    - **channel client** — calls by name. A request one handler can settle calls a node
+      handler over a **ClientServer channel**; a request a unit of state must take goes to an
+      Instance Spot over a **RouteMesh channel**.
+    - **spot client** — calls a Spot by id.
+    - **actor client** — calls an Actor by id.
 - **Session server** — takes the client's real-time connection. The STREAM node receives the
   message, the session relay passes it over a **RouteMesh channel**, and the actor in the user
   spot an entry spot assigned handles it.

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.18.0 LANGUAGES C CXX)
 
+# IDE project trees (Visual Studio, Xcode): group targets into solution
+# folders via the FOLDER target property instead of leaving them flat.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
@@ -2094,6 +2098,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_poll_interval_wait
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
+    "framework-unit;framework-regression")
+  add_zlink_framework_test(
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
@@ -2343,8 +2351,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
   set(ZLINK_FRAMEWORK_CPP_SAMPLE_NAMES
     Bingo TicTacToe DeliveryDispatch GameQuest ShoppingMall SupportChat ZoneWorld)
   foreach(sample_name IN LISTS ZLINK_FRAMEWORK_CPP_SAMPLE_NAMES)
+    # Group each sample's targets under samples/<Sample> in the IDE tree
+    # instead of one flat "samples" list.
+    set(CMAKE_FOLDER "samples/${sample_name}")
     add_subdirectory(samples/${sample_name})
   endforeach()
+  unset(CMAKE_FOLDER)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     if(WIN32)

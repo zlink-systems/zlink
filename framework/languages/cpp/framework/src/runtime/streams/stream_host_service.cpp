@@ -12,6 +12,7 @@
 #include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <nlohmann/json.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -3962,7 +3963,7 @@ bool stream_host_service_t::drain_sessions_until (
         }
         if (drained)
             return true;
-        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
     }
     return std::all_of (_listeners.begin (), _listeners.end (), [] (const auto &listener) {
         return !listener || listener->active_session_count () == 0;
