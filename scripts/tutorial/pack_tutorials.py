@@ -103,6 +103,12 @@ def pack(lang: str, section: str, ref: str,
             data = normalize(item.filename, source.read(item))
             info = zipfile.ZipInfo(prefix + item.filename, date_time=item.date_time)
             info.compress_type = zipfile.ZIP_DEFLATED
+            #  `ZipInfo.create_system`은 이 프로세스가 도는 OS로 기본값이 정해진다
+            #  (Windows에서는 0=MS-DOS). 그러면 external_attr에 POSIX mode를 넣어도
+            #  "made by" host가 Unix가 아니라서 Linux의 unzip이 그 mode를 무시하고
+            #  644로 푼다 — Windows에서 묶은 zip만 gradlew·*.sh 실행 권한이 사라지는
+            #  방식으로 재현된다. 묶는 OS와 무관하게 항상 Unix로 표시한다.
+            info.create_system = 3
             mode = 0o755 if executable(item.filename) else 0o644
             info.external_attr = mode << 16
             dest.writestr(info, data)
