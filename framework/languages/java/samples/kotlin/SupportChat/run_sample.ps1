@@ -93,7 +93,7 @@ function Start-Role {
     if ($IsWindows) { $Binary = "$Binary.bat" }
     $logPath = Join-Path $LogDir "$Name.log"
     $errPath = Join-Path $LogDir "$Name.err.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -RedirectStandardOutput $logPath -RedirectStandardError $errPath
     $Processes.Add($process)
 }
 

@@ -137,6 +137,36 @@ function Set-ZlinkSampleJavaRuntime {
         "Install JDK $requiredVersion, or set JAVA_HOME to an existing JDK $requiredVersion installation.")
 }
 
+# Every sample child process starts here. Windows PowerShell 5.1 hands back a
+# Process object that never opened the OS handle, so the exit code is gone the
+# moment the child exits and `$process.ExitCode` reads back as $null instead of
+# a number. Reading Handle while the child is alive keeps the exit code
+# readable afterwards, on both PowerShell editions.
+function Start-ZlinkSampleProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [string]$RedirectStandardOutput,
+        [string]$RedirectStandardError
+    )
+
+    $parameters = @{
+        FilePath = $FilePath
+        WorkingDirectory = $WorkingDirectory
+        NoNewWindow = $true
+        PassThru = $true
+    }
+    foreach ($name in @("ArgumentList", "RedirectStandardOutput", "RedirectStandardError")) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $parameters[$name] = $PSBoundParameters[$name]
+        }
+    }
+    $process = Start-Process @parameters
+    [void]$process.Handle
+    return $process
+}
+
 function Invoke-ZlinkSampleExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
@@ -148,11 +178,9 @@ function Invoke-ZlinkSampleExecutable {
     $argumentLine = ($Arguments | ForEach-Object {
         ConvertTo-ZlinkSampleProcessArgument $_
     }) -join " "
-    $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
-        -WorkingDirectory (Get-Location).Path -NoNewWindow `
-        -RedirectStandardOutput $OutputPath -RedirectStandardError $errorPath `
-        -PassThru
-    [void]$process.Handle
+    $process = Start-ZlinkSampleProcess -FilePath $Executable -ArgumentList $argumentLine `
+        -WorkingDirectory (Get-Location).Path `
+        -RedirectStandardOutput $OutputPath -RedirectStandardError $errorPath
     try {
         $process.WaitForExit()
         $exitCode = [int]$process.ExitCode
@@ -168,7 +196,6 @@ function Invoke-ZlinkSampleExecutable {
 function Stop-ZlinkSampleProcessTree {
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
-    [void]$Process.Handle
     if ($Process.HasExited) { return }
     if (-not $IsWindows) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
