@@ -640,19 +640,22 @@ class redis_location_store_t final : public location_store_t
                 // The index ZSET below is this provider's private
                 // secondary index -- it exists purely to answer prefix
                 // scans and is not part of the cross-language contract.
-                const auto original_keys =
-                  redis.command<std::vector<std::string>> ("ZRANGE", index_key (), 0, -1);
-                for (const auto &original_key : original_keys) {
-                    if (!original_key.starts_with (request.prefix))
-                        continue;
-                    const auto mapped = redis.hget (map_key (), original_key);
-                    if (!mapped)
-                        continue;
-                    const auto members =
-                      redis.command<std::vector<std::string>> ("ZREVRANGE", *mapped, 0, 0);
-                    if (members.empty ())
-                        continue;
-                    const auto decoded = detail::decode_opaque_value (members[0]);
+                // One round trip, not one per key. Walking the index in C++
+                // cost an HGET plus a ZREVRANGE per matching key, so a snapshot
+                // paid 2N sequential round trips on this provider's single
+                // worker thread and every other location-store caller queued
+                // behind it. That is invisible where a round trip is ~0.3 ms
+                // and dominant where it is not.
+                const std::vector<std::string> scan_keys{index_key (), map_key ()};
+                const std::vector<std::string> scan_args{request.prefix};
+                const auto scanned = redis.eval<std::vector<std::string>> (
+                  std::string (scan_script), scan_keys.begin (), scan_keys.end (),
+                  scan_args.begin (), scan_args.end ());
+                if (scanned.size () % 2 != 0)
+                    throw sw::redis::Error ("invalid opaque location scan result");
+                for (std::size_t index = 0; index + 1 < scanned.size (); index += 2) {
+                    const auto &original_key = scanned[index];
+                    const auto decoded = detail::decode_opaque_value (scanned[index + 1]);
                     if (decoded.original_key != original_key)
                         continue;
                     if (decoded.tombstone
@@ -708,6 +711,33 @@ class redis_location_store_t final : public location_store_t
     }
 
   private:
+    // KEYS = { index_key, map_key } ; ARGV = { prefix }
+    // Returns a flat { original_key, newest_member }* array. Filtering by
+    // prefix and resolving each logical key to its opaque record happens on
+    // the server so a snapshot costs one round trip instead of 2N. Tombstone
+    // and expiry filtering stay in the caller, which already owns the opaque
+    // value format.
+    static constexpr std::string_view scan_script = R"(
+local originals = redis.call('ZRANGE', KEYS[1], 0, -1)
+local prefixLength = string.len(ARGV[1])
+local out = {}
+for index = 1, #originals do
+  local originalKey = originals[index]
+  if prefixLength == 0
+    or string.sub(originalKey, 1, prefixLength) == ARGV[1] then
+    local mapped = redis.call('HGET', KEYS[2], originalKey)
+    if mapped then
+      local members = redis.call('ZREVRANGE', mapped, 0, 0)
+      if #members > 0 then
+        out[#out + 1] = originalKey
+        out[#out + 1] = members[1]
+      end
+    end
+  end
+end
+return out
+)";
+
     // KEYS = { record_key } ; ARGV = {} (none needed: the record key alone
     // identifies the ZSET append-log).
     static constexpr std::string_view read_script = R"(
