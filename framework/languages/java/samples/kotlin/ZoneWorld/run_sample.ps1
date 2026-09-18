@@ -435,20 +435,18 @@ try {
         "--no-daemon", "--no-parallel", "--max-workers=1", ":Server:installDist", ":Client:installDist", "--quiet")
 
     if ($B8Child) {
-        $python = Get-Command python.exe, python, py.exe, py -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $python) { throw "Python is required for the ZW-B8 fault proxy." }
+        $python = Get-ZlinkSamplePythonCommand
         foreach ($proxy in @(
             @{ Name = "proxy-zone-node-1"; Port = $Mesh1 },
             @{ Name = "proxy-zone-node-2"; Port = $Mesh2 },
             @{ Name = "proxy-gateway"; Port = $GatewayMesh })) {
-            $arguments = @()
-            if ($python.Name -in @("py.exe", "py")) { $arguments += "-3" }
+            $arguments = @($python.Arguments)
             $arguments += @(
                 (Join-Path $SampleDir "../../java/ZoneWorld/Support/session_route_block_proxy.py"),
                 "--listen-host", "127.0.0.1", "--listen-port", "$($proxy.Port)",
                 "--target-host", "127.0.0.2", "--target-port", "$($proxy.Port)",
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44"))
-            Start-Role $proxy.Name $python.Source $arguments | Out-Null
+            Start-Role $proxy.Name $python.Path $arguments | Out-Null
             if (-not (Wait-Log $proxy.Name "proxy-ready")) { throw "$($proxy.Name) did not become ready" }
         }
     }
