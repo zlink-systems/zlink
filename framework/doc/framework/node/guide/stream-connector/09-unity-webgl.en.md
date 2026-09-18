@@ -1,4 +1,4 @@
-# 03 — Unity WebGL
+# Unity WebGL
 
 [← Table Of Contents](INDEX.en.md) | [Previous: Browser](02-browser.en.md)
 

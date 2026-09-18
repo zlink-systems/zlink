@@ -1,44 +1,38 @@
-# 02 — Getting Started
-
-[← Overview](01-overview.en.md) | [Table Of Contents](INDEX.en.md) | [Next: Connector Options →](03-connector-options.en.md)
-
+---
+title: "Installation and the First Connection · C++"
 ---
 
-## Installation
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/stream-connector/02-getting-started.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-### vcpkg
+# Installation and the First Connection
 
-```bash
-vcpkg install zlink-stream-connector
-```
+<!-- framework-adapter-nav:start -->
+[Guide Home](README.en.md) | [Previous: Stream Connector Overview](01-overview.en.md) | [Next: Connector Options](03-connector-options.en.md)
+<!-- framework-adapter-nav:end -->
 
-To install TLS and WebSocket together, specify the features.
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/02-getting-started.en.md) · [Java](../../../java/guide/stream-connector/02-getting-started.en.md) · [Kotlin](../../../kotlin/guide/stream-connector/02-getting-started.en.md) · [Node/TypeScript](../../../node/guide/stream-connector/02-getting-started.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can add the connector package to a project, connect to a server, and exchange the first
+    packet. The connection code in this chapter runs as it stands in
+    `framework/languages/<language>/tutorial/StreamClient`.
+
+The connector ships separately from the server framework, so a client project references the
+connector package alone. This chapter walks from installation to the first reply. The full set of
+options and their defaults is covered by [Connector Options](03-connector-options.en.md).
+
+## 1. Installation
 
 ```bash
 vcpkg install "zlink-stream-connector[tls,websocket]"
 ```
-
-### Conan
-
-```bash
-conan install --requires "zlink-stream-connector/0.10.0" \
-  -o "zlink-stream-connector/*:with_tls=True" \
-  -o "zlink-stream-connector/*:with_websocket=True"
-```
-
-### CMake FetchContent
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(zlink_stream_connector
-    GIT_REPOSITORY https://github.com/zlink-systems/zlink.git
-    GIT_TAG        main
-    SOURCE_SUBDIR  framework/languages/cpp/connector/core
-)
-FetchContent_MakeAvailable(zlink_stream_connector)
-```
-
-## CMake Integration
 
 ```cmake
 find_package(zlink-stream-connector CONFIG REQUIRED)
@@ -46,113 +40,66 @@ find_package(zlink-stream-connector CONFIG REQUIRED)
 target_link_libraries(my_game PRIVATE zlink::stream_connector)
 ```
 
-If you're also using the e2e client:
+## 2. Connecting and the First Request
 
-```cmake
-find_package(zlink-stream-e2e-client CONFIG REQUIRED)
-
-target_link_libraries(my_scenario_test PRIVATE
-    zlink::stream_connector
-    zlink::stream_e2e_client
-)
-```
-
-## First Connection
+A connector is created from options that carry the endpoint and the timeouts. Packets can be sent
+only after the connection is established, so the connection is awaited first. A request waits
+until the server's answer arrives and then returns the answer payload.
 
 ```cpp
-#include <zlink/stream_connector.hpp>
-
-namespace zsc = zlink::stream_connector;
-
-int main()
-{
-    zsc::connector_options_t options;
-    options.endpoint = "tcp://game.example.com:7000";
-
-    auto connector = zsc::connector_factory_t::create(options);
-
-    auto connected = connector.connect();
-    if (!connected) {
-        // Check the failure reason with connected.error_code()
-        return 1;
-    }
-
-    // Send/receive packets after the connection succeeds
-    connector.close();
-    return 0;
-}
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:stream-client"
 ```
 
-## send — One-Way Sending
+!!! warning "A browser client connects over `ws://`"
 
-```cpp
-struct chat_message_t {
-    std::string room_id;
-    std::string text;
-};
+    Native builds use `tcp://`, `tls://`, `ws://`, and `wss://`. A browser runtime cannot open an
+    OS socket, so it uses `ws://` or `wss://` only, and the server endpoint carries the same
+    scheme.
 
-connector.send(chat_message_t{"room-42", "안녕하세요"})
-    .packet_name("chat.send")
-    .submit();
+## 3. What You See
+
+```bash
+dotnet run --project StreamClient/StreamClient.csproj
+# connected: True
+# round trip: 56ms
 ```
 
-`submit()` returns a `result_t<void>`. A callback style can also be used.
+A true `connected` means the connection is established. The round trip is measured from the time
+the client sent, which the server echoes back.
+
+## 4. Sending Without an Answer
+
+A packet that needs no answer is sent with send. Nothing goes out until the terminal call is made,
+and that terminal reports completion and failure only. Use a request when the client needs to know
+what the server did.
 
 ```cpp
-connector.send(chat_message_t{"room-42", "안녕하세요"})
-    .packet_name("chat.send")
-    .submit([](zsc::result_t<void> result) {
-        if (!result) {
-            // result.error_code()
-        }
-    });
+connector.send (chat_message_t{"room-42", "hello"})
+  .packet_name ("chat.send")   // Omitted, the name comes from the payload type.
+  .submit ();
 ```
 
-## request — Request/Reply
+## 5. Receiving What the Server Sends First
+
+Packets the server sends on its own are received by a registered handler. Registration returns a
+value that can be released, and the handler stays in place while that value lives. Under the
+default setting a handler does not run at receive time: it runs in the execution context that
+called the pump. A game loop calls the pump once per frame.
 
 ```cpp
-struct login_request_t {
-    std::string player_id;
-    std::string token;
-};
+auto subscription = connector.on<leaderboard_update_t> (
+  [] (const sc::message_t<leaderboard_update_t> &message) {
+      std::cout << message.payload.rank << std::endl;
+  });
 
-struct login_reply_t {
-    int64_t session_id;
-    std::string server_time;
-};
-
-auto reply = connector
-    .request(login_request_t{"player-1", "tok-abc123"})
-    .packet_name("auth.login")
-    .submit<login_reply_t>();
-
-if (!reply) {
-    // reply.error_code() == zsc::error_code_t::request_timeout, etc.
-    return;
-}
-
-auto session = reply.value().session_id;
-```
-
-## Receiving A Push — on()
-
-A push packet the server sends is received through the callback registered with `on<T>()`. In
-manual dispatch mode, the callback runs when `dispatch()` is called.
-
-```cpp
-connector.on<chat_pushed_t>([](const chat_pushed_t& msg) {
-    // msg.room_id, msg.text
-});
-
-// In the game loop
 while (running) {
-    connector.dispatch();
-    // ...
+    connector.dispatch ();   // Runs the handlers queued so far and returns.
+    render_frame ();
 }
 ```
 
-## Next Steps
+## 6. Next Chapters
 
-- Callback thread rules and dispatch mode → [05 — Receiving Packets](05-receiving.en.md)
-- Connection options (heartbeat, reconnect, TLS settings) → [03 — Connector Options](03-connector-options.en.md)
-- The e2e client coroutine flow → [08 — E2E Client](08-e2e-client.en.md)
+- Every option and its default — [Connector Options](03-connector-options.en.md)
+- Packet names, metadata, compression — [Sending Packets](04-sending.en.md)
+- The receive queue and the wait surfaces — [Receiving Packets](05-receiving.en.md)

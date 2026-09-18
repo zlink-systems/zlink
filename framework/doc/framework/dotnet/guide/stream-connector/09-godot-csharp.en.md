@@ -1,4 +1,4 @@
-# 03 — Godot C#
+# Godot C#
 
 [← Table Of Contents](INDEX.en.md) | [Previous: Unity](02-unity.en.md)
 

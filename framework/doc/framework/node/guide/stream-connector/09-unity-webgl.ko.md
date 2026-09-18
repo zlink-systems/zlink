@@ -1,4 +1,4 @@
-# 03 — Unity WebGL
+# Unity WebGL
 
 [← 목차](INDEX.ko.md) | [이전: 브라우저](02-browser.ko.md)
 

@@ -1,15 +1,24 @@
-# TypeScript Stream Connector
+# Node/TypeScript Stream Connector
 
-TypeScript STREAM client connector(`@zlink-systems/stream-connector`)의 문서 진입점이다. 대상은
-브라우저 웹 client와 Unity WebGL, Cocos Creator web, Godot Web처럼 브라우저에서 실행되는 build다.
-Node.js는 connector의 제품 실행 환경이 아니며 서버 process와 browser test runner만 담당한다.
+TypeScript STREAM client connector의 가이드다. **브라우저가 주 대상이고**
+Unity WebGL과 Godot Web 빌드가 이 connector를 사용한다. Node.js는 이 connector의
+제품 런타임이 아니며 시험과 도구에서 사용한다.
 
-| 문서 | 내용 |
-|------|------|
-| [가이드 INDEX](INDEX.ko.md) | 브라우저 연결, codec, dispatch와 flow 전달 |
-| [03 — Unity WebGL](03-unity-webgl.ko.md) | `com.zlink.stream-connector.webgl` UPM 어댑터 |
-| [TypeScript 공개 계약](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md) | 정확한 public 타입과 package root |
-| [Stream Connector 공통 스펙](../../../common/spec/stream-connector/32-stream-connector.ko.md) | 대상 환경, transport와 wire 계약 |
+| 순서 | 문서 | 내용 |
+|----|------|------|
+| 1 | [Stream Connector 개요](01-overview.ko.md) | 무엇에 쓰고 어디서 도는가, 서버 framework와의 경계 |
+| 2 | [설치와 첫 연결](02-getting-started.ko.md) | 패키지 설치, 최소 연결, 첫 송신과 수신 |
+| 3 | [Connector 옵션](03-connector-options.ko.md) | 옵션 목록과 기본값, 값이 검증되는 시점 |
+| 4 | [packet 송신](04-sending.ko.md) | send와 request, packet 이름이 정해지는 순서, codec |
+| 5 | [packet 수신](05-receiving.ko.md) | 등록과 해제, dispatch mode, 수신 큐와 개수 |
+| 6 | [연결 생명주기](06-lifecycle.ko.md) | 연결 상태, 재연결, heartbeat, 종료 사유 |
+| 7 | [오류 처리](07-error-handling.ko.md) | 닫힌 오류 코드 집합과 언어별 전달 방식 |
+| 8 | [브라우저](08-browser.ko.md) | 브라우저에서의 사용과 WebSocket 제약 |
+| 9 | [Unity WebGL](09-unity-webgl.ko.md) | Unity WebGL 빌드에서의 사용 |
 
-package root는 플랫폼 `WebSocket`으로 `ws`와 `wss` 연결을 제공한다. `/browser` subpath나 Node
-socket 구현은 제공하지 않는다.
+파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
+
+## 관련 문서
+
+- 공개 계약: [Node/TypeScript 공개 계약](../../../common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md)
+- 서버 가이드: [Node/TypeScript 서버 가이드](../server/README.ko.md)

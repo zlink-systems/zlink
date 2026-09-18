@@ -1,4 +1,4 @@
-# 02 — Unity (네이티브 빌드)
+# Unity (네이티브 빌드)
 
 [← 목차](INDEX.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Godot C# →](03-godot-csharp.ko.md)
 

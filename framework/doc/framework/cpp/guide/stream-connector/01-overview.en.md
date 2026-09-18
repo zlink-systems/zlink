@@ -1,87 +1,134 @@
-# 01 — Overview
-
-[← Table Of Contents](INDEX.en.md) | [Next: Getting Started →](02-getting-started.en.md)
-
+---
+title: "Stream Connector Overview · C++"
 ---
 
-The C++ Stream Connector is a client-side library that connects to a ZLink STREAM server. It's split
-into a product family so the same STREAM protocol can be used across a variety of environments —
-game engines, general C++ applications, server e2e tests, and more.
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/stream-connector/01-overview.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## Product Family Composition
+# Stream Connector Overview
 
-```
-connector/
-├── core/          — connector runtime for general C++ clients (no-exception, no-coroutine)
-├── e2e-client/    — coroutine helper for server e2e/perf scenarios
-├── engines/       — Unreal, Godot, Axmol engine adapters
-└── perf/          — performance test client and runner
-```
+<!-- framework-adapter-nav:start -->
+[Guide Home](README.en.md) | [Next: Installation and the First Connection](02-getting-started.en.md)
+<!-- framework-adapter-nav:end -->
 
-Each deliverable is distributed independently. You can use only the engine adapter without
-installing core, and core works fine without using the e2e client.
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/01-overview.en.md) · [Java](../../../java/guide/stream-connector/01-overview.en.md) · [Kotlin](../../../kotlin/guide/stream-connector/01-overview.en.md) · [Node/TypeScript](../../../node/guide/stream-connector/01-overview.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
 
-## Deployment Units
+!!! info "After reading this chapter"
 
-| Artifact | CMake target | Distribution format | Main users |
-|--------|-------------|-----------|-------------|
-| `zlink-stream-connector` | `zlink::stream_connector` | CMake, vcpkg, Conan | General C++ clients, inside game engines |
-| `zlink-stream-e2e-client` | `zlink::stream_e2e_client` | CMake, vcpkg, Conan | Server e2e/smoke/perf tests |
-| `zlink-unreal-stream-connector` | Unreal plugin module | source plugin | Unreal Engine games |
-| `zlink-godot-stream-connector` | GDExtension | source GDExtension | Godot 4 games |
-| `zlink-axmol-connector` | CMake target | source package | Axmol engine games |
+    You can decide which connector a client outside the mesh uses to reach a STREAM server,
+    and you know where the connector's responsibility ends.
 
-## core — The Basic Connector
+A STREAM server treats one connection as a session. Unlike mesh calls between nodes, which name
+their target, STREAM addresses **the connection itself**, so the server can also send first.
+The Stream Connector is the client-side library that opens that connection, and it carries the
+same packets the server session handles.
 
-core is a standalone library that doesn't depend on C++ exceptions or coroutines. It builds even in
-a game engine with exceptions turned off. The public header doesn't expose `<coroutine>` or a
-Boost.Asio executor type.
+This chapter covers the connector's scope, the choice per runtime, and the published artifacts.
+Installation and the first connection are covered by
+[Installation and the First Connection](02-getting-started.en.md).
 
-```cpp
-#include <zlink/stream_connector.hpp>
+## 1. What the Connector Covers
 
-zlink::stream_connector::connector_options_t options;
-options.endpoint = "tcp://game.example.com:7000";
-auto connector = zlink::stream_connector::connector_factory_t::create(options);
-```
+A packet is the **unit of transfer that carries a payload behind a header holding a name and
+metadata**. The connector builds and reads those packets, keeps the connection alive, and
+restores it after a drop. What travels on top — chat, combat, orders — is defined by the
+application. The connector has no domain of its own.
 
-Failures are returned as `result_t<T>`.
+Application code never builds or reads header bytes. The public surface has no place for an
+arbitrary header; it deals in names, metadata, and payloads.
 
-## e2e-client — The Coroutine Helper
+## 2. The Boundary with the Server Framework
 
-The e2e client is an optional surface layered on top of core. Use it in an environment where C++20
-coroutines can be reliably turned on. It's not the default API for a general game client.
+The connector package does not depend on the server framework package, and the server framework
+package does not reference the connector either. The two share a single wire contract, so a
+client build never downloads the server runtime.
 
-```cpp
-#include <zlink/stream_e2e_client.hpp>
+The connector depends only on what a client needs to run: transport, codec, and compression.
+That keeps the same protocol available in a web browser or a game engine, where a server runtime
+cannot be hosted.
 
-auto client = zlink::stream_e2e_client::use(connector);
-auto reply = co_await client.request(ping_t{"player-1", 1}).async<pong_t>();
-```
+## 3. Choosing a Connector per Runtime
 
-`async()` doesn't call the blocking `submit()`. While the coroutine waits, the worker thread handles
-other work.
+Which connector applies is decided by **the engine and the build target, not by the language**.
+The same Unity project uses different connectors for its native build and its web build.
 
-## Supported Engines
+| Target | Native build | Web build (browser · WASM) |
+|---|---|---|
+| Unity | `.NET` connector | TypeScript connector — C# calls the JS layer through jslib interop |
+| Godot | C++ connector (GDExtension) or `.NET` connector (Godot C#) | TypeScript connector |
+| Cocos | C++ connector (Axmol adapter) | TypeScript connector (Cocos Creator web) |
+| Unreal | C++ connector (plugin) | not applicable |
+| Browser web client | — | TypeScript connector |
+| Desktop and server applications | `.NET` · Java · C++ connector | — |
 
-| Engine | Support | Adapter Format |
-|------|------|-------------|
-| Unreal Engine | supported | `.uplugin` + `UObject` API + Game Thread delegate |
-| Godot 4 | supported | GDExtension + Godot signal |
-| Axmol Engine | supported | C++ source package + `Scheduler::runOnAxmolThread` |
-| Cocos Creator 3.x | not supported in C++ | uses the TypeScript connector |
-| Cocos2d-x | not supported | updates discontinued |
+**A web build uses the TypeScript connector regardless of language.** No language can open an OS
+socket inside the browser sandbox.
 
-## Transport Support
+A game engine cannot touch engine objects outside the main thread. That is why the setting that
+decides when receive callbacks run defaults to **pumping them yourself**, and why the C++
+connector core builds in a configuration with exceptions and coroutines turned off.
 
-| scheme | transport | build feature |
-|--------|-----------|---------------|
-| `tcp://host:port` | TCP | always included |
-| `tls://host:port` | TLS over TCP | `WITH_TLS` (OpenSSL) |
-| `ws://host:port/path` | WebSocket | `WITH_WEBSOCKET` |
-| `wss://host:port/path` | WebSocket over TLS | `WITH_WEBSOCKET` + `WITH_TLS` |
+## 4. Endpoints and Transports
 
-## Relationship With The Server Framework
+The endpoint scheme decides the transport. With nothing else configured, this mapping applies.
 
-The connector is a client library that connects to a STREAM server. It has no mutual dependency with
-the server framework package. The two sides only share the STREAM header/payload wire contract.
+| Scheme | Transport |
+|---|---|
+| `tcp://` | TCP |
+| `tls://` | TLS over TCP |
+| `ws://` | WebSocket |
+| `wss://` | WebSocket over TLS |
+
+Browser runtimes — web, Cocos web, Unity WebGL, Godot Web — can use `ws` and `wss` only. Giving
+one of them a `tcp://` or `tls://` endpoint fails immediately as a configuration error instead of
+failing quietly at connect time. This is a platform limit, not an implementation limit. Native
+builds use every transport in the table.
+
+## 5. The Unit of Transfer
+
+Each packet has a **kind**, which says whether the packet expects an answer or is itself an answer.
+
+| Kind | Meaning |
+|---|---|
+| Send | one-way packet that expects no answer |
+| Request | packet that waits for an answer |
+| Response | successful answer to a request |
+| Error | failed answer to a request, or a stream error unrelated to any request |
+
+An answer is matched to its request by the sequence the runtime assigns, so several requests may
+be in flight and each completes on its own regardless of arrival order. Answers carry no packet
+name.
+
+The codec that turns a payload into bytes is chosen once when the connector is created, and the
+default is JSON. The send and receive payload limits are 64KB each and are adjustable through
+options. Metadata is the place for small values such as a trace id or a locale, and the whole of
+it cannot exceed 1024 bytes.
+
+## 6. Published Artifacts
+
+| Target | Artifact | Channel |
+|---|---|---|
+| General C++ client | `zlink-stream-connector` | CMake · vcpkg · Conan |
+| Unreal | `zlink-unreal-stream-connector` | source plugin |
+| Godot (C++) | `zlink-godot-stream-connector` | source GDExtension |
+| Cocos/Axmol | `zlink-axmol-connector` | source package |
+| `.NET` desktop and server, Unity native, Godot C# | `Zlink.Stream.Connector` | NuGet |
+| Java · Kotlin | `systems.zlink:zlink-stream-connector` | Maven |
+| Browser runtimes | `@zlink-systems/stream-connector` | npm |
+| Unity WebGL adapter | `com.zlink.stream-connector.webgl` | UPM source package |
+
+Web targets share a single npm package because browser, Cocos web, Unity WebGL, and Godot Web are
+all browser runtimes. Native engine adapters ship as source, following the convention that engine
+build systems take adapters in as source. Unity native and Godot C# have no package of their own
+and use the `.NET` connector as it is.
+
+## 7. Next Chapters
+
+- Install and exchange the first packet — [Installation and the First Connection](02-getting-started.en.md)
+- Defaults and when they are validated — [Connector Options](03-connector-options.en.md)
+- Connection state and reconnection — [Connection Lifecycle](06-lifecycle.en.md)

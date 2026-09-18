@@ -1,4 +1,4 @@
-# 02 — Unity (Native Build)
+# Unity (Native Build)
 
 [← Table Of Contents](INDEX.en.md) | [Previous: Overview](01-overview.en.md) | [Next: Godot C# →](03-godot-csharp.en.md)
 
