@@ -14,7 +14,7 @@ title: "Relocation · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/37-relocation.en.md) · [C++](../../../cpp/guide/server/37-relocation.en.md) · [Java](../../../java/guide/server/37-relocation.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/37-relocation.en.md)
+View in another language — [C++](../../../cpp/guide/server/37-relocation.en.md) · [C#/.NET](../../../dotnet/guide/server/37-relocation.en.md) · [Java](../../../java/guide/server/37-relocation.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/37-relocation.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

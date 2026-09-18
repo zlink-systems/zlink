@@ -14,7 +14,7 @@ title: "Actor · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/22-actor.en.md) · [C++](../../../cpp/guide/server/22-actor.en.md) · [Java](../../../java/guide/server/22-actor.en.md) · [Kotlin](../../../kotlin/guide/server/22-actor.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/22-actor.en.md) · [C#/.NET](../../../dotnet/guide/server/22-actor.en.md) · [Java](../../../java/guide/server/22-actor.en.md) · [Kotlin](../../../kotlin/guide/server/22-actor.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

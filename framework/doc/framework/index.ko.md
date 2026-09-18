@@ -40,7 +40,21 @@ Spring 위에 Spring MVC가 올라가는 것과 같은 자리에서, `ASP.NET Co
     하나의 선언 모델 위에서 조합된다. 네 방식의 대응 관계는
     [개요](dotnet/guide/server/01-overview.ko.md) 2장이 다룬다.
 
-## 코드로 보면
+## ZLink Framework의 이점
+
+**상태를 보관하는 단위가 요청을 직렬로 처리한다.** 게임의 room, 주문 하나, 대화
+하나처럼 여러 사용자의 요청이 동시에 도착하는 상태가 있다. ZLink에서는 그 상태를
+Spot 하나가 보관하고 도착한 요청을 순서대로 실행한다. handler 안에 lock이 필요
+없으므로, 경합과 데드락을 막는 코드가 업무 로직 사이에 섞이지 않는다.
+
+**실시간 기능에 필요하던 구성 요소가 줄어든다.** 기존 web 서비스는 실시간 연결을
+유지하려고 sticky LB와 WebSocket 서버를 두고, 서버 사이의 전달에 pub/sub 브로커를
+경유하며, 같은 상태를 두 인스턴스가 동시에 고치지 않도록 분산 락을 사용한다.
+ZLink에서는 runtime 사이의 직접 연결과 Spot의 직렬 실행이 이 구성 요소를 대신한다.
+
+앞의 것은 다음 절이, 뒤의 것은 [복잡도 감소](#복잡도-감소)가 다룬다.
+
+## 코드에 나타나는 이점
 
 **던전 room 안에서** 보스를 처치하면, 그 보상의 일부를 소속 길드에도 반영하는
 코드다. 첫 번째는 player 쪽 handler — 처치 보상을 플레이어에게 적용한 뒤 길드로
@@ -420,8 +434,8 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 
 | 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 |
 | --- | --- | --- | --- |
-| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) |
 | C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) |
+| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) |
 | Java | [서버](java/guide/server/README.ko.md) | [퀵스타트](java/quickstart.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) |
 | Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) |
 | Node.js | [서버](node/guide/server/README.ko.md) | [퀵스타트](node/quickstart.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) |

@@ -14,7 +14,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [C++](../../../cpp/guide/server/14-samples.ko.md) · [Java](../../../java/guide/server/14-samples.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/14-samples.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/14-samples.ko.md) · [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [Java](../../../java/guide/server/14-samples.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/14-samples.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -4,6 +4,11 @@ title: "가이드 홈 · C++"
 
 # ZLink Framework C++ — 사용자 가이드
 
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/README.ko.md) · [Java](../../../java/guide/server/README.ko.md) · [Kotlin](../../../kotlin/guide/server/README.ko.md) · [Node/TypeScript](../../../node/guide/server/README.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
 **실시간 메시징이 중요한 서버 시스템**을 여러 프로세스로 나눠 만드는 C++
 애플리케이션 프레임워크다.
 
@@ -26,7 +31,7 @@ int main (int argc, char **argv)
 
 ---
 
-## 이 프레임워크로 무엇을 만드는가
+## 만드는 시스템
 
 여러 서버 프로세스가 역할을 나눠 협력하고, 상태 변화를 실시간으로 클라이언트에
 전달해야 하는 시스템에 맞게 설계됐다.
@@ -41,9 +46,9 @@ int main (int argc, char **argv)
 공통 구조는 하나다 — 역할별 서버 프로세스가 typed 메시지로 통신하고, 클라이언트는
 실시간 연결(stream)로 상태 변화를 받는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/cpp-topology.html"
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology.html"
         title="역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/cpp-topology.html" target="_blank">↗ 크게 보기</a></p>
+<p><a href="/common/diagrams/guide-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 각 서버 프로세스는 독립 실행 파일이고 서로 TCP로 연결된다. 하나의 서버 안에
 HTTP 입구, 다른 서버와의 통신 경로, 클라이언트 연결, 상태 단위 관리가 모두
@@ -246,9 +251,9 @@ room_mesh.objects ()
 
 이 가이드의 모든 다이어그램은 같은 시각 언어를 사용한다 — 색이 곧 개념이다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/cpp-element-kinds.html"
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds.html"
         title="구성도에 나오는 다섯 가지" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/cpp-element-kinds.html" target="_blank">↗ 크게 보기</a></p>
+<p><a href="/common/diagrams/guide-element-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 여러 장이 같은 TicTacToe/Bingo 토폴로지를 그리며, 장마다 확대 위치만 바뀐다.
 

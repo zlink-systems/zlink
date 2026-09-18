@@ -14,7 +14,7 @@ title: "3. Core Concepts · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
+View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) · **C#/.NET** · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

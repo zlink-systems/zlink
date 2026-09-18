@@ -14,7 +14,7 @@ title: "3. 핵심 개념 · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/03-concepts.ko.md) · [C++](../../../cpp/guide/server/03-concepts.ko.md) · [Java](../../../java/guide/server/03-concepts.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/03-concepts.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/03-concepts.ko.md) · [C#/.NET](../../../dotnet/guide/server/03-concepts.ko.md) · [Java](../../../java/guide/server/03-concepts.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/03-concepts.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

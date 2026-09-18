@@ -14,7 +14,7 @@ title: "STREAM · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/23-stream.ko.md) · [C++](../../../cpp/guide/server/23-stream.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/23-stream.ko.md) · [Node/TypeScript](../../../node/guide/server/23-stream.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/23-stream.ko.md) · [C#/.NET](../../../dotnet/guide/server/23-stream.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/23-stream.ko.md) · [Node/TypeScript](../../../node/guide/server/23-stream.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

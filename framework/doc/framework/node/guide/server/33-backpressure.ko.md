@@ -14,7 +14,7 @@ title: "Backpressure — 처리보다 도착이 빠를 때 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/33-backpressure.ko.md) · [C++](../../../cpp/guide/server/33-backpressure.ko.md) · [Java](../../../java/guide/server/33-backpressure.ko.md) · [Kotlin](../../../kotlin/guide/server/33-backpressure.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/33-backpressure.ko.md) · [C#/.NET](../../../dotnet/guide/server/33-backpressure.ko.md) · [Java](../../../java/guide/server/33-backpressure.ko.md) · [Kotlin](../../../kotlin/guide/server/33-backpressure.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "Actor membership · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/35-actor-membership.ko.md) · [C++](../../../cpp/guide/server/35-actor-membership.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/35-actor-membership.ko.md) · [Node/TypeScript](../../../node/guide/server/35-actor-membership.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/35-actor-membership.ko.md) · [C#/.NET](../../../dotnet/guide/server/35-actor-membership.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/35-actor-membership.ko.md) · [Node/TypeScript](../../../node/guide/server/35-actor-membership.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "Session과 Actor 연결 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/24-actor-session.ko.md) · [C++](../../../cpp/guide/server/24-actor-session.ko.md) · [Java](../../../java/guide/server/24-actor-session.ko.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/24-actor-session.ko.md) · [C#/.NET](../../../dotnet/guide/server/24-actor-session.ko.md) · [Java](../../../java/guide/server/24-actor-session.ko.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -15,7 +15,7 @@
 (function () {
   "use strict";
 
-  var LANGS = ["dotnet", "cpp", "java", "kotlin", "node"];
+  var LANGS = ["cpp", "dotnet", "java", "kotlin", "node"];
   /*  mkdocs-static-i18n의 로케일. 기본(en)은 주소에 구간이 없다. */
   var LOCALES = ["ko", "en"];
   var KEY = "zlink-lang";
@@ -112,14 +112,21 @@
     if (!box) return;
     var links = box.querySelectorAll("a[data-zlink-lang]");
     var any = false;
+    var label = "";
     Array.prototype.forEach.call(links, function (a) {
-      var target = swapped(a.getAttribute("data-zlink-lang"));
+      var value = a.getAttribute("data-zlink-lang");
+      var target = swapped(value);
       if (target) {
         a.setAttribute("href", target);
         any = true;
       }
-      a.parentNode.hidden = a.getAttribute("data-zlink-lang") === lang;
+      if (value === lang) label = a.textContent;
+      a.parentNode.hidden = value === lang;
     });
+    /*  버튼에 지금 언어의 이름을 적는다. 아이콘만 두면 무엇을 고르는 자리인지
+        처음 보는 독자가 알 수 없다. */
+    var name = box.querySelector(".zlink-lang__label");
+    if (name) name.textContent = label;
     box.hidden = !any;                      /*  가이드 밖에서는 선택기를 감춘다 */
   }
 

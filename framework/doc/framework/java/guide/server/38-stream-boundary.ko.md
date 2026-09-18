@@ -14,7 +14,7 @@ title: "STREAM의 동작 원리 · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.ko.md) · [C++](../../../cpp/guide/server/38-stream-boundary.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.ko.md) · [Node/TypeScript](../../../node/guide/server/38-stream-boundary.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/38-stream-boundary.ko.md) · [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.ko.md) · [Node/TypeScript](../../../node/guide/server/38-stream-boundary.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

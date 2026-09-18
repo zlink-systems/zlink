@@ -14,7 +14,7 @@ title: "Actor · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/22-actor.en.md) · [Java](../../../java/guide/server/22-actor.en.md) · [Kotlin](../../../kotlin/guide/server/22-actor.en.md) · [Node/TypeScript](../../../node/guide/server/22-actor.en.md)
+View in another language — [C++](../../../cpp/guide/server/22-actor.en.md) · **C#/.NET** · [Java](../../../java/guide/server/22-actor.en.md) · [Kotlin](../../../kotlin/guide/server/22-actor.en.md) · [Node/TypeScript](../../../node/guide/server/22-actor.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

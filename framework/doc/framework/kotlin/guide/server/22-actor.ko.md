@@ -14,7 +14,7 @@ title: "Actor · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/22-actor.ko.md) · [C++](../../../cpp/guide/server/22-actor.ko.md) · [Java](../../../java/guide/server/22-actor.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/22-actor.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/22-actor.ko.md) · [C#/.NET](../../../dotnet/guide/server/22-actor.ko.md) · [Java](../../../java/guide/server/22-actor.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/22-actor.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

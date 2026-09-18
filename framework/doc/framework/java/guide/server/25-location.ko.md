@@ -14,7 +14,7 @@ title: "Location · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/25-location.ko.md) · [C++](../../../cpp/guide/server/25-location.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/25-location.ko.md) · [Node/TypeScript](../../../node/guide/server/25-location.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/25-location.ko.md) · [C#/.NET](../../../dotnet/guide/server/25-location.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/25-location.ko.md) · [Node/TypeScript](../../../node/guide/server/25-location.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

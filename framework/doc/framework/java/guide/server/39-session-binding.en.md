@@ -14,7 +14,7 @@ title: "How Session Binding Works · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/39-session-binding.en.md) · [C++](../../../cpp/guide/server/39-session-binding.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/39-session-binding.en.md) · [Node/TypeScript](../../../node/guide/server/39-session-binding.en.md)
+View in another language — [C++](../../../cpp/guide/server/39-session-binding.en.md) · [C#/.NET](../../../dotnet/guide/server/39-session-binding.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/39-session-binding.en.md) · [Node/TypeScript](../../../node/guide/server/39-session-binding.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

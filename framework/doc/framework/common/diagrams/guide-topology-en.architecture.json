@@ -1,9 +1,9 @@
 {
   "diagram_type": "architecture",
   "meta": {
-    "title": "역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다",
-    "subtitle": "HTTP로 들어온 요청은 채널을 지나 SPOT에 닿고, 실시간 연결은 stream으로 들어온다",
-    "output": "cpp-topology.html",
+    "title": "Servers talk in typed messages by role; clients receive over a stream",
+    "subtitle": "An HTTP request passes through channels to a SPOT; a live connection arrives over the stream",
+    "output": "guide-topology-en.html",
     "legend": {
       "mode": "hidden"
     }
@@ -24,7 +24,7 @@
     {
       "id": "CL",
       "type": "frontend",
-      "label": "클라이언트 앱",
+      "label": "client app",
       "row": 0,
       "col": 0
     },
@@ -38,7 +38,7 @@
     {
       "id": "APIC",
       "type": "backend",
-      "label": "채널 client",
+      "label": "channel client",
       "row": 0,
       "col": 2
     },
@@ -60,7 +60,7 @@
     {
       "id": "CORES",
       "type": "backend",
-      "label": "채널 server",
+      "label": "channel server",
       "row": 1,
       "col": 2
     },
@@ -75,7 +75,7 @@
       "id": "SPOT",
       "type": "frontend",
       "label": "SPOT",
-      "sublabel": "상태 단위",
+      "sublabel": "unit of state",
       "row": 2,
       "col": 3
     }
@@ -83,7 +83,7 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "진입 서버",
+      "label": "entry server",
       "wraps": [
         "HTTP",
         "APIC"
@@ -92,7 +92,7 @@
     },
     {
       "kind": "region",
-      "label": "도메인 서버",
+      "label": "domain server",
       "wraps": [
         "ST",
         "CORES",
@@ -106,7 +106,7 @@
     {
       "from": "CL",
       "to": "HTTP",
-      "label": "① HTTP 요청",
+      "label": "① HTTP request",
       "variant": "default"
     },
     {
@@ -117,7 +117,7 @@
     {
       "from": "APIC",
       "to": "CORES",
-      "label": "② 서버 간 메시지",
+      "label": "② server-to-server",
       "variant": "default",
       "labelDy": 38
     },
@@ -129,7 +129,7 @@
     {
       "from": "CL",
       "to": "ST",
-      "label": "③ 실시간 접속",
+      "label": "③ live connection",
       "variant": "default"
     },
     {
@@ -145,7 +145,7 @@
     {
       "from": "APIC",
       "to": "REG",
-      "label": "주소 해석",
+      "label": "address lookup",
       "variant": "dashed"
     },
     {
@@ -159,11 +159,11 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "두 갈래로 들어온다",
+      "title": "Two ways in",
       "items": [
-        "요청은 HTTP API → 채널 client → 채널 server → SPOT으로 간다. 서버끼리는 주소가 아니라 이름으로 부른다.",
-        "실시간 연결은 stream으로 들어와 actor gateway를 지나 같은 SPOT에 닿는다.",
-        "채널 client와 채널 server는 Registry에서 이름에 해당하는 node를 찾는다."
+        "A request goes HTTP API → channel client → channel server → SPOT; servers address each other by name, not by host.",
+        "A live connection arrives over the stream, passes the actor gateway and reaches the same SPOT.",
+        "The channel client and channel server look up the node behind a name in the Registry."
       ]
     }
   ],

@@ -4,6 +4,11 @@ title: "Guide Home · C++"
 
 # ZLink Framework C++ — User Guide
 
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/README.en.md) · [Java](../../../java/guide/server/README.en.md) · [Kotlin](../../../kotlin/guide/server/README.en.md) · [Node/TypeScript](../../../node/guide/server/README.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
 A C++ application framework for building **server systems where real-time messaging
 matters** out of several cooperating processes.
 
@@ -27,7 +32,7 @@ encoding.
 
 ---
 
-## What This Framework Builds
+## Systems It Is Built For
 
 It's designed for systems where several server processes split responsibilities and
 cooperate, and where a state change must reach the client in real time.
@@ -42,9 +47,9 @@ cooperate, and where a state change must reach the client in real time.
 There's one common shape — role-specific server processes talk in typed messages, and the
 client receives state changes over a real-time connection (stream).
 
-<iframe class="zlink-diagram" src="/common/diagrams/cpp-topology-en.html"
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
         title="Servers talk in typed messages by role; clients receive over a stream" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/cpp-topology-en.html" target="_blank">↗ Open larger</a></p>
+<p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
 
 Each server process is an independent executable connected to the others over TCP. HTTP
 ingress, the communication path to other servers, client connections, and state-unit
@@ -251,9 +256,9 @@ and come back to chapter 4.
 
 Every diagram in this guide uses the same visual language — color maps to concept.
 
-<iframe class="zlink-diagram" src="/common/diagrams/cpp-element-kinds-en.html"
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
         title="The five kinds in the diagram" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/cpp-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
+<p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
 
 Several chapters draw the same TicTacToe/Bingo topology, and only the zoomed-in location
 changes per chapter.

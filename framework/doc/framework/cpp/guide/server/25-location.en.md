@@ -14,7 +14,7 @@ title: "Location · C++"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/25-location.en.md) · **C++** · [Java](../../../java/guide/server/25-location.en.md) · [Kotlin](../../../kotlin/guide/server/25-location.en.md) · [Node/TypeScript](../../../node/guide/server/25-location.en.md)
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/25-location.en.md) · [Java](../../../java/guide/server/25-location.en.md) · [Kotlin](../../../kotlin/guide/server/25-location.en.md) · [Node/TypeScript](../../../node/guide/server/25-location.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

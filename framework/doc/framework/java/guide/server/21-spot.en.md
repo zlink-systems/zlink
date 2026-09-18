@@ -14,7 +14,7 @@ title: "Spot · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/21-spot.en.md) · [C++](../../../cpp/guide/server/21-spot.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/21-spot.en.md) · [Node/TypeScript](../../../node/guide/server/21-spot.en.md)
+View in another language — [C++](../../../cpp/guide/server/21-spot.en.md) · [C#/.NET](../../../dotnet/guide/server/21-spot.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/21-spot.en.md) · [Node/TypeScript](../../../node/guide/server/21-spot.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

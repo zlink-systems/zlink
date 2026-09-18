@@ -14,7 +14,7 @@ title: "Activation and Lifetime · C++"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/34-activation-lifetime.en.md) · **C++** · [Java](../../../java/guide/server/34-activation-lifetime.en.md) · [Kotlin](../../../kotlin/guide/server/34-activation-lifetime.en.md) · [Node/TypeScript](../../../node/guide/server/34-activation-lifetime.en.md)
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/34-activation-lifetime.en.md) · [Java](../../../java/guide/server/34-activation-lifetime.en.md) · [Kotlin](../../../kotlin/guide/server/34-activation-lifetime.en.md) · [Node/TypeScript](../../../node/guide/server/34-activation-lifetime.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

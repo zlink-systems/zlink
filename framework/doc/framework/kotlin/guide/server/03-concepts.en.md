@@ -14,7 +14,7 @@ title: "3. Core Concepts · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · [C++](../../../cpp/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
+View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) · [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

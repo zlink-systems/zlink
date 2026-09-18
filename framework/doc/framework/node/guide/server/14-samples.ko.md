@@ -14,7 +14,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Node/Ty
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [C++](../../../cpp/guide/server/14-samples.ko.md) · [Java](../../../java/guide/server/14-samples.ko.md) · [Kotlin](../../../kotlin/guide/server/14-samples.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/14-samples.ko.md) · [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [Java](../../../java/guide/server/14-samples.ko.md) · [Kotlin](../../../kotlin/guide/server/14-samples.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

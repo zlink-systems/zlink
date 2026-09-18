@@ -14,7 +14,7 @@ title: "Actor · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/22-actor.ko.md) · [C++](../../../cpp/guide/server/22-actor.ko.md) · [Java](../../../java/guide/server/22-actor.ko.md) · [Kotlin](../../../kotlin/guide/server/22-actor.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/22-actor.ko.md) · [C#/.NET](../../../dotnet/guide/server/22-actor.ko.md) · [Java](../../../java/guide/server/22-actor.ko.md) · [Kotlin](../../../kotlin/guide/server/22-actor.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

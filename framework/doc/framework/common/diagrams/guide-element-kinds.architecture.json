@@ -4,7 +4,7 @@
   "meta": {
     "title": "구성도에 나오는 다섯 가지",
     "subtitle": "색이 곧 역할이다 — 위 구성도와 같은 색을 쓴다",
-    "output": "cpp-element-kinds.html",
+    "output": "guide-element-kinds.html",
     "legend": {
       "mode": "hidden"
     }

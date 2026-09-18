@@ -14,7 +14,7 @@ title: "Location · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/25-location.ko.md) · [C++](../../../cpp/guide/server/25-location.ko.md) · [Java](../../../java/guide/server/25-location.ko.md) · [Kotlin](../../../kotlin/guide/server/25-location.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/25-location.ko.md) · [C#/.NET](../../../dotnet/guide/server/25-location.ko.md) · [Java](../../../java/guide/server/25-location.ko.md) · [Kotlin](../../../kotlin/guide/server/25-location.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

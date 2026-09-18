@@ -14,7 +14,7 @@ title: "Session and Actor · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/24-actor-session.en.md) · [Java](../../../java/guide/server/24-actor-session.en.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.en.md) · [Node/TypeScript](../../../node/guide/server/24-actor-session.en.md)
+View in another language — [C++](../../../cpp/guide/server/24-actor-session.en.md) · **C#/.NET** · [Java](../../../java/guide/server/24-actor-session.en.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.en.md) · [Node/TypeScript](../../../node/guide/server/24-actor-session.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "실행 모델 · C++"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/32-execution-model.ko.md) · **C++** · [Java](../../../java/guide/server/32-execution-model.ko.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.ko.md) · [Node/TypeScript](../../../node/guide/server/32-execution-model.ko.md)
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/32-execution-model.ko.md) · [Java](../../../java/guide/server/32-execution-model.ko.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.ko.md) · [Node/TypeScript](../../../node/guide/server/32-execution-model.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

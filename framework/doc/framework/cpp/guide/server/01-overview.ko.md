@@ -14,7 +14,7 @@ title: "1. 개요 · C++"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/01-overview.ko.md) · **C++** · [Java](../../../java/guide/server/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/server/01-overview.ko.md)
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/01-overview.ko.md) · [Java](../../../java/guide/server/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/server/01-overview.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

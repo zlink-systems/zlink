@@ -14,7 +14,7 @@ title: "Location · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/25-location.en.md) · [C++](../../../cpp/guide/server/25-location.en.md) · [Java](../../../java/guide/server/25-location.en.md) · [Kotlin](../../../kotlin/guide/server/25-location.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/25-location.en.md) · [C#/.NET](../../../dotnet/guide/server/25-location.en.md) · [Java](../../../java/guide/server/25-location.en.md) · [Kotlin](../../../kotlin/guide/server/25-location.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

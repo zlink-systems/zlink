@@ -14,7 +14,7 @@ title: "활성화와 수명 · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/34-activation-lifetime.ko.md) · [Java](../../../java/guide/server/34-activation-lifetime.ko.md) · [Kotlin](../../../kotlin/guide/server/34-activation-lifetime.ko.md) · [Node/TypeScript](../../../node/guide/server/34-activation-lifetime.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/34-activation-lifetime.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/34-activation-lifetime.ko.md) · [Kotlin](../../../kotlin/guide/server/34-activation-lifetime.ko.md) · [Node/TypeScript](../../../node/guide/server/34-activation-lifetime.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

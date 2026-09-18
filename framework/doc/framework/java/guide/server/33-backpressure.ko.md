@@ -14,7 +14,7 @@ title: "Backpressure — 처리보다 도착이 빠를 때 · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/33-backpressure.ko.md) · [C++](../../../cpp/guide/server/33-backpressure.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/33-backpressure.ko.md) · [Node/TypeScript](../../../node/guide/server/33-backpressure.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/33-backpressure.ko.md) · [C#/.NET](../../../dotnet/guide/server/33-backpressure.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/33-backpressure.ko.md) · [Node/TypeScript](../../../node/guide/server/33-backpressure.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

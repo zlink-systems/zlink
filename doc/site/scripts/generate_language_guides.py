@@ -60,8 +60,8 @@ def lang_dir_for(lang: str, section: str) -> Path:
 
 #  탭 라벨 → 언어 디렉터리.
 LANGUAGES = {
-    "C#/.NET": "dotnet",
     "C++": "cpp",
+    "C#/.NET": "dotnet",
     "Java": "java",
     "Kotlin": "kotlin",
     "Node/TypeScript": "node",
@@ -339,7 +339,9 @@ def generate_locale(suffix: str, check_only: bool,
             if check_only:
                 stale.append(str(out.relative_to(REPO_ROOT)))
                 continue
-            out.write_text(content, encoding="utf-8")
+            #  줄바꿈은 LF로 고정한다. Windows에서 기본값으로 쓰면 CRLF가 되어
+            #  생성물 전체가 내용 변화 없이 수정된 것으로 보인다.
+            out.write_text(content, encoding="utf-8", newline="")
             written += 1
 
     return written, stale

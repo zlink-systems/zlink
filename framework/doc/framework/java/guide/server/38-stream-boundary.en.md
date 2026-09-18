@@ -14,7 +14,7 @@ title: "How STREAM Works · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.en.md) · [C++](../../../cpp/guide/server/38-stream-boundary.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.en.md) · [Node/TypeScript](../../../node/guide/server/38-stream-boundary.en.md)
+View in another language — [C++](../../../cpp/guide/server/38-stream-boundary.en.md) · [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.en.md) · [Node/TypeScript](../../../node/guide/server/38-stream-boundary.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

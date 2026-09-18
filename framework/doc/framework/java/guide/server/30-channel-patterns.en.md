@@ -14,7 +14,7 @@ title: "How Channels Work · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.en.md) · [C++](../../../cpp/guide/server/30-channel-patterns.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.en.md) · [Node/TypeScript](../../../node/guide/server/30-channel-patterns.en.md)
+View in another language — [C++](../../../cpp/guide/server/30-channel-patterns.en.md) · [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.en.md) · [Node/TypeScript](../../../node/guide/server/30-channel-patterns.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

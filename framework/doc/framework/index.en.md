@@ -41,7 +41,25 @@ that an existing web service otherwise takes on when it adds real-time features.
     declarative model. How the four map to each other is covered in
     [Overview](dotnet/guide/server/01-overview.en.md) chapter 2.
 
-## In Code
+## The Advantages of ZLink Framework
+
+**The unit that holds the state processes requests serially.** A game room, a
+single order, a single conversation — state that several users' requests reach
+at the same time. In ZLink one Spot holds that state and runs the requests in
+the order they arrive. A handler needs no lock, so the code that guards against
+contention and deadlock does not sit among the business logic.
+
+**Fewer components are needed for a real-time feature.** A conventional web
+service keeps the real-time connection with a sticky LB and a WebSocket server,
+routes server-to-server delivery through a pub/sub broker, and takes a
+distributed lock so that two instances do not modify the same state at once. In
+ZLink a direct connection between runtimes and a Spot's serial execution stand
+in for those components.
+
+The next section covers the first, and [Reducing
+Complexity](#reducing-complexity) the second.
+
+## The Advantages in Code
 
 This code runs **inside a dungeon room**: when a boss is defeated, it applies part of the
 reward to the player's guild as well. The first handler runs on the player side — it applies
@@ -432,8 +450,8 @@ switch line at the top of each chapter lets you view the same chapter in another
 
 | Language | Server guide | Get started right away | Client-side guide |
 | --- | --- | --- | --- |
-| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
 | C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
+| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
 | Java | [Server](java/guide/server/README.en.md) | [Quickstart](java/quickstart.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
 | Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
 | Node.js | [Server](node/guide/server/README.en.md) | [Quickstart](node/quickstart.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |

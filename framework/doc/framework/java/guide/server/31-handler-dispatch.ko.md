@@ -14,7 +14,7 @@ title: "Handler와 메시지 처리 · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/31-handler-dispatch.ko.md) · [C++](../../../cpp/guide/server/31-handler-dispatch.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/31-handler-dispatch.ko.md) · [Node/TypeScript](../../../node/guide/server/31-handler-dispatch.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/31-handler-dispatch.ko.md) · [C#/.NET](../../../dotnet/guide/server/31-handler-dispatch.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/31-handler-dispatch.ko.md) · [Node/TypeScript](../../../node/guide/server/31-handler-dispatch.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

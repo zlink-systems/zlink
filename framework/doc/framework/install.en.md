@@ -14,31 +14,6 @@ channel, Spot and Actor contracts, so nodes in one mesh call each other across l
 messaging engine. Each tab lists what it includes, and the optional packages you add when you
 need them.
 
-=== "C#/.NET"
-
-    ```bash
-    dotnet add package Zlink.Framework.AspNetCore
-    ```
-
-    | Included package | Role |
-    |---|---|
-    | `Zlink.Framework` | Framework contracts and runtime |
-    | `Zlink` | **The Core messaging engine's `.NET` binding** |
-    | `Zlink.Framework.Contracts` | Codec interfaces and framework exceptions |
-    | `Zlink.Framework.Provider.Abstractions` | Provider extension points |
-    | `Zlink.Stream.Connector` | The STREAM client surface |
-    | `Zlink.HttpClient` | HTTP client |
-    | `Microsoft.Extensions.DependencyInjection.Abstractions` · `.Logging.Abstractions` · `.Hosting.Abstractions` · `.Diagnostics.HealthChecks` | DI, logging, host lifecycle, health checks |
-
-    | Optional package | When to add |
-    |---|---|
-    | `Zlink.Framework.Locations.Redis` | Using a Redis location store |
-    | `Zlink.Framework.Codecs.Protobuf` · `Zlink.Framework.Codecs.MessagePack` | In place of the default JSON codec |
-
-    A host that is not ASP.NET Core installs `Zlink.Framework` and starts the host in code. The
-    runtime requires .NET 8 or later, and the path to a first run is covered by the
-    [quickstart](dotnet/quickstart.en.md).
-
 === "C++"
 
     ```cmake
@@ -105,6 +80,31 @@ need them.
     `windows-ninja`, `linux-ninja` or `macos-ninja` for Rider, VS Code and CLion. A C++20
     compiler is required, and the full procedure for all three paths is covered by the
     [quickstart](cpp/quickstart.en.md).
+
+=== "C#/.NET"
+
+    ```bash
+    dotnet add package Zlink.Framework.AspNetCore
+    ```
+
+    | Included package | Role |
+    |---|---|
+    | `Zlink.Framework` | Framework contracts and runtime |
+    | `Zlink` | **The Core messaging engine's `.NET` binding** |
+    | `Zlink.Framework.Contracts` | Codec interfaces and framework exceptions |
+    | `Zlink.Framework.Provider.Abstractions` | Provider extension points |
+    | `Zlink.Stream.Connector` | The STREAM client surface |
+    | `Zlink.HttpClient` | HTTP client |
+    | `Microsoft.Extensions.DependencyInjection.Abstractions` · `.Logging.Abstractions` · `.Hosting.Abstractions` · `.Diagnostics.HealthChecks` | DI, logging, host lifecycle, health checks |
+
+    | Optional package | When to add |
+    |---|---|
+    | `Zlink.Framework.Locations.Redis` | Using a Redis location store |
+    | `Zlink.Framework.Codecs.Protobuf` · `Zlink.Framework.Codecs.MessagePack` | In place of the default JSON codec |
+
+    A host that is not ASP.NET Core installs `Zlink.Framework` and starts the host in code. The
+    runtime requires .NET 8 or later, and the path to a first run is covered by the
+    [quickstart](dotnet/quickstart.en.md).
 
 === "Java"
 

@@ -14,7 +14,7 @@ title: "The Execution Model · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/32-execution-model.en.md) · [C++](../../../cpp/guide/server/32-execution-model.en.md) · [Java](../../../java/guide/server/32-execution-model.en.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/32-execution-model.en.md) · [C#/.NET](../../../dotnet/guide/server/32-execution-model.en.md) · [Java](../../../java/guide/server/32-execution-model.en.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "실행 모델 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/32-execution-model.ko.md) · [C++](../../../cpp/guide/server/32-execution-model.ko.md) · [Java](../../../java/guide/server/32-execution-model.ko.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/32-execution-model.ko.md) · [C#/.NET](../../../dotnet/guide/server/32-execution-model.ko.md) · [Java](../../../java/guide/server/32-execution-model.ko.md) · [Kotlin](../../../kotlin/guide/server/32-execution-model.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

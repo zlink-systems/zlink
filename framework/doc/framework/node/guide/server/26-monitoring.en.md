@@ -14,7 +14,7 @@ title: "Monitoring · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/26-monitoring.en.md) · [C++](../../../cpp/guide/server/26-monitoring.en.md) · [Java](../../../java/guide/server/26-monitoring.en.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/26-monitoring.en.md) · [C#/.NET](../../../dotnet/guide/server/26-monitoring.en.md) · [Java](../../../java/guide/server/26-monitoring.en.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

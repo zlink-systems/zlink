@@ -14,7 +14,7 @@ title: "Session 묶음의 동작 원리 · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/39-session-binding.ko.md) · [C++](../../../cpp/guide/server/39-session-binding.ko.md) · [Java](../../../java/guide/server/39-session-binding.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/39-session-binding.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/39-session-binding.ko.md) · [C#/.NET](../../../dotnet/guide/server/39-session-binding.ko.md) · [Java](../../../java/guide/server/39-session-binding.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/39-session-binding.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

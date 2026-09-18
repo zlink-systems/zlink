@@ -14,7 +14,7 @@ title: "Channel 메시징 · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/20-channel-messaging.ko.md) · [Java](../../../java/guide/server/20-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.ko.md) · [Node/TypeScript](../../../node/guide/server/20-channel-messaging.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/20-channel-messaging.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/20-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.ko.md) · [Node/TypeScript](../../../node/guide/server/20-channel-messaging.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

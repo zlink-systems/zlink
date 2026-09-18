@@ -14,7 +14,7 @@ title: "Spot · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/21-spot.ko.md) · [Java](../../../java/guide/server/21-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/21-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/21-spot.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/21-spot.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/21-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/21-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/21-spot.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

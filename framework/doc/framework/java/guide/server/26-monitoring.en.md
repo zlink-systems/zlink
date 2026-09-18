@@ -14,7 +14,7 @@ title: "Monitoring · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/26-monitoring.en.md) · [C++](../../../cpp/guide/server/26-monitoring.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/26-monitoring.en.md) · [Node/TypeScript](../../../node/guide/server/26-monitoring.en.md)
+View in another language — [C++](../../../cpp/guide/server/26-monitoring.en.md) · [C#/.NET](../../../dotnet/guide/server/26-monitoring.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/26-monitoring.en.md) · [Node/TypeScript](../../../node/guide/server/26-monitoring.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

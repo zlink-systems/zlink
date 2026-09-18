@@ -14,7 +14,7 @@ title: "Backpressure — When Arrival Outpaces Processing · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/33-backpressure.en.md) · [C++](../../../cpp/guide/server/33-backpressure.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/33-backpressure.en.md) · [Node/TypeScript](../../../node/guide/server/33-backpressure.en.md)
+View in another language — [C++](../../../cpp/guide/server/33-backpressure.en.md) · [C#/.NET](../../../dotnet/guide/server/33-backpressure.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/33-backpressure.en.md) · [Node/TypeScript](../../../node/guide/server/33-backpressure.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

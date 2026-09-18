@@ -4,9 +4,128 @@ title: "Guide Home · Java"
 
 # ZLink Framework Java — User Guide
 
-The order to use ZLink Framework in a Java/Spring Boot environment. Chapters 03–17 share the
-same source across every language, and the example switches to Java code when you pick the
-`.java` tab.
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/server/README.en.md) · [C#/.NET](../../../dotnet/guide/server/README.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/README.en.md) · [Node/TypeScript](../../../node/guide/server/README.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+A Java application framework for building **server systems where real-time
+messaging matters** out of several cooperating processes. It goes straight into
+Spring Boot, so there is no separate runtime to move to.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+```
+
+Register one handler and the framework takes care of message decoding, routing
+and encoding.
+
+---
+
+## Systems It Is Built For
+
+It is designed for systems where several server processes divide the roles
+between them and state changes reach the client in real time.
+
+| Domain | Core scenario |
+|--------|--------------|
+| **Real-time games** | Create a room -> player joins -> game state updates -> client push |
+| **Customer support chat** | Open a conversation -> assign an agent -> relay messages -> push conversation state |
+| **Order workflow** | Accept an order -> process each step -> change state -> notify the client |
+| **Delivery and dispatch** | Request a dispatch -> assign and accept -> track state -> real-time push |
+
+The shape they share is that server processes for each role talk in typed
+messages, and the client receives state changes over a real-time connection.
+
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
+        title="Servers for each role talk in typed messages and the client receives over STREAM" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
+
+---
+
+## Core Capabilities
+
+### Channel messaging — typed request-reply between servers
+
+A channel is a name given to a path between servers. One side sends a request to
+the channel name and the other side handles it and replies. Serialization (JSON ·
+MessagePack · Protobuf) is the framework's work.
+
+The sending side.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
+```
+
+The receiving side.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.java:channel-request-handler"
+```
+
+Besides request-reply there are the fanout (pub/sub) and route mesh (address
+routing) patterns.
+[Channel messaging →](20-channel-messaging.en.md)
+
+---
+
+### Spot — a unit of state without locks
+
+A Spot binds **one region of state** and its participants into an execution unit:
+a game room, a support conversation, a unit of order processing. Everything that
+happens inside one Spot — participant packets, timers, joins and leaves — is
+processed **serially**. State is reached without a lock, and two requests never
+overlap in the same Spot even when the handling is asynchronous.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/spots/GameRoom.java:spot-class"
+```
+
+It divides into an entry spot that assigns (one per node) and a room spot that
+holds the state (one per unit). Periodic work is registered as a timer.
+[Spot →](21-spot.en.md)
+
+---
+
+### STREAM and Actor — the client's real-time connection
+
+A client's real-time two-way connection is a **STREAM**, and the server-side
+object standing for one connection is an **Actor**. When a client connects, a
+session creates the Actor, and the Actor joins a Spot to take part in handling
+its state.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/GameSession.java:session-actor-relay"
+```
+
+The client side of the connection is a separate product, the stream connector.
+[STREAM →](23-stream.en.md) · [Binding a session to an Actor →](24-actor-session.en.md)
+
+---
+
+### Location — endpoints stay out of the code
+
+When several servers of the same role are up, the address of the one to connect
+to is not written in the code. A shared location store keeps the addresses, and
+each server looks up the node an id is on right now.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
+```
+
+[Location →](25-location.en.md)
+
+---
+
+### What Spring Boot provides
+
+The DI container, configuration, HTTP endpoints and logging are Spring Boot's own.
+ZLink Framework registers its handlers and meshes on top of them, so REST
+endpoints and real-time connections run in the same process.
+
+---
+
+## Table Of Contents
 
 | Order | Document | Content |
 |----|------|------|
@@ -44,6 +163,18 @@ reading order.
 Chapters 01, 11, 13, and 16 are written separately for Java because the install steps and
 surface names differ per language. Open each chapter directly from the links in the table
 above.
+
+## How To Read The Diagrams
+
+Every diagram in this guide uses the same visual language — the color is the
+concept.
+
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
+        title="The five kinds that appear in the diagrams" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
+
+Several chapters draw the same topology; what changes from chapter to chapter is
+where it is magnified.
 
 ## Related Documents
 

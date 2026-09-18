@@ -14,7 +14,7 @@ title: "How Channels Work · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.en.md) · [C++](../../../cpp/guide/server/30-channel-patterns.en.md) · [Java](../../../java/guide/server/30-channel-patterns.en.md) · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/30-channel-patterns.en.md) · [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.en.md) · [Java](../../../java/guide/server/30-channel-patterns.en.md) · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

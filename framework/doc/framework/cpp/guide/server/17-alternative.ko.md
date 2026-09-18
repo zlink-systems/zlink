@@ -14,7 +14,7 @@ title: "17. ZLink의 적용 범위 — 내부 서비스 통신과 실시간 상�
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/17-alternative.ko.md) · **C++** · [Java](../../../java/guide/server/17-alternative.ko.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.ko.md) · [Node/TypeScript](../../../node/guide/server/17-alternative.ko.md)
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/17-alternative.ko.md) · [Java](../../../java/guide/server/17-alternative.ko.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.ko.md) · [Node/TypeScript](../../../node/guide/server/17-alternative.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

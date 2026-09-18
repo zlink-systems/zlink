@@ -14,7 +14,7 @@ title: "Timer와 worker · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/36-timer-worker.ko.md) · [C++](../../../cpp/guide/server/36-timer-worker.ko.md) · [Java](../../../java/guide/server/36-timer-worker.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/36-timer-worker.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/36-timer-worker.ko.md) · [C#/.NET](../../../dotnet/guide/server/36-timer-worker.ko.md) · [Java](../../../java/guide/server/36-timer-worker.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/36-timer-worker.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

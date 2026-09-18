@@ -14,7 +14,7 @@ title: "Timers and Workers · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/36-timer-worker.en.md) · [Java](../../../java/guide/server/36-timer-worker.en.md) · [Kotlin](../../../kotlin/guide/server/36-timer-worker.en.md) · [Node/TypeScript](../../../node/guide/server/36-timer-worker.en.md)
+View in another language — [C++](../../../cpp/guide/server/36-timer-worker.en.md) · **C#/.NET** · [Java](../../../java/guide/server/36-timer-worker.en.md) · [Kotlin](../../../kotlin/guide/server/36-timer-worker.en.md) · [Node/TypeScript](../../../node/guide/server/36-timer-worker.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

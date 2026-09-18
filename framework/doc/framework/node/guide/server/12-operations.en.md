@@ -14,7 +14,7 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · Nod
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/12-operations.en.md) · [C++](../../../cpp/guide/server/12-operations.en.md) · [Java](../../../java/guide/server/12-operations.en.md) · [Kotlin](../../../kotlin/guide/server/12-operations.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/12-operations.en.md) · [C#/.NET](../../../dotnet/guide/server/12-operations.en.md) · [Java](../../../java/guide/server/12-operations.en.md) · [Kotlin](../../../kotlin/guide/server/12-operations.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

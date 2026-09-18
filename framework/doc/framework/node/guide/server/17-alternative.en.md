@@ -14,7 +14,7 @@ title: "17. Where ZLink Applies — Internal Service Communication and Real-Time
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/17-alternative.en.md) · [C++](../../../cpp/guide/server/17-alternative.en.md) · [Java](../../../java/guide/server/17-alternative.en.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/17-alternative.en.md) · [C#/.NET](../../../dotnet/guide/server/17-alternative.en.md) · [Java](../../../java/guide/server/17-alternative.en.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "Relocation · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/37-relocation.ko.md) · [C++](../../../cpp/guide/server/37-relocation.ko.md) · [Java](../../../java/guide/server/37-relocation.ko.md) · [Kotlin](../../../kotlin/guide/server/37-relocation.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/37-relocation.ko.md) · [C#/.NET](../../../dotnet/guide/server/37-relocation.ko.md) · [Java](../../../java/guide/server/37-relocation.ko.md) · [Kotlin](../../../kotlin/guide/server/37-relocation.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

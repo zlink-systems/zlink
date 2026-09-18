@@ -14,7 +14,7 @@ title: "1. Overview · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/01-overview.en.md) · [C++](../../../cpp/guide/server/01-overview.en.md) · [Java](../../../java/guide/server/01-overview.en.md) · [Kotlin](../../../kotlin/guide/server/01-overview.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/01-overview.en.md) · [C#/.NET](../../../dotnet/guide/server/01-overview.en.md) · [Java](../../../java/guide/server/01-overview.en.md) · [Kotlin](../../../kotlin/guide/server/01-overview.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

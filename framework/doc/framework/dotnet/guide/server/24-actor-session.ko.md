@@ -14,7 +14,7 @@ title: "Session과 Actor 연결 · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/24-actor-session.ko.md) · [Java](../../../java/guide/server/24-actor-session.ko.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.ko.md) · [Node/TypeScript](../../../node/guide/server/24-actor-session.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/24-actor-session.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/24-actor-session.ko.md) · [Kotlin](../../../kotlin/guide/server/24-actor-session.ko.md) · [Node/TypeScript](../../../node/guide/server/24-actor-session.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

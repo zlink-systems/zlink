@@ -14,7 +14,7 @@ title: "Channel 동작 원리 · C++"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.ko.md) · **C++** · [Java](../../../java/guide/server/30-channel-patterns.ko.md) · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.ko.md) · [Node/TypeScript](../../../node/guide/server/30-channel-patterns.ko.md)
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/30-channel-patterns.ko.md) · [Java](../../../java/guide/server/30-channel-patterns.ko.md) · [Kotlin](../../../kotlin/guide/server/30-channel-patterns.ko.md) · [Node/TypeScript](../../../node/guide/server/30-channel-patterns.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

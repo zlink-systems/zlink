@@ -14,7 +14,7 @@ title: "STREAM · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/23-stream.en.md) · [Java](../../../java/guide/server/23-stream.en.md) · [Kotlin](../../../kotlin/guide/server/23-stream.en.md) · [Node/TypeScript](../../../node/guide/server/23-stream.en.md)
+View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) · **C#/.NET** · [Java](../../../java/guide/server/23-stream.en.md) · [Kotlin](../../../kotlin/guide/server/23-stream.en.md) · [Node/TypeScript](../../../node/guide/server/23-stream.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

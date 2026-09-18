@@ -14,7 +14,7 @@ title: "Actor · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/22-actor.ko.md) · [Java](../../../java/guide/server/22-actor.ko.md) · [Kotlin](../../../kotlin/guide/server/22-actor.ko.md) · [Node/TypeScript](../../../node/guide/server/22-actor.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/22-actor.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/22-actor.ko.md) · [Kotlin](../../../kotlin/guide/server/22-actor.ko.md) · [Node/TypeScript](../../../node/guide/server/22-actor.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

@@ -14,7 +14,7 @@ title: "모니터링 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/26-monitoring.ko.md) · [C++](../../../cpp/guide/server/26-monitoring.ko.md) · [Java](../../../java/guide/server/26-monitoring.ko.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/26-monitoring.ko.md) · [C#/.NET](../../../dotnet/guide/server/26-monitoring.ko.md) · [Java](../../../java/guide/server/26-monitoring.ko.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

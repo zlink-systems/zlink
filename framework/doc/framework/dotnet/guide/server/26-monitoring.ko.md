@@ -14,7 +14,7 @@ title: "모니터링 · C#/.NET"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/26-monitoring.ko.md) · [Java](../../../java/guide/server/26-monitoring.ko.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.ko.md) · [Node/TypeScript](../../../node/guide/server/26-monitoring.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/26-monitoring.ko.md) · **C#/.NET** · [Java](../../../java/guide/server/26-monitoring.ko.md) · [Kotlin](../../../kotlin/guide/server/26-monitoring.ko.md) · [Node/TypeScript](../../../node/guide/server/26-monitoring.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

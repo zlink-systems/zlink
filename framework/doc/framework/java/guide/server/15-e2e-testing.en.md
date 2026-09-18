@@ -14,7 +14,7 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
+View in another language — [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

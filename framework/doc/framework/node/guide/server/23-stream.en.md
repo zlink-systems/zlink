@@ -14,7 +14,7 @@ title: "STREAM · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/23-stream.en.md) · [C++](../../../cpp/guide/server/23-stream.en.md) · [Java](../../../java/guide/server/23-stream.en.md) · [Kotlin](../../../kotlin/guide/server/23-stream.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) · [C#/.NET](../../../dotnet/guide/server/23-stream.en.md) · [Java](../../../java/guide/server/23-stream.en.md) · [Kotlin](../../../kotlin/guide/server/23-stream.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

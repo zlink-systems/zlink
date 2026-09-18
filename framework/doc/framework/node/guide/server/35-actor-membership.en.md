@@ -14,7 +14,7 @@ title: "Actor Membership · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/35-actor-membership.en.md) · [C++](../../../cpp/guide/server/35-actor-membership.en.md) · [Java](../../../java/guide/server/35-actor-membership.en.md) · [Kotlin](../../../kotlin/guide/server/35-actor-membership.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/35-actor-membership.en.md) · [C#/.NET](../../../dotnet/guide/server/35-actor-membership.en.md) · [Java](../../../java/guide/server/35-actor-membership.en.md) · [Kotlin](../../../kotlin/guide/server/35-actor-membership.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

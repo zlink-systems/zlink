@@ -14,7 +14,7 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Kotl
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · [Java](../../../java/guide/server/15-e2e-testing.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · [Java](../../../java/guide/server/15-e2e-testing.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

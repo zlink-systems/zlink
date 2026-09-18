@@ -14,7 +14,7 @@ title: "Handlers and Message Processing · Kotlin"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/31-handler-dispatch.en.md) · [C++](../../../cpp/guide/server/31-handler-dispatch.en.md) · [Java](../../../java/guide/server/31-handler-dispatch.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/31-handler-dispatch.en.md)
+View in another language — [C++](../../../cpp/guide/server/31-handler-dispatch.en.md) · [C#/.NET](../../../dotnet/guide/server/31-handler-dispatch.en.md) · [Java](../../../java/guide/server/31-handler-dispatch.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/31-handler-dispatch.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

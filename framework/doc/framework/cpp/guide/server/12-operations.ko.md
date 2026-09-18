@@ -14,7 +14,7 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · C++
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/12-operations.ko.md) · **C++** · [Java](../../../java/guide/server/12-operations.ko.md) · [Kotlin](../../../kotlin/guide/server/12-operations.ko.md) · [Node/TypeScript](../../../node/guide/server/12-operations.ko.md)
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/12-operations.ko.md) · [Java](../../../java/guide/server/12-operations.ko.md) · [Kotlin](../../../kotlin/guide/server/12-operations.ko.md) · [Node/TypeScript](../../../node/guide/server/12-operations.ko.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

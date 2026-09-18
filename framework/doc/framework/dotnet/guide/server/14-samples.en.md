@@ -14,7 +14,7 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/14-samples.en.md) · [Java](../../../java/guide/server/14-samples.en.md) · [Kotlin](../../../kotlin/guide/server/14-samples.en.md) · [Node/TypeScript](../../../node/guide/server/14-samples.en.md)
+View in another language — [C++](../../../cpp/guide/server/14-samples.en.md) · **C#/.NET** · [Java](../../../java/guide/server/14-samples.en.md) · [Kotlin](../../../kotlin/guide/server/14-samples.en.md) · [Node/TypeScript](../../../node/guide/server/14-samples.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

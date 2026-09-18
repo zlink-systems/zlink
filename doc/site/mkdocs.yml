@@ -301,47 +301,6 @@ exclude_docs: |
 nav:
   - Home: index.md
   - Install: install.md
-  - .NET:
-      - Guide home: dotnet/guide/server/README.md
-      - Getting started:
-          - Overview: dotnet/guide/server/01-overview.md
-          - Core concepts: dotnet/guide/server/03-concepts.md
-          - Quickstart: dotnet/quickstart.md
-      - Feature guide:
-          - Channel messaging: dotnet/guide/server/20-channel-messaging.md
-          - Spot: dotnet/guide/server/21-spot.md
-          - Actor: dotnet/guide/server/22-actor.md
-          - STREAM: dotnet/guide/server/23-stream.md
-          - Session and Actor: dotnet/guide/server/24-actor-session.md
-          - Location: dotnet/guide/server/25-location.md
-          - Monitoring: dotnet/guide/server/26-monitoring.md
-      - How it works:
-          - The execution model: dotnet/guide/server/32-execution-model.md
-          - Backpressure: dotnet/guide/server/33-backpressure.md
-          - Activation and lifetime: dotnet/guide/server/34-activation-lifetime.md
-          - Actor membership: dotnet/guide/server/35-actor-membership.md
-          - Timers and workers: dotnet/guide/server/36-timer-worker.md
-          - Relocation: dotnet/guide/server/37-relocation.md
-          - How channels work: dotnet/guide/server/30-channel-patterns.md
-          - Handlers and message processing: dotnet/guide/server/31-handler-dispatch.md
-          - How STREAM works: dotnet/guide/server/38-stream-boundary.md
-          - How session binding works: dotnet/guide/server/39-session-binding.md
-          - Where ZLink fits: dotnet/guide/server/17-alternative.md
-      - Operations:
-          - Operations and lifecycle: dotnet/guide/server/12-operations.md
-          - Options: dotnet/guide/server/16-options.md
-      - Tests: dotnet/guide/server/15-e2e-testing.md
-      - Reference:
-          - Key type index: dotnet/guide/server/13-interface-catalog.md
-          - Reference home: dotnet/reference/README.md
-          - 01. Host lifecycle: dotnet/reference/01-host-lifecycle.md
-          - 02. Topology discovery: dotnet/reference/02-topology-discovery.md
-          - 03. Messaging execution: dotnet/reference/03-messaging-execution.md
-          - 04. Spot instance: dotnet/reference/04-spot-instance.md
-          - 05. Actor relocation: dotnet/reference/05-actor-relocation.md
-          - 06. Stream session: dotnet/reference/06-stream-session.md
-          - 07. Location authority: dotnet/reference/07-location-authority.md
-          - 08. Observability diagnostics: dotnet/reference/08-observability-diagnostics.md
   - C++:
       - Guide home: cpp/guide/server/README.md
       - Getting started:
@@ -388,6 +347,47 @@ nav:
           - 06. Stream session: cpp/reference/06-stream-session.md
           - 07. Location authority: cpp/reference/07-location-authority.md
           - 08. Observability diagnostics: cpp/reference/08-observability-diagnostics.md
+  - .NET:
+      - Guide home: dotnet/guide/server/README.md
+      - Getting started:
+          - Overview: dotnet/guide/server/01-overview.md
+          - Core concepts: dotnet/guide/server/03-concepts.md
+          - Quickstart: dotnet/quickstart.md
+      - Feature guide:
+          - Channel messaging: dotnet/guide/server/20-channel-messaging.md
+          - Spot: dotnet/guide/server/21-spot.md
+          - Actor: dotnet/guide/server/22-actor.md
+          - STREAM: dotnet/guide/server/23-stream.md
+          - Session and Actor: dotnet/guide/server/24-actor-session.md
+          - Location: dotnet/guide/server/25-location.md
+          - Monitoring: dotnet/guide/server/26-monitoring.md
+      - How it works:
+          - The execution model: dotnet/guide/server/32-execution-model.md
+          - Backpressure: dotnet/guide/server/33-backpressure.md
+          - Activation and lifetime: dotnet/guide/server/34-activation-lifetime.md
+          - Actor membership: dotnet/guide/server/35-actor-membership.md
+          - Timers and workers: dotnet/guide/server/36-timer-worker.md
+          - Relocation: dotnet/guide/server/37-relocation.md
+          - How channels work: dotnet/guide/server/30-channel-patterns.md
+          - Handlers and message processing: dotnet/guide/server/31-handler-dispatch.md
+          - How STREAM works: dotnet/guide/server/38-stream-boundary.md
+          - How session binding works: dotnet/guide/server/39-session-binding.md
+          - Where ZLink fits: dotnet/guide/server/17-alternative.md
+      - Operations:
+          - Operations and lifecycle: dotnet/guide/server/12-operations.md
+          - Options: dotnet/guide/server/16-options.md
+      - Tests: dotnet/guide/server/15-e2e-testing.md
+      - Reference:
+          - Key type index: dotnet/guide/server/13-interface-catalog.md
+          - Reference home: dotnet/reference/README.md
+          - 01. Host lifecycle: dotnet/reference/01-host-lifecycle.md
+          - 02. Topology discovery: dotnet/reference/02-topology-discovery.md
+          - 03. Messaging execution: dotnet/reference/03-messaging-execution.md
+          - 04. Spot instance: dotnet/reference/04-spot-instance.md
+          - 05. Actor relocation: dotnet/reference/05-actor-relocation.md
+          - 06. Stream session: dotnet/reference/06-stream-session.md
+          - 07. Location authority: dotnet/reference/07-location-authority.md
+          - 08. Observability diagnostics: dotnet/reference/08-observability-diagnostics.md
   - Java:
       - Guide home: java/guide/server/README.md
       - Getting started:

@@ -14,7 +14,7 @@ title: "STREAM · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/23-stream.ko.md) · [C++](../../../cpp/guide/server/23-stream.ko.md) · [Java](../../../java/guide/server/23-stream.ko.md) · [Kotlin](../../../kotlin/guide/server/23-stream.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/23-stream.ko.md) · [C#/.NET](../../../dotnet/guide/server/23-stream.ko.md) · [Java](../../../java/guide/server/23-stream.ko.md) · [Kotlin](../../../kotlin/guide/server/23-stream.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

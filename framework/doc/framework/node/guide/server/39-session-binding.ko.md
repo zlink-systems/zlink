@@ -14,7 +14,7 @@ title: "Session 묶음의 동작 원리 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/39-session-binding.ko.md) · [C++](../../../cpp/guide/server/39-session-binding.ko.md) · [Java](../../../java/guide/server/39-session-binding.ko.md) · [Kotlin](../../../kotlin/guide/server/39-session-binding.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/39-session-binding.ko.md) · [C#/.NET](../../../dotnet/guide/server/39-session-binding.ko.md) · [Java](../../../java/guide/server/39-session-binding.ko.md) · [Kotlin](../../../kotlin/guide/server/39-session-binding.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

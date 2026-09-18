@@ -14,7 +14,7 @@ title: "STREAM의 동작 원리 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.ko.md) · [C++](../../../cpp/guide/server/38-stream-boundary.ko.md) · [Java](../../../java/guide/server/38-stream-boundary.ko.md) · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/38-stream-boundary.ko.md) · [C#/.NET](../../../dotnet/guide/server/38-stream-boundary.ko.md) · [Java](../../../java/guide/server/38-stream-boundary.ko.md) · [Kotlin](../../../kotlin/guide/server/38-stream-boundary.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

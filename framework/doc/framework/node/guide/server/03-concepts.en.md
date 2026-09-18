@@ -14,7 +14,7 @@ title: "3. Core Concepts · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · [C++](../../../cpp/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · **Node/TypeScript**
+View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) · [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

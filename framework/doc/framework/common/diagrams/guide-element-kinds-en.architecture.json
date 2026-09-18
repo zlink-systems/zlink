@@ -4,7 +4,7 @@
   "meta": {
     "title": "The five kinds in the diagram",
     "subtitle": "Colour carries the role, matching the diagram above",
-    "output": "cpp-element-kinds-en.html",
+    "output": "guide-element-kinds-en.html",
     "legend": {
       "mode": "hidden"
     }

@@ -14,7 +14,7 @@ title: "Channel 메시징 · Node/TypeScript"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/20-channel-messaging.ko.md) · [C++](../../../cpp/guide/server/20-channel-messaging.ko.md) · [Java](../../../java/guide/server/20-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.ko.md) · **Node/TypeScript**
+다른 언어로 보기 — [C++](../../../cpp/guide/server/20-channel-messaging.ko.md) · [C#/.NET](../../../dotnet/guide/server/20-channel-messaging.ko.md) · [Java](../../../java/guide/server/20-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.ko.md) · **Node/TypeScript**
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

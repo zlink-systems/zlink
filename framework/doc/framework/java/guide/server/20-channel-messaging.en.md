@@ -14,7 +14,7 @@ title: "Channel Messaging · Java"
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-View in another language — [C#/.NET](../../../dotnet/guide/server/20-channel-messaging.en.md) · [C++](../../../cpp/guide/server/20-channel-messaging.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/20-channel-messaging.en.md)
+View in another language — [C++](../../../cpp/guide/server/20-channel-messaging.en.md) · [C#/.NET](../../../dotnet/guide/server/20-channel-messaging.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/20-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/20-channel-messaging.en.md)
 { .zlink-langswitch }
 <!-- language-switch:end -->
 

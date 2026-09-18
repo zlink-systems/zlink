@@ -13,31 +13,6 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 **설치하는 것은 host 패키지 하나다.** 그 하나가 framework runtime과 Core 메시징 엔진을
 포함한다. 각 탭에 그 포함 목록과 선택 패키지가 있다.
 
-=== "C#/.NET"
-
-    ```bash
-    dotnet add package Zlink.Framework.AspNetCore
-    ```
-
-    | 포함 패키지 | 역할 |
-    |---|---|
-    | `Zlink.Framework` | framework 계약과 runtime |
-    | `Zlink` | **Core 메시징 엔진의 `.NET` binding** |
-    | `Zlink.Framework.Contracts` | codec 인터페이스와 framework 예외 |
-    | `Zlink.Framework.Provider.Abstractions` | provider 확장점 |
-    | `Zlink.Stream.Connector` | STREAM client 표면 |
-    | `Zlink.HttpClient` | HTTP client |
-    | `Microsoft.Extensions.DependencyInjection.Abstractions` · `.Logging.Abstractions` · `.Hosting.Abstractions` · `.Diagnostics.HealthChecks` | DI·로깅·host 수명주기·health check |
-
-    | 선택 패키지 | 추가하는 경우 |
-    |---|---|
-    | `Zlink.Framework.Locations.Redis` | Redis location store를 사용할 때 |
-    | `Zlink.Framework.Codecs.Protobuf` · `Zlink.Framework.Codecs.MessagePack` | 기본 JSON codec 대신 사용할 때 |
-
-    ASP.NET Core host가 아니면 `Zlink.Framework`를 설치하고 host를 코드에서 직접 시작한다.
-    런타임은 .NET 8 이상이 필요하며, 첫 실행까지의 절차는
-    [퀵스타트](dotnet/quickstart.ko.md)가 다룬다.
-
 === "C++"
 
     ```cmake
@@ -102,6 +77,31 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     IDE에서는 `CMakePresets.json`의 preset을 선택한다. Visual Studio는 `vs2022`, Rider·VS
     Code·CLion은 `windows-ninja`·`linux-ninja`·`macos-ninja`다. C++20 컴파일러가 필요하며,
     세 경로의 전체 절차는 [퀵스타트](cpp/quickstart.ko.md)가 다룬다.
+
+=== "C#/.NET"
+
+    ```bash
+    dotnet add package Zlink.Framework.AspNetCore
+    ```
+
+    | 포함 패키지 | 역할 |
+    |---|---|
+    | `Zlink.Framework` | framework 계약과 runtime |
+    | `Zlink` | **Core 메시징 엔진의 `.NET` binding** |
+    | `Zlink.Framework.Contracts` | codec 인터페이스와 framework 예외 |
+    | `Zlink.Framework.Provider.Abstractions` | provider 확장점 |
+    | `Zlink.Stream.Connector` | STREAM client 표면 |
+    | `Zlink.HttpClient` | HTTP client |
+    | `Microsoft.Extensions.DependencyInjection.Abstractions` · `.Logging.Abstractions` · `.Hosting.Abstractions` · `.Diagnostics.HealthChecks` | DI·로깅·host 수명주기·health check |
+
+    | 선택 패키지 | 추가하는 경우 |
+    |---|---|
+    | `Zlink.Framework.Locations.Redis` | Redis location store를 사용할 때 |
+    | `Zlink.Framework.Codecs.Protobuf` · `Zlink.Framework.Codecs.MessagePack` | 기본 JSON codec 대신 사용할 때 |
+
+    ASP.NET Core host가 아니면 `Zlink.Framework`를 설치하고 host를 코드에서 직접 시작한다.
+    런타임은 .NET 8 이상이 필요하며, 첫 실행까지의 절차는
+    [퀵스타트](dotnet/quickstart.ko.md)가 다룬다.
 
 === "Java"
 
