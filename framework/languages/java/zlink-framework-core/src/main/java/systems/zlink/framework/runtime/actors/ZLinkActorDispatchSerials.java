@@ -40,6 +40,15 @@ final class ZLinkActorDispatchSerials {
     // admission ordering without invoking the queue under that monitor.
     private final Map<String, Set<CompletableFuture<Void>>> pendingAdmissions =
         new HashMap<>();
+    // A deferred Join barrier is queued on the Actor's dispatch target at
+    // registration time, but a same-node Join re-targets the Actor to the
+    // target Spot as soon as that Spot admits it (spec 05-spot-actor-membership
+    // §4.2 step 2), before OnJoinedActor and the completion callback ran.
+    // Spec 05 §4 lets no Actor payload run before the completion callback
+    // ended, so the barrier must stay in front of the Actor across that
+    // re-target: every later dispatch target starts behind it.
+    private final Map<String, CompletionStage<Void>> lifecycleBarriers =
+        new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
     ZLinkActorDispatchSerials() {
@@ -151,7 +160,14 @@ final class ZLinkActorDispatchSerials {
                 throw new IllegalStateException(
                     "actor dispatch admission is closed: " + actorId);
             }
-            actorTargets.put(actorId, target);
+            ZLinkActorDispatchTarget previous = actorTargets.put(actorId, target);
+            CompletionStage<Void> barrier = lifecycleBarriers.get(actorId);
+            if (barrier != null && previous != null && previous != target) {
+                //  Installed on the state lane, ahead of the turn this
+                //  prepare admits, so no arrival admitted after the re-target
+                //  can overtake the pending barrier.
+                target.executeActorLifecycleNext(actorId, () -> barrier);
+            }
             return new QueuedTurn(
                 actorId,
                 target);
@@ -370,8 +386,18 @@ final class ZLinkActorDispatchSerials {
     CompletionStage<Void> enqueueBarrier(
         String actorId,
         Supplier<CompletionStage<Void>> operation) {
-        return trackedTarget(actorId).executeActorLifecycleNext(
+        ZLinkActorDispatchTarget target = trackedTarget(actorId);
+        //  The hold that a re-target installs in front of the new queue
+        //  releases on the barrier's terminal, success or failure alike.
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        inStateLane(() -> lifecycleBarriers.put(actorId, released));
+        CompletionStage<Void> barrier = target.executeActorLifecycleNext(
             actorId, () -> runTurn(actorId, operation));
+        barrier.whenComplete((ignored, error) -> {
+            stateLane.runAsync(() -> lifecycleBarriers.remove(actorId, released));
+            released.complete(null);
+        });
+        return barrier;
     }
 
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySeal(
