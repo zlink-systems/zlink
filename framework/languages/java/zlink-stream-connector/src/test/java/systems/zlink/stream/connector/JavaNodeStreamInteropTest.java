@@ -45,10 +45,24 @@ final class JavaNodeStreamInteropTest {
 
     private static byte[] runNodeInterop(byte[] requestFrame) throws Exception {
         Path connectorDist = nodeConnectorDist();
+        //  The script goes through a file, not `node -e`: on Windows the command
+        //  line is one string, so the double quotes inside the script (the JSON
+        //  payload literal) are re-parsed as argument quoting and Node received
+        //  `{join:true}`. The payload comparison then failed on Windows only.
+        Path script = Files.createTempFile("zlink-java-node-interop", ".cjs");
+        try {
+            Files.writeString(script, nodeScript(), StandardCharsets.UTF_8);
+            return runNodeInterop(script, connectorDist, requestFrame);
+        } finally {
+            Files.deleteIfExists(script);
+        }
+    }
+
+    private static byte[] runNodeInterop(Path script, Path connectorDist, byte[] requestFrame)
+        throws Exception {
         Process process = new ProcessBuilder(
                 "node",
-                "-e",
-                nodeScript(),
+                script.toString(),
                 connectorDist.toString(),
                 HexFormat.of().formatHex(requestFrame))
             .redirectErrorStream(true)
@@ -84,12 +98,12 @@ final class JavaNodeStreamInteropTest {
     private static String nodeScript() {
         return """
             const path = require('node:path');
-            const connector = require(process.argv[1]);
+            const connector = require(process.argv[2]);
             const { ZlinkStreamFrameCodec } = require(
-              path.join(process.argv[1], 'Runtime/Protocol/ZlinkStreamFrameCodec.js'));
+              path.join(process.argv[2], 'Runtime/Protocol/ZlinkStreamFrameCodec.js'));
             const { ZlinkStreamHeaderCodec } = require(
-              path.join(process.argv[1], 'Runtime/Protocol/ZlinkStreamHeaderCodec.js'));
-            const requestFrame = Buffer.from(process.argv[2], 'hex');
+              path.join(process.argv[2], 'Runtime/Protocol/ZlinkStreamHeaderCodec.js'));
+            const requestFrame = Buffer.from(process.argv[3], 'hex');
             const decodedFrame = ZlinkStreamFrameCodec.decode(requestFrame);
             const decodedHeader = ZlinkStreamHeaderCodec.decode(decodedFrame.header);
             if (decodedHeader.kind !== connector.ZlinkStreamMessageKind.Request ||
