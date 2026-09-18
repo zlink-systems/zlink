@@ -88,6 +88,25 @@ zlink_sample_allocate_paired_ports() {
   zlink_allocate_tcp_ports "$1" 20100 20999 1000
 }
 
+# Single owner of every C++ sample runner's run-directory lifetime.
+#
+# A passing run removes the directory, generated role config and all. A failing
+# run keeps it and prints the path, because the role stdout/stderr logs inside it
+# are the only evidence of why the run failed and a runner that deletes them on
+# the failure path leaves nothing to diagnose.
+zlink_sample_close_run_dir() {
+  local run_dir="$1"
+  local status="$2"
+  local label="$3"
+
+  [[ -n "${run_dir}" && -d "${run_dir}" ]] || return 0
+  if [[ "${status}" -ne 0 ]]; then
+    printf '%s run directory preserved: %s\n' "${label}" "${run_dir}" >&2
+    return 0
+  fi
+  rm -rf "${run_dir}"
+}
+
 zlink_redis_is_bind_conflict() {
   local details="${1,,}"
   [[ "${details}" == *"address already in use"* ||

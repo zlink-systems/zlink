@@ -758,29 +758,78 @@ bool sample_code_does_not_read_the_environment (const std::filesystem::path &roo
     return ok;
 }
 
+/* A runner's run directory holds the generated role config and the role
+ * stdout/stderr logs together, so one decision governs both: a passing run
+ * removes the directory, a failing run keeps it and prints the path. The logs
+ * are the only evidence of why a run failed, and a runner that deletes them in
+ * its own exit path leaves a readiness timeout with nothing to read. That
+ * decision has one owner -- `zlink_sample_close_run_dir` in
+ * `samples/redis-common.sh` and `Close-ZlinkSampleRunDir` in
+ * `samples/redis-common.ps1` -- and every runner delegates to it. */
 bool runner_generated_config_files_are_private_and_cleaned (const std::filesystem::path &root)
 {
+    struct shell_t
+    {
+        const char *extension;
+        const char *helper_file;
+        const char *helper_definition;
+        const char *helper_call;
+        const char *self_delete;
+    };
+    static constexpr shell_t shells[] = {
+      {".sh", "redis-common.sh", "zlink_sample_close_run_dir() {", "zlink_sample_close_run_dir",
+       "rm -rf"},
+      {".ps1", "redis-common.ps1", "function Close-ZlinkSampleRunDir", "Close-ZlinkSampleRunDir",
+       "Remove-Item -Recurse"}};
+
     bool ok = true;
-    for (const auto *tree : {"samples"}) {
-        const auto tree_root = root / tree;
-        for (const auto &entry : layout_recursive_directory_entries (tree_root)) {
-            if (!entry.is_regular_file () || entry.path ().extension () != ".sh") {
-                continue;
-            }
-            const auto &content = entry.contents ().text;
-            if (content.find ("--config") == std::string::npos) {
-                continue;
-            }
-            if (content.find ("os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)") == std::string::npos) {
-                std::cerr << "runner-generated application config must use mode 0600: "
-                          << entry.path () << '\n';
+    const auto samples_root = root / "samples";
+    for (const auto &shell : shells) {
+        layout_file_contents_t helper;
+        read_layout_file (samples_root / shell.helper_file, helper);
+        for (const auto *required :
+             {shell.helper_definition, shell.self_delete, "run directory preserved"}) {
+            if (helper.text.find (required) == std::string::npos) {
+                std::cerr << "the run-directory helper in " << shell.helper_file
+                          << " must contain \"" << required << "\"\n";
                 ok = false;
             }
-            if (content.find ("rm -rf") == std::string::npos) {
-                std::cerr << "runner-generated application config must be cleaned on exit: "
-                          << entry.path () << '\n';
-                ok = false;
+        }
+    }
+
+    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
+        if (!entry.is_regular_file ()) {
+            continue;
+        }
+        const auto extension = entry.path ().extension ().string ();
+        const shell_t *shell = nullptr;
+        for (const auto &candidate : shells) {
+            if (extension == candidate.extension) {
+                shell = &candidate;
             }
+        }
+        if (shell == nullptr) {
+            continue;
+        }
+        const auto &content = entry.contents ().text;
+        if (content.find ("--config") == std::string::npos) {
+            continue;
+        }
+        if (extension == ".sh"
+            && content.find ("os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)") == std::string::npos) {
+            std::cerr << "runner-generated application config must use mode 0600: "
+                      << entry.path () << '\n';
+            ok = false;
+        }
+        if (content.find (shell->helper_call) == std::string::npos) {
+            std::cerr << "runner must close its run directory through " << shell->helper_call
+                      << ": " << entry.path () << '\n';
+            ok = false;
+        }
+        if (content.find (shell->self_delete) != std::string::npos) {
+            std::cerr << "runner must not delete its run directory itself (\"" << shell->self_delete
+                      << "\"); a failing run has to keep the role logs: " << entry.path () << '\n';
+            ok = false;
         }
     }
     return ok;
