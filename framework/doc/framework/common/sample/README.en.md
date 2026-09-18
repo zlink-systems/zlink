@@ -530,25 +530,11 @@ The standard templates are placed under this directory's `runner-templates/`.
   reveals the language and sample run scope. For example, a Java sample should be clearly
   identifiable at a glance as the same language/sample scope, like `zlink-redis-java-sample...`, and
   a Kotlin sample as `zlink-redis-kotlin-sample...`.
-- An individual `run_sample.*` and the integrated sample runner don't delete a different container
-  with the same prefix at startup. Since the same-language runner can also run concurrently, prefix
-  cleanup could remove a different run's dedicated Redis.
-- An individual `run_sample.*` cleans up only the Redis container id it created itself, on both
-  normal and failure exit. Broad prefix-based cleanup isn't put into an individual script's exit
-  trap.
-- The integrated sample runner doesn't clean up a different run's Redis — it sequentially calls each
-  individual `run_sample.*`. This runner also doesn't run samples in parallel within one run.
-- The integrated runner invokes a shell runner as `bash <path>/run_sample.sh`; it doesn't change the
-  source file's executable mode in order to run it.
-- The integrated sample runner must be able to run only a specific sample list. With no argument, it
-  runs every sample; with an argument, it sequentially runs only the specified sample runners. E.g.:
-  `./run_samples.sh Bingo SupportChat`, or for a runner that needs to distinguish per-language paths,
-  `./run_samples.sh java/Bingo kotlin/SupportChat`. The integrated runner doesn't re-implement a
-  sample's internal procedure — it only calls the selected individual `run_sample.*`.
-- The integrated sample runner doesn't re-implement per-sample internal behavior. On each attempt,
-  it calls the selected individual `run_sample.*` and manages only the final result. Redis endpoint
-  creation, readiness, log location, and self-check detailed procedure are handled by the
-  individual script and common helper.
+- A `run_sample.*` doesn't delete a different container with the same prefix at startup. Since
+  runners of different languages can run concurrently, prefix cleanup could remove a different run's
+  dedicated Redis.
+- A `run_sample.*` cleans up only the Redis container id it created itself, on both normal and
+  failure exit. Broad prefix-based cleanup isn't put into its exit trap.
 - The Redis host port is selected per run from the language-specific Redis range. The runner verifies
   availability with an OS bind, passes that port explicitly to Docker, verifies that the inspected
   port equals the selected value, and delivers it to the application configuration. The Redis key

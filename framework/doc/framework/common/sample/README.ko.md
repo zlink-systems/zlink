@@ -489,23 +489,10 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
   드러내는 prefix를 추가한다. 예를 들어 Java sample은 `zlink-redis-java-sample...`,
   Kotlin sample은 `zlink-redis-kotlin-sample...`처럼 같은 언어·sample 범위를 한눈에
   알 수 있어야 한다.
-- 개별 `run_sample.*`와 통합 sample runner는 시작 시 같은 prefix의 다른 container를 지우지
-  않는다. 같은 언어 runner도 동시에 실행될 수 있으므로 prefix cleanup은 다른 실행의 전용 Redis를
-  제거할 수 있다.
-- 개별 `run_sample.*`는 정상 종료와 실패 종료 모두에서 자신이 만든 Redis container id만
-  정리한다. prefix로 넓게 지우는 cleanup을 개별 script의 exit trap에 넣지 않는다.
-- 통합 sample runner는 다른 실행의 Redis를 정리하지 않고 각 개별 `run_sample.*`를 순차 호출한다.
-  이 runner도 한 실행 안에서는 sample을 병렬 실행하지 않는다.
-- 통합 runner는 shell runner를 `bash <path>/run_sample.sh`로 호출하며, 실행을 위해 source file의
-  executable mode를 변경하지 않는다.
-- 통합 sample runner는 특정 sample 리스트만 실행할 수 있어야 한다. 인자가 없으면 모든 sample을
-  실행하고, 인자가 있으면 지정한 sample runner만 순차 실행한다. 예:
-  `./run_samples.sh Bingo SupportChat` 또는 언어별 경로를 구분해야 하는 runner에서는
-  `./run_samples.sh java/Bingo kotlin/SupportChat`처럼 쓴다. 통합 runner는 sample 내부 절차를
-  재구현하지 않고 선택한 개별 `run_sample.*`만 호출한다.
-- 통합 sample runner는 sample별 내부 동작을 다시 구현하지 않는다. 각 시도에서는 선택한 개별
-  `run_sample.*`를 호출하고 최종 결과만 관리한다. Redis endpoint 생성,
-  readiness, 로그 위치, self-check 세부 절차는 개별 script와 공통 helper가 맡는다.
+- `run_sample.*`는 시작 시 같은 prefix의 다른 container를 지우지 않는다. 서로 다른 언어의
+  runner가 동시에 실행될 수 있으므로 prefix cleanup은 다른 실행의 전용 Redis를 제거할 수 있다.
+- `run_sample.*`는 정상 종료와 실패 종료 모두에서 자신이 만든 Redis container id만
+  정리한다. prefix로 넓게 지우는 cleanup을 exit trap에 넣지 않는다.
 - Redis host port는 언어별 Redis 구간 안에서 실행할 때마다 선택한다. Runner는 OS bind로
   사용 가능 여부를 확인한 뒤 그 port를 Docker에 명시하고, `inspect` 결과가 선택값과 같은지
   확인해서 애플리케이션 설정에 전달한다. Redis key prefix도 실행마다 고유하게 만든다.
