@@ -322,10 +322,10 @@ try {
     Write-RoleConfig (Join-Path $ConfigDir "zone-node-3.json") "zone-node-3" $Node3Mesh $Node3Stream $Node3Http $RedisEndpoint $KeyPrefix $Broadcast "" $true $true
 
     if ($B8Child) {
-        $python = Get-Command python.exe, python3.exe, py.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        $python = Get-ZlinkSamplePythonCommand
         if ($python) {
-            $proxyRuntime = $python.Source
-            $proxyPrefix = if ($python.Name -eq "py.exe") { @("-3") } else { @() }
+            $proxyRuntime = $python.Path
+            $proxyPrefix = @($python.Arguments)
             $proxyScript = Join-Path $PSScriptRoot "Support/session_route_block_proxy.py"
         } else {
             $node = Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1
