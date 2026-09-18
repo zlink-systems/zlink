@@ -4,6 +4,7 @@
 
 #include <zlink/codecs/protobuf.hpp>
 
+#include "../support/read_text_file.hpp"
 #include "loopback_tcp_endpoint.hpp"
 #include "test_completion_poller_driver.hpp"
 
@@ -533,13 +534,7 @@ class recording_dispatch_observer_t
     std::filesystem::path _log_path;
 };
 
-std::string read_file (const std::filesystem::path &path)
-{
-    std::ifstream input (path);
-    std::stringstream buffer;
-    buffer << input.rdbuf ();
-    return buffer.str ();
-}
+using zlink::framework::tests::read_text_file;
 
 std::size_t count_occurrences (const std::string &text, const std::string &needle)
 {
@@ -1686,7 +1681,7 @@ int main ()
         return 107;
     }
     clear_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
-    const auto dispatch_log_text = read_file (dispatch_log_path);
+    const auto dispatch_log_text = read_text_file (dispatch_log_path);
     std::filesystem::remove (dispatch_log_path);
     if (count_occurrences (dispatch_log_text, "dispatch-error") < 5
         || dispatch_log_text.find ("surface=channel") == std::string::npos
