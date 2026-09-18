@@ -18,6 +18,7 @@
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
 #include "runtime/utils/uuid.hpp"
@@ -1979,7 +1980,7 @@ bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target
         if (_node->transport ().topology ().peer (routing_id)) {
             return true;
         }
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
     return _node->transport ().topology ().peer (routing_id).has_value ();
 }

@@ -43,6 +43,7 @@
 #include "runtime/host/relocation_target_eligibility.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -2721,7 +2722,7 @@ int app_t::run (int argc, char **argv) try
                 g_stop_signal_requested = 0;
                 (void) shutdown ();
             }
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
         }
     }
     catch (...) {
@@ -3360,7 +3361,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     complete (terminal);
                     co_return;
                 }
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+                zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
                 application_units = spot_runtime->application_relocation_units ();
             }
 
@@ -3637,7 +3638,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         }
         if (!relocation_active)
             break;
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     }
     {
         std::lock_guard lock (state.relocation_operation.mutex);

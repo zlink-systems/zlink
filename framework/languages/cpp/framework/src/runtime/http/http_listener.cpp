@@ -3,6 +3,7 @@
 #include "runtime/http/http_host_service.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/http/http_request_pipeline.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -282,7 +283,7 @@ class http_host_service_t::listener_t
         const auto deadline = std::chrono::steady_clock::now () + timeout;
         while (_active_requests.load (std::memory_order_acquire) != 0
                && std::chrono::steady_clock::now () < deadline) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (5));
+            zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (5));
         }
         return _active_requests.load (std::memory_order_acquire) == 0;
     }

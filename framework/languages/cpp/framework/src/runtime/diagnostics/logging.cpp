@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -91,7 +93,14 @@ log_level_t parse_log_level (std::string level)
 
 std::string format_record (const log_record_t &record)
 {
-    const auto time = std::chrono::system_clock::to_time_t (record.timestamp);
+    // A whole second cannot separate two hops of one request, so the timestamp
+    // carries milliseconds. std::chrono::system_clock::to_time_t may round, which
+    // would disagree with the millisecond remainder; floor the seconds instead.
+    const auto since_epoch = record.timestamp.time_since_epoch ();
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds> (since_epoch);
+    const auto milliseconds =
+      std::chrono::duration_cast<std::chrono::milliseconds> (since_epoch - seconds);
+    const std::time_t time = static_cast<std::time_t> (seconds.count ());
     std::tm tm{};
 #if defined(_WIN32)
     localtime_s (&tm, &time);
@@ -99,8 +108,9 @@ std::string format_record (const log_record_t &record)
     localtime_r (&time, &tm);
 #endif
     std::ostringstream output;
-    output << std::put_time (&tm, "%Y-%m-%dT%H:%M:%S") << ' ' << log_level_name (record.level)
-           << ' ' << record.category << " - " << record.message;
+    output << std::put_time (&tm, "%Y-%m-%dT%H:%M:%S") << '.' << std::setw (3)
+           << std::setfill ('0') << milliseconds.count () << std::setfill (' ') << ' '
+           << log_level_name (record.level) << ' ' << record.category << " - " << record.message;
     for (const auto &field : record.fields) {
         output << ' ' << field.key << '=' << field.value;
     }
