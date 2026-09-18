@@ -3,6 +3,7 @@
 #include "runtime/channels/route_channel_runtime.hpp"
 
 #include "runtime/transport/endpoint_notation.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <algorithm>
 #include <thread>
@@ -510,7 +511,7 @@ result_t<void> route_channel_runtime_t::wait_until_peer_ready (const zlink::rout
             || std::chrono::steady_clock::now () >= deadline) {
             return last;
         }
-        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
     }
 }
 
@@ -541,7 +542,7 @@ route_channel_runtime_t::wait_until_connected (std::chrono::milliseconds timeout
             || std::chrono::steady_clock::now () >= deadline) {
             return last;
         }
-        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
     }
 }
 

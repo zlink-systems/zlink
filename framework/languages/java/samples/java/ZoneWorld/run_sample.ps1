@@ -302,8 +302,11 @@ function Invoke-Client {
 }
 
 function Start-Zone {
-    param([string]$Name, [string]$ConfigName = "")
-    if (-not $ConfigName) { $ConfigName = $Name }
+    param([string]$Name)
+    # Every restart is a replacement: same NodeId, a new RID on the node's own replacement
+    # endpoint, ready with no zones. The stop kind does not change that, so the configuration
+    # follows from the node name alone.
+    $ConfigName = "$Name-replacement"
     $process = Start-Role $Name $ServerBin @("--config", (Join-Path $ConfigDir "$ConfigName.properties"))
     if (-not (Wait-LogWhileRunning $Name "topology=ready" 1 $process 900)) { return $false }
     return Wait-LogWhileRunning $Name "node status report submitted" 1 $process 900
@@ -336,8 +339,7 @@ function Invoke-ClientWithStop {
     $node = $armed.Matches[0].Groups[1].Value
     Stop-Node $node $Mode
     if (-not (Complete-Client $run)) { Add-Verdict $Id $false "client verdict failed after stop" }
-    $config = if ($node -eq "zone-node-2") { "zone-node-crash-replacement" } else { $node }
-    if (-not (Start-Zone $node $config)) { Add-Verdict $Id $false "replacement did not reach topology ready" }
+    if (-not (Start-Zone $node)) { Add-Verdict $Id $false "replacement did not reach topology ready" }
 }
 
 function Test-EveryLog {
@@ -397,10 +399,11 @@ try {
         }
     }
 
-    $ports = @(Get-ZlinkSampleApplicationPorts -Language Java -Count 9)
-    $Mesh1 = $ports[0]; $Mesh2 = $ports[1]; $ReplacementMesh = $ports[2]
-    $OpsStream = $ports[3]; $OpsMesh = $ports[4]; $GatewayStream = $ports[5]
-    $GatewayMesh = $ports[6]; $SpareMesh = $ports[7]
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Java -Count 10)
+    $Mesh1 = $ports[0]; $Mesh2 = $ports[1]
+    $ReplacementMesh1 = $ports[2]; $ReplacementMesh2 = $ports[3]
+    $OpsStream = $ports[4]; $OpsMesh = $ports[5]; $GatewayStream = $ports[6]
+    $GatewayMesh = $ports[7]; $SpareMesh = $ports[8]
 
     $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-zoneworld" `
         $(if ($env:ZLINK_REDIS_IMAGE) { $env:ZLINK_REDIS_IMAGE } else { "redis:7.2-alpine" }) -Language Java
@@ -411,8 +414,11 @@ try {
     Write-ServerConfig "zone-node-1" "zone" "zone-node-1" $Mesh1 0 $false $false $false "*"
     Write-ServerConfig "zone-node-2" "zone" "zone-node-2" $Mesh2 0
     Write-ServerConfig "zone-node-3" "zone" "zone-node-3" $SpareMesh 0 $true $true $true
-    Write-ServerConfig "zone-node-replacement" "zone" "zone-node-2" $ReplacementMesh 0
-    Write-ServerConfig "zone-node-crash-replacement" "zone" "zone-node-2" $ReplacementMesh 0 $false $true $true
+    # One replacement configuration per node, and it is the only configuration a restart uses.
+    # A stopped owner's zones stay with the incarnation that owned them, so a restarted node
+    # reaches ready with no zones and spawns no bots, whether it was stopped or killed.
+    Write-ServerConfig "zone-node-1-replacement" "zone" "zone-node-1" $ReplacementMesh1 0 $false $true $true
+    Write-ServerConfig "zone-node-2-replacement" "zone" "zone-node-2" $ReplacementMesh2 0 $false $true $true
     Write-ServerConfig "ops" "ops" "ops" $OpsMesh $OpsStream
     Write-ServerConfig "gateway" "gateway" "gateway" $GatewayMesh $GatewayStream
 
@@ -523,7 +529,7 @@ try {
         if (-not (Complete-Client $run)) { throw "scenario ZW-G4 failed" }
         if (-not (Select-String -LiteralPath $ClientLog -SimpleMatch "scenario ZW-G4 passed" -Quiet)) { throw "scenario ZW-G4 failed" }
         $opsFirst = Get-NextLogLine "ops"
-        if (-not (Start-Zone "zone-node-2" "zone-node-crash-replacement")) { throw "scenario ZW-G4 failed" }
+        if (-not (Start-Zone "zone-node-2")) { throw "scenario ZW-G4 failed" }
         $new = Get-RoutingId "zone-node-2" $opsFirst
         if (-not (Test-ZoneRoutingId $new) -or $new -eq $old) { throw "scenario ZW-G4 failed" }
         if (-not (Invoke-Client "ZW-G4-fresh") -or
@@ -567,7 +573,7 @@ try {
             Stop-Node "zone-node-2" "KILL"
             if (-not (Wait-LogWhileRunning $run.Name "scenario ZW-E5 replacement waiting" 1 $run.Process 900)) {
                 [void](Complete-Client $run); Add-Verdict "ZW-E5" $false "client did not observe the stopped node"
-            } elseif (-not (Start-Zone "zone-node-2" "zone-node-crash-replacement")) {
+            } elseif (-not (Start-Zone "zone-node-2")) {
                 Add-Verdict "ZW-E5" $false "replacement did not reach topology ready"
             } elseif (-not (Complete-Client $run)) {
                 Add-Verdict "ZW-E5" $false "maintenance not restored"
@@ -629,7 +635,7 @@ try {
         $old = $Rid2
         Stop-Node "zone-node-2" "TERM"
         $opsFirst = Get-NextLogLine "ops"
-        Start-Role "zone-node-replacement" $ServerBin @("--config", (Join-Path $ConfigDir "zone-node-crash-replacement.properties")) | Out-Null
+        Start-Role "zone-node-replacement" $ServerBin @("--config", (Join-Path $ConfigDir "zone-node-2-replacement.properties")) | Out-Null
         if (Wait-LogWhileRunning "zone-node-replacement" "topology=ready" 1 $NodeProcesses["zone-node-replacement"] 900) {
             $new = Get-RoutingId "zone-node-2" $opsFirst
             $first = @((Get-Content -LiteralPath $ClientLog)).Count + 1

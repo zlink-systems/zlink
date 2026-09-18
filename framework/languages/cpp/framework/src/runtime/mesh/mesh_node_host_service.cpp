@@ -19,6 +19,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
@@ -1055,7 +1056,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
               actor_result_from_terminal (*terminal, [this] (zlink::message_t raw) {
                   return message_t::from_raw (std::move (raw), _serializers);
               })));
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     }
     return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
       framework_error_kind_t::deadline_exceeded, "Actor creation deadline elapsed"));

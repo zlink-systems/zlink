@@ -2098,6 +2098,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_poll_interval_wait
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
+    "framework-unit;framework-regression")
+  add_zlink_framework_test(
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")

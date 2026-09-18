@@ -48,6 +48,14 @@ class ZoneBootstrap(
         listOf("zone-node-1", "zone-node-2").forEach { nodeId ->
             maintenance.apply(nodeId, store.get(nodeId))
         }
+        // A replacement keeps the NodeId and claims nothing. A stopped owner's zone objects stay
+        // with the incarnation that owned them, so claiming here could settle on one zone — which
+        // is neither the two a cold start needs nor the none a replacement announces, and a state
+        // the loop below could never leave. Only a cold start claims.
+        if (topology.allowsEmptyZoneSet()) {
+            println("topology=ready node=${topology.nodeValue()} zones=")
+            return
+        }
         var attempt = 0
         while (census.zoneIds().size != 2) {
             val claimed = census.zoneIds()
@@ -81,7 +89,6 @@ class ZoneBootstrap(
                     if (census.zoneIds() != claimed) break
                 }
             }
-            if (topology.allowsEmptyZoneSet() && census.zoneIds().isEmpty() && attempt >= 8) break
             check(attempt++ < 119) {
                 "Zone Spot capacity did not settle. node=${topology.nodeValue()} zones=${census.zoneIds()}"
             }

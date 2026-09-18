@@ -13,6 +13,7 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
+#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <service_wire_constants.hpp>
 #include <service_wire_pilot_codec.hpp>
@@ -4845,7 +4846,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 reply_terminal ({101, 0, std::nullopt});
                                 return true;
                             }
-                            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+                            zlink::framework::runtime::wait_poll_interval (
+                              std::chrono::milliseconds (1));
                             current = store->read_authority (authority_key).result ().value ();
                         }
                         return false;
