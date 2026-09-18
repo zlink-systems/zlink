@@ -94,6 +94,7 @@ public final class GameQuestSession implements ZLinkSession {
     private CompletionStage<Void> handleJoin(Messages.JoinSessionReq request) {
         playerId = request.playerId();
         store.bind(request.playerId(), topology.gameApi().instanceName());
+        // --8<-- [start:doc-gq-join-bind]
         return ensurePlayerActor(request)
             .thenCompose(actorRef -> context.actors().bind(actorRef))
             .thenCompose(bound -> {
@@ -111,6 +112,7 @@ public final class GameQuestSession implements ZLinkSession {
                 context.client().reply(new Messages.JoinSessionRes(ownerProjection.activeQuests())).submit();
             });
             });
+        // --8<-- [end:doc-gq-join-bind]
     }
 
     private CompletionStage<Void> handleGetProgress(Messages.GetQuestProgressReq request) {
@@ -139,6 +141,7 @@ public final class GameQuestSession implements ZLinkSession {
             });
     }
 
+    // --8<-- [start:doc-gq-action-handler]
     private CompletionStage<Void> handleKill(Messages.KillMonsterReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
@@ -147,6 +150,7 @@ public final class GameQuestSession implements ZLinkSession {
             request.monsterId(),
             1,
             true);
+        // --8<-- [start:doc-gq-store-dispatch]
         store.recordGameplay(event);
         return process(event)
             .thenRun(() -> System.out.printf(
@@ -163,7 +167,9 @@ public final class GameQuestSession implements ZLinkSession {
                 }
                 return CompletableFuture.failedFuture(error);
             });
+        // --8<-- [end:doc-gq-store-dispatch]
     }
+    // --8<-- [end:doc-gq-action-handler]
 
     private CompletionStage<Void> handleCollect(Messages.CollectItemMsg message) {
         Messages.GameplayMsg event = event(
@@ -215,6 +221,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.UnlockFeatureRes(event.eventId())).submit());
     }
 
+    // --8<-- [start:doc-gq-owner-send]
     private CompletionStage<Void> process(
         Messages.GameplayMsg event) {
         return channels.sendToSpot(event.playerId(), event)
@@ -222,6 +229,7 @@ public final class GameQuestSession implements ZLinkSession {
             .inMesh(SampleNames.PlayerQuestSpotDiscovery)
             .submit();
     }
+    // --8<-- [end:doc-gq-owner-send]
 
     private static boolean isUnavailable(Throwable error) {
         Throwable current = error;

@@ -122,6 +122,7 @@ class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
 
+            // --8<-- [start:doc-gq-api-register]
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingId(RoutingId.from("gamequest-api-${api.instanceName}"))
                 .listen()
@@ -136,6 +137,7 @@ class Program {
                 .bind(api.streamEndpoint)
                 .enableActorDispatch()
                 .registerSession(GameQuestSession::class.java)
+            // --8<-- [end:doc-gq-api-register]
         }
     }
 
@@ -211,9 +213,11 @@ class GameQuestSession(
     private suspend fun handleJoin(request: JoinSessionReq) {
         playerId = request.playerId
         store.bind(request.playerId, topology.gameApi().instanceName)
+        // --8<-- [start:doc-gq-join-bind]
         val actorRef = ensurePlayerActor(request)
         playerActor = context.actors().find(actorRef.actorId).orElse(null)
             ?: context.actors().bind(actorRef).await()
+        // --8<-- [end:doc-gq-join-bind]
         val ownerProjection = routes
             .requestToSpot(request.playerId, GetQuestProgressReq(request.playerId))
             .timeout(SampleTimings.RequestTimeout)
@@ -249,6 +253,7 @@ class GameQuestSession(
         context.client().reply(response).submit()
     }
 
+    // --8<-- [start:doc-gq-action-handler]
     private suspend fun handleKill(request: KillMonsterReq) {
         try {
             val processed = process(event(request.playerId, request.idempotencyKey, "kill", request.monsterId, 1, true))
@@ -258,6 +263,7 @@ class GameQuestSession(
             throw failure
         }
     }
+    // --8<-- [end:doc-gq-action-handler]
 
     private suspend fun handleCollect(message: CollectItemMsg) {
         process(event(message.playerId, message.idempotencyKey, "collect", message.itemId, message.count, true))
@@ -278,14 +284,18 @@ class GameQuestSession(
     }
 
     private suspend fun process(event: GameplayMsg): GameplayMsg {
+        // --8<-- [start:doc-gq-store-dispatch]
         store.recordGameplay(event)
+        // --8<-- [start:doc-gq-owner-send]
         routes
             .sendToSpot(event.playerId, event)
             .instanceSpot(SampleNames.PlayerQuestSpotType)
             .inMesh(SampleNames.PlayerQuestMesh)
             .submit()
             .await()
+        // --8<-- [end:doc-gq-owner-send]
         println("gamequest-api event-routed player=${event.playerId}")
+        // --8<-- [end:doc-gq-store-dispatch]
         return event
     }
 
@@ -341,6 +351,7 @@ class GameQuestEntrySpot(
     }
 }
 
+// --8<-- [start:doc-gq-progress-push]
 class QuestProcessingActorHandler(
     private val store: GameQuestStore,
 ) : ZLinkSuspendingEntrySpotActorSendHandler<
@@ -358,6 +369,7 @@ class QuestProcessingActorHandler(
         actor.push(message)
     }
 }
+// --8<-- [end:doc-gq-progress-push]
 
 private fun startHttp(store: GameQuestStore, topology: SampleTopology): HttpServer {
     val json = jacksonObjectMapper()

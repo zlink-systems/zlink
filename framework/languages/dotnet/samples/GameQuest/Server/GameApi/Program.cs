@@ -65,6 +65,7 @@ internal static class Program
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(Program));
+            // --8<-- [start:doc-gq-api-register]
             var mesh = options.AddRouteMesh(SampleNames.MeshName)
                 .Listen(topology.GameApiMeshEndpoint(apiName))
                 .SetRoutingIdPrefix("game-api");
@@ -76,6 +77,7 @@ internal static class Program
                 .Bind(configuration.StreamBindEndpoint)
                 .EnableActorDispatch()
                 .AddSession<GameQuestSession>();
+            // --8<-- [end:doc-gq-api-register]
         });
 
         var app = builder.Build();

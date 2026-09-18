@@ -40,6 +40,7 @@ internal sealed class ZLinkQuestProgressNotifier(IZLinkActorClient actors) : IQu
     {
         try
         {
+            // --8<-- [start:doc-gq-notify-actor]
             var contracts = projection.Select(QuestContractMapper.ToContract).ToArray();
             foreach (var progress in contracts)
                 await actors.SendToActor(playerId, new QuestProgressMsg(playerId, progress))
@@ -53,6 +54,7 @@ internal sealed class ZLinkQuestProgressNotifier(IZLinkActorClient actors) : IQu
             }
 
             return new QuestProgressNotifyResult(true, null, null);
+            // --8<-- [end:doc-gq-notify-actor]
         }
         catch (ZLinkFrameworkException error)
         {

@@ -31,6 +31,7 @@ public final class QuestStore implements AutoCloseable {
     }
 
     public Messages.QuestProcessingMsg apply(Messages.GameplayMsg event) {
+        // --8<-- [start:doc-gq-process]
         PlayerState state = state(event.playerId());
         if (state.appliedEventIds.contains(event.eventId())) {
             shared.recordDeduplicatedEvent(event.eventId());
@@ -49,6 +50,7 @@ public final class QuestStore implements AutoCloseable {
         shared.writeProjection(event.playerId(), decision.projection());
         shared.appendQuestEvents(decision.storedEvents());
         state.appliedEventIds.add(event.eventId());
+        // --8<-- [end:doc-gq-process]
         return new Messages.QuestProcessingMsg(
             event.eventId(),
             event.playerId(),
@@ -60,6 +62,7 @@ public final class QuestStore implements AutoCloseable {
 
     public Messages.SyncQuestProgressRes sync(String playerId) {
         PlayerState state = state(playerId);
+        // --8<-- [start:doc-gq-sync]
         int firstHuntCount = gameplay.killCount(playerId, "wolf");
         List<Messages.QuestProgress> projection = copyProjection(state);
         Messages.QuestProgress firstHunt = projection.stream()
@@ -98,6 +101,7 @@ public final class QuestStore implements AutoCloseable {
                 playerId, Messages.QuestIds.FirstHunt);
         }
         return new Messages.SyncQuestProgressRes(copyProjection(state));
+        // --8<-- [end:doc-gq-sync]
     }
 
     public Messages.DeleteQuestProjectionRes deleteProjection(String playerId, String questId) {

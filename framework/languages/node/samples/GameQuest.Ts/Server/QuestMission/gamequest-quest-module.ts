@@ -42,6 +42,7 @@ function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
           builder.addLocationStore(createGameQuestLocationStore(config));
           builder.addRelocationStore(createGameQuestRelocationStore(config));
           gameQuestLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-gq-mission-register]
           const spotMesh = builder.addRouteMesh(SampleNames.playerQuestSpotMesh)
             .listen(config[spotRouterEndpointKey])
             .setRoutingIdPrefix('gamequest-mission');
@@ -50,6 +51,7 @@ function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
             PlayerQuestSpot,
             (factory) => factory.recreateOnRelocation()
           );
+          // --8<-- [end:doc-gq-mission-register]
           return builder.build();
         }
       })

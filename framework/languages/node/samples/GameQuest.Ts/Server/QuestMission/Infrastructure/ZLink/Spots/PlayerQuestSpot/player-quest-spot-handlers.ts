@@ -19,6 +19,7 @@ import type {
   SyncQuestProgressRes
 } from '../../../../../../Shared/Contracts/messages';
 
+// --8<-- [start:doc-gq-apply-handler]
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'GameplayMsg' })
 class ApplyGameplayEventSpotHandler
@@ -46,6 +47,7 @@ class ApplyGameplayEventSpotHandler
     await this.notifier.notify(message.playerId, result.changedProgress, result.completedQuestIds);
   }
 }
+// --8<-- [end:doc-gq-apply-handler]
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'GetQuestProgressReq' })
@@ -114,6 +116,7 @@ class RebuildQuestProjectionSpotHandler
   }
 }
 
+// --8<-- [start:doc-gq-close-handler]
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'ClosePlayerQuestMsg' })
 class ClosePlayerQuestSpotHandler
@@ -128,6 +131,7 @@ class ClosePlayerQuestSpotHandler
     await spot.context.close();
   }
 }
+// --8<-- [end:doc-gq-close-handler]
 
 function requirePlayer(spot: PlayerQuestSpot, playerId: string): void {
   spot.bindPlayer(playerId);

@@ -65,6 +65,7 @@ internal sealed class GameQuestEntrySpot(
     }
 }
 
+// --8<-- [start:doc-gq-progress-push]
 [ZLinkSpotActorSendHandler(nameof(QuestProgressMsg))]
 internal sealed class QuestProgressMsgActorHandler
     : IZLinkEntrySpotActorSendHandler<
@@ -84,6 +85,7 @@ internal sealed class QuestProgressMsgActorHandler
             .Async(cancellationToken);
     }
 }
+// --8<-- [end:doc-gq-progress-push]
 
 [ZLinkSpotActorSendHandler(nameof(QuestCompletedMsg))]
 internal sealed class QuestCompletedMsgActorHandler

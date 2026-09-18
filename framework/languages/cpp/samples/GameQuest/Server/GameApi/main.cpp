@@ -203,6 +203,7 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
         return {request.player_id, _store.projection (request.player_id)};
     }
 
+    // --8<-- [start:doc-gq-progress-push]
     void quest_progress_notified (player_actor_t &actor,
                                   message_context_t &,
                                   const notify_quest_progress_msg_t &notify)
@@ -231,6 +232,7 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
             }
         }
     }
+    // --8<-- [end:doc-gq-progress-push]
 
   private:
     game_api_store_t &_store;
@@ -269,6 +271,7 @@ class gamequest_session_t final : public packet_stream_session_t
         const auto packet = std::string (dispatch.packet_name);
         if (packet == join_session_req_t::packet_name) {
             const auto request = payload.parse_json<join_session_req_t> ();
+            // --8<-- [start:doc-gq-join-bind]
             auto actor = _actors.get_or_create (gamequest_player_actor_type, request.player_id);
             if (!actor) {
                 throw framework_exception_t (
@@ -276,6 +279,7 @@ class gamequest_session_t final : public packet_stream_session_t
                   actor.error () ? actor.error ()->what () : "gamequest session actor bind failed");
             }
             auto bound = co_await _actors.bind_or_get (actor.value ().ref ()).async ();
+            // --8<-- [end:doc-gq-join-bind]
             _player_id = request.player_id;
             _store.bind (request.player_id, _topology.api_name);
             auto synced = co_await sync_projection (request.player_id);
@@ -335,8 +339,10 @@ class gamequest_session_t final : public packet_stream_session_t
               .async ();
             co_return;
         }
+        // --8<-- [start:doc-gq-action-handler]
         if (packet == kill_monster_req_t::packet_name) {
             const auto request = payload.parse_json<kill_monster_req_t> ();
+            // --8<-- [start:doc-gq-store-dispatch]
             const auto event = event_for (request.player_id, request.idempotency_key,
                                           "MonsterKilled", request.monster_id, 1);
             try {
@@ -348,10 +354,12 @@ class gamequest_session_t final : public packet_stream_session_t
                 }
                 throw;
             }
+            // --8<-- [end:doc-gq-store-dispatch]
             stream.reply_packet (zlink::message_t::from_json (kill_monster_res_t{event.event_id}))
               .async ();
             co_return;
         }
+        // --8<-- [end:doc-gq-action-handler]
         if (packet == collect_item_req_t::packet_name) {
             const auto request = payload.parse_json<collect_item_req_t> ();
             const auto event = event_for (request.player_id, request.idempotency_key,
@@ -397,9 +405,11 @@ class gamequest_session_t final : public packet_stream_session_t
      * client에는 event id만 즉시 돌려주고, 진행은 notify로 돌아온다. */
     task_t<void> apply_event (const gameplay_msg_t &event)
     {
+        // --8<-- [start:doc-gq-owner-send]
         co_await _routes.send_to_spot (player_spot_id (event.player_id), event)
           .instance_spot (sample_names_t::player_quest_spot)
           .async ();
+        // --8<-- [end:doc-gq-owner-send]
         _store.record_event (event);
         std::cerr << "gamequest-api event-routed player=" << event.player_id << "\n";
         co_return;
@@ -454,6 +464,7 @@ int main (int argc, char **argv)
       .set_key_prefix (topology.redis_key_prefix + "relocation:");
     /* GameApi는 player entry Spot을 제공하는 Object Server다. API와 QuestMission은
          * 같은 RouteMesh에서 global Spot routing을 사용한다. */
+    // --8<-- [start:doc-gq-api-register]
     auto gamequest = options.add_route_mesh ("gamequest");
     gamequest
       .set_routing_id (zlink::routing_id_t::from ("gamequest-" + topology.api_name + "-spot"))
@@ -467,6 +478,7 @@ int main (int argc, char **argv)
     options.add_stream_node (sample_names_t::stream_node)
       .bind (topology.selected_api_stream_endpoint ())
       .register_session<gamequest_session_t> ();
+    // --8<-- [end:doc-gq-api-register]
     app.add_hosted_service (
       std::make_unique<sample_readiness_service_t> ("stream", topology.api_name));
     app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (

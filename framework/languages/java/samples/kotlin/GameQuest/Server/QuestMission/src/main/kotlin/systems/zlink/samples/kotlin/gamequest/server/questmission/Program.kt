@@ -100,6 +100,7 @@ class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
 
+            // --8<-- [start:doc-gq-mission-register]
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingId(RoutingId.from("gamequest-mission-${mission.instanceName}"))
                 .listen(mission.channelEndpoint)
@@ -108,6 +109,7 @@ class Program {
                     SampleNames.PlayerQuestSpotType,
                     PlayerQuestSpot::class.java,
                 ) { factory -> factory.recreateOnRelocation() }
+            // --8<-- [end:doc-gq-mission-register]
         }
     }
 
@@ -168,6 +170,7 @@ class PlayerQuestSpot(
 ) : ZLinkInstanceSpot {
     override fun context(): ZLinkInstanceSpotContext = instanceContext
 
+    // --8<-- [start:doc-gq-spot-init]
     override fun onInitialize(): CompletionStage<Void> {
         val generation = store.markRehydrated(instanceContext.spotId())
         if (generation > 1) {
@@ -179,6 +182,7 @@ class PlayerQuestSpot(
         )
         return CompletableFuture.completedFuture(null)
     }
+    // --8<-- [end:doc-gq-spot-init]
 
     fun requirePlayer(playerId: String) {
         require(playerId == instanceContext.spotId()) {
@@ -192,6 +196,7 @@ class PlayerQuestSpot(
     }
 }
 
+// --8<-- [start:doc-gq-apply-handler]
 class GameplayMsgRouteHandler(
     private val actors: ZLinkActorClient,
 ) : ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
@@ -200,13 +205,16 @@ class GameplayMsgRouteHandler(
         request: GameplayMsg,
     ): CompletionStage<Void> {
         val processed = spot.apply(request)
+        // --8<-- [start:doc-gq-notify-actor]
         processed.projection.firstOrNull()?.let { progress ->
             println("gamequest-mission processed player=${request.playerId} quest=${progress.questId}")
         }
         actors.sendToActor(request.playerId, processed).submit()
+        // --8<-- [end:doc-gq-notify-actor]
         return CompletableFuture.completedFuture(null)
     }
 }
+// --8<-- [end:doc-gq-apply-handler]
 
 class GetQuestProgressHandler(
     private val store: QuestStore,
@@ -260,12 +268,14 @@ class SyncQuestProgressHandler(
     }
 }
 
+// --8<-- [start:doc-gq-close-handler]
 class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg> {
     override fun handle(
         spot: PlayerQuestSpot,
         request: ClosePlayerQuestMsg,
     ): CompletionStage<Void> = spot.context().close().thenApply { null }
 }
+// --8<-- [end:doc-gq-close-handler]
 
 class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     private val domain = QuestDomain()
@@ -278,6 +288,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
 
     @Synchronized
     fun apply(event: GameplayMsg): QuestProcessingMsg {
+        // --8<-- [start:doc-gq-process]
         restorePlayer(event.playerId)
         val key = "${event.playerId}:${event.decodePayload().idempotencyKey}"
         eventIdsByIdempotency[key]?.let {
@@ -296,6 +307,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
         events += decision.storedEvents
         shared.writeProjection(event.playerId, decision.projection)
         shared.appendQuestEvents(decision.storedEvents)
+        // --8<-- [end:doc-gq-process]
         return QuestProcessingMsg(
             event.eventId,
             event.playerId,
@@ -308,6 +320,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
 
     @Synchronized
     fun sync(playerId: String, firstHuntCount: Int): SyncQuestProgressRes {
+        // --8<-- [start:doc-gq-sync]
         restorePlayer(playerId)
         val projection = copyProjection(playerId).toMutableList()
         val firstHunt = projection.firstOrNull { it.questId == QuestIds.FirstHunt }
@@ -343,6 +356,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
             println("gamequest-mission reconciled player=$playerId quest=${QuestIds.FirstHunt}")
         }
         return SyncQuestProgressRes(copyProjection(playerId))
+        // --8<-- [end:doc-gq-sync]
     }
 
     @Synchronized

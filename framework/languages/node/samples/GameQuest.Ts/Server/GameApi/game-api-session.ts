@@ -48,6 +48,7 @@ class JoinSessionHandler {
     if (existing !== undefined && existing.actorId !== request.playerId) {
       throw new Error(`Session is already bound to player '${existing.actorId}'.`);
     }
+    // --8<-- [start:doc-gq-join-bind]
     const located = await this.actorManager.find(request.playerId);
     const created = located === undefined
       ? await this.actorManager
@@ -64,6 +65,7 @@ class JoinSessionHandler {
       throw new Error(`Player actor '${request.playerId}' was not resolved.`);
     }
     await context.actors.bindOrGet(actorRef);
+    // --8<-- [end:doc-gq-join-bind]
     const current = await this.getProjection(request.playerId);
     context.client.reply(new JoinSessionRes(request.playerId, current.activeQuests)).submit();
   }

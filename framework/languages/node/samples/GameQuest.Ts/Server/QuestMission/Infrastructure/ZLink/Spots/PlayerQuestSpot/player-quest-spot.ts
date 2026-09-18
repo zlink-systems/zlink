@@ -6,6 +6,7 @@ class PlayerQuestSpot implements ZLinkInstanceSpot {
   playerId = '';
   private aggregate: PlayerQuestAggregate | undefined;
 
+  // --8<-- [start:doc-gq-spot-init]
   bindPlayer(playerId: string): void {
     if (this.playerId === '') {
       this.playerId = playerId;
@@ -20,6 +21,7 @@ class PlayerQuestSpot implements ZLinkInstanceSpot {
     this.aggregate ??= load();
     return this.aggregate;
   }
+  // --8<-- [end:doc-gq-spot-init]
 
   replaceAggregate(aggregate: PlayerQuestAggregate): void {
     this.aggregate = aggregate;

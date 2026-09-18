@@ -23,6 +23,7 @@ internal sealed class PlayerQuestSpot(
     {
     }
 
+    // --8<-- [start:doc-gq-spot-init]
     public async ValueTask OnInitializeAsync(
         CancellationToken cancellationToken)
     {
@@ -35,6 +36,7 @@ internal sealed class PlayerQuestSpot(
             Generation,
             processor.MissionName);
     }
+    // --8<-- [end:doc-gq-spot-init]
 
     public ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
@@ -80,6 +82,7 @@ internal sealed class PlayerQuestSpot(
     }
 }
 
+// --8<-- [start:doc-gq-close-handler]
 internal sealed class ClosePlayerQuestHandler :
     IZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg>
 {
@@ -92,7 +95,9 @@ internal sealed class ClosePlayerQuestHandler :
         await spot.Context.CloseAsync(cancellationToken);
     }
 }
+// --8<-- [end:doc-gq-close-handler]
 
+// --8<-- [start:doc-gq-apply-handler]
 internal sealed class ApplyGameplayEventHandler :
     IZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg>
 {
@@ -104,6 +109,7 @@ internal sealed class ApplyGameplayEventHandler :
         return spot.ApplyGameplayEventAsync(message, cancellationToken);
     }
 }
+// --8<-- [end:doc-gq-apply-handler]
 
 internal sealed class SyncQuestProgressHandler :
     IZLinkSpotRequestHandler<PlayerQuestSpot, SyncQuestProgressReq, SyncQuestProgressRes>

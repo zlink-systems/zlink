@@ -54,6 +54,7 @@ internal sealed class GameplayActionService(
         GameplayEvent candidate,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-gq-store-dispatch]
         var stored = await store.GetOrAddGameplayEventAsync(candidate, cancellationToken);
         string routedTo;
         try
@@ -68,6 +69,7 @@ internal sealed class GameplayActionService(
                 stored.PlayerId);
             throw;
         }
+        // --8<-- [end:doc-gq-store-dispatch]
         logger.LogInformation(
             "gamequest-api event-routed player={PlayerId} event={EventId} type={EventType} owner={Owner}",
             stored.PlayerId,
