@@ -47,6 +47,7 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
             ZLinkActorCreateResponse.accept());
     }
 
+    // --8<-- [start:doc-bingo-entry-destroy]
     @Override
     public CompletionStage<Void> onJoinedActor(
         PlayerActor actor) {
@@ -57,6 +58,7 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
         }
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-bingo-entry-destroy]
 
     @Override
     public CompletionStage<Void> onLeaveActor(

@@ -39,6 +39,7 @@ public final class AuthenticateSessionHandler
         if (request.getAccessToken().isBlank()) {
             throw new IllegalArgumentException("access token is required");
         }
+        // --8<-- [start:doc-bingo-session-auth]
         return routes
             .requestToChannel(
                 SampleNames.ApiChannel,
@@ -54,11 +55,14 @@ public final class AuthenticateSessionHandler
                             authenticated.getActorId(),
                             authenticated.getDisplayName()))
                     .submit()
+                    // --8<-- [start:doc-bingo-session-bind]
                     .thenCompose(result -> context.actors().bind(requireActor(result))
                         .thenRun(() -> context.client().reply(BingoMessages.authenticateRes(
                             authenticated.getActorId(),
                             authenticated.getDisplayName())).submit()));
+                    // --8<-- [end:doc-bingo-session-bind]
             });
+        // --8<-- [end:doc-bingo-session-auth]
     }
 
     private static void requireAuthenticated(Messages.AuthenticatePlayerRes authenticated) {

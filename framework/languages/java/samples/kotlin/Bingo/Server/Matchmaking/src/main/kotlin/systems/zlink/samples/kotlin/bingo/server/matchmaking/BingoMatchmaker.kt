@@ -35,11 +35,13 @@ class BingoMatchmaker(
         inFlight.decrementAndGet()
     }
 
+    // --8<-- [start:doc-bingo-matchmaker-idle]
     fun closeIfIdle() {
         if (inFlight.get() == 0 && Duration.between(lastActivity, Instant.now()) >= IdleCloseAfter) {
             instanceContext.close()
         }
     }
+    // --8<-- [end:doc-bingo-matchmaker-idle]
 
     private companion object {
         val IdleCheckPeriod: Duration = Duration.ofSeconds(5)

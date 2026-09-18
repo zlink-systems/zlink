@@ -33,6 +33,7 @@ class authenticate_session_handler_t
         /* client stream의 payload도 Protobuf다 — JSON으로 파싱하지 않는다. */
         authenticate_req_t request;
         zlink::stream_connector::from_stream_payload (payload, request);
+        // --8<-- [start:doc-bingo-session-auth]
         authenticate_player_req_t authenticate_request;
         authenticate_request.set_access_token (request.access_token ());
         auto authenticated =
@@ -56,6 +57,8 @@ class authenticate_session_handler_t
               located.error_kind (),
               located.error () ? located.error ()->what () : "Player actor could not be located.");
         }
+        // --8<-- [end:doc-bingo-session-auth]
+        // --8<-- [start:doc-bingo-session-bind]
         auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
         auto actor = actors.find (authenticated.actor_id ()).value_or (bound);
 
@@ -64,6 +67,7 @@ class authenticate_session_handler_t
         reply_payload.set_display_name (authenticated.display_name ());
         const auto reply_message = zlink::stream_connector::to_stream_payload (reply_payload);
         stream.reply_packet (reply_message).async ();
+        // --8<-- [end:doc-bingo-session-bind]
 
         co_return actor;
     }

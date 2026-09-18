@@ -29,6 +29,7 @@ class match_bingo_api_handler_t
 
     task_t<match_bingo_api_res_t> handle (const match_bingo_api_req_t &request)
     {
+        // --8<-- [start:doc-bingo-api-match]
         constexpr auto level_bucket = "1-10";
         reserve_bingo_room_req_t reserve_request;
         reserve_request.set_mode (request.mode ());
@@ -48,6 +49,7 @@ class match_bingo_api_handler_t
               return create;
           }())
           .async ();
+        // --8<-- [end:doc-bingo-api-match]
         _logger.info ("match bingo room", {{"actor_id", request.actor_id ()},
                                            {"room_id", allocated.room_id ()},
                                            {"mode", request.mode ()}});

@@ -37,6 +37,7 @@ public final class BingoSession implements ZLinkSession {
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-bingo-session-disconnect]
     @Override
     public CompletionStage<Void> onDisconnected() {
         return CompletableFuture.allOf(context.actors().bound().stream()
@@ -50,12 +51,14 @@ public final class BingoSession implements ZLinkSession {
                 }
             });
     }
+    // --8<-- [end:doc-bingo-session-disconnect]
 
     @Override
     public CompletionStage<Void> onError(ZLinkStreamError error) {
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-bingo-session-relay]
     @Override
     public CompletionStage<Void> onDispatch(
         ZLinkSessionDispatchContext dispatch,
@@ -65,6 +68,7 @@ public final class BingoSession implements ZLinkSession {
                 .relay(payload)
                 .thenApply(ignored -> null));
     }
+    // --8<-- [end:doc-bingo-session-relay]
 
     private CompletionStage<Void> rememberBoundActor() {
         if (context.actors().bound().size() == 1) {

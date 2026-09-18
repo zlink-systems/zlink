@@ -6,16 +6,19 @@
 namespace zlink::samples::bingo
 {
 
+// --8<-- [start:doc-bingo-draw-timer]
 inline task_t<void> bingo_room_spot_t::handle_draw_tick (const timer_tick_t &)
 {
     if (!_game.should_draw ()) {
         co_return;
     }
+    // --8<-- [start:doc-bingo-bound-push]
     const auto drawn = _game.draw_next ();
     if (!drawn) {
         co_return;
     }
     send_to_players (make_message (*drawn));
+    // --8<-- [end:doc-bingo-bound-push]
     if (drawn->state.status == bingo_room_status_t::finished) {
         send_to_players (make_game_ended_message (drawn->state));
         publish_reward (*drawn);
@@ -32,5 +35,6 @@ inline task_t<void> bingo_room_draw_timer_handler_t::handle (bingo_room_spot_t &
 {
     co_await spot.handle_draw_tick (tick);
 }
+// --8<-- [end:doc-bingo-draw-timer]
 
 } // namespace zlink::samples::bingo

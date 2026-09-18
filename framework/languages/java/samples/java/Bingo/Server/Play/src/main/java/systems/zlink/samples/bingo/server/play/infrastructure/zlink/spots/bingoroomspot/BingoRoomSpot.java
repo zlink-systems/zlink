@@ -99,6 +99,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                     .map(CompletionStage::toCompletableFuture)
                     .toArray(CompletableFuture[]::new));
         }
+        // --8<-- [start:doc-bingo-room-join]
         return context.outbound()
             .requestToChannel(SampleNames.ApiChannel, BingoMessages.getPlayerRecordReq(actor.actorId()))
             .timeout(SampleTimings.RequestTimeout)
@@ -112,6 +113,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 pendingJoins.remove(actor.actorId());
                 join(actor, request, record.getWins(), record.getLosses());
             });
+        // --8<-- [end:doc-bingo-room-join]
     }
 
     @Override
@@ -227,6 +229,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         return BingoMessages.submitBingoCardRes(change.state());
     }
 
+    // --8<-- [start:doc-bingo-draw-timer]
     public CompletionStage<Void> tick() {
         if (game == null || cleanupStarted) {
             return CompletableFuture.completedFuture(null);
@@ -241,6 +244,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 }
             });
     }
+    // --8<-- [end:doc-bingo-draw-timer]
 
     public CompletionStage<Void> announceReward(
         Messages.BingoRewardAcquiredEvent event) {
@@ -330,6 +334,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         Messages.BingoRoomState state) {
     }
 
+    // --8<-- [start:doc-bingo-room-cleanup]
     private CompletionStage<Void> leaveFinishedActors(BingoRoomGame.Change change) {
         if (cleanupStarted || !change.state().getStatus().equals("Finished")) {
             return CompletableFuture.completedFuture(null);
@@ -344,6 +349,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         return CompletableFuture.allOf(
             leaves.toArray(CompletableFuture[]::new));
     }
+    // --8<-- [end:doc-bingo-room-cleanup]
 
     private CompletionStage<Void> publishWinner(
         BingoRoomGame.Change change) {
@@ -351,6 +357,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             return CompletableFuture.completedFuture(null);
         }
         String winner = change.state().getWinnersList().getFirst();
+        // --8<-- [start:doc-bingo-reward-publish]
         return context.outbound()
             .publish(
                 SampleNames.RoomRewardChannel,
@@ -363,6 +370,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                     "Golden Dauber",
                     "Legendary"))
             .submit();
+        // --8<-- [end:doc-bingo-reward-publish]
     }
 
     private void publishEvents(

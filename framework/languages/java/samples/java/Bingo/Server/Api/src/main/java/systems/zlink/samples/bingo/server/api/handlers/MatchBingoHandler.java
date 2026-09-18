@@ -28,6 +28,7 @@ public final class MatchBingoHandler
     public CompletionStage<Messages.MatchBingoApiRes> handle(
         Messages.MatchBingoApiReq request,
         ZLinkMessageContext context) {
+        // --8<-- [start:doc-bingo-api-match]
         String levelBucket = "1-10";
         return routes.requestToSpot(
                 "match:" + levelBucket,
@@ -45,5 +46,6 @@ public final class MatchBingoHandler
                 .submit()
                 .thenApply(ignored ->
                     BingoMessages.matchBingoApiRes(allocated.getRoomId())));
+        // --8<-- [end:doc-bingo-api-match]
     }
 }

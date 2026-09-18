@@ -27,6 +27,7 @@ class MatchBingoActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler<
         context: ZLinkMessageContext,
         message: MatchBingoReq,
     ): MatchBingoRes {
+        // --8<-- [start:doc-bingo-match-actor]
         val matched = entrySpot.context().outbound().requestToChannel(
             SampleNames.ApiChannel,
             MatchBingoApiReq(
@@ -50,6 +51,7 @@ class MatchBingoActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler<
         )
             .timeout(SampleTimings.RequestTimeout)
             .defer()
+        // --8<-- [end:doc-bingo-match-actor]
         return MatchBingoRes(
             matched.roomId,
             BingoRoomState(

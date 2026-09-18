@@ -42,6 +42,7 @@ function createBingoPlayModule() {
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);
+          // --8<-- [start:doc-bingo-play-register]
           const mesh = builder.addRouteMesh(SampleNames.roomSpotNode)
             .setRoutingIdPrefix('play')
             .listen(config.playSpotEndpoint);
@@ -66,6 +67,7 @@ function createBingoPlayModule() {
           builder.addClientServerChannel(SampleNames.apiChannel).client();
           mesh.channel(SampleNames.roomRouteChannel).server();
           mesh.channel(SampleNames.roomRewardChannel).server();
+          // --8<-- [end:doc-bingo-play-register]
           return builder.build();
         }
       })

@@ -34,12 +34,14 @@ class BingoEntrySpot(
         return ZLinkActorCreateResponse.accept()
     }
 
+    // --8<-- [start:doc-bingo-entry-destroy]
     override suspend fun onJoinedActorSuspending(actor: PlayerActor) {
         if (actor.destroyAfterEntrySpotJoin) {
             context.destroyActor(actor).await()
             logger.info("bingo-lifecycle entry-destroy-complete actor={}", actor.actorId())
         }
     }
+    // --8<-- [end:doc-bingo-entry-destroy]
 
     override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
     }

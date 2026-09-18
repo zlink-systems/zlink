@@ -15,6 +15,7 @@ import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class BingoRoomRelocationAdapter
     implements ZLinkSpotRelocationAdapter<BingoRoomSpot> {
+    // --8<-- [start:doc-bingo-relocation-adapter]
     @Override
     public CompletionStage<byte[]> capture(
         BingoRoomSpot spot,
@@ -46,6 +47,7 @@ public final class BingoRoomRelocationAdapter
             return CompletableFuture.failedFuture(failure);
         }
     }
+    // --8<-- [end:doc-bingo-relocation-adapter]
 
     @Override
     public CompletionStage<Void> restore(

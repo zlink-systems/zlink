@@ -11,6 +11,7 @@ class BingoSession implements ZLinkSession {
     readonly context: ZLinkSessionContext
   ) {}
 
+  // --8<-- [start:doc-bingo-session-relay]
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) {
       return;
@@ -21,13 +22,16 @@ class BingoSession implements ZLinkSession {
     }
     await actor.relay(payload, signal);
   }
+  // --8<-- [end:doc-bingo-session-relay]
 
+  // --8<-- [start:doc-bingo-session-disconnect]
   async onDisconnected(): Promise<void> {
     const actors = this.context.actors.bound;
     // Framework cleanup owns disconnect notification; this callback only records
     // the sample lifecycle evidence without submitting another notification.
     console.error(`bingo-lifecycle session-disconnect actor=${actors[0]?.actorId ?? '-'} destroy=false`);
   }
+  // --8<-- [end:doc-bingo-session-disconnect]
 }
 
 class BingoSessionFactory implements ZLinkSessionFactory<BingoSession> {

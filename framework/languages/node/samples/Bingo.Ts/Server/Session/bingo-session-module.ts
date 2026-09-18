@@ -38,6 +38,7 @@ function createBingoSessionModule() {
           builder.addRelocationStore(createBingoRelocationStore(endpoints));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);
+          // --8<-- [start:doc-bingo-session-register]
           const mesh = builder.addRouteMesh(SampleNames.roomSpotNode)
             .setRoutingIdPrefix('session')
             .listen(endpoints.sessionSpotEndpoint);
@@ -48,6 +49,7 @@ function createBingoSessionModule() {
             .bind(endpoints.sessionEndpoint)
             .registerSession(BingoSessionFactory)
           .build();
+          // --8<-- [end:doc-bingo-session-register]
         }
       })
     ],

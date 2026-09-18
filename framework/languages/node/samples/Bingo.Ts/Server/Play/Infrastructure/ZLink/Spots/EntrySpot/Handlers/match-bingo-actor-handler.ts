@@ -42,6 +42,7 @@ class MatchBingoActorHandler
     request: MatchBingoReq
   ): Promise<MatchBingoRes> {
     console.error(`bingo-match request actor=${actor.actorId}`);
+    // --8<-- [start:doc-bingo-match-actor]
     const matched = await this.channels
       .requestToChannel(
         SampleNames.apiChannel,
@@ -62,6 +63,7 @@ class MatchBingoActorHandler
       }))
       .timeout(SampleTimings.requestTimeout)
       .defer();
+    // --8<-- [end:doc-bingo-match-actor]
     const response = new MatchBingoRes({
       roomId: matched.roomId,
       state: new BingoRoomState({

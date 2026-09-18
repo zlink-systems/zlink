@@ -42,6 +42,7 @@ public final class SessionServerApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
+            // --8<-- [start:doc-bingo-session-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);
             node.listen(topology.selectedSessionRouterEndpoint())
                 .setRoutingIdPrefix("session");
@@ -52,6 +53,7 @@ public final class SessionServerApplication {
                 .bind(topology.selectedStreamEndpoint())
                 .enableActorDispatch()
                 .registerSession(BingoSession.class);
+            // --8<-- [end:doc-bingo-session-register]
         };
     }
 

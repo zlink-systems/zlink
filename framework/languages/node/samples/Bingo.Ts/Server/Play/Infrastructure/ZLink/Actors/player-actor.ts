@@ -19,6 +19,7 @@ class PlayerActor implements ZLinkActor {
     public displayName: string
   ) {}
 
+  // --8<-- [start:doc-bingo-bound-push]
   async push(payload: unknown): Promise<void> {
     this.nextSeq += 1;
     await this.context.boundSession
@@ -26,6 +27,7 @@ class PlayerActor implements ZLinkActor {
       .metadata('seq', String(this.nextSeq))
       .submit();
   }
+  // --8<-- [end:doc-bingo-bound-push]
 
   markForDestroyAfterRoomLeave(): void {
     this.destroyAfterEntrySpotJoin = true;

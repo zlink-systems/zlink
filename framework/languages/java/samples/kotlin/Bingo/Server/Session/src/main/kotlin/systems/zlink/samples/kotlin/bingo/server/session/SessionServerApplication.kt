@@ -43,6 +43,7 @@ class SessionServerApplication {
             }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()
+            // --8<-- [start:doc-bingo-session-register]
             val node = options.addRouteMesh(SampleNames.Mesh)
 
             node.listen(topology.selectedSessionRouterEndpoint())
@@ -54,6 +55,7 @@ class SessionServerApplication {
                 .bind(topology.selectedStreamEndpoint())
                 .enableActorDispatch()
                 .registerSession(BingoSession::class.java)
+            // --8<-- [end:doc-bingo-session-register]
         }
 
     @Bean

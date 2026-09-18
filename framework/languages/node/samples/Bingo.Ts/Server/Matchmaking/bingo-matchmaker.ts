@@ -32,10 +32,12 @@ class ReserveBingoRoomHandler
   }
 }
 
+// --8<-- [start:doc-bingo-matchmaker-idle]
 class BingoMatchmakerIdleTimer implements ZLinkSpotTimerHandler<BingoMatchmaker> {
   async handle(spot: BingoMatchmaker, _tick: ZLinkTimerTick): Promise<void> {
     if (Date.now() - spot.lastActivity >= 30_000) await spot.context.close();
   }
 }
+// --8<-- [end:doc-bingo-matchmaker-idle]
 
 export { BingoMatchmaker, BingoMatchmakerIdleTimer, ReserveBingoRoomHandler };

@@ -31,6 +31,7 @@ class bingo_session_t final : public packet_stream_session_t
         return task_t<void> (result_t<void>::success ());
     }
 
+    // --8<-- [start:doc-bingo-session-disconnect]
     task_t<void> on_disconnected (stream_t &) override
     {
         if (_bound_actor_id) {
@@ -44,12 +45,14 @@ class bingo_session_t final : public packet_stream_session_t
         }
         co_return;
     }
+    // --8<-- [end:doc-bingo-session-disconnect]
 
     task_t<void> on_error (stream_t &, const stream_error_t &) override
     {
         return task_t<void> (result_t<void>::success ());
     }
 
+    // --8<-- [start:doc-bingo-session-relay]
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
                             const zlink::message_t &payload) override
@@ -73,6 +76,7 @@ class bingo_session_t final : public packet_stream_session_t
         co_await actor.value ().relay (payload);
         co_return;
     }
+    // --8<-- [end:doc-bingo-session-relay]
 
   private:
     result_t<session_actor_t> require_bound_actor (const std::string &action) const

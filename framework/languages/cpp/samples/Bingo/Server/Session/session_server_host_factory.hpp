@@ -44,6 +44,7 @@ class session_server_host_factory_t
         options.add_relocation_store<redis::redis_relocation_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "relocation:");
+        // --8<-- [start:doc-bingo-session-register]
         options.add_client_server_channel (sample_names_t::api_channel).client ();
         auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
         room_mesh
@@ -54,6 +55,7 @@ class session_server_host_factory_t
         options.add_stream_node (sample_names_t::stream_node)
           .bind (topology.selected_stream_endpoint ())
           .register_session<bingo_session_t> ();
+        // --8<-- [end:doc-bingo-session-register]
         app.add_hosted_service (std::make_unique<route_mesh_readiness_service_t> (
           "session-" + topology.session_node, sample_names_t::room_spot_mesh, "room",
           std::vector<std::string>{sample_names_t::play_a_rid, sample_names_t::play_b_rid}));

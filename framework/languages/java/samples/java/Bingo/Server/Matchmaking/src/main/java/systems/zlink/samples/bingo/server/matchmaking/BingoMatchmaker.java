@@ -43,11 +43,13 @@ public final class BingoMatchmaker implements ZLinkInstanceSpot {
         inFlight.decrementAndGet();
     }
 
+    // --8<-- [start:doc-bingo-matchmaker-idle]
     void closeIfIdle() {
         if (inFlight.get() == 0
             && Duration.between(lastActivity, Instant.now()).compareTo(IDLE_CLOSE_AFTER) >= 0) {
             context.close();
         }
     }
+    // --8<-- [end:doc-bingo-matchmaker-idle]
 
 }

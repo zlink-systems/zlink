@@ -4,6 +4,7 @@ using Zlink.Framework.Contracts.Timers;
 
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot.Handlers;
 
+// --8<-- [start:doc-bingo-draw-timer]
 [ZLinkSpotTimerHandler("bingo-draw", 200)]
 internal sealed class BingoRoomDrawTimerHandler : IZLinkSpotTimerHandler<BingoRoom>
 {
@@ -25,3 +26,4 @@ internal sealed class BingoRoomDrawTimerHandler : IZLinkSpotTimerHandler<BingoRo
         }
     }
 }
+// --8<-- [end:doc-bingo-draw-timer]

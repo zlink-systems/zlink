@@ -58,12 +58,14 @@ class bingo_matchmaker_t : public instance_spot_t
         return _reservations.reserve (request);
     }
 
+    // --8<-- [start:doc-bingo-matchmaker-idle]
     void close_if_idle ()
     {
         if (std::chrono::steady_clock::now () - _last_activity >= std::chrono::seconds (30)) {
             _context.close ();
         }
     }
+    // --8<-- [end:doc-bingo-matchmaker-idle]
 
   private:
     bingo_match_reservation_store_t &_reservations;

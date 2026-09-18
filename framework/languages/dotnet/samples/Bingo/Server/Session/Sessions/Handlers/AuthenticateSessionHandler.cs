@@ -19,6 +19,7 @@ internal sealed class AuthenticateBingoSessionHandler(
         AuthenticateReq request,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-bingo-session-auth]
         var authenticated = await channels.RequestToChannel(SampleNames.ApiChannel,
                 new AuthenticatePlayerReq { AccessToken = request.AccessToken })
             .Async<AuthenticatePlayerRes>(cancellationToken);
@@ -42,7 +43,9 @@ internal sealed class AuthenticateBingoSessionHandler(
             ZLinkActorCreateResult.Created value => value.Actor,
             _ => throw new InvalidOperationException("Player Actor creation was rejected.")
         };
+        // --8<-- [end:doc-bingo-session-auth]
 
+        // --8<-- [start:doc-bingo-session-bind]
         var boundActor = await context.Actors.BindOrGetAsync(
             actor,
             cancellationToken);
@@ -57,5 +60,6 @@ internal sealed class AuthenticateBingoSessionHandler(
                 DisplayName = authenticated.DisplayName
             })
             .Async(cancellationToken);
+        // --8<-- [end:doc-bingo-session-bind]
     }
 }

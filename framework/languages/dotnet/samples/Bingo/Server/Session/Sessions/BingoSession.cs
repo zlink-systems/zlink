@@ -15,6 +15,7 @@ internal sealed class BingoSession(
         return ValueTask.CompletedTask;
     }
 
+    // --8<-- [start:doc-bingo-session-disconnect]
     public async ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
     {
         foreach (var actor in Context.Actors.Bound)
@@ -25,6 +26,7 @@ internal sealed class BingoSession(
                 actor.ActorId);
         }
     }
+    // --8<-- [end:doc-bingo-session-disconnect]
 
     public ValueTask OnErrorAsync(
         ZLinkStreamError error,
@@ -33,6 +35,7 @@ internal sealed class BingoSession(
         return ValueTask.CompletedTask;
     }
 
+    // --8<-- [start:doc-bingo-session-relay]
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
@@ -47,6 +50,7 @@ internal sealed class BingoSession(
                 cancellationToken)
             ;
     }
+    // --8<-- [end:doc-bingo-session-relay]
 
     private IZLinkSessionActor RequireSingleBoundActor(string action)
     {

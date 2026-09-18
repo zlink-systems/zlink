@@ -10,6 +10,7 @@ class bingo_room_relocation_adapter_t final
     : public spot_relocation_adapter_t<bingo_room_spot_t>
 {
   public:
+    // --8<-- [start:doc-bingo-relocation-adapter]
     task_t<std::vector<std::byte>>
     capture (bingo_room_spot_t &spot,
              std::stop_token) override
@@ -19,6 +20,7 @@ class bingo_room_relocation_adapter_t final
         co_return std::vector<std::byte> (
           message.bytes ().begin (), message.bytes ().end ());
     }
+    // --8<-- [end:doc-bingo-relocation-adapter]
 
     task_t<void>
     restore (bingo_room_spot_t &spot,
