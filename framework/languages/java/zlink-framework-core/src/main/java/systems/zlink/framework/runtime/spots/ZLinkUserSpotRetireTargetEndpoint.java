@@ -1078,6 +1078,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     generations, participant.authorityKey());
                 var replay = actorStaging.closeDirectJoinIngress(
                     target.staged(), request.relocationPayload());
+                //  Spec 08-routing §3 step 5: closing the temporary queue
+                //  is the switch to existing Actor dispatch, so the
+                //  admission-time registration that routed arrivals into
+                //  that queue ends here — before command 44 (spec 05 §4.2
+                //  step 8) lets the Session owner relay again. Otherwise the
+                //  first relay after the route switch is handed to the
+                //  closed queue and lost.
+                actorJoin.releasePrewarm(request.fence().aggregateId());
                 actorStaging.publishDirectJoinHidden(
                     replay, targetOwnerGeneration);
                 actorStaging.prepareDirectJoinBoundSession(

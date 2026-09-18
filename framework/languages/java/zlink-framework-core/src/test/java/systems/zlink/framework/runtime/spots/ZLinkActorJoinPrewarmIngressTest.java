@@ -70,15 +70,132 @@ final class ZLinkActorJoinPrewarmIngressTest {
     @Test
     void arrivalBetweenAcceptedAndPrepareIsDeliveredAfterRelocationCompletes()
         throws Exception {
-        String actorId = "actor-prewarm";
-        long objectGeneration = 4;
-        long sourceAuthorityOwnerGeneration = 7;
-        UUID relocationId = UUID.randomUUID();
-        String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        try (Harness harness = Harness.start(
+                request -> CompletableFuture.completedFuture(null))) {
+            harness.admit();
 
-        var options = hostOptions();
-        try (ZLinkFrameworkRuntime targetHost =
-                 ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            //  Step 2: a message for this exact Actor arrives at the
+            //  target's production ingress endpoint before PREPARE
+            //  (Restore) has installed the real staged queue. Without the
+            //  fix this is dropped — handleActor only consulted the real
+            //  stage map. With the fix it must be accepted (parked).
+            var parkFailure = new AtomicReference<Throwable>();
+            boolean parkedAccepted = harness.arrive(
+                harness.sourceFence(), "EARLY", parkFailure);
+            assertTrue(parkedAccepted,
+                "production ingress must park an arrival between Accepted "
+                    + "and PREPARE instead of dropping it");
+            assertEquals(null, parkFailure.get());
+
+            //  Step 3 (spec 15 §4.2 step 4): PREPARE (Restore) installs
+            //  the real stage and must atomically migrate the parked
+            //  arrival into it.
+            harness.stageAndCommit();
+
+            //  A further arrival after install must also reach the actor
+            //  (through the real stage directly this time).
+            boolean postInstallAccepted = harness.arrive(
+                harness.sourceFence(), "AFTER_INSTALL", parkFailure);
+            assertTrue(postInstallAccepted);
+            assertEquals(null, parkFailure.get());
+
+            //  Step 4 (spec 15 §4.2 step 7): publish commits and drains
+            //  the durable backlog — the parked arrival, migrated at
+            //  install time, must come out in order ahead of the arrival
+            //  that landed straight in the real stage.
+            harness.endpoint.publish(harness.request)
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertTrue(harness.joinedCalled.get(),
+                "OnJoinedActor must run as part of the direct-Join publish");
+            //  Both arrivals reached the actor, in order: the one parked
+            //  between Accepted and PREPARE (migrated atomically when the
+            //  real stage installed) ahead of the one that landed
+            //  straight in the real stage after install.
+            assertEquals(List.of("EARLY", "AFTER_INSTALL"),
+                harness.recordingBackend.replayed);
+        }
+    }
+
+    /**
+     * Spec 04-session/02 §8.2: command 44 is submitted after the target
+     * closed its relocation temporary queue and replayed it, and the
+     * Session owner resumes relaying to the target route as soon as it
+     * applies that command. The first relay therefore lands while the
+     * target is still finishing publish (Location Store normalization,
+     * stage release). The relocation temporary queue is closed by then, so
+     * that arrival must fall through to normal Actor ingress — the endpoint
+     * must not report it as staged and let the closed queue swallow it.
+     */
+    @Test
+    void arrivalAfterTemporaryQueueClosedFallsThroughToNormalIngress()
+        throws Exception {
+        var normalizeEntered = new CompletableFuture<Void>();
+        var normalizeRelease = new CompletableFuture<Void>();
+        try (Harness harness = Harness.start(request -> {
+                normalizeEntered.complete(null);
+                return normalizeRelease;
+            })) {
+            harness.admit();
+            harness.stageAndCommit();
+
+            //  Publish closes the temporary queue, replays it and submits
+            //  command 44, then blocks in normalization: this is the window
+            //  in which the Session owner's first relay reaches the target.
+            CompletionStage<Void> publish = harness.endpoint.publish(
+                harness.request);
+            normalizeEntered.get(5, TimeUnit.SECONDS);
+
+            //  The relay arrives from the Session owner, not from the
+            //  relocation source, so only the admission-time placeholder can
+            //  claim it.
+            var failure = new AtomicReference<Throwable>();
+            boolean staged = harness.arrive(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                    RoutingId.from("session-owner-node"), 5, "session-owner", 2),
+                "AFTER_CLOSE", failure);
+
+            normalizeRelease.complete(null);
+            publish.toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertFalse(staged,
+                "an arrival after the temporary queue closed must fall "
+                    + "through to normal Actor ingress, not be reported as "
+                    + "staged");
+            assertEquals(null, failure.get());
+            assertEquals(List.of(), harness.recordingBackend.replayed,
+                "the closed temporary queue must not replay the late arrival");
+        }
+    }
+
+    /**
+     * One relocation of one Actor driven through the production target
+     * endpoint: admission (spec 15 §4.2 step 2), PREPARE + target-only CAS
+     * (steps 4/6) and publish (step 7) each run for real; only handler
+     * dispatch is recorded instead of routed.
+     */
+    private static final class Harness implements AutoCloseable {
+        final String actorId = "actor-prewarm";
+        final long objectGeneration = 4;
+        final long sourceAuthorityOwnerGeneration = 7;
+        final UUID relocationId = UUID.randomUUID();
+        final String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        final java.util.concurrent.atomic.AtomicBoolean joinedCalled =
+            new java.util.concurrent.atomic.AtomicBoolean();
+        final ZLinkFrameworkRuntime targetHost;
+        final AuthorityState authority = new AuthorityState();
+        final ZLinkAggregateRelocationCoordinator coordinator;
+        final RecordingActorBackend recordingBackend;
+        final ZLinkActorJoinCanonicalAdapter targetJoin;
+        final ZLinkUserSpotRetireTargetEndpoint endpoint;
+        final Object targetSpot;
+        final ZLinkSpotRetireControl.StageRequest request;
+
+        private Harness(
+            ZLinkUserSpotRetireTargetEndpoint.SteadyNormalizer normalizer)
+            throws Exception {
+            var options = hostOptions();
+            targetHost = ZLinkFrameworkRuntimeTestAccess.start(options);
             ZLinkSpotRuntime targetSpots =
                 (ZLinkSpotRuntime) targetHost.spotManager();
             ZLinkActorRuntime targetActors =
@@ -86,17 +203,16 @@ final class ZLinkActorJoinPrewarmIngressTest {
             targetHost.spotManager()
                 .getOrCreate(TARGET_SPOT_ID, SPOT_TYPE)
                 .submit().toCompletableFuture().get();
-            Object targetSpot = targetSpots.spotFor(TARGET_SPOT_ID);
+            targetSpot = targetSpots.spotFor(TARGET_SPOT_ID);
             var targetAdapters = new ZLinkRelocationAdapterRegistry(
                 options.registration(), ZLinkHandlerActivator.reflection());
 
-            AuthorityState authority = new AuthorityState();
             authority.seedActorReady(
                 actorAuthorityKey, objectGeneration,
                 sourceAuthorityOwnerGeneration, "source-owner", 12,
                 SOURCE_RID, SOURCE_NODE_GENERATION, "lobby", 3);
             ZLinkLocationRepository authorityStore = authority.proxy();
-            var coordinator = new ZLinkAggregateRelocationCoordinator(
+            coordinator = new ZLinkAggregateRelocationCoordinator(
                 authorityStore);
 
             //  Production creation and lifecycle calls
@@ -105,16 +221,16 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  a real packet name would need is faked, since this test's
             //  focus is the relocation temporary queue plumbing, not
             //  application handler routing.
-            var recordingBackend = new RecordingActorBackend(
+            recordingBackend = new RecordingActorBackend(
                 targetSpots.primaryNode(),
                 targetSpots.actorSessions(),
                 targetAdapters,
                 targetSpots);
             var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(
                 recordingBackend);
-            var targetJoin = new ZLinkActorJoinCanonicalAdapter(
+            targetJoin = new ZLinkActorJoinCanonicalAdapter(
                 targetActors, targetSpots);
-            var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
+            endpoint = new ZLinkUserSpotRetireTargetEndpoint(
                 TARGET_RID,
                 TARGET_NODE_GENERATION,
                 coordinator,
@@ -126,18 +242,42 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             + "test — only parked (temporary) arrivals")),
                 new ZLinkSessionRelocationPeerClient(inertNode()),
                 Duration.ofSeconds(1),
-                request -> CompletableFuture.completedFuture(null),
+                normalizer,
                 null,
                 null,
                 authorityStore,
                 actorStaging,
                 targetJoin);
 
-            //  Step 1 (spec 15 §4.2 step 2): OnActorJoin admits — this is
-            //  the exact production call the target makes before Accepted
-            //  returns to source, and it is what registers the relocation
-            //  temporary queue.
-            var joinedCalled = new java.util.concurrent.atomic.AtomicBoolean();
+            var participants = List.of(new ZLinkSpotRetireControl
+                .ParticipantFence(
+                    actorAuthorityKey, 1, actorId, ACTOR_TYPE, true,
+                    objectGeneration, sourceAuthorityOwnerGeneration));
+            byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+                relocationId, actorId, objectGeneration,
+                sourceAuthorityOwnerGeneration, true,
+                new byte[] {7, 2, 6}, List.of());
+            request = new ZLinkSpotRetireControl.StageRequest(
+                new ZLinkSpotRetireControl.Fence(relocationId, 1),
+                SOURCE_RID, SOURCE_NODE_GENERATION,
+                "source-owner", 12,
+                TARGET_RID, TARGET_NODE_GENERATION,
+                "target-owner", 23,
+                MESH, TARGET_SPOT_ID, ACTOR_TYPE, false, true,
+                root,
+                participants);
+        }
+
+        static Harness start(
+            ZLinkUserSpotRetireTargetEndpoint.SteadyNormalizer normalizer)
+            throws Exception {
+            return new Harness(normalizer);
+        }
+
+        /** Spec 15 §4.2 step 2: OnActorJoin admits — the exact production
+         * call the target makes before Accepted returns to source, and what
+         * registers the relocation temporary queue. */
+        void admit() {
             var admission = new ZLinkActorJoinRelocationPort.Admission(
                 relocationId,
                 new ZLinkActorJoinOperationId(1, 1),
@@ -153,64 +293,12 @@ final class ZLinkActorJoinPrewarmIngressTest {
                 ZLinkMessage.empty(),
                 Duration.ofSeconds(30));
             targetJoin.admit(admission);
+        }
 
-            //  Step 2: a message for this exact Actor arrives at the
-            //  target's production ingress endpoint before PREPARE
-            //  (Restore) has installed the real staged queue. Without the
-            //  fix this is dropped — handleActor only consulted the real
-            //  stage map. With the fix it must be accepted (parked).
-            byte[] parkedRecord = actorRecord(actorId, "EARLY");
-            var parkFailure = new AtomicReference<Throwable>();
-            boolean parkedAccepted = endpoint.handleActor(
-                new ZLinkInternalMeshNode.PeerAuthorityFence(
-                    SOURCE_RID, SOURCE_NODE_GENERATION, "source-owner", 12),
-                new ZLinkServiceM6BWireCodec.ActorMessage(
-                    false, 0, null, 0, 0, 1, null,
-                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        new ZLinkBackendActorRef(
-                            TARGET_RID, actorId, objectGeneration),
-                        TARGET_NODE_GENERATION,
-                        sourceAuthorityOwnerGeneration + 1,
-                        23)),
-                () -> parkedRecord,
-                List.of(Message.from("early-arrival")),
-                null,
-                reply -> { throw new AssertionError(
-                    "parked arrival must not reply before relocation "
-                        + "completes"); },
-                parkFailure::set);
-            assertTrue(parkedAccepted,
-                "production ingress must park an arrival between Accepted "
-                    + "and PREPARE instead of dropping it");
-            assertEquals(null, parkFailure.get());
-
-            //  Step 3 (spec 15 §4.2 step 4): PREPARE (Restore) installs
-            //  the real stage and must atomically migrate the parked
-            //  arrival into it.
-            var participants = List.of(new ZLinkSpotRetireControl
-                .ParticipantFence(
-                    actorAuthorityKey, 1, actorId, ACTOR_TYPE, true,
-                    objectGeneration, sourceAuthorityOwnerGeneration));
-            byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
-                relocationId, actorId, objectGeneration,
-                sourceAuthorityOwnerGeneration, true,
-                new byte[] {7, 2, 6}, List.of());
-            var request = new ZLinkSpotRetireControl.StageRequest(
-                new ZLinkSpotRetireControl.Fence(relocationId, 1),
-                SOURCE_RID, SOURCE_NODE_GENERATION,
-                "source-owner", 12,
-                TARGET_RID, TARGET_NODE_GENERATION,
-                "target-owner", 23,
-                MESH, TARGET_SPOT_ID, ACTOR_TYPE, false, true,
-                root,
-                participants);
-
-            //  The Location Store reservation (spec 15 §4.2 step 6
-            //  prerequisite): reserve the aggregate progress marker
-            //  before PREPARE reads the still-source-owned previous
-            //  membership row; the CAS itself commits after PREPARE,
-            //  mirroring source capture happening before the target-only
-            //  CAS in production.
+        /** Spec 15 §4.2 steps 4 and 6: reserve the aggregate progress
+         * marker, PREPARE (install the real stage), then the target-only
+         * Location Store CAS — the same order production follows. */
+        void stageAndCommit() throws Exception {
             var storeRequest = new ZLinkAggregateRelocationCoordinator
                 .Request(
                     relocationId,
@@ -226,7 +314,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             ZLinkAuthorityGenerationTransition.NEW_OWNER,
                             authority.rows.get(actorAuthorityKey).payload(),
                             new byte[0])),
-                    root,
+                    request.relocationPayload(),
                     new ZLinkMeshNodeDescriptorKey(MESH, TARGET_RID),
                     TARGET_NODE_GENERATION,
                     new ZLinkPlacementCapacityBundle(1, 0, Optional.empty()),
@@ -234,19 +322,25 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     "seed-1");
             var prepared = coordinator.prepare(storeRequest, OPEN)
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
-
-            endpoint.stage(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
-
-            //  Target-only Location Store CAS (spec 15 §4.2 step 6).
+            endpoint.stage(request).toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
             coordinator.commit(prepared, OPEN)
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
 
-            //  A further arrival after install must also reach the actor
-            //  (through the real stage directly this time).
-            byte[] postInstallRecord = actorRecord(actorId, "AFTER_INSTALL");
-            boolean postInstallAccepted = endpoint.handleActor(
-                new ZLinkInternalMeshNode.PeerAuthorityFence(
-                    SOURCE_RID, SOURCE_NODE_GENERATION, "source-owner", 12),
+        ZLinkInternalMeshNode.PeerAuthorityFence sourceFence() {
+            return new ZLinkInternalMeshNode.PeerAuthorityFence(
+                SOURCE_RID, SOURCE_NODE_GENERATION, "source-owner", 12);
+        }
+
+        /** One production ingress arrival for the relocating Actor. */
+        boolean arrive(
+            ZLinkInternalMeshNode.PeerAuthorityFence from,
+            String packetName,
+            AtomicReference<Throwable> failure) {
+            byte[] record = actorRecord(actorId, packetName);
+            return endpoint.handleActor(
+                from,
                 new ZLinkServiceM6BWireCodec.ActorMessage(
                     false, 0, null, 0, 0, 1, null,
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -255,30 +349,16 @@ final class ZLinkActorJoinPrewarmIngressTest {
                         TARGET_NODE_GENERATION,
                         sourceAuthorityOwnerGeneration + 1,
                         23)),
-                () -> postInstallRecord,
-                List.of(Message.from("post-install-arrival")),
+                () -> record,
+                List.of(Message.from(packetName)),
                 null,
                 reply -> { throw new AssertionError(
-                    "second arrival must not reply before relocation "
-                        + "completes either"); },
-                parkFailure::set);
-            assertTrue(postInstallAccepted);
-            assertEquals(null, parkFailure.get());
+                    "a one-way arrival must not reply: " + packetName); },
+                failure::set);
+        }
 
-            //  Step 4 (spec 15 §4.2 step 7): publish commits and drains
-            //  the durable backlog — the parked arrival, migrated at
-            //  install time, must come out in order ahead of the arrival
-            //  that landed straight in the real stage.
-            endpoint.publish(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
-
-            assertTrue(joinedCalled.get(),
-                "OnJoinedActor must run as part of the direct-Join publish");
-            //  Both arrivals reached the actor, in order: the one parked
-            //  between Accepted and PREPARE (migrated atomically when the
-            //  real stage installed) ahead of the one that landed
-            //  straight in the real stage after install.
-            assertEquals(List.of("EARLY", "AFTER_INSTALL"),
-                recordingBackend.replayed);
+        @Override public void close() throws Exception {
+            targetHost.close();
         }
     }
 
