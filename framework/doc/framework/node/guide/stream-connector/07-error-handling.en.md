@@ -10,7 +10,7 @@ title: "Error Handling · Node/TypeScript"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: Browser](08-browser.en.md)
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: Browser](08-browser.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

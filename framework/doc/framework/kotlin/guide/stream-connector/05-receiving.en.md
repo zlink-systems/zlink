@@ -10,7 +10,7 @@ title: "Receiving Packets · Kotlin"
 # Receiving Packets
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Sending Packets](04-sending.en.md) | [Next: Connection Lifecycle](06-lifecycle.en.md)
+[Contents](README.en.md) | [Previous: Sending Packets](04-sending.en.md) | [Next: Connection Lifecycle](06-lifecycle.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

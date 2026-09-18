@@ -10,7 +10,7 @@ title: "Error Handling · Java"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md)
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

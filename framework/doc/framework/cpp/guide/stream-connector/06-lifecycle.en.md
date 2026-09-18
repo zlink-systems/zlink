@@ -10,7 +10,7 @@ title: "Connection Lifecycle · C++"
 # Connection Lifecycle
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Receiving Packets](05-receiving.en.md) | [Next: Error Handling](07-error-handling.en.md)
+[Contents](README.en.md) | [Previous: Receiving Packets](05-receiving.en.md) | [Next: Error Handling](07-error-handling.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

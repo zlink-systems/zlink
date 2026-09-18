@@ -10,7 +10,7 @@ title: "오류 처리 · Kotlin"
 # 오류 처리
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md)
+[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

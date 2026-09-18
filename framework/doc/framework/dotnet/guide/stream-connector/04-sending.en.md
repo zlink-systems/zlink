@@ -10,7 +10,7 @@ title: "Sending Packets · C#/.NET"
 # Sending Packets
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Connector Options](03-connector-options.en.md) | [Next: Receiving Packets](05-receiving.en.md)
+[Contents](README.en.md) | [Previous: Connector Options](03-connector-options.en.md) | [Next: Receiving Packets](05-receiving.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

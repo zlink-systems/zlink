@@ -10,7 +10,7 @@ title: "연결 생명주기 · Java"
 # 연결 생명주기
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: packet 수신](05-receiving.ko.md) | [다음: 오류 처리](07-error-handling.ko.md)
+[목차](README.ko.md) | [이전: packet 수신](05-receiving.ko.md) | [다음: 오류 처리](07-error-handling.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

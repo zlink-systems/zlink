@@ -10,7 +10,7 @@ title: "Installation and the First Connection · C#/.NET"
 # Installation and the First Connection
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Stream Connector Overview](01-overview.en.md) | [Next: Connector Options](03-connector-options.en.md)
+[Contents](README.en.md) | [Previous: Stream Connector Overview](01-overview.en.md) | [Next: Connector Options](03-connector-options.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
