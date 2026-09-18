@@ -599,7 +599,10 @@ class KotlinPublicSurfaceContractTest {
             //  backpressure contract never applied and common spec 32 §10 now says the
             //  client keeps receiving without a queue bound. The pin could not follow at
             //  the time because this module test source did not compile (#513).
-            "ZLinkKotlinStreamConnector" to "560cc2ff8277106e578a168bdf31f37033aec52755fce4fc155cf7aec2912b4f",
+            //  Re-pinned after merging main: this branch also changes the connector
+            //  surface (the suspending setDiagnosticsLevel pair among others), so the
+            //  merged surface is not the one main pinned. The value below is measured.
+            "ZLinkKotlinStreamConnector" to "86e827b8ff2c9d69361ab49311dc7036a059cded44c6914177e0ef18f86a6403",
             "ZLinkKotlinLifecycleCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
             "ZLinkKotlinSendCall" to "dca3ddd35276a190fa5f79289f2771312f7305178cc1260a31fa00e1a99b8e44",
             "ZLinkStreamTypedWaitCall" to "6385a73bc528712e6d0f31512ba8f29c1951b2c347c48b6001f03c34e80d84f4",
