@@ -277,7 +277,72 @@ final class ZLinkStreamDispatchQueue {
     }
 
     CompletionStage<Void> drainAsync() {
-        QueuedDispatch next = null;
+        CompletableFuture<Void> drained = new CompletableFuture<>();
+        drainInto(drained);
+        return drained;
+    }
+
+    /**
+     * Runs the dispatchable items one after another until the queue has none
+     * left, one fails, or one hands back a stage that has not finished.
+     *
+     * <p>Spec 32 7 makes {@code Manual} the default so the application pumps
+     * on the thread that may touch its objects, and it runs the registered
+     * handlers in the order they were queued. Both are properties of this
+     * loop: an item runs on the thread that reached it, and the next one is
+     * only taken once the previous one has finished.
+     *
+     * <p>An item that finished on the spot - the usual case, a handler that
+     * returns without waiting for anything - is followed by the next turn of
+     * this loop. Chaining it through a continuation instead left the
+     * continuation running on the same stack, so the depth grew with the
+     * queue and a {@code Manual} queue, which grows until the pump, ran the
+     * stack out. Only an item that has not finished hands the rest of the
+     * queue to its own completion, and that resumes on the thread that
+     * completed it - the same thread the recursive chain used.
+     */
+    private void drainInto(CompletableFuture<Void> drained) {
+        while (true) {
+            QueuedDispatch next;
+            try {
+                next = takeDispatchable();
+            } catch (Throwable error) {
+                drained.completeExceptionally(error);
+                return;
+            }
+            if (next == null) {
+                drained.complete(null);
+                return;
+            }
+            CompletableFuture<Void> item;
+            try {
+                item = next.action().get().toCompletableFuture();
+            } catch (Throwable error) {
+                closeMessage(next.message());
+                drained.completeExceptionally(error);
+                return;
+            }
+            if (item.isDone() && !item.isCompletedExceptionally()) {
+                continue;
+            }
+            item.whenComplete((ignored, error) -> {
+                if (error != null) {
+                    drained.completeExceptionally(error);
+                } else {
+                    drainInto(drained);
+                }
+            });
+            return;
+        }
+    }
+
+    /**
+     * Takes the first queued item that is dispatchable right now, or
+     * {@code null} when the queue holds none. A queue that changed while it
+     * was being examined is examined again, so an item added or claimed in
+     * between is neither missed nor dispatched twice.
+     */
+    private QueuedDispatch takeDispatchable() {
         while (true) {
             long observedVersion;
             List<QueuedDispatch> candidates;
@@ -285,14 +350,9 @@ final class ZLinkStreamDispatchQueue {
                 observedVersion = version;
                 candidates = List.copyOf(queue);
             }
+            QueuedDispatch next = null;
             for (QueuedDispatch candidate : candidates) {
-                boolean dispatchable;
-                try {
-                    dispatchable = candidate.dispatchable().getAsBoolean();
-                } catch (Throwable error) {
-                    return CompletableFuture.failedFuture(error);
-                }
-                if (!dispatchable) {
+                if (!candidate.dispatchable().getAsBoolean()) {
                     continue;
                 }
                 boolean versionChanged;
@@ -307,22 +367,13 @@ final class ZLinkStreamDispatchQueue {
                 }
             }
             if (next != null) {
-                break;
+                return next;
             }
             synchronized (queue) {
                 if (version == observedVersion) {
-                    return CompletableFuture.completedFuture(null);
+                    return null;
                 }
             }
-        }
-        if (next == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        try {
-            return next.action().get().thenCompose(ignored -> drainAsync());
-        } catch (Throwable error) {
-            closeMessage(next.message());
-            return CompletableFuture.failedFuture(error);
         }
     }
 
