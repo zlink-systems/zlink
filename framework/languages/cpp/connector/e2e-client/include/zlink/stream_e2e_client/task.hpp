@@ -20,84 +20,143 @@ namespace zlink::stream_e2e_client
 using zlink::stream_connector::error_code_t;
 using zlink::stream_connector::result_t;
 
-template <typename T> class task_t
+namespace detail
 {
-  public:
+
+/// Shared state of a task, and the one place a task's completion is decided.
+///
+/// A task has a single producer: the starter callback of an operation task, or
+/// the coroutine frame of a coroutine task. `complete` is that producer's last
+/// act. Until it runs the task carries no result, so a result is proof that the
+/// producer has finished - waiters, awaiting coroutines and `~task_t` all read
+/// the same fact and none of them can act on a producer that is still working.
+template <typename T> struct task_state_t
+{
     using callback_t = std::function<void (result_t<T>)>;
     using starter_t = std::function<void (callback_t)>;
 
-    struct state_t
+    std::mutex mutex;
+    std::condition_variable ready;
+    std::optional<result_t<T>> result;
+    std::coroutine_handle<> continuation;
+    starter_t starter;
+    bool started = false;
+
+    void complete (result_t<T> value)
     {
-        std::mutex mutex;
-        std::condition_variable ready;
-        std::optional<result_t<T>> result;
-        std::coroutine_handle<> continuation;
-        starter_t starter;
-        bool started = false;
-    };
+        std::coroutine_handle<> resumed;
+        {
+            std::lock_guard<std::mutex> lock (mutex);
+            if (result.has_value ()) {
+                return;
+            }
+            result = std::move (value);
+            resumed = continuation;
+            continuation = {};
+        }
+        ready.notify_all ();
+        if (resumed) {
+            resumed.resume ();
+        }
+    }
 
-    struct promise_type
+    /// Completes a task whose owner went away before its producer finished. The
+    /// awaiting coroutine is dropped rather than resumed: its own frame is going
+    /// away with the owner that held it.
+    void cancel ()
     {
-        std::shared_ptr<state_t> state = std::make_shared<state_t> ();
-
-        task_t get_return_object ()
         {
-            return task_t (std::coroutine_handle<promise_type>::from_promise (*this), state);
+            std::lock_guard<std::mutex> lock (mutex);
+            if (result.has_value ()) {
+                return;
+            }
+            continuation = {};
+            result = result_t<T>::failure (error_code_t::disconnected,
+                                           "stream e2e task was canceled");
         }
-        std::suspend_never initial_suspend () noexcept { return {}; }
-        struct final_awaiter
-        {
-            bool await_ready () noexcept { return false; }
+        ready.notify_all ();
+    }
+};
 
-            std::coroutine_handle<>
-            await_suspend (std::coroutine_handle<promise_type> handle) noexcept
-            {
-                auto state = handle.promise ().state;
-                state->ready.notify_all ();
-                std::coroutine_handle<> continuation;
-                {
-                    std::lock_guard<std::mutex> lock (state->mutex);
-                    continuation = state->continuation;
-                    state->continuation = {};
-                }
-                return continuation ? continuation : std::noop_coroutine ();
-            }
+/// Final suspend of every coroutine task, and the only place a coroutine frame
+/// is destroyed.
+///
+/// **A coroutine frame is owned by the frame itself.** The connector resumes a
+/// client coroutine on its own thread - on Windows `connector_t::close`
+/// completes pending operations from the IOCP thread - so the coroutine runs
+/// its result production, its frame-local cleanup and its final suspend on a
+/// thread the task's owner does not control. Nobody outside the frame can tell
+/// when the frame has stopped touching itself, so nobody outside the frame may
+/// free it. The frame carries its outcome out to here, destroys itself, and
+/// only then completes the task; `task_t` holds no coroutine handle at all.
+template <typename T, typename Promise> struct task_final_awaiter_t
+{
+    bool await_ready () noexcept { return false; }
 
-            void await_resume () noexcept {}
-        };
+    void await_suspend (std::coroutine_handle<Promise> handle) noexcept
+    {
+        /* Move everything off the frame first. After `destroy` nothing in the
+         * frame may be read or written again - including `*this`, which lives
+         * in the frame as the awaiter of this final suspend. */
+        auto state = handle.promise ().state;
+        auto outcome = std::move (handle.promise ().outcome);
+        handle.destroy ();
 
-        final_awaiter final_suspend () noexcept
-        {
-            return {};
+        if (!outcome) {
+            outcome = result_t<T>::failure (error_code_t::user_callback_failed,
+                                            "stream e2e coroutine produced no result");
         }
-        void unhandled_exception ()
-        {
-            std::string detail = "unhandled connector coroutine exception";
-            try {
-                throw;
-            }
-            catch (const std::exception &error) {
-                detail += std::string (": ") + error.what ();
-            }
-            catch (...) {
-            }
-            set_result (result_t<T>::failure (error_code_t::user_callback_failed, detail));
+        state->complete (std::move (*outcome));
+    }
+
+    void await_resume () noexcept {}
+};
+
+/// The half of a coroutine task's promise that is the same for every result
+/// type: where the outcome waits, and how the frame ends.
+template <typename T, typename Promise> struct task_promise_base_t
+{
+    std::shared_ptr<task_state_t<T>> state = std::make_shared<task_state_t<T>> ();
+    std::optional<result_t<T>> outcome;
+
+    std::suspend_never initial_suspend () noexcept { return {}; }
+    task_final_awaiter_t<T, Promise> final_suspend () noexcept { return {}; }
+
+    void unhandled_exception ()
+    {
+        std::string detail = "unhandled connector coroutine exception";
+        try {
+            throw;
         }
-        void return_value (result_t<T> value) { set_result (std::move (value)); }
+        catch (const std::exception &error) {
+            detail += std::string (": ") + error.what ();
+        }
+        catch (...) {
+        }
+        outcome = result_t<T>::failure (error_code_t::user_callback_failed, std::move (detail));
+    }
+};
+
+} // namespace detail
+
+template <typename T> class task_t
+{
+  public:
+    using state_t = detail::task_state_t<T>;
+    using callback_t = typename state_t::callback_t;
+    using starter_t = typename state_t::starter_t;
+
+    struct promise_type : detail::task_promise_base_t<T, promise_type>
+    {
+        task_t get_return_object () { return task_t (this->state); }
+
+        void return_value (result_t<T> value) { this->outcome = std::move (value); }
         template <typename U>
         requires (!std::is_same_v<std::remove_cvref_t<U>, result_t<T>>) void return_value (
           U &&value)
         {
-            set_result (result_t<T>::success (T (std::forward<U> (value))));
+            this->outcome = result_t<T>::success (T (std::forward<U> (value)));
         }
-
-      private:
-        void set_result (result_t<T> value)
-        {
-            std::lock_guard<std::mutex> lock (state->mutex);
-            state->result = std::move (value);
-        }
-
     };
 
     explicit task_t (result_t<T> result) : _state (std::make_shared<state_t> ())
@@ -110,32 +169,18 @@ template <typename T> class task_t
         _state->starter = std::move (starter);
     }
 
-    task_t (task_t &&other) noexcept :
-        _handle (other._handle), _state (std::move (other._state))
-    {
-        other._handle = {};
-    }
+    task_t (task_t &&other) noexcept = default;
     task_t &operator= (task_t &&other) noexcept
     {
         if (this != &other) {
-            if (_handle) {
-                _handle.destroy ();
-            }
-            _handle = other._handle;
+            cancel_pending ();
             _state = std::move (other._state);
-            other._handle = {};
         }
         return *this;
     }
     task_t (const task_t &) = delete;
     task_t &operator= (const task_t &) = delete;
-    ~task_t ()
-    {
-        cancel_pending ();
-        if (_handle) {
-            _handle.destroy ();
-        }
-    }
+    ~task_t () { cancel_pending (); }
 
     bool await_ready ()
     {
@@ -193,10 +238,7 @@ template <typename T> class task_t
     }
 
   private:
-    task_t (std::coroutine_handle<promise_type> handle, std::shared_ptr<state_t> state) :
-        _handle (handle), _state (std::move (state))
-    {
-    }
+    explicit task_t (std::shared_ptr<state_t> state) : _state (std::move (state)) {}
 
     void start_operation () const
     {
@@ -209,118 +251,31 @@ template <typename T> class task_t
             _state->started = true;
             starter = _state->starter;
         }
-        starter ([state = _state] (result_t<T> result) {
-            std::coroutine_handle<> continuation;
-            {
-                std::lock_guard<std::mutex> lock (state->mutex);
-                if (state->result.has_value ()) {
-                    return;
-                }
-                state->result = std::move (result);
-                continuation = state->continuation;
-                state->continuation = {};
-            }
-            state->ready.notify_all ();
-            if (continuation) {
-                continuation.resume ();
-            }
-        });
+        starter ([state = _state] (result_t<T> result) { state->complete (std::move (result)); });
     }
 
     void cancel_pending ()
     {
-        if (!_state) {
-            return;
+        if (_state) {
+            _state->cancel ();
         }
-        {
-            std::lock_guard<std::mutex> lock (_state->mutex);
-            if (_state->result.has_value ()) {
-                return;
-            }
-            _state->continuation = {};
-            _state->result = result_t<T>::failure (error_code_t::disconnected,
-                                                   "stream e2e task was canceled");
-        }
-        _state->ready.notify_all ();
     }
 
-    std::coroutine_handle<promise_type> _handle{};
     std::shared_ptr<state_t> _state;
 };
 
 template <> class task_t<void>
 {
   public:
-    using callback_t = std::function<void (result_t<void>)>;
-    using starter_t = std::function<void (callback_t)>;
+    using state_t = detail::task_state_t<void>;
+    using callback_t = state_t::callback_t;
+    using starter_t = state_t::starter_t;
 
-    struct state_t
+    struct promise_type : detail::task_promise_base_t<void, promise_type>
     {
-        std::mutex mutex;
-        std::condition_variable ready;
-        std::optional<result_t<void>> result;
-        std::coroutine_handle<> continuation;
-        starter_t starter;
-        bool started = false;
-    };
+        task_t get_return_object () { return task_t (this->state); }
 
-    struct promise_type
-    {
-        std::shared_ptr<state_t> state = std::make_shared<state_t> ();
-
-        task_t get_return_object ()
-        {
-            return task_t (std::coroutine_handle<promise_type>::from_promise (*this), state);
-        }
-        std::suspend_never initial_suspend () noexcept { return {}; }
-        struct final_awaiter
-        {
-            bool await_ready () noexcept { return false; }
-
-            std::coroutine_handle<>
-            await_suspend (std::coroutine_handle<promise_type> handle) noexcept
-            {
-                auto state = handle.promise ().state;
-                state->ready.notify_all ();
-                std::coroutine_handle<> continuation;
-                {
-                    std::lock_guard<std::mutex> lock (state->mutex);
-                    continuation = state->continuation;
-                    state->continuation = {};
-                }
-                return continuation ? continuation : std::noop_coroutine ();
-            }
-
-            void await_resume () noexcept {}
-        };
-
-        final_awaiter final_suspend () noexcept
-        {
-            return {};
-        }
-        void unhandled_exception ()
-        {
-            std::string detail = "unhandled connector coroutine exception";
-            try {
-                throw;
-            }
-            catch (const std::exception &error) {
-                detail += std::string (": ") + error.what ();
-            }
-            catch (...) {
-            }
-            set_result (
-              result_t<void>::failure (error_code_t::user_callback_failed, std::move (detail)));
-        }
-        void return_void () { set_result (result_t<void>::success ()); }
-
-      private:
-        void set_result (result_t<void> value)
-        {
-            std::lock_guard<std::mutex> lock (state->mutex);
-            state->result = std::move (value);
-        }
-
+        void return_void () { this->outcome = result_t<void>::success (); }
     };
 
     explicit task_t (result_t<void> result) : _state (std::make_shared<state_t> ())
@@ -333,32 +288,18 @@ template <> class task_t<void>
         _state->starter = std::move (starter);
     }
 
-    task_t (task_t &&other) noexcept :
-        _handle (other._handle), _state (std::move (other._state))
-    {
-        other._handle = {};
-    }
+    task_t (task_t &&other) noexcept = default;
     task_t &operator= (task_t &&other) noexcept
     {
         if (this != &other) {
-            if (_handle) {
-                _handle.destroy ();
-            }
-            _handle = other._handle;
+            cancel_pending ();
             _state = std::move (other._state);
-            other._handle = {};
         }
         return *this;
     }
     task_t (const task_t &) = delete;
     task_t &operator= (const task_t &) = delete;
-    ~task_t ()
-    {
-        cancel_pending ();
-        if (_handle) {
-            _handle.destroy ();
-        }
-    }
+    ~task_t () { cancel_pending (); }
 
     bool await_ready ()
     {
@@ -415,10 +356,7 @@ template <> class task_t<void>
     }
 
   private:
-    task_t (std::coroutine_handle<promise_type> handle, std::shared_ptr<state_t> state) :
-        _handle (handle), _state (std::move (state))
-    {
-    }
+    explicit task_t (std::shared_ptr<state_t> state) : _state (std::move (state)) {}
 
     void start_operation () const
     {
@@ -431,42 +369,16 @@ template <> class task_t<void>
             _state->started = true;
             starter = _state->starter;
         }
-        starter ([state = _state] (result_t<void> result) {
-            std::coroutine_handle<> continuation;
-            {
-                std::lock_guard<std::mutex> lock (state->mutex);
-                if (state->result.has_value ()) {
-                    return;
-                }
-                state->result = std::move (result);
-                continuation = state->continuation;
-                state->continuation = {};
-            }
-            state->ready.notify_all ();
-            if (continuation) {
-                continuation.resume ();
-            }
-        });
+        starter ([state = _state] (result_t<void> result) { state->complete (std::move (result)); });
     }
 
     void cancel_pending ()
     {
-        if (!_state) {
-            return;
+        if (_state) {
+            _state->cancel ();
         }
-        {
-            std::lock_guard<std::mutex> lock (_state->mutex);
-            if (_state->result.has_value ()) {
-                return;
-            }
-            _state->continuation = {};
-            _state->result = result_t<void>::failure (error_code_t::disconnected,
-                                                      "stream e2e task was canceled");
-        }
-        _state->ready.notify_all ();
     }
 
-    std::coroutine_handle<promise_type> _handle{};
     std::shared_ptr<state_t> _state;
 };
 

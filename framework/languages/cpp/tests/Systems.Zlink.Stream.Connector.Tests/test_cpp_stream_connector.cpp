@@ -30,11 +30,13 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <future>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <optional>
+#include <semaphore>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -631,6 +633,76 @@ result_waits_for_coroutine_frame_cleanup (std::atomic_bool &cleaned)
             cleaned->store (true);
         }
     } cleanup_marker{&cleaned};
+    co_return true;
+}
+
+/* Issue #630: a coroutine frame is owned by the frame itself, never by the
+ * `task_t` that carries its result.
+ *
+ * On Windows under load, `connector_t::close` completes a pending operation on
+ * the connector's own IOCP thread and that resumes the client coroutine there.
+ * The coroutine therefore runs its last steps - result production, frame-local
+ * cleanup, final suspend - on a thread the task's owner does not control. If
+ * `~task_t` may destroy the frame, the owner can free it while the connector
+ * thread is still inside it.
+ *
+ * The probe below forces exactly that interleaving with semaphores instead of
+ * timing: the coroutine parks on `owner_done` after producing its result and
+ * before the frame is finished, the owner drops the task and then reclaims the
+ * heap, and the coroutine checks whether its own frame survived. */
+struct frame_lifetime_probe_t
+{
+    std::binary_semaphore resume_frame{0};  /* owner  -> frame: finish the awaited operation */
+    std::binary_semaphore frame_parked{0};  /* frame  -> owner: result produced, frame still live */
+    std::binary_semaphore owner_done{0};    /* owner  -> frame: the owner has dropped the task */
+    std::binary_semaphore frame_left{0};    /* frame  -> owner: the frame-local guard is done */
+    std::atomic_bool frame_overwritten{false};
+    std::atomic_int guard_destructions{0};
+};
+
+zlink::stream_e2e_client::task_t<bool>
+coroutine_frame_outlives_its_task (frame_lifetime_probe_t &probe)
+{
+    /* Resumed from a foreign thread, the way the connector's close path resumes
+     * a client coroutine. */
+    co_await zlink::stream_e2e_client::task_t<void> (
+      [&probe] (std::function<void (zlink::stream_connector::result_t<void>)> callback) {
+          std::thread ([&probe, callback = std::move (callback)] () mutable {
+              probe.resume_frame.acquire ();
+              callback (zlink::stream_connector::result_t<void>::success ());
+          }).detach ();
+      });
+
+    struct frame_guard_t
+    {
+        frame_lifetime_probe_t *probe;
+        unsigned char canary[4096];
+
+        explicit frame_guard_t (frame_lifetime_probe_t *owner) : probe (owner)
+        {
+            std::memset (canary, 0xa5, sizeof (canary));
+        }
+        frame_guard_t (const frame_guard_t &) = delete;
+        frame_guard_t &operator= (const frame_guard_t &) = delete;
+        ~frame_guard_t ()
+        {
+            /* Frame-local destructors run after the coroutine has produced its
+             * result and before final suspend, so this is the point where a
+             * result-carrying owner could believe the frame is finished. */
+            auto *watcher = probe; /* off the frame, so parking never reads it */
+            watcher->guard_destructions.fetch_add (1);
+            watcher->frame_parked.release ();
+            watcher->owner_done.acquire ();
+            for (const unsigned char byte : canary) {
+                if (byte != 0xa5) {
+                    watcher->frame_overwritten.store (true);
+                    break;
+                }
+            }
+            watcher->frame_left.release ();
+        }
+    } guard{&probe};
+
     co_return true;
 }
 
@@ -1279,6 +1351,37 @@ int main ()
           result_waits_for_coroutine_frame_cleanup (coroutine_frame_cleaned).result ();
         if (!cleanup_result || !cleanup_result.value () || !coroutine_frame_cleaned.load ()) {
             return 108;
+        }
+    }
+    /* Issue #630: dropping the task must not free a coroutine frame that is
+     * still running on another thread. */
+    {
+        frame_lifetime_probe_t probe;
+        std::optional<zlink::stream_e2e_client::task_t<bool>> task (
+          coroutine_frame_outlives_its_task (probe));
+
+        probe.resume_frame.release ();
+        probe.frame_parked.acquire ();
+
+        /* The coroutine has produced its result and is parked inside its own
+         * frame. This is where the owner used to conclude the task was done. */
+        task.reset ();
+
+        /* Reclaim the heap: if the frame was freed, these blocks take its bytes. */
+        std::vector<std::vector<unsigned char>> reclaimed;
+        reclaimed.reserve (512);
+        for (int index = 0; index < 512; ++index) {
+            reclaimed.emplace_back (8192, 0x5a);
+        }
+
+        probe.owner_done.release ();
+        probe.frame_left.acquire ();
+
+        if (probe.frame_overwritten.load ()) {
+            return 204;
+        }
+        if (probe.guard_destructions.load () != 1) {
+            return 205;
         }
     }
 
