@@ -527,7 +527,21 @@ number precision).
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
 | `allocation` | Placement information (§3.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §4), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§3.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
-| `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). |
+| `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
+
+The node that runs the creation decodes `requestContentReference` and verifies that the
+decoded bytes have the length `requestEncodedSize` and the SHA-256 `requestSha256`. If
+either differs, it doesn't run the factory and records the creation as failed. Those two
+values decide the request content's integrity, so the reference string carries no separate
+checksum segment.
+
+The reservation isn't a separate record; it's a state of this one. A reservation is the
+interval during which `allocation.state` is `reserved` and `pendingCreation` is present,
+and `pendingCreation.reservationId` identifies it. No logical key is reserved for it, and
+completing or aborting a reservation another node created is decided from this record and
+§7's final-result record alone. Reservation state isn't held outside the fields in the
+table above — reservation information placed in a field only one language reads doesn't
+survive another language's update of that record.
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
@@ -566,6 +580,13 @@ no-op.** The Store reports it as ignored/stale and doesn't re-store the descript
 publisher must increment Revision to change published content — a replayed `RENEW` at an
 unchanged Revision never errors and never overwrites the stored descriptor, even if
 replayed more than once.
+
+**A runtime call that changes descriptor content starts, within that call, the
+publication of the next Revision that reflects the change.** A host doesn't defer that
+publication to the automatic discovery polling cycle — that cycle is the interval at
+which a host reads descriptors other hosts published, and it doesn't set when a host
+publishes its own change. When the publication completes follows the host's execution
+model. A caller doesn't assume the new Revision is stored by the time the call returns.
 
 The host builds the whole descriptor during startup first. If it exceeds the size limit,
 it doesn't publish a truncated or split version — the whole startup fails instead. The
@@ -1491,6 +1512,9 @@ against the store record golden fixture. Each item maps to one test.
 - A location looked up by global ID returns the same result independent of MeshName.
 - The next-page value for a list read is at most 4,096 bytes; one page is at most 1,000
   entries and 4 MiB, and every page is from the same-point-in-time list.
+- Even on a host configured with a long polling interval, a runtime descriptor change is
+  observed in the Store as a new Revision before that interval elapses; with no change,
+  the same wait fails to observe one.
 
 **Creation**
 
@@ -1500,6 +1524,12 @@ against the store record golden fixture. Each item maps to one test.
   record deletion, space return, and a failure result together.
 - The same request can re-read the stored final result for 5 minutes from the original
   deadline.
+- A target in one language can complete or abort a reservation secured in another, and no
+  reservation record other than the authority record and the final-result record appears in
+  the Store meanwhile.
+- A `requestContentReference` outside the specified form, or decoded bytes whose length or
+  SHA-256 differs from the record's values, doesn't run the factory and records the creation
+  as failed; matching values run it.
 - Commands 47/48 verify source and target run generation, `OperationId`, the creation
   record, `StoreVersion`, and object generation, and command 20's result is returned
   exactly once.

@@ -50,8 +50,14 @@ Spot, Actor와 Logical Multicast는 같은 MeshNode를 사용한다. 전 수신�
 Linux 또는 WSL에서는 저장소 root에서 다음과 같이 호출한다.
 
 ```bash
+./framework/languages/cpp/samples/TicTacToe/run_sample.sh
 ./framework/languages/cpp/samples/Bingo/run_sample.sh
 ```
+
+위 두 줄은 각각 한 샘플의 호출이다. 한 번에 하나씩 실행한다.
+
+DeliveryDispatch 샘플은 현재 Linux 또는 WSL용 `run_sample.sh`로 전체 client/server 흐름을
+검증한다.
 
 Windows PowerShell에서는 같은 샘플을 다음과 같이 호출한다.
 
@@ -59,7 +65,7 @@ Windows PowerShell에서는 같은 샘플을 다음과 같이 호출한다.
 .\framework\languages\cpp\samples\Bingo\run_sample.ps1
 ```
 
-C++ 샘플은 일곱 개이므로 전부 확인하려면 호출도 일곱 번이다. 경로의 `Bingo` 자리에
+C++ 샘플은 일곱 개이므로 전부 확인하려면 호출도 일곱 번이다. 경로의 샘플 이름 자리에
 `Bingo`, `DeliveryDispatch`, `GameQuest`, `ShoppingMall`, `SupportChat`, `TicTacToe`,
 `ZoneWorld`를 차례로 넣어 한 번에 하나씩 실행한다.
 

@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "../support/read_text_file.hpp"
+
 #include <cctype>
 #include <deque>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <map>
 #include <sstream>
 #include <string>
@@ -33,9 +33,7 @@ struct layout_file_contents_t
 
 void read_layout_file (const std::filesystem::path &path, layout_file_contents_t &contents)
 {
-    std::ifstream input (path);
-    contents.text.assign (std::istreambuf_iterator<char> (input),
-                          std::istreambuf_iterator<char> ());
+    contents.text = zlink::framework::tests::read_text_file (path);
 
     const auto &text = contents.text;
     for (std::size_t begin = 0; begin < text.size ();) {

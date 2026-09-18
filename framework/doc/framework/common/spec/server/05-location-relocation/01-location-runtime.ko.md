@@ -482,7 +482,19 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
 | `allocation` | 배치 정보(§3.3)다. dotnet `ZLinkPlacementAllocation`(내부 구현)에서 파생한다. `state`(`reserved \| active`), `objectKind`(`actor \| userSpot \| instanceSpot` — Entry Spot은 없다. Entry Spot의 Actor는 `actor`로 집계한다, §4), `stableType`, `descriptor`(`{meshName, routingIdHex}` — MeshNode descriptor key와 같은 모양), `descriptorLifecycleGeneration`(target MeshNode의 `lifecycleGeneration`과 CAS로 맞춰야 하는 값)과 `capacity`를 포함한다. `capacity`는 `{actors, spots, spotType}`이며 `actors`·`spots`는 이번 allocation이 확보한 정수 slot 수, `spotType`은 Spot이 아니면 `null`이고 Spot이면 `{objectKind, stableType, count}`다(§3.3의 "Spot slot 1과 해당 Spot 종류·stable type slot 1" — flat counter 하나로는 어떤 `(spotKind, stableType)` 조합을 확보했는지 표현할 수 없다). |
-| `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. |
+| `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. `requestContentReference`의 형식은 `inline-v1:{base64url}`이며, `{base64url}`은 생성 요청 bytes를 `A-Z a-z 0-9 - _` 알파벳으로 인코딩한 값으로 padding `=`을 붙이지 않는다. 다른 형식은 인식하지 않는다. |
+
+생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
+`requestEncodedSize`와 같고 SHA-256이 `requestSha256`과 같은지 확인한다. 어느 하나라도
+다르면 factory를 실행하지 않고 그 생성을 실패로 기록한다. 이 두 값이 요청 내용의 무결성을
+판정하므로 reference 문자열에는 별도의 checksum 구간을 두지 않는다.
+
+예약은 별도의 record가 아니라 이 record의 상태다. `allocation.state`가 `reserved`이고
+`pendingCreation`이 있는 구간이 하나의 예약이며, `pendingCreation.reservationId`가 그
+예약의 식별자다. 예약 전용 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
+취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
+두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
+그 정보가 남지 않는다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -517,6 +529,12 @@ Framework에 노출하지 않는다.
 이를 ignored/stale로 보고하고 descriptor를 다시 저장하지 않는다. Publisher는 게시 내용을
 바꾸려면 반드시 Revision을 증가시켜야 한다 — Revision이 바뀌지 않은 `RENEW`는 여러 번
 반복되더라도 error가 되지 않고 저장된 descriptor를 덮어쓰지도 않는다.
+
+**Descriptor 내용을 바꾸는 runtime 호출은 그 변경을 반영한 다음 Revision의 게시를 그
+호출에서 시작한다.** Host는 게시를 automatic discovery polling 주기까지 미루지 않는다 — 그
+주기는 다른 host가 게시한 descriptor를 읽는 간격이며, 자신의 변경을 게시하는 시점을 정하지
+않는다. 게시가 끝나는 시점은 host의 실행 모델을 따른다. 호출자는 호출이 반환한 시점에 새
+Revision이 Store에 저장되어 있다고 가정하지 않는다.
 
 Host는 startup 중 descriptor 전체를 먼저 만든다. 크기 제한을 넘으면 일부를 자르거나 나누어
 게시하지 않고 startup 전체를 실패시킨다. Application state의 format과 version은 descriptor에
@@ -1349,6 +1367,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 전역 ID로 조회한 위치는 MeshName과 독립적으로 같은 결과를 반환한다.
 - 목록 읽기의 다음 페이지 값은 최대 4,096 bytes이고, 한 페이지는 최대 1,000개·4 MiB이며
   모든 페이지가 같은 시점의 목록이다.
+- Polling 주기를 길게 설정한 host에서도 runtime descriptor 변경이 그 주기 전에 새 Revision
+  으로 Store에서 관찰되며, 변경이 없으면 같은 대기가 관찰에 실패한다.
 
 **생성**
 
@@ -1356,6 +1376,10 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 생성이 끝나면 `Ready`, 수용 공간과 최종 결과를 한 번에 기록하거나, record 삭제와 공간
   반환과 실패 결과를 한 번에 기록한다.
 - 같은 요청은 최초 deadline에서 5분 동안 저장한 최종 결과를 다시 읽을 수 있다.
+- 한 언어가 확보한 예약을 다른 언어의 target이 완료하거나 취소할 수 있으며, 그 사이 Store에는
+  authority record와 최종 결과 record 외의 예약 record가 생기지 않는다.
+- `requestContentReference`가 정한 형식을 벗어나거나 decode한 bytes의 길이·SHA-256이 record의
+  값과 다르면 factory를 실행하지 않고 생성을 실패로 기록하며, 값이 모두 맞으면 실행한다.
 - Command 47·48은 source와 target 실행 세대, `OperationId`, 생성 record, `StoreVersion`과
   object generation을 확인하고, command 20 결과는 한 번만 반환된다.
 - `Creating` record와 공간 확보·사용·반환은 각각 하나의 Store 요청으로 처리되며, 같은 공간

@@ -1,17 +1,15 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { readSourceText } = require('./helpers/source-text');
 
-const wrapper = fs.readFileSync(
-  path.resolve(__dirname, '../../cross-language/run_cross_language_smoke.sh'),
-  'utf8'
+const wrapper = readSourceText(
+  path.resolve(__dirname, '../../cross-language/run_cross_language_smoke.sh')
 );
-const smoke = fs.readFileSync(
-  path.resolve(__dirname, '../../cross-language/node_dotnet_smoke.js'),
-  'utf8'
+const smoke = readSourceText(
+  path.resolve(__dirname, '../../cross-language/node_dotnet_smoke.js')
 );
 
 test('cross-language wrapper prebuilds the TestHost and uses no-build execution', () => {

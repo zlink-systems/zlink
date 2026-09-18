@@ -3,6 +3,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { readSourceText } = require('./helpers/source-text');
 
 const workspaceRoot = path.resolve(__dirname, '..', '..');
 const samplesRoot = path.join(workspaceRoot, 'samples');
@@ -34,7 +35,7 @@ test('node samples define required runners and keep scenario contracts in common
   if (!fs.existsSync(samplesReadme)) {
     missing.push('samples/README.ko.md');
   } else {
-    const readme = fs.readFileSync(samplesReadme, 'utf8');
+    const readme = readSourceText(samplesReadme);
     for (const requiredText of [
       '../../../doc/framework/common/sample/README.ko.md',
       'npm run browser:install',
@@ -366,7 +367,7 @@ test('node client flow files use ClientScenario names', () => {
     const clientRoot = path.join(samplesRoot, sample, 'Client');
     for (const file of sampleSourceFiles(clientRoot)) {
       const relative = relativePath(path.join(samplesRoot, sample), file);
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       if (/client-app|self-check|TestScenario/.test(relative) || /ClientApp|TestScenario/.test(content)) {
         violations.push(`${sample}/${relative}`);
       }
@@ -433,16 +434,16 @@ test('node common-spec samples expose buildable scenario entrypoints', () => {
   const missing = [];
 
   for (const [sample, packageName, scenarioFile, scenarioName, passMarker, serverEntries] of cases) {
-    const packageJson = fs.readFileSync(path.join(samplesRoot, sample, 'package.json'), 'utf8');
-    const tsconfig = fs.readFileSync(path.join(samplesRoot, sample, 'tsconfig.json'), 'utf8');
-    const client = fs.readFileSync(path.join(samplesRoot, sample, 'Client', 'main.ts'), 'utf8');
-    const scenario = fs.readFileSync(path.join(
+    const packageJson = readSourceText(path.join(samplesRoot, sample, 'package.json'));
+    const tsconfig = readSourceText(path.join(samplesRoot, sample, 'tsconfig.json'));
+    const client = readSourceText(path.join(samplesRoot, sample, 'Client', 'main.ts'));
+    const scenario = readSourceText(path.join(
       samplesRoot,
       sample,
       'Client',
       scenarioFile
-    ), 'utf8');
-    const contracts = fs.readFileSync(path.join(samplesRoot, sample, 'Shared', 'Contracts', 'messages.ts'), 'utf8');
+    ));
+    const contracts = readSourceText(path.join(samplesRoot, sample, 'Shared', 'Contracts', 'messages.ts'));
 
     for (const [content, text] of [
       [packageJson, packageName],
@@ -478,9 +479,8 @@ test('SupportChat uses managers for object creation and keeps API authentication
     'SupportChat.Ts',
     'Server/Support/Application/ConversationAssignment/agent-assignment-service.ts'
   );
-  const apiHandler = fs.readFileSync(
-    path.join(samplesRoot, 'SupportChat.Ts', 'Server', 'Api', 'Handlers', 'open-conversation-handler.ts'),
-    'utf8'
+  const apiHandler = readSourceText(
+    path.join(samplesRoot, 'SupportChat.Ts', 'Server', 'Api', 'Handlers', 'open-conversation-handler.ts')
   );
   const apiModule = readSample('SupportChat.Ts', 'Server/Api/supportchat-api-module.ts');
   const supportModule = readSample('SupportChat.Ts', 'Server/Support/supportchat-support-module.ts');
@@ -532,7 +532,7 @@ test('DeliveryDispatch TypeScript sample uses framework channel topology', () =>
     'Server/Courier/node1-main.ts',
     'Server/Courier/node2-main.ts'
   ].map((file) => readSample('DeliveryDispatch.Ts', file)).join('\n');
-  const runSample = fs.readFileSync(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'run_sample.sh'), 'utf8');
+  const runSample = readSourceText(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'run_sample.sh'));
   const sampleRunner = readSample('DeliveryDispatch.Ts', 'Runner/sample-runner.mjs');
 
   assert.match(clientScenario, /BrowserHttpClient/);
@@ -630,8 +630,8 @@ test('GameQuest TypeScript sample uses framework channel topology', () => {
   );
   const questStore = readSample('GameQuest.Ts', 'Server/Shared/Store/quest-progress-store.ts');
   const serverMain = readSample('GameQuest.Ts', 'Server/bootstrap.ts');
-  const runSample = fs.readFileSync(path.join(samplesRoot, 'GameQuest.Ts', 'run_sample.sh'), 'utf8');
-  const runSamplePs1 = fs.readFileSync(path.join(samplesRoot, 'GameQuest.Ts', 'run_sample.ps1'), 'utf8');
+  const runSample = readSourceText(path.join(samplesRoot, 'GameQuest.Ts', 'run_sample.sh'));
+  const runSamplePs1 = readSourceText(path.join(samplesRoot, 'GameQuest.Ts', 'run_sample.ps1'));
   const sampleRunner = readSample('GameQuest.Ts', 'Runner/sample-runner.mjs');
 
   assert.match(clientMain, /BrowserHttpClientFactory\.create\(config\.apiAHttpUrl\)/);
@@ -753,8 +753,8 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   const workflowModule = readSample('ShoppingMall.Ts', 'Server/OrderWorkflow/shoppingmall-workflow-module.ts');
   const orderStore = readSample('ShoppingMall.Ts', 'Server/Shared/Store/order-store.ts');
   const serverMain = readSample('ShoppingMall.Ts', 'Server/bootstrap.ts');
-  const runSample = fs.readFileSync(path.join(samplesRoot, 'ShoppingMall.Ts', 'run_sample.sh'), 'utf8');
-  const runSamplePs1 = fs.readFileSync(path.join(samplesRoot, 'ShoppingMall.Ts', 'run_sample.ps1'), 'utf8');
+  const runSample = readSourceText(path.join(samplesRoot, 'ShoppingMall.Ts', 'run_sample.sh'));
+  const runSamplePs1 = readSourceText(path.join(samplesRoot, 'ShoppingMall.Ts', 'run_sample.ps1'));
   const sampleRunner = readSample('ShoppingMall.Ts', 'Runner/sample-runner.mjs');
 
   assert.match(clientMain, /ZLinkHttpClient\.create\(config\.apiAHttpUrl\)/);
@@ -769,7 +769,7 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   assert.match(commerceApiModule, /\.listen\('tcp:\/\/127\.0\.0\.1:0'\)/);
   assert.equal((commerceApiModule.match(/\.addRouteMesh\(/g) ?? []).length, 1);
   for (const file of sampleSourceFiles(path.join(samplesRoot, 'ShoppingMall.Ts', 'Server', 'CommerceApi'))) {
-    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /OrderWorkflow\//);
+    assert.doesNotMatch(readSourceText(file), /OrderWorkflow\//);
   }
   assert.match(commerceApiServer, /http\.createServer/);
   assert.match(commerceApiServer, /\/orders\/start/);
@@ -831,7 +831,7 @@ test('common-spec TypeScript clients do not import server modules', () => {
   const violations = [];
   for (const sample of ['DeliveryDispatch.Ts', 'GameQuest.Ts', 'ShoppingMall.Ts']) {
     for (const file of sampleSourceFiles(path.join(samplesRoot, sample, 'Client'))) {
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       if (/from ['"]\.\.\/Server\//.test(content)) {
         violations.push(relativePath(samplesRoot, file));
       }
@@ -844,7 +844,7 @@ test('common-spec TypeScript clients do not import server modules', () => {
 test('node samples use only framework and connector public APIs', () => {
   const violations = [];
   for (const file of sampleSourceFiles(samplesRoot)) {
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/bindings\/node|runtime\/native|src\/zlink\/runtime|packages\/[^/]+\/src/.test(content)) {
       violations.push(relativePath(workspaceRoot, file));
     }
@@ -858,7 +858,7 @@ test('node framework samples exercise the real NestJS application context', () =
   for (const sample of ['TicTacToe.Ts', 'Bingo.Ts']) {
     const usesNestModule = sampleSourceFiles(path.join(samplesRoot, sample))
       .some((file) => {
-        const content = fs.readFileSync(file, 'utf8');
+        const content = readSourceText(file);
         return content.includes('@zlink-systems/nestjs')
           || content.includes('packages/nestjs/dist');
       });
@@ -873,7 +873,7 @@ test('node framework samples exercise the real NestJS application context', () =
     if (relative.startsWith('shared/') || relative.includes('/dist/')) {
       continue;
     }
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/startChannelServer|startRouteServer|createZLinkNestRuntime|nestjs-provider-runtime/.test(content)) {
       hiddenServerRuntime.push(relative);
     }
@@ -887,8 +887,8 @@ test('node framework samples exercise the real NestJS application context', () =
     ['Bingo.Ts/Server/Session/main.ts', 'Bingo.Ts/Server/Session/bingo-session-module.ts', 'createBingoSessionModule']
   ];
   for (const [mainRelative, moduleRelative, factoryName] of serverRoles) {
-    const main = fs.readFileSync(path.join(samplesRoot, mainRelative), 'utf8');
-    const module = fs.readFileSync(path.join(samplesRoot, moduleRelative), 'utf8');
+    const main = readSourceText(path.join(samplesRoot, mainRelative));
+    const module = readSourceText(path.join(samplesRoot, moduleRelative));
     if (!main.includes(factoryName)) {
       missing.push(`${mainRelative}:${factoryName}`);
     }
@@ -925,11 +925,11 @@ test('node framework samples exercise the real NestJS application context', () =
 });
 
 test('TicTacToe TypeScript sample builds and exposes basic TypeScript roles', () => {
-  const packageJson = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'package.json'), 'utf8');
-  const tsconfig = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'tsconfig.json'), 'utf8');
-  const client = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'main.ts'), 'utf8');
-  const api = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
-  const play = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
+  const packageJson = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'package.json'));
+  const tsconfig = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'tsconfig.json'));
+  const client = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'main.ts'));
+  const api = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'));
+  const play = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'));
   //  The aggregate runner this test also read is gone (#405, e106104ffe). That TicTacToe.Ts
   //  owns run_sample.sh and run_sample.ps1 is asserted by the first test in this file, and
   //  that the npm sample gate spawns them by the two sample-gate tests below.
@@ -951,7 +951,7 @@ test('TicTacToe TypeScript sample builds and exposes basic TypeScript roles', ()
     if (!file.endsWith('.ts')) {
       continue;
     }
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/require\(['"][^'"]*samples\/TicTacToe\/|from ['"][^'"]*samples\/TicTacToe\//.test(content)) {
       violations.push(`${relativePath(samplesRoot, file)} references the JavaScript TicTacToe sample`);
     }
@@ -965,15 +965,15 @@ test('TicTacToe TypeScript sample builds and exposes basic TypeScript roles', ()
 });
 
 test('TicTacToe TypeScript sample implements the common game state contract', () => {
-  const client = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'), 'utf8');
-  const board = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Domain', 'TicTacToe', 'tictactoe-board.ts'), 'utf8');
-  const match = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Domain', 'TicTacToe', 'tictactoe-match.ts'), 'utf8');
-  const joinHandler = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'EntrySpot', 'Handlers', 'play-actor-join-game-handler.ts'), 'utf8');
-  const moveHandler = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'TicTacToeGameSpot', 'Handlers', 'play-actor-place-mark-handler.ts'), 'utf8');
-  const gameSpot = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'TicTacToeGameSpot', 'tictactoe-game-spot.ts'), 'utf8');
-  const playActor = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Actors', 'play-actor.ts'), 'utf8');
-  const playSession = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'play-session.ts'), 'utf8');
-  const authenticateHandler = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'Handlers', 'authenticate-play-session-handler.ts'), 'utf8');
+  const client = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'));
+  const board = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Domain', 'TicTacToe', 'tictactoe-board.ts'));
+  const match = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Domain', 'TicTacToe', 'tictactoe-match.ts'));
+  const joinHandler = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'EntrySpot', 'Handlers', 'play-actor-join-game-handler.ts'));
+  const moveHandler = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'TicTacToeGameSpot', 'Handlers', 'play-actor-place-mark-handler.ts'));
+  const gameSpot = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'TicTacToeGameSpot', 'tictactoe-game-spot.ts'));
+  const playActor = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Actors', 'play-actor.ts'));
+  const playSession = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'play-session.ts'));
+  const authenticateHandler = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'Handlers', 'authenticate-play-session-handler.ts'));
   const required = [
     [board, 'class TicTacToeBoard'],
     [match, 'class TicTacToeMatch'],
@@ -1010,12 +1010,12 @@ test('TicTacToe TypeScript sample implements the common game state contract', ()
 });
 
 test('Bingo TypeScript sample builds and exposes separated TypeScript roles', () => {
-  const packageJson = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'package.json'), 'utf8');
-  const tsconfig = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'tsconfig.json'), 'utf8');
-  const client = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'main.ts'), 'utf8');
-  const api = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
-  const session = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'), 'utf8');
-  const play = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
+  const packageJson = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'package.json'));
+  const tsconfig = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'tsconfig.json'));
+  const client = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'main.ts'));
+  const api = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'));
+  const session = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'));
+  const play = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'));
   const required = [
     [packageJson, '@zlink-systems/sample-bingo-ts'],
     [packageJson, 'tsc -p tsconfig.json'],
@@ -1036,7 +1036,7 @@ test('Bingo TypeScript sample builds and exposes separated TypeScript roles', ()
     if (!file.endsWith('.ts')) {
       continue;
     }
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/require\(['"][^'"]*samples\/Bingo\/|from ['"][^'"]*samples\/Bingo\//.test(content)) {
       violations.push(`${relativePath(samplesRoot, file)} references the JavaScript Bingo sample`);
     }
@@ -1050,13 +1050,13 @@ test('Bingo TypeScript sample builds and exposes separated TypeScript roles', ()
 });
 
 test('Bingo TypeScript sample uses channel peers and location store registration where supported', () => {
-  const api = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
-  const apiModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'bingo-api-module.ts'), 'utf8');
-  const play = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
-  const playModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'), 'utf8');
-  const session = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'), 'utf8');
-  const sessionModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'bingo-session-module.ts'), 'utf8');
-  const locationStore = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Configuration', 'location-store.ts'), 'utf8');
+  const api = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'));
+  const apiModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'bingo-api-module.ts'));
+  const play = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'));
+  const playModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'));
+  const session = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'));
+  const sessionModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'bingo-session-module.ts'));
+  const locationStore = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Configuration', 'location-store.ts'));
   const required = [
     [locationStore, 'ZLinkRedisLocationStore'],
     [locationStore, 'redisEndpoint'],
@@ -1111,7 +1111,7 @@ test('Bingo TypeScript sample uses channel peers and location store registration
 });
 
 test('Bingo TypeScript sample publishes drawn number before finished notify', () => {
-  const roomSpot = fs.readFileSync(path.join(
+  const roomSpot = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1121,7 +1121,7 @@ test('Bingo TypeScript sample publishes drawn number before finished notify', ()
     'Spots',
     'BingoRoomSpot',
     'bingo-room-spot.ts'
-  ), 'utf8');
+  ));
   const drawIndex = roomSpot.indexOf('new BingoNumberDrawnNotify(');
   const finishedBranchIndex = roomSpot.indexOf('if (drawn.finished)');
   const endedIndex = roomSpot.indexOf('new BingoGameEndedNotify(');
@@ -1145,9 +1145,9 @@ test('node topology samples run server roles as separate processes over TCP rout
     }
   ];
   for (const { sample, serverEntries, processes } of cases) {
-    const runSample = fs.readFileSync(path.join(samplesRoot, sample, 'Runner', 'sample-runner.mjs'), 'utf8');
+    const runSample = readSourceText(path.join(samplesRoot, sample, 'Runner', 'sample-runner.mjs'));
     for (const serverRelative of serverEntries) {
-      const serverContent = fs.readFileSync(path.join(samplesRoot, sample, serverRelative), 'utf8');
+      const serverContent = readSourceText(path.join(samplesRoot, sample, serverRelative));
       assert.match(serverContent, /SAMPLE_CONFIG|forRootFactory|create[A-Za-z]+Module/);
     }
     for (const processEntry of processes) {
@@ -1163,7 +1163,7 @@ test('node topology samples run server roles as separate processes over TCP rout
 test('node topology samples do not use stdin command protocol as messaging', () => {
   const violations = [];
   for (const file of sampleSourceFiles(samplesRoot)) {
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/runRoleServer|startRoleProcess|withRoleProcess|command ===|stdin\.write/.test(content)) {
       violations.push(relativePath(samplesRoot, file));
     }
@@ -1201,7 +1201,7 @@ test('node samples do not hide readiness with sleeps or pre-ready pings', () => 
       || file.includes(`${path.sep}scripts${path.sep}`)) {
       continue;
     }
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/\bsleep\s*\(|setTimeout\s*\(|beforeReady/.test(content)) {
       violations.push(relativePath(workspaceRoot, file));
     }
@@ -1232,13 +1232,13 @@ test('node sample gate invokes only the selected samples, in order, one runner p
   assert.notEqual(unknown.status, 0, unknown.stdout);
   assert.match(unknown.stderr, /Unknown Node sample 'NotASample'\./);
 
-  const gate = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run-samples-gate.js'), 'utf8');
+  const gate = readSourceText(path.join(workspaceRoot, 'scripts', 'run-samples-gate.js'));
   assert.doesNotMatch(gate, /node --test|retry|sleep\(|chmod/);
 });
 
 test('node client samples wait for push packets through stream connector helpers', () => {
-  const bingoApp = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'bingo-client-scenario.ts'), 'utf8');
-  const ticTacToeClient = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'), 'utf8');
+  const bingoApp = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'bingo-client-scenario.ts'));
+  const ticTacToeClient = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'));
   const missing = [];
   const violations = [];
   for (const [name, content] of [
@@ -1269,8 +1269,8 @@ test('node client samples wait for push packets through stream connector helpers
 });
 
 test('node client scenarios follow the common sample document order', () => {
-  const bingoApp = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'bingo-client-scenario.ts'), 'utf8');
-  const ticTacToeClient = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'), 'utf8');
+  const bingoApp = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'bingo-client-scenario.ts'));
+  const ticTacToeClient = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'));
 
   assertOrdered('Bingo.Ts/Client/bingo-client-scenario.ts', bingoApp, [
     "1. Clients connect only to Session streams, authenticate",
@@ -1334,18 +1334,18 @@ test('node client scenarios follow the common sample document order', () => {
 });
 
 test('node samples use the codecs required by the common specs', () => {
-  const ticTacToeClient = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'), 'utf8');
-  const ticTacToePlay = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'), 'utf8');
-  const ticTacToeContracts = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Shared', 'Contracts', 'messages.ts'), 'utf8');
-  const bingoClient = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'main.ts'), 'utf8');
-  const bingoSessionModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'bingo-session-module.ts'), 'utf8');
-  const bingoAuthenticateHandler = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'Sessions', 'Handlers', 'authenticate-session-handler.ts'), 'utf8');
-  const bingoRoomSpot = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'BingoRoomSpot', 'bingo-room-spot.ts'), 'utf8');
-  const bingoContracts = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'messages.ts'), 'utf8');
-  const bingoCodec = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-codec.ts'), 'utf8');
-  const bingoBrowserCodec = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-browser-codec.ts'), 'utf8');
-  const bingoFrameworkCodec = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-framework-codec.ts'), 'utf8');
-  const bingoProto = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'bingo_messages.proto'), 'utf8');
+  const ticTacToeClient = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'tictactoe-client-scenario.ts'));
+  const ticTacToePlay = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'));
+  const ticTacToeContracts = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Shared', 'Contracts', 'messages.ts'));
+  const bingoClient = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Client', 'main.ts'));
+  const bingoSessionModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'bingo-session-module.ts'));
+  const bingoAuthenticateHandler = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'Sessions', 'Handlers', 'authenticate-session-handler.ts'));
+  const bingoRoomSpot = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Spots', 'BingoRoomSpot', 'bingo-room-spot.ts'));
+  const bingoContracts = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'messages.ts'));
+  const bingoCodec = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-codec.ts'));
+  const bingoBrowserCodec = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-browser-codec.ts'));
+  const bingoFrameworkCodec = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'protobuf-framework-codec.ts'));
+  const bingoProto = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Shared', 'Contracts', 'bingo_messages.proto'));
   const required = [
     [ticTacToeClient, 'zlinkStreamConnectorFactory.create'],
     [ticTacToePlay, '.addStreamNode(SampleNames.playStream'],
@@ -1370,7 +1370,7 @@ test('node samples use the codecs required by the common specs', () => {
       if (!file.endsWith('.ts')) {
         continue;
       }
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       const relative = relativePath(samplesRoot, file);
       if (sample === 'TicTacToe.Ts' && /MessagePack|msgpack|toMsgPack|fromMsgPack|zlinkStreamMessagePackCodec|createMessagePackMessage|readMessagePackMessage/.test(content)) {
         violations.push(relative);
@@ -1422,14 +1422,14 @@ test('TicTacToe server uses framework stream session instead of connector framin
   const violations = [];
 
   for (const relative of checked) {
-    const content = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', relative), 'utf8');
+    const content = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', relative));
     if (/stream-connector|ZlinkStream(Frame|Codec)|net\.createServer|tryReadFrame/.test(content)) {
       violations.push(relative);
     }
   }
 
-  const playModule = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'), 'utf8');
-  const playSession = fs.readFileSync(path.join(
+  const playModule = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'));
+  const playSession = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1438,9 +1438,9 @@ test('TicTacToe server uses framework stream session instead of connector framin
     'ZLink',
     'Sessions',
     'play-session.ts'
-  ), 'utf8');
-  const authenticateHandler = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'Handlers', 'authenticate-play-session-handler.ts'), 'utf8');
-  const playActor = fs.readFileSync(path.join(
+  ));
+  const authenticateHandler = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'Infrastructure', 'ZLink', 'Sessions', 'Handlers', 'authenticate-play-session-handler.ts'));
+  const playActor = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1449,8 +1449,8 @@ test('TicTacToe server uses framework stream session instead of connector framin
     'ZLink',
     'Actors',
     'play-actor.ts'
-  ), 'utf8');
-  const playJoinHandler = fs.readFileSync(path.join(
+  ));
+  const playJoinHandler = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1461,8 +1461,8 @@ test('TicTacToe server uses framework stream session instead of connector framin
     'EntrySpot',
     'Handlers',
     'play-actor-join-game-handler.ts'
-  ), 'utf8');
-  const gameSpot = fs.readFileSync(path.join(
+  ));
+  const gameSpot = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1472,7 +1472,7 @@ test('TicTacToe server uses framework stream session instead of connector framin
     'Spots',
     'TicTacToeGameSpot',
     'tictactoe-game-spot.ts'
-  ), 'utf8');
+  ));
   for (const text of [
     '.addStreamNode(SampleNames.playStream',
     '.registerSession(PlaySessionFactory)',
@@ -1490,23 +1490,23 @@ test('TicTacToe server uses framework stream session instead of connector framin
 });
 
 test('node samples keep contracts separate from sample configuration and application roles explicit', () => {
-  const ticTacToeContracts = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Shared', 'Contracts', 'messages.ts'), 'utf8');
-  const ticTacToeSettings = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Configuration', 'sample-settings.ts'), 'utf8');
-  const ticTacToeCreator = fs.readFileSync(path.join(
+  const ticTacToeContracts = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Shared', 'Contracts', 'messages.ts'));
+  const ticTacToeSettings = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Configuration', 'sample-settings.ts'));
+  const ticTacToeCreator = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
     'Api',
     'Handlers',
     'create-game-http-handler.ts'
-  ), 'utf8');
-  const bingoAllocator = fs.readFileSync(path.join(
+  ));
+  const bingoAllocator = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
     'Matchmaking',
     'bingo-match-reservation-store.ts'
-  ), 'utf8');
+  ));
   const required = [
     [ticTacToeSettings, 'SampleNames'],
     [ticTacToeSettings, 'SampleTimings'],
@@ -1533,19 +1533,19 @@ test('node samples keep contracts separate from sample configuration and applica
 });
 
 test('Node samples use automatic handlers except TicTacToe manual registration', () => {
-  const apiMain = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
-  const playMain = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
-  const apiModule = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'tictactoe-api-module.ts'), 'utf8');
-  const playModule = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'), 'utf8');
-  const apiHandler = fs.readFileSync(path.join(
+  const apiMain = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'));
+  const playMain = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'));
+  const apiModule = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'tictactoe-api-module.ts'));
+  const playModule = readSourceText(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'tictactoe-play-module.ts'));
+  const apiHandler = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
     'Api',
     'Handlers',
     'authenticate-player-handler.ts'
-  ), 'utf8');
-  const playHandler = fs.readFileSync(path.join(
+  ));
+  const playHandler = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1556,8 +1556,8 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'EntrySpot',
     'Handlers',
     'play-actor-join-game-handler.ts'
-  ), 'utf8');
-  const ticTacToeTimerHandler = fs.readFileSync(path.join(
+  ));
+  const ticTacToeTimerHandler = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1568,8 +1568,8 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'TicTacToeGameSpot',
     'Handlers',
     'tictactoe-game-timer-handler.ts'
-  ), 'utf8');
-  const playEntrySpot = fs.readFileSync(path.join(
+  ));
+  const playEntrySpot = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1579,8 +1579,8 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'Spots',
     'EntrySpot',
     'play-entry-spot.ts'
-  ), 'utf8');
-  const gameSpot = fs.readFileSync(path.join(
+  ));
+  const gameSpot = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1590,8 +1590,8 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'Spots',
     'TicTacToeGameSpot',
     'tictactoe-game-spot.ts'
-  ), 'utf8');
-  const sessionFactory = fs.readFileSync(path.join(
+  ));
+  const sessionFactory = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1600,9 +1600,9 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'ZLink',
     'Sessions',
     'play-session-factory.ts'
-  ), 'utf8');
-  const bingoPlayModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'), 'utf8');
-  const bingoTimerHandler = fs.readFileSync(path.join(
+  ));
+  const bingoPlayModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'));
+  const bingoTimerHandler = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1613,9 +1613,9 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     'BingoRoomSpot',
     'Handlers',
     'bingo-room-timer-handler.ts'
-  ), 'utf8');
+  ));
   const nestPackage = sampleSourceFiles(path.join(workspaceRoot, 'packages', 'nestjs', 'src'))
-    .map((file) => fs.readFileSync(file, 'utf8'))
+    .map((file) => readSourceText(file))
     .join('\n');
   const required = [
     [nestPackage, 'export function zlinkRequestHandler'],
@@ -1644,12 +1644,12 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
     [ticTacToeTimerHandler, '@Injectable()'],
     [bingoTimerHandler, 'class BingoRoomTimerHandler'],
     [bingoTimerHandler, '@zlinkSpotTimerHandler({'],
-    [fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'bingo-api-module.ts'), 'utf8'), '.addHandlerGroup(\'api\')'],
-    [fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Matchmaking', 'bingo-matchmaking-module.ts'), 'utf8'),
+    [readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'bingo-api-module.ts')), '.addHandlerGroup(\'api\')'],
+    [readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Matchmaking', 'bingo-matchmaking-module.ts')),
       '.addInstanceSpotFactory('],
-    [fs.readFileSync(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'Server', 'Session', 'customer-status-handler.ts'), 'utf8'),
+    [readSourceText(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'Server', 'Session', 'customer-status-handler.ts')),
       '@zlinkEntrySpotActorSendHandler({'],
-    [fs.readFileSync(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'Server', 'Session', 'customer-status-handler.ts'), 'utf8'),
+    [readSourceText(path.join(samplesRoot, 'DeliveryDispatch.Ts', 'Server', 'Session', 'customer-status-handler.ts')),
       'packetName: PacketNames.deliveryStatusUpdated'],
     [bingoPlayModule, 'zlinkModule(__dirname'],
     [playModule, '.addStreamNode(SampleNames.playStream']
@@ -1695,9 +1695,9 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
   for (const [name, content] of [
     ['TicTacToe.Ts/Server/Api/main.ts', apiMain],
     ['TicTacToe.Ts/Server/Play/main.ts', playMain],
-    ['Bingo.Ts/Server/Api/main.ts', fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'), 'utf8')],
-    ['Bingo.Ts/Server/Play/main.ts', fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'), 'utf8')],
-    ['Bingo.Ts/Server/Session/main.ts', fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'), 'utf8')]
+    ['Bingo.Ts/Server/Api/main.ts', readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'))],
+    ['Bingo.Ts/Server/Play/main.ts', readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'))],
+    ['Bingo.Ts/Server/Session/main.ts', readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'))]
   ]) {
     if (content.includes('zlinkHandlers')) {
       violations.push(name);
@@ -1725,7 +1725,7 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
       continue;
     }
     for (const file of sampleSourceFiles(path.join(samplesRoot, sample))) {
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       if (/\.add(?:Request|Send|Publish)Handler\(/.test(content)
         || /\.addSubscribe\(/.test(content)
         || /\.handlers\.add(?:Handler|Packet|Subscribe|ActorPacket)\(/.test(content)
@@ -1747,7 +1747,7 @@ test('Node samples use automatic handlers except TicTacToe manual registration',
   }
 
   for (const file of sampleSourceFiles(path.join(samplesRoot, 'TicTacToe.Ts', 'Server'))) {
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     if (/zlinkModule\(__dirname|@zlink(?:Request|Send|Publish|Spot|EntrySpot)[A-Za-z]*Handler/.test(content)) {
       violations.push(`${relativePath(samplesRoot, file)}:implicit-handler-discovery`);
     }
@@ -1782,7 +1782,7 @@ test('session samples that bind actors enable Framework actor dispatch', () => {
   ];
   const missing = modules
     .filter((segments) => {
-      const source = fs.readFileSync(path.join(samplesRoot, ...segments), 'utf8');
+      const source = readSourceText(path.join(samplesRoot, ...segments));
       return !source.includes('.enableActorDispatch()');
     })
     .map((segments) => segments.join('/'));
@@ -1791,29 +1791,29 @@ test('session samples that bind actors enable Framework actor dispatch', () => {
 });
 
 test('TicTacToe keeps manual topology on one physical MeshNode per process', () => {
-  const apiModule = fs.readFileSync(path.join(
+  const apiModule = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
     'Api',
     'tictactoe-api-module.ts'
-  ), 'utf8');
-  const playModule = fs.readFileSync(path.join(
+  ));
+  const playModule = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
     'Play',
     'tictactoe-play-module.ts'
-  ), 'utf8');
-  const createGame = fs.readFileSync(path.join(
+  ));
+  const createGame = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
     'Api',
     'Handlers',
     'create-game-http-handler.ts'
-  ), 'utf8');
-  const authenticate = fs.readFileSync(path.join(
+  ));
+  const authenticate = readSourceText(path.join(
     samplesRoot,
     'TicTacToe.Ts',
     'Server',
@@ -1823,7 +1823,7 @@ test('TicTacToe keeps manual topology on one physical MeshNode per process', () 
     'Sessions',
     'Handlers',
     'authenticate-play-session-handler.ts'
-  ), 'utf8');
+  ));
 
   for (const module of [apiModule, playModule]) {
     assert.equal((module.match(/\.addRouteMesh\(/g) ?? []).length, 1);
@@ -1845,14 +1845,14 @@ test('TicTacToe keeps manual topology on one physical MeshNode per process', () 
 
 test('only TicTacToe uses manual server-to-server connections', () => {
   const ticTacToeServer = sampleSourceFiles(path.join(samplesRoot, 'TicTacToe.Ts', 'Server'))
-    .map((file) => fs.readFileSync(file, 'utf8'))
+    .map((file) => readSourceText(file))
     .join('\n');
   assert.match(ticTacToeServer, /\.peerConnections\(\)\.connect\(/);
 
   const violations = [];
   for (const sample of requiredSamples.filter((name) => name !== 'TicTacToe.Ts')) {
     for (const file of sampleSourceFiles(path.join(samplesRoot, sample, 'Server'))) {
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       if (/\.peerConnections\(\)\.connect\(/.test(content)
         || /\.enableClient\(\s*[^)]/.test(content)
         || /\.enableSubscriber\(\s*[^)]/.test(content)
@@ -1866,7 +1866,7 @@ test('only TicTacToe uses manual server-to-server connections', () => {
 });
 
 test('Bingo TypeScript sample separates room lifecycle from pure bingo game rules', () => {
-  const roomGame = fs.readFileSync(path.join(
+  const roomGame = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1874,8 +1874,8 @@ test('Bingo TypeScript sample separates room lifecycle from pure bingo game rule
     'Domain',
     'Bingo',
     'bingo-room-game.ts'
-  ), 'utf8');
-  const bingoGame = fs.readFileSync(path.join(
+  ));
+  const bingoGame = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1883,7 +1883,7 @@ test('Bingo TypeScript sample separates room lifecycle from pure bingo game rule
     'Domain',
     'Bingo',
     'bingo-game.ts'
-  ), 'utf8');
+  ));
   const required = [
     [bingoGame, 'class BingoGame'],
     [bingoGame, 'submitCard'],
@@ -1912,7 +1912,7 @@ test('Bingo TypeScript sample separates room lifecycle from pure bingo game rule
 });
 
 test('Bingo TypeScript sample normalizes wire room settings before creating room state', () => {
-  const roomSpot = fs.readFileSync(path.join(
+  const roomSpot = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1922,8 +1922,8 @@ test('Bingo TypeScript sample normalizes wire room settings before creating room
     'Spots',
     'BingoRoomSpot',
     'bingo-room-spot.ts'
-  ), 'utf8');
-  const roomModels = fs.readFileSync(path.join(
+  ));
+  const roomModels = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1931,7 +1931,7 @@ test('Bingo TypeScript sample normalizes wire room settings before creating room
     'Domain',
     'Bingo',
     'bingo-room-models.ts'
-  ), 'utf8');
+  ));
 
   assert.match(roomModels, /function roomSettingsFromPayload/);
   assert.match(roomSpot, /const create = request\.decode<BingoRoomCreateReq>/);
@@ -1940,8 +1940,8 @@ test('Bingo TypeScript sample normalizes wire room settings before creating room
 });
 
 test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
-  const playModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'), 'utf8');
-  const roomSpot = fs.readFileSync(path.join(
+  const playModule = readSourceText(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'));
+  const roomSpot = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1951,8 +1951,8 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'Spots',
     'BingoRoomSpot',
     'bingo-room-spot.ts'
-  ), 'utf8');
-  const entrySpot = fs.readFileSync(path.join(
+  ));
+  const entrySpot = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1962,8 +1962,8 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'Spots',
     'EntrySpot',
     'bingo-entry-spot.ts'
-  ), 'utf8');
-  const matchHandler = fs.readFileSync(path.join(
+  ));
+  const matchHandler = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1974,8 +1974,8 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'EntrySpot',
     'Handlers',
     'match-bingo-actor-handler.ts'
-  ), 'utf8');
-  const submitHandler = fs.readFileSync(path.join(
+  ));
+  const submitHandler = readSourceText(path.join(
     samplesRoot,
     'Bingo.Ts',
     'Server',
@@ -1986,8 +1986,8 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'BingoRoomSpot',
     'Handlers',
     'submit-bingo-card-handler.ts'
-  ), 'utf8');
-  const frameworkSpotContract = fs.readFileSync(path.join(
+  ));
+  const frameworkSpotContract = readSourceText(path.join(
     workspaceRoot,
     'packages',
     'framework',
@@ -1995,7 +1995,7 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'contracts',
     'Spots',
     'ZLinkSpot.ts'
-  ), 'utf8');
+  ));
   const required = [
     [frameworkSpotContract, 'interface ZLinkSpot<TActor extends ZLinkActor = ZLinkActor>'],
     [frameworkSpotContract, 'interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>'],
@@ -2064,10 +2064,10 @@ test('node TypeScript samples schedule actor destroy in Entry Spot with sample-o
   const missing = [];
 
   for (const sample of cases) {
-    const actor = fs.readFileSync(path.join(samplesRoot, sample.sample, ...sample.actor), 'utf8');
-    const entrySpot = fs.readFileSync(path.join(samplesRoot, sample.sample, ...sample.entrySpot), 'utf8');
-    const userSpot = fs.readFileSync(path.join(samplesRoot, sample.sample, ...sample.userSpot), 'utf8');
-    const runSample = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
+    const actor = readSourceText(path.join(samplesRoot, sample.sample, ...sample.actor));
+    const entrySpot = readSourceText(path.join(samplesRoot, sample.sample, ...sample.entrySpot));
+    const userSpot = readSourceText(path.join(samplesRoot, sample.sample, ...sample.userSpot));
+    const runSample = readSourceText(path.join(samplesRoot, 'run-sample.mjs'));
 
     for (const [label, content, text] of [
       ['entrySpot', entrySpot, 'onJoinedActor'],
@@ -2084,22 +2084,22 @@ test('node TypeScript samples schedule actor destroy in Entry Spot with sample-o
       missing.push(`${sample.sample}:userSpot:destroyActor`);
     }
     if (sample.sample === 'TicTacToe.Ts' || sample.sample === 'Bingo.Ts') {
-      const relocation = fs.readFileSync(path.join(
+      const relocation = readSourceText(path.join(
         samplesRoot,
         sample.sample,
         'Server', 'Play', 'Infrastructure', 'ZLink', 'Actors',
         sample.sample === 'TicTacToe.Ts'
           ? 'play-actor-relocation-adapter.ts'
           : 'player-actor-relocation-adapter.ts'
-      ), 'utf8');
-      const leaveHandler = fs.readFileSync(path.join(
+      ));
+      const leaveHandler = readSourceText(path.join(
         samplesRoot,
         sample.sample,
         'Server', 'Play', 'Infrastructure', 'ZLink',
         ...(sample.sample === 'TicTacToe.Ts'
           ? ['Spots', 'TicTacToeGameSpot', 'Handlers', 'play-actor-leave-game-handler.ts']
           : ['Actors', 'player-actor-lifecycle-handlers.ts'])
-      ), 'utf8');
+      ));
       for (const [label, content, text] of [
         ['actor', actor, 'destroyAfterEntrySpotJoin'],
         ['actor', actor, 'markForDestroyAfterRoomLeave'],
@@ -2120,17 +2120,17 @@ test('node TypeScript samples schedule actor destroy in Entry Spot with sample-o
 });
 
 test('node sample wrappers delegate shared mechanics and sample-specific orchestration', () => {
-  const sharedRunner = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
+  const sharedRunner = readSourceText(path.join(samplesRoot, 'run-sample.mjs'));
   assert.match(sharedRunner, /await import\(pathToFileURL/);
   assert.match(sharedRunner, /await startRedis\(\)/);
   assert.match(sharedRunner, /scripts\/browser-e2e\/run-sample\.mjs/);
   assert.doesNotMatch(sharedRunner, /sampleDefinitions|Bingo\.Ts|TicTacToe\.Ts|DeliveryDispatch\.Ts/);
 
   for (const sample of topologySamples) {
-    const shell = fs.readFileSync(path.join(samplesRoot, sample, 'run_sample.sh'), 'utf8');
-    const powershell = fs.readFileSync(path.join(samplesRoot, sample, 'run_sample.ps1'), 'utf8');
-    const sampleRunner = fs.readFileSync(path.join(samplesRoot, sample, 'Runner', 'sample-runner.mjs'), 'utf8');
-    const client = fs.readFileSync(path.join(samplesRoot, sample, 'Client', 'main.ts'), 'utf8');
+    const shell = readSourceText(path.join(samplesRoot, sample, 'run_sample.sh'));
+    const powershell = readSourceText(path.join(samplesRoot, sample, 'run_sample.ps1'));
+    const sampleRunner = readSourceText(path.join(samplesRoot, sample, 'Runner', 'sample-runner.mjs'));
+    const client = readSourceText(path.join(samplesRoot, sample, 'Client', 'main.ts'));
 
     assert.match(shell, /run-sample\.mjs" .*Runner\/sample-runner\.mjs/);
     assert.match(powershell, /run-sample\.mjs.*Runner\/sample-runner\.mjs/);
@@ -2145,7 +2145,7 @@ test('node sample wrappers delegate shared mechanics and sample-specific orchest
 });
 
 test('node shared sample runner isolates Redis and application ports without Docker volumes', () => {
-  const runner = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
+  const runner = readSourceText(path.join(samplesRoot, 'run-sample.mjs'));
 
   assert.match(runner, /const redisPortRange = \{ min: 28000, max: 28099 \}/);
   assert.match(runner, /const applicationPortRange = \{ min: 28100, max: 29999 \}/);
@@ -2182,7 +2182,7 @@ test('node shared sample runner isolates Redis and application ports without Doc
 });
 
 test('node shared sample runner fails before completion output when a role requires SIGKILL', () => {
-  const runner = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
+  const runner = readSourceText(path.join(samplesRoot, 'run-sample.mjs'));
   const cleanup = runner.slice(runner.indexOf('async function cleanup()'), runner.indexOf('function printLogs()'));
   const main = runner.slice(runner.indexOf('async function main()'), runner.indexOf('function createContext'));
 
@@ -2226,7 +2226,7 @@ test('framework sample runners never remove Redis containers or processes owned 
   assert.deepEqual(missing, [], 'every sample must own the runner this rule applies to');
 
   for (const runner of runners) {
-    assert.doesNotMatch(fs.readFileSync(runner, 'utf8'), /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
+    assert.doesNotMatch(readSourceText(runner), /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
       `${relativePath(frameworkRoot, runner)} must only clean resources created by its own sample run`);
   }
 });
@@ -2279,7 +2279,7 @@ test('node session samples do not implement sample-only actor session stores', (
 
   for (const sample of ['TicTacToe.Ts', 'Bingo.Ts']) {
     for (const file of sampleSourceFiles(path.join(samplesRoot, sample))) {
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readSourceText(file);
       for (const pattern of bannedPatterns) {
         if (pattern.test(content)) {
           violations.push(`${relativePath(samplesRoot, file)} matches ${pattern}`);
@@ -2319,7 +2319,7 @@ test('node framework source tree does not keep emitted JavaScript beside TypeScr
 //  is proven against a real run by samples/ZoneWorld/Runner/test/runner-cleanup.test.js.
 
 test('node cross-language smoke covers bidirectional channel fanout route stream drain and store paths', () => {
-  const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
+  const smoke = readSourceText(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'));
   const required = [
     'requestToChannel',
     'sendToChannel',
@@ -2340,7 +2340,7 @@ test('node cross-language smoke covers bidirectional channel fanout route stream
 });
 
 test('node to dotnet channel stage uses the ClientServer transport contract', () => {
-  const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
+  const smoke = readSourceText(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'));
   const stage = smoke.match(
     /async function nodeClientToDotnetChannelServer\(tempDir\) \{([\s\S]*?)\n\}\n\nasync function nodePublisherToDotnetFanoutSubscriber/
   )?.[1];
@@ -2353,7 +2353,7 @@ test('node to dotnet channel stage uses the ClientServer transport contract', ()
 });
 
 test('dotnet to node channel stage uses the ClientServer transport contract', () => {
-  const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
+  const smoke = readSourceText(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'));
   const stage = smoke.match(
     /async function dotnetClientToNodeChannelServer\(tempDir\) \{([\s\S]*?)\n\}\n\nasync function nodeRouteClientToDotnetRouteServer/
   )?.[1];
@@ -2423,7 +2423,7 @@ function findUnreachableSampleTypeScriptFiles() {
     }
     const runner = path.join(samplesRoot, sample, 'Runner', 'sample-runner.mjs');
     if (fs.existsSync(runner)) {
-      const content = fs.readFileSync(runner, 'utf8');
+      const content = readSourceText(runner);
       for (const match of content.matchAll(/dist\/([^'"`]+)\.js/g)) {
         add(path.join(samplesRoot, sample, `${match[1]}.ts`));
       }
@@ -2431,7 +2431,7 @@ function findUnreachableSampleTypeScriptFiles() {
   }
   while (queue.length > 0) {
     const file = queue.shift();
-    const content = fs.readFileSync(file, 'utf8');
+    const content = readSourceText(file);
     addDiscoveredProviderFiles(file, content, add, files);
     for (const specifier of importSpecifiers(content)) {
       const resolved = resolveSampleImport(file, specifier, files);
@@ -2525,7 +2525,7 @@ function assertOrdered(name, content, snippets) {
 }
 
 function readSample(sample, relative) {
-  return fs.readFileSync(path.join(samplesRoot, sample, relative), 'utf8');
+  return readSourceText(path.join(samplesRoot, sample, relative));
 }
 
 function relativePath(base, file) {
