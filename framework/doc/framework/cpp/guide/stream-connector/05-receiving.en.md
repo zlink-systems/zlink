@@ -1,173 +1,159 @@
-# 05 — Receiving Packets
-
-[← Sending Packets](04-sending.en.md) | [Table Of Contents](INDEX.en.md) | [Next: Connection Lifecycle →](06-lifecycle.en.md)
-
+---
+title: "Receiving Packets · C++"
 ---
 
-## on\<T\>() — Registering A Push Callback
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/stream-connector/05-receiving.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-Receives a push packet the server sends, via a callback.
+# Receiving Packets
+
+<!-- framework-adapter-nav:start -->
+[Guide Home](README.en.md) | [Previous: Sending Packets](04-sending.en.md) | [Next: Connection Lifecycle](06-lifecycle.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/stream-connector/05-receiving.en.md) · [Java](../../../java/guide/stream-connector/05-receiving.en.md) · [Kotlin](../../../kotlin/guide/stream-connector/05-receiving.en.md) · [Node/TypeScript](../../../node/guide/stream-connector/05-receiving.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can receive packets the server sends first through a handler and release that registration
+    when you choose. You can also wait for a single packet and read how many arrived under a name.
+
+A packet the server sent stays in the **receive queue** until a handler takes it or a wait surface
+consumes it. This chapter covers how packets leave that queue. Answers and heartbeats do not pass
+through it — an answer goes straight to the request waiting for it, and a heartbeat serves the
+connection itself.
+
+## 1. Registering a Handler
+
+A handler receives a **message**, not a payload alone. The message carries the packet name, the
+decoded payload, the metadata, and the flow identifier. Which packets it receives is decided by the
+payload type or by an explicit name.
 
 ```cpp
-struct leaderboard_update_t {
-    int32_t rank;
-    std::string player_id;
-    int64_t score;
-};
-
-connector.on<leaderboard_update_t>([](const leaderboard_update_t& update) {
-    // update.rank, update.player_id, update.score
-});
+auto subscription = connector.on<leaderboard_update_t> (
+  [] (const sc::message_t<leaderboard_update_t> &message) {
+      update_board (message.packet_name, message.payload.rank);
+  });
 ```
 
-The packet name can be specified explicitly.
+A handler may send again over the same connector. That send continues the flow of the message
+being handled, so client logs and server traces line up on one flow.
+
+## 2. Releasing a Registration
+
+Registration returns **a value that can be released**. This keeps a client that registers a
+subscription for the lifetime of one screen from having to rebuild the connection when the screen
+closes. A released handler does not run afterwards, and releasing the same value twice is not an
+error.
 
 ```cpp
-connector.on<leaderboard_update_t>(
-    "leaderboard.weekly",
-    [](const leaderboard_update_t& update) {
-        // process only the weekly leaderboard
-    });
+subscription.unsubscribe ();   // The registration also ends when the value goes away.
 ```
 
-`on()` adds to a callback list owned by the connector. When the connector closes, the callbacks are
-also removed. Currently, there's no API to individually unregister an already-registered callback.
+**Whether the value's lifetime is the registration's lifetime is decided by the language.** In a
+language that expresses ownership as a value, the registration ends when the value goes away, so
+the value is kept for as long as the handler must run. In the others the registration stays until it
+is released explicitly, even if the value is discarded.
 
-## Dispatch Mode
+The connection-state, error, and disconnect handlers return the same kind of value. They are
+covered by [Connection Lifecycle](06-lifecycle.en.md).
 
-`dispatch_mode` decides when an `on<T>()` callback runs.
+## 3. When a Handler Runs
 
-### Manual Mode (Default)
+Under the default setting the receive path does not call handlers directly; it queues them. When
+the application calls the pump, the handlers queued so far run **in the execution context that
+called it**. A game loop calls it once per frame. The pump processes what has accumulated and
+returns; it does not wait for a new packet.
 
-The callback runs on the thread that called `dispatch()`. Use this to align with a game engine's
-frame loop.
+Switching to immediate execution runs handlers on the receive path with no pump. A slow handler then
+blocks that path and delays the receive work behind it.
 
 ```cpp
-// connector_options_t::dispatch_mode = dispatch_mode_t::manual (default)
-
-// game loop
 while (running) {
-    connector.dispatch(); // runs pending push-packet callbacks
-    update_game_state();
-    render();
+    connector.dispatch ();
+    render_frame ();
 }
 ```
 
-`dispatch()` processes whatever callbacks are pending at call time and returns. It doesn't wait for
-a newly arriving packet.
+The wait surfaces below observe the receive queue directly rather than running registered handlers,
+so they work in a configuration that never calls the pump.
 
-### Immediate Mode
+## 4. Waiting for One Packet
 
-The callback runs immediately on the connector's receive path. No call to `dispatch()` is needed.
-Suits a CLI, tool, or e2e client.
-
-```cpp
-options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
-```
-
-Even in immediate mode, the callback runs outside the connector's internal lock. It's safe to call
-`connector.send()` inside the callback.
-
-## wait_for\<T\>() — Waiting For A Specific Packet
-
-Waits once for a specific packet, with no callback registered. A matched packet is consumed, and is
-not delivered to an `on<T>()` callback afterward.
+To wait for a single packet at a point in a scenario, use a wait surface instead of registering a
+handler. It consumes the matching packet and returns that message; a packet that does not match
+stays in the queue for a later handler or wait. Without an explicit timeout, the connector's default
+wait timeout applies.
 
 ```cpp
-struct server_ready_t {
-    std::string server_id;
-    int32_t player_capacity;
-};
-
-auto ready = connector
-    .wait_for<server_ready_t>()
-    .packet_name("server.ready")
-    .timeout(std::chrono::seconds{10})
-    .submit();
-
-if (!ready) {
-    // ready.error_code() == error_code_t::request_timeout, etc.
-    return;
-}
-
-auto capacity = ready.value().player_capacity;
+auto found = connector.wait_for<match_found_t> ()
+               .where ([] (const auto &message) {
+                   return message.payload.match_id == "match-7f3a";
+               })
+               .timeout (std::chrono::seconds (30))
+               .submit ();
 ```
 
-If timeout is omitted, `connector_options_t::wait_timeout` is used.
+**Predicates and returns deal in messages, not payloads.** A predicate given the payload alone
+cannot see the packet name or the metadata. When the value to filter on sits inside the payload,
+read that field inside the predicate — there is no surface dedicated to a status field.
 
-### where() — Conditional Filter
+## 5. Packets That Must Not Arrive, and Arrival Order
 
-Consumes only a packet matching a specific condition. A packet that doesn't match isn't consumed —
-it stays in the queue, to be processed by a later wait or dispatch.
+Verifying a scenario means confirming not only that a packet arrived, but also that one did not and
+that several arrived in order. The first names an observation window and confirms the packet does
+not arrive during it. The second applies predicates in order, confirms packets of the same name
+arrived in that order, and returns the list of messages.
 
 ```cpp
-auto my_match = connector
-    .wait_for<match_found_t>()
-    .where([](const match_found_t& msg) {
-        return msg.match_id == "match-7f3a";
-    })
-    .timeout(std::chrono::seconds{30})
-    .submit();
+auto quiet = connector.expect_none<order_changed_t> ()
+               .within (std::chrono::milliseconds (100))
+               .submit ();
+
+auto steps = connector.wait_for_sequence<order_changed_t> ()
+               .expect ([] (const auto &m) { return m.payload.status == status_t::paid; })
+               .expect ([] (const auto &m) { return m.payload.status == status_t::shipped; })
+               .timeout (std::chrono::seconds (2))
+               .submit ();
 ```
 
-If you only need to check whether a single field equals a specific value, you can use the
-member-pointer overload. This avoids repeating a C++ lambda's parameter declaration.
+A failed observation — nothing arrived in time, something arrived that should not have, the order
+was wrong — is reported as a validation failure. A wait that cannot continue because the connection
+ended is reported as no connection. The caller has to tell an observation that did not hold from an
+observation that lost its subject.
+
+## 6. Received Counts
+
+The count of packets **received** under a name is readable per name. Consuming one does not lower
+it, so the count still answers how many arrived under that name after a handler has run through the
+pump. The count also rises when the packet arrives, whatever the setting for when handlers run.
 
 ```cpp
-auto my_match = connector
-    .wait_for<match_found_t>()
-    .where(&match_found_t::match_id, std::string("match-7f3a"))
-    .timeout(std::chrono::seconds{30})
-    .submit();
+auto count = connector.received_count ("leaderboard.update");
 ```
 
-### The wait_for Callback Style
+The reference point is the moment the connection is established. The count starts at zero then, and
+a reconnect is a new connection, so it starts at zero again. Unconsumed messages left from the
+previous connection are cleared at the same moment — otherwise a wait surface would hand back a
+packet from before the drop as if it belonged to the new connection.
 
-```cpp
-connector
-    .wait_for<server_ready_t>()
-    .packet_name("server.ready")
-    .submit([](zlink::stream_connector::result_t<server_ready_t> result) {
-        if (!result) { return; }
-        // result.value()
-    });
-```
+## 7. The Receive Queue — No Limit Is Set
 
-## Connection State Events
+The connector keeps receiving and processing what arrives. There is no limit on the queue, no
+message is dropped, and a long queue is never a reason to close the connection. The connector does
+not implement a socket of its own and uses what the runtime provides, so there is no place to hold
+reads back either.
 
-```cpp
-connector.on_connection_state_changed([](const zlink::stream_connector::connection_state_changed_t& ev) {
-    // ev.state: created, connecting, connected, reconnecting, disconnected, closed
-});
+In a client that works correctly, messages do not accumulate: a handler processes them or a wait
+surface consumes them. Continued growth means the client is not calling the pump, which is why the
+received count is not a basis for flow control.
 
-connector.on_disconnected([]() {
-    // the connection dropped (before a reconnect attempt)
-});
+## 8. Next Chapters
 
-connector.on_error([](const zlink::stream_connector::error_t& err) {
-    // err.code, err.message
-});
-```
-
-## Calling send/request Inside A Callback
-
-You can call the same connector's `send()`, `request()` while a callback is running. The
-implementation doesn't run the user callback while holding the connector's internal lock.
-
-```cpp
-connector.on<pvp_invite_t>([&connector](const pvp_invite_t& invite) {
-    // safe to send inside the callback
-    connector
-        .send(pvp_accept_t{invite.match_id, "player-1"})
-        .packet_name("pvp.accept")
-        .submit();
-});
-```
-
-## pending_dispatch_count()
-
-Checks the number of pending callbacks in manual mode.
-
-```cpp
-auto pending = connector.pending_dispatch_count();
-```
+- Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
+- Errors raised on the receive path — [Error Handling](07-error-handling.en.md)

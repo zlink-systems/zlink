@@ -9,8 +9,8 @@ game engines** (Unity, Godot C#).
 | Document | Content |
 |------|------|
 | [01 — Overview](01-overview.en.md) | Target execution environment, deployment unit, per-engine connector responsibility |
-| [02 — Unity (Native Build)](02-unity.en.md) | Pumping `Dispatch.Async()` from a `MonoBehaviour`, pausing, coroutine projects |
-| [03 — Godot C#](03-godot-csharp.en.md) | Pumping from `Node._Process`, signal integration, shutdown handling |
+| [02 — Unity (Native Build)](08-unity.en.md) | Pumping `Dispatch.Async()` from a `MonoBehaviour`, pausing, coroutine projects |
+| [03 — Godot C#](09-godot-csharp.en.md) | Pumping from `Node._Process`, signal integration, shutdown handling |
 
 The connector's API surface (options, send/request, codec, errors) is covered by the
 [.NET Public Contract](../../../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md)

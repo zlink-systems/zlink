@@ -337,6 +337,34 @@ nav:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
           - Options: cpp/guide/server/16-options.md
       - Tests: cpp/guide/server/15-e2e-testing.md
+      - Stream connector:
+          - Home: cpp/guide/stream-connector/README.md
+          - Stream Connector Overview: cpp/guide/stream-connector/01-overview.md
+          - Installation and the First Connection: cpp/guide/stream-connector/02-getting-started.md
+          - Connector Options: cpp/guide/stream-connector/03-connector-options.md
+          - Sending Packets: cpp/guide/stream-connector/04-sending.md
+          - Receiving Packets: cpp/guide/stream-connector/05-receiving.md
+          - Connection Lifecycle: cpp/guide/stream-connector/06-lifecycle.md
+          - Error Handling: cpp/guide/stream-connector/07-error-handling.md
+          - 08 — E2E Client: cpp/guide/stream-connector/08-e2e-client.md
+          - 09 — Engine Adapters: cpp/guide/stream-connector/09-engine-adapters.md
+          - 10 — Packaging: cpp/guide/stream-connector/10-packaging.md
+          - 11 — Performance Testing: cpp/guide/stream-connector/11-performance.md
+      - HTTP client:
+          - Home: cpp/guide/http-client/README.md
+          - 1. Overview: cpp/guide/http-client/01-overview.md
+          - 2. Getting Started: cpp/guide/http-client/02-getting-started.md
+          - 3. Client Configuration: cpp/guide/http-client/03-client-configuration.md
+          - 4. Making Requests: cpp/guide/http-client/04-making-requests.md
+          - 5. Request Body: cpp/guide/http-client/05-request-body.md
+          - 6. Handling Responses: cpp/guide/http-client/06-handling-responses.md
+          - 7. Async And Coroutines: cpp/guide/http-client/07-async-coroutines.md
+          - 8. Streaming: cpp/guide/http-client/08-streaming.md
+          - 9. Authentication And TLS: cpp/guide/http-client/09-authentication-tls.md
+          - 10. Redirect · Retry · Cookie: cpp/guide/http-client/10-redirects-retries-cookies.md
+          - 11. Proxy: cpp/guide/http-client/11-proxy.md
+          - 12. Compression: cpp/guide/http-client/12-compression.md
+          - 13. Error Handling: cpp/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: cpp/guide/server/13-interface-catalog.md
           - Reference home: cpp/reference/README.md
@@ -378,6 +406,32 @@ nav:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
           - Options: dotnet/guide/server/16-options.md
       - Tests: dotnet/guide/server/15-e2e-testing.md
+      - Stream connector:
+          - Home: dotnet/guide/stream-connector/README.md
+          - Stream Connector Overview: dotnet/guide/stream-connector/01-overview.md
+          - Installation and the First Connection: dotnet/guide/stream-connector/02-getting-started.md
+          - Connector Options: dotnet/guide/stream-connector/03-connector-options.md
+          - Sending Packets: dotnet/guide/stream-connector/04-sending.md
+          - Receiving Packets: dotnet/guide/stream-connector/05-receiving.md
+          - Connection Lifecycle: dotnet/guide/stream-connector/06-lifecycle.md
+          - Error Handling: dotnet/guide/stream-connector/07-error-handling.md
+          - Unity (Native Build): dotnet/guide/stream-connector/08-unity.md
+          - Godot C#: dotnet/guide/stream-connector/09-godot-csharp.md
+      - HTTP client:
+          - Home: dotnet/guide/http-client/README.md
+          - 1. Overview: dotnet/guide/http-client/01-overview.md
+          - 2. Getting Started: dotnet/guide/http-client/02-getting-started.md
+          - 3. Client Configuration: dotnet/guide/http-client/03-client-configuration.md
+          - 4. Making Requests: dotnet/guide/http-client/04-making-requests.md
+          - 5. Request Body: dotnet/guide/http-client/05-request-body.md
+          - 6. Handling Responses: dotnet/guide/http-client/06-handling-responses.md
+          - 7. Async: dotnet/guide/http-client/07-async.md
+          - 8. Streaming: dotnet/guide/http-client/08-streaming.md
+          - 9. Authentication And TLS: dotnet/guide/http-client/09-authentication-tls.md
+          - 10. Redirect · Retry · Cookie: dotnet/guide/http-client/10-redirects-retries-cookies.md
+          - 11. Proxy: dotnet/guide/http-client/11-proxy.md
+          - 12. Compression: dotnet/guide/http-client/12-compression.md
+          - 13. Error Handling: dotnet/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: dotnet/guide/server/13-interface-catalog.md
           - Reference home: dotnet/reference/README.md
@@ -419,6 +473,30 @@ nav:
           - Operations and lifecycle: java/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
       - Tests: java/guide/server/15-e2e-testing.md
+      - Stream connector:
+          - Home: java/guide/stream-connector/README.md
+          - Stream Connector Overview: java/guide/stream-connector/01-overview.md
+          - Installation and the First Connection: java/guide/stream-connector/02-getting-started.md
+          - Connector Options: java/guide/stream-connector/03-connector-options.md
+          - Sending Packets: java/guide/stream-connector/04-sending.md
+          - Receiving Packets: java/guide/stream-connector/05-receiving.md
+          - Connection Lifecycle: java/guide/stream-connector/06-lifecycle.md
+          - Error Handling: java/guide/stream-connector/07-error-handling.md
+      - HTTP client:
+          - Home: java/guide/http-client/README.md
+          - 1. Overview: java/guide/http-client/01-overview.md
+          - 2. Getting Started: java/guide/http-client/02-getting-started.md
+          - 3. Client Configuration: java/guide/http-client/03-client-configuration.md
+          - 4. Making Requests: java/guide/http-client/04-making-requests.md
+          - 5. Request Body: java/guide/http-client/05-request-body.md
+          - 6. Handling Responses: java/guide/http-client/06-handling-responses.md
+          - 7. Async: java/guide/http-client/07-async.md
+          - 8. Streaming: java/guide/http-client/08-streaming.md
+          - 9. Authentication And TLS: java/guide/http-client/09-authentication-tls.md
+          - 10. Redirect · Retry · Cookie: java/guide/http-client/10-redirects-retries-cookies.md
+          - 11. Proxy: java/guide/http-client/11-proxy.md
+          - 12. Compression: java/guide/http-client/12-compression.md
+          - 13. Error Handling: java/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: java/guide/server/13-interface-catalog.md
           - Reference home: java/reference/README.md
@@ -460,6 +538,30 @@ nav:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
       - Tests: kotlin/guide/server/15-e2e-testing.md
+      - Stream connector:
+          - Home: kotlin/guide/stream-connector/README.md
+          - Stream Connector Overview: kotlin/guide/stream-connector/01-overview.md
+          - Installation and the First Connection: kotlin/guide/stream-connector/02-getting-started.md
+          - Connector Options: kotlin/guide/stream-connector/03-connector-options.md
+          - Sending Packets: kotlin/guide/stream-connector/04-sending.md
+          - Receiving Packets: kotlin/guide/stream-connector/05-receiving.md
+          - Connection Lifecycle: kotlin/guide/stream-connector/06-lifecycle.md
+          - Error Handling: kotlin/guide/stream-connector/07-error-handling.md
+      - HTTP client:
+          - Home: kotlin/guide/http-client/README.md
+          - 1. Overview: kotlin/guide/http-client/01-overview.md
+          - 2. Getting Started: kotlin/guide/http-client/02-getting-started.md
+          - 3. Client Configuration: kotlin/guide/http-client/03-client-configuration.md
+          - 4. Making Requests: kotlin/guide/http-client/04-making-requests.md
+          - 5. Request Body: kotlin/guide/http-client/05-request-body.md
+          - 6. Handling Responses: kotlin/guide/http-client/06-handling-responses.md
+          - 7. Coroutines: kotlin/guide/http-client/07-coroutines.md
+          - 8. Streaming: kotlin/guide/http-client/08-streaming.md
+          - 9. Authentication And TLS: kotlin/guide/http-client/09-authentication-tls.md
+          - 10. Redirect · Retry · Cookie: kotlin/guide/http-client/10-redirects-retries-cookies.md
+          - 11. Proxy: kotlin/guide/http-client/11-proxy.md
+          - 12. Compression: kotlin/guide/http-client/12-compression.md
+          - 13. Error Handling: kotlin/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: kotlin/guide/server/13-interface-catalog.md
           - Reference home: kotlin/reference/README.md
@@ -501,6 +603,32 @@ nav:
           - Operations and lifecycle: node/guide/server/12-operations.md
           - Options: node/guide/server/16-options.md
       - Tests: node/guide/server/15-e2e-testing.md
+      - Stream connector:
+          - Home: node/guide/stream-connector/README.md
+          - Stream Connector Overview: node/guide/stream-connector/01-overview.md
+          - Installation and the First Connection: node/guide/stream-connector/02-getting-started.md
+          - Connector Options: node/guide/stream-connector/03-connector-options.md
+          - Sending Packets: node/guide/stream-connector/04-sending.md
+          - Receiving Packets: node/guide/stream-connector/05-receiving.md
+          - Connection Lifecycle: node/guide/stream-connector/06-lifecycle.md
+          - Error Handling: node/guide/stream-connector/07-error-handling.md
+          - Browser: node/guide/stream-connector/08-browser.md
+          - Unity WebGL: node/guide/stream-connector/09-unity-webgl.md
+      - HTTP client:
+          - Home: node/guide/http-client/README.md
+          - 1. Overview: node/guide/http-client/01-overview.md
+          - 2. Getting Started: node/guide/http-client/02-getting-started.md
+          - 3. Client Configuration: node/guide/http-client/03-client-configuration.md
+          - 4. Making Requests: node/guide/http-client/04-making-requests.md
+          - 5. Request Body: node/guide/http-client/05-request-body.md
+          - 6. Handling Responses: node/guide/http-client/06-handling-responses.md
+          - 7. Async: node/guide/http-client/07-async.md
+          - 8. Streaming: node/guide/http-client/08-streaming.md
+          - 9. Authentication And TLS: node/guide/http-client/09-authentication-tls.md
+          - 10. Redirect · Retry · Cookie: node/guide/http-client/10-redirects-retries-cookies.md
+          - 11. Proxy: node/guide/http-client/11-proxy.md
+          - 12. Compression: node/guide/http-client/12-compression.md
+          - 13. Error Handling: node/guide/http-client/13-error-handling.md
       - Reference:
           - Key type index: node/guide/server/13-interface-catalog.md
           - Reference home: node/reference/README.md

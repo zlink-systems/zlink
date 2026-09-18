@@ -214,8 +214,8 @@ sandbox.
 
     The UPM adapter carries the npm package's browser bundle and provides only the jslib and C#
     call boundary. **Its C# surface is the same as the native package's.** Both builds are
-    covered by [Unity native](dotnet/guide/stream-connector/02-unity.en.md) and
-    [Unity WebGL](node/guide/stream-connector/03-unity-webgl.en.md).
+    covered by [Unity native](dotnet/guide/stream-connector/08-unity.en.md) and
+    [Unity WebGL](node/guide/stream-connector/09-unity-webgl.en.md).
 
 === "Unreal"
 
@@ -241,7 +241,7 @@ sandbox.
 
     The GDExtension comes out of the C++ connector build. Godot C# uses the `.NET` connector
     package as it is. The procedures are covered by
-    [Godot C#](dotnet/guide/stream-connector/03-godot-csharp.en.md) and the
+    [Godot C#](dotnet/guide/stream-connector/09-godot-csharp.en.md) and the
     [engine adapter guide](cpp/guide/stream-connector/09-engine-adapters.en.md).
 
 === "Cocos"
@@ -271,7 +271,7 @@ sandbox.
 
     **Browser targets accept `ws` and `wss` only.** A `tcp://` or `tls://` endpoint fails
     immediately as a configuration error. The procedure is covered by the
-    [browser guide](node/guide/stream-connector/02-browser.en.md).
+    [browser guide](node/guide/stream-connector/08-browser.en.md).
 
 === "e2e and tooling"
 

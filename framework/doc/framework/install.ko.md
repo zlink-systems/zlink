@@ -208,8 +208,8 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 
     UPM 어댑터는 npm 패키지의 browser bundle을 담고 jslib·C# 호출 경계만 제공한다. **C# 표면은
     네이티브 패키지와 같다.** 두 빌드의 절차는
-    [Unity 네이티브](dotnet/guide/stream-connector/02-unity.ko.md)와
-    [Unity WebGL](node/guide/stream-connector/03-unity-webgl.ko.md)이 다룬다.
+    [Unity 네이티브](dotnet/guide/stream-connector/08-unity.ko.md)와
+    [Unity WebGL](node/guide/stream-connector/09-unity-webgl.ko.md)이 다룬다.
 
 === "Unreal"
 
@@ -232,7 +232,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     | Godot Web | TypeScript | `@zlink-systems/stream-connector` (npm) |
 
     GDExtension은 C++ connector를 빌드하면 함께 나온다. Godot C#은 `.NET` connector 패키지를 그대로 사용한다. 절차는
-    [Godot C#](dotnet/guide/stream-connector/03-godot-csharp.ko.md)과
+    [Godot C#](dotnet/guide/stream-connector/09-godot-csharp.ko.md)과
     [engine adapter 가이드](cpp/guide/stream-connector/09-engine-adapters.ko.md)가 다룬다.
 
 === "Cocos"
@@ -262,7 +262,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 
     **브라우저 계열은 `ws`·`wss`만 사용한다.** `tcp://`·`tls://` endpoint를 받으면 구성 오류로
     즉시 실패한다. 절차는
-    [브라우저 가이드](node/guide/stream-connector/02-browser.ko.md)가 다룬다.
+    [브라우저 가이드](node/guide/stream-connector/08-browser.ko.md)가 다룬다.
 
 === "e2e·도구"
 

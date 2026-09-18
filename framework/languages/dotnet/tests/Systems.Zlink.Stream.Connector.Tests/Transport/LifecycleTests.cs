@@ -1624,14 +1624,23 @@ public sealed partial class StreamConnectorTests
         });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        // The close runs the disconnect handler but never waits for it to finish
-        // (stream-connector spec §7); a handler that has not returned must not hold
-        // the close open.
-        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            // The close runs the disconnect handler but never waits for it to finish
+            // (stream-connector spec §7); a handler that has not returned must not hold
+            // the close open.
+            await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(handlerStarted.Task.IsCompleted, "Close returned without running the disconnect handler.");
-        Assert.False(handlerCompleted.Task.IsCompleted);
-        releaseHandler.TrySetResult();
+            Assert.True(handlerStarted.Task.IsCompleted, "Close returned without running the disconnect handler.");
+            Assert.False(handlerCompleted.Task.IsCompleted);
+        }
+        finally
+        {
+            // A handler left waiting holds the connector's disposal open, which would turn
+            // a failure of the assertions above into a run that never ends.
+            releaseHandler.TrySetResult();
+        }
+
         await handlerCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -1712,9 +1721,17 @@ public sealed partial class StreamConnectorTests
         });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            // A handler left waiting holds the connector's disposal open, which would turn
+            // a close that does not return into a run that never ends.
+            releaseHandler.TrySetResult();
+        }
 
-        releaseHandler.TrySetResult();
         await handlerThrew.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
 
