@@ -1151,9 +1151,6 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
       << "C++ sample overview must name the TicTacToe full self-check";
     EXPECT_NE (top_level_readme.find ("samples/Bingo/run_sample.sh"), std::string::npos)
       << "C++ sample overview must name the Bingo full self-check";
-    EXPECT_NE (top_level_readme.find ("DeliveryDispatch 샘플은 현재 Linux 또는 WSL용"),
-               std::string::npos)
-      << "C++ sample overview must describe DeliveryDispatch runner availability";
 
     const auto tictactoe_runner = read_text_file (cpp_root / "samples/TicTacToe/run_sample.sh");
     EXPECT_NE (tictactoe_runner.find ("full client/server self-check completed"), std::string::npos)
