@@ -257,9 +257,10 @@ public final class Program {
         systems.zlink.framework.actors.ZLinkActorClient actorClient,
         NodeMaintenanceState maintenance,
         MaintenanceStore store,
-        NodeCensus census) {
+        NodeCensus census,
+        ZoneStatusReporter reporter) {
         return new ZoneBootstrap(
-            topology, spots, actors, actorClient, maintenance, store, census);
+            topology, spots, actors, actorClient, maintenance, store, census, reporter);
     }
 
     @Bean

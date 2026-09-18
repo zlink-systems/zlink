@@ -34,7 +34,17 @@ class ZoneBootstrap(
     private val maintenance: NodeMaintenanceState,
     private val store: MaintenanceStore,
     private val census: NodeCensus,
+    private val reporter: ZoneStatusReporter,
 ) : ApplicationRunner {
+    // Ops learns a node's zone set only from the node's own status report (README §2.2). The
+    // report is sent once the zone set is settled and before topology=ready is printed, so the
+    // report an observer gates on never carries the pre-claim census; the periodic report and
+    // the maintenance-change report are the only other senders.
+    private fun ready() {
+        reporter.reportNow().exceptionally { null }.toCompletableFuture().join()
+        println("topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}")
+    }
+
     override fun run(args: ApplicationArguments) {
         if (topology.isSubscriberOnly()) {
             println("topology=ready node=${topology.nodeValue()} zones=")
@@ -53,7 +63,7 @@ class ZoneBootstrap(
         // is neither the two a cold start needs nor the none a replacement announces, and a state
         // the loop below could never leave. Only a cold start claims.
         if (topology.allowsEmptyZoneSet()) {
-            println("topology=ready node=${topology.nodeValue()} zones=")
+            ready()
             return
         }
         var attempt = 0
@@ -111,7 +121,7 @@ class ZoneBootstrap(
                     "start=(${bot.x},${bot.y}), dir=(${bot.dirX},${bot.dirY})")
             }
         }
-        println("topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}")
+        ready()
     }
 }
 
@@ -133,7 +143,7 @@ class ZoneStatusReporter(
         scheduler = createdScheduler
         running = true
         createdScheduler.scheduleAtFixedRate(
-            ::report, 0, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS,
+            ::report, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS,
         )
     }
 

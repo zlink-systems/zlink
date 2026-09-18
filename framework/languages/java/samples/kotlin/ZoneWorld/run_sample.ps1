@@ -522,6 +522,7 @@ try {
         if (-not (Wait-Log "zone-node-2" "crash-boundary join pending" $targetFirst 900)) { throw "scenario ZW-G4 failed" }
         Stop-Node "zone-node-2" "KILL"
         if (-not (Complete-Client $run)) { throw "scenario ZW-G4 failed" }
+        if (-not (Select-String -LiteralPath $ClientLog -SimpleMatch "scenario ZW-G4 passed" -Quiet)) { throw "scenario ZW-G4 failed" }
         $opsFirst = Get-NextLogLine "ops"
         if (-not (Start-Zone "zone-node-2")) { throw "scenario ZW-G4 failed" }
         $new = Get-RoutingId "zone-node-2" $opsFirst

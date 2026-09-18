@@ -518,24 +518,34 @@ final class Scenarios {
 
     private static void g4(ClientOptions options) {
         try (Ops ops = new Ops(options); Probes probes = new Probes(options)) {
+            // The runner crashes zone-node-2, so the pending join must target a zone that node
+            // owns. The probe pair spans the two owners; the side zone-node-2 owns is the target.
             Messages.NodeView east = ops.watch().nodes().stream()
                 .filter(value -> value.nodeId().equals("zone-node-2")).findFirst().orElseThrow();
             Messages.RelocationPairRes observed = requiredPair(probes);
-            Messages.RelocationPairRes pair = east.zones().contains(observed.targetZoneId()) ? observed
-                : new Messages.RelocationPairRes(observed.targetZoneId(), observed.sourceZoneId(),
+            Messages.RelocationPairRes pair;
+            if (east.zones().contains(observed.targetZoneId())) {
+                pair = observed;
+            } else if (east.zones().contains(observed.sourceZoneId())) {
+                pair = new Messages.RelocationPairRes(observed.targetZoneId(), observed.sourceZoneId(),
                     observed.targetOwnerNodeRid(), observed.sourceOwnerNodeRid(), null);
+            } else {
+                throw new IllegalStateException("zone-node-2 owns neither probed zone: zones=" + east.zones());
+            }
             Edge edge = edge(pair.sourceZoneId(), pair.targetZoneId());
             try (Game player = new Game(options, unique("g4-crash"))) {
                 ensure(player.join().error() == null, "JoinWorld succeeds");
                 player.moveTo(edge.source().x(), edge.source().y());
+                // The join stays pending until the owner dies, so its first terminal result is the
+                // crash verdict: Unavailable from the crash, DeadlineExceeded when nothing crashed.
                 CompletionStage<ZLinkStreamMessage<Messages.CrashRelocationProbeRes>> failed = waitFor(
-                    player.connector, Messages.CrashRelocationProbeRes.class,
-                    value -> "Unavailable".equals(value.error()), Duration.ofSeconds(60));
+                    player.connector, Messages.CrashRelocationProbeRes.class, value -> true, Duration.ofSeconds(60));
                 player.connector.send(new Messages.CrashRelocationProbeMsg(edge.target().x(), edge.target().y()))
                     .submit().toCompletableFuture().join();
-                System.out.println("scenario ZW-G4 armed node=zone-node-2");
-                ensure("Unavailable".equals(failed.toCompletableFuture().join().payload().error()),
-                    "crashed Ready owner terminates in-flight operation Unavailable");
+                System.out.println("scenario ZW-G4 armed node=zone-node-2 zone=" + pair.targetZoneId());
+                Messages.CrashRelocationProbeRes terminal = failed.toCompletableFuture().join().payload();
+                ensure("Unavailable".equals(terminal.error()),
+                    "crashed Ready owner terminates in-flight operation Unavailable, got " + terminal.error());
             }
         }
     }
