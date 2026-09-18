@@ -184,7 +184,7 @@ nav:
           - DI container: cpp/guide/server/40-di-container.md
           - Configuration: cpp/guide/server/41-configuration.md
           - HTTP hosting: cpp/guide/server/42-http-hosting.md
-          - Execution and configuration model: cpp/guide/server/43-execution-model.md
+          - Host execution model: cpp/guide/server/43-execution-model.md
       - Feature guide:
           - Channel messaging: cpp/guide/server/20-channel-messaging.md
           - Spot: cpp/guide/server/21-spot.md
@@ -194,16 +194,16 @@ nav:
           - Location: cpp/guide/server/25-location.md
           - Monitoring: cpp/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: cpp/guide/server/32-execution-model.md
+          - Execution model: cpp/guide/server/32-execution-model.md
           - Backpressure: cpp/guide/server/33-backpressure.md
           - Activation and lifetime: cpp/guide/server/34-activation-lifetime.md
           - Actor membership: cpp/guide/server/35-actor-membership.md
           - Timers and workers: cpp/guide/server/36-timer-worker.md
           - Relocation: cpp/guide/server/37-relocation.md
-          - How channels work: cpp/guide/server/30-channel-patterns.md
-          - Handlers and message processing: cpp/guide/server/31-handler-dispatch.md
-          - How STREAM works: cpp/guide/server/38-stream-boundary.md
-          - How session binding works: cpp/guide/server/39-session-binding.md
+          - Channel patterns: cpp/guide/server/30-channel-patterns.md
+          - Handler dispatch: cpp/guide/server/31-handler-dispatch.md
+          - STREAM boundary: cpp/guide/server/38-stream-boundary.md
+          - Session binding: cpp/guide/server/39-session-binding.md
           - Where ZLink fits: cpp/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
@@ -264,16 +264,16 @@ nav:
           - Location: dotnet/guide/server/25-location.md
           - Monitoring: dotnet/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: dotnet/guide/server/32-execution-model.md
+          - Execution model: dotnet/guide/server/32-execution-model.md
           - Backpressure: dotnet/guide/server/33-backpressure.md
           - Activation and lifetime: dotnet/guide/server/34-activation-lifetime.md
           - Actor membership: dotnet/guide/server/35-actor-membership.md
           - Timers and workers: dotnet/guide/server/36-timer-worker.md
           - Relocation: dotnet/guide/server/37-relocation.md
-          - How channels work: dotnet/guide/server/30-channel-patterns.md
-          - Handlers and message processing: dotnet/guide/server/31-handler-dispatch.md
-          - How STREAM works: dotnet/guide/server/38-stream-boundary.md
-          - How session binding works: dotnet/guide/server/39-session-binding.md
+          - Channel patterns: dotnet/guide/server/30-channel-patterns.md
+          - Handler dispatch: dotnet/guide/server/31-handler-dispatch.md
+          - STREAM boundary: dotnet/guide/server/38-stream-boundary.md
+          - Session binding: dotnet/guide/server/39-session-binding.md
           - Where ZLink fits: dotnet/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
@@ -332,16 +332,16 @@ nav:
           - Location: java/guide/server/25-location.md
           - Monitoring: java/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: java/guide/server/32-execution-model.md
+          - Execution model: java/guide/server/32-execution-model.md
           - Backpressure: java/guide/server/33-backpressure.md
           - Activation and lifetime: java/guide/server/34-activation-lifetime.md
           - Actor membership: java/guide/server/35-actor-membership.md
           - Timers and workers: java/guide/server/36-timer-worker.md
           - Relocation: java/guide/server/37-relocation.md
-          - How channels work: java/guide/server/30-channel-patterns.md
-          - Handlers and message processing: java/guide/server/31-handler-dispatch.md
-          - How STREAM works: java/guide/server/38-stream-boundary.md
-          - How session binding works: java/guide/server/39-session-binding.md
+          - Channel patterns: java/guide/server/30-channel-patterns.md
+          - Handler dispatch: java/guide/server/31-handler-dispatch.md
+          - STREAM boundary: java/guide/server/38-stream-boundary.md
+          - Session binding: java/guide/server/39-session-binding.md
           - Where ZLink fits: java/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: java/guide/server/12-operations.md
@@ -398,16 +398,16 @@ nav:
           - Location: kotlin/guide/server/25-location.md
           - Monitoring: kotlin/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: kotlin/guide/server/32-execution-model.md
+          - Execution model: kotlin/guide/server/32-execution-model.md
           - Backpressure: kotlin/guide/server/33-backpressure.md
           - Activation and lifetime: kotlin/guide/server/34-activation-lifetime.md
           - Actor membership: kotlin/guide/server/35-actor-membership.md
           - Timers and workers: kotlin/guide/server/36-timer-worker.md
           - Relocation: kotlin/guide/server/37-relocation.md
-          - How channels work: kotlin/guide/server/30-channel-patterns.md
-          - Handlers and message processing: kotlin/guide/server/31-handler-dispatch.md
-          - How STREAM works: kotlin/guide/server/38-stream-boundary.md
-          - How session binding works: kotlin/guide/server/39-session-binding.md
+          - Channel patterns: kotlin/guide/server/30-channel-patterns.md
+          - Handler dispatch: kotlin/guide/server/31-handler-dispatch.md
+          - STREAM boundary: kotlin/guide/server/38-stream-boundary.md
+          - Session binding: kotlin/guide/server/39-session-binding.md
           - Where ZLink fits: kotlin/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
@@ -464,16 +464,16 @@ nav:
           - Location: node/guide/server/25-location.md
           - Monitoring: node/guide/server/26-monitoring.md
       - How it works:
-          - The execution model: node/guide/server/32-execution-model.md
+          - Execution model: node/guide/server/32-execution-model.md
           - Backpressure: node/guide/server/33-backpressure.md
           - Activation and lifetime: node/guide/server/34-activation-lifetime.md
           - Actor membership: node/guide/server/35-actor-membership.md
           - Timers and workers: node/guide/server/36-timer-worker.md
           - Relocation: node/guide/server/37-relocation.md
-          - How channels work: node/guide/server/30-channel-patterns.md
-          - Handlers and message processing: node/guide/server/31-handler-dispatch.md
-          - How STREAM works: node/guide/server/38-stream-boundary.md
-          - How session binding works: node/guide/server/39-session-binding.md
+          - Channel patterns: node/guide/server/30-channel-patterns.md
+          - Handler dispatch: node/guide/server/31-handler-dispatch.md
+          - STREAM boundary: node/guide/server/38-stream-boundary.md
+          - Session binding: node/guide/server/39-session-binding.md
           - Where ZLink fits: node/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: node/guide/server/12-operations.md
