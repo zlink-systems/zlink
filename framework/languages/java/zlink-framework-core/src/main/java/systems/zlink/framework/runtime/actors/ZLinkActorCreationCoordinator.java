@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.actors;
 import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -195,7 +194,7 @@ public final class ZLinkActorCreationCoordinator
             ZLinkPlacementObjectKind.ACTOR,
             key,
             actorType,
-            inline(requestEnvelope),
+            ZLinkInlineCreationContentCodec.encode(requestEnvelope),
             sha256(requestEnvelope),
             requestEnvelope.length,
             new ZLinkMeshNodeDescriptorKey(
@@ -357,21 +356,14 @@ public final class ZLinkActorCreationCoordinator
                         ? "Actor reservation is stale"
                         : stale.getMessage());
             }
+            var pending = snapshot.pendingCreation().orElseThrow();
             byte[] stored;
             try {
-                stored = decodeInline(snapshot.pendingCreation()
-                    .orElseThrow().requestContentReference());
+                stored = ZLinkInlineCreationContentCodec.decode(
+                    pending.requestContentReference(),
+                    pending.requestSha256(),
+                    pending.requestEncodedSize());
             } catch (RuntimeException invalid) {
-                return failReserved(
-                    request,
-                    operation,
-                    reservation,
-                    "Actor create payload is invalid");
-            }
-            var pending = snapshot.pendingCreation().orElseThrow();
-            if (stored.length != pending.requestEncodedSize()
-                || !MessageDigest.isEqual(
-                    sha256(stored), pending.requestSha256())) {
                 return failReserved(
                     request,
                     operation,
@@ -952,23 +944,6 @@ public final class ZLinkActorCreationCoordinator
             () -> null,
             CompletableFuture.delayedExecutor(
                 10, TimeUnit.MILLISECONDS));
-    }
-
-    private static String inline(byte[] value) {
-        return "inline-v1:"
-            + Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(value);
-    }
-
-    private static byte[] decodeInline(String value) {
-        String prefix = "inline-v1:";
-        if (value == null || !value.startsWith(prefix)) {
-            throw new IllegalArgumentException(
-                "unsupported Actor creation intent reference");
-        }
-        return Base64.getUrlDecoder().decode(
-            value.substring(prefix.length()));
     }
 
     private static byte[] sha256(byte[] value) {

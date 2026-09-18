@@ -223,7 +223,7 @@ public sealed class EntrySpotIdentityStoreTests
             objectKind,
             ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(EntrySpotId),
             "match",
-            "inline-v1:00000000:",
+            "inline-v1:",
             new byte[32],
             0,
             new ZLinkMeshNodeDescriptorKey(

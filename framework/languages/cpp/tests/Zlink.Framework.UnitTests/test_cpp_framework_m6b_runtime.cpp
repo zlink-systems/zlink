@@ -6508,7 +6508,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
       .intent =
         {.stable_type = "room",
          .request_content_reference =
-           "inline-v1:bd9444ea:QUI",
+           "inline-v1:QUI",
          .request_sha256 =
            zlink::framework::runtime::sha256 (creation_payload),
          .request_encoded_size = 2},

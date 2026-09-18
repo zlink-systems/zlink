@@ -2861,7 +2861,7 @@ public sealed class ServiceRuntimeFoundationTests
                     ZLinkPlacementObjectKind.InstanceSpot,
                     key,
                     "cart",
-                    "inline-v1:00000000:",
+                    "inline-v1:",
                     new byte[32],
                     0,
                     new ZLinkMeshNodeDescriptorKey("mesh", ownerRid),

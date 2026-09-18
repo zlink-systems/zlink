@@ -90,6 +90,57 @@ public sealed class StoreRecordGoldenTests
     }
 
     /// <summary>
+    /// 21-location-runtime.md#2.4: pendingCreation.requestContentReference is
+    /// <c>inline-v1:{base64url}</c> and no other form is recognized; the node
+    /// that runs the creation verifies the decoded bytes against the same
+    /// record's requestEncodedSize and requestSha256. This drives the
+    /// production codec with the fixture's accepted and rejected vectors, so
+    /// .NET demonstrates rejection as well as acceptance.
+    /// </summary>
+    [Fact]
+    public void StoreRecordGolden_creation_content_references_accept_and_reject_as_pinned()
+    {
+        var fixturePath = Path.Combine(
+            Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework/runtime/protocol/golden/store-record-v1.json");
+        using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        var creation = fixture.RootElement.GetProperty("creationContentReference");
+
+        var accepted = 0;
+        foreach (var item in creation.GetProperty("accepted").EnumerateArray())
+        {
+            var expected = Convert.FromHexString(item.GetProperty("payloadHex").GetString()!);
+            Assert.True(
+                Zlink.Framework.Runtime.Spots.ZLinkInlineCreationIntentCodec.TryDecode(
+                    item.GetProperty("reference").GetString()!,
+                    Convert.FromHexString(item.GetProperty("requestSha256").GetString()!),
+                    item.GetProperty("requestEncodedSize").GetInt32(),
+                    out var payload),
+                item.GetProperty("name").GetString());
+            Assert.Equal(expected, payload);
+            Assert.Equal(
+                item.GetProperty("reference").GetString(),
+                Zlink.Framework.Runtime.Spots.ZLinkInlineCreationIntentCodec.Encode(expected));
+            accepted++;
+        }
+        Assert.True(accepted > 0);
+
+        var rejected = 0;
+        foreach (var item in creation.GetProperty("rejected").EnumerateArray())
+        {
+            Assert.False(
+                Zlink.Framework.Runtime.Spots.ZLinkInlineCreationIntentCodec.TryDecode(
+                    item.GetProperty("reference").GetString()!,
+                    Convert.FromHexString(item.GetProperty("requestSha256").GetString()!),
+                    item.GetProperty("requestEncodedSize").GetInt32(),
+                    out _),
+                item.GetProperty("name").GetString());
+            rejected++;
+        }
+        Assert.True(rejected > 0);
+    }
+
+    /// <summary>
     /// Checklist C-4/C-4e (dotnet store convergence): unlike the test above,
     /// which is a pure-function fixture self-test, this drives the actual
     /// production key builders (ZLinkProviderLocationRepository.OwnerKey/

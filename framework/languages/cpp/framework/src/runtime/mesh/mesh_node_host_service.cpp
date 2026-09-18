@@ -230,10 +230,11 @@ read_actor_creation_request (const std::shared_ptr<location_repository_t> &store
     const auto target_rid = zlink::routing_id_t::from (request.reservation.target_node_routing_id);
     if (snapshot->allocation.target.node_rid.value () != target_rid.to_string ())
         return std::nullopt;
-    const auto payload =
-      decode_inline_creation_content (snapshot->pending_creation->request_content_reference);
-    if (!payload || snapshot->pending_creation->request_encoded_size != payload->size ()
-        || snapshot->pending_creation->request_sha256 != sha256 (*payload))
+    const auto payload = decode_inline_creation_content (
+      snapshot->pending_creation->request_content_reference,
+      snapshot->pending_creation->request_sha256,
+      snapshot->pending_creation->request_encoded_size);
+    if (!payload)
         return std::nullopt;
     return decode_actor_creation_intent (*payload);
 }

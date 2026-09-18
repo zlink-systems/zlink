@@ -1,35 +1,33 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/framework/contracts/locations/stores.hpp>
+#include "runtime/locations/sha256.hpp"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace zlink::framework::runtime
 {
 
-inline std::uint32_t inline_creation_crc32c (
-  const std::vector<std::byte> &payload)
-{
-    std::uint32_t crc = 0xffffffffu;
-    for (const auto value : payload) {
-        crc ^= std::to_integer<std::uint8_t> (value);
-        for (int bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1u)
-              ^ (0x82f63b78u & (0u - (crc & 1u)));
-    }
-    return ~crc;
-}
+// 21-location-runtime.md#2.4: requestContentReference is `inline-v1:{base64url}`
+// over `A-Z a-z 0-9 - _` with no `=` padding, and no other form is recognized.
+// The record's requestEncodedSize and requestSha256 decide the content's
+// integrity, so the reference carries no checksum segment of its own.
+inline constexpr std::string_view inline_creation_content_prefix = "inline-v1:";
 
 inline std::string encode_inline_creation_content (
   const std::vector<std::byte> &payload)
 {
     constexpr std::string_view alphabet =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    std::string encoded;
-    encoded.reserve ((payload.size () * 4u + 2u) / 3u);
+    std::string result{inline_creation_content_prefix};
+    result.reserve (
+      result.size () + (payload.size () * 4u + 2u) / 3u);
     std::uint32_t accumulator = 0;
     unsigned bits = 0;
     for (const auto value : payload) {
@@ -38,42 +36,27 @@ inline std::string encode_inline_creation_content (
         bits += 8;
         while (bits >= 6) {
             bits -= 6;
-            encoded.push_back (alphabet[(accumulator >> bits) & 0x3fu]);
+            result.push_back (alphabet[(accumulator >> bits) & 0x3fu]);
         }
     }
     if (bits != 0)
-        encoded.push_back (alphabet[(accumulator << (6u - bits)) & 0x3fu]);
-    constexpr char hex[] = "0123456789abcdef";
-    const auto crc = inline_creation_crc32c (payload);
-    std::string result = "inline-v1:";
-    for (int shift = 28; shift >= 0; shift -= 4)
-        result.push_back (hex[(crc >> shift) & 0x0fu]);
-    result.push_back (':');
-    result += encoded;
+        result.push_back (alphabet[(accumulator << (6u - bits)) & 0x3fu]);
     return result;
 }
 
+// Decodes the reference and verifies it against the same atomic record's
+// requestEncodedSize and requestSha256. A reference outside the specified
+// form, a length mismatch or a digest mismatch all return nullopt, and the
+// caller must record the creation as failed without running the factory.
 inline std::optional<std::vector<std::byte>>
-decode_inline_creation_content (std::string_view reference)
+decode_inline_creation_content (std::string_view reference,
+                                const std::array<std::byte, 32> &expected_sha256,
+                                std::uint64_t expected_encoded_size)
 {
-    constexpr std::string_view prefix = "inline-v1:";
-    if (!reference.starts_with (prefix))
+    if (!reference.starts_with (inline_creation_content_prefix))
         return std::nullopt;
-    reference.remove_prefix (prefix.size ());
-    const auto separator = reference.find (':');
-    if (separator != 8 || separator + 1 > reference.size ())
-        return std::nullopt;
-    std::uint32_t expected_crc = 0;
-    for (const auto value : reference.substr (0, separator)) {
-        expected_crc <<= 4u;
-        if (value >= '0' && value <= '9')
-            expected_crc |= static_cast<std::uint32_t> (value - '0');
-        else if (value >= 'a' && value <= 'f')
-            expected_crc |= static_cast<std::uint32_t> (value - 'a' + 10);
-        else
-            return std::nullopt;
-    }
-    const auto encoded = reference.substr (separator + 1);
+    const auto encoded =
+      reference.substr (inline_creation_content_prefix.size ());
     if (encoded.size () % 4u == 1u)
         return std::nullopt;
     std::vector<std::byte> payload;
@@ -102,11 +85,9 @@ decode_inline_creation_content (std::string_view reference)
               (accumulator >> bits) & 0xffu));
         }
     }
-    if (bits != 0
-        && (accumulator & ((std::uint32_t{1} << bits) - 1u)) != 0)
+    if (payload.size () != expected_encoded_size)
         return std::nullopt;
-    const auto actual_crc = inline_creation_crc32c (payload);
-    if (actual_crc != expected_crc)
+    if (sha256 (payload) != expected_sha256)
         return std::nullopt;
     return payload;
 }

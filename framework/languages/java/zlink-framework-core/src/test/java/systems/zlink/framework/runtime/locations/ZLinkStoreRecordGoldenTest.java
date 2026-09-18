@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -17,6 +18,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Iterator;
 import org.junit.jupiter.api.Test;
+import systems.zlink.framework.runtime.internal.locations.ZLinkInlineCreationContentCodec;
 
 /**
  * Target-contract pin for checklist C-3 (store record golden fixture:
@@ -84,6 +86,49 @@ final class ZLinkStoreRecordGoldenTest {
                 assertEquals(0, decoded.rawBytes.length, "tombstone must carry empty rawBytes: " + name);
             }
         }
+    }
+
+    /**
+     * 21-location-runtime.md#2.4: {@code pendingCreation.requestContentReference}
+     * is {@code inline-v1:{base64url}} and no other form is recognized; the node
+     * that runs the creation verifies the decoded bytes against the same
+     * record's {@code requestEncodedSize} and {@code requestSha256}. This drives
+     * the production codec with the fixture's accepted and rejected vectors, so
+     * Java demonstrates rejection as well as acceptance.
+     */
+    @Test
+    void creationContentReferencesAcceptAndRejectAsPinned() throws IOException {
+        JsonNode fixture = new ObjectMapper().readTree(Files.readString(sharedFixturePath()));
+        JsonNode creation = fixture.path("creationContentReference");
+
+        int accepted = 0;
+        for (JsonNode item : creation.path("accepted")) {
+            byte[] expected = HexFormat.of().parseHex(item.path("payloadHex").asText());
+            byte[] payload = ZLinkInlineCreationContentCodec.decode(
+                item.path("reference").asText(),
+                HexFormat.of().parseHex(item.path("requestSha256").asText()),
+                item.path("requestEncodedSize").asInt());
+            assertArrayEquals(expected, payload, item.path("name").asText());
+            assertEquals(
+                item.path("reference").asText(),
+                ZLinkInlineCreationContentCodec.encode(expected),
+                item.path("name").asText());
+            accepted++;
+        }
+        assertTrue(accepted > 0);
+
+        int rejected = 0;
+        for (JsonNode item : creation.path("rejected")) {
+            assertThrows(
+                IllegalArgumentException.class,
+                () -> ZLinkInlineCreationContentCodec.decode(
+                    item.path("reference").asText(),
+                    HexFormat.of().parseHex(item.path("requestSha256").asText()),
+                    item.path("requestEncodedSize").asInt()),
+                item.path("name").asText());
+            rejected++;
+        }
+        assertTrue(rejected > 0);
     }
 
     private record OpaqueMember(String originalKey, byte[] rawBytes, String version, long expiresAtMs,

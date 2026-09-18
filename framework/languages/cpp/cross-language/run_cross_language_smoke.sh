@@ -1867,8 +1867,7 @@ stage_cpp_source_java_target_remote_actor_create() {
 # Each entry names the issue that owns the remaining cause.
 QUARANTINED_CELLS=(
   "remote-actor-create-cpp-dotnet|#560 -- the Location Store creation-reservation row's key derivation and field set are unspecified, so .NET answers Stale to a reservation another runtime made"
-  "remote-actor-create-cpp-java|#559 -- Java's inline-v1 creation-intent reference carries no CRC32C segment, so it refuses every foreign reservation"
-  "remote-actor-create-dotnet-java|#559 -- the same Java defect with C++ out of the picture entirely; this cell is the control that shows the remaining causes are not C++'s"
+  "remote-actor-create-cpp-java|#560 -- with the reference grammar settled the Java target no longer refuses the reference (its control cell, remote-actor-create-dotnet-java, now passes), and what is left is the same unspecified reservation row that holds remote-actor-create-cpp-dotnet: a C++-written reservation the peer runtime cannot act on"
   "remote-actor-create-cpp-node|#561 and #562 -- the Node target registers an Actor factory but no Entry Spot, and publishes entrySpotId only when an Entry Spot type is registered; which of the two owns its refusal is not isolated yet"
 )
 
@@ -2289,11 +2288,15 @@ stage_dotnet_source_cpp_target_user_spot_join
 stage_cpp_source_node_target_user_spot_join
 stage_java_source_cpp_target_user_spot_join
 stage_cpp_source_java_target_user_spot_join
-# The remote-actor-create cells are deliberately NOT part of this default run:
-# they still fail on divergences owned by the peer runtimes (see the block
-# comment above stage_cpp_source_dotnet_target_remote_actor_create). Run them
-# with ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create. The guard below
-# keeps that exclusion honest.
+# #559 closed the requestContentReference grammar, so this cell -- a .NET
+# requester placing an Actor on a Java target through the Location Store
+# reservation -- passes and joins the default run. The remaining
+# remote-actor-create cells are still NOT part of it: they fail on divergences
+# owned by the peer runtimes (see the block comment above
+# stage_cpp_source_dotnet_target_remote_actor_create). Run them with
+# ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create. The guard below keeps
+# that exclusion honest.
+stage_dotnet_source_java_target_remote_actor_create
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"
