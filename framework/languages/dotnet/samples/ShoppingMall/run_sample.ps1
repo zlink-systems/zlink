@@ -84,9 +84,17 @@ function Invoke-ShoppingMallPlannedRelocation {
                     throw "Planned relocation source '$sourceInstanceId' does not map to one workflow target"
                 }
                 $targetUrl = [string]$targetEntries[0].Value
+                # The relocated object is the planned-relocation fixture Spot, not
+                # the order Instance Spot: when normal placement co-locates the two,
+                # the relocate endpoint retires the order routing endpoint first, so
+                # the order id has no owner to observe. Ask about the anchor.
+                $anchorId = [string]$result.AnchorId
+                if ([string]::IsNullOrWhiteSpace($anchorId)) {
+                    throw "Planned relocation returned no anchor for ${OrderId}"
+                }
                 for ($statusAttempt = 0; $statusAttempt -lt $WaitAttempts; $statusAttempt++) {
                     try {
-                        $status = Invoke-RestMethod -Method Get -Uri "$targetUrl/self-check/owner/$OrderId"
+                        $status = Invoke-RestMethod -Method Get -Uri "$targetUrl/self-check/owner/$anchorId"
                     }
                     catch {
                         Start-Sleep -Milliseconds 100
@@ -97,7 +105,7 @@ function Invoke-ShoppingMallPlannedRelocation {
                     }
                     Start-Sleep -Milliseconds 100
                 }
-                throw "Planned relocation did not complete for ${OrderId}: target did not become owner"
+                throw "Relocation fixture did not acquire a new owner: $anchorId"
             }
             $lastResult = "owner=true outcome=$($result.Outcome) reason=$($result.Reason)"
         }
@@ -106,16 +114,19 @@ function Invoke-ShoppingMallPlannedRelocation {
     throw "Planned relocation did not complete for ${OrderId}: $lastResult"
 }
 
-function Invoke-ShoppingMallRelocatedOrderContinue {
+function Wait-ShoppingMallRelocatedOrderCompleted {
     param(
         [Parameter(Mandatory = $true)][string]$OrderId,
-        [Parameter(Mandatory = $true)][string]$ApiUrl,
-        [Parameter(Mandatory = $true)][hashtable]$Headers
+        [Parameter(Mandatory = $true)][string]$ApiUrl
     )
 
+    # Only the relocated fixture's replay drives this order past its checkpoint,
+    # so the runner observes the public read API instead of pushing the order
+    # forward itself. Driving it here would confirm the order without the
+    # relocation target ever resuming it.
     for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
         try {
-            $result = Invoke-RestMethod -Method Post -Uri "$ApiUrl/orders/$OrderId/continue" -Headers $Headers -Body "{}"
+            $result = Invoke-RestMethod -Method Get -Uri "$ApiUrl/orders/$OrderId"
             if ($result.state.status -eq "Confirmed") {
                 return
             }
@@ -123,7 +134,7 @@ function Invoke-ShoppingMallRelocatedOrderContinue {
         catch { }
         Start-Sleep -Milliseconds 100
     }
-    throw "Relocated order did not finish: $OrderId"
+    throw "Relocated order did not finish on its target lifecycle: $OrderId"
 }
 
 function Wait-ShoppingMallWorkflowMeshReady {
@@ -292,7 +303,7 @@ try {
         "workflow-a" = $SHOPPINGMALL_WORKFLOW_A_HTTP_URL
         "workflow-b" = $SHOPPINGMALL_WORKFLOW_B_HTTP_URL
     } -Headers $jsonHeaders
-    Invoke-ShoppingMallRelocatedOrderContinue -OrderId $relocationOrderId -ApiUrl $SHOPPINGMALL_API_A_HTTP_URL -Headers $jsonHeaders
+    Wait-ShoppingMallRelocatedOrderCompleted -OrderId $relocationOrderId -ApiUrl $SHOPPINGMALL_API_A_HTTP_URL
     # Planned relocation is intentionally required. These can pass only when the
     # sample actually drives relocation; store wiring does not emit either line.
     Wait-ShoppingMallLogExactCount "replayed" @((Join-Path $LogDir "workflow-a.out.log"), (Join-Path $LogDir "workflow-b.out.log")) "shoppingmall-order replayed order=" 1

@@ -301,4 +301,33 @@ public sealed partial class RegressionTests
         Assert.Contains("OrderProjectionState", mapper, StringComparison.Ordinal);
         Assert.Contains("OrderState ToContract", mapper, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ShoppingMall_Runners_Observe_The_Same_Planned_Relocation_Evidence()
+    {
+        var sampleRoot = ResolveSampleRoot("ShoppingMall");
+        var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
+        var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
+
+        // The relocated object is the planned-relocation fixture Spot, not the
+        // order Instance Spot. When normal placement co-locates the two, the
+        // relocate endpoint retires the order routing endpoint first, so the
+        // order id has no owner left for either runner to observe.
+        Assert.Contains("wait_relocated_anchor_owner \"${RELOCATION_ANCHOR_ID}\"", shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("$anchorId = [string]$result.AnchorId", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("/self-check/owner/$anchorId", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain("/self-check/owner/$OrderId", powershellRunner, StringComparison.Ordinal);
+
+        // Only the relocated fixture's replay drives the checkpointed order to
+        // Confirmed. A runner that posts the continue itself confirms the order
+        // without the relocation target ever resuming it, and then races its own
+        // replay-count evidence.
+        Assert.Contains("curl -fsS \"${SHOPPINGMALL_API_A_HTTP_URL}/orders/${order_id}\"", shellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("Invoke-RestMethod -Method Get -Uri \"$ApiUrl/orders/$OrderId\"", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("/orders/$OrderId/continue", powershellRunner, StringComparison.Ordinal);
+    }
 }
