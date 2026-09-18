@@ -48,7 +48,7 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
                 return thread;
             });
             running = true;
-            scheduler.scheduleAtFixedRate(this::report, 0,
+            scheduler.scheduleAtFixedRate(this::report, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
                 ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS);
         }
     }

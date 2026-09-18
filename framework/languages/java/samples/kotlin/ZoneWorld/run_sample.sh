@@ -232,9 +232,11 @@ if [[ "$G4_CHILD" == 1 ]]; then
   run_client ZW-G4 & client_pid=$!
   wait_log_while_running client 'scenario ZW-G4 armed node=zone-node-2' "$first" "$client_pid" 900 \
     || { wait "$client_pid" || true; exit 1; }
-  wait_log zone-node-2 'crash-boundary join pending' "$target_first" 900
+  wait_log zone-node-2 'crash-boundary join pending' "$target_first" 900 \
+    || { wait "$client_pid" || true; echo "scenario ZW-G4 failed: crash boundary not reached on zone-node-2" >&2; exit 1; }
   kill_node zone-node-2 KILL
   wait "$client_pid" || { echo "scenario ZW-G4 failed" >&2; exit 1; }
+  tail -n +"$first" "$LOG_DIR/client.log" | grep -Fxq 'scenario ZW-G4 passed' || { echo "scenario ZW-G4 failed" >&2; exit 1; }
   ops_first="$(next_line "$LOG_DIR/ops.log")"; start_zone zone-node-2
   new="$(routing_id zone-node-2 "$ops_first")"
   first="$(next_line "$LOG_DIR/client.log")"

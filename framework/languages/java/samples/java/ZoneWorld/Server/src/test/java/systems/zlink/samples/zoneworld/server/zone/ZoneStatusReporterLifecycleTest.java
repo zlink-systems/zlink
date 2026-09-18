@@ -31,6 +31,7 @@ final class ZoneStatusReporterLifecycleTest {
         context.registerBean("zoneStatusReporter", ZoneStatusReporter.class, () -> reporter);
         try {
             context.refresh();
+            reporter.reportNow();
             runtime.firstSubmission.get(2, TimeUnit.SECONDS);
 
             context.close();
@@ -50,6 +51,7 @@ final class ZoneStatusReporterLifecycleTest {
         ZoneStatusReporter reporter = reporter(runtime);
         AtomicInteger callbacks = new AtomicInteger();
         reporter.start();
+        reporter.reportNow();
         runtime.firstSubmission.get(2, TimeUnit.SECONDS);
 
         reporter.stop(callbacks::incrementAndGet);

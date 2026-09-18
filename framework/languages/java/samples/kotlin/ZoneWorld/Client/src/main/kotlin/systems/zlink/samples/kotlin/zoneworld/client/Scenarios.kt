@@ -444,20 +444,29 @@ internal object Scenarios {
 
     private suspend fun g4(options: ClientOptions) {
         val ops = Ops.create(options); val probes = Probes.create(options); withResources(ops, probes) { coroutineScope {
+            // The runner crashes zone-node-2, so the pending join must target a zone that node
+            // owns. The probe pair spans the two owners; the side zone-node-2 owns is the target.
             val east = ops.watch().nodes.first { it.nodeId == "zone-node-2" }; val observed = requiredPair(probes)
-            val pair = if (observed.targetZoneId in east.zones) observed else Messages.RelocationPairRes(
-                observed.targetZoneId, observed.sourceZoneId, observed.targetOwnerNodeRid, observed.sourceOwnerNodeRid)
+            val pair = when {
+                observed.targetZoneId in east.zones -> observed
+                observed.sourceZoneId in east.zones -> Messages.RelocationPairRes(
+                    observed.targetZoneId, observed.sourceZoneId, observed.targetOwnerNodeRid, observed.sourceOwnerNodeRid)
+                else -> error("zone-node-2 owns neither probed zone: zones=${east.zones}")
+            }
             val crossing = edge(pair.sourceZoneId, pair.targetZoneId); val player = Game.create(options, unique("g4-crash"))
             withResources(player) {
                 ensure(player.join().error == null, "JoinWorld succeeds")
                 player.moveTo(crossing.source.x, crossing.source.y)
+                // The join stays pending until the owner dies, so its first terminal result is the
+                // crash verdict: Unavailable from the crash, DeadlineExceeded when nothing crashed.
                 val failed = async(start = CoroutineStart.UNDISPATCHED) {
-                    player.connector.waitFor<Messages.CrashRelocationProbeRes>().where { it.payload().error == "Unavailable" }
-                        .timeout(Duration.ofSeconds(60)).await().payload()
+                    player.connector.waitFor<Messages.CrashRelocationProbeRes>().timeout(Duration.ofSeconds(60)).await().payload()
                 }
                 player.connector.send(Messages.CrashRelocationProbeMsg(crossing.target.x, crossing.target.y)).await()
-                println("scenario ZW-G4 armed node=zone-node-2")
-                ensure(failed.await().error == "Unavailable", "crashed Ready owner terminates in-flight operation Unavailable")
+                println("scenario ZW-G4 armed node=zone-node-2 zone=${pair.targetZoneId}")
+                val terminal = failed.await()
+                ensure(terminal.error == "Unavailable",
+                    "crashed Ready owner terminates in-flight operation Unavailable, got ${terminal.error}")
             }
         } }
     }
