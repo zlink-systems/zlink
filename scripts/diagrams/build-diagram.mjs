@@ -43,7 +43,7 @@ await b.close();
 // The viewer page sizes itself to the viewport (body{min-height:100vh}). Inside an
 // embedding iframe that means the figure inflates to the reader's screen height, so
 // the embed build releases it and lets the content decide.
-const CHROME_STRIP = '<style id="zlink-embed-clean">.toolbar,.no-print{display:none!important}.container{padding-top:8px!important;min-height:0!important}html,body{min-height:0!important;height:auto!important}</style>';
+const CHROME_STRIP = '<style id="zlink-embed-clean">.toolbar,.no-print{display:none!important}.container{padding-top:8px!important;min-height:0!important}html,body{min-height:0!important;height:auto!important}.header{margin-bottom:.4rem!important;padding-right:0!important}.header h1{font-size:.8rem!important;font-weight:600!important;letter-spacing:0!important;line-height:1.3!important}.header .subtitle{font-size:.7rem!important;line-height:1.3!important}</style>';
 let h=readFileSync(out,'utf8');
 if(!h.includes('zlink-embed-clean')) h=h.replace('</head>', CHROME_STRIP + '</head>');
 if (vb){ const pad=28; const nvb=`${Math.round(vb[0]-pad)} ${Math.round(vb[1]-pad)} ${Math.round(vb[2]-vb[0]+2*pad)} ${Math.round(vb[3]-vb[1]+2*pad)}`;

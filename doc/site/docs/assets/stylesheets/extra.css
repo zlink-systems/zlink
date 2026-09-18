@@ -125,6 +125,22 @@
   background-color: var(--md-accent-fg-color);
 }
 
+/* archify 다이어그램을 담는 iframe.
+
+   높이를 주지 않으면 브라우저가 기본값 150px을 쓴다. 문서에는 `width:100%`만 적혀
+   있어 그림이 잘린 채 나왔다. 그림마다 비율이 다르므로 화면 높이에 맞춰 잡고
+   위아래로 한계를 둔다. */
+.md-typeset iframe.zlink-diagram {
+  display: block;
+  height: clamp(18rem, 46vh, 32rem);
+  margin-bottom: 0.3rem;
+  border-radius: 0.2rem;
+  background-color: var(--md-code-bg-color);
+}
+@media screen and (max-width: 44.9375em) {
+  .md-typeset iframe.zlink-diagram { height: clamp(14rem, 52vh, 22rem); }
+}
+
 /* 헤더의 언어 선택기. 로케일(한국어/English) 선택기와 같은 `md-select` 마크업이라
    자리와 동작은 테마가 맡는다. 여기서는 아이콘 크기만 맞춘다.
    zlink-lang.js가 자리를 잡기 전에는 hidden이라 깜박이지 않는다. */
