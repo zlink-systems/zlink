@@ -9,6 +9,25 @@ The project lives at
 blocks below are read from those files when the site is built. Without a location store, two
 processes name each other's endpoint directly and exchange one request/reply.
 
+## 0. Downloading the tutorial
+
+This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
+one archive is all you need — there is no reason to clone the whole repository.
+
+[**Download zlink-tutorial-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip)
+
+The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
+leaves the project under `zlink-tutorial-node/`, with the package versions of the release you
+downloaded.
+
+For the current main, take just that directory out of the repository.
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
+cd zlink
+git sparse-checkout set framework/languages/node/tutorial
+```
+
 ## 1. Installation
 
 - Node.js 22 or later (`engines` of `@zlink-systems/zlink`)

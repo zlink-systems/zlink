@@ -29,6 +29,23 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · C#/.NET
 **어디서 시작할지 모르겠다면 [Bingo](#3-bingo--온라인-게임-서버-구축)를 본다.** framework
 기능이 가장 많이 등장하고, 구성 자체가 일반적인 온라인 게임 서버 그대로다.
 
+## 0. 샘플 내려받기
+
+샘플은 저장소 전체를 clone하지 않아도 된다. 언어별 압축 파일 하나에 샘플이 모두 들어 있다.
+
+[**zlink-samples-dotnet.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip)
+
+주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 샘플은 배포된 패키지만
+참조하므로 압축을 풀고 바로 빌드한다. 그 안의 버전은 받은 릴리즈에 맞춰져 있다.
+
+최신 main을 원하면 저장소에서 그 디렉터리만 가져온다.
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
+cd zlink
+git sparse-checkout set framework/languages/dotnet/samples
+```
+
 ## 1. 무엇을 만드는지로 고르기
 
 | 만들려는 시스템 | 샘플 | 이 샘플이 맡은 주제 |

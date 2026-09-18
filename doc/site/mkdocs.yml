@@ -138,6 +138,7 @@ plugins:
             Install: 설치
             Quickstart: 퀵스타트
             Samples: 샘플
+            Sample scenario contract: 샘플 시나리오 계약
             Picking a sample: 샘플 고르기
             Guide: 가이드
             Reference: 레퍼런스
@@ -337,6 +338,7 @@ nav:
       - Operations:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
           - Options: cpp/guide/server/16-options.md
+      - Samples: cpp/guide/server/14-samples.md
       - Tests: cpp/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: cpp/guide/stream-connector/README.md
@@ -406,6 +408,7 @@ nav:
       - Operations:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
           - Options: dotnet/guide/server/16-options.md
+      - Samples: dotnet/guide/server/14-samples.md
       - Tests: dotnet/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: dotnet/guide/stream-connector/README.md
@@ -473,6 +476,7 @@ nav:
       - Operations:
           - Operations and lifecycle: java/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
+      - Samples: java/guide/server/14-samples.md
       - Tests: java/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: java/guide/stream-connector/README.md
@@ -538,6 +542,7 @@ nav:
       - Operations:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
+      - Samples: kotlin/guide/server/14-samples.md
       - Tests: kotlin/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: kotlin/guide/stream-connector/README.md
@@ -603,6 +608,7 @@ nav:
       - Operations:
           - Operations and lifecycle: node/guide/server/12-operations.md
           - Options: node/guide/server/16-options.md
+      - Samples: node/guide/server/14-samples.md
       - Tests: node/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: node/guide/stream-connector/README.md
@@ -642,8 +648,6 @@ nav:
           - 07. Location authority: node/reference/07-location-authority.md
           - 08. Observability diagnostics: node/reference/08-observability-diagnostics.md
   - Samples:
-      - Picking a sample: common/guide/server/14-samples.md
-      - Overview: common/sample/README.md
       - Bingo: common/sample/bingo/README.md
       - TicTacToe: common/sample/tictactoe/README.md
       - SupportChat: common/sample/supportchat/README.md
@@ -654,6 +658,7 @@ nav:
       - Event sourcing: common/sample/event/README.md
   - Spec:
       - Common spec: common/README.md
+      - Sample scenario contract: common/sample/README.md
       - Server spec: common/spec/server/README.md
       - Foundation:
           - Foundation overview: common/spec/server/00-foundation/README.md

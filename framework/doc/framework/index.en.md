@@ -448,13 +448,13 @@ The guide is **fully self-contained per language.** Inside the guide for the lan
 pick, there's only that language's code, and you read it start to finish within it. The
 switch line at the top of each chapter lets you view the same chapter in another language.
 
-| Language | Server guide | Get started right away | Client-side guide |
-| --- | --- | --- | --- |
-| C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
-| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
-| Java | [Server](java/guide/server/README.en.md) | [Quickstart](java/quickstart.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
-| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
-| Node.js | [Server](node/guide/server/README.en.md) | [Quickstart](node/quickstart.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |
+| Language | Server guide | Get started right away | Client-side guide | Download |
+| --- | --- | --- | --- | --- |
+| C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip) |
+| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-dotnet.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip) |
+| Java | [Server](java/guide/server/README.en.md) | [Quickstart](java/quickstart.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip) |
+| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip) |
+| Node.js | [Server](node/guide/server/README.en.md) | [Quickstart](node/quickstart.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip) |
 
 **The two client-side guides** cover libraries deployed separately from the server
 framework. Stream Connector is the library a client uses to connect to a STREAM endpoint

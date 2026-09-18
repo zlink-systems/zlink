@@ -32,6 +32,24 @@ registration code and handlers.
 It's where the most framework features show up, and its architecture mirrors that of a
 typical online game server.
 
+## 0. Downloading the samples
+
+The samples do not need the whole repository. One archive per language holds all of them.
+
+[**Download zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip)
+
+The address does not depend on the platform: Windows and WSL fetch the same file. The samples
+reference published packages only, so they build straight after unpacking, with the versions of
+the release you downloaded.
+
+For the current main, take just that directory out of the repository.
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
+cd zlink
+git sparse-checkout set framework/languages/dotnet/samples
+```
+
 ## 1. Choosing by What You're Building
 
 | System you're building | Sample | What this sample covers |
