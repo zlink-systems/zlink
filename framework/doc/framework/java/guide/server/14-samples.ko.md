@@ -248,11 +248,8 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 띄우고 끝나면 정리하므로 `docker`만 있으면 된다.
 
 ```bash
-# java와 kotlin 샘플을 한 runner가 함께 다룬다.
+# java와 kotlin 샘플이 같은 sample root 아래 언어별 디렉토리로 나뉜다.
 framework/languages/java/samples/java/TicTacToe/run_sample.sh
-
-  framework/languages/java/samples/java/TicTacToe/run_sample.sh
-  framework/languages/java/samples/java/Bingo/run_sample.sh
 ```
 
 샘플은 하나씩 실행한다. 일곱 개를 모두 확인하려면 일곱 번 호출한다. 브라우저 UI를 포함한

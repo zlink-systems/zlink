@@ -276,8 +276,7 @@ and runs verification too. For a sample that needs a location store, the runner 
 its own Redis container and cleans it up when done, so all you need is `docker`.
 
 ```bash
-  framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
-  framework/languages/java/samples/kotlin/Bingo/run_sample.sh
+framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
 ```
 
 Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its

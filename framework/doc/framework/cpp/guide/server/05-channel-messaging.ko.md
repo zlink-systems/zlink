@@ -237,7 +237,7 @@ Spot으로 한정되고, Classic fanout은 mesh 구성과 무관하게 등록한
 끝난다.** 나머지 구독자는 영향을 받지 않고, 발행자는 느린 구독자 하나 때문에 멈추지
 않는다.
 
-발행자 설정 `NoDrop`을 켜면 이 상한 동작만 바뀐다. topic과 일치하는 구독자 pipe 가운데
+발행자 설정 `no_drop`을 켜면 이 상한 동작만 바뀐다. topic과 일치하는 구독자 pipe 가운데
 하나라도 publish record를 받을 준비가 되지 않은 동안, publisher transport는 record를 그 topic과 일치하는 어느
 pipe에도 제출하지 않는다. 따라서 느린 구독자 하나가 publish call의 완료를 늦출 수 있다. 정확한
 HWM admission 규칙은 [Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정한다.
