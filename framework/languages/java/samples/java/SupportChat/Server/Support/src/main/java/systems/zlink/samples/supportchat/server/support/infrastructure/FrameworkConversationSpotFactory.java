@@ -14,6 +14,7 @@ public final class FrameworkConversationSpotFactory implements ConversationSpotF
         this.spots = spots;
     }
 
+    // --8<-- [start:doc-sc-api-open]
     @Override
     public CompletionStage<Void> start(String conversationId, StartRequest request) {
         return spots.getOrCreate(conversationId, SampleNames.ConversationSpotType)
@@ -23,4 +24,5 @@ public final class FrameworkConversationSpotFactory implements ConversationSpotF
             .submit()
             .thenApply(ignored -> null);
     }
+    // --8<-- [end:doc-sc-api-open]
 }

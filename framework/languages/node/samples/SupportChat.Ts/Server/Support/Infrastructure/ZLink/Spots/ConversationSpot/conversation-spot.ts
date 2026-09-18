@@ -109,14 +109,18 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
       );
       return;
     }
+    // --8<-- [start:doc-sc-assign]
     const agentActorId = this.assignments.assignNextAgent();
     if (agentActorId === undefined) return;
     const roster = this.directory.get(agentActorId);
     if (roster === undefined) {
       throw new Error(`Assigned roster actor '${agentActorId}' was not found.`);
     }
+    // --8<-- [start:doc-sc-roster-push]
     const assigned = this.assignAgent(agentActorId, roster.displayName);
     await this.notifications.publish(assigned.event, [roster.actorId]);
+    // --8<-- [end:doc-sc-roster-push]
+    // --8<-- [end:doc-sc-assign]
   }
 
   async onLeaveActor(actor: SupportUserActor): Promise<void> {
@@ -141,6 +145,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     return joined.state;
   }
 
+  // --8<-- [start:doc-sc-message-push]
   async sendChat(actorId: string, text: string): Promise<{ message: ChatMessage; state: ConversationState }> {
     const actor = this.requireActor(actorId);
     this.requireParticipant(actor);
@@ -150,6 +155,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     await this.notifications.publish(result.event, this.otherActorRefs(actor.actorId));
     return result;
   }
+  // --8<-- [end:doc-sc-message-push]
 
   async setTyping(actorId: string, isTyping: boolean): Promise<void> {
     const actor = this.requireActor(actorId);

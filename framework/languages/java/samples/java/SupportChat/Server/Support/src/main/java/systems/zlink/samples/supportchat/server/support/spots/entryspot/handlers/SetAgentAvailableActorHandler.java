@@ -27,6 +27,7 @@ public final class SetAgentAvailableActorHandler
         this.directory = directory;
     }
 
+    // --8<-- [start:doc-sc-set-available]
     @Override
     public CompletionStage<Messages.SetAgentAvailableRes> handle(
         SupportEntrySpot spot,
@@ -40,6 +41,7 @@ public final class SetAgentAvailableActorHandler
         return CompletableFuture.completedFuture(
             new Messages.SetAgentAvailableRes(request.isAvailable()));
     }
+    // --8<-- [end:doc-sc-set-available]
 
     private static void requireRole(SupportUserActor actor, String expectedRole) {
         if (!expectedRole.equals(actor.role())) {

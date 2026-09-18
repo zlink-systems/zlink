@@ -126,10 +126,12 @@ class ConversationSpot(
         actors.remove(actor.participantId)
     }
 
+    // --8<-- [start:doc-sc-idle-timer]
     suspend fun checkIdle() {
         val change = conversation?.markIdle(System.currentTimeMillis()) ?: return
         publishChange(change)
     }
+    // --8<-- [end:doc-sc-idle-timer]
 
     fun refreshMembership(actor: SupportUserActor): JoinConversationRes {
         val conversation = requireConversation()
@@ -166,6 +168,7 @@ class ConversationSpot(
         return CloseConversationRes(ConversationContracts.toState(change.state))
     }
 
+    // --8<-- [start:doc-sc-assign]
     private suspend fun assignAgent() {
         val conversation = requireConversation()
         val assigned = assignment.assignForConversation(conversation.conversationId) ?: return
@@ -179,6 +182,7 @@ class ConversationSpot(
             assigned.rosterActorId,
         )
     }
+    // --8<-- [end:doc-sc-assign]
 
     private fun joinAgent(agent: SupportUserActor): ConversationChange {
         val conversation = requireConversation()

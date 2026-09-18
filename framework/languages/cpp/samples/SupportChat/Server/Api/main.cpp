@@ -96,6 +96,7 @@ class open_conversation_api_handler_t
 
     task_t<open_conversation_api_res_t> handle (const open_conversation_api_req_t &request)
     {
+        // --8<-- [start:doc-sc-api-open]
         auto created =
           co_await _spots.create (sample_names_t::conversation_spot)
             .in_mesh (sample_names_t::mesh)
@@ -105,6 +106,7 @@ class open_conversation_api_handler_t
                 std::chrono::system_clock::now ().time_since_epoch ())
                 .count ()})
             .async ();
+        // --8<-- [end:doc-sc-api-open]
         if (created.state == spot_create_state_t::rejected || !created.reply) {
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "SupportChat conversation creation returned no state");

@@ -5,6 +5,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
+// --8<-- [start:doc-sc-idle-timer]
 public final class ConversationIdleTimerHandler
     implements ZLinkSpotTimerHandler<ConversationSpot> {
     @Override
@@ -13,3 +14,4 @@ public final class ConversationIdleTimerHandler
         return CompletableFuture.completedFuture(null);
     }
 }
+// --8<-- [end:doc-sc-idle-timer]

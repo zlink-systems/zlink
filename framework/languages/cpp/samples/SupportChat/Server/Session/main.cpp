@@ -43,6 +43,7 @@ class supportchat_session_t final : public packet_stream_session_t
 
     task_t<void> on_error (stream_t &, const stream_error_t &) override { co_return; }
 
+    // --8<-- [start:doc-sc-session-dispatch]
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
                             const zlink::message_t &payload) override
@@ -61,6 +62,7 @@ class supportchat_session_t final : public packet_stream_session_t
             }
             const authenticate_res_t authenticated{*verified.actor_id, *verified.display_name,
                                                    *verified.role};
+            // --8<-- [start:doc-sc-session-auth]
             auto ensure =
               ensure_support_user_actor_req_t{authenticated.actor_id, authenticated.display_name,
                                               authenticated.role, authenticated.actor_id};
@@ -71,6 +73,7 @@ class supportchat_session_t final : public packet_stream_session_t
             _identity_actor_id = std::string (bound.actor_id ());
             _identity_display_name = authenticated.display_name;
             _identity_role = authenticated.role;
+            // --8<-- [end:doc-sc-session-auth]
             stream.reply_packet (zlink::message_t::from_json (authenticated)).async ();
             co_return;
         }
@@ -91,8 +94,10 @@ class supportchat_session_t final : public packet_stream_session_t
         }
         co_await actor.relay (payload);
     }
+    // --8<-- [end:doc-sc-session-dispatch]
 
   private:
+    // --8<-- [start:doc-sc-metadata-relay]
     task_t<session_actor_t> select_actor (stream_t &stream,
                                           const session_message_context_t &dispatch)
     {
@@ -104,6 +109,7 @@ class supportchat_session_t final : public packet_stream_session_t
         }
         co_return require_actor (_identity_actor_id, std::string (dispatch.packet_name));
     }
+    // --8<-- [end:doc-sc-metadata-relay]
 
     task_t<ensure_agent_conversation_res_t>
     ensure_agent_conversation_actor (stream_t &stream, const session_message_context_t &dispatch)
@@ -122,6 +128,7 @@ class supportchat_session_t final : public packet_stream_session_t
               refreshed.parse_json<join_conversation_res_t> ().state};
         }
 
+        // --8<-- [start:doc-sc-agent-join]
         auto ensured = co_await _channels
                          .request ("supportchat.support",
                                    ensure_agent_conversation_req_t{
@@ -161,6 +168,7 @@ class supportchat_session_t final : public packet_stream_session_t
             }
         }
         co_return ensured;
+        // --8<-- [end:doc-sc-agent-join]
     }
 
     static std::string require_conversation_id (const session_message_context_t &dispatch)
@@ -216,6 +224,7 @@ int main (int argc, char **argv)
     options.add_relocation_store<redis::redis_relocation_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    // --8<-- [start:doc-sc-session-register]
     options.add_client_server_channel ("supportchat.support").client ();
     options.add_client_server_channel ("supportchat.api").client ();
     auto support_spot = options.add_route_mesh (sample_names_t::mesh);
@@ -225,6 +234,7 @@ int main (int argc, char **argv)
     options.add_stream_node ("supportchat-session-stream")
       .bind (topology.session_stream_endpoint)
       .register_session<supportchat_session_t> ();
+    // --8<-- [end:doc-sc-session-register]
     app.add_hosted_service (
       std::make_unique<sample_readiness_service_t> ("stream", "session"));
     app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (

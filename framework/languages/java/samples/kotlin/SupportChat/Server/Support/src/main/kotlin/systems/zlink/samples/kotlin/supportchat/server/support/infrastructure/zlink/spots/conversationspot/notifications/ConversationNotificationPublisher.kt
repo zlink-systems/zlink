@@ -24,6 +24,7 @@ class ConversationNotificationPublisher {
         }
     }
 
+    // --8<-- [start:doc-sc-roster-push]
     suspend fun publishAssignedToRoster(
         roster: SupportUserActor,
         snapshot: ConversationSnapshot,
@@ -33,6 +34,7 @@ class ConversationNotificationPublisher {
             .send(ConversationAssignedNotify(state.conversationId, state))
             .submit()
     }
+    // --8<-- [end:doc-sc-roster-push]
 
     private suspend fun publish(
         event: ConversationEvent,
@@ -79,6 +81,7 @@ class ConversationNotificationPublisher {
             .submit()
     }
 
+    // --8<-- [start:doc-sc-message-push]
     private suspend fun publishMessage(
         event: ConversationEvent,
         state: ConversationState,
@@ -92,6 +95,7 @@ class ConversationNotificationPublisher {
                 .submit()
         }
     }
+    // --8<-- [end:doc-sc-message-push]
 
     private suspend fun publishTyping(
         event: ConversationEvent,

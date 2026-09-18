@@ -36,9 +36,11 @@ class SupportEntrySpot(
     override suspend fun onLeaveActorSuspending(actor: SupportUserActor) {
     }
 
+    // --8<-- [start:doc-sc-agent-disconnect]
     override suspend fun onDisconnectActorSuspending(actor: SupportUserActor) {
         if (actor.role == SupportChatRoles.Agent) {
             assignment.setAvailable(actor.actorId, actor.displayName, false)
         }
     }
+    // --8<-- [end:doc-sc-agent-disconnect]
 }

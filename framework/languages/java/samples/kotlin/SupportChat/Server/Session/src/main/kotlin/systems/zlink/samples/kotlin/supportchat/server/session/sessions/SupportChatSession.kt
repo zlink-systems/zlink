@@ -44,6 +44,7 @@ class SupportChatSession(
     override suspend fun onErrorSuspending(error: ZLinkStreamError) {
     }
 
+    // --8<-- [start:doc-sc-session-dispatch]
     override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
@@ -54,6 +55,7 @@ class SupportChatSession(
             else -> relayConversationPacket(dispatch, payload)
         }
     }
+    // --8<-- [end:doc-sc-session-dispatch]
 
     private suspend fun authenticate(request: AuthenticateReq) {
         val authenticated = channels
@@ -75,6 +77,7 @@ class SupportChatSession(
         val role = authenticated.role
             ?: throw IllegalStateException("SupportChat authentication did not return a role.")
 
+        // --8<-- [start:doc-sc-session-auth]
         val ensured = channels
             .requestToChannel(
                 SampleNames.SupportChannel,
@@ -93,6 +96,7 @@ class SupportChatSession(
         identityActorId = actorId
         identityDisplayName = displayName
         identityRole = role
+        // --8<-- [end:doc-sc-session-auth]
         context.client()
             .reply(AuthenticateRes(actorId, displayName, role))
             .submit()
@@ -114,6 +118,7 @@ class SupportChatSession(
             return
         }
 
+        // --8<-- [start:doc-sc-agent-join]
         val ensured = channels
             .requestToChannel(
                 SampleNames.SupportChannel,
@@ -130,8 +135,10 @@ class SupportChatSession(
             conversationId,
         )
         context.client().reply(JoinConversationRes(ensured.scheduled, ensured.state)).submit()
+        // --8<-- [end:doc-sc-agent-join]
     }
 
+    // --8<-- [start:doc-sc-metadata-relay]
     private suspend fun relayConversationPacket(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
@@ -140,6 +147,7 @@ class SupportChatSession(
         val target = conversationId?.let { conversationActors[it] } ?: requireIdentityActor()
         target.relay(dispatch, payload).await()
     }
+    // --8<-- [end:doc-sc-metadata-relay]
 
     private fun requireIdentityActor(): ZLinkSessionActor =
         identityActor ?: throw IllegalStateException(

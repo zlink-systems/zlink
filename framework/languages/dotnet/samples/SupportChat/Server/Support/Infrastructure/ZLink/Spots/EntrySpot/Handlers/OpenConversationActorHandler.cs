@@ -30,6 +30,7 @@ internal sealed class OpenConversationActorHandler(
         // The API server allocates the conversation; this handler then joins the
         // customer. Agent assignment happens inside the ConversationSpot when the
         // customer joins, so it can reserve and later release the agent's capacity.
+        // --8<-- [start:doc-sc-open-actor]
         var opened = await entrySpot.Context.Outbound.RequestToChannel(
                 SampleNames.ApiChannel,
                 new OpenConversationApiReq(
@@ -43,6 +44,7 @@ internal sealed class OpenConversationActorHandler(
                 opened.State.ConversationId,
                 new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName))
             .Defer();
+        // --8<-- [end:doc-sc-open-actor]
 
         logger.LogInformation(
             "support entry open: completed conversation={ConversationId} status={Status}",

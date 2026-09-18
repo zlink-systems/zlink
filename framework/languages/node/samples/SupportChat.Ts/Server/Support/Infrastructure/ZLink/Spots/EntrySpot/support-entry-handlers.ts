@@ -42,6 +42,7 @@ class SetAgentAvailableHandler implements ZLinkEntrySpotActorRequestHandler<Supp
     private readonly directory: SupportActorDirectory
   ) {}
 
+  // --8<-- [start:doc-sc-set-available]
   async handle(_spot: SupportEntrySpot, actor: SupportUserActor, _context: ZLinkMessageContext, request: SetAgentAvailableReq): Promise<SetAgentAvailableRes> {
     const identity = requireIdentity(this.directory, actor.actorId);
     if (identity.role !== SupportChatRoles.Agent || identity.actorId !== identity.participantId) {
@@ -49,6 +50,7 @@ class SetAgentAvailableHandler implements ZLinkEntrySpotActorRequestHandler<Supp
     }
     return { isAvailable: this.availability.setAvailable(actor.actorId, request.isAvailable) };
   }
+  // --8<-- [end:doc-sc-set-available]
 }
 
 @zlinkEntrySpotActorRequestHandler({
@@ -95,6 +97,7 @@ class OpenConversationActorHandler implements ZLinkEntrySpotActorRequestHandler<
     if (identity.role !== SupportChatRoles.Customer) {
       throw new Error('Only a customer can open a support conversation.');
     }
+    // --8<-- [start:doc-sc-open-actor]
     const opened = await this.channels
       .requestToChannel(
         SampleNames.apiChannel,
@@ -108,6 +111,7 @@ class OpenConversationActorHandler implements ZLinkEntrySpotActorRequestHandler<
       identity.role,
       identity.displayName
     ));
+    // --8<-- [end:doc-sc-open-actor]
     return {
       conversationId: opened.conversationId,
       state: {

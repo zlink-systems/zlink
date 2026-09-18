@@ -17,6 +17,7 @@ class OpenConversationHandler implements ZLinkRequestHandler<OpenConversationApi
   constructor(@Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager) {}
 
   async handle(request: OpenConversationApiReq): Promise<OpenConversationApiRes> {
+    // --8<-- [start:doc-sc-api-open]
     const created = await this.spots
       .create(SampleNames.conversationSpotType)
       .inMesh(SampleNames.meshName)
@@ -26,6 +27,7 @@ class OpenConversationHandler implements ZLinkRequestHandler<OpenConversationApi
         request.subject
       ))
       .submit();
+    // --8<-- [end:doc-sc-api-open]
     return {
       conversationId: String(created.spot.spotId),
       status: ConversationStatuses.WaitingForAgent
