@@ -417,6 +417,15 @@ binding을 사용하고, standalone client는 검증된 CLI 입력 또는 필요
 언어별 구현은 shell, PowerShell, npm, Gradle, dotnet, CMake처럼 도구가 달라도 아래 실행
 계약을 맞춘다.
 
+**샘플은 하나씩 실행한다.** 확인하려는 sample의 디렉토리에서 그 sample의 `run_sample.sh`
+또는 `run_sample.ps1`을 직접 부른다. 여러 sample을 한 번에 도는 집계 runner는 두지 않는다.
+한 sample이 멈추면 그 언어의 실행 전체가 함께 멈추고, sample 사이의 간섭이 어느 한 sample의
+결함처럼 보이기 때문이다. 같은 언어의 sample을 동시에 돌리지 않는다 — 고정 port와 Redis
+container를 쓰므로 서로 섞인다. 서로 다른 언어의 실행은 동시에 진행해도 된다.
+
+한 sample의 통과 여부는 그 sample runner의 종료 상태가 정한다. 여러 sample의 결과를 모아
+판정하는 자리를 따로 두지 않는다.
+
 **필수 격리 규칙:** Redis가 필요한 각 sample 실행은 그 실행만 사용하는 전용 Docker Redis
 container를 새로 만들어야 한다. 이미 실행 중인 container, host Redis, 다른 sample이나 E2E가 만든
 Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key prefix만 다르게 지정하는 것도
@@ -452,10 +461,9 @@ container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현
 기준 템플릿은 이 디렉토리의 `runner-templates/` 아래에 둔다.
 
 - `runner-templates/redis-common.template.sh`: Redis helper 기준
-- `runner-templates/run_sample.template.sh`: 개별 sample runner 기준
-- `runner-templates/run_samples.template.sh`: 통합 sample runner 기준
+- `runner-templates/run_sample.template.sh`: sample runner 기준
 
-- 개별 `run_sample.*`는 build → 로그 디렉토리 생성 → 필요한 Redis 준비 → 서버 시작
+- `run_sample.*`는 build → 로그 디렉토리 생성 → 필요한 Redis 준비 → 서버 시작
   → readiness 확인 → client self-check 실행 → 서버와 Redis 정리 순서를 책임진다.
 - 각 언어는 sample runner들이 공유하는 Redis helper를 둔다. helper는 실행별 Redis container
   시작과 그 실행이 만든 container id 정리를 공통 함수로 제공하고, 개별 sample script가 Docker

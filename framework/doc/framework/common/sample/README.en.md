@@ -453,6 +453,16 @@ Every language's sample runner must have the same usage meaning and the same Red
 per-language implementation can use different tools — shell, PowerShell, npm, Gradle, dotnet, CMake —
 but matches the execution contract below.
 
+**Samples run one at a time.** From the directory of the sample you want to check, invoke that
+sample's `run_sample.sh` or `run_sample.ps1` directly. No aggregate runner that walks several
+samples exists, because one stalled sample takes the whole language's run with it and makes
+interference between samples look like a defect in any one of them. Don't run two samples of the
+same language at once — they take fixed ports and Redis containers, so they mix. Runs in different
+languages may proceed at the same time.
+
+A sample's verdict is the exit status of its own runner. No separate place collects several
+samples' results and decides from them.
+
 **Mandatory isolation rule:** each sample run that needs Redis must create a fresh, dedicated Docker
 Redis container used only by that run. An already-running container, host Redis, or a Redis endpoint
 created by a different sample or E2E must not be shared or used as a fallback. Specifying only a
@@ -491,10 +501,9 @@ implementation.
 The standard templates are placed under this directory's `runner-templates/`.
 
 - `runner-templates/redis-common.template.sh`: the Redis helper standard
-- `runner-templates/run_sample.template.sh`: the individual sample runner standard
-- `runner-templates/run_samples.template.sh`: the integrated sample runner standard
+- `runner-templates/run_sample.template.sh`: the sample runner standard
 
-- An individual `run_sample.*` is responsible for the order: build → create log directory →
+- A `run_sample.*` is responsible for the order: build → create log directory →
   prepare Redis if needed → start servers → confirm readiness → run the client self-check → clean
   up servers and Redis.
 - Each language has a Redis helper shared by its sample runners. The helper provides, as common
