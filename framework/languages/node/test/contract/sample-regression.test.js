@@ -16,6 +16,9 @@ const requiredSamples = [
   'ShoppingMall.Ts'
 ];
 const maintainedSamples = [...requiredSamples, 'ZoneWorld'];
+//  The same seven samples as `maintainedSamples`, under the names the other languages use:
+//  only Node carries the `.Ts` suffix.
+const commonSamples = maintainedSamples.map((sample) => sample.replace(/\.Ts$/, ''));
 const topologySamples = [
   'TicTacToe.Ts',
   'Bingo.Ts',
@@ -925,7 +928,9 @@ test('TicTacToe TypeScript sample builds and exposes basic TypeScript roles', ()
   const client = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Client', 'main.ts'), 'utf8');
   const api = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
   const play = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
-  const runSamples = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
+  //  The aggregate runner this test also read is gone (#405, e106104ffe). That TicTacToe.Ts
+  //  owns run_sample.sh and run_sample.ps1 is asserted by the first test in this file, and
+  //  that the npm sample gate spawns them by the two sample-gate tests below.
   const required = [
     [packageJson, '@zlink-systems/sample-tictactoe-ts'],
     [packageJson, 'tsc -p tsconfig.json'],
@@ -934,9 +939,7 @@ test('TicTacToe TypeScript sample builds and exposes basic TypeScript roles', ()
     [client, 'loadSampleConfig'],
     [client, 'PASS TicTacToe.Ts'],
     [api, 'TicTacToeApiModule'],
-    [play, 'TicTacToePlayModule'],
-    [runSamples, 'TicTacToe.Ts'],
-    [runSamples, 'runner="${SCRIPT_DIR}/${sample}/run_sample.sh"']
+    [play, 'TicTacToePlayModule']
   ];
   const missing = required
     .filter(([content, text]) => !content.includes(text))
@@ -1011,7 +1014,6 @@ test('Bingo TypeScript sample builds and exposes separated TypeScript roles', ()
   const api = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
   const session = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Session', 'main.ts'), 'utf8');
   const play = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
-  const runSamples = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
   const required = [
     [packageJson, '@zlink-systems/sample-bingo-ts'],
     [packageJson, 'tsc -p tsconfig.json'],
@@ -1022,9 +1024,7 @@ test('Bingo TypeScript sample builds and exposes separated TypeScript roles', ()
     [client, 'bingo=completed'],
     [api, 'async function bootstrap'],
     [session, 'async function bootstrap'],
-    [play, 'async function bootstrap'],
-    [runSamples, 'Bingo.Ts'],
-    [runSamples, 'runner="${SCRIPT_DIR}/${sample}/run_sample.sh"']
+    [play, 'async function bootstrap']
   ];
   const missing = required
     .filter(([content, text]) => !content.includes(text))
@@ -1208,11 +1208,30 @@ test('node samples do not hide readiness with sleeps or pre-ready pings', () => 
   assert.deepEqual(violations, []);
 });
 
-test('node top-level sample runner only invokes selected samples in order', () => {
-  const runSamples = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
-  assert.match(runSamples, /for sample in "\$\{samples\[@\]\}"/);
-  assert.match(runSamples, /"\$\{runner\}"/);
-  assert.doesNotMatch(runSamples, /node --test|retry|sleep|grep/);
+test('node sample gate invokes only the selected samples, in order, one runner per invocation', () => {
+  //  The aggregate samples/run_samples.sh that used to hold this loop is gone (#405,
+  //  e106104ffe). scripts/run-samples-gate.js took over selection and ordering, so the
+  //  same three facts are asserted against what it actually spawns.
+  const selection = ['ZoneWorld', 'Bingo.Ts'];
+  const invocations = sampleGateInvocations(selection);
+  assert.deepEqual(
+    invocations,
+    selection.map((sample) => ({
+      command: 'bash',
+      args: [path.join(samplesRoot, sample, 'run_sample.sh')]
+    }))
+  );
+
+  const unknown = childProcess.spawnSync(
+    process.execPath,
+    [path.join(workspaceRoot, 'scripts', 'run-samples-gate.js'), '--dry-run', 'NotASample'],
+    { cwd: workspaceRoot, encoding: 'utf8', env: { ...process.env, ZLINK_TEST_PLATFORM: 'linux' } }
+  );
+  assert.notEqual(unknown.status, 0, unknown.stdout);
+  assert.match(unknown.stderr, /Unknown Node sample 'NotASample'\./);
+
+  const gate = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run-samples-gate.js'), 'utf8');
+  assert.doesNotMatch(gate, /node --test|retry|sleep\(|chmod/);
 });
 
 test('node client samples wait for push packets through stream connector helpers', () => {
@@ -2178,25 +2197,36 @@ test('node shared sample runner fails before completion output when a role requi
     'browser completion output must remain deferred until cleanup passes');
 });
 
-test('framework aggregate sample runners never remove Redis containers or processes owned by another run', () => {
-  const shellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
-  const powershellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.ps1'), 'utf8');
+test('framework sample runners never remove Redis containers or processes owned by another run', () => {
+  //  This guarded the per-language aggregate runners, which are gone (#405, e106104ffe).
+  //  The rule it states is about whoever owns a sample's Redis container and process
+  //  group, and that owner is now each sample's own runner, so it moved onto all of them
+  //  across the four languages that ship sample runners.
   const frameworkRoot = path.resolve(workspaceRoot, '..', '..');
-
-  for (const [label, content] of [
-    ['samples:sh', shellRunner],
-    ['samples:ps1', powershellRunner],
-    ['dotnet:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/dotnet/samples/run_samples.sh'), 'utf8')],
-    ['java:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/java/samples/run_samples.sh'), 'utf8')],
-    ['cpp:samples', fs.readFileSync(path.join(frameworkRoot, 'languages/cpp/samples/run_samples.sh'), 'utf8')]
-  ]) {
-    assert.doesNotMatch(content, /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
-      `${label} must only clean resources created by its own sample run`);
+  const runners = [];
+  for (const sample of maintainedSamples) {
+    runners.push(path.join(samplesRoot, sample, 'run_sample.sh'));
+    runners.push(path.join(samplesRoot, sample, 'run_sample.ps1'));
+  }
+  for (const sample of commonSamples) {
+    runners.push(path.join(frameworkRoot, 'languages/dotnet/samples', sample, 'run_sample.sh'));
+    runners.push(path.join(frameworkRoot, 'languages/dotnet/samples', sample, 'run_sample.ps1'));
+    runners.push(path.join(frameworkRoot, 'languages/cpp/samples', sample, 'run_sample.sh'));
+    runners.push(path.join(frameworkRoot, 'languages/cpp/samples', sample, 'run_sample.ps1'));
+    for (const language of ['java', 'kotlin']) {
+      runners.push(path.join(frameworkRoot, 'languages/java/samples', language, sample, 'run_sample.sh'));
+      runners.push(path.join(frameworkRoot, 'languages/java/samples', language, sample, 'run_sample.ps1'));
+    }
   }
 
-  assert.match(shellRunner, /\[\[ ! -f "\$\{runner\}" \]\]/);
-  assert.match(shellRunner, /bash "\$\{runner\}"/);
-  assert.doesNotMatch(shellRunner, /chmod|\[\[ ! -x/);
+  const missing = runners.filter((runner) => !fs.existsSync(runner))
+    .map((runner) => relativePath(frameworkRoot, runner));
+  assert.deepEqual(missing, [], 'every sample must own the runner this rule applies to');
+
+  for (const runner of runners) {
+    assert.doesNotMatch(fs.readFileSync(runner, 'utf8'), /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
+      `${relativePath(frameworkRoot, runner)} must only clean resources created by its own sample run`);
+  }
 });
 
 test('node samples keep only contracts and shared sample configuration under Shared', () => {
@@ -2214,21 +2244,24 @@ test('node samples keep only contracts and shared sample configuration under Sha
   assert.deepEqual(violations, []);
 });
 
-test('node top-level sample runners execute every maintained sample', () => {
-  const shellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
-  const powershellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.ps1'), 'utf8');
-  const missing = [];
-
-  for (const sample of maintainedSamples) {
-    if (!shellRunner.includes(sample)) {
-      missing.push(`sh:${sample}`);
-    }
-    if (!powershellRunner.includes(sample)) {
-      missing.push(`ps1:${sample}`);
-    }
-  }
-
-  assert.deepEqual(missing, []);
+test('node sample gate executes every maintained sample on both platforms', () => {
+  //  The aggregate runners listed the samples; scripts/run-samples-gate.js lists them now
+  //  (#405, e106104ffe). Read the list back from what the gate spawns rather than from its
+  //  source, so a sample dropped from either platform's path is caught.
+  assert.deepEqual(
+    sampleGateInvocations([], 'linux'),
+    maintainedSamples.map((sample) => ({
+      command: 'bash',
+      args: [path.join(samplesRoot, sample, 'run_sample.sh')]
+    }))
+  );
+  assert.deepEqual(
+    sampleGateInvocations([], 'win32').map(({ command, args }) => ({ command, runner: args.at(-1) })),
+    maintainedSamples.map((sample) => ({
+      command: 'powershell.exe',
+      runner: path.join(samplesRoot, sample, 'run_sample.ps1')
+    }))
+  );
 });
 
 test('node session samples do not implement sample-only actor session stores', () => {
@@ -2272,28 +2305,16 @@ test('node framework source tree does not keep emitted JavaScript beside TypeScr
   assert.deepEqual(emitted, []);
 });
 
-test('node run_samples.sh executes every sample self-check', () => {
-  if (process.platform !== 'linux') {
-    return;
-  }
-
-  const result = childProcess.spawnSync(path.join(samplesRoot, 'run_samples.sh'), {
-    cwd: workspaceRoot,
-    encoding: 'utf8',
-    timeout: 600_000
-  });
-
-  if (result.status === 0) {
-    for (const sample of maintainedSamples) {
-      assert.match(result.stdout, new RegExp(`PASS ${escapeRegExp(sample)}`));
-    }
-    return;
-  }
-
-  assert.match(result.stderr, /Sample role \S+ exited during cleanup with status (?:SIGKILL|137|-9)\./);
-  assert.doesNotMatch(result.stdout, /PASS \S+/,
-    'a teardown failure must not publish a sample completion marker');
-});
+//  'node run_samples.sh executes every sample self-check' was removed with the aggregate
+//  runner it invoked (#405, e106104ffe). What it did — start every sample of the language
+//  in one invocation — is the batch shape that made a stalled sample hold the whole run,
+//  and the framework gate now runs each sample as its own `node-sample-<Sample>` step
+//  (scripts/gate/framework-gate.sh). Keeping it here would have run the seven samples a
+//  second time inside the gate's `node-sample-tests` step. Its two remaining assertions
+//  already have owners: the completion marker is emitted only after cleanup passes is
+//  pinned statically on samples/run-sample.mjs by 'node shared sample runner fails before
+//  completion output when a role requires SIGKILL' above, and the live teardown behaviour
+//  is proven against a real run by samples/ZoneWorld/Runner/test/runner-cleanup.test.js.
 
 test('node cross-language smoke covers bidirectional channel fanout route stream drain and store paths', () => {
   const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
@@ -2538,4 +2559,17 @@ function isAllowedBingoCodecConfigurationFile(relative) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+//  What `npm run verify:samples` would spawn, asked of the gate itself instead of read off
+//  its source, so the assertion sees the selection, the order and the per-platform runner
+//  the gate actually uses.
+function sampleGateInvocations(selection, platform = 'linux') {
+  const result = childProcess.spawnSync(
+    process.execPath,
+    [path.join(workspaceRoot, 'scripts', 'run-samples-gate.js'), '--dry-run', ...selection],
+    { cwd: workspaceRoot, encoding: 'utf8', env: { ...process.env, ZLINK_TEST_PLATFORM: platform } }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
 }

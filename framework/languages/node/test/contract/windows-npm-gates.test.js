@@ -228,16 +228,23 @@ test('output cleanup dry-run expands workspace paths and rejects parent paths', 
   assert.match(outside.stderr, /Refusing to remove path outside the Node workspace/);
 });
 
+//  The aggregate samples/run_samples.{sh,ps1} are gone (#405, e106104ffe); the gate now
+//  spawns one per-sample runner per invocation. Which samples it walks is pinned in
+//  sample-regression.test.js; what is Windows-specific, and therefore lives here, is that
+//  every invocation picks the PowerShell runner and never reaches for bash or a .sh file.
 test('sample npm gate selects the PowerShell runner on Windows', () => {
   const result = runNode('run-samples-gate.js', ['--dry-run'], {
     ZLINK_TEST_PLATFORM: 'win32'
   });
   assert.equal(result.status, 0, result.stderr);
-  const invocation = JSON.parse(result.stdout);
-  assert.equal(invocation.command, 'powershell.exe');
-  assert.ok(invocation.args.includes('-NonInteractive'));
-  assert.ok(invocation.args.some((arg) => arg.endsWith(path.join('samples', 'run_samples.ps1'))));
-  assert.ok(invocation.args.every((arg) => !arg.endsWith('.sh')));
+  const invocations = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.ok(invocations.length > 0, result.stdout);
+  for (const invocation of invocations) {
+    assert.equal(invocation.command, 'powershell.exe');
+    assert.ok(invocation.args.includes('-NonInteractive'));
+    assert.ok(invocation.args.some((arg) => arg.endsWith(`${path.sep}run_sample.ps1`)), invocation.args.join(' '));
+    assert.ok(invocation.args.every((arg) => !arg.endsWith('.sh')), invocation.args.join(' '));
+  }
 });
 
 test('sample npm gate preserves the shell runner on non-Windows hosts', () => {
@@ -245,9 +252,12 @@ test('sample npm gate preserves the shell runner on non-Windows hosts', () => {
     ZLINK_TEST_PLATFORM: 'linux'
   });
   assert.equal(result.status, 0, result.stderr);
-  const invocation = JSON.parse(result.stdout);
-  assert.equal(invocation.command, 'bash');
-  assert.ok(invocation.args.some((arg) => arg.endsWith(path.join('samples', 'run_samples.sh'))));
+  const invocations = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.ok(invocations.length > 0, result.stdout);
+  for (const invocation of invocations) {
+    assert.equal(invocation.command, 'bash');
+    assert.ok(invocation.args.some((arg) => arg.endsWith(`${path.sep}run_sample.sh`)), invocation.args.join(' '));
+  }
 });
 
 test('cross-language npm gate selects native commands on Windows', () => {

@@ -58,8 +58,11 @@ for (const mode of ['normal', 'sigterm', 'sigterm-b8']) {
     fs.mkdirSync(tempRoot);
     const logPath = path.join(evidence, 'run.log');
     const log = fs.openSync(logPath, 'w');
-    // This is the same aggregate entry point and single-PID SIGTERM used by the npm gate.
-    const runner = spawn('bash', [path.join(samplesRoot, 'run_samples.sh'), 'ZoneWorld'], {
+    // ZoneWorld's own runner is the entry point both the framework gate and
+    // `npm run verify:samples` spawn since the aggregate runner was dropped (#405,
+    // e106104ffe), and it is the process that owns the sample's tree: SIGTERM on this
+    // single PID must reap every descendant and remove every run directory.
+    const runner = spawn('bash', [path.join(samplesRoot, 'ZoneWorld', 'run_sample.sh')], {
       env: { ...process.env, TMPDIR: tempRoot }, stdio: ['ignore', log, log]
     });
     fs.closeSync(log);
@@ -102,7 +105,12 @@ for (const mode of ['normal', 'sigterm', 'sigterm-b8']) {
         if (entry.startsWith('zlink-zoneworld-')) runDirs.add(path.join(tempRoot, entry));
       }
       for (const entry of observed.values()) {
-        if (/\/.+vite preview .*--outDir /.test(entry.command)) previewPids.add(entry.pid);
+        // The runner spawns the preview through Vite's CLI entry point
+        // (`node <root>/node_modules/vite/bin/vite.js preview …`), which f9906673b2 moved
+        // off the bare `vite preview` this pattern was written against. Matching only the
+        // old spelling made previewPids permanently empty, so the assertion below could
+        // never observe the process it exists to watch.
+        if (/\/.+vite(?:\.js)? preview .*--outDir /.test(entry.command)) previewPids.add(entry.pid);
         if (/\/esbuild --service=/.test(entry.command)) esbuildPids.add(entry.pid);
       }
       const previewReady = [...runDirs].some((dir) => {
@@ -115,7 +123,11 @@ for (const mode of ['normal', 'sigterm', 'sigterm-b8']) {
         }
       });
       const b8Ready = mode === 'sigterm-b8' && runDirs.size >= 2
-        && [...observed.values()].some((entry) => /session_route_block_proxy.py/.test(entry.command));
+        // f9906673b2 replaced the Python session-route proxy with
+        // Support/session-route-block-proxy.mjs, which is what the B8 lane spawns. Waiting
+        // on the old name meant this lane never reached its SIGTERM and the runner was
+        // allowed to finish normally instead.
+        && [...observed.values()].some((entry) => /session-route-block-proxy\.mjs/.test(entry.command));
       if (!terminated && (b8Ready
         || mode === 'sigterm' && previewPids.size > 0 && esbuildPids.size > 0 && previewReady)) {
         terminated = true;
@@ -140,7 +152,7 @@ for (const mode of ['normal', 'sigterm', 'sigterm-b8']) {
       assert.ok(esbuildPids.size > 0, 'The sample must actually start the esbuild service');
     }
     assert.deepEqual(result, { code: mode === 'normal' ? 0 : 143, signal: null }, `See ${logPath}`);
-    if (mode === 'normal') assert.match(fs.readFileSync(logPath, 'utf8'), /sample ZoneWorld completed/);
+    if (mode === 'normal') assert.match(fs.readFileSync(logPath, 'utf8'), /PASS ZoneWorld/);
     else assert.ok(terminated, 'SIGTERM must interrupt the selected stage');
     t.diagnostic(`observed=${observed.size} preview=${previewPids.size} esbuild=${esbuildPids.size} runDirs=${runDirs.size}; survivors=0`);
     passed = true;
