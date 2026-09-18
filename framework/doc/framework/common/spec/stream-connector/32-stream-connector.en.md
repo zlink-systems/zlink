@@ -634,6 +634,23 @@ is kept for as long as the registration must live. Elsewhere the value
 may be discarded and the registration stays until it is unregistered
 explicitly.
 
+**The connector does not wait for a handler to finish.** Running a
+registered handler is the connector's work; waiting for it to finish is
+not. `close` returns once it has **run** the disconnect handlers, without
+looking at whether they finished. Reconnecting is the same (§6).
+
+What the connector waits for is its own — draining frames it has not
+sent, closing the transport, failing the requests that are waiting.
+`close` returns once that is done.
+
+Where a handler returns a value, this means that value is not waited on;
+where a handler runs in place, running it is finishing it and there is no
+difference. Either way, **one handler that never finishes cannot hold up
+the close.**
+
+**Work that must finish is waited for outside the handler.** The
+connector does not wait in its place.
+
 ## 8. Compression
 
 - The supported algorithm is **None and Lz4**, and the **default is
@@ -887,6 +904,7 @@ test name differs, the meaning must be the same.
 | **Received count** | **`receivedCount(name)` counts what arrived, does not fall on consumption, and is independent of dispatch mode. It restarts at zero when the connection is established (§10)** |
 | **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, a failed condition is `ValidationFailed`, and an ended connection is `Disconnected` (§10.1)** |
 | **Flow exposure and propagation** | **A received message exposes the flow identifier and origin, and a runtime without an ambient context provides an explicit means of passing it (§5.5)** |
+| **Handlers and close** | **`close` returns even with a disconnect handler that never finishes, and the handler has been run before it returns (§7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
 | Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
 

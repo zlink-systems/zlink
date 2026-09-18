@@ -531,6 +531,20 @@ state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있�
 동안 보관한다. 나머지 언어는 값을 버려도 등록이 남고 명시적으로 해제할 때까지 유지된다. 돌려주는 타입 이름은 언어
 문서가 소유한다.
 
+**connector는 handler의 완료를 기다리지 않는다.** 등록된 handler를 실행하는 것은 connector의
+일이지만 그 handler가 끝나기를 기다리는 것은 아니다. `close`는 끊김 handler를 **실행한 뒤**
+돌아오며 그 handler가 끝났는지는 보지 않는다. 재연결도 같다(§6).
+
+connector가 기다리는 것은 자기 것뿐이다 — 보내지 못한 frame의 배출, transport 종료, 대기 중인
+request의 실패 처리. 이것이 끝나면 `close`가 돌아온다.
+
+handler가 값을 돌려주는 언어에서는 그 값이 끝나기를 기다리지 않는다는 뜻이고, handler를 그
+자리에서 실행하는 언어에서는 실행이 곧 끝이므로 차이가 없다. 어느 쪽이든 **끝나지 않는
+handler 하나가 종료를 막지 못한다.**
+
+**handler 안에서 끝내야 하는 일이 있으면 그 일을 handler 밖에서 기다린다.** connector가 대신
+기다려 주지 않는다.
+
 ## 8. 압축
 
 - 지원 알고리즘은 **없음(None)과 Lz4**이며, **기본값은 Lz4**다.
@@ -745,6 +759,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
 | **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
 | **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
+| **handler와 종료** | **끝나지 않는 끊김 handler가 있어도 `close`가 돌아온다. handler는 `close`가 돌아오기 전에 실행됐다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 | diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
 
