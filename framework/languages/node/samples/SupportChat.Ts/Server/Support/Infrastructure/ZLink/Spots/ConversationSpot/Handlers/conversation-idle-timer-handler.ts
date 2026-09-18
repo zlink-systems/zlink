@@ -2,6 +2,7 @@ import { AgentAvailabilityDirectory } from '../../../../../Application/Conversat
 import type { ZLinkSpotTimerHandler, ZLinkTimerTick } from '@zlink-systems/framework';
 import type { ConversationSpot } from '../conversation-spot';
 
+// --8<-- [start:doc-sc-idle-timer]
 class ConversationIdleTimerHandler implements ZLinkSpotTimerHandler<ConversationSpot> {
   constructor(private readonly availability: AgentAvailabilityDirectory) {}
 
@@ -10,5 +11,6 @@ class ConversationIdleTimerHandler implements ZLinkSpotTimerHandler<Conversation
     if (releasedAgent !== undefined) this.availability.released(releasedAgent);
   }
 }
+// --8<-- [end:doc-sc-idle-timer]
 
 export { ConversationIdleTimerHandler };

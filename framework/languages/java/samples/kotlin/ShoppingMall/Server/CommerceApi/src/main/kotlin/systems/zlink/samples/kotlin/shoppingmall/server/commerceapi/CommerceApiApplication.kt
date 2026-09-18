@@ -56,10 +56,12 @@ class CommerceApiApplication {
             configurer.addClientServerChannel(SampleNames.commerceApiChannel(peer))
                 .client()
 
+            // --8<-- [start:doc-sm-api-register]
             configurer.addRouteMesh(SampleNames.OrderWorkflowMesh)
                 .setRoutingId(RoutingId.from(role.instanceId))
                 .listen()
                 .objects().client()
+            // --8<-- [end:doc-sm-api-register]
         }
     }
 

@@ -59,11 +59,13 @@ internal static class Program
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(Program));
+            // --8<-- [start:doc-sm-api-register]
             var mesh = options.AddRouteMesh(SampleNames.MeshName)
                 .Listen(instance.MeshEndpoint)
                 .SetRoutingIdPrefix("commerce-api");
             mesh.Objects().Client();
             mesh.Channel(SampleNames.OrderProjectionChannel).Client();
+            // --8<-- [end:doc-sm-api-register]
             //  Workflow peers are found through the Location Store. A manual peer connection here
             //  switches the node to manual acquisition, which conflicts with the routing ID prefix
             //  set above and fails startup.

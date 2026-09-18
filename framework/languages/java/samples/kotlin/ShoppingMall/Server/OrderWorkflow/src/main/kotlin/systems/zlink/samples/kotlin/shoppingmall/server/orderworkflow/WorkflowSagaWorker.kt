@@ -34,6 +34,7 @@ class WorkflowSagaWorker(
         worker?.interrupt()
     }
 
+    // --8<-- [start:doc-sm-background-continue]
     private fun pump() {
         while (running.get()) {
             val orderId =
@@ -51,4 +52,5 @@ class WorkflowSagaWorker(
             }
         }
     }
+    // --8<-- [end:doc-sm-background-continue]
 }

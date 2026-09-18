@@ -12,6 +12,7 @@ internal sealed class CourierSessionBinder(
     IZLinkActorManager actors,
     ILogger<CourierSessionBinder> logger)
 {
+    // --8<-- [start:doc-dd-session-bind]
     public async ValueTask<BindCourierSessionRes> BindAsync(
         string courierId,
         IZLinkSessionContext context,
@@ -31,6 +32,7 @@ internal sealed class CourierSessionBinder(
 
         return new BindCourierSessionRes(courierId);
     }
+    // --8<-- [end:doc-dd-session-bind]
 
     private async ValueTask<ActorRef> FindOrEnsureActorAsync(
         string courierId,

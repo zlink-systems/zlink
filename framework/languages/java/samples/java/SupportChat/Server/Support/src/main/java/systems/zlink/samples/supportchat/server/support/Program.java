@@ -85,6 +85,7 @@ public final class Program {
                 .setAdvertiseHost(channelEndpoint.getHost())
                 .listen(channelEndpoint.getPort())
                 .addHandlerGroup(SampleNames.SupportChannel);
+            // --8<-- [start:doc-sc-support-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.SupportActorMesh);
             node.listen(support.routerEndpoint())
                 .setRoutingId(SampleNames.SupportNodeRoutingId);
@@ -101,6 +102,7 @@ public final class Program {
                     SampleNames.ConversationSpotType,
                     ConversationSpot.class,
                     factory -> factory.disableRelocation());
+            // --8<-- [end:doc-sc-support-register]
         };
     }
 

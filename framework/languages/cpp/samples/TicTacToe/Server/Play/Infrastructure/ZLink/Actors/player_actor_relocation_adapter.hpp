@@ -42,6 +42,7 @@ class player_actor_relocation_adapter_t final
     : public actor_relocation_adapter_t<player_actor_t>
 {
   public:
+    // --8<-- [start:doc-ttt-actor-capture]
     task_t<std::vector<std::byte>>
     capture (player_actor_t &actor, std::stop_token) override
     {
@@ -51,6 +52,7 @@ class player_actor_relocation_adapter_t final
         co_return std::vector<std::byte> (
           message.bytes ().begin (), message.bytes ().end ());
     }
+    // --8<-- [end:doc-ttt-actor-capture]
 
     task_t<void>
     restore (player_actor_t &actor,

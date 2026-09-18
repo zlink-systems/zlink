@@ -28,9 +28,11 @@ function createOpsModule() {
         builder.addStreamNode(ZoneWorldNames.opsStreamNode)
           .bind(ops.streamEndpoint)
           .registerSession(OpsSessionFactory);
+        // --8<-- [start:doc-zw-fanout-publisher]
         builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)
           .enablePublisher(ops.broadcastEndpoint)
           .setRoutingIdPrefix('zoneworld-ops');
+        // --8<-- [end:doc-zw-fanout-publisher]
         const mesh = builder.addRouteMesh(ZoneWorldNames.zoneMesh)
           .listen(ops.reportEndpoint);
         mesh.channel(ZoneWorldNames.reportChannel).server().addHandlerGroup('ops');

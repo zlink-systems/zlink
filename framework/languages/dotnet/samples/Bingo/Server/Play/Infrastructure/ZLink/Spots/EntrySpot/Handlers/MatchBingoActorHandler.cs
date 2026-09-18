@@ -20,6 +20,7 @@ internal sealed class MatchBingoActorHandler(
         CancellationToken cancellationToken)
     {
         logger.LogInformation("match: actor request. actor={ActorId}, mode={Mode}", actor.ActorId, message.Mode);
+        // --8<-- [start:doc-bingo-match-actor]
         var apiRequest = new MatchBingoApiReq
         {
             ActorId = actor.ActorId,
@@ -43,6 +44,7 @@ internal sealed class MatchBingoActorHandler(
                     ObserveOnly = false
                 })
             .Defer();
+        // --8<-- [end:doc-bingo-match-actor]
         logger.LogInformation("match: actor join scheduled. actor={ActorId}, room={RoomId}", actor.ActorId,
             matched.RoomId);
 

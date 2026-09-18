@@ -69,6 +69,7 @@ class SupportApplication {
                 .addHandlerGroup(SampleNames.SupportChannel)
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client()
+            // --8<-- [start:doc-sc-support-register]
             val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
             node.listen(support.routerEndpoint)
                 .setRoutingIdPrefix("support-owner")
@@ -85,6 +86,7 @@ class SupportApplication {
                     SampleNames.ConversationSpotType,
                     ConversationSpot::class.java,
                 ) { factory -> factory.disableRelocation() }
+            // --8<-- [end:doc-sc-support-register]
         }
 
     @Bean

@@ -95,6 +95,7 @@ class WorldAnnounceSubscriber implements ZLinkFanoutHandler<WorldAnnounceEvent> 
   }
 }
 
+// --8<-- [start:doc-zw-maintenance-subscriber]
 @Injectable()
 @zlinkPublishHandler('zone-broadcast', PacketNames.nodeMaintenanceChangedEvent)
 class MaintenanceChangedSubscriber implements ZLinkFanoutHandler<NodeMaintenanceChangedEvent> {
@@ -105,6 +106,7 @@ class MaintenanceChangedSubscriber implements ZLinkFanoutHandler<NodeMaintenance
     console.log(`maintenance cache updated node=${message.nodeId} enabled=${message.enabled} topic=${context.topic}`);
   }
 }
+// --8<-- [end:doc-zw-maintenance-subscriber]
 
 export {
   ApplyNodeMaintenanceHandler,

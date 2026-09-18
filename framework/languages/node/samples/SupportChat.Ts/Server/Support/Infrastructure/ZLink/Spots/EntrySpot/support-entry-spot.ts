@@ -40,12 +40,14 @@ class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> {
   async onJoinedActor(_actor: SupportUserActor): Promise<void> {}
   async onLeaveActor(_actor: SupportUserActor): Promise<void> {}
 
+  // --8<-- [start:doc-sc-agent-disconnect]
   async onDisconnectActor(actor: SupportUserActor): Promise<void> {
     const identity = this.directory.get(actor.actorId);
     if (identity?.role === 'Agent' && identity.actorId === identity.participantId) {
       this.availability.setAvailable(identity.actorId, false);
     }
   }
+  // --8<-- [end:doc-sc-agent-disconnect]
 }
 
 export { SupportEntrySpot };

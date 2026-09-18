@@ -69,6 +69,7 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
         co_return spot_actor_join_result_t::accept ();
     }
 
+    // --8<-- [start:doc-ttt-entry-destroy]
     task_t<void> on_actor_joined (player_actor_t &actor) override
     {
         actor_ids.push_back (actor.actor_id);
@@ -80,6 +81,7 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
         std::cout << "tictactoe-lifecycle actor-destroy-complete actor=" << actor.actor_id
                   << std::endl;
     }
+    // --8<-- [end:doc-ttt-entry-destroy]
 
     task_t<void> on_leave_actor (player_actor_t &actor) override
     {

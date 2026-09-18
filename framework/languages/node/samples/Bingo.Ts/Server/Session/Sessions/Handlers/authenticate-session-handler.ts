@@ -36,6 +36,7 @@ class SessionAuthenticator {
   ): Promise<void> {
     const request = payload.decode(AuthenticateReq);
     console.log(`session-auth request api actor=${request.accessToken}`);
+    // --8<-- [start:doc-bingo-session-auth]
     const authenticated = await this.zlinkClient
         .requestToChannel(
           SampleNames.apiChannel,
@@ -66,9 +67,11 @@ class SessionAuthenticator {
       .timeout(500)
       .submit(AbortSignal.timeout(500));
     if (ensured.status === 'rejected') throw new Error('Player Actor creation was rejected.');
+    // --8<-- [end:doc-bingo-session-auth]
     console.log(`session-auth ensured actor=${ensured.actor.actorId}`);
 
     console.log(`session-auth bind actor=${ensured.actor.actorId}`);
+    // --8<-- [start:doc-bingo-session-bind]
     try {
       await context.actors.bindOrGet(ensured.actor);
     } catch (error) {
@@ -80,6 +83,7 @@ class SessionAuthenticator {
       actorId: ensured.actor.actorId,
       displayName: authenticated.displayName
     })).submit();
+    // --8<-- [end:doc-bingo-session-bind]
     console.log(`session-auth replied actor=${ensured.actor.actorId}`);
   }
 }

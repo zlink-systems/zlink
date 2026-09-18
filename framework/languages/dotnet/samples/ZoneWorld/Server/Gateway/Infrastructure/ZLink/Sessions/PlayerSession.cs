@@ -137,6 +137,7 @@ public sealed class PlayerSessionBinder(
         string playerId,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-zw-session-bind]
         var actorRef = await actors
             .GetOrCreate(playerId, ZoneWorldNames.PlayerActorType)
             .InMesh(ZoneWorldNames.MeshName)
@@ -149,6 +150,7 @@ public sealed class PlayerSessionBinder(
         };
 
         await context.Actors.BindOrGetAsync(actorRef, cancellationToken);
+        // --8<-- [end:doc-zw-session-bind]
         logger.LogInformation("session bound to player actor. player={PlayerId}", playerId);
     }
 }

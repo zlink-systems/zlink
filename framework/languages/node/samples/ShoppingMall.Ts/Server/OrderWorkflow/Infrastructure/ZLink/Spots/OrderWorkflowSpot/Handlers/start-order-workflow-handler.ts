@@ -7,6 +7,7 @@ import { OrderWorkflowService } from '../../../../../Application/OrderWorkflow/o
 import { OrderWorkflowSpot } from '../order-workflow-spot';
 import { SHOPPINGMALL_ROLE } from '../../../../../order-workflow-tokens';
 
+// --8<-- [start:doc-sm-start-handler]
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => OrderWorkflowSpot, packetName: 'StartOrderWorkflowReq' })
 class StartOrderWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
@@ -15,7 +16,9 @@ class StartOrderWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflow
     @Inject(SHOPPINGMALL_ROLE) private readonly role: string
   ) {}
 
+  // --8<-- [start:doc-sm-spot-start]
   handle(spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
+    // --8<-- [start:doc-sm-background-continue]
     const response = this.workflow.start(request, this.role);
     setImmediate(() => {
       void Promise.resolve()
@@ -27,8 +30,11 @@ class StartOrderWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflow
         ));
     });
     return Promise.resolve(response);
+    // --8<-- [end:doc-sm-background-continue]
   }
+  // --8<-- [end:doc-sm-spot-start]
 }
+// --8<-- [end:doc-sm-start-handler]
 
 function isTerminal(status: string): boolean {
   return status === OrderStatuses.Confirmed || status === OrderStatuses.Failed;

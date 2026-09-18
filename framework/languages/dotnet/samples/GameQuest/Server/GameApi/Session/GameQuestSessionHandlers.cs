@@ -41,6 +41,7 @@ internal sealed class JoinSessionHandler(
         JoinSessionReq request,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-gq-join-bind]
         var actor = (await actors.GetOrCreate(request.PlayerId, SampleNames.SessionActorType)
             .Request(request).Async(cancellationToken)) switch
         {
@@ -49,11 +50,13 @@ internal sealed class JoinSessionHandler(
             _ => throw new InvalidOperationException("Session Actor creation was rejected.")
         };
         _ = await context.Actors.BindOrGetAsync(actor, cancellationToken);
+        // --8<-- [end:doc-gq-join-bind]
         await context.Client.Reply(await joinSessions.ExecuteAsync(request.PlayerId, cancellationToken))
             .Async(cancellationToken);
     }
 }
 
+// --8<-- [start:doc-gq-action-handler]
 [ZLinkSpotActorRequestHandler(nameof(KillMonsterReq))]
 internal sealed class KillMonsterHandler(GameplayActionService actions)
     : IZLinkEntrySpotActorRequestHandler<GameQuestEntrySpot, PlayerSessionActor, KillMonsterReq, KillMonsterRes>
@@ -74,6 +77,7 @@ internal sealed class KillMonsterHandler(GameplayActionService actions)
             cancellationToken));
     }
 }
+// --8<-- [end:doc-gq-action-handler]
 
 [ZLinkSpotActorSendHandler(nameof(CollectItemMsg))]
 internal sealed class CollectItemHandler(GameplayActionService actions)

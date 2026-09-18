@@ -17,6 +17,7 @@ internal sealed class OpenConversationHandler(
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-sc-api-open]
         var created = await spots
             .Create(SampleNames.ConversationSpotType)
             .InMesh(SampleNames.MeshName)
@@ -26,6 +27,7 @@ internal sealed class OpenConversationHandler(
                     request.Subject,
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
             .Async(cancellationToken);
+        // --8<-- [end:doc-sc-api-open]
         var state = created.Reply?.Decode<ConversationCreateRes>().State
             ?? throw new InvalidOperationException(
                 "Conversation Spot creation returned no state.");

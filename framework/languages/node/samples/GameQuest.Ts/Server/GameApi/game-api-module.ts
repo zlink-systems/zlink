@@ -51,6 +51,7 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
           builder.addLocationStore(createGameQuestLocationStore(config));
           builder.addRelocationStore(createGameQuestRelocationStore(config));
           gameQuestLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-gq-api-register]
           builder.addStreamNode(SampleNames.playerStreamNode)
             .enableActorDispatch()
             .bind(config[streamEndpointKey])
@@ -65,6 +66,7 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
             GameQuestPlayerActorFactory,
             (factory) => factory.recreateOnRelocation()
           );
+          // --8<-- [end:doc-gq-api-register]
           return builder.build();
         }
       })

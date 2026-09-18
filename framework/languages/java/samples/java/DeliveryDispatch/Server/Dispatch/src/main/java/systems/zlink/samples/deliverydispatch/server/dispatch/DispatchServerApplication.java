@@ -42,6 +42,7 @@ public final class DispatchServerApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.CourierChannel)
                 .client();
+            // --8<-- [start:doc-dd-dispatch-register]
             // The courier's decision comes back here as its own one-way message, so dispatch has
             // to be a channel server (common sample spec section 7.4).
             URI dispatchEndpoint = URI.create(topology.dispatchChannelEndpoint());
@@ -58,6 +59,7 @@ public final class DispatchServerApplication {
                 .listen(topology.dispatchSpotEndpoint())
                 .setRoutingId(RoutingId.from(SampleNames.DispatchNode));
             courierRoutes.objects().client();
+            // --8<-- [end:doc-dd-dispatch-register]
         };
     }
 

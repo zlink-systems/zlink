@@ -6,6 +6,7 @@
 namespace zlink::samples::bingo
 {
 
+// --8<-- [start:doc-bingo-reward-subscribe]
 inline task_t<void>
 bingo_room_spot_t::on_reward_acquired (const bingo_reward_acquired_event_t &event)
 {
@@ -27,5 +28,6 @@ bingo_room_spot_t::on_reward_acquired (const bingo_reward_acquired_event_t &even
     _context->relocation_ready ().defer ();
     co_return;
 }
+// --8<-- [end:doc-bingo-reward-subscribe]
 
 } // namespace zlink::samples::bingo

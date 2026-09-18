@@ -81,16 +81,19 @@ class OrderWorkflowService(private val store: CommerceStore) {
         // Each iteration advances one event-stream transition; a started order
         // reaches a terminal state within a handful of steps.
         for (step in 0 until MAX_WORKFLOW_STEPS) {
+            // --8<-- [start:doc-sm-replay]
             val stored = store.readEvents(orderId)
             val aggregate = OrderAggregate.rehydrate(orderId, stored.toDomainEvents())
             if (aggregate.isTerminal() || !aggregate.hasStarted()) {
                 return store.findReadModel(orderId) ?: store.placeholder(orderId)
             }
+            // --8<-- [end:doc-sm-replay]
             val status = aggregate.status()
             if (status == OrderStatus.InventoryReserved && spot != null) {
                 println("shoppingmall-order replayed order=$orderId generation=${spot.context().objectGeneration()}")
             }
             val ts = now()
+            // --8<-- [start:doc-sm-next-step]
             val next: List<Any> = when (status) {
                 OrderStatus.Created -> {
                     val reserve = store.reserveInventory(orderId, aggregate.lines().toContractLines())
@@ -123,6 +126,7 @@ class OrderWorkflowService(private val store: CommerceStore) {
                 return requireProjection(orderId)
             }
             appendAndProject(orderId, stored.size.toLong(), next)
+            // --8<-- [end:doc-sm-next-step]
             for (event in next) {
                 if (event is InventoryReleasedEvent) {
                     store.releaseInventory(orderId, event.reservationId, event.reason)
@@ -132,6 +136,7 @@ class OrderWorkflowService(private val store: CommerceStore) {
         return store.findReadModel(orderId) ?: store.placeholder(orderId)
     }
 
+    // --8<-- [start:doc-sm-rebuild]
     fun rebuildProjection(orderId: String): OrderState {
         val stored = store.readEvents(orderId)
         if (stored.isEmpty()) {
@@ -145,7 +150,9 @@ class OrderWorkflowService(private val store: CommerceStore) {
         store.saveReadModel(readModel)
         return readModel
     }
+    // --8<-- [end:doc-sm-rebuild]
 
+    // --8<-- [start:doc-sm-append]
     private fun appendAndProject(orderId: String, expectedVersion: Long, events: List<Any>) {
         val toStore = events.map { toStored(orderId, it) }
         store.appendEvents(orderId, expectedVersion, toStore)
@@ -155,6 +162,7 @@ class OrderWorkflowService(private val store: CommerceStore) {
         }
         store.saveReadModel(state!!.toReadModel())
     }
+    // --8<-- [end:doc-sm-append]
 
     private fun toStored(orderId: String, event: Any): StoredEvent {
         val payload = json.valueToTree<JsonNode>(event)

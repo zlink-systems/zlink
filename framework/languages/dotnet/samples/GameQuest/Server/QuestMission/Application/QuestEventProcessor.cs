@@ -25,6 +25,7 @@ internal sealed class QuestEventProcessor(
             : QuestCatalog.Match(gameplayFact);
         if (definition is null) return;
 
+        // --8<-- [start:doc-gq-process]
         var stream = await store.ReadQuestStreamAsync(
             gameplayFact.PlayerId,
             definition.QuestId,
@@ -41,6 +42,7 @@ internal sealed class QuestEventProcessor(
                 decision.State,
                 decision.Events,
                 cancellationToken)) return;
+        // --8<-- [end:doc-gq-process]
 
         var projection = await store.ReadProjectionAsync(gameplayFact.PlayerId, cancellationToken);
         var completedQuestId = decision.Events.OfType<QuestCompleted>().Any()
@@ -71,6 +73,7 @@ internal sealed class QuestEventProcessor(
         int? replayGeneration,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-gq-sync]
         var snapshot = await snapshots.ReadSnapshotAsync(playerId, cancellationToken);
         if (snapshot.KillCount > 0)
             await ProcessAsync(
@@ -86,6 +89,7 @@ internal sealed class QuestEventProcessor(
                 cancellationToken);
 
         return await store.ReadProjectionAsync(playerId, cancellationToken);
+        // --8<-- [end:doc-gq-sync]
     }
 
     private async ValueTask<bool> NotifyBoundGameApiAsync(

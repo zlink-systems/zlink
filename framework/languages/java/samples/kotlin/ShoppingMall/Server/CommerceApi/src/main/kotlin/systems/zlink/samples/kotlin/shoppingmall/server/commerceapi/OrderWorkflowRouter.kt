@@ -34,6 +34,7 @@ class OrderWorkflowRouter(private val routes: ZLinkRouteClient) {
     suspend fun rebuildProjection(orderId: String): OrderState =
         request(orderId, RebuildOrderProjectionReq(orderId), RebuildOrderProjectionRes::class.java).state
 
+    // --8<-- [start:doc-sm-api-request]
     private suspend fun <TReply> request(orderId: String, payload: Any, replyType: Class<TReply>): TReply {
         return routes.requestToSpot(orderId, payload)
             .instanceSpot(SampleNames.OrderWorkflowSpotType)
@@ -42,4 +43,5 @@ class OrderWorkflowRouter(private val routes: ZLinkRouteClient) {
             .submit(replyType)
             .await()
     }
+    // --8<-- [end:doc-sm-api-request]
 }

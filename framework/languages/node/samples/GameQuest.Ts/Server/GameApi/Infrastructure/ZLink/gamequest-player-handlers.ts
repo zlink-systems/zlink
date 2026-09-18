@@ -55,6 +55,7 @@ abstract class GameQuestActionSendHandler<TMessage extends { playerId: string }>
   }
 }
 
+// --8<-- [start:doc-gq-action-handler]
 @zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.killMonsterReq })
 class KillMonsterHandler extends GameQuestActionHandler<KillMonsterReq, { eventId: string }> {
   constructor(actions: GameplayActionService) { super(actions); }
@@ -63,6 +64,7 @@ class KillMonsterHandler extends GameQuestActionHandler<KillMonsterReq, { eventI
     return (await this.actions.killMonster(request)).response;
   }
 }
+// --8<-- [end:doc-gq-action-handler]
 
 @zlinkEntrySpotActorSendHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.collectItemMsg })
 class CollectItemHandler extends GameQuestActionSendHandler<CollectItemMsg> {

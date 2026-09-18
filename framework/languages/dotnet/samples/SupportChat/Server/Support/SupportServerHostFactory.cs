@@ -56,6 +56,7 @@ public static class SupportServerHostFactory
             }));
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            // --8<-- [start:doc-sc-support-register]
             options.ConfigureMetadata()
                 .AllowSessionToActor(SampleNames.ConversationIdMetadataKey)
                 .AllowActorToSession(SampleNames.ConversationIdMetadataKey);
@@ -69,6 +70,7 @@ public static class SupportServerHostFactory
                     SampleNames.SupportActorType, factory => factory.PreserveStateWith<SupportUserActorRelocationAdapter>())
                 .AddSpotFactory<ConversationSpot>(
                     SampleNames.ConversationSpotType, factory => factory.DisableRelocation());
+            // --8<-- [end:doc-sc-support-register]
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });
 

@@ -32,6 +32,7 @@ public final class OfferDeadlineSweeper implements AutoCloseable {
         scheduler.shutdownNow();
     }
 
+    // --8<-- [start:doc-dd-sweeper]
     private void sweep() {
         for (DeliveryOffer offer : offers.takeExpired()) {
             System.out.println("deliverydispatch dispatch: offer expired delivery="
@@ -45,4 +46,5 @@ public final class OfferDeadlineSweeper implements AutoCloseable {
             }
         }
     }
+    // --8<-- [end:doc-dd-sweeper]
 }

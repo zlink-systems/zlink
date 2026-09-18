@@ -125,6 +125,7 @@ class PlayerActor(
         CompletableFuture.completedFuture<Void>(null)
     } else actorContext.boundSession().send(message).submit()
 
+    // --8<-- [start:doc-zw-join-completed]
     override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
         val operationId = when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
@@ -165,6 +166,7 @@ class PlayerActor(
             }
         }
     }
+    // --8<-- [end:doc-zw-join-completed]
 
     private fun mapFailure(kind: String) = when (kind) {
         "UNAVAILABLE" -> "Unavailable"
@@ -203,12 +205,14 @@ class PlayerActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayerActor> {
         val completedJoins: List<OperationId>,
     )
     private data class OperationId(val high: Long, val low: Long)
+    // --8<-- [start:doc-zw-actor-capture]
     override fun capture(actor: PlayerActor, cancellation: ZLinkRelocationCancellation): CompletionStage<ByteArray> =
         CompletableFuture.completedFuture(mapper.writeValueAsBytes(State(
             actor.x, actor.y, actor.zoneId, actor.isBot, actor.dirX, actor.dirY,
             actor.pendingTargetX, actor.pendingTargetY, actor.pendingTargetZone, actor.pending,
             actor.pendingPurposeName, actor.completedJoinIds.map { OperationId(it.high(), it.low()) },
         )))
+    // --8<-- [end:doc-zw-actor-capture]
     override fun restore(actor: PlayerActor, state: ByteArray, cancellation: ZLinkRelocationCancellation): CompletionStage<Void> {
         val value = mapper.readValue(state, State::class.java)
         actor.restoreState(
@@ -268,6 +272,7 @@ class ZoneSpot(
         if (actorId != join.playerId || zone != ZoneWorldSpec.zoneOf(join.x, join.y)) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "InvalidZone")))
         }
+        // --8<-- [start:doc-zw-admission]
         if (maintenance.rejectsArrival(topology.nodeValue(), zone, join.fromZoneId)) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "ZoneMaintenance")))
         }
@@ -277,6 +282,7 @@ class ZoneSpot(
         }
         pending[actorId] = join
         return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept(Messages.EnterZoneRes(zone)))
+        // --8<-- [end:doc-zw-admission]
     }
 
     override fun onJoinedActor(actor: PlayerActor): CompletionStage<Void> {
@@ -337,6 +343,7 @@ class ZoneSpot(
     }
 
     fun move(actor: PlayerActor, targetX: Int, targetY: Int): CompletionStage<Void> {
+        // --8<-- [start:doc-zw-move]
         val decision = ZoneWorldSpec.validateMove(actor.x, actor.y, targetX, targetY)
         if (!decision.accepted) return if (actor.isBot) CompletableFuture.completedFuture(null)
         else actor.send(Messages.MoveRejectedNotify(decision.reason ?: "Rejected", actor.x, actor.y))
@@ -347,13 +354,16 @@ class ZoneSpot(
             return if (actor.isBot) CompletableFuture.completedFuture(null)
             else actors.sendToActor(actor.actorId, Messages.DeliverZoneStateMsg(context.spotId(), tickValue, statePlayers())).submit()
         }
+        // --8<-- [start:doc-zw-zone-change]
         actor.prepareMove(targetX, targetY, targetZone)
         actor.context().joinSpot(targetZone, Messages.EnterZoneReq(
             actor.actorId, targetX, targetY, actor.isBot, false, actor.zoneId, false,
         ))
             .timeout(Duration.ofSeconds(10)).defer()
+        // --8<-- [end:doc-zw-zone-change]
         println("zone transfer requested actor=${actor.actorId} from=${context.spotId()} to=$targetZone node=${topology.nodeValue()}")
         return CompletableFuture.completedFuture(null)
+        // --8<-- [end:doc-zw-move]
     }
 
     fun crashProbe(actor: PlayerActor, targetX: Int, targetY: Int): CompletionStage<Void> {
@@ -370,10 +380,12 @@ class ZoneSpot(
     }
 
     fun applyPosition(update: Messages.UpdatePositionMsg) { residents[update.playerId]?.updatePosition(update.x, update.y) }
+    // --8<-- [start:doc-zw-state-push]
     fun deliverState(actor: PlayerActor, message: Messages.DeliverZoneStateMsg): CompletionStage<Void> {
         if (residents[actor.actorId] !== actor) return CompletableFuture.completedFuture(null)
         return actor.send(Messages.ZoneStateNotify(message.zoneId, message.tick, message.players))
     }
+    // --8<-- [end:doc-zw-state-push]
     fun applyBorder(event: Messages.ZoneBorderEvent) {
         if (event.toZoneId != context.spotId()) return
         val current = borders[event.fromZoneId]
@@ -390,6 +402,7 @@ class ZoneSpot(
         return values.values.sortedWith(compareBy(ZoneWorldSpec.utf8Order) { it.playerId })
     }
 
+    // --8<-- [start:doc-zw-border-publish]
     private fun publishBorders() {
         ZoneWorldSpec.adjacentZones(context.spotId()).forEach { target ->
             val players = residents.values.filter { ZoneWorldSpec.inBorderBand(it.x, it.y, context.spotId(), target) }
@@ -399,6 +412,7 @@ class ZoneSpot(
                 Messages.ZoneBorderEvent(context.spotId(), target, tickValue, players)).submit()
         }
     }
+    // --8<-- [end:doc-zw-border-publish]
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
@@ -470,11 +484,13 @@ class EntryZoneEnterWorldHandler : ZLinkEntrySpotActorRequestHandler<
         if (!ZoneWorldSpec.inRange(request.x, request.y)) return CompletableFuture.completedFuture(
             Messages.EnterWorldRes("", request.x, request.y, "OutOfRange"),
         )
+        // --8<-- [start:doc-zw-entry-join]
         actor.prepareEntry(request.x, request.y, request.isBot, request.dirX, request.dirY)
         val zone = ZoneWorldSpec.zoneOf(request.x, request.y)
         actor.context().joinSpot(zone, Messages.EnterZoneReq(
             actor.actorId, request.x, request.y, request.isBot, true, "", false,
         )).defer()
+        // --8<-- [end:doc-zw-entry-join]
         return CompletableFuture.completedFuture(Messages.EnterWorldRes(zone, request.x, request.y))
     }
 }
@@ -556,6 +572,7 @@ class ProbeHandlers {
     ): CompletionStage<Void> = spot.crashProbe(actor, message.x, message.y)
 }
 
+// --8<-- [start:doc-zw-border-subscribe]
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 class BorderSubscriptionHandlers {
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
@@ -578,6 +595,7 @@ class BorderSubscriptionHandlers {
         spot.applyBorder(event); return CompletableFuture.completedFuture(null)
     }
 }
+// --8<-- [end:doc-zw-border-subscribe]
 
 @ZLinkHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
 class WorldAnnounceSubscriber(
@@ -596,6 +614,7 @@ class WorldAnnounceSubscriber(
     }
 }
 
+// --8<-- [start:doc-zw-maintenance-subscriber]
 @ZLinkHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
 class NodeMaintenanceSubscriber(
     private val state: NodeMaintenanceState,
@@ -612,3 +631,4 @@ class NodeMaintenanceSubscriber(
         return CompletableFuture.completedFuture(null)
     }
 }
+// --8<-- [end:doc-zw-maintenance-subscriber]

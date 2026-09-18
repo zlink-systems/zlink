@@ -7,6 +7,7 @@ namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.ConversationSpot
 // Periodic tick that advances the conversation's idle lifecycle
 // (Active -> WaitingForClose -> Closed). It runs inside the spot dispatch context, so
 // the idle/close pushes it triggers are delivered to the bound sessions.
+// --8<-- [start:doc-sc-idle-timer]
 [ZLinkSpotTimerHandler("conversation-idle", 200)]
 internal sealed class ConversationIdleTimerHandler : IZLinkSpotTimerHandler<ConversationSpot>
 {
@@ -19,3 +20,4 @@ internal sealed class ConversationIdleTimerHandler : IZLinkSpotTimerHandler<Conv
         return spot.CheckIdleAsync(cancellationToken);
     }
 }
+// --8<-- [end:doc-sc-idle-timer]

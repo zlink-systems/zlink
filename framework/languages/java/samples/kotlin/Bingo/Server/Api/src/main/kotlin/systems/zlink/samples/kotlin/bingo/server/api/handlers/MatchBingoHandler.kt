@@ -23,6 +23,7 @@ class MatchBingoHandler(
         request: MatchBingoApiReq,
         context: ZLinkMessageContext,
     ) = run {
+        // --8<-- [start:doc-bingo-api-match]
         val levelBucket = "1-10"
         val allocated = routes
             .requestToSpot(
@@ -45,6 +46,7 @@ class MatchBingoHandler(
             .timeout(SampleTimings.RequestTimeout)
             .submit()
             .await()
+        // --8<-- [end:doc-bingo-api-match]
 
         MatchBingoApiRes(allocated.roomId)
     }

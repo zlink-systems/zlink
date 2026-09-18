@@ -34,6 +34,7 @@ internal sealed class BingoEntrySpot(
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
     }
 
+    // --8<-- [start:doc-bingo-entry-destroy]
     public async ValueTask OnJoinedActorAsync(
         PlayerActor actor,
         CancellationToken cancellationToken)
@@ -57,6 +58,7 @@ internal sealed class BingoEntrySpot(
         }
 
     }
+    // --8<-- [end:doc-bingo-entry-destroy]
 
     public ValueTask OnLeaveActorAsync(
         PlayerActor actor,

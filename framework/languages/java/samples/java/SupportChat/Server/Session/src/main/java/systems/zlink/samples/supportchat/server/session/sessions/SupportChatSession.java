@@ -53,6 +53,7 @@ public final class SupportChatSession implements ZLinkSession {
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-sc-session-dispatch]
     @Override
     public CompletionStage<Void> onDispatch(
         ZLinkSessionDispatchContext dispatch,
@@ -63,7 +64,9 @@ public final class SupportChatSession implements ZLinkSession {
             default -> relayConversationPacket(dispatch, payload);
         };
     }
+    // --8<-- [end:doc-sc-session-dispatch]
 
+    // --8<-- [start:doc-sc-session-auth]
     private CompletionStage<Void> authenticate(Messages.AuthenticateReq request) {
         return channels
             .requestToChannel(SampleNames.ApiChannel, new Messages.AuthenticateUserReq(request.accessToken()))
@@ -99,7 +102,9 @@ public final class SupportChatSession implements ZLinkSession {
                     .submit();
             });
     }
+    // --8<-- [end:doc-sc-session-auth]
 
+    // --8<-- [start:doc-sc-agent-join]
     private CompletionStage<Void> joinConversation(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
@@ -124,7 +129,9 @@ public final class SupportChatSession implements ZLinkSession {
                         new Messages.JoinConversationRes(ensured.scheduled(), ensured.state())).submit();
                 }));
     }
+    // --8<-- [end:doc-sc-agent-join]
 
+    // --8<-- [start:doc-sc-metadata-relay]
     private CompletionStage<Void> relayConversationPacket(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
@@ -136,6 +143,7 @@ public final class SupportChatSession implements ZLinkSession {
         }
         return target.relay(dispatch, payload).thenApply(ignored -> null);
     }
+    // --8<-- [end:doc-sc-metadata-relay]
 
     private CompletionStage<ZLinkSessionActor> bindOrGet(
         ActorRef actorRef) {

@@ -29,6 +29,7 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
         return context;
     }
 
+    // --8<-- [start:doc-gq-spot-init]
     @Override
     public CompletionStage<Void> onInitialize() {
         store.activate(playerId);
@@ -41,6 +42,7 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
         }
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-gq-spot-init]
 
     private void requirePlayer(String requestedPlayerId) {
         if (!playerId.equals(requestedPlayerId)) {

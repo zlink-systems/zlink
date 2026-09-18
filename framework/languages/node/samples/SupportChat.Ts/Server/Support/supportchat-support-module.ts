@@ -33,6 +33,7 @@ function createSupportChatSupportModule() {
             .messageFlow('normal');
           builder.addLocationStore(createSupportChatLocationStore(config));
           supportChatLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-sc-support-register]
           const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)
               .listen(config.supportSpotEndpoint).setRoutingIdPrefix('support-owner');
           const objectServer = mesh.objects().server();
@@ -49,6 +50,7 @@ function createSupportChatSupportModule() {
           );
           mesh.channel(SampleNames.conversationSpotMesh).server();
           builder.addClientServerChannel(SampleNames.apiChannel).client();
+          // --8<-- [end:doc-sc-support-register]
           return builder.build();
         }
       })

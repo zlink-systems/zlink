@@ -75,10 +75,12 @@ public final class Program {
             options.addLocationStore(SampleLocationStore.create(topology));
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            // --8<-- [start:doc-sm-api-register]
             options.addRouteMesh(SampleNames.OrderSpotDiscovery)
                 .setRoutingId(RoutingId.from(api.instanceName()))
                 .listen()
                 .objects().client();
+            // --8<-- [end:doc-sm-api-register]
         };
     }
 

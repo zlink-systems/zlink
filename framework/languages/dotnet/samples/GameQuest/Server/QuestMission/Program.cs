@@ -56,11 +56,13 @@ internal static class Program
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(Program));
+            // --8<-- [start:doc-gq-mission-register]
             var mesh = options.AddRouteMesh(SampleNames.MeshName)
                 .Listen(instance.MeshEndpoint)
                 .SetRoutingIdPrefix("quest-mission");
             mesh.Objects().Server().AddInstanceSpotFactory<PlayerQuestSpot>(
                 SampleNames.PlayerQuestSpotType, factory => factory.RecreateOnRelocation());
+            // --8<-- [end:doc-gq-mission-register]
         });
 
         var app = builder.Build();

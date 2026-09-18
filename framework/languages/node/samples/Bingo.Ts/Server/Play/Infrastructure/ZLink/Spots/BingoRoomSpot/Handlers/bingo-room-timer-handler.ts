@@ -3,6 +3,7 @@ import { ZLinkTimerOverrunPolicy } from '@zlink-systems/framework';
 import type { ZLinkSpotTimerHandler, ZLinkTimerTick } from '@zlink-systems/framework';
 import { BingoRoomSpot } from '../bingo-room-spot';
 
+// --8<-- [start:doc-bingo-draw-timer]
 @zlinkSpotTimerHandler({
   spot: () => BingoRoomSpot,
   name: 'bingo-draw',
@@ -18,5 +19,6 @@ class BingoRoomTimerHandler implements ZLinkSpotTimerHandler<BingoRoomSpot> {
     await room.drawNextNumber();
   }
 }
+// --8<-- [end:doc-bingo-draw-timer]
 
 export { BingoRoomTimerHandler };

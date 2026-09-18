@@ -93,6 +93,7 @@ class BingoRoomSpot(
             pendingRewards.forEach { notifyObservers(it) }
             return
         }
+        // --8<-- [start:doc-bingo-room-join]
         val record = context.outbound()
             .requestToChannel(SampleNames.ApiChannel, GetPlayerRecordReq(actor.actorId()))
             .timeout(SampleTimings.RequestTimeout)
@@ -107,6 +108,7 @@ class BingoRoomSpot(
             pendingJoins.remove(actor.actorId())
             join(actor, request, record.wins, record.losses)
         }
+        // --8<-- [end:doc-bingo-room-join]
     }
 
     override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
@@ -212,6 +214,7 @@ class BingoRoomSpot(
         return SubmitBingoCardRes(change.state)
     }
 
+    // --8<-- [start:doc-bingo-draw-timer]
     suspend fun tick() {
         val game = this.game
         if (game == null || cleanupStarted) {
@@ -225,6 +228,7 @@ class BingoRoomSpot(
             context.relocationReady().defer()
         }
     }
+    // --8<-- [end:doc-bingo-draw-timer]
 
     suspend fun announceReward(event: BingoRewardAcquiredEvent) {
         if (!settings.observerMode() || event.roomId != settings.observedRoomId) {
@@ -268,6 +272,7 @@ class BingoRoomSpot(
         return StopObservingBingoEventsRes(true)
     }
 
+    // --8<-- [start:doc-bingo-room-cleanup]
     private suspend fun leaveFinishedActors(change: BingoRoomGame.Change) {
         if (cleanupStarted || change.state.status != BingoRoomGame.Finished) {
             return
@@ -278,6 +283,7 @@ class BingoRoomSpot(
             context.leaveActor(actor).await()
         }
     }
+    // --8<-- [end:doc-bingo-room-cleanup]
 
     fun applySettings(settings: BingoRoomSettings) {
         check(settings.observerMode() || settings.requiredPlayers > 0) { "Bingo room requires at least one player." }
@@ -327,6 +333,7 @@ class BingoRoomSpot(
             return
         }
         val winner = state.winners.first()
+        // --8<-- [start:doc-bingo-reward-publish]
         context.outbound()
             .publish(
                 SampleNames.RoomRewardChannel,
@@ -342,6 +349,7 @@ class BingoRoomSpot(
             )
             .submit()
             .await()
+        // --8<-- [end:doc-bingo-reward-publish]
     }
 
     private fun publishEvents(
@@ -376,6 +384,7 @@ class BingoRoomSpot(
             BingoRoomEventKind.GAME_STARTED ->
                 recipient.push(BingoGameStartedNotify(event.state))
 
+            // --8<-- [start:doc-bingo-bound-push]
             BingoRoomEventKind.NUMBER_DRAWN ->
                 recipient.push(
                     BingoNumberDrawnNotify(
@@ -385,6 +394,7 @@ class BingoRoomSpot(
                         event.state,
                     )
                 )
+            // --8<-- [end:doc-bingo-bound-push]
 
             BingoRoomEventKind.STATE ->
                 recipient.push(BingoStateNotify(event.state))

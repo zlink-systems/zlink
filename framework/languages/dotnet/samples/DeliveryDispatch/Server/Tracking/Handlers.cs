@@ -18,6 +18,7 @@ internal sealed class DeliveryStatusChangedHandler(
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-dd-tracking-forward]
         evidence.Append(request);
         var updated = new DeliveryStatusUpdatedMsg(
             request.DeliveryId,
@@ -27,6 +28,7 @@ internal sealed class DeliveryStatusChangedHandler(
             request.OccurredAtUnixMs);
         await actors.SendToActor(request.CustomerId, updated)
             .Async(cancellationToken);
+        // --8<-- [end:doc-dd-tracking-forward]
         logger.LogInformation(
             "deliverydispatch-tracking status={Status} delivery={DeliveryId}",
             request.Status,

@@ -75,6 +75,7 @@ class GameplayActionService {
   private async publishAndNotify<TResponse extends { eventId: string }>(
     candidate: GameplayEventEnvelope
   ): Promise<{ response: TResponse; projection: QuestProgress[]; completedQuestId?: string }> {
+    // --8<-- [start:doc-gq-store-dispatch]
     const { event: stored, recorded } = this.store.recordGameplayEvent(candidate);
     try {
       await this.publisher.send(stored);
@@ -87,6 +88,7 @@ class GameplayActionService {
       }
       throw error;
     }
+    // --8<-- [end:doc-gq-store-dispatch]
     if (recorded) {
       console.error(`gamequest-api event-routed player=${stored.playerId}`);
     } else {

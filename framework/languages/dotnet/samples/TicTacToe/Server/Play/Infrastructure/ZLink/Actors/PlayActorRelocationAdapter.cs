@@ -8,6 +8,7 @@ namespace TicTacToe.Server.Play.Infrastructure.ZLink.Actors;
 internal sealed class PlayActorRelocationAdapter
     : IZLinkActorRelocationAdapter<PlayActor>
 {
+    // --8<-- [start:doc-ttt-actor-capture]
     public ValueTask<byte[]> CaptureAsync(
         PlayActor actor,
         CancellationToken cancellationToken)
@@ -21,6 +22,7 @@ internal sealed class PlayActorRelocationAdapter
             actor.Disconnected,
             actor.ProcessedJoinOperations)));
     }
+    // --8<-- [end:doc-ttt-actor-capture]
 
     public ValueTask RestoreAsync(
         PlayActor actor,

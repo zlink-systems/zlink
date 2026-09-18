@@ -76,6 +76,7 @@ class quest_event_store_t
             return {projection_unlocked (event.player_id), {}, {}, false};
         }
 
+        // --8<-- [start:doc-gq-process]
         const auto rule = quest_rule_for (event);
         if (!rule) {
             return {projection_unlocked (event.player_id), {}, {}, false};
@@ -101,6 +102,7 @@ class quest_event_store_t
                          reconciliation ? stored_quest_event_t::reconciled
                                         : stored_quest_event_t::progressed,
                          event, *rule, next_count - previous_count, next_count);
+        // --8<-- [end:doc-gq-process]
 
         std::string completed_quest_id;
         bool reward_granted = false;
@@ -277,6 +279,7 @@ class player_quest_spot_t : public instance_spot_t
     instance_spot_context_t &context () noexcept override { return _context; }
     const instance_spot_context_t &context () const noexcept override { return _context; }
 
+    // --8<-- [start:doc-gq-apply-handler]
     void configure () override
     {
         _context.handlers ()
@@ -286,7 +289,9 @@ class player_quest_spot_t : public instance_spot_t
           .add_handler<&player_quest_spot_t::admin> (projection_admin_req_t::packet_name)
           .add_handler<&player_quest_spot_t::close> (close_player_quest_msg_t::packet_name);
     }
+    // --8<-- [end:doc-gq-apply-handler]
 
+    // --8<-- [start:doc-gq-spot-init]
     task_t<void> on_initialize () override
     {
         const auto spot_id = _context.spot_id ();
@@ -302,12 +307,14 @@ class player_quest_spot_t : public instance_spot_t
         }
         co_return;
     }
+    // --8<-- [end:doc-gq-spot-init]
 
     /* 공통 sample spec §11.2: gameplay event는 응답 없는 one-way다. 진행 notify는 player의 현재
      * session binding이 가리키는 노드의 entry spot으로 route한다 — binding이 없으면 생략(§12). */
     task_t<void> apply (const gameplay_msg_t &message)
     {
         auto result = _store.apply (decode_gameplay (message));
+        // --8<-- [start:doc-gq-notify-actor]
         auto actor = co_await _directory.find (message.player_id);
         if (!actor) {
             std::cerr << "gamequest mission kept projection while the player has no session"
@@ -319,11 +326,13 @@ class player_quest_spot_t : public instance_spot_t
                  notify_quest_progress_msg_t{message.player_id, result.projection,
                                              result.completed_quest_id})
           .async ();
+        // --8<-- [end:doc-gq-notify-actor]
         std::cerr << "gamequest mission notified player=" << message.player_id
                   << " completed=" << result.completed_quest_id << "\n";
         co_return;
     }
 
+    // --8<-- [start:doc-gq-sync]
     sync_quest_progress_res_t sync (const sync_quest_progress_owner_req_t &request)
     {
         if (request.snapshot_kill_count > 0) {
@@ -341,17 +350,20 @@ class player_quest_spot_t : public instance_spot_t
         }
         return {_store.projection (request.player_id)};
     }
+    // --8<-- [end:doc-gq-sync]
 
     get_quest_progress_res_t get (const get_quest_progress_req_t &request)
     {
         return {_store.projection (request.player_id)};
     }
 
+    // --8<-- [start:doc-gq-close-handler]
     task_t<void> close (const close_player_quest_msg_t &)
     {
         (void) co_await _context.close ();
         co_return;
     }
+    // --8<-- [end:doc-gq-close-handler]
 
     task_t<projection_admin_res_t> admin (const projection_admin_req_t &request)
     {
@@ -403,6 +415,7 @@ int main (int argc, char **argv)
       .set_key_prefix (topology.redis_key_prefix + "relocation:");
     /* QuestMission은 PlayerQuestSpot factory를 제공하는 Object Server다. API와
          * 같은 RouteMesh를 사용하므로 별도 spot router와 ChannelName을 만들지 않는다. */
+    // --8<-- [start:doc-gq-mission-register]
     auto gamequest = options.add_route_mesh ("gamequest");
     gamequest
       .set_routing_id (zlink::routing_id_t::from (
@@ -418,6 +431,7 @@ int main (int argc, char **argv)
       .add_instance_spot_factory<player_quest_spot_t, quest_event_store_t, actor_directory_t,
                                  actor_client_t, sample_topology_t> (sample_names_t::player_quest_spot)
       .recreate_on_relocation ();
+    // --8<-- [end:doc-gq-mission-register]
     app.add_hosted_service (std::make_unique<sample_readiness_service_t> (
       "instance-factory", topology.mission_name));
     return app.run (argc, argv);

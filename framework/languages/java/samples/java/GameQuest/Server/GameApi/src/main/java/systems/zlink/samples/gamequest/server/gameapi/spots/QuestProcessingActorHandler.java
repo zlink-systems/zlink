@@ -7,6 +7,7 @@ import systems.zlink.samples.gamequest.server.gameapi.actors.GameQuestPlayerActo
 import systems.zlink.samples.gamequest.server.gameapi.store.GameQuestStore;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
 
+// --8<-- [start:doc-gq-progress-push]
 public final class QuestProcessingActorHandler
     implements ZLinkEntrySpotActorSendHandler<
         GameQuestEntrySpot,
@@ -28,3 +29,4 @@ public final class QuestProcessingActorHandler
         return actor.push(message);
     }
 }
+// --8<-- [end:doc-gq-progress-push]

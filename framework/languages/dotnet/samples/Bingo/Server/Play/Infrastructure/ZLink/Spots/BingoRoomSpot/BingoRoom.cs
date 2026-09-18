@@ -85,6 +85,7 @@ internal sealed class BingoRoom(
         }
         else
         {
+            // --8<-- [start:doc-bingo-room-join]
             GetPlayerRecordRes record;
             try
             {
@@ -110,6 +111,7 @@ internal sealed class BingoRoom(
                 await Context.LeaveActorAsync(actor, cancellationToken);
                 return;
             }
+            // --8<-- [end:doc-bingo-room-join]
 
             _pendingJoins.Remove(actor.ActorId);
             actor.SetDisplayName(join.DisplayName);
@@ -260,6 +262,7 @@ internal sealed class BingoRoom(
                 change.State.Winners[0],
                 BingoRewardItems.GoldenDauberId,
                 Context.NodeRid.ToString());
+            // --8<-- [start:doc-bingo-reward-publish]
             await Context.Outbound.Publish(
                     SampleNames.RoomChannel,
                     SampleNames.RewardTopic,
@@ -273,6 +276,7 @@ internal sealed class BingoRoom(
                         Rarity = BingoRewardItems.LegendaryRarity
                     })
                 .Async(cancellationToken);
+            // --8<-- [end:doc-bingo-reward-publish]
             logger.LogInformation(
                 "bingo reward: published. room={RoomId}, actor={ActorId}, item={ItemId}, nodeRid={NodeRid}",
                 change.State.RoomId,
@@ -282,6 +286,7 @@ internal sealed class BingoRoom(
         }
     }
 
+    // --8<-- [start:doc-bingo-room-cleanup]
     internal async ValueTask LeaveFinishedActorsAsync(CancellationToken cancellationToken)
     {
         if (_cleanupStarted || _game?.Status != BingoRoomStatus.Finished) return;
@@ -299,6 +304,7 @@ internal sealed class BingoRoom(
         foreach (var actor in actors)
             await Context.LeaveActorAsync(actor, cancellationToken);
     }
+    // --8<-- [end:doc-bingo-room-cleanup]
 
     public void ApplySettings(BingoRoomSettings settings)
     {

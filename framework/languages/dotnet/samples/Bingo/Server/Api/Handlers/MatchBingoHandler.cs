@@ -20,6 +20,7 @@ internal sealed class MatchBingoHandler(
     {
         logger.LogInformation("api match: request. actor={ActorId}, mode={Mode}",
             request.ActorId, request.Mode);
+        // --8<-- [start:doc-bingo-api-match]
         const string levelBucket = "1-10";
         var allocated = await spotClient
             .RequestToSpot(
@@ -39,6 +40,7 @@ internal sealed class MatchBingoHandler(
             .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
             .InMesh(SampleNames.PlayMeshName)
             .Request(new BingoRoomCreateReq { Settings = allocated.Settings })
+        // --8<-- [end:doc-bingo-api-match]
             .Async(cancellationToken);
         logger.LogInformation(
             "api match: room Spot ready. room={RoomId}, state={State}",

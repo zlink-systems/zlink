@@ -85,6 +85,7 @@ class TicTacToeGame(
         actor.markDisconnected()
     }
 
+    // --8<-- [start:doc-ttt-timer-register]
     override suspend fun onInitializeSuspending() {
         // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
         gameTick = context.addTimer(
@@ -94,6 +95,7 @@ class TicTacToeGame(
             null,
         ).await()
     }
+    // --8<-- [end:doc-ttt-timer-register]
 
     override suspend fun onClosingSuspending(context: ZLinkSpotClosingContext) {
         gameTick?.cancel()?.await()
@@ -105,6 +107,7 @@ class TicTacToeGame(
         definition = request
     }
 
+    // --8<-- [start:doc-ttt-game-join]
     fun join(actor: PlayActor, roomId: String, player: PlayerInfo): TicTacToeGameJoinRes {
         validateJoin(roomId, player)
         actor.applyPlayer(player)
@@ -124,6 +127,7 @@ class TicTacToeGame(
         broadcast(state, actor.actorId)
         return TicTacToeGameJoinRes(state)
     }
+    // --8<-- [end:doc-ttt-game-join]
 
     private fun validateJoin(roomId: String, player: PlayerInfo) {
         ensureCreated()
@@ -182,6 +186,7 @@ class TicTacToeGame(
     private fun requireDefinition(): TicTacToeGameCreateReq =
         definition ?: error("tic-tac-toe game has not completed creation")
 
+    // --8<-- [start:doc-ttt-broadcast]
     private fun broadcast(state: GameState, excludedActorId: String?) {
         players
             .asSequence()
@@ -193,6 +198,7 @@ class TicTacToeGame(
                     .submit()
             }
     }
+    // --8<-- [end:doc-ttt-broadcast]
 
     private fun notifyPlayerJoined(
         joinedActor: PlayActor,
@@ -221,6 +227,7 @@ class TicTacToeGame(
 
     private data class PlayerSlot(var actor: PlayActor, val mark: String)
 
+    // --8<-- [start:doc-ttt-leave-game]
     suspend fun leaveGame(actor: PlayActor, roomId: String) {
         check(this.roomId == roomId) { "leave request room id does not match game room" }
         if (!isTerminal(match.snapshot())) {
@@ -229,6 +236,7 @@ class TicTacToeGame(
         actor.markForDestroyAfterRoomLeave()
         context.leaveActor(actor).await()
     }
+    // --8<-- [end:doc-ttt-leave-game]
 
     private fun isTerminal(state: GameState): Boolean =
         state.status == "Won" ||

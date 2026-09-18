@@ -14,6 +14,7 @@ internal sealed class GameplayEventOwnerDispatcher(
         GameplayEvent gameplayEvent,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-gq-owner-send]
         await spots.SendToSpot(gameplayEvent.PlayerId,
                 new GameplayMsg(
                     gameplayEvent.EventId,
@@ -29,6 +30,7 @@ internal sealed class GameplayEventOwnerDispatcher(
             .InstanceSpot(SampleNames.PlayerQuestSpotType)
             .InMesh(SampleNames.MeshName)
             .Async(cancellationToken);
+        // --8<-- [end:doc-gq-owner-send]
         return gameplayEvent.PlayerId;
     }
 

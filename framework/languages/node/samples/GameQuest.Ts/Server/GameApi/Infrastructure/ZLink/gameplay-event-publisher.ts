@@ -11,12 +11,14 @@ class GameplayEventPublisher {
   ) {}
 
   async send(event: GameplayEventEnvelope): Promise<void> {
+    // --8<-- [start:doc-gq-owner-send]
     const message = gameplayMsg(event);
     await this.spots
       .sendToSpot(questMissionSpotId(event.playerId), message)
       .instanceSpot(SampleNames.playerQuestSpotType)
       .inMesh(SampleNames.playerQuestSpotMesh)
       .submit();
+    // --8<-- [end:doc-gq-owner-send]
   }
 }
 

@@ -40,6 +40,7 @@ class SessionApplication {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.configureLocations()
+            // --8<-- [start:doc-sc-session-register]
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client()
             options.addClientServerChannel(SampleNames.SupportChannel)
@@ -52,6 +53,7 @@ class SessionApplication {
                 .bind(session.streamEndpoint)
                 .enableActorDispatch()
                 .registerSession(SupportChatSession::class.java)
+            // --8<-- [end:doc-sc-session-register]
         }
 
     @Bean

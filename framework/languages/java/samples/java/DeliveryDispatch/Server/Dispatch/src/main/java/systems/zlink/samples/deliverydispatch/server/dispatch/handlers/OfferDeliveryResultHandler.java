@@ -33,6 +33,7 @@ public final class OfferDeliveryResultHandler
     public CompletionStage<Void> handle(
         Messages.OfferDeliveryResultMsg message,
         ZLinkMessageContext context) {
+        // --8<-- [start:doc-dd-decision-settle]
         Optional<DeliveryOffer> offer = offers.settle(message.deliveryId(), message.attempt());
         if (offer.isEmpty()) {
             System.out.println("deliverydispatch-dispatch stale-decision-ignored delivery="
@@ -45,5 +46,6 @@ public final class OfferDeliveryResultHandler
             + " courier=" + message.courierId() + " attempt=" + message.attempt()
             + " accepted=" + message.accepted());
         return worker.settle(offer.get(), message.accepted(), message.reason());
+        // --8<-- [end:doc-dd-decision-settle]
     }
 }

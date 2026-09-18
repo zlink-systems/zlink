@@ -49,6 +49,7 @@ public static class SessionServerHostFactory
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(SessionServerHostFactory));
+            // --8<-- [start:doc-sc-session-register]
             var mesh = options.AddRouteMesh(SampleNames.MeshName)
                 .Listen(session.MeshEndpoint)
                 .SetRoutingIdPrefix("support-session");
@@ -58,6 +59,7 @@ public static class SessionServerHostFactory
                 .Bind(session.StreamEndpoint)
                 .EnableActorDispatch()
                 .AddSession<SupportChatSession>();
+            // --8<-- [end:doc-sc-session-register]
         });
 
         return builder.Build();

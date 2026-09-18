@@ -53,6 +53,7 @@ public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> 
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-sc-agent-disconnect]
     @Override
     public CompletionStage<Void> onDisconnectActor(SupportUserActor actor) {
         if (SampleNames.Roles.Agent.equals(actor.role())) {
@@ -60,4 +61,5 @@ public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> 
         }
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-sc-agent-disconnect]
 }

@@ -12,6 +12,7 @@ import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 @Injectable()
 class PlayActorLeaveGameHandler
   implements ZLinkSpotActorSendHandler<TicTacToeGameSpot, PlayActor, LeaveGameMsg> {
+  // --8<-- [start:doc-ttt-leave-game]
   @ZLinkSpotActorSend(PacketNames.leaveGameMsg)
   async handle(
     spot: TicTacToeGameSpot,
@@ -28,6 +29,7 @@ class PlayActorLeaveGameHandler
     actor.roomId = undefined;
     console.log(`tictactoe-lifecycle leave-completed actor=${actor.actorId}`);
   }
+  // --8<-- [end:doc-ttt-leave-game]
 }
 
 export { PlayActorLeaveGameHandler };

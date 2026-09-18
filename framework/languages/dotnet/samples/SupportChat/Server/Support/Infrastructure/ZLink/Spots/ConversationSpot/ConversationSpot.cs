@@ -140,6 +140,7 @@ internal sealed class ConversationSpot(
 
     // Reserves a capacity-available agent for this conversation and notifies its roster
     // actor. Availability is reserved here and released on close (see PublishChangeAsync).
+    // --8<-- [start:doc-sc-assign]
     private async ValueTask AssignAgentAsync(CancellationToken cancellationToken)
     {
         var conversation = RequireConversation();
@@ -155,6 +156,7 @@ internal sealed class ConversationSpot(
             conversation.ConversationId,
             assigned.RosterActorId);
     }
+    // --8<-- [end:doc-sc-assign]
 
     // A reconnected client has a fresh session and no local conversation view, so it
     // re-fetches the current state through JoinConversationReq. Membership already

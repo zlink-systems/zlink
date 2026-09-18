@@ -58,9 +58,11 @@ class OpsSession(
         // stays whatever the node itself last reported, so an observed maintenance value is
         // always the node's own and never the operator's intent echoed back.
         maintenance.set(request.nodeId, request.enabled)
+        // --8<-- [start:doc-zw-ops-publish]
         return fanout.publish(ZoneWorldNames.BROADCAST_CHANNEL, ZoneWorldNames.MAINTENANCE_TOPIC,
             Messages.NodeMaintenanceChangedEvent(request.nodeId, request.enabled)).submit()
             .thenCompose { reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, node.zones)) }
+        // --8<-- [end:doc-zw-ops-publish]
     }
 
     private fun diagnostics(request: Messages.NodeDiagnosticsReq): CompletionStage<Void> {

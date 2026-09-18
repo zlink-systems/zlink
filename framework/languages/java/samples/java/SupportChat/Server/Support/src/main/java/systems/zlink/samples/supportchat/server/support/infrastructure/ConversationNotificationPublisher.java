@@ -8,6 +8,7 @@ import systems.zlink.samples.supportchat.server.support.domain.Conversation;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
 public final class ConversationNotificationPublisher {
+    // --8<-- [start:doc-sc-roster-push]
     public void assigned(
         AgentAssignmentService.AvailableAgent agent,
         Conversation.Snapshot state,
@@ -15,6 +16,7 @@ public final class ConversationNotificationPublisher {
         directory.require(agent.rosterActorId()).push(new Messages.ConversationAssignedNotify(
             state.conversationId(), ConversationContracts.state(state)));
     }
+    // --8<-- [end:doc-sc-roster-push]
 
     public void publish(
         Conversation.Change change,
@@ -31,9 +33,11 @@ public final class ConversationNotificationPublisher {
                         state.conversationId(), event.actorId(),
                         ConversationContracts.role(event.role()), state));
                 }
+                // --8<-- [start:doc-sc-message-push]
                 case MessageAppended -> publishExcept(
                     participants, event.actorId(), new Messages.ChatMessageNotify(
                         state.conversationId(), ConversationContracts.message(event.message()), state));
+                // --8<-- [end:doc-sc-message-push]
                 case TypingChanged -> publishExcept(
                     participants, event.actorId(), new Messages.TypingChangedNotify(
                         state.conversationId(), event.actorId(),

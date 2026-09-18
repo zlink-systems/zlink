@@ -78,6 +78,7 @@ public class Program {
                     .setConnectionString(topology.location().redisEndpoint())
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
+            // --8<-- [start:doc-gq-mission-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery);
             node.listen(mission.spotRouterEndpoint())
                 .setRoutingIdPrefix("gamequest-mission-owner");
@@ -87,6 +88,7 @@ public class Program {
                     SampleNames.PlayerQuestSpotType,
                     PlayerQuestSpot.class,
                     factory -> factory.recreateOnRelocation());
+            // --8<-- [end:doc-gq-mission-register]
         };
     }
 

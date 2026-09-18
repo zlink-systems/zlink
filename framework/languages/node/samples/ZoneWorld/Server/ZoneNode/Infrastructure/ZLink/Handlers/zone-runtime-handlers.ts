@@ -109,6 +109,7 @@ export {
   ZoneTickHandler
 };
 
+// --8<-- [start:doc-zw-border-subscribe]
 function zoneBorderSubscriptionHandler(): ClassDecorator {
   const topics = Object.values(ZoneIds).flatMap((from) =>
     adjacentZones(from).map((to) => ZoneWorldNames.borderTopic(from, to))
@@ -123,3 +124,4 @@ function zoneBorderSubscriptionHandler(): ClassDecorator {
     }
   };
 }
+// --8<-- [end:doc-zw-border-subscribe]

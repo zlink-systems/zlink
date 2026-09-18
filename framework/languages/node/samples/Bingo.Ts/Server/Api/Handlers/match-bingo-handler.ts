@@ -25,6 +25,7 @@ class MatchBingoHandler implements ZLinkRequestHandler<MatchBingoApiReq, MatchBi
   ) {}
 
   async handle(request: MatchBingoApiReq): Promise<MatchBingoApiRes> {
+    // --8<-- [start:doc-bingo-api-match]
     const levelBucket = '1-10';
     const allocated = await this.outbound
       .requestToSpot(`match:${levelBucket}`, new ReserveBingoRoomReq({
@@ -40,6 +41,7 @@ class MatchBingoHandler implements ZLinkRequestHandler<MatchBingoApiReq, MatchBi
       .inMesh(SampleNames.playMeshName)
       .request(new BingoRoomCreateReq({ settings: allocated.settings }))
       .submit();
+    // --8<-- [end:doc-bingo-api-match]
     return new MatchBingoApiRes({ roomId: allocated.roomId });
   }
 }

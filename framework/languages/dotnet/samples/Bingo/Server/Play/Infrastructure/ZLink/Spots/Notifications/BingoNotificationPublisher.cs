@@ -40,6 +40,7 @@ internal sealed class BingoNotificationPublisher
                 .Send(new BingoGameStartedNotify { State = roomEvent.State })
                 .Async(cancellationToken);
                 break;
+            // --8<-- [start:doc-bingo-bound-push]
             case BingoRoomEventKind.NumberDrawn:
                 await roomEvent.Recipient.Context.BoundSession
                 .Send(
@@ -52,6 +53,7 @@ internal sealed class BingoNotificationPublisher
                     })
                 .Async(cancellationToken);
                 break;
+            // --8<-- [end:doc-bingo-bound-push]
             case BingoRoomEventKind.GameEnded:
                 await roomEvent.Recipient.Context.BoundSession
                 .Send(new BingoGameEndedNotify { State = roomEvent.State })

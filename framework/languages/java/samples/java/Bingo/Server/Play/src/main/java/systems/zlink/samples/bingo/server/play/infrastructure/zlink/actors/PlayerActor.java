@@ -108,9 +108,11 @@ public final class PlayerActor implements ZLinkActor {
         disconnected = true;
     }
 
+    // --8<-- [start:doc-bingo-bound-push]
     public CompletionStage<Void> push(Object message) {
         return context.boundSession()
             .send(message)
             .submit();
     }
+    // --8<-- [end:doc-bingo-bound-push]
 }

@@ -20,6 +20,7 @@ internal sealed class ConversationNotificationPublisher
 
     // Sent when a conversation is assigned to an agent, before the agent joins. It goes
     // to the agent's roster actor so the agent client knows which conversation to join.
+    // --8<-- [start:doc-sc-roster-push]
     public async ValueTask PublishAssignedToRosterAsync(
         SupportUserActor roster,
         ConversationSnapshot snapshot,
@@ -30,6 +31,7 @@ internal sealed class ConversationNotificationPublisher
             .Send(new ConversationAssignedNotify(state.ConversationId, state))
             .Async(cancellationToken);
     }
+    // --8<-- [end:doc-sc-roster-push]
 
     private async ValueTask PublishAsync(
         ConversationEvent conversationEvent,
@@ -104,6 +106,7 @@ internal sealed class ConversationNotificationPublisher
             });
     }
 
+    // --8<-- [start:doc-sc-message-push]
     private static async ValueTask PublishMessageAsync(
         ConversationEvent conversationEvent,
         ConversationState state,
@@ -122,6 +125,7 @@ internal sealed class ConversationNotificationPublisher
                     .Async(cancellationToken);
             });
     }
+    // --8<-- [end:doc-sc-message-push]
 
     private static async ValueTask PublishTypingAsync(
         ConversationEvent conversationEvent,

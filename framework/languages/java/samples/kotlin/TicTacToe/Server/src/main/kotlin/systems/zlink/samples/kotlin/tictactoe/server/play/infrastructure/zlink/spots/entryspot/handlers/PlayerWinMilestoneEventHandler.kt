@@ -7,6 +7,7 @@ import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.s
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerWinMilestoneEvent
 
 // --8<-- [start:doc-multicast-subscribe]
+// --8<-- [start:doc-ttt-milestone-handler]
 @ZLinkSpotSubscription(topic = SampleNames.PlayerMilestoneTopic)
 class PlayerWinMilestoneEventHandler :
     ZLinkSuspendingSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> {
@@ -14,4 +15,5 @@ class PlayerWinMilestoneEventHandler :
         spot.notifyMilestone(event)
     }
 }
+// --8<-- [end:doc-ttt-milestone-handler]
 // --8<-- [end:doc-multicast-subscribe]

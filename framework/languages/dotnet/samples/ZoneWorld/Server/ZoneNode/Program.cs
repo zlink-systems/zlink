@@ -86,6 +86,7 @@ builder.Services.AddZLinkFramework(options =>
     // The zone spots and the player actors. A player entering a zone joins the spot named
     // after it, and when that spot is on another node the join causes relocation — which is
     // why the relocation adapter is not optional (§2.6).
+    // --8<-- [start:doc-zw-node-register]
     var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
         .SetRoutingIdPrefix("zn")
         .Listen(node.MeshEndpoint);
@@ -102,6 +103,7 @@ builder.Services.AddZLinkFramework(options =>
                 // only placement input and limits each process to two local Zone Spot owners.
                 .StableTypeLimit(2)
                 .DisableRelocation());
+    // --8<-- [end:doc-zw-node-register]
     // --8<-- [start:doc-multi-channel-register]
     mesh.Channel(ZoneWorldNames.ZoneChannel).Server();
 
@@ -110,10 +112,12 @@ builder.Services.AddZLinkFramework(options =>
     mesh.Channel(ZoneWorldNames.ReportChannel).Client();
     // --8<-- [end:doc-multi-channel-register]
 
+    // --8<-- [start:doc-zw-fanout-subscribe]
     options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
         .EnableSubscriber()
         .AddHandler<WorldAnnounceSubscriber, WorldAnnounceEvent>()
         .AddHandler<NodeMaintenanceChangedSubscriber, NodeMaintenanceChangedEvent>();
+    // --8<-- [end:doc-zw-fanout-subscribe]
 });
 
 if (hostsZones)

@@ -22,6 +22,7 @@ class CourierActor implements ZLinkActor {
     return { courierId: this.actorId };
   }
 
+  // --8<-- [start:doc-dd-offer-push]
   async offer(request: OfferDeliveryMsg): Promise<void> {
     this.offers.set(request.deliveryId, request.attempt);
     await this.context.boundSession.send(new OfferDeliveryNotify(
@@ -31,7 +32,9 @@ class CourierActor implements ZLinkActor {
       request.dropoffAddress
     )).submit();
   }
+  // --8<-- [end:doc-dd-offer-push]
 
+  // --8<-- [start:doc-dd-decision-send]
   async decide(decision: CourierDecisionMsg): Promise<void> {
     const attempt = this.offers.get(decision.deliveryId);
     if (attempt === undefined) {
@@ -48,6 +51,7 @@ class CourierActor implements ZLinkActor {
       )
     ).submit();
   }
+  // --8<-- [end:doc-dd-decision-send]
 
 }
 

@@ -57,6 +57,7 @@ class player_actor_t final : public fw::actor_t
     fw::task_t<void> on_join_completed (
       const fw::actor_join_completion_t &completion) override
     {
+        // --8<-- [start:doc-zw-join-completed]
         if (std::holds_alternative<fw::actor_join_accepted_t> (completion)) {
             std::cerr << "zoneworld-join-accepted player="
                       << player_id << " zone=" << zone_id
@@ -122,6 +123,7 @@ class player_actor_t final : public fw::actor_t
             pending_join = false;
             pending_crash_probe = false;
         }
+        // --8<-- [end:doc-zw-join-completed]
         co_return;
     }
 
@@ -183,6 +185,7 @@ class player_relocation_adapter_t final
     : public fw::actor_relocation_adapter_t<player_actor_t>
 {
   public:
+    // --8<-- [start:doc-zw-actor-capture]
     fw::task_t<std::vector<std::byte>> capture (
       player_actor_t &actor,
       std::stop_token) override
@@ -196,6 +199,7 @@ class player_relocation_adapter_t final
         co_return std::vector<std::byte> (
           message.bytes ().begin (), message.bytes ().end ());
     }
+    // --8<-- [end:doc-zw-actor-capture]
 
     fw::task_t<void> restore (
       player_actor_t &actor,

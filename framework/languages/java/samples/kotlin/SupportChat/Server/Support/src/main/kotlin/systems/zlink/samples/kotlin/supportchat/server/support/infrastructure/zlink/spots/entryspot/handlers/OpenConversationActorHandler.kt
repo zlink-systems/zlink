@@ -31,6 +31,7 @@ class OpenConversationActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler
             throw IllegalStateException("Only customer actors can open a conversation.")
         }
 
+        // --8<-- [start:doc-sc-open-actor]
         val opened = entrySpot.context().outbound()
             .requestToChannel(
                 SampleNames.ApiChannel,
@@ -50,5 +51,6 @@ class OpenConversationActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler
                 JoinConversationReq(actor.participantId, actor.role, actor.displayName),
             )
         return OpenConversationRes(opened.conversationId, joined.state)
+        // --8<-- [end:doc-sc-open-actor]
     }
 }

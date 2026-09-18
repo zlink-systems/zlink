@@ -110,6 +110,7 @@ class Program {
                     .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
                 mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).client()
                 // --8<-- [end:doc-multi-channel-register]
+                // --8<-- [start:doc-zw-node-register]
                 mesh.objects().server()
                     .addEntrySpot(ZoneEntrySpot::class.java)
                     .addSpotFactory(ZoneWorldNames.ZONE_SPOT_TYPE, ZoneSpot::class.java) {
@@ -120,16 +121,21 @@ class Program {
                         PlayerActor::class.java,
                         PlayerActorFactory::class.java,
                     ) { it.preserveStateWith(PlayerActorRelocationAdapter::class.java) }
+                // --8<-- [end:doc-zw-node-register]
+                // --8<-- [start:doc-zw-fanout-subscribe]
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL).enableSubscriber()
                     .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
+                // --8<-- [end:doc-zw-fanout-subscribe]
             }
             "ops" -> {
                 mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).server()
                     .addHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
                 mesh.objects().client()
+                // --8<-- [start:doc-zw-fanout-publisher]
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
                     .setRoutingIdPrefix("zoneworld-kotlin-ops-broadcast")
                     .enablePublisher()
+                // --8<-- [end:doc-zw-fanout-publisher]
                 options.addStreamNode(ZoneWorldNames.OPS_STREAM).bind(topology.streamValue())
                     .enableActorDispatch().registerSession(OpsSession::class.java)
             }

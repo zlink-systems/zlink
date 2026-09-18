@@ -40,6 +40,7 @@ class JoinWorldSessionHandler {
   ): Promise<void> {
     if (context.actors.bound.length !== 0) throw new Error('Session already joined the world.');
     const request = payload.decode(JoinWorldReq);
+    // --8<-- [start:doc-zw-session-bind]
     const ensured = await this.actors
       .getOrCreate(request.playerId, ZoneWorldNames.playerActorType)
       .inMesh(ZoneWorldNames.zoneMesh)
@@ -48,6 +49,7 @@ class JoinWorldSessionHandler {
       .submit();
     if (ensured.status === 'rejected') throw new Error(`Player actor '${request.playerId}' creation was rejected.`);
     const actor = await context.actors.bindOrGet(ensured.actor);
+    // --8<-- [end:doc-zw-session-bind]
     await actor.relay(payload);
     console.log(`session bound to player actor player=${request.playerId}`);
   }

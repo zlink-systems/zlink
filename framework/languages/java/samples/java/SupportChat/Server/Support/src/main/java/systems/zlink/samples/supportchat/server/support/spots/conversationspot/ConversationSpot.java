@@ -170,6 +170,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         publish(requireConversation().markIdle(System.currentTimeMillis()));
     }
 
+    // --8<-- [start:doc-sc-assign]
     private void assignAgent() {
         AgentAssignmentService.AvailableAgent assigned = assignment.assignForConversation(
             requireConversation().snapshot().conversationId());
@@ -181,6 +182,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
             "support conversation: assigned. conversation={}, roster={}",
             context.spotId(), assigned.rosterActorId());
     }
+    // --8<-- [end:doc-sc-assign]
 
     private void publish(Conversation.Change change) {
         notifications.publish(change, actors, directory, assignment);

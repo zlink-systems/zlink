@@ -12,6 +12,7 @@ class DeliveryStatusUpdatedHandler : ZLinkSuspendingEntrySpotActorSendHandler<
     CustomerActor,
     DeliveryStatusUpdatedMsg,
     > {
+    // --8<-- [start:doc-dd-customer-push]
     override suspend fun handle(
         entrySpot: CustomerEntrySpot,
         actor: CustomerActor,
@@ -33,4 +34,5 @@ class DeliveryStatusUpdatedHandler : ZLinkSuspendingEntrySpotActorSendHandler<
             )
         }
     }
+    // --8<-- [end:doc-dd-customer-push]
 }

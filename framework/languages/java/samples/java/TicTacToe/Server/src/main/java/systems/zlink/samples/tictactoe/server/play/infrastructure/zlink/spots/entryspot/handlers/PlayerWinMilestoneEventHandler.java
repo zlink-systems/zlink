@@ -9,6 +9,7 @@ import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.en
 import systems.zlink.samples.tictactoe.shared.contracts.PlayerWinMilestoneEvent;
 
 // --8<-- [start:doc-multicast-subscribe]
+// --8<-- [start:doc-ttt-milestone-handler]
 @ZLinkSpotSubscription(topic = SampleNames.PlayerMilestoneTopic)
 public final class PlayerWinMilestoneEventHandler
     implements ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> {
@@ -20,4 +21,5 @@ public final class PlayerWinMilestoneEventHandler
         return CompletableFuture.completedFuture(null);
     }
 }
+// --8<-- [end:doc-ttt-milestone-handler]
 // --8<-- [end:doc-multicast-subscribe]

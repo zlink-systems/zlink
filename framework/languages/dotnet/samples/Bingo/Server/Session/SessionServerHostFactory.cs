@@ -42,6 +42,7 @@ public static class SessionServerHostFactory
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(SessionServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
+            // --8<-- [start:doc-bingo-session-register]
             options.AddRouteMesh(SampleNames.PlayMeshName)
                 .SetRoutingIdPrefix("session")
                 .Listen(session.MeshEndpoint)
@@ -51,6 +52,7 @@ public static class SessionServerHostFactory
                 .Bind(session.StreamEndpoint)
                 .EnableActorDispatch()
                 .AddSession<BingoSession>();
+            // --8<-- [end:doc-bingo-session-register]
         });
         builder.Services.AddSingleton(new BingoReadyReport(
             BingoReadyKind.MeshRoute,

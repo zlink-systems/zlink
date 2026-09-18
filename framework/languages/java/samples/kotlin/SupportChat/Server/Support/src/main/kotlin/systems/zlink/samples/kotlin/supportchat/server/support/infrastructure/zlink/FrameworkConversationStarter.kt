@@ -15,6 +15,7 @@ class FrameworkConversationStarter(
         conversationId: String,
         request: ConversationStartReq,
     ) {
+        // --8<-- [start:doc-sc-api-open]
         spots.getOrCreate(conversationId, SampleNames.ConversationSpotType)
             .request(
                 ConversationCreateReq(
@@ -26,5 +27,6 @@ class FrameworkConversationStarter(
             )
             .submit()
             .await()
+        // --8<-- [end:doc-sc-api-open]
     }
 }

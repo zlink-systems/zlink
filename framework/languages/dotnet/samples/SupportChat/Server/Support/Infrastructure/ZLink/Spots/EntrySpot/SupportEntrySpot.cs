@@ -64,6 +64,7 @@ internal sealed class SupportEntrySpot(
     // Fires when a member actor's stream session disconnects. An agent's roster actor
     // leaves the assignable list so it stops receiving new conversations until it
     // reconnects and re-registers availability (§9).
+    // --8<-- [start:doc-sc-agent-disconnect]
     public ValueTask OnDisconnectActorAsync(
         SupportUserActor actor,
         CancellationToken cancellationToken)
@@ -78,4 +79,5 @@ internal sealed class SupportEntrySpot(
 
         return ValueTask.CompletedTask;
     }
+    // --8<-- [end:doc-sc-agent-disconnect]
 }

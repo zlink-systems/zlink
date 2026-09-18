@@ -29,6 +29,7 @@ class StartOrderUseCase(
     private val instanceId = topology.role().instanceId
 
     suspend fun execute(request: StartOrderReq): StartOrderRes {
+        // --8<-- [start:doc-sm-api-start]
         val existing = store.findIdempotency(request.idempotencyKey)
         if (existing != null && existing.started) {
             val state = store.findReadModel(existing.orderId) ?: store.placeholder(existing.orderId)
@@ -41,6 +42,7 @@ class StartOrderUseCase(
         val command = buildCommand(request, existing)
         val state = workflows.startWorkflow(command)
         return StartOrderRes(state.orderId, state.status)
+        // --8<-- [end:doc-sm-api-start]
     }
 
     suspend fun prepareInventoryReserved(request: StartOrderReq): PrepareInventoryReservedApiRes =

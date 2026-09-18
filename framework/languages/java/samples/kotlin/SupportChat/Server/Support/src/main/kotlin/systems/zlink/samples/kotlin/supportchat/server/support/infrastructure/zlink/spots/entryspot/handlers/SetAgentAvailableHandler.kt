@@ -23,6 +23,7 @@ class SetAgentAvailableHandler(
     SetAgentAvailableReq,
     SetAgentAvailableRes,
     > {
+    // --8<-- [start:doc-sc-set-available]
     override suspend fun handle(
         entrySpot: SupportEntrySpot,
         actor: SupportUserActor,
@@ -38,4 +39,5 @@ class SetAgentAvailableHandler(
         assignment.setAvailable(actor.actorId, actor.displayName, request.isAvailable)
         return SetAgentAvailableRes(request.isAvailable)
     }
+    // --8<-- [end:doc-sc-set-available]
 }

@@ -59,6 +59,7 @@ public final class PlayServerApplication {
                     .setConnectionString(topology.redisEndpoint())
                     .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(PlayServerApplication.class);
+            // --8<-- [start:doc-bingo-play-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);
             node.listen(topology.selectedPlaySpotRouterEndpoint())
                 .setRoutingIdPrefix("play");
@@ -86,6 +87,7 @@ public final class PlayServerApplication {
                     PlayerActorFactory.class,
                     factory -> factory.preserveStateWith(
                         PlayerActorRelocationAdapter.class));
+            // --8<-- [end:doc-bingo-play-register]
         };
     }
 

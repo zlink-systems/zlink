@@ -33,6 +33,7 @@ public final class CourierDecisionActorHandler
         CourierActor actor,
         ZLinkMessageContext context,
         Messages.CourierDecisionMsg message) {
+        // --8<-- [start:doc-dd-decision-send]
         Optional<Integer> attempt = actor.takeOfferedAttempt(message.deliveryId());
         if (attempt.isEmpty()) {
             System.err.println("deliverydispatch courier-actor: decision for an unknown offer"
@@ -53,5 +54,6 @@ public final class CourierDecisionActorHandler
                 "deliverydispatch courier-actor: decision delivery="
                     + message.deliveryId() + " courier=" + actor.actorId()
                     + " attempt=" + attempt.get() + " accepted=" + message.accepted()));
+        // --8<-- [end:doc-dd-decision-send]
     }
 }

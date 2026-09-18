@@ -42,6 +42,7 @@ internal sealed class SupportChatSession(
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
+    // --8<-- [start:doc-sc-session-dispatch]
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
@@ -60,6 +61,7 @@ internal sealed class SupportChatSession(
                 return;
         }
     }
+    // --8<-- [end:doc-sc-session-dispatch]
 
     private async ValueTask AuthenticateAsync(ZLinkMessage payload, CancellationToken cancellationToken)
     {
@@ -74,6 +76,7 @@ internal sealed class SupportChatSession(
             || string.IsNullOrWhiteSpace(authenticated.Role))
             throw new InvalidOperationException(authenticated.Reason ?? "SupportChat authentication failed.");
 
+        // --8<-- [start:doc-sc-session-auth]
         // The identity actor's ParticipantId is its own ActorId (customer id or roster id).
         var actor = await GetOrCreateActorAsync(
             authenticated.ActorId,
@@ -90,6 +93,7 @@ internal sealed class SupportChatSession(
         _identityActorId = authenticated.ActorId;
         _identityDisplayName = authenticated.DisplayName;
         _identityRole = authenticated.Role;
+        // --8<-- [end:doc-sc-session-auth]
 
         await Context.Client.Reply(new AuthenticateRes(
                 authenticated.ActorId,
@@ -118,6 +122,7 @@ internal sealed class SupportChatSession(
             return;
         }
 
+        // --8<-- [start:doc-sc-agent-join]
         // An agent joins each conversation through its own per-conversation actor. Ask
         // the Support server to create it and join it into the ConversationSpot, then
         // bind it onto this session so the agent client receives that room's pushes.
@@ -137,12 +142,14 @@ internal sealed class SupportChatSession(
         await _conversationActors[conversationId].RelayAsync(
             payload,
             cancellationToken);
+        // --8<-- [end:doc-sc-agent-join]
         logger.LogInformation(
             "session: agent conversation join submitted. roster={RosterActorId}, conversation={ConversationId}",
             _identityActorId,
             conversationId);
     }
 
+    // --8<-- [start:doc-sc-metadata-relay]
     private async ValueTask RelayConversationPacketAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
@@ -154,6 +161,7 @@ internal sealed class SupportChatSession(
             : RequireIdentityActor();
         await target.RelayAsync(payload, cancellationToken);
     }
+    // --8<-- [end:doc-sc-metadata-relay]
 
     private IZLinkSessionActor RequireIdentityActor()
     {

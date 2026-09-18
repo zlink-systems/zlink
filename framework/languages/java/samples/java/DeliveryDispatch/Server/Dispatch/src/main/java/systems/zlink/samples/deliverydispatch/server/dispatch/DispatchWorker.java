@@ -32,12 +32,14 @@ public final class DispatchWorker {
         this.offers = offers;
     }
 
+    // --8<-- [start:doc-dd-offer-start]
     /** The first offer. Records it, sends it, and returns — nobody is left waiting. */
     public CompletionStage<Void> dispatch(Messages.AssignDeliveryMsg request) {
         String courierId = Candidates.get(0);
         return publishStatus(request, Messages.DeliveryStatus.Assigned, courierId)
             .thenCompose(ignored -> startOffer(request, courierId, 0));
     }
+    // --8<-- [end:doc-dd-offer-start]
 
     /** A decision arrived. Accepted carries the delivery through; refused reassigns. */
     public CompletionStage<Void> settle(DeliveryOffer offer, boolean accepted, String reason) {
@@ -62,6 +64,7 @@ public final class DispatchWorker {
      * lives here rather than on the courier node: a node that timed the offer and manufactured a
      * refusal would be hiding the dispatch policy (common sample spec section 7.4).
      */
+    // --8<-- [start:doc-dd-reassign]
     public CompletionStage<Void> reassign(DeliveryOffer offer) {
         int nextIndex = offer.candidateIndex() + 1;
         if (nextIndex >= Candidates.size()) {
@@ -80,6 +83,7 @@ public final class DispatchWorker {
         return publishStatus(offer.request(), Messages.DeliveryStatus.Reassigned, courierId)
             .thenCompose(ignored -> startOffer(offer.request(), courierId, nextIndex));
     }
+    // --8<-- [end:doc-dd-reassign]
 
     public CompletionStage<Messages.ServerAssertionRes> assertServerEvidence(
         Messages.ServerAssertionReq request) {
@@ -96,6 +100,7 @@ public final class DispatchWorker {
         return offer(request, courierId, attempt);
     }
 
+    // --8<-- [start:doc-dd-offer-send]
     /** The offer is a one-way send: the turn that sends it ends right there. */
     private CompletionStage<Void> offer(
         Messages.AssignDeliveryMsg request,
@@ -112,6 +117,7 @@ public final class DispatchWorker {
                     request.dropoffAddress()))
             .submit();
     }
+    // --8<-- [end:doc-dd-offer-send]
 
     private CompletionStage<Void> publishStatus(
         Messages.AssignDeliveryMsg request,

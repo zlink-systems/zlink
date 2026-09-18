@@ -176,6 +176,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             // application-signaled relocation boundary.
             _context->relocation_ready ().defer ();
         } else {
+            // --8<-- [start:doc-bingo-room-join]
             get_player_record_res_t record;
             try {
                 get_player_record_req_t get_record;
@@ -195,6 +196,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
                 (void) co_await _context->leave_actor (actor_ref_for (actor), actor);
                 co_return;
             }
+            // --8<-- [end:doc-bingo-room-join]
             _pending_joins.erase (resumed);
             const auto display_name =
               actor.display_name.empty () ? request.display_name () : actor.display_name;
@@ -274,6 +276,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         if (drawn.state.winners.empty ()) {
             return;
         }
+        // --8<-- [start:doc-bingo-reward-publish]
         bingo_reward_acquired_event_t reward_event;
         reward_event.set_room_id (drawn.state.room_id);
         reward_event.set_actor_id (drawn.state.winners.front ());
@@ -282,6 +285,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         reward_event.set_item_name (bingo_reward_items_t::golden_dauber_name);
         reward_event.set_rarity (bingo_reward_items_t::legendary_rarity);
         _context->publish (sample_names_t::reward_topic, reward_event).async ();
+        // --8<-- [end:doc-bingo-reward-publish]
     }
 
     template <typename TNotify>
@@ -297,6 +301,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
 
     task_t<void> on_reward_acquired (const bingo_reward_acquired_event_t &event);
 
+    // --8<-- [start:doc-bingo-room-cleanup]
     task_t<void> leave_finished_actors ()
     {
         if (cleanup_started || snapshot ().winners.empty ()) {
@@ -314,6 +319,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         }
         co_return;
     }
+    // --8<-- [end:doc-bingo-room-cleanup]
 
     static actor_ref_t actor_ref_for (const player_actor_t &actor)
     {

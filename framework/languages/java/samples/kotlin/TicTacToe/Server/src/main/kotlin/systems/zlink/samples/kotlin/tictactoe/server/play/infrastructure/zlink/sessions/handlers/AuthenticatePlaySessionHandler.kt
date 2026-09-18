@@ -37,12 +37,14 @@ class AuthenticatePlaySessionHandler(
             .timeout(SampleNames.RequestTimeout)
             .submit(AuthenticatePlayerRes::class.java)
             .await()
+        // --8<-- [start:doc-ttt-session-bind]
         val playActor = actors.kotlin().getOrCreate(
             authenticated.player.actorId,
             SampleNames.PlayActor,
         ).request(PlayerActorCreateReq(authenticated.player)).await()
         val resolvedActor = requireActor(playActor)
         val boundActor = context.actors().bind(requireActor(playActor)).await()
+        // --8<-- [end:doc-ttt-session-bind]
         check(boundActor.ref() == resolvedActor) {
             "Bound ActorRef does not match the resolved ActorRef for '${authenticated.player.actorId}'."
         }

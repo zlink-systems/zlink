@@ -9,6 +9,7 @@ import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 public final class BorderSubscriptionHandlers {
+    // --8<-- [start:doc-zw-border-subscribe]
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
     public CompletionStage<Void> northWestToNorthEast(
         ZoneSpot spot, Messages.ZoneBorderEvent event) {
@@ -22,6 +23,7 @@ public final class BorderSubscriptionHandlers {
         spot.applyBorder(event);
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-zw-border-subscribe]
 
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
     public CompletionStage<Void> northEastToNorthWest(

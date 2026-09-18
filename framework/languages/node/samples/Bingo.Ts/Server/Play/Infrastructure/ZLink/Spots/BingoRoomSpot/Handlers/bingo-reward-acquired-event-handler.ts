@@ -5,6 +5,7 @@ import { BingoRoomSpot } from '../bingo-room-spot';
 import type { ZLinkPublishMessageContext, ZLinkSpotSubscriptionHandler } from '@zlink-systems/framework';
 import type { BingoRewardAcquiredEvent } from '../../../../../../../Shared/Contracts/messages';
 
+// --8<-- [start:doc-bingo-reward-subscribe]
 @Injectable()
 @zlinkSpotSubscriptionHandler({
   spot: () => BingoRoomSpot,
@@ -22,5 +23,6 @@ class BingoRewardAcquiredEventHandler
     await room.announceReward(event);
   }
 }
+// --8<-- [end:doc-bingo-reward-subscribe]
 
 export { BingoRewardAcquiredEventHandler };

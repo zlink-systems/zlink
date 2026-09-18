@@ -24,6 +24,7 @@ public final class EntryZoneJoinHandler
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException("Join player does not match the actor"));
         }
+        // --8<-- [start:doc-zw-entry-join]
         actor.prepareEntry(
             ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y, false, 0, 0);
         String zone = ZoneWorldSpec.zoneOf(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y);
@@ -34,6 +35,7 @@ public final class EntryZoneJoinHandler
                 false, true, "", false))
             .timeout(Duration.ofSeconds(10))
             .defer();
+        // --8<-- [end:doc-zw-entry-join]
         return CompletableFuture.completedFuture(null);
     }
 }

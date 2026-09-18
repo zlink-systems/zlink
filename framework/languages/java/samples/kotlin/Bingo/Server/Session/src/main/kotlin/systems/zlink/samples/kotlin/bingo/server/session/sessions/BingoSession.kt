@@ -17,6 +17,7 @@ class BingoSession(
 
     override fun context(): ZLinkSessionContext = context
 
+    // --8<-- [start:doc-bingo-session-disconnect]
     override suspend fun onDisconnectedSuspending() {
         for (actor in context.actors().bound()) {
             actor.notifyDisconnected().await()
@@ -28,7 +29,9 @@ class BingoSession(
             )
         }
     }
+    // --8<-- [end:doc-bingo-session-disconnect]
 
+    // --8<-- [start:doc-bingo-session-relay]
     override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
@@ -43,6 +46,7 @@ class BingoSession(
         val actor = requireSingleBoundActor(dispatch.packetName())
         actor.relay(dispatch, payload).await()
     }
+    // --8<-- [end:doc-bingo-session-relay]
 
     private fun requireSingleBoundActor(packetName: String): ZLinkSessionActor =
         when (context.actors().bound().size) {

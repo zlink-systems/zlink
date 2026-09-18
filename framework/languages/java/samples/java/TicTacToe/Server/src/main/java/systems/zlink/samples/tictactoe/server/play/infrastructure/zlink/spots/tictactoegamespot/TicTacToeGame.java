@@ -96,6 +96,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
             ZLinkSpotActorJoinResult.accept(new TicTacToeGameJoinRes(preview.state())));
     }
 
+    // --8<-- [start:doc-ttt-game-join]
     @Override
     public CompletionStage<Void> onJoinedActor(PlayActor actor) {
         TicTacToeGameJoinReq joinRequest = pendingJoins.remove(actor.actorId());
@@ -105,6 +106,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         join(actor, joinRequest.roomId(), joinRequest.player());
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-ttt-game-join]
 
     @Override
     public CompletionStage<Void> onLeaveActor(PlayActor actor) {
@@ -118,6 +120,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-ttt-timer-register]
     @Override
     public CompletionStage<Void> onInitialize() {
         // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
@@ -128,6 +131,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
                 null)
             .thenAccept(timer -> gameTick = timer);
     }
+    // --8<-- [end:doc-ttt-timer-register]
 
     @Override
     public CompletionStage<Void> onClosing() {
@@ -232,6 +236,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
 
     private final List<PlayActor> actors = new ArrayList<>();
 
+    // --8<-- [start:doc-ttt-broadcast]
     private void broadcast(GameState state, String excludedActorId) {
         actors.stream()
             .filter(actor -> excludedActorId == null || !actor.actorId().equals(excludedActorId))
@@ -239,6 +244,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
                 .send(new GameStateNotify(state))
                 .submit());
     }
+    // --8<-- [end:doc-ttt-broadcast]
 
     private void notifyPlayerJoined(
         PlayActor joinedActor,
@@ -275,6 +281,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
             || "TurnTimedOut".equals(state.status());
     }
 
+    // --8<-- [start:doc-ttt-leave-game]
     public CompletionStage<Void> leaveGame(PlayActor actor, String roomId) {
         if (!this.roomId.equals(roomId)) {
             throw new IllegalStateException("leave request room id does not match game room");
@@ -285,6 +292,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         actor.markForDestroyAfterRoomLeave();
         return context.leaveActor(actor);
     }
+    // --8<-- [end:doc-ttt-leave-game]
 
     private void publishWinMilestone(
         PlayActor actor,

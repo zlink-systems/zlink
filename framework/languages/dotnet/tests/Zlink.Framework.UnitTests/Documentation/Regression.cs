@@ -61,7 +61,15 @@ public sealed class RegressionTests
         "36-timer-worker.ko.md",
         "37-relocation.ko.md",
         "38-stream-boundary.ko.md",
-        "39-session-binding.ko.md"
+        "39-session-binding.ko.md",
+        //  샘플 따라 읽기 장. 계약은 common/sample이 소유하므로 소유 스펙 머리말을 두지 않는다.
+        "50-bingo.ko.md",
+        "51-tictactoe.ko.md",
+        "52-supportchat.ko.md",
+        "53-deliverydispatch.ko.md",
+        "54-shoppingmall.ko.md",
+        "55-gamequest.ko.md",
+        "56-zoneworld.ko.md"
     ];
 
     [Fact]
@@ -267,6 +275,13 @@ public sealed class RegressionTests
         {
             "14-samples.ko.md",
             "15-e2e-testing.ko.md",
+            "50-bingo.ko.md",
+            "51-tictactoe.ko.md",
+            "52-supportchat.ko.md",
+            "53-deliverydispatch.ko.md",
+            "54-shoppingmall.ko.md",
+            "55-gamequest.ko.md",
+            "56-zoneworld.ko.md",
         };
 
         foreach (var document in CommonGuideDocuments)

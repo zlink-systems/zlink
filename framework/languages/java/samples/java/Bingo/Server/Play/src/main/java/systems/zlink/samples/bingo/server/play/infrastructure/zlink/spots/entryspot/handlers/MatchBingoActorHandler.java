@@ -23,6 +23,7 @@ public final class MatchBingoActorHandler
         PlayerActor actor,
         ZLinkMessageContext context,
         Messages.MatchBingoReq request) {
+        // --8<-- [start:doc-bingo-match-actor]
         return entrySpot.context().outbound().requestToChannel(
                 SampleNames.ApiChannel,
                 BingoMessages.matchBingoApiReq(
@@ -63,5 +64,6 @@ public final class MatchBingoActorHandler
                     List.of());
                 return BingoMessages.matchBingoRes(matched.getRoomId(), initialState);
             });
+        // --8<-- [end:doc-bingo-match-actor]
     }
 }

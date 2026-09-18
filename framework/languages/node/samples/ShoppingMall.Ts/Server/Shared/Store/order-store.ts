@@ -73,6 +73,7 @@ class OrderStore {
     });
   }
 
+  // --8<-- [start:doc-sm-api-start]
   reserveOrder(request: StartOrderReq): StartOrderWorkflowReq {
     return this.updateCommerce((data) => {
       const cart = data.carts[request.cartId];
@@ -92,6 +93,7 @@ class OrderStore {
       );
     });
   }
+  // --8<-- [end:doc-sm-api-start]
 
   createPendingMapping(idempotencyKey: string, orderId: string, ownerInstanceId: string): { created: boolean } {
     return this.updateCommerce((data) => {
@@ -176,12 +178,14 @@ class OrderStore {
 
   continueOrder(orderId: string, instanceId: string, objectGeneration?: bigint): { state: OrderState } {
     for (;;) {
+      // --8<-- [start:doc-sm-replay]
       const order = this.readOrder(orderId);
       if (order.stream.length === 0) throw new Error(`Order '${orderId}' does not exist.`);
       const aggregate = this.foldAggregate(order.stream);
       this.healProjection(orderId, instanceId);
       const last = aggregate.lastEventType();
       if (last === 'OrderConfirmed' || last === 'OrderFailed') return { state: aggregate.snapshot() };
+      // --8<-- [end:doc-sm-replay]
 
       if (last === 'InventoryReserved' && order.relocationCheckpointGeneration !== undefined) {
         if (objectGeneration === undefined || objectGeneration.toString() !== order.relocationCheckpointGeneration) {
@@ -196,6 +200,7 @@ class OrderStore {
       const started = this.startedPayload(order.stream);
       let type: OrderEventType;
       let payload: (eventId: string) => Record<string, unknown>;
+      // --8<-- [start:doc-sm-next-step]
       if (last === 'OrderStarted') {
         const result = this.reserveInventoryEffect(orderId, started.lines);
         type = result.accepted ? 'InventoryReserved' : 'InventoryReservationFailed';
@@ -229,6 +234,7 @@ class OrderStore {
       } catch (error) {
         if (!(error instanceof ExpectedVersionConflict)) throw error;
       }
+      // --8<-- [end:doc-sm-next-step]
     }
   }
 
@@ -266,11 +272,13 @@ class OrderStore {
     throw new Error(`Stale expected version was accepted for '${orderId}'.`);
   }
 
+  // --8<-- [start:doc-sm-get-state]
   getOrder(orderId: string): { state: OrderState } {
     const state = this.readOrder(orderId).projection;
     if (state === undefined) throw new Error(`Order projection '${orderId}' does not exist.`);
     return { state };
   }
+  // --8<-- [end:doc-sm-get-state]
 
   deleteProjection(orderId: string): { deleted: boolean } {
     return this.updateOrder(orderId, (data) => {
@@ -281,6 +289,7 @@ class OrderStore {
     });
   }
 
+  // --8<-- [start:doc-sm-rebuild]
   rebuildProjection(orderId: string): { state: OrderState } {
     return this.updateOrder(orderId, (data) => {
       const state = this.fold(data.stream);
@@ -289,6 +298,7 @@ class OrderStore {
       return { state };
     });
   }
+  // --8<-- [end:doc-sm-rebuild]
 
   assertEvidence(request: ServerAssertionReq): { passed: boolean; evidence: string[] } {
     const commerce = this.readCommerce();
@@ -321,6 +331,7 @@ class OrderStore {
     return { passed: problems.length === 0, evidence: [...evidence, ...problems] };
   }
 
+  // --8<-- [start:doc-sm-append]
   private appendEvent(
     orderId: string,
     expectedVersion: number,
@@ -348,6 +359,7 @@ class OrderStore {
       return data.projection;
     });
   }
+  // --8<-- [end:doc-sm-append]
 
   private healProjection(orderId: string, instanceId?: string): OrderState {
     return this.updateOrder(orderId, (data) => {

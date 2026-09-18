@@ -35,6 +35,7 @@ class BindCourierSessionHandler {
     @Inject(ZLINK_ACTOR_MANAGER) private readonly actorManager: ZLinkActorManager
   ) {}
 
+  // --8<-- [start:doc-dd-session-bind]
   async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     const request = payload.decode(BindCourierSessionReq);
     const actorRef = await this.findOrEnsureActor(request.courierId);
@@ -42,6 +43,7 @@ class BindCourierSessionHandler {
     console.log(`deliverydispatch-courier bound courier=${request.courierId}`);
     await actor.relay(payload);
   }
+  // --8<-- [end:doc-dd-session-bind]
 
   private async findOrEnsureActor(courierId: string): Promise<ActorRef> {
     const result = await this.actorManager

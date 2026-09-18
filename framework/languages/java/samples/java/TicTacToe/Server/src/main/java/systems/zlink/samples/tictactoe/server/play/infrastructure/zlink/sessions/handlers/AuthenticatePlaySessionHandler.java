@@ -52,6 +52,7 @@ public final class AuthenticatePlaySessionHandler
                 new AuthenticatePlayerReq(request.accessToken()))
             .timeout(SampleNames.RequestTimeout)
             .submit(AuthenticatePlayerRes.class)
+            // --8<-- [start:doc-ttt-session-bind]
             .thenCompose(authenticated -> actors.getOrCreate(
                     authenticated.player().actorId(), SampleNames.PlayActor)
                 .request(new PlayerActorCreateReq(authenticated.player()))
@@ -75,6 +76,7 @@ public final class AuthenticatePlaySessionHandler
                                 .submit();
                         });
                 }));
+            // --8<-- [end:doc-ttt-session-bind]
     }
 
     private static ActorRef requireActor(ZLinkActorCreateResult result) {

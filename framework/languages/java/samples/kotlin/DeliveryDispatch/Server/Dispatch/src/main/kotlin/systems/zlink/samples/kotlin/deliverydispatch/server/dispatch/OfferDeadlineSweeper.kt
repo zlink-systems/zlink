@@ -33,6 +33,7 @@ class OfferDeadlineSweeper(
         scope.cancel()
     }
 
+    // --8<-- [start:doc-dd-sweeper]
     private suspend fun sweep() {
         for (offer in offers.takeExpired()) {
             println(
@@ -50,4 +51,5 @@ class OfferDeadlineSweeper(
             }
         }
     }
+    // --8<-- [end:doc-dd-sweeper]
 }

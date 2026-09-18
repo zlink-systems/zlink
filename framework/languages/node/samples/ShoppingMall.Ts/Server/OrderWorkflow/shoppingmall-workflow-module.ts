@@ -34,6 +34,7 @@ function createShoppingMallWorkflowModule(role: string): Function {
           builder.addLocationStore(createShoppingMallLocationStore(config));
           builder.addRelocationStore(createShoppingMallRelocationStore(config));
           shoppingMallLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-sm-workflow-register]
           const mesh = builder.addRouteMesh(SampleNames.orderWorkflowSpotMesh)
             .listen(workflowSpotEndpointForRole(role, config));
           mesh.objects().server().addInstanceSpotFactory(
@@ -41,6 +42,7 @@ function createShoppingMallWorkflowModule(role: string): Function {
             OrderWorkflowSpot,
             (factory) => factory.recreateOnRelocation()
           );
+          // --8<-- [end:doc-sm-workflow-register]
           return builder.build();
         }
       })

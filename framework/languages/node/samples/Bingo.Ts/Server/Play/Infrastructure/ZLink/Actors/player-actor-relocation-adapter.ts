@@ -3,6 +3,7 @@ import { PlayerActor } from './player-actor';
 import { PlayerActorTransferState } from '../../../../../Shared/Contracts/bingo-messages.generated';
 
 class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
+  // --8<-- [start:doc-bingo-relocation-adapter]
   async capture(actor: PlayerActor): Promise<Uint8Array> {
     return new TextEncoder().encode(JSON.stringify(new PlayerActorTransferState({
       displayName: actor.displayName,
@@ -10,6 +11,7 @@ class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<Player
       disconnected: false
     })));
   }
+  // --8<-- [end:doc-bingo-relocation-adapter]
 
   async restore(actor: PlayerActor, payload: Uint8Array): Promise<void> {
     const restored = JSON.parse(new TextDecoder().decode(payload)) as PlayerActorTransferState;

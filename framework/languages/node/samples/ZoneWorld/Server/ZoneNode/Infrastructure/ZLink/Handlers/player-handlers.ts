@@ -49,6 +49,7 @@ class EntryEnterWorldHandler {
   ): Promise<EnterWorldRes> {
     actor.dirX = request.dirX;
     actor.dirY = request.dirY;
+    // --8<-- [start:doc-zw-entry-join]
     const targetZone = zoneOf(request.x, request.y);
     actor.beginPendingJoin(request.isBot ? 'bot' : 'world');
     try {
@@ -60,6 +61,7 @@ class EntryEnterWorldHandler {
       actor.completePendingJoin();
       throw error;
     }
+    // --8<-- [end:doc-zw-entry-join]
     actor.x = request.x;
     actor.y = request.y;
     actor.zoneId = targetZone;
@@ -134,6 +136,7 @@ class PlayerMovement {
 
   async move(actor: PlayerActor, x: number, y: number): Promise<void> {
     const previousZone = actor.zoneId;
+    // --8<-- [start:doc-zw-move]
     const decision = validateMove(actor, x, y, () => false);
     if (decision.kind === 'rejected') {
       await this.reject(actor, decision.reason);
@@ -150,6 +153,7 @@ class PlayerMovement {
         .submit();
       return;
     }
+    // --8<-- [start:doc-zw-zone-change]
     actor.beginPendingJoin(actor.isBot ? 'bot' : 'move');
     try {
       actor.context.joinSpot(
@@ -161,6 +165,8 @@ class PlayerMovement {
       throw error;
     }
     console.log(`zone change scheduled player=${actor.actorId} from=${previousZone} to=${targetZone}`);
+    // --8<-- [end:doc-zw-zone-change]
+    // --8<-- [end:doc-zw-move]
   }
 
   private async reject(actor: PlayerActor, reason: typeof MoveRejectReasons[keyof typeof MoveRejectReasons]): Promise<void> {

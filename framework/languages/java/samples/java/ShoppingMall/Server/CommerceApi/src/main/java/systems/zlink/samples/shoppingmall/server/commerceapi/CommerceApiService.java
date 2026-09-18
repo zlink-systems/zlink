@@ -28,6 +28,7 @@ public final class CommerceApiService {
     }
 
     public CompletionStage<Messages.StartOrderRes> startOrder(Messages.StartOrderReq request) {
+        // --8<-- [start:doc-sm-api-start]
         validate(request);
         Messages.CartSeed cart = store.getCart(request.cartId());
         store.validateShippingAddress(request.shippingAddressId());
@@ -50,12 +51,15 @@ public final class CommerceApiService {
                 store.markIdempotencyStarted(request.idempotencyKey());
                 return new Messages.StartOrderRes(mapping.orderId(), started.state().status());
             });
+        // --8<-- [end:doc-sm-api-start]
     }
 
+    // --8<-- [start:doc-sm-get-state]
     public CompletionStage<Messages.GetOrderStateRes> getOrder(String orderId) {
         return CompletableFuture.completedFuture(
             new Messages.GetOrderStateRes(store.findProjection(orderId)));
     }
+    // --8<-- [end:doc-sm-get-state]
 
     public void deleteProjection(String orderId) {
         store.deleteProjection(orderId);
@@ -145,6 +149,7 @@ public final class CommerceApiService {
             cart.currency());
     }
 
+    // --8<-- [start:doc-sm-api-request]
     private ZLinkSpotRequestCall workflowRequest(
         String orderId,
         Object request) {
@@ -152,6 +157,7 @@ public final class CommerceApiService {
             .instanceSpot(SampleNames.OrderWorkflowSpotType)
             .inMesh(SampleNames.OrderSpotDiscovery);
     }
+    // --8<-- [end:doc-sm-api-request]
 
     private static void validate(Messages.StartOrderReq request) {
         requireText(request.cartId(), "cartId");

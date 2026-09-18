@@ -49,6 +49,7 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  // --8<-- [start:doc-dd-reassign]
   private async startOffer(request: AssignDeliveryMsg, attempt: number): Promise<void> {
     if (attempt < 1 || attempt > courierCandidates.length) {
       const previous = this.offers.get(request.deliveryId);
@@ -57,6 +58,7 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       console.log(`deliverydispatch-dispatch failed delivery=${request.deliveryId} reason=candidates-exhausted`);
       return;
     }
+    // --8<-- [start:doc-dd-offer-start]
     const courierId = courierCandidates[attempt - 1];
 
     const actor = await this.findOrEnsureActor(courierId);
@@ -77,12 +79,17 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       status: 'Offered'
     };
     this.offers.save(offer);
+    // --8<-- [start:doc-dd-offer-send]
     await this.actors.sendToActor(
       actor.actorId,
       offerDelivery(courierId, request.deliveryId, attempt, request.pickupAddress, request.dropoffAddress)
     ).submit();
+    // --8<-- [end:doc-dd-offer-send]
+    // --8<-- [end:doc-dd-offer-start]
   }
+  // --8<-- [end:doc-dd-reassign]
 
+  // --8<-- [start:doc-dd-decision-settle]
   private async applyResult(result: OfferDeliveryResultMsg): Promise<void> {
     const current = this.offers.get(result.deliveryId);
     if (
@@ -107,7 +114,9 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     this.saveStatus(current, 'Rejected');
     await this.startOffer(current, current.attempt + 1);
   }
+  // --8<-- [end:doc-dd-decision-settle]
 
+  // --8<-- [start:doc-dd-sweeper]
   private async sweepExpiredOffers(): Promise<void> {
     const now = Date.now();
     for (const offer of this.offers.offered()) {
@@ -116,6 +125,7 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       await this.startOffer(offer, offer.attempt + 1);
     }
   }
+  // --8<-- [end:doc-dd-sweeper]
 
   private saveStatus(offer: DeliveryOffer, status: DeliveryOfferStatus): void {
     this.offers.save({ ...offer, status });

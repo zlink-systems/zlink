@@ -20,6 +20,7 @@ class OfferDeliveryResultHandler(
     private val worker: DispatchWorker,
 ) : ZLinkSuspendingSendHandler<OfferDeliveryResultMsg> {
     override suspend fun handle(message: OfferDeliveryResultMsg, context: ZLinkMessageContext) {
+        // --8<-- [start:doc-dd-decision-settle]
         val offer = offers.settle(message.deliveryId, message.attempt)
         if (offer == null) {
             println(
@@ -35,5 +36,6 @@ class OfferDeliveryResultHandler(
                 "courier=${message.courierId} attempt=${message.attempt} accepted=${message.accepted}",
         )
         worker.settle(offer, message.accepted, message.reason)
+        // --8<-- [end:doc-dd-decision-settle]
     }
 }

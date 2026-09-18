@@ -30,6 +30,7 @@ public final class DeliveryStatusChangedHandler
     public CompletionStage<Messages.DeliveryStatusChangedRes> handle(
         Messages.DeliveryStatusChangedReq request,
         ZLinkMessageContext context) {
+        // --8<-- [start:doc-dd-tracking-forward]
         evidenceStore.append(request);
         if (request.status() == Messages.DeliveryStatus.Delivered) {
             System.out.println("deliverydispatch-tracking status=Delivered delivery="
@@ -46,5 +47,6 @@ public final class DeliveryStatusChangedHandler
                     new Messages.DeliveryStatusChangedRes(
                         request.deliveryId(), request.status()));
         });
+        // --8<-- [end:doc-dd-tracking-forward]
     }
 }

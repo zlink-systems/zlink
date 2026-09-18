@@ -55,6 +55,7 @@ function createTicTacToePlayModule() {
             .messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
           builder.addRelocationStore(createTicTacToeRelocationStore(config));
+          // --8<-- [start:doc-ttt-play-register]
           builder.addStreamNode(SampleNames.playStream)
             .enableActorDispatch()
             .bind(config.playStreamEndpoint)
@@ -79,6 +80,7 @@ function createTicTacToePlayModule() {
             PlayActorFactory,
             (factory) => factory.preserveStateWith(PlayActorRelocationAdapter)
           );
+          // --8<-- [end:doc-ttt-play-register]
           mesh.channel(SampleNames.playerMilestoneChannel).server();
           if (config.playIndex === 0) {
             // RouteMesh: Play-A is the single initiator for the Play-A to Play-B connection.

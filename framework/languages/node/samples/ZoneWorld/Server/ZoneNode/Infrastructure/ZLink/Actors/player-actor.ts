@@ -72,6 +72,7 @@ class PlayerActor implements ZLinkActor {
     );
   }
 
+  // --8<-- [start:doc-zw-join-completed]
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     const kind = 'kind' in completion ? completion.kind : 'none';
     console.log(
@@ -101,6 +102,7 @@ class PlayerActor implements ZLinkActor {
     }
     this.push(new MoveRejectedNotify(reason as never, this.x, this.y));
   }
+  // --8<-- [end:doc-zw-join-completed]
 
   async sendJoinResult(error: string | null): Promise<void> {
     await this.context.boundSession
@@ -128,6 +130,7 @@ class DeliverZoneNotificationMsgHandler {
   async handle(_spot: ZoneSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverZoneNotificationMsg): Promise<void> {
     const value = message.payload as Record<string, unknown>;
     switch (message.packetName) {
+      // --8<-- [start:doc-zw-state-push]
       case 'ZoneStateNotify':
         actor.push(new ZoneStateNotify(
           value.zoneId as string,
@@ -135,6 +138,7 @@ class DeliverZoneNotificationMsgHandler {
           value.players as ConstructorParameters<typeof ZoneStateNotify>[2]
         ));
         return;
+      // --8<-- [end:doc-zw-state-push]
       case 'ZoneChangedNotify':
         actor.push(new ZoneChangedNotify(
           value.playerId as string,

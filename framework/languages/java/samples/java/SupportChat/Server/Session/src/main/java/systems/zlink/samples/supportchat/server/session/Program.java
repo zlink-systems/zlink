@@ -54,6 +54,7 @@ public final class Program {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
+            // --8<-- [start:doc-sc-session-register]
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client();
             options.addClientServerChannel(SampleNames.SupportChannel)
@@ -66,6 +67,7 @@ public final class Program {
                 .bind(session.streamEndpoint())
                 .enableActorDispatch()
                 .registerSession(SupportChatSession.class);
+            // --8<-- [end:doc-sc-session-register]
         };
     }
 

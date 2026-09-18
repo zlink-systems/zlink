@@ -7,6 +7,7 @@ import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
+// --8<-- [start:doc-bingo-reward-subscribe]
 @ZLinkSpotSubscription(topic = SampleNames.WinnerTopic)
 public final class BingoRewardAcquiredEventHandler
     implements ZLinkSpotSubscriptionHandler<BingoRoomSpot, Messages.BingoRewardAcquiredEvent> {
@@ -17,3 +18,4 @@ public final class BingoRewardAcquiredEventHandler
         return spot.announceReward(event);
     }
 }
+// --8<-- [end:doc-bingo-reward-subscribe]

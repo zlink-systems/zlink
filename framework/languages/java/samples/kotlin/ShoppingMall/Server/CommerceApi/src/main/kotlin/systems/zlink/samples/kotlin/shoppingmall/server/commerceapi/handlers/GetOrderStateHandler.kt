@@ -8,6 +8,7 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateR
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateRes
 
 /** Read-only projection lookup. Never advances the workflow or appends events. */
+// --8<-- [start:doc-sm-get-state]
 @ZLinkHandlerGroup("commerce")
 class GetOrderStateHandler(
     private val store: CommerceStore,
@@ -21,3 +22,4 @@ class GetOrderStateHandler(
         return GetOrderStateRes(state)
     }
 }
+// --8<-- [end:doc-sm-get-state]

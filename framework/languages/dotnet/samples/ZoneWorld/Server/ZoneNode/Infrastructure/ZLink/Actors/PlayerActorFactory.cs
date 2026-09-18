@@ -20,6 +20,7 @@ internal sealed class PlayerActorFactory : IZLinkActorFactory<PlayerActor>
 internal sealed class PlayerActorRelocationAdapter
     : IZLinkActorRelocationAdapter<PlayerActor>
 {
+    // --8<-- [start:doc-zw-actor-capture]
     public ValueTask<byte[]> CaptureAsync(
         PlayerActor actor,
         CancellationToken cancellationToken)
@@ -36,6 +37,7 @@ internal sealed class PlayerActorRelocationAdapter
                 actor.PendingJoins,
                 actor.ProcessedJoinOperations)));
     }
+    // --8<-- [end:doc-zw-actor-capture]
 
     public ValueTask RestoreAsync(
         PlayerActor actor,

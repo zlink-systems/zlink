@@ -13,6 +13,7 @@ internal sealed class SetAgentAvailableHandler(
     SupportActorDirectory actors)
     : IZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, SetAgentAvailableReq, SetAgentAvailableRes>
 {
+    // --8<-- [start:doc-sc-set-available]
     public ValueTask<SetAgentAvailableRes> HandleAsync(
         SupportEntrySpot entrySpot,
         SupportUserActor actor,
@@ -27,4 +28,5 @@ internal sealed class SetAgentAvailableHandler(
         assignment.SetAvailable(actor.ActorId, actor.DisplayName, message.IsAvailable);
         return ValueTask.FromResult(new SetAgentAvailableRes(message.IsAvailable));
     }
+    // --8<-- [end:doc-sc-set-available]
 }

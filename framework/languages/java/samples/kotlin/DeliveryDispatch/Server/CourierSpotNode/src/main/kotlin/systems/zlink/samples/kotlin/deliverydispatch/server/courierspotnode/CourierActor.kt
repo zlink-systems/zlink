@@ -22,6 +22,7 @@ class CourierActor(
 
     override fun context(): ZLinkActorContext = actorContext
 
+    // --8<-- [start:doc-dd-offer-push]
     /** Pushes the offer and returns. The courier takes as long as it takes. */
     fun offer(offer: OfferDeliveryMsg) {
         synchronized(offeredAttempts) {
@@ -38,6 +39,7 @@ class CourierActor(
             )
             .submit()
     }
+    // --8<-- [end:doc-dd-offer-push]
 
     /**
      * The attempt the courier is answering, or null when this actor knows of no such offer — it was

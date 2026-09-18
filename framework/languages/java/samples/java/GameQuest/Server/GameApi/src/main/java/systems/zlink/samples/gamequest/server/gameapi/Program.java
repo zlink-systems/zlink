@@ -82,6 +82,7 @@ public class Program {
                     .setConnectionString(topology.location().redisEndpoint())
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
+            // --8<-- [start:doc-gq-api-register]
             options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery)
                 .setRoutingIdPrefix("gamequest-api")
                 .listen(api.spotRouterEndpoint())
@@ -97,6 +98,7 @@ public class Program {
                 .bind(api.streamEndpoint())
                 .enableActorDispatch()
                 .registerSession(GameQuestSession.class);
+            // --8<-- [end:doc-gq-api-register]
         };
     }
 

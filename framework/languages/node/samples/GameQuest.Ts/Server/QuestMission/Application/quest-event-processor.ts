@@ -30,6 +30,7 @@ class QuestEventProcessor {
     @Inject(GAMEQUEST_INSTANCE_ID) private readonly missionName: string
   ) {}
 
+  // --8<-- [start:doc-gq-process]
   process(event: GameplayEventEnvelope, aggregate: PlayerQuestAggregate): QuestProcessingResult {
     const decision = QuestDomain.decide(event, aggregate);
     const result = this.commit(event.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
@@ -45,12 +46,14 @@ class QuestEventProcessor {
     this.readModel.project(playerId, events);
     return aggregate;
   }
+  // --8<-- [end:doc-gq-process]
 
   readProgress(playerId: string): QuestProgress[] {
     return this.readModel.readProjection(playerId);
   }
 
   syncProgress(request: SyncQuestProgressReq, aggregate: PlayerQuestAggregate): QuestProcessingResult & SyncQuestProgressRes {
+    // --8<-- [start:doc-gq-sync]
     const snapshot = this.gameplay.readGameplaySnapshot(request.playerId);
     const firstHunt = snapshot.killCounts.find((entry) => entry.monsterId === 'wolf' && entry.areaId === 'forest')?.count ?? 0;
     const decision = QuestDomain.reconcileFirstHunt(request.playerId, firstHunt, aggregate);
@@ -59,6 +62,7 @@ class QuestEventProcessor {
       console.error(`gamequest-mission reconciled player=${request.playerId} quest=${QuestIds.FirstHunt}`);
     }
     return { ...result, updatedQuests: result.projection };
+    // --8<-- [end:doc-gq-sync]
   }
 
   consumeReplayAfterClose(playerId: string): boolean {

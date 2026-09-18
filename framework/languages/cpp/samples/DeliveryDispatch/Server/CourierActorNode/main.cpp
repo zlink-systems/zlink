@@ -92,6 +92,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
         return {request.courier_id};
     }
 
+    // --8<-- [start:doc-dd-offer-push]
     task_t<void> offer_delivery (courier_actor_t &actor,
                                  message_context_t &,
                                  const offer_delivery_msg_t &message)
@@ -103,6 +104,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                                          message.pickup_address, message.dropoff_address})
           .async ();
     }
+    // --8<-- [end:doc-dd-offer-push]
 
     /* 배송원의 결정은 배차 쪽으로 one-way로 돌려준다. 노드는 시한을 세지 않는다 — 제안 시한은
      * DispatchWorker가 소유한다(공통 sample spec §7.4). */
@@ -110,6 +112,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                            message_context_t &,
                            const courier_decision_msg_t &decision)
     {
+        // --8<-- [start:doc-dd-decision-send]
         const auto offered = actor.offered_attempts.find (decision.delivery_id);
         if (offered == actor.offered_attempts.end ()) {
             std::cerr << "deliverydispatch courier-actor: decision for an unknown offer delivery="
@@ -124,6 +127,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                  offer_delivery_result_msg_t{decision.delivery_id, decision.courier_id, attempt,
                                              decision.accepted, decision.reason})
           .async ();
+        // --8<-- [end:doc-dd-decision-send]
     }
 
   private:
@@ -156,6 +160,7 @@ int main (int argc, char **argv)
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix);
+    // --8<-- [start:doc-dd-node-register]
     /* 배송원의 결정을 배차 쪽으로 돌려보내는 통로. */
     options.add_client_server_channel (sample_names_t::dispatch_route_channel).client ();
     auto actor_mesh = options.add_route_mesh (sample_names_t::courier_actor_discovery);
@@ -168,6 +173,7 @@ int main (int argc, char **argv)
       .add_actor_factory<courier_actor_t, courier_actor_factory_t> (
         sample_names_t::courier_actor_type)
       .disable_relocation ();
+    // --8<-- [end:doc-dd-node-register]
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
       instance_name, sample_names_t::courier_actor_discovery,
       std::vector<std::string>{sample_names_t::courier_session_route_node,

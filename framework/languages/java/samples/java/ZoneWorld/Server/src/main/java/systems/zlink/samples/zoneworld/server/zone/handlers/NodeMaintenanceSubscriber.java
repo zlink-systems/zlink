@@ -31,6 +31,7 @@ public final class NodeMaintenanceSubscriber
         this.statusReporter = statusReporter;
     }
 
+    // --8<-- [start:doc-zw-maintenance-subscriber]
     @Override
     public CompletionStage<Void> handle(
         Messages.NodeMaintenanceChangedEvent message,
@@ -47,4 +48,5 @@ public final class NodeMaintenanceSubscriber
         }
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-zw-maintenance-subscriber]
 }

@@ -27,6 +27,7 @@ function createSupportChatSessionModule() {
             .messageFlow('normal');
           builder.addLocationStore(locationStore);
           supportChatLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-sc-session-register]
           const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)
             .listen(config.sessionSpotEndpoint).setRoutingIdPrefix('support-session');
           mesh.objects().client();
@@ -36,6 +37,7 @@ function createSupportChatSessionModule() {
               .bind(config.sessionStreamEndpoint)
               .registerSession(SupportChatSessionFactory as never)
             .build();
+          // --8<-- [end:doc-sc-session-register]
         }
       })
     ],

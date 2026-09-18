@@ -145,6 +145,7 @@ class courier_offer_port_t
     {
     }
 
+    // --8<-- [start:doc-dd-offer-send]
     task_t<void>
     offer (const assign_delivery_msg_t &delivery, const std::string &courier_id, int attempt)
     {
@@ -159,6 +160,7 @@ class courier_offer_port_t
                                       delivery.pickup_address, delivery.dropoff_address})
           .async ();
     }
+    // --8<-- [end:doc-dd-offer-send]
 
   private:
     actor_directory_t &_directory;
@@ -196,6 +198,7 @@ class dispatch_worker_t
     {
     }
 
+    // --8<-- [start:doc-dd-offer-start]
     /* 첫 제안. Assigned를 기록하고 제안을 보낸 뒤 이 턴은 끝난다. */
     task_t<void> start (const assign_delivery_msg_t &request)
     {
@@ -206,6 +209,7 @@ class dispatch_worker_t
         const auto attempt = _state.offer (request, 0, sample_timings_t::courier_decision_timeout);
         co_await _offers.offer (request, courier_id, attempt);
     }
+    // --8<-- [end:doc-dd-offer-start]
 
     /* 배송원의 결정이 도착했다. 수락이면 진행, 거절이면 다음 후보로 재제안. */
     task_t<void> settle (const delivery_offer_t &offer, bool accepted, const std::string &reason)
@@ -227,6 +231,7 @@ class dispatch_worker_t
         co_await reassign (offer);
     }
 
+    // --8<-- [start:doc-dd-reassign]
     /* 시한이 지난 제안. 다음 후보로 재제안한다 — 제안 시한은 worker가 소유한다. */
     task_t<void> reassign (const delivery_offer_t &offer)
     {
@@ -245,6 +250,7 @@ class dispatch_worker_t
           _state.offer (offer.request, next_index, sample_timings_t::courier_decision_timeout);
         co_await _offers.offer (offer.request, courier_id, attempt);
     }
+    // --8<-- [end:doc-dd-reassign]
 
   private:
     dispatch_state_t &_state;
@@ -372,12 +378,14 @@ class offer_deadline_sweeper_t final : public hosted_service_t
         }
     }
 
+    // --8<-- [start:doc-dd-sweeper]
     void sweep (dispatch_state_t &state, dispatch_worker_t &worker)
     {
         reap ();
         auto pending = state.take_pending ();
         for (auto &assignment : pending.first)
             _work.push_back (start (worker, std::move (assignment)));
+        // --8<-- [start:doc-dd-decision-settle]
         for (auto &decision : pending.second) {
             auto offer = state.settle (decision.delivery_id, decision.attempt);
             if (!offer) {
@@ -388,12 +396,14 @@ class offer_deadline_sweeper_t final : public hosted_service_t
             }
             _work.push_back (settle (worker, *offer, std::move (decision)));
         }
+        // --8<-- [end:doc-dd-decision-settle]
         for (const auto &offer : state.expired ()) {
             std::cerr << "deliverydispatch dispatch: offer expired delivery="
                       << offer.request.delivery_id << " attempt=" << offer.attempt << "\n";
             _work.push_back (reassign (worker, offer));
         }
     }
+    // --8<-- [end:doc-dd-sweeper]
 
     task_t<void> start (dispatch_worker_t &worker, assign_delivery_msg_t request)
     {
@@ -443,6 +453,7 @@ class offer_deadline_sweeper_t final : public hosted_service_t
     std::vector<task_t<void>> _work;
 };
 
+// --8<-- [start:doc-dd-http-create]
 class create_delivery_http_handler_t
 {
   public:
@@ -468,6 +479,7 @@ class create_delivery_http_handler_t
   private:
     channel_client_t &_channels;
 };
+// --8<-- [end:doc-dd-http-create]
 
 class server_assertion_http_handler_t
 {
@@ -518,6 +530,7 @@ int main (int argc, char **argv)
         std::make_unique<evidence_store_t> (configuration.evidence_path ()))
       .add_singleton<dispatch_state_t> ()
       .add_singleton<courier_selection_policy_t> ();
+    // --8<-- [start:doc-dd-dispatch-register]
     auto dispatch_channel =
       options.add_client_server_channel (sample_names_t::dispatch_route_channel);
     dispatch_channel.server ()
@@ -536,6 +549,7 @@ int main (int argc, char **argv)
       .group ("dispatch")
       .add_send<assign_delivery_handler_t> ()
       .add_send<offer_delivery_result_handler_t> ();
+    // --8<-- [end:doc-dd-dispatch-register]
     options.http ()
       .listen (topology.dispatch_api_http_url)
       .map_health ("/health")

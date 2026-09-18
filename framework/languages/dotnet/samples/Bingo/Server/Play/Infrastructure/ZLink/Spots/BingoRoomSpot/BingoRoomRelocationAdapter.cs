@@ -9,6 +9,7 @@ namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 internal sealed class BingoRoomRelocationAdapter
     : IZLinkSpotRelocationAdapter<BingoRoom>
 {
+    // --8<-- [start:doc-bingo-relocation-adapter]
     public ValueTask<byte[]> CaptureAsync(
         BingoRoom spot,
         CancellationToken cancellationToken)
@@ -25,6 +26,7 @@ internal sealed class BingoRoomRelocationAdapter
                 state.Settings.ObservedRoomId,
                 Convert.ToBase64String(state.State.ToByteArray()))));
     }
+    // --8<-- [end:doc-bingo-relocation-adapter]
 
     public ValueTask RestoreAsync(
         BingoRoom spot,

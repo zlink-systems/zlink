@@ -147,9 +147,16 @@ endpoint와 실시간 연결이 함께 동작한다.
 | 22 | [운영과 lifecycle](12-operations.ko.md) | 런타임 메트릭, relocate, drain, readiness 연결 |
 | 23 | [Options](16-options.ko.md) | 옵션 목록, 기본값과 바꾸는 시점 |
 | 24 | [샘플 고르기](14-samples.ko.md) | 어떤 샘플을 먼저 볼지 고르고 실행하는 방법 |
-| 25 | [E2E 테스트](15-e2e-testing.ko.md) | client library로 시스템 전체를 검증하기 |
-| 26 | [주요 타입 사용 색인](13-interface-catalog.ko.md) | 계약 인터페이스를 검증 코드로 색인 |
-| 27 | [모니터링](26-monitoring.ko.md) | 재작성 대기 — 상태 snapshot과 진단 |
+| 25 | [Bingo 따라 읽기](50-bingo.ko.md) | 인증·매칭·room·timer·multicast·cleanup을 코드 순서로 |
+| 26 | [TicTacToe 따라 읽기](51-tictactoe.ko.md) | 수동 연결·수동 등록, 다른 node로의 Actor join |
+| 27 | [SupportChat 따라 읽기](52-supportchat.ko.md) | session 하나에 Actor 여럿, metadata relay, idle timer |
+| 28 | [DeliveryDispatch 따라 읽기](53-deliverydispatch.ko.md) | one-way send, deadline 기록과 재배정, 고객 push |
+| 29 | [ShoppingMall 따라 읽기](54-shoppingmall.ko.md) | owner Instance Spot, replay·다음 단계·expected version |
+| 30 | [GameQuest 따라 읽기](55-gamequest.ko.md) | player별 owner, best-effort push와 보정 |
+| 31 | [ZoneWorld 따라 읽기](56-zoneworld.ko.md) | capacity placement, 경계 join과 relocation, fanout·관찰 |
+| 32 | [E2E 테스트](15-e2e-testing.ko.md) | client library로 시스템 전체를 검증하기 |
+| 33 | [주요 타입 사용 색인](13-interface-catalog.ko.md) | 계약 인터페이스를 검증 코드로 색인 |
+| 34 | [모니터링](26-monitoring.ko.md) | 재작성 대기 — 상태 snapshot과 진단 |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 읽는 순서는 이 표가 정한다.
 

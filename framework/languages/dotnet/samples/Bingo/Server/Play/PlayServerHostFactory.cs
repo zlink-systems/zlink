@@ -60,6 +60,7 @@ public static class PlayServerHostFactory
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(PlayServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
+            // --8<-- [start:doc-bingo-play-register]
             var mesh = options.AddRouteMesh(SampleNames.PlayMeshName)
                 .SetRoutingIdPrefix("play")
                 .Listen(node.MeshEndpoint);
@@ -81,6 +82,7 @@ public static class PlayServerHostFactory
                         .PreserveStateWith<BingoRoomRelocationAdapter>());
             // --8<-- [end:doc-execution-mode]
             mesh.Channel(SampleNames.RoomChannel).Server();
+            // --8<-- [end:doc-bingo-play-register]
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });
         builder.Services.AddSingleton(new BingoReadyReport(

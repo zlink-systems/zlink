@@ -35,6 +35,7 @@ public final class CourierActor implements ZLinkActor {
         return context;
     }
 
+    // --8<-- [start:doc-dd-offer-push]
     /** Pushes the offer and returns. The courier takes as long as it takes. */
     public CompletionStage<Void> offer(Messages.OfferDeliveryMsg offer) {
         synchronized (gate) {
@@ -48,6 +49,7 @@ public final class CourierActor implements ZLinkActor {
                 offer.dropoffAddress()))
             .submit();
     }
+    // --8<-- [end:doc-dd-offer-push]
 
     /**
      * The attempt the courier is answering, or empty when this actor knows of no such offer — it

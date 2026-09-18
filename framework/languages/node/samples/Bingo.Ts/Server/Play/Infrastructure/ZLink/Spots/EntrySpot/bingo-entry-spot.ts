@@ -26,6 +26,7 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
   ) {}
 
+  // --8<-- [start:doc-bingo-entry-destroy]
   async onJoinedActor(actor: PlayerActor): Promise<void> {
     if (!actor.consumeDestroyAfterEntrySpotJoin()) {
       console.error(`bingo-lifecycle entry-joined actor=${actor.actorId} destroy=false`);
@@ -35,6 +36,7 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
       .sendToActor(actor.actorId, new DestroyBingoActorMsg({}))
       .submit();
   }
+  // --8<-- [end:doc-bingo-entry-destroy]
 
   async onActorJoin(
     _actorId: string,

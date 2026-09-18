@@ -6,6 +6,7 @@ import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.OrderWorkfl
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
 import java.util.concurrent.CompletionStage;
 
+// --8<-- [start:doc-sm-start-handler]
 public final class StartOrderWorkflowSpotHandler
     implements ZLinkSpotRequestHandler<OrderWorkflowSpot, Messages.StartOrderWorkflowReq, Messages.StartOrderWorkflowRes> {
     private final OrderWorkflowService workflow;
@@ -14,6 +15,7 @@ public final class StartOrderWorkflowSpotHandler
         this.workflow = workflow;
     }
 
+    // --8<-- [start:doc-sm-spot-start]
     @Override
     public CompletionStage<Messages.StartOrderWorkflowRes> handle(
         OrderWorkflowSpot spot,
@@ -23,4 +25,6 @@ public final class StartOrderWorkflowSpotHandler
         return workflow.startInSpot(spot, request)
             .thenApply(Messages.StartOrderWorkflowRes::new);
     }
+    // --8<-- [end:doc-sm-spot-start]
 }
+// --8<-- [end:doc-sm-start-handler]

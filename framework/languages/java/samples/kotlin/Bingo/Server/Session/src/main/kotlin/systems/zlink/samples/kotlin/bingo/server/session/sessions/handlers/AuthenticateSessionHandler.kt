@@ -34,6 +34,7 @@ class AuthenticateSessionHandler(
             throw IllegalArgumentException("access token is required")
         }
 
+        // --8<-- [start:doc-bingo-session-auth]
         val authenticated = routes
             .requestToChannel(
                 SampleNames.ApiChannel,
@@ -56,6 +57,8 @@ class AuthenticateSessionHandler(
         )
             .request(EnsurePlayerActorReq(authenticated.actorId, authenticated.displayName))
             .await()
+        // --8<-- [end:doc-bingo-session-auth]
+        // --8<-- [start:doc-bingo-session-bind]
         context.actors().bind(requireActor(actor)).await()
         context.client()
             .reply(
@@ -65,6 +68,7 @@ class AuthenticateSessionHandler(
                 ),
             )
             .submit()
+        // --8<-- [end:doc-bingo-session-bind]
     }
 
     private fun requireActor(result: ZLinkActorCreateResult): ActorRef = when (result) {

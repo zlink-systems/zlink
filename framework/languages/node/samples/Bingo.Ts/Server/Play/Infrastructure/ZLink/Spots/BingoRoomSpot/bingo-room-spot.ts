@@ -163,6 +163,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     // Actor's reference, so player pushes are wired here rather than during
     // admission, which observes identity only.
     this.playerIds.add(actorId);
+    // --8<-- [start:doc-bingo-room-join]
     const joined = this.pendingPlayerJoins.get(actorId);
     this.pendingPlayerJoins.delete(actorId);
     const player = this.game.players.find((candidate) => candidate.actor.actorId === actorId);
@@ -184,6 +185,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (joined.started) {
       await this.notifyGameStarted();
     }
+    // --8<-- [end:doc-bingo-room-join]
   }
 
   async onLeaveActor(actor: PlayerActor): Promise<void> {
@@ -278,6 +280,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     return true;
   }
 
+  // --8<-- [start:doc-bingo-room-cleanup]
   private async leaveFinishedActors(): Promise<void> {
     if (this.cleanupStarted || this.snapshot().status !== BingoRoomStatus.Finished) {
       return;
@@ -292,6 +295,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       }
     }
   }
+  // --8<-- [end:doc-bingo-room-cleanup]
 
   snapshot(): BingoRoomSnapshot {
     return this.game.snapshot();
@@ -360,6 +364,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (winner === undefined) {
       return;
     }
+    // --8<-- [start:doc-bingo-reward-publish]
     await this.context.outbound
       .publish(
         SampleNames.roomRewardChannel,
@@ -374,6 +379,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         })
       )
       .submit();
+    // --8<-- [end:doc-bingo-reward-publish]
   }
 
   private async notifyActor(actorId: string, payload: unknown): Promise<void> {

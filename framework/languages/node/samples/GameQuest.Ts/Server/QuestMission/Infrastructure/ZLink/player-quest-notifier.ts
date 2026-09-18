@@ -19,6 +19,7 @@ class PlayerQuestNotifier {
 
   async notify(playerId: string, progress: QuestProgress[], completedQuestIds: string[]): Promise<void> {
     if (progress.length === 0) return;
+    // --8<-- [start:doc-gq-notify-actor]
     const actor = await this.actorManager.find(playerId);
     if (actor === undefined) {
       console.error(`gamequest notification skipped: no bound actor location player=${playerId}`);
@@ -36,6 +37,7 @@ class PlayerQuestNotifier {
         ).submit();
       }
     }
+    // --8<-- [end:doc-gq-notify-actor]
   }
 }
 

@@ -7,6 +7,7 @@ import systems.zlink.samples.gamequest.server.configuration.SampleNames;
 import systems.zlink.samples.gamequest.server.questmission.spots.PlayerQuestSpot;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
 
+// --8<-- [start:doc-gq-apply-handler]
 public final class ApplyGameplaySpotHandler
     implements ZLinkSpotPacketHandler<PlayerQuestSpot, Messages.GameplayMsg> {
     private final ZLinkActorClient actors;
@@ -19,6 +20,7 @@ public final class ApplyGameplaySpotHandler
     public CompletionStage<Void> handle(
         PlayerQuestSpot spot,
         Messages.GameplayMsg request) {
+        // --8<-- [start:doc-gq-notify-actor]
         Messages.QuestProcessingMsg result = spot.apply(request);
         if (!result.duplicate()) {
             String questId = questIdFor(request);
@@ -28,6 +30,7 @@ public final class ApplyGameplaySpotHandler
             }
         }
         return actors.sendToActor(request.playerId(), result).submit();
+        // --8<-- [end:doc-gq-notify-actor]
     }
 
     private static String questIdFor(Messages.GameplayMsg request) {
@@ -39,3 +42,4 @@ public final class ApplyGameplaySpotHandler
         };
     }
 }
+// --8<-- [end:doc-gq-apply-handler]

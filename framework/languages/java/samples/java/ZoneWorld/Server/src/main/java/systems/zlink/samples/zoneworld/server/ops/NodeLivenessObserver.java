@@ -38,6 +38,7 @@ public final class NodeLivenessObserver implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        // --8<-- [start:doc-zw-observe-peers]
         observation = runtime.observe(ZoneWorldNames.MESH, 32);
         observation.subscribe(
             new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
@@ -61,6 +62,7 @@ public final class NodeLivenessObserver implements ApplicationRunner {
                 public void onComplete() {
                 }
             });
+        // --8<-- [end:doc-zw-observe-peers]
         expiry.scheduleAtFixedRate(registry::expireStaleReports, 1, 1, TimeUnit.SECONDS);
     }
 

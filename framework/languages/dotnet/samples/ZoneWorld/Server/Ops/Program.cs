@@ -65,8 +65,10 @@ builder.Services.AddZLinkFramework(options =>
 
     // The announcement and the maintenance change both leave here without a node list.
     // Adding a node changes nothing on this side — that is the whole point (ZW-D2).
+    // --8<-- [start:doc-zw-fanout-publisher]
     options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
         .EnablePublisher();
+    // --8<-- [end:doc-zw-fanout-publisher]
 
     var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
         .Listen(ops.MeshEndpoint)

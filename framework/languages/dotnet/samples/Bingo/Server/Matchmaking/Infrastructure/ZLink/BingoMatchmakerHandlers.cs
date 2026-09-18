@@ -18,6 +18,7 @@ internal sealed class ReserveBingoRoomHandler(IBingoMatchReservationStore reserv
     }
 }
 
+// --8<-- [start:doc-bingo-matchmaker-idle]
 internal sealed class BingoMatchmakerIdleTimer
     : IZLinkSpotTimerHandler<BingoMatchmaker>
 {
@@ -31,3 +32,4 @@ internal sealed class BingoMatchmakerIdleTimer
             await spot.Context.CloseAsync(cancellationToken);
     }
 }
+// --8<-- [end:doc-bingo-matchmaker-idle]

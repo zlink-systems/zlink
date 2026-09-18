@@ -357,6 +357,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     /* 공통 sample spec §14: 유휴 감지는 conversation Spot의 server-side timer가 소유한다.
      * idle deadline이 지나면 `WaitingForClose`로 바꾸고 idle 알림을, close grace가 지나면
      * 대화를 닫고 closed 알림을 **모든 참가자**에게 보낸다. */
+    // --8<-- [start:doc-sc-idle-timer]
     task_t<void> on_initialize () override
     {
         _idle_timer = _context.add_timer<conversation_idle_timer_handler_t> (
@@ -381,6 +382,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         co_return;
     }
+    // --8<-- [end:doc-sc-idle-timer]
 
     task_t<spot_create_response_t> on_create (const zlink::framework::message_t &request) override
     {
@@ -409,6 +411,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             || request.display_name != profile->display_name) {
             co_return spot_actor_join_result_t::reject ();
         }
+        // --8<-- [start:doc-sc-assign]
         auto projected = require_conversation ();
         conversation_state_t admission_state;
         if (request.role == role_t::agent) {
@@ -425,6 +428,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         _pending_actor_joins.insert (std::string (actor_id));
         co_return spot_actor_join_result_t::accept (join_conversation_res_t{true, admission_state});
+        // --8<-- [end:doc-sc-assign]
     }
 
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
@@ -451,6 +455,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         co_return current;
     }
 
+    // --8<-- [start:doc-sc-message-push]
     task_t<send_chat_message_res_t> send_message (support_user_actor_t &actor,
                                                   message_context_t &,
                                                   const send_chat_message_req_t &request)
@@ -468,6 +473,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         co_return sent;
     }
+    // --8<-- [end:doc-sc-message-push]
 
     task_t<void>
     set_typing (support_user_actor_t &actor, message_context_t &, const set_typing_msg_t &request)
@@ -524,6 +530,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
 
         auto joined =
           require_conversation ().join_customer (actor.participant_id, actor.display_name);
+        // --8<-- [start:doc-sc-roster-push]
         const auto pending = _pending_agent_assignments.find (actor.actor_id);
         if (pending != _pending_agent_assignments.end ()) {
             const auto assigned = pending->second;
@@ -535,6 +542,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
               conversation_assigned_notify_t::packet_name);
             co_return join_conversation_res_t{false, assignment.state};
         }
+        // --8<-- [end:doc-sc-roster-push]
         co_return join_conversation_res_t{false, joined.state};
     }
 
@@ -687,6 +695,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
 
     task_t<void> on_leave_actor (support_user_actor_t &) override { co_return; }
 
+    // --8<-- [start:doc-sc-set-available]
     set_agent_available_res_t set_available (support_user_actor_t &actor,
                                              message_context_t &,
                                              const set_agent_available_req_t &request)
@@ -698,6 +707,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
         return _runtime.set_agent_available (actor.actor_id, actor.display_name,
                                              request.is_available);
     }
+    // --8<-- [end:doc-sc-set-available]
 
     join_conversation_res_t
     schedule_conversation_join (support_user_actor_t &actor,
@@ -712,6 +722,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
                                                  actor.role == role_t::agent);
     }
 
+    // --8<-- [start:doc-sc-open-actor]
     task_t<open_conversation_res_t> open_conversation (support_user_actor_t &actor,
                                                        message_context_t &,
                                                        const open_conversation_req_t &request)
@@ -729,6 +740,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
         auto scheduled = actor.schedule_conversation_join (conversation_id, false);
         co_return open_conversation_res_t{conversation_id, std::move (scheduled.state)};
     }
+    // --8<-- [end:doc-sc-open-actor]
 
   private:
     void apply_actor_profile (support_user_actor_t &actor, ensure_support_user_actor_req_t profile)
@@ -888,6 +900,7 @@ int main (int argc, char **argv)
     options.http ()
       .listen (topology.support_http_url)
       .map_health ("/health");
+    // --8<-- [start:doc-sc-support-register]
     auto support_spot = options.add_route_mesh (sample_names_t::mesh);
     support_spot.set_routing_id (
       zlink::routing_id_t::from (sample_names_t::support_node_routing_id));
@@ -901,6 +914,7 @@ int main (int argc, char **argv)
       .add_actor_factory<support_user_actor_t, support_user_actor_factory_t> (
         support_user_actor_type)
       .preserve_state_with<support_user_actor_relocation_adapter_t> ();
+    // --8<-- [end:doc-sc-support-register]
     app.add_hosted_service (
       std::make_unique<sample_readiness_service_t> ("public", "support"));
     return app.run (argc, argv);

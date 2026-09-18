@@ -42,6 +42,7 @@ function createCourierActorNodeModule(options: CourierOptions) {
           const nodeId = options.courierId === 'courier-a'
             ? DeliveryDispatchNodeIds.courierNode1
             : DeliveryDispatchNodeIds.courierNode2;
+          // --8<-- [start:doc-dd-node-register]
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
               .listen(spotEndpoint).routingId(nodeId);
           const objectServer = mesh.objects().server();
@@ -52,6 +53,7 @@ function createCourierActorNodeModule(options: CourierOptions) {
             (factory) => factory.disableRelocation()
           );
           builder.addClientServerChannel(SampleNames.dispatchChannel).client();
+          // --8<-- [end:doc-dd-node-register]
           return builder.build();
         }
       })

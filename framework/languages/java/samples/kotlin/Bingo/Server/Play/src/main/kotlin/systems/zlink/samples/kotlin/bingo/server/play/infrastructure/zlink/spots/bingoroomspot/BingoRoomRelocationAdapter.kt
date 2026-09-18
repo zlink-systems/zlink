@@ -13,6 +13,7 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomState
 class BingoRoomRelocationAdapter(
     private val json: ObjectMapper,
 ) : ZLinkSpotRelocationAdapter<BingoRoomSpot> {
+    // --8<-- [start:doc-bingo-relocation-adapter]
     override fun capture(
         spot: BingoRoomSpot,
         cancellation: ZLinkRelocationCancellation,
@@ -23,6 +24,7 @@ class BingoRoomRelocationAdapter(
             json.writeValueAsBytes(Payload(state.settings, state.state)),
         )
     }
+    // --8<-- [end:doc-bingo-relocation-adapter]
 
     override fun restore(
         spot: BingoRoomSpot,

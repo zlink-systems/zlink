@@ -47,6 +47,7 @@ class play_server_host_factory_t
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "relocation:");
         options.add_client_server_channel (sample_names_t::api_channel).client ();
+        // --8<-- [start:doc-bingo-play-register]
         auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
         room_mesh.set_routing_id (zlink::routing_id_t::from (
           topology.play_node == "b" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid))
@@ -67,6 +68,7 @@ class play_server_host_factory_t
           .add_actor_factory<player_actor_t, player_actor_factory_t> (
             sample_names_t::player_actor_type)
           .preserve_state_with<player_actor_relocation_adapter_t> ();
+        // --8<-- [end:doc-bingo-play-register]
         app.add_hosted_service (std::make_unique<play_peer_route_readiness_service_t> (
           sample_names_t::room_spot_mesh, "play-" + topology.play_node,
           topology.play_node == "a" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid,

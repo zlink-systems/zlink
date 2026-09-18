@@ -127,6 +127,7 @@ internal sealed class DispatchWorker(
     DeliveryStatusPublisher statusPublisher,
     ILogger<DispatchWorker> logger)
 {
+    // --8<-- [start:doc-dd-offer-start]
     /// <summary>The first offer. Records it, sends it, and returns — nobody is left waiting.</summary>
     public async ValueTask StartAsync(AssignDeliveryMsg request, CancellationToken cancellationToken)
     {
@@ -140,6 +141,7 @@ internal sealed class DispatchWorker(
         var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(request, courierId, attempt, cancellationToken);
     }
+    // --8<-- [end:doc-dd-offer-start]
 
     /// <summary>A decision arrived. Accepted carries the delivery through; refused reassigns.</summary>
     public async ValueTask SettleAsync(
@@ -180,6 +182,7 @@ internal sealed class DispatchWorker(
     /// deadline lives here rather than on the courier node: a node that timed the offer and
     /// manufactured a refusal would be hiding the dispatch policy (common sample spec §7.4).
     /// </summary>
+    // --8<-- [start:doc-dd-reassign]
     public async ValueTask ReassignAsync(DeliveryOffer offer, CancellationToken cancellationToken)
     {
         var nextIndex = offer.CandidateIndex + 1;
@@ -202,6 +205,7 @@ internal sealed class DispatchWorker(
         var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(offer.Request, courierId, attempt, cancellationToken);
     }
+    // --8<-- [end:doc-dd-reassign]
 }
 
 /// <summary>Takes accepted deliveries off the queue and starts them, in order.</summary>
@@ -244,6 +248,7 @@ internal sealed class OfferDeadlineSweeper(
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            // --8<-- [start:doc-dd-sweeper]
             await Task.Delay(SampleTimings.OfferSweepInterval, stoppingToken);
 
             foreach (var offer in offers.TakeExpired())
@@ -265,6 +270,7 @@ internal sealed class OfferDeadlineSweeper(
                         offer.Request.DeliveryId);
                 }
             }
+            // --8<-- [end:doc-dd-sweeper]
         }
     }
 }

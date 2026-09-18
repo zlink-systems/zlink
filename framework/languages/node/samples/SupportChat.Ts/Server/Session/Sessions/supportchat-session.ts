@@ -51,6 +51,7 @@ class SupportChatSessionRouter {
     if (!authenticated.accepted || authenticated.actorId === undefined || authenticated.displayName === undefined || authenticated.role === undefined) {
       throw new Error(authenticated.reason ?? 'SupportChat authentication failed.');
     }
+    // --8<-- [start:doc-sc-session-auth]
     const actorRef = await this.getOrCreateActor(
       authenticated.actorId,
       new SupportUserActorCreateReq(
@@ -67,6 +68,7 @@ class SupportChatSessionRouter {
       role: authenticated.role,
       conversationActors: new Map()
     });
+    // --8<-- [end:doc-sc-session-auth]
     context.client.reply(new AuthenticateRes(
       authenticated.actorId,
       authenticated.displayName,
@@ -78,6 +80,7 @@ class SupportChatSessionRouter {
     await this.requireIdentityActor(context).relay(payload);
   }
 
+  // --8<-- [start:doc-sc-metadata-relay]
   async relayConversation(
     context: ZLinkSessionContext,
     dispatch: ZLinkSessionDispatchContext,
@@ -89,6 +92,7 @@ class SupportChatSessionRouter {
       if (dispatch.packetName === PacketNames.setTypingMsg) return;
       throw new Error(`Conversation metadata is required for '${dispatch.packetName}'.`);
     }
+    // --8<-- [start:doc-sc-agent-join]
     if (identity.role === SupportChatRoles.Agent
         && dispatch.packetName === PacketNames.joinConversationReq
         && !identity.conversationActors.has(conversationId)) {
@@ -109,9 +113,11 @@ class SupportChatSessionRouter {
       await actor.relay(payload);
       return;
     }
+    // --8<-- [end:doc-sc-agent-join]
     const actor = await this.conversationActor(context, identity, conversationId, dispatch.packetName);
     if (actor !== undefined) await actor.relay(payload);
   }
+  // --8<-- [end:doc-sc-metadata-relay]
 
   private requireIdentity(context: ZLinkSessionContext): SessionIdentity {
     const identity = this.identities.get(context);
@@ -186,6 +192,7 @@ function conversationHandler(packetName: string) {
   return ConversationHandler;
 }
 
+// --8<-- [start:doc-sc-session-dispatch]
 const OpenConversationSessionHandler = identityHandler(PacketNames.openConversationReq);
 const SetAgentAvailableSessionHandler = identityHandler(PacketNames.setAgentAvailableReq);
 const JoinConversationSessionHandler = conversationHandler(PacketNames.joinConversationReq);
@@ -206,6 +213,7 @@ class SupportChatSession implements ZLinkSession {
     // actor.notifyDisconnected() here can race a later session binding.
   }
 }
+// --8<-- [end:doc-sc-session-dispatch]
 
 class SupportChatSessionFactory implements ZLinkSessionFactory<SupportChatSession> {
   async create(context: ZLinkSessionContext): Promise<SupportChatSession> {

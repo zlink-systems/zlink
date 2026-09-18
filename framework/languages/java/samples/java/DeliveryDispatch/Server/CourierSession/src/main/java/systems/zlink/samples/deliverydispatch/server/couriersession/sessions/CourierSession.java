@@ -72,6 +72,7 @@ public final class CourierSession implements ZLinkSession {
         });
     }
 
+    // --8<-- [start:doc-dd-session-bind]
     private CompletionStage<Void> handleBindCourierSessionReq(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
@@ -93,6 +94,7 @@ public final class CourierSession implements ZLinkSession {
             });
         });
     }
+    // --8<-- [end:doc-dd-session-bind]
 
     private CompletionStage<ActorRef> findOrEnsureActor(
         String courierId) {

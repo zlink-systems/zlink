@@ -128,6 +128,7 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
         return {request.delivery_id};
     }
 
+    // --8<-- [start:doc-dd-customer-push]
     void status_updated (customer_actor_t &actor,
                          message_context_t &,
                          const delivery_status_updated_msg_t &status)
@@ -148,6 +149,7 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
                       << status.delivery_id << "\n";
         }
     }
+    // --8<-- [end:doc-dd-customer-push]
 
   private:
     entry_spot_context_t _context;

@@ -64,6 +64,7 @@ public static class DispatchServerHostFactory
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(DispatchServerHostFactory));
+            // --8<-- [start:doc-dd-dispatch-register]
             var mesh = options.AddRouteMesh(SampleNames.CourierMeshName)
                 .Listen(topology.MeshEndpoint)
                 .SetRoutingIdPrefix("delivery-dispatch");
@@ -74,6 +75,7 @@ public static class DispatchServerHostFactory
                 .Listen()
                 .AddHandlerGroup(SampleNames.DispatchChannel);
             options.AddClientServerChannel(SampleNames.TrackingRouteChannel).Client();
+            // --8<-- [end:doc-dd-dispatch-register]
         });
 
         var app = builder.Build();
@@ -91,6 +93,7 @@ public static class DispatchServerHostFactory
                 ? Results.Ok(new { ready = true, role = "dispatch" })
                 : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         });
+        // --8<-- [start:doc-dd-http-create]
         app.MapPost("/deliveries", async (
             CreateDeliveryReq request,
             Zlink.Framework.Contracts.Channels.IZLinkRouteClient channels,
@@ -108,6 +111,7 @@ public static class DispatchServerHostFactory
                 .LogInformation("deliverydispatch api: created delivery={DeliveryId}", request.DeliveryId);
             return Results.Ok(new CreateDeliveryRes(request.DeliveryId));
         });
+        // --8<-- [end:doc-dd-http-create]
         return app;
     }
 }

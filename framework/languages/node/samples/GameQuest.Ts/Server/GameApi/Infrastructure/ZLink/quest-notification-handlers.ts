@@ -12,6 +12,7 @@ import type {
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 
+// --8<-- [start:doc-gq-progress-push]
 @zlinkEntrySpotActorSendHandler({
   actor: () => GameQuestPlayerActor,
   entrySpot: () => GameQuestEntrySpot,
@@ -39,5 +40,6 @@ class DeliverQuestNotificationHandler
     await actor.push(new QuestProgressNotify(message.playerId, message.progress));
   }
 }
+// --8<-- [end:doc-gq-progress-push]
 
 export { DeliverQuestNotificationHandler };

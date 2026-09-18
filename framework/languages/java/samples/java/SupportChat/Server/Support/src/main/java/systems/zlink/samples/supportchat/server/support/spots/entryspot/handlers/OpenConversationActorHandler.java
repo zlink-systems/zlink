@@ -22,6 +22,7 @@ public final class OpenConversationActorHandler
         ZLinkMessageContext context,
         Messages.OpenConversationReq request) {
         requireRole(actor, SampleNames.Roles.Customer);
+        // --8<-- [start:doc-sc-open-actor]
         return spot.context().outbound()
             .requestToChannel(
                 SampleNames.ApiChannel,
@@ -37,6 +38,7 @@ public final class OpenConversationActorHandler
                         actor.participantId(), actor.role(), actor.displayName()));
                 return new Messages.OpenConversationRes(opened.conversationId(), scheduled.state());
             });
+        // --8<-- [end:doc-sc-open-actor]
     }
 
     private static void requireRole(SupportUserActor actor, String expectedRole) {

@@ -90,6 +90,7 @@ Entry Spot에 등록된 observer handler가 그것을 받아 관전 client로 pu
 - 짝이 되는 장: [Channel 메시징](20-channel-messaging.ko.md)(ClientServer channel),
   [Spot](21-spot.ko.md)(User Spot 생성), [STREAM](23-stream.ko.md)
 - 시나리오: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) · payload JSON
+- 따라 읽기: [TicTacToe 따라 읽기](51-tictactoe.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 3. Bingo — 온라인 게임 서버 구축
 
@@ -126,6 +127,7 @@ payload는 이 샘플만 Protobuf다. 역할과 계약 수가 많은 gateway형 
   [Location](25-location.ko.md)
 - 시나리오: [Bingo](../../../common/sample/bingo/README.ko.md) · payload Protobuf
 - 06과 07의 등록 코드 예시가 이 샘플에서 나온다.
+- 따라 읽기: [Bingo 따라 읽기](50-bingo.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 4. SupportChat — 라이브 채팅 상담 시스템 구축
 
@@ -166,6 +168,7 @@ session이 bind되어 대화 상태가 그대로 이어지고, 일정 시간 메
 - 짝이 되는 장: [Session과 Actor 연결](24-actor-session.ko.md), [Timer와 worker](36-timer-worker.ko.md),
   [STREAM](23-stream.ko.md)
 - 시나리오: [SupportChat](../../../common/sample/supportchat/README.ko.md) · payload JSON
+- 따라 읽기: [SupportChat 따라 읽기](52-supportchat.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 5. DeliveryDispatch — 배차 시스템 구축
 
@@ -186,6 +189,7 @@ actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배
 - 짝이 되는 장: [Channel 메시징](20-channel-messaging.ko.md),
   [Actor](22-actor.ko.md), [STREAM](23-stream.ko.md)
 - 시나리오: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md) · payload JSON
+- 따라 읽기: [DeliveryDispatch 따라 읽기](53-deliverydispatch.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 6. ShoppingMall — 주문 처리 시스템 구축
 
@@ -206,6 +210,7 @@ saga 오케스트레이터·조율 상태·스케줄러·outbox 같은 별도 �
 - 짝이 되는 장: [Spot](21-spot.ko.md), [12-operations](12-operations.ko.md)
 - 시나리오: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) · payload JSON
 - event sourcing 자체는 framework 기능이 아니라 application이 Spot 위에 올린 구성이다.
+- 따라 읽기: [ShoppingMall 따라 읽기](54-shoppingmall.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 7. GameQuest — 퀘스트 진행 시스템 구축
 
@@ -225,6 +230,7 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 - 짝이 되는 장: [Spot](21-spot.ko.md),
   [Session과 Actor 연결](24-actor-session.ko.md)
 - 시나리오: [GameQuest](../../../common/sample/event/gamequest.ko.md) · payload JSON
+- 따라 읽기: [GameQuest 따라 읽기](55-gamequest.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
 
@@ -259,6 +265,7 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
 - server와 runner는 다섯 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
   browser smoke는 같은 TypeScript client를 사용한다.
+- 따라 읽기: [ZoneWorld 따라 읽기](56-zoneworld.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
 ## 9. 실행
 

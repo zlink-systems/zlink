@@ -12,6 +12,7 @@ public final class DeliveryStatusUpdatedHandler
         CustomerEntrySpot,
         CustomerActor,
         Messages.DeliveryStatusUpdatedMsg> {
+    // --8<-- [start:doc-dd-customer-push]
     @Override
     public CompletionStage<Void> handle(
         CustomerEntrySpot entrySpot,
@@ -30,4 +31,5 @@ public final class DeliveryStatusUpdatedHandler
                 }
             });
     }
+    // --8<-- [end:doc-dd-customer-push]
 }

@@ -63,6 +63,7 @@ class PlayServerApplication {
                         .setKeyPrefix(topology.redisKeyPrefix + "relocation:"),
                 ),
             )
+            // --8<-- [start:doc-bingo-play-register]
             val node = options.addRouteMesh(SampleNames.Mesh)
             node.listen(topology.selectedPlaySpotRouterEndpoint())
                 .setRoutingIdPrefix("play")
@@ -91,6 +92,7 @@ class PlayServerApplication {
                 ) { factory ->
                     factory.preserveStateWith(PlayerActorRelocationAdapter::class.java)
                 }
+            // --8<-- [end:doc-bingo-play-register]
         }
 
     @Bean

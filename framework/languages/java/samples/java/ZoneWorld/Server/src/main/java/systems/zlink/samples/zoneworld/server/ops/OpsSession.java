@@ -100,6 +100,7 @@ public final class OpsSession implements ZLinkSession {
         // stays whatever the node itself last reported, so an observed maintenance value is
         // always the node's own and never the operator's intent echoed back.
         maintenance.set(request.nodeId(), request.enabled());
+        // --8<-- [start:doc-zw-ops-publish]
         return fanout.publish(
                 ZoneWorldNames.BROADCAST_CHANNEL,
                 ZoneWorldNames.MAINTENANCE_TOPIC,
@@ -110,6 +111,7 @@ public final class OpsSession implements ZLinkSession {
                 request.enabled(),
                 node.zones(),
                 null)));
+        // --8<-- [end:doc-zw-ops-publish]
     }
 
     private CompletionStage<Void> diagnostics(Messages.NodeDiagnosticsReq request) {

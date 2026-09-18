@@ -21,6 +21,7 @@ internal sealed class CourierActor(
     public IZLinkActorContext Context { get; } = context;
 
     /// <summary>Pushes the offer and returns. The courier takes as long as it takes.</summary>
+    // --8<-- [start:doc-dd-offer-push]
     public async ValueTask OfferAsync(OfferDeliveryMsg offer, CancellationToken cancellationToken)
     {
         _offeredAttempts[offer.DeliveryId] = offer.Attempt;
@@ -32,6 +33,7 @@ internal sealed class CourierActor(
                 offer.DropoffAddress))
             .Async(cancellationToken);
     }
+    // --8<-- [end:doc-dd-offer-push]
 
     /// <summary>
     /// The attempt the courier is answering, or null when this actor knows of no such offer —

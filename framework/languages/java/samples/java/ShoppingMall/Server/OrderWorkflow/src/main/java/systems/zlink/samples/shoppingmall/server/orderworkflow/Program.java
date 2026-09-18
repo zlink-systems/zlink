@@ -81,6 +81,7 @@ public final class Program {
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            // --8<-- [start:doc-sm-workflow-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.OrderSpotDiscovery);
             node.listen(workflow.spotRouterEndpoint())
                 .setRoutingId(RoutingId.from(workflow.instanceName()));
@@ -90,6 +91,7 @@ public final class Program {
                     SampleNames.OrderWorkflowSpotType,
                     OrderWorkflowSpot.class,
                     factory -> factory.recreateOnRelocation());
+            // --8<-- [end:doc-sm-workflow-register]
         };
     }
 

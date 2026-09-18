@@ -57,6 +57,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
             return builder.build();
           }
 
+          // --8<-- [start:doc-zw-node-register]
           const zoneMesh = builder.addRouteMesh(ZoneWorldNames.zoneMesh)
             .setRoutingIdPrefix('zn');
           if (node.spotRouterAdvertiseHost !== undefined) {
@@ -75,6 +76,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
             PlayerActorFactory,
             (factory) => factory.preserveStateWith(PlayerActorRelocationAdapter)
           );
+          // --8<-- [end:doc-zw-node-register]
           // --8<-- [start:doc-multi-channel-register]
           zoneMesh.channel(ZoneWorldNames.zoneMesh).server();
           zoneMesh.channel(ZoneWorldNames.bridgeMesh).server();
@@ -87,9 +89,11 @@ function createZoneNodeModule(includeZoneRuntime = true) {
             if (configuredChannel === opsChannelName) membership.addHandlerGroup('zone-ops');
             else membership.setWeight(0);
           }
+          // --8<-- [start:doc-zw-fanout-subscribe]
           builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)
             .enableSubscriber()
             .addHandlerGroup('zone-broadcast');
+          // --8<-- [end:doc-zw-fanout-subscribe]
           return {
             ...builder.build(),
             monitoring: {}
