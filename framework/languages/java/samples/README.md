@@ -2,7 +2,7 @@
 
 This directory contains Java and Kotlin samples for the public 0.10.0 framework
 contract. Java samples are under `java/`, Kotlin samples are under `kotlin/`,
-and both languages implement the same six sample scenarios defined by the
+and both languages implement the same seven sample scenarios defined by the
 [common sample documents](../../../doc/framework/common/sample/README.ko.md).
 
 ## Samples
@@ -15,8 +15,9 @@ and both languages implement the same six sample scenarios defined by the
 | `DeliveryDispatch` | Courier selection, timeout reassignment, tracking, and customer push | Redis location store |
 | `GameQuest` | Player quest owner Spots, event streams, and projections | Redis location store |
 | `ShoppingMall` | Channel service selection, order workflow, event streams, projections, and fanout events | Redis location store |
+| `ZoneWorld` | Gateway, two ZoneNodes, and Ops roles: Actor transfer across zones, zone Logical Multicast, Node direct operations, and runtime events | Redis location store |
 
-Both language directories contain these six sample roots. Their internal file
+Both language directories contain these seven sample roots. Their internal file
 layouts follow each language and are not required to be identical:
 
 ```text
@@ -27,14 +28,16 @@ samples/
 |   |-- GameQuest/
 |   |-- ShoppingMall/
 |   |-- SupportChat/
-|   `-- TicTacToe/
+|   |-- TicTacToe/
+|   `-- ZoneWorld/
 `-- kotlin/
     |-- Bingo/
     |-- DeliveryDispatch/
     |-- GameQuest/
     |-- ShoppingMall/
     |-- SupportChat/
-    `-- TicTacToe/
+    |-- TicTacToe/
+    `-- ZoneWorld/
 ```
 
 The common sample documents own workflow and message contracts. An individual
@@ -78,23 +81,38 @@ each message type.
 
 ## Running Samples
 
-Run every Java and Kotlin sample from this directory:
+Every sample root owns a `run_sample.sh` and a `run_sample.ps1`, and one
+invocation runs one sample. The
+[common sample document](../../../doc/framework/common/sample/README.ko.md)
+owns this rule in its "The Sample Run Script And Redis Isolation Standard"
+section; what follows is only the command for this language.
+
+From this directory, on Linux or WSL:
 
 ```bash
-./run_samples.sh
+./java/Bingo/run_sample.sh
 ```
 
 On Windows:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\run_samples.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 ```
 
-Pass language and sample paths to run a subset in the given order.
+Kotlin uses the same sample names under `kotlin/`:
 
 ```bash
-./run_samples.sh java/Bingo kotlin/SupportChat
+./kotlin/Bingo/run_sample.sh
 ```
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\Bingo\run_sample.ps1
+```
+
+Each language has seven samples, so checking one language takes seven
+invocations and checking both Java and Kotlin takes fourteen. Substitute
+`Bingo`, `DeliveryDispatch`, `GameQuest`, `ShoppingMall`, `SupportChat`,
+`TicTacToe`, and `ZoneWorld` in turn, one at a time.
 
 Each sample runner starts role-specific Spring processes, waits for readiness,
 runs the probe or client scenario, and removes the processes and Redis

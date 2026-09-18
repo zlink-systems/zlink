@@ -35,8 +35,9 @@ test('node samples define required runners and keep scenario contracts in common
     for (const requiredText of [
       '../../../doc/framework/common/sample/README.ko.md',
       'npm run browser:install',
-      './samples/run_samples.sh',
-      './samples/run_samples.ps1',
+      // One invocation runs one sample (#405, #585); the aggregate runner is gone.
+      './samples/Bingo.Ts/run_sample.sh',
+      './samples/Bingo.Ts/run_sample.ps1',
       'Bingo.Ts/Client/bingo-client-scenario.ts'
     ]) {
       if (!readme.includes(requiredText)) {
@@ -60,8 +61,9 @@ test('node samples define required runners and keep scenario contracts in common
   if (!fs.existsSync(path.join(commonSampleDocsRoot, 'README.ko.md'))) {
     missing.push('framework/doc/framework/common/sample/README.ko.md');
   }
-  if (!fs.existsSync(path.join(samplesRoot, 'run_samples.sh'))) {
-    missing.push('run_samples.sh');
+  if (fs.existsSync(path.join(samplesRoot, 'run_samples.sh'))
+    || fs.existsSync(path.join(samplesRoot, 'run_samples.ps1'))) {
+    missing.push('samples/run_samples.* must not reappear; one invocation runs one sample');
   }
   if (fs.existsSync(path.join(samplesRoot, 'shared'))) {
     missing.push('samples/shared must not hide sample logic');
