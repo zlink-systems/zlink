@@ -65,7 +65,7 @@ inline void run_sm_d14_scenario (const std::string &session_tls_stream_endpoint)
     }
 
     const auto notify = push_wait.get ();
-    if (notify.actor_id != actor_id || notify.value != "tls-push") {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != "tls-push") {
         throw std::runtime_error ("SM-D14 TLS push notify mismatch");
     }
 

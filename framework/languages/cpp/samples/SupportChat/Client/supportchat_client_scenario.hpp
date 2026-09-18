@@ -386,24 +386,36 @@ class supportchat_client_scenario_t
         std::cout << "supportchat=completed" << std::endl;
     }
 
+    /* The wait surface hands back a message (stream-connector §5.5); these
+     * helpers keep their payload-shaped futures. */
+    template <typename TPayload>
+    static std::future<TPayload>
+    unwrap_payload (std::future<zlink::stream_connector::message_t<TPayload>> source)
+    {
+        return std::async (std::launch::async,
+                           [source = std::move (source)] () mutable { return source.get ().payload; });
+    }
+
     static std::future<conversation_idle_notify_t> wait_idle (connector_t &connector,
                                                               std::string conversation_id,
                                                               const char *failure_message)
     {
-        return connector.wait_for<conversation_idle_notify_t> ()
-          .where (&conversation_idle_notify_t::conversation_id, std::move (conversation_id))
-          .timeout (notification_wait_timeout)
-          .to_future (failure_message);
+        return unwrap_payload (connector.wait_for<conversation_idle_notify_t> ()
+                                 .where (&conversation_idle_notify_t::conversation_id,
+                                         std::move (conversation_id))
+                                 .timeout (notification_wait_timeout)
+                                 .to_future (failure_message));
     }
 
     static std::future<conversation_closed_notify_t> wait_closed (connector_t &connector,
                                                                   std::string conversation_id,
                                                                   const char *failure_message)
     {
-        return connector.wait_for<conversation_closed_notify_t> ()
-          .where (&conversation_closed_notify_t::conversation_id, std::move (conversation_id))
-          .timeout (notification_wait_timeout)
-          .to_future (failure_message);
+        return unwrap_payload (connector.wait_for<conversation_closed_notify_t> ()
+                                 .where (&conversation_closed_notify_t::conversation_id,
+                                         std::move (conversation_id))
+                                 .timeout (notification_wait_timeout)
+                                 .to_future (failure_message));
     }
 
     template <typename TReply, typename TRequest>
@@ -438,7 +450,8 @@ class supportchat_client_scenario_t
             return agent.wait_for<conversation_assigned_notify_t> ()
               .timeout (std::chrono::seconds (12))
               .to_future ("assignment packet wait failed")
-              .get ();
+              .get ()
+              .payload;
         });
     }
 
@@ -447,23 +460,26 @@ class supportchat_client_scenario_t
       std::string conversation_id,
       const char *failure_message)
     {
-        return connector.wait_for<participant_joined_notify_t> ()
-          .where (&participant_joined_notify_t::conversation_id, std::move (conversation_id))
-          .timeout (std::chrono::seconds (12))
-          .to_future (failure_message);
+        return unwrap_payload (connector.wait_for<participant_joined_notify_t> ()
+                                 .where (&participant_joined_notify_t::conversation_id,
+                                         std::move (conversation_id))
+                                 .timeout (std::chrono::seconds (12))
+                                 .to_future (failure_message));
     }
 
     static std::future<chat_message_notify_t> wait_chat (connector_t &connector,
                                                          std::string conversation_id,
                                                          std::string text)
     {
-        return connector.wait_for<chat_message_notify_t> ()
-          .where ([conversation_id = std::move (conversation_id), text = std::move (text)] (
-                    const chat_message_notify_t &message) {
-              return message.conversation_id == conversation_id && message.message.text == text;
-          })
-          .timeout (std::chrono::seconds (12))
-          .to_future ("chat message wait failed");
+        return unwrap_payload (
+          connector.wait_for<chat_message_notify_t> ()
+            .where ([conversation_id = std::move (conversation_id), text = std::move (text)] (
+                      const zlink::stream_connector::message_t<chat_message_notify_t> &message) {
+                return message.payload.conversation_id == conversation_id
+                       && message.payload.message.text == text;
+            })
+            .timeout (std::chrono::seconds (12))
+            .to_future ("chat message wait failed"));
     }
 
     static std::future<typing_changed_notify_t> wait_typing (connector_t &connector,
@@ -471,14 +487,17 @@ class supportchat_client_scenario_t
                                                               std::string actor_id,
                                                               bool is_typing)
     {
-        return connector.wait_for<typing_changed_notify_t> ()
-          .where ([conversation_id = std::move (conversation_id), actor_id = std::move (actor_id),
-                    is_typing] (const typing_changed_notify_t &message) {
-              return message.conversation_id == conversation_id && message.actor_id == actor_id
-                     && message.is_typing == is_typing;
-          })
-          .timeout (std::chrono::seconds (12))
-          .to_future ("typing wait failed");
+        return unwrap_payload (
+          connector.wait_for<typing_changed_notify_t> ()
+            .where ([conversation_id = std::move (conversation_id),
+                     actor_id = std::move (actor_id), is_typing] (
+                      const zlink::stream_connector::message_t<typing_changed_notify_t> &message) {
+                return message.payload.conversation_id == conversation_id
+                       && message.payload.actor_id == actor_id
+                       && message.payload.is_typing == is_typing;
+            })
+            .timeout (std::chrono::seconds (12))
+            .to_future ("typing wait failed"));
     }
 
     static std::future<void> wait_no_typing (connector_t &connector)

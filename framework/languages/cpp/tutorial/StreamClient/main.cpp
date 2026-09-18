@@ -85,7 +85,7 @@ int main ()
         const auto changed =
           value_of (connector.wait_for<nickname_changed_t> ().submit (), "nickname push");
 
-        std::cout << "pushed: " << changed.nickname << std::endl;
+        std::cout << "pushed: " << changed.payload.nickname << std::endl;
         // --8<-- [end:session-actor-client]
 
         require (connector.close (), "close");

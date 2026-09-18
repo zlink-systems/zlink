@@ -82,7 +82,7 @@ inline void run_sm_d4_scenario (const std::string &session_stream_endpoint)
         throw std::runtime_error ("SM-D4 first actor push failed");
     }
     auto first_notify = first_wait.get ();
-    if (first_notify.value != "push-x") {
+    if (first_notify.payload.value != "push-x") {
         throw std::runtime_error ("SM-D4 first actor push notify mismatch");
     }
 
@@ -100,7 +100,7 @@ inline void run_sm_d4_scenario (const std::string &session_stream_endpoint)
         throw std::runtime_error ("SM-D4 second actor push failed");
     }
     auto second_notify = second_wait.get ();
-    if (second_notify.value != "push-y") {
+    if (second_notify.payload.value != "push-y") {
         throw std::runtime_error ("SM-D4 second actor push notify mismatch");
     }
 

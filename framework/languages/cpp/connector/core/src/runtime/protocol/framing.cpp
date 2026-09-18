@@ -63,7 +63,7 @@ result_t<packet_t> read_stream_packet (
     auto prefix_result = read_exact_from_connection (connection, 6);
     if (!prefix_result) {
         return result_t<packet_t>::failure (
-          prefix_result.error_code (), prefix_result.error ()->message);
+          prefix_result.error ()->code, prefix_result.error ()->message);
     }
     const auto &prefix = prefix_result.value ();
     const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
@@ -77,18 +77,18 @@ result_t<packet_t> read_stream_packet (
     auto header_result = read_exact_from_connection (connection, header_size);
     if (!header_result) {
         return result_t<packet_t>::failure (
-          header_result.error_code (), header_result.error ()->message);
+          header_result.error ()->code, header_result.error ()->message);
     }
     auto payload_result = read_exact_from_connection (connection, payload_size);
     if (!payload_result) {
         return result_t<packet_t>::failure (
-          payload_result.error_code (), payload_result.error ()->message);
+          payload_result.error ()->code, payload_result.error ()->message);
     }
     auto header_bytes = std::move (header_result.value ());
     auto payload_bytes = std::move (payload_result.value ());
     auto decoded = header_codec_t{}.decode (header_bytes);
     if (!decoded) {
-        return result_t<packet_t>::failure (decoded.error_code (), decoded.error ()->message);
+        return result_t<packet_t>::failure (decoded.error ()->code, decoded.error ()->message);
     }
     auto header = decoded.value ();
     state.last_inbound_received = std::chrono::steady_clock::now ();
@@ -133,6 +133,11 @@ result_t<packet_t> read_stream_packet (
     packet.codec = header.codec;
     packet.compressed = compressed;
     packet.payload = std::move (payload);
+    packet.flow_id = std::move (header.flow_id);
+    packet.flow_origin = header.flow_origin;
+    if (header.kind == message_kind_t::send) {
+        note_received_packet (state, packet);
+    }
     return result_t<packet_t>::success (std::move (packet));
 }
 
@@ -140,12 +145,20 @@ result_t<packet_t> read_stream_packet (
 
 void dispatch_packet (connector_state_t &state, const packet_t &packet)
 {
-    const auto found = state.packet_handlers.find (packet.name);
-    if (found == state.packet_handlers.end ()) {
-        return;
+    std::vector<packet_handler_entry_t> handlers;
+    {
+        std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+        const auto found = state.packet_handlers.find (packet.name);
+        if (found == state.packet_handlers.end ()) {
+            return;
+        }
+        handlers = found->second;
     }
-    for (const auto &handler : found->second) {
-        handler (packet);
+    /* stream-connector §5.5: a send or request started while this handler runs
+     * continues the received message's flow. */
+    flow_scope_t flow (packet);
+    for (const auto &entry : handlers) {
+        entry.handler (packet);
     }
 }
 
@@ -166,7 +179,7 @@ drain_available_pushes (connector_state_t &state,
         auto packet = read_stream_packet (state, connection);
         if (!packet) {
             return result_t<std::vector<packet_t>>::failure (
-              packet.error_code (), packet.error ()->message);
+              packet.error ()->code, packet.error ()->message);
         }
         packets.push_back (std::move (packet.value ()));
     }

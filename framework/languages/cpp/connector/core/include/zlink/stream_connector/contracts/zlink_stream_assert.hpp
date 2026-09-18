@@ -2,6 +2,13 @@
 #pragma once
 
 #include <zlink/stream_connector/contracts/result.hpp>
+#include <zlink/stream_connector/contracts/stream_payload.hpp>
+
+/* The E2E assertion helpers (cpp stream-connector §4.2) report a violation by
+ * throwing, so they exist only where exceptions are enabled. The connector core
+ * itself reports by value and stays usable in an engine build that disables
+ * them. */
+#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
 
 #include <functional>
 #include <optional>
@@ -72,7 +79,7 @@ error_t expect_failure (TAction &&action,
         throw std::runtime_error ("expected action to fail");
     }
     auto error = result->error ().value_or (
-      error_t{result->error_code (), "action failed without an error message"});
+      error_t{error_code_t::disconnected, "action failed without an error message"});
     if (expected_kind && error.code != *expected_kind) {
         throw std::runtime_error ("action failed with an unexpected error kind");
     }
@@ -88,7 +95,7 @@ template <typename TAction> error_t expect_timeout (TAction &&action)
             throw std::runtime_error ("expected action to time out");
         }
         auto error = result.error ().value_or (
-          error_t{result.error_code (), "action failed without an error message"});
+          error_t{error_code_t::disconnected, "action failed without an error message"});
         if (error.code == error_code_t::request_timeout
             || error.code == error_code_t::connect_timeout) {
             return error;
@@ -104,3 +111,5 @@ template <typename TAction> error_t expect_timeout (TAction &&action)
 }
 
 } // namespace zlink::stream_connector::assertions
+
+#endif // ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS

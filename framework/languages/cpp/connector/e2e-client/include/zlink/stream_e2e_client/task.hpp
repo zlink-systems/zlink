@@ -180,7 +180,7 @@ template <typename T> class task_t
         std::unique_lock<std::mutex> lock (_state->mutex);
         _state->ready.wait (lock, [this] { return _state->result.has_value (); });
         auto result = std::move (*_state->result);
-        _state->result = result_t<T>::failure (error_code_t::canceled,
+        _state->result = result_t<T>::failure (error_code_t::disconnected,
                                                "stream e2e task result was consumed");
         return result;
     }
@@ -238,7 +238,7 @@ template <typename T> class task_t
                 return;
             }
             _state->continuation = {};
-            _state->result = result_t<T>::failure (error_code_t::canceled,
+            _state->result = result_t<T>::failure (error_code_t::disconnected,
                                                    "stream e2e task was canceled");
         }
         _state->ready.notify_all ();
@@ -402,7 +402,7 @@ template <> class task_t<void>
         std::unique_lock<std::mutex> lock (_state->mutex);
         _state->ready.wait (lock, [this] { return _state->result.has_value (); });
         auto result = std::move (*_state->result);
-        _state->result = result_t<void>::failure (error_code_t::canceled,
+        _state->result = result_t<void>::failure (error_code_t::disconnected,
                                                   "stream e2e task result was consumed");
         return result;
     }
@@ -460,7 +460,7 @@ template <> class task_t<void>
                 return;
             }
             _state->continuation = {};
-            _state->result = result_t<void>::failure (error_code_t::canceled,
+            _state->result = result_t<void>::failure (error_code_t::disconnected,
                                                       "stream e2e task was canceled");
         }
         _state->ready.notify_all ();

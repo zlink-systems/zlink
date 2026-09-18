@@ -452,16 +452,21 @@ class bound_session_t
         auto promise = std::make_shared<std::promise<e2e::bound_push_notify_t>> ();
         auto future = promise->get_future ();
         _connector->wait_for<e2e::bound_push_notify_t> (e2e::bound_push_notify_t::packet_name)
-          .where (
-            [marker] (const e2e::bound_push_notify_t &notify) { return notify.marker == marker; })
+          .where ([marker] (
+                    const zlink::stream_connector::message_t<e2e::bound_push_notify_t> &message) {
+              return message.payload.marker == marker;
+          })
           .timeout (std::chrono::seconds (10))
-          .submit ([promise] (sc::result_t<e2e::bound_push_notify_t> result) {
+          .submit ([promise] (
+                     sc::result_t<zlink::stream_connector::message_t<e2e::bound_push_notify_t>>
+                       result) {
               if (result) {
-                  promise->set_value (std::move (result.value ()));
+                  promise->set_value (std::move (result.value ().payload));
               } else {
                   promise->set_exception (std::make_exception_ptr (std::runtime_error (
                     "bound push wait failed: code="
-                    + std::to_string (static_cast<int> (result.error_code ())))));
+                    + std::to_string (static_cast<int> (result.error_code ().value_or (
+                                           zlink::stream_connector::error_code_t::disconnected))))));
               }
           });
         return future;
@@ -488,7 +493,8 @@ class bound_session_t
                        .template submit<e2e::bound_push_res_t> ();
         require (static_cast<bool> (reply),
                  "bound session push request failed: code="
-                   + std::to_string (static_cast<int> (reply.error_code ())));
+                   + std::to_string (static_cast<int> (reply.error_code ().value_or (
+                                          zlink::stream_connector::error_code_t::disconnected))));
         return reply.value ();
     }
 

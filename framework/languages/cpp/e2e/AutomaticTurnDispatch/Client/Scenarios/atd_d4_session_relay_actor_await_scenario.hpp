@@ -61,10 +61,10 @@ std::string run_atd_d4_session_relay_actor_await_scenario (
             "ATD-D4 reply marker mismatch");
 
     const auto notify = bound_push.get ();
-    ensure (notify.actor_id == actors.actor_a, "ATD-D4 push actor mismatch");
-    ensure (notify.request_id == request_id, "ATD-D4 push request mismatch");
-    ensure (notify.value == "bound-session-push", "ATD-D4 push value mismatch");
-    ensure (notify.node_rid == "play-a", "ATD-D4 push node mismatch");
+    ensure (notify.payload.actor_id == actors.actor_a, "ATD-D4 push actor mismatch");
+    ensure (notify.payload.request_id == request_id, "ATD-D4 push request mismatch");
+    ensure (notify.payload.value == "bound-session-push", "ATD-D4 push value mismatch");
+    ensure (notify.payload.node_rid == "play-a", "ATD-D4 push node mismatch");
 
     std::this_thread::sleep_for (std::chrono::milliseconds (150));
     auto leaked = unbound_push.submit ();

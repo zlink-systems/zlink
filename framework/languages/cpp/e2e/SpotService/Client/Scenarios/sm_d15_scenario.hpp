@@ -94,7 +94,7 @@ inline void run_sm_d15_scenario (const std::string &play_http_endpoint,
         throw std::runtime_error ("SM-D15 push evidence missing");
     }
     const auto notify = wait.get ();
-    if (notify.actor_id != actor_id || notify.value != marker) {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != marker) {
         throw std::runtime_error ("SM-D15 gateway actor push result mismatch");
     }
     (void) stream.close ();

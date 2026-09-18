@@ -117,7 +117,7 @@ inline void run_sm_d12_scenario (const std::string &session_a_stream_endpoint,
         throw std::runtime_error ("SM-D12 push request failed");
     }
     auto notify = notify_wait.get ();
-    if (notify.actor_id != actor_id || notify.value != "after-transfer" || notify.seen != 2) {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != "after-transfer" || notify.payload.seen != 2) {
         throw std::runtime_error ("SM-D12 push notify mismatch");
     }
 

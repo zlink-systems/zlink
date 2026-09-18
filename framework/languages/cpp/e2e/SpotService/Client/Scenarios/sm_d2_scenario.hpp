@@ -114,7 +114,7 @@ inline void run_sm_d2_scenario (const std::string &play_b_http_endpoint,
     }
 
     auto notify = remote_wait.get ();
-    if (notify.actor_id != actor_id || notify.value != "push-remote") {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != "push-remote") {
         throw std::runtime_error ("SM-D2 remote stream push notify mismatch");
     }
     auto unbound_notify = unbound_wait.submit ();

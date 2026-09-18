@@ -117,7 +117,9 @@ class FZLinkStreamConnectorRuntime
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
         Connector = zlink::stream_connector::connector_factory_t::create (std::move (options));
         auto pending = Pending;
-        Connector.on_connection_state_changed (
+        /* stream-connector §7: the handle owns the registration, so it is kept
+         * for as long as the runtime needs the handler. */
+        StateSubscription = Connector.on_connection_state_changed (
           [pending] (const zlink::stream_connector::connection_state_changed_t &event) {
               EnqueueState (pending, to_unreal_state (event.current));
           });
@@ -342,6 +344,7 @@ class FZLinkStreamConnectorRuntime
     }
 
     zlink::stream_connector::connector_t Connector;
+    zlink::stream_connector::subscription_t StateSubscription;
     std::shared_ptr<pending_state_t> Pending;
 };
 

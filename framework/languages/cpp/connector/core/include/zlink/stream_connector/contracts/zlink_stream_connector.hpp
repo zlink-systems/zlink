@@ -5,14 +5,18 @@
 #include <zlink/stream_connector/contracts/codec_registry.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_subscription.hpp>
 
 #include <chrono>
 #include <functional>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <typeindex>
+#include <typeinfo>
 #include <utility>
 
 namespace zlink::stream_connector
@@ -36,6 +40,23 @@ class connector_t
     /// Returns the current connection state snapshot.
     connection_state_t state () const;
 
+    /// Returns why the connection last ended (stream-connector §6.2).
+    ///
+    /// Empty until the connection has ended once, including a first connect
+    /// that failed. Reconnecting does not clear it: the value keeps the reason
+    /// of the last ending, so code that never saw the disconnect event reads
+    /// the same value afterwards.
+    std::optional<close_reason_t> close_reason () const;
+
+    /// Returns how many packets with this name arrived on the current
+    /// connection (stream-connector §10).
+    ///
+    /// The count is of packets received. Consuming one does not lower it,
+    /// whether a handler dispatched it or a wait surface took it, and the
+    /// dispatch mode does not change it. A connection that is established
+    /// restarts the count at zero.
+    std::size_t received_count (std::string_view packet_name) const;
+
     /// Returns a copy of the options used by this connector.
     ///
     /// diagnostics_level reflects the current effective level, not necessarily the value the
@@ -48,15 +69,20 @@ class connector_t
     /// and uses that single value for the whole operation.
     diagnostics_level_t diagnostics_level () const;
 
-    /// Synchronous compatibility bridge over set_diagnostics_level_async().
+    /// Changes the diagnostics level without waiting (stream-connector §13).
     ///
-    /// Do not call from a Framework execution context (handler, lane/turn, or completion
-    /// callback); use the asynchronous surface there. The connector is not recreated and
-    /// nothing is applied retroactively (message-flow-tracing §4.1).
+    /// Changing the level writes one value, so there is no completion to wait
+    /// for. This surface is safe inside a receive callback precisely because it
+    /// does not wait on the asynchronous pair below: it never waits for its own
+    /// completion. The change applies from the next processing point on and is
+    /// not applied retroactively to frames already encoded or decoded
+    /// (message-flow-tracing §4.1).
     void set_diagnostics_level (diagnostics_level_t level);
 
-    /// Canonical asynchronous diagnostics-level control for the connector's existing
-    /// no-coroutine callback boundary. The callback runs after the level is installed.
+    /// Asynchronous pair of set_diagnostics_level() on the connector's existing
+    /// no-coroutine callback boundary. It changes the same value and does not
+    /// stand in for the synchronous surface. The callback runs after the level
+    /// is installed.
     void set_diagnostics_level_async (
       diagnostics_level_t level,
       std::function<void (result_t<void>)> callback);
@@ -98,13 +124,13 @@ class connector_t
     /// Starts a typed wait call for the packet name resolved from TMessage.
     template <typename TMessage> wait_call_t<TMessage> wait_for ()
     {
-        return wait_for<TMessage> (detail::message_packet_name<TMessage> ());
+        return wait_for<TMessage> (resolve_packet_name<TMessage> ());
     }
 
     /// Starts a typed wait call with the given timeout.
     template <typename TMessage> wait_call_t<TMessage> wait_for (std::chrono::milliseconds timeout)
     {
-        return wait_for<TMessage> (detail::message_packet_name<TMessage> ()).timeout (timeout);
+        return wait_for<TMessage> (resolve_packet_name<TMessage> ()).timeout (timeout);
     }
 
     /// Starts a typed wait call with the given packet name.
@@ -129,7 +155,7 @@ class connector_t
     /// Starts a negative observation for the packet name resolved from TMessage.
     template <typename TMessage> expect_none_call_t<TMessage> expect_none ()
     {
-        return expect_none<TMessage> (detail::message_packet_name<TMessage> ());
+        return expect_none<TMessage> (resolve_packet_name<TMessage> ());
     }
 
     /// Starts a typed negative observation for the given packet name.
@@ -147,7 +173,7 @@ class connector_t
     /// Starts an ordered wait for the packet name resolved from TMessage.
     template <typename TMessage> wait_for_sequence_call_t<TMessage> wait_for_sequence ()
     {
-        return wait_for_sequence<TMessage> (detail::message_packet_name<TMessage> ());
+        return wait_for_sequence<TMessage> (resolve_packet_name<TMessage> ());
     }
 
     /// Starts a typed ordered wait for the given packet name.
@@ -158,21 +184,29 @@ class connector_t
           _state, std::move (packet_name), options ().wait_timeout);
     }
 
-    /// Registers a connection state callback owned by this connector.
-    connector_t &
+    /// Registers a connection state callback (stream-connector §7).
+    ///
+    /// Keep the returned handle for as long as the handler must run; letting it
+    /// go removes the registration.
+    [[nodiscard]] subscription_t
     on_connection_state_changed (std::function<void (const connection_state_changed_t &)> handler);
 
-    /// Registers an error callback owned by this connector.
-    connector_t &on_error (std::function<void (const error_t &)> handler);
+    /// Registers an error callback (stream-connector §7).
+    [[nodiscard]] subscription_t on_error (std::function<void (const error_t &)> handler);
 
-    /// Registers a disconnected callback owned by this connector.
-    connector_t &on_disconnected (std::function<void ()> handler);
+    /// Registers a disconnected callback (stream-connector §6.2, §7).
+    ///
+    /// The handler receives the close reason. The same value stays readable
+    /// from close_reason() afterwards.
+    [[nodiscard]] subscription_t
+    on_disconnected (std::function<void (std::optional<close_reason_t>)> handler);
 
     /// Starts a typed send call by copying the payload into a packet.
     template <typename TMessage> send_call_t send (const TMessage &message)
     {
         auto packet = make_packet<TMessage> ();
-        packet.payload = detail::to_packet_payload (message, 0);
+        packet.payload =
+          detail::encode_typed_payload (_state, detail::to_packet_payload (message, 0));
         return send_call_t (_state, std::move (packet));
     }
 
@@ -189,7 +223,8 @@ class connector_t
     template <typename TRequest> request_call_t request (const TRequest &request)
     {
         auto packet = make_packet<TRequest> ();
-        packet.payload = detail::to_packet_payload (request, 0);
+        packet.payload =
+          detail::encode_typed_payload (_state, detail::to_packet_payload (request, 0));
         return request_call_t (_state, std::move (packet), options ().request_timeout);
     }
 
@@ -205,27 +240,33 @@ class connector_t
     /// Registers a packet callback for the given packet name.
     ///
     /// In manual dispatch mode the callback runs from dispatch(). In immediate dispatch mode it
-    /// runs from the connector receive path. The connector owns the callback until it is closed or
-    /// destroyed.
+    /// runs from the connector receive path. Keep the returned handle for as
+    /// long as the handler must run; letting it go removes the registration
+    /// (stream-connector §7).
     template <typename TMessage>
-    connector_t &on (std::string packet_name, std::function<void (const TMessage &)> callback)
+    [[nodiscard]] subscription_t on (std::string packet_name,
+                                     std::function<void (const message_t<TMessage> &)> callback)
     {
+        /* The connector owns this handler, so the handler holds a weak
+         * reference back: a strong one would keep the connector state alive
+         * through its own handler list. */
+        std::weak_ptr<void> weak_state = _state;
         return on_packet_erased (
-          std::move (packet_name), [callback = std::move (callback)] (const packet_t &packet) {
-              if constexpr (std::is_same_v<TMessage, packet_t>) {
-                  callback (packet);
-              } else {
-                  TMessage message{};
-                  detail::apply_packet_payload (message, packet.codec, packet.payload, 0);
-                  callback (std::move (message));
+          std::move (packet_name),
+          [weak_state, callback = std::move (callback)] (const packet_t &packet) {
+              auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
+              if (!message) {
+                  return;
               }
+              callback (message.value ());
           });
     }
 
     /// Registers a packet callback for the packet name resolved from TMessage.
-    template <typename TMessage> connector_t &on (std::function<void (const TMessage &)> callback)
+    template <typename TMessage>
+    [[nodiscard]] subscription_t on (std::function<void (const message_t<TMessage> &)> callback)
     {
-        return on<TMessage> (detail::message_packet_name<TMessage> (), std::move (callback));
+        return on<TMessage> (resolve_packet_name<TMessage> (), std::move (callback));
     }
 
   private:
@@ -233,15 +274,30 @@ class connector_t
     friend std::shared_ptr<void> connector_internal_handle (const connector_t &connector);
 
     explicit connector_t (connector_options_t options);
+
+    /* stream-connector §5: a name declared on the payload type wins, a
+     * configured name resolver comes next, and the type's simple name is the
+     * fallback. A caller who names the packet on the builder still wins over
+     * all three. */
+    template <typename TMessage> std::string resolve_packet_name () const
+    {
+        if constexpr (detail::has_static_packet_name<TMessage> ()) {
+            return detail::message_packet_name<TMessage> ();
+        } else {
+            return resolve_type_packet_name (detail::simple_type_name<TMessage> ());
+        }
+    }
+
+    std::string resolve_type_packet_name (std::string type_name) const;
+
     template <typename TMessage> packet_t make_packet () const
     {
-        return make_packet (std::type_index (typeid (TMessage)),
-                            detail::message_packet_name<TMessage> ());
+        return make_packet (std::type_index (typeid (TMessage)), resolve_packet_name<TMessage> ());
     }
 
     packet_t make_packet (std::type_index type, std::string packet_name) const;
-    connector_t &on_packet_erased (std::string packet_name,
-                                   std::function<void (const packet_t &)> handler);
+    subscription_t on_packet_erased (std::string packet_name,
+                                     std::function<void (const packet_t &)> handler);
 
     std::shared_ptr<void> _state;
     codec_registry_t _codecs;

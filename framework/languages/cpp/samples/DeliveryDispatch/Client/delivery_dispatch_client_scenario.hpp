@@ -112,19 +112,27 @@ class delivery_dispatch_client_scenario_t
                 "delivery-success subscription failed");
         auto offer = wait_offer (courier, delivery_id, "courier-a");
         auto statuses = customer.wait_for_sequence<delivery_status_notify_t> ()
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::assigned;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::accepted;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::picked_up;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::delivered;
                           })
@@ -137,16 +145,16 @@ class delivery_dispatch_client_scenario_t
                 delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
               .fetch<create_delivery_res_t> ();
         });
-        const auto courier_offer = offer.get ();
+        const auto courier_offer = offer.get ().payload;
         send_decision (courier, courier_offer.delivery_id, courier_offer.courier_id, true);
         auto created = created_future.get ();
         ensure (created.delivery_id == delivery_id, "delivery-success create failed");
         auto received = statuses.result ();
         ensure (static_cast<bool> (received), "delivery-success status sequence failed");
-        ensure (received.value ()[0].courier_id == "courier-a", "assigned courier mismatch");
-        ensure (received.value ()[1].courier_id == "courier-a", "accepted courier mismatch");
-        ensure (received.value ()[2].courier_id == "courier-a", "picked-up courier mismatch");
-        ensure (received.value ()[3].courier_id == "courier-a", "delivered courier mismatch");
+        ensure (received.value ()[0].payload.courier_id == "courier-a", "assigned courier mismatch");
+        ensure (received.value ()[1].payload.courier_id == "courier-a", "accepted courier mismatch");
+        ensure (received.value ()[2].payload.courier_id == "courier-a", "picked-up courier mismatch");
+        ensure (received.value ()[3].payload.courier_id == "courier-a", "delivered courier mismatch");
     }
 
     static void run_reassigned_delivery (zlink::http_client::client_t &http,
@@ -168,19 +176,27 @@ class delivery_dispatch_client_scenario_t
         auto first_offer = wait_offer (courier_a, delivery_id, "courier-a");
         auto second_offer = wait_offer (courier_b, delivery_id, "courier-b");
         auto statuses = customer.wait_for_sequence<delivery_status_notify_t> ()
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::assigned;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::reassigned;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::accepted;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::delivered;
                           })
@@ -194,16 +210,16 @@ class delivery_dispatch_client_scenario_t
               .fetch<create_delivery_res_t> ();
         });
         (void) first_offer.get ();
-        const auto accepted_offer = second_offer.get ();
+        const auto accepted_offer = second_offer.get ().payload;
         send_decision (courier_b, accepted_offer.delivery_id, accepted_offer.courier_id, true);
         auto created = created_future.get ();
         ensure (created.delivery_id == delivery_id, "delivery-reassign create failed");
         auto received = statuses.result ();
         ensure (static_cast<bool> (received), "delivery-reassign status sequence failed");
-        ensure (received.value ()[0].courier_id == "courier-a", "assigned courier mismatch");
-        ensure (received.value ()[1].courier_id == "courier-b", "reassigned courier mismatch");
-        ensure (received.value ()[2].courier_id == "courier-b", "accepted courier mismatch");
-        ensure (received.value ()[3].courier_id == "courier-b", "delivered courier mismatch");
+        ensure (received.value ()[0].payload.courier_id == "courier-a", "assigned courier mismatch");
+        ensure (received.value ()[1].payload.courier_id == "courier-b", "reassigned courier mismatch");
+        ensure (received.value ()[2].payload.courier_id == "courier-b", "accepted courier mismatch");
+        ensure (received.value ()[3].payload.courier_id == "courier-b", "delivered courier mismatch");
         /* This decision belongs to A's expired offer.  Send it only after B's
          * acceptance path has completed so the dispatch worker must reject it
          * as stale rather than treating it as the active attempt. */
@@ -230,15 +246,21 @@ class delivery_dispatch_client_scenario_t
         auto first_offer = wait_offer (courier_a, delivery_id, "courier-a");
         auto second_offer = wait_offer (courier_b, delivery_id, "courier-b");
         auto statuses = customer.wait_for_sequence<delivery_status_notify_t> ()
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::assigned;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::reassigned;
                           })
-                          .expect ([delivery_id] (const delivery_status_notify_t &message) {
+                          .expect (
+                            [delivery_id] (const zlink::stream_connector::message_t<delivery_status_notify_t> &message_message) {
+                              const auto &message = message_message.payload;
                               return message.delivery_id == delivery_id
                                      && message.status == delivery_status_t::failed;
                           })
@@ -250,15 +272,15 @@ class delivery_dispatch_client_scenario_t
                 delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
               .fetch<create_delivery_res_t> ();
         });
-        const auto rejected_a = first_offer.get ();
+        const auto rejected_a = first_offer.get ().payload;
         send_decision (courier_a, rejected_a.delivery_id, rejected_a.courier_id, false);
-        const auto rejected_b = second_offer.get ();
+        const auto rejected_b = second_offer.get ().payload;
         send_decision (courier_b, rejected_b.delivery_id, rejected_b.courier_id, false);
         const auto created = created_future.get ();
         ensure (created.delivery_id == delivery_id, "delivery-exhausted create failed");
         const auto received = statuses.result ();
         ensure (static_cast<bool> (received), "delivery-exhausted status sequence failed");
-        ensure (received.value ()[2].status == delivery_status_t::failed,
+        ensure (received.value ()[2].payload.status == delivery_status_t::failed,
                 "delivery-exhausted did not reach failed");
     }
 
@@ -271,11 +293,13 @@ class delivery_dispatch_client_scenario_t
         std::cout << "deliverydispatch-server-evidence=completed\n";
     }
 
-    static std::future<offer_delivery_notify_t>
+    static std::future<zlink::stream_connector::message_t<offer_delivery_notify_t>>
     wait_offer (connector_t &courier, const std::string &delivery_id, const std::string &courier_id)
     {
         return courier.wait_for<offer_delivery_notify_t> ()
-          .where ([delivery_id, courier_id] (const offer_delivery_notify_t &message) {
+          .where (
+            [delivery_id, courier_id] (const zlink::stream_connector::message_t<offer_delivery_notify_t> &message_message) {
+              const auto &message = message_message.payload;
               return message.delivery_id == delivery_id && message.courier_id == courier_id;
           })
           .timeout (std::chrono::seconds (12))

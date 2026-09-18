@@ -210,7 +210,7 @@ TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
       read_file (root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     const auto runner = read_file (root / "run_sample.sh");
 
-    EXPECT_NE (scenario.find ("client1_joined.state ().players ()"), std::string::npos)
+    EXPECT_NE (scenario.find ("client1_joined.payload.state ().players ()"), std::string::npos)
       << "SMP-CP-34 step 5 must validate the player records carried by the join push";
     EXPECT_NE (contracts.find ("int32 wins"), std::string::npos)
       << "Bingo player state must carry the wins loaded during actor join";
@@ -224,7 +224,7 @@ TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
       scenario.find ("same_bingo_room_state (client1_drawn.state (), client2_drawn.state ())"),
       std::string::npos)
       << "SMP-CP-34 step 8 must compare the complete draw state from both pushes";
-    EXPECT_NE (scenario.find ("same_bingo_player_list (client1_ended.state ().players ()"),
+    EXPECT_NE (scenario.find ("same_bingo_player_list (client1_ended.payload.state ().players ()"),
                std::string::npos)
       << "SMP-CP-34 step 9 must compare the final player lists from both pushes";
     EXPECT_NE (room.find ("bingo-lifecycle room-leave actor="), std::string::npos)
@@ -1299,24 +1299,24 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
                std::string::npos);
     EXPECT_NE (client.find ("client1_auth.player.level >= room.required_level"), std::string::npos);
     EXPECT_NE (client.find ("client2_auth.player.level >= room.required_level"), std::string::npos);
-    EXPECT_NE (client.find ("client1_saw_client2_join.display_name"), std::string::npos);
-    EXPECT_NE (client.find ("client1_saw_client2_join.level"), std::string::npos);
-    EXPECT_NE (client.find ("client1_saw_client2_join.state.status"), std::string::npos);
-    EXPECT_NE (client.find ("milestone.display_name == client1_auth.player.display_name"),
+    EXPECT_NE (client.find ("client1_saw_client2_join.payload.display_name"), std::string::npos);
+    EXPECT_NE (client.find ("client1_saw_client2_join.payload.level"), std::string::npos);
+    EXPECT_NE (client.find ("client1_saw_client2_join.payload.state.status"), std::string::npos);
+    EXPECT_NE (client.find ("milestone.payload.display_name == client1_auth.player.display_name"),
                std::string::npos);
     for (const auto *required :
          {"client1_first_move.state.board == \"X........\"",
           "client1_first_move.state.next_turn == tictactoe_marks_t::o",
-          "same_state (client2_saw_first_move.state, client1_first_move.state)",
+          "same_state (client2_saw_first_move.payload.state, client1_first_move.state)",
           "client2_first_move.state.board == \"X..O.....\"",
           "client2_first_move.state.next_turn == tictactoe_marks_t::x",
-          "same_state (client1_saw_first_o_move.state, client2_first_move.state)",
+          "same_state (client1_saw_first_o_move.payload.state, client2_first_move.state)",
           "client1_second_move.state.board == \"XX.O.....\"",
           "client1_second_move.state.next_turn == tictactoe_marks_t::o",
-          "same_state (client2_saw_second_x_move.state, client1_second_move.state)",
+          "same_state (client2_saw_second_x_move.payload.state, client1_second_move.state)",
           "client2_second_move.state.board == \"XX.OO....\"",
           "client2_second_move.state.next_turn == tictactoe_marks_t::x",
-          "same_state (client1_saw_second_o_move.state, client2_second_move.state)"}) {
+          "same_state (client1_saw_second_o_move.payload.state, client2_second_move.state)"}) {
         EXPECT_NE (client.find (required), std::string::npos) << required;
     }
 }
@@ -1642,7 +1642,7 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
                std::string::npos);
     EXPECT_NE (client.find ("reconnected_auth.player.actor_id == client1_auth.player.actor_id"),
                std::string::npos);
-    EXPECT_NE (client.find ("same_state (reconnected_join.state, client1_winning_move.state)"),
+    EXPECT_NE (client.find ("same_state (reconnected_join.payload.state, client1_winning_move.state)"),
                std::string::npos);
     EXPECT_EQ (client.find ("run_recreate_check"), std::string::npos);
     EXPECT_EQ (client.find ("tictactoe-client.log"), std::string::npos);

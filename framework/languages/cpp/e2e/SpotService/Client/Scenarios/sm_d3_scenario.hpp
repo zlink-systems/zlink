@@ -71,7 +71,7 @@ inline void run_sm_d3_scenario (const std::string &play_http_endpoint,
         throw std::runtime_error ("SM-D3 entry actor push failed");
     }
     auto entry_notify = entry_wait.get ();
-    if (entry_notify.actor_id != entry_actor_id || entry_notify.value != "entry-push") {
+    if (entry_notify.payload.actor_id != entry_actor_id || entry_notify.payload.value != "entry-push") {
         throw std::runtime_error ("SM-D3 entry push notify mismatch");
     }
 
@@ -142,7 +142,7 @@ inline void run_sm_d3_scenario (const std::string &play_http_endpoint,
         throw std::runtime_error ("SM-D3 user actor push failed");
     }
     auto user_notify = user_wait.get ();
-    if (user_notify.actor_id != user_actor_id || user_notify.value != "user-push") {
+    if (user_notify.payload.actor_id != user_actor_id || user_notify.payload.value != "user-push") {
         throw std::runtime_error ("SM-D3 user push notify mismatch");
     }
 

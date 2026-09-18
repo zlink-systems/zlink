@@ -1295,11 +1295,11 @@ class stream_peer_state_t
         options.heartbeat.enabled = false;
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         _connector.emplace (zlink::stream_connector::connector_factory_t::create (options));
-        _connector->on<sa::admission_msg_t> (
+        _admission_subscription = _connector->on<sa::admission_msg_t> (
           sa::admission_msg_t::packet_name,
-          [this] (const sa::admission_msg_t &message) {
+          [this] (const zlink::stream_connector::message_t<sa::admission_msg_t> &message) {
               std::lock_guard lock (_mutex);
-              ++_received[message.operation_id];
+              ++_received[message.payload.operation_id];
           });
         const auto connected = _connector->connect ();
         if (!connected) {
@@ -1366,6 +1366,9 @@ class stream_peer_state_t
   private:
     mutable std::mutex _mutex;
     std::optional<zlink::stream_connector::connector_t> _connector;
+    /* stream-connector §7: the handle owns the registration, so it lives as
+     * long as this peer state does. */
+    zlink::stream_connector::subscription_t _admission_subscription;
     std::map<std::string, std::uint64_t> _received;
 };
 

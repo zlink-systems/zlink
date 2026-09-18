@@ -9,4 +9,6 @@
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_interfaces.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_models.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_subscription.hpp>

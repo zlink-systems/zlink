@@ -108,7 +108,7 @@ inline void run_sm_d1_scenario (const std::string &play_http_endpoint,
     }
 
     auto notify = bound_wait.get ();
-    if (notify.actor_id != actor_id || notify.value != "push-local") {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != "push-local") {
         throw std::runtime_error ("SM-D1 bound stream push notify mismatch");
     }
     auto unbound_notify = unbound_wait.submit ();

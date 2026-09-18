@@ -48,7 +48,7 @@ inline void sm_g4_push_and_verify (zlink::stream_connector::connector_t &stream,
     }
 
     auto notify = wait.get ();
-    if (notify.actor_id != actor_id || notify.value != value) {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != value) {
         throw std::runtime_error ("SM-G4 push notify mismatch for " + actor_id);
     }
 }

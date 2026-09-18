@@ -23,10 +23,8 @@ inline const char *shutdown_error_name (zlink::stream_connector::error_code_t co
         return "request_timeout";
     case zlink::stream_connector::error_code_t::remote_error:
         return "remote_error";
-    case zlink::stream_connector::error_code_t::closed:
-        return "closed";
-    case zlink::stream_connector::error_code_t::canceled:
-        return "canceled";
+    case zlink::stream_connector::error_code_t::send_failed:
+        return "send_failed";
     default:
         return "other";
     }
@@ -53,7 +51,9 @@ inline void run_shutdown_wait_scenario (const client_options_t &client_options)
     ensure (result.error_code () != zlink::stream_connector::error_code_t::request_timeout,
             "ATD-E3 shutdown wait must observe closed/cancelled error before request timeout");
     std::cout << "automatic-turn-dispatch shutdown wait result=passed error="
-              << shutdown_error_name (result.error_code ()) << "\n";
+              << shutdown_error_name (result.error_code ().value_or (
+                   zlink::stream_connector::error_code_t::disconnected))
+              << "\n";
 }
 
 inline void run_shutdown_recovery_scenario (const client_options_t &client_options)

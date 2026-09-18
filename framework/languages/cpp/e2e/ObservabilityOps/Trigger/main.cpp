@@ -129,7 +129,7 @@ int zlink::framework::e2e::observability_ops::client::run (int argc, char **argv
             std::mutex gate;
             std::condition_variable changed;
             std::optional<zlink::stream_connector::close_reason_t> observed;
-            client.on_connection_state_changed (
+            auto state_subscription = client.on_connection_state_changed (
               [&] (const zlink::stream_connector::connection_state_changed_t &event) {
                   if (event.current == zlink::stream_connector::connection_state_t::disconnected
                       || event.current == zlink::stream_connector::connection_state_t::closed) {

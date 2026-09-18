@@ -123,13 +123,17 @@ class bound_actor_session_t
         auto promise = std::make_shared<std::promise<e2e::actor_push_notify_t>> ();
         auto future = promise->get_future ();
         _connector->wait_for<e2e::actor_push_notify_t> (e2e::actor_push_notify_t::packet_name)
-          .where ([scenario] (const e2e::actor_push_notify_t &notify) {
+          .where (
+            [scenario] (const zlink::stream_connector::message_t<e2e::actor_push_notify_t> &notify_message) {
+              const auto &notify = notify_message.payload;
               return notify.scenario == scenario;
           })
           .timeout (std::chrono::seconds (10))
-          .submit ([promise] (sc::result_t<e2e::actor_push_notify_t> result) {
+          .submit ([promise] (
+                     sc::result_t<zlink::stream_connector::message_t<e2e::actor_push_notify_t>>
+                       result) {
               if (result) {
-                  promise->set_value (std::move (result.value ()));
+                  promise->set_value (std::move (result.value ().payload));
               } else {
                   promise->set_exception (std::make_exception_ptr (
                     std::runtime_error ("bound actor push wait failed")));

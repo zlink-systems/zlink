@@ -7,6 +7,9 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +20,7 @@ namespace zlink::stream_e2e_client
 using zlink::stream_connector::codec_t;
 using zlink::stream_connector::connector_t;
 using zlink::stream_connector::expect_none_call_t;
+using zlink::stream_connector::message_t;
 using zlink::stream_connector::metadata_t;
 using zlink::stream_connector::packet_t;
 using zlink::stream_connector::request_call_t;
@@ -45,12 +49,6 @@ class coroutine_send_call_t
     coroutine_send_call_t &metadata (metadata_t metadata)
     {
         _inner.metadata (std::move (metadata));
-        return *this;
-    }
-
-    coroutine_send_call_t &codec (codec_t codec)
-    {
-        _inner.codec (codec);
         return *this;
     }
 
@@ -86,12 +84,6 @@ class coroutine_request_call_t
     coroutine_request_call_t &metadata (metadata_t metadata)
     {
         _inner.metadata (std::move (metadata));
-        return *this;
-    }
-
-    coroutine_request_call_t &codec (codec_t codec)
-    {
-        _inner.codec (codec);
         return *this;
     }
 
@@ -148,7 +140,8 @@ template <typename TMessage> class coroutine_wait_call_t
         return *this;
     }
 
-    coroutine_wait_call_t &where (std::function<bool (const TMessage &)> predicate)
+    coroutine_wait_call_t &where (
+      std::function<bool (const message_t<TMessage> &)> predicate)
     {
         _inner.where (std::move (predicate));
         return *this;
@@ -161,26 +154,46 @@ template <typename TMessage> class coroutine_wait_call_t
         return *this;
     }
 
-    result_t<TMessage> submit () { return _inner.submit (); }
+    result_t<message_t<TMessage>> submit () { return _inner.submit (); }
 
-    void submit (std::function<void (result_t<TMessage>)> callback)
+    void submit (std::function<void (result_t<message_t<TMessage>>)> callback)
     {
         _inner.submit (std::move (callback));
     }
 
-    task_t<TMessage> async ()
+    task_t<message_t<TMessage>> async ()
     {
-        auto task = task_t<TMessage> (
-          [inner = std::move (_inner)] (std::function<void (result_t<TMessage>)> callback) mutable {
+        auto task = task_t<message_t<TMessage>> (
+          [inner = std::move (_inner)] (
+            std::function<void (result_t<message_t<TMessage>>)> callback) mutable {
               inner.submit (std::move (callback));
           });
         task.start ();
         return task;
     }
 
-    std::future<TMessage> to_future (std::string failure_message = "stream wait failed")
+    /* The core reports failures by value and never throws (cpp
+     * stream-connector §5); the throwing shape belongs on this side of the
+     * boundary. */
+    std::future<message_t<TMessage>> to_future (std::string failure_message = "stream wait failed")
     {
-        return _inner.to_future (std::move (failure_message));
+        auto promise = std::make_shared<std::promise<message_t<TMessage>>> ();
+        auto future = promise->get_future ();
+        _inner.submit ([promise, failure_message = std::move (failure_message)] (
+                         result_t<message_t<TMessage>> result) mutable {
+            try {
+                if (!result) {
+                    promise->set_exception (
+                      std::make_exception_ptr (std::runtime_error (failure_message)));
+                    return;
+                }
+                promise->set_value (std::move (result.value ()));
+            }
+            catch (...) {
+                promise->set_exception (std::current_exception ());
+            }
+        });
+        return future;
     }
 
   private:
@@ -231,7 +244,7 @@ template <typename TMessage> class coroutine_wait_for_sequence_call_t
     }
 
     coroutine_wait_for_sequence_call_t &expect (
-      std::function<bool (const TMessage &)> predicate)
+      std::function<bool (const message_t<TMessage> &)> predicate)
     {
         _inner.expect (std::move (predicate));
         return *this;
@@ -243,18 +256,18 @@ template <typename TMessage> class coroutine_wait_for_sequence_call_t
         return *this;
     }
 
-    result_t<std::vector<TMessage>> submit () { return _inner.submit (); }
+    result_t<std::vector<message_t<TMessage>>> submit () { return _inner.submit (); }
 
-    void submit (std::function<void (result_t<std::vector<TMessage>>)> callback)
+    void submit (std::function<void (result_t<std::vector<message_t<TMessage>>>)> callback)
     {
         _inner.submit (std::move (callback));
     }
 
-    task_t<std::vector<TMessage>> async ()
+    task_t<std::vector<message_t<TMessage>>> async ()
     {
-        auto task = task_t<std::vector<TMessage>> (
+        auto task = task_t<std::vector<message_t<TMessage>>> (
           [inner = std::move (_inner)] (
-            std::function<void (result_t<std::vector<TMessage>>)> callback) mutable {
+            std::function<void (result_t<std::vector<message_t<TMessage>>>)> callback) mutable {
               inner.submit (std::move (callback));
           });
         task.start ();
@@ -289,7 +302,7 @@ class coroutine_connector_t
 
         explicit operator bool () { return static_cast<bool> (submit ()); }
 
-        error_code_t error_code ()
+        std::optional<error_code_t> error_code ()
         {
             if (!_last_result) {
                 _last_result = _submit_operation ();

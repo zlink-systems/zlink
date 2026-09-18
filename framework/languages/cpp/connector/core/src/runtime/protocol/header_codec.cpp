@@ -203,12 +203,12 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
           error_code_t::validation_failed, "Correlation id is too large.");
     }
     if (auto validation = validate_header (header); !validation) {
-        return result_t<std::vector<std::uint8_t>>::failure (validation.error_code (),
+        return result_t<std::vector<std::uint8_t>>::failure (validation.error ()->code,
                                                              validation.error ()->message);
     }
     auto metadata = metadata_codec_t::encode (header.metadata);
     if (!metadata) {
-        return result_t<std::vector<std::uint8_t>>::failure (metadata.error_code (),
+        return result_t<std::vector<std::uint8_t>>::failure (metadata.error ()->code,
                                                              metadata.error ()->message);
     }
     if (metadata.value ().size () > std::numeric_limits<std::uint16_t>::max ()) {
@@ -297,7 +297,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         offset += metadata_size;
         auto decoded = metadata_codec_t::decode (metadata);
         if (!decoded) {
-            return result_t<stream_header_t>::failure (decoded.error_code (),
+            return result_t<stream_header_t>::failure (decoded.error ()->code,
                                                        decoded.error ()->message);
         }
         header.metadata = decoded.value ();
@@ -333,7 +333,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
                                                    "Helper header contains trailing bytes.");
     }
     if (auto validation = validate_header (header, validate_flow); !validation) {
-        return result_t<stream_header_t>::failure (validation.error_code (),
+        return result_t<stream_header_t>::failure (validation.error ()->code,
                                                    validation.error ()->message);
     }
     return result_t<stream_header_t>::success (std::move (header));

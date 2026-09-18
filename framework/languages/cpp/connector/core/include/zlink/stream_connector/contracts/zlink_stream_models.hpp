@@ -36,6 +36,27 @@ struct packet_t
     codec_t codec = codec_t::raw;
     bool compressed = false;
     zlink::message_t payload;
+    /* Flow of the received message (stream-connector §5.5). Both values are
+     * empty when the diagnostics level is off (§13), and on an outbound packet
+     * the connector fills them at encode time. */
+    std::string flow_id;
+    std::optional<flow_origin_t> flow_origin;
+};
+
+/// A received message: the decoded payload with everything the receiving code
+/// needs to place it (stream-connector §5.5).
+///
+/// `flow_id` and `flow_origin` are empty when the diagnostics level is off
+/// (§13). Predicates and returns of the wait surfaces deal in this type, not in
+/// the payload alone, so a predicate can also read the packet name and the
+/// metadata (§10.1).
+template <typename TPayload> struct message_t
+{
+    std::string packet_name;
+    TPayload payload{};
+    metadata_t metadata;
+    std::string flow_id;
+    std::optional<flow_origin_t> flow_origin;
 };
 
 struct connection_state_changed_t

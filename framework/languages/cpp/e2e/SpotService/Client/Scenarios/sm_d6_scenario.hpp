@@ -103,7 +103,7 @@ inline void run_sm_d6_scenario (const std::string &session_stream_endpoint,
     }
 
     auto notify = bound_wait.get ();
-    if (notify.actor_id != actor_id || notify.value != "push-bound-only") {
+    if (notify.payload.actor_id != actor_id || notify.payload.value != "push-bound-only") {
         throw std::runtime_error ("SM-D6 bound push notify mismatch");
     }
     auto leaked = unbound_wait.submit ();
@@ -116,15 +116,15 @@ inline void run_sm_d6_scenario (const std::string &session_stream_endpoint,
     std::optional<std::chrono::steady_clock::time_point> old_disconnected;
     std::optional<std::chrono::steady_clock::time_point> duplicate_received;
     std::optional<std::string> duplicate_payload;
-    bound.on<zlink::stream_connector::packet_t> (
+    auto replaced_subscription = bound.on<zlink::stream_connector::packet_t> (
       "ActorBindingReplacedNotify",
-      [&] (const zlink::stream_connector::packet_t &packet) {
+      [&] (const zlink::stream_connector::message_t<zlink::stream_connector::packet_t> &message) {
           const std::lock_guard lock (close_gate);
-          duplicate_payload = packet.payload.to_string ();
+          duplicate_payload = message.payload.payload.to_string ();
           duplicate_received = std::chrono::steady_clock::now ();
           close_changed.notify_all ();
       });
-    bound.on_connection_state_changed (
+    auto bound_state_subscription = bound.on_connection_state_changed (
       [&] (const zlink::stream_connector::connection_state_changed_t &event) {
           if (event.current
                 == zlink::stream_connector::connection_state_t::disconnected
@@ -200,8 +200,8 @@ inline void run_sm_d6_scenario (const std::string &session_stream_endpoint,
           + (replacement_push ? replacement_push.value ().body : "<transport failure>"));
     }
     const auto replacement_notify = replacement_wait.get ();
-    if (replacement_notify.actor_id != actor_id
-        || replacement_notify.value != "push-replacement-only") {
+    if (replacement_notify.payload.actor_id != actor_id
+        || replacement_notify.payload.value != "push-replacement-only") {
         throw std::runtime_error ("SM-D6 replacement push notify mismatch");
     }
 
