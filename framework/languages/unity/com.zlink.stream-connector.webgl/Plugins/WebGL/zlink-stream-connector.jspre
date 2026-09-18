@@ -1648,23 +1648,30 @@ var ZlinkStreamConnectorBundle = (() => {
      * `Manual` needs no dispatch pump to complete a wait. The queue is scanned in
      * a microtask so a message that arrived before the wait started is still
      * observed, and so the caller has its subscription in hand by then.
+     *
+     * @param onConnectionEnded Called, instead of {@link observer}, when
+     *   {@link resetForNewConnection} abandons this registration because the
+     *   connection it was watching ended before a message matched (spec
+     *   stream-connector 32 §10.1: "연결이 끝나 대기를 이어갈 수 없으면
+     *   `Disconnected`다").
      */
-    observe(name, observer) {
+    observe(name, observer, onConnectionEnded) {
       validateName(name);
       let set = this.observers.get(name);
       if (set === void 0) {
         set = /* @__PURE__ */ new Set();
         this.observers.set(name, set);
       }
-      set.add(observer);
+      const registration = { consume: observer, onConnectionEnded };
+      set.add(registration);
       queueMicrotask(() => {
         var _a;
-        if (((_a = this.observers.get(name)) == null ? void 0 : _a.has(observer)) === true) {
-          this.offerQueued(name, observer);
+        if (((_a = this.observers.get(name)) == null ? void 0 : _a.has(registration)) === true) {
+          this.offerQueued(name, registration);
         }
       });
       return subscription(() => {
-        set.delete(observer);
+        set.delete(registration);
         if (set.size === 0 && this.observers.get(name) === set) {
           this.observers.delete(name);
         }
@@ -1675,15 +1682,47 @@ var ZlinkStreamConnectorBundle = (() => {
       var _a;
       return (_a = this.receivedCounts.get(name)) != null ? _a : 0;
     }
-    /** A newly established connection counts from 0 again (spec §10). */
-    resetReceivedCounts() {
+    /**
+     * Rebaselines the queue for a connection that was just established. Spec
+     * stream-connector 32 §10 (line ~649): the reference point is the moment a
+     * connection is established, so counts restart at 0 and whatever the
+     * previous connection left unconsumed goes with it — keeping the queue
+     * while only the counts reset would let counts and queue describe two
+     * different connections, and let `waitFor` hand back a packet from before
+     * the drop as if the new connection had delivered it.
+     *
+     * `ZlinkStreamMessage`/`ZlinkStreamEncodedPayload` are plain data (name,
+     * metadata, a `Uint8Array` payload) with no dispose/close of their own —
+     * unlike Java's queued frames, which `closeMessage` releases — so dropping
+     * the queue's references is the whole of the release here.
+     *
+     * @param replacesAnEarlierConnection False for the very first connection:
+     *   there is no earlier queue or wait to abandon yet. True for a reconnect,
+     *   which also fails every wait surface still registered from the
+     *   connection that just ended with `Disconnected` (Java
+     *   `ZLinkStreamDispatchQueue.resetForNewConnection` parity) — that
+     *   registration was watching a queue this call just discarded, so letting
+     *   it keep watching would silently rebind it to the new connection.
+     */
+    resetForNewConnection(replacesAnEarlierConnection) {
       this.receivedCounts.clear();
+      this.queue.length = 0;
+      this.queueHead = 0;
+      this.queuedCount = 0;
+      if (!replacesAnEarlierConnection || this.observers.size === 0) {
+        return;
+      }
+      const abandoned = [...this.observers.values()].flatMap((set) => [...set]);
+      this.observers.clear();
+      for (const registration of abandoned) {
+        registration.onConnectionEnded();
+      }
     }
     enqueue(message, signal) {
       var _a, _b;
       this.receivedCounts.set(message.name, ((_a = this.receivedCounts.get(message.name)) != null ? _a : 0) + 1);
-      for (const observer of [...(_b = this.observers.get(message.name)) != null ? _b : []]) {
-        if (observer(message)) {
+      for (const registration of [...(_b = this.observers.get(message.name)) != null ? _b : []]) {
+        if (registration.consume(message)) {
           return;
         }
       }
@@ -1711,13 +1750,13 @@ var ZlinkStreamConnectorBundle = (() => {
       this.scheduleDrain();
       await this.drainTask;
     }
-    offerQueued(name, observer) {
+    offerQueued(name, registration) {
       for (let index = this.queueHead; index < this.queue.length; index += 1) {
         const queued = this.queue[index];
         if (queued === void 0 || queued.message.name !== name) {
           continue;
         }
-        if (!observer(queued.message)) {
+        if (!registration.consume(queued.message)) {
           continue;
         }
         this.removeAt(index);
@@ -2110,7 +2149,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.currentConnection = connection;
         this.connectionGeneration += 1;
         this.disconnectedPublished = false;
-        this.receivedMessages.resetReceivedCounts();
+        this.receivedMessages.resetForNewConnection(this.connectionGeneration > 1);
         this.lastInboundAt = Date.now();
         await this.setState("connected" /* Connected */, void 0, signal);
         this.startHeartbeat();
@@ -2940,7 +2979,10 @@ var ZlinkStreamConnectorBundle = (() => {
             finish(cause);
           }
           return true;
-        });
+        }, () => finish(connectorError(
+          "disconnected" /* Disconnected */,
+          `The connection this wait for '${name}' observed has ended.`
+        )));
       });
     }
     encodePayload(payload, messageType) {

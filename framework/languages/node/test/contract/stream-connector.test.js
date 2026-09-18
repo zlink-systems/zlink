@@ -2603,3 +2603,99 @@ test('a disconnect handler may call close without waiting on the close that ran 
   await waitFor(() => nestedSettled, 2000);
   assert.equal(nestedFailure, undefined);
 });
+
+// Issue #583 (5): spec stream-connector 32 section 10 (line ~649) says a
+// connection that is established drops whatever the previous connection left
+// unconsumed, not only its counts — otherwise the counts and the queue
+// describe two different connections. Before the fix, the lifecycle reset
+// only `receivedCounts` on reconnect and left the queue in place, so a
+// `waitFor` registered after the reconnect could still be handed a message
+// the dead connection delivered.
+test('reconnecting drops the previous connection\'s unconsumed queue, not only its counts', async () => {
+  let connectCalls = 0;
+  let oldReads = 0;
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = async () => {
+    oldReads += 1;
+    // The first read delivers a message nobody consumes; every read after it
+    // fails, which is what drives the disconnect into a reconnect.
+    if (oldReads === 1) return sendFrame('OldMessage', 'stale');
+    throw new Error('old connection read failed');
+  };
+  const newConnection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        connectCalls += 1;
+        return connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+  // No handler is registered for 'OldMessage', so it arrives, is counted, and
+  // stays queued — nobody dispatches it.
+  await waitFor(() => instance.receivedCount('OldMessage') === 1, 1000);
+
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    2000
+  );
+
+  assert.equal(instance.receivedCount('OldMessage'), 0);
+  // A `waitFor` registered fresh on the new connection must actually wait —
+  // not be handed the stale message the dead connection queued — and time out.
+  await assert.rejects(
+    instance.waitFor('OldMessage').timeout(50).submit(),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.RequestTimeout
+  );
+});
+
+// Issue #583 (5): a `waitFor` already registered when the connection it is
+// watching ends is abandoned right there (spec stream-connector 32 section
+// 10.1: "연결이 끝나 대기를 이어갈 수 없으면 Disconnected다"), matching Java
+// `ZLinkStreamDispatchQueue.resetForNewConnection`'s
+// `replacesAnEarlierConnection` waiter failure. It must not keep waiting
+// through the reconnect only to time out as if nothing had arrived.
+test('a waitFor pending across a reconnect rejects as disconnected instead of waiting on the new connection', async () => {
+  let connectCalls = 0;
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = () => new Promise((_resolve, reject) => {
+    oldConnection.rejectRead = reject;
+  });
+  const newConnection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        connectCalls += 1;
+        return connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+  const pending = instance.waitFor('NeverArrives').timeout(5000).submit();
+  // Attached before the rejection fires, in the same tick `pending` is
+  // created, so this is the promise's real handler rather than a second one
+  // racing an "unhandledRejection" the reconnect below would otherwise raise.
+  const pendingRejection = assert.rejects(
+    pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+
+  oldConnection.rejectRead(new Error('old connection read failed'));
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    2000
+  );
+
+  await pendingRejection;
+});
