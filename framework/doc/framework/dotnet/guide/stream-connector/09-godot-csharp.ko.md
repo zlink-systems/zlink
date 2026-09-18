@@ -1,6 +1,6 @@
 # Godot C#
 
-[← 목차](INDEX.ko.md) | [이전: Unity](02-unity.ko.md)
+[← 목차](INDEX.ko.md) | [이전: Unity](08-unity.ko.md)
 
 ---
 

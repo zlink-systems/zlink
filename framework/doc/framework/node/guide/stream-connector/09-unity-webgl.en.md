@@ -1,6 +1,6 @@
 # Unity WebGL
 
-[← Table Of Contents](INDEX.en.md) | [Previous: Browser](02-browser.en.md)
+[← Table Of Contents](INDEX.en.md) | [Previous: Browser](08-browser.en.md)
 
 ---
 
@@ -134,6 +134,6 @@ check the following by hand after changing the package.
 
 ## Related documents
 
-- [02 — Browser](02-browser.en.md) — codec injection, dispatch, and flow delivery
-- [.NET Stream Connector Guide 02 — Unity (native build)](../../../dotnet/guide/stream-connector/02-unity.en.md)
+- [02 — Browser](08-browser.en.md) — codec injection, dispatch, and flow delivery
+- [.NET Stream Connector Guide 02 — Unity (native build)](../../../dotnet/guide/stream-connector/08-unity.en.md)
 - [Install](../../../install.en.md)

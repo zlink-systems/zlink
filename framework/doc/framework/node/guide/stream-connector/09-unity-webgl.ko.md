@@ -1,6 +1,6 @@
 # Unity WebGL
 
-[← 목차](INDEX.ko.md) | [이전: 브라우저](02-browser.ko.md)
+[← 목차](INDEX.ko.md) | [이전: 브라우저](08-browser.ko.md)
 
 ---
 
@@ -125,6 +125,6 @@ jslib 경계는 `framework/languages/node/test/contract/unity-webgl-jslib.test.j
 
 ## 관련 문서
 
-- [02 — 브라우저](02-browser.ko.md) — codec 주입, dispatch, flow 전달
-- [.NET Stream Connector 가이드 02 — Unity(네이티브 빌드)](../../../dotnet/guide/stream-connector/02-unity.ko.md)
+- [02 — 브라우저](08-browser.ko.md) — codec 주입, dispatch, flow 전달
+- [.NET Stream Connector 가이드 02 — Unity(네이티브 빌드)](../../../dotnet/guide/stream-connector/08-unity.ko.md)
 - [설치](../../../install.ko.md)
