@@ -1038,9 +1038,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 === "Kotlin"
 
     ```bash
-    # kotlin 샘플은 java와 같은 runner를 쓰고 언어만 골라 준다.
-    ZLINK_SAMPLE_LANGUAGES=kotlin \
-      framework/languages/java/samples/run_samples.sh TicTacToe
+      framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
 
     # runner 안에서는 java와 같은 절차다 — installDist → start_server → wait_port → client.
     ```

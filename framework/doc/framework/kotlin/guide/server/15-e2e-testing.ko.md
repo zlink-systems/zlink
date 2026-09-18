@@ -283,9 +283,7 @@ private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): J
 실행 script는 **server 기동, client 실행, 실행 뒤 정리**를 담당한다.
 
 ```bash
-# kotlin 샘플은 java와 같은 runner를 쓰고 언어만 골라 준다.
-ZLINK_SAMPLE_LANGUAGES=kotlin \
-  framework/languages/java/samples/run_samples.sh TicTacToe
+  framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
 
 # runner 안에서는 java와 같은 절차다 — installDist → start_server → wait_port → client.
 ```

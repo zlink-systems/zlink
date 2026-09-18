@@ -210,7 +210,7 @@ Actor ID와 Spot ID는 Mesh별 주소가 아니라 Location Store namespace 전�
 
 우선순위: `P0`
 
-Provider를 추가할 때 consumer를 재시작해야 한다면 automatic discovery의 운영상 이점이 사라진다.
+Provider를 추가할 때 consumer를 재시작해야 한다면 automatic discovery의 운영상 장점이 사라진다.
 Framework는 새 provider가 ready 상태가 된 뒤 이후 request의 선택 후보에 포함해야 한다.
 
 **검증 질문:** Provider A가 request를 처리하는 동안 B를 추가하면 consumer 재시작 없이 B도 이후

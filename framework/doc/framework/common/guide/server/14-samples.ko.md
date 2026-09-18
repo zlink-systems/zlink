@@ -235,8 +235,6 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
     # 샘플 하나 실행
     framework/languages/dotnet/samples/Bingo/run_sample.sh
 
-    # 여러 개를 이어서 실행 (인자를 생략하면 전체)
-    framework/languages/dotnet/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "C++"
@@ -245,27 +243,19 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
     # 샘플 하나 실행
     framework/languages/cpp/samples/Bingo/run_sample.sh
 
-    # 여러 개를 이어서 실행 (인자를 생략하면 전체)
-    framework/languages/cpp/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "Java"
 
     ```bash
-    # java와 kotlin 샘플을 한 runner가 함께 다룬다.
+    # java와 kotlin 샘플이 같은 sample root 아래 언어별 디렉토리로 나뉜다.
     framework/languages/java/samples/java/TicTacToe/run_sample.sh
-
-    # 여러 개를 이어서 실행 (인자를 생략하면 전체)
-    ZLINK_SAMPLE_LANGUAGES=java \
-      framework/languages/java/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "Kotlin"
 
     ```bash
-    # kotlin 샘플은 java와 같은 runner를 쓰고 언어만 골라 준다.
-    ZLINK_SAMPLE_LANGUAGES=kotlin \
-      framework/languages/java/samples/run_samples.sh TicTacToe Bingo
+    framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
     ```
 
 === "Node/TypeScript"
@@ -274,13 +264,12 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
     # 샘플 하나 실행
     framework/languages/node/samples/Bingo.Ts/run_sample.sh
 
-    # 여러 개를 이어서 실행 (인자를 생략하면 전체)
-    framework/languages/node/samples/run_samples.sh TicTacToe Bingo
     ```
 
-공통 sample target에는 브라우저 UI를 포함한 ZoneWorld도 포함된다. 다섯 언어의
-`run_samples.sh`는 ZoneWorld를 포함한 7개 샘플을 모두 실행한다. ZoneWorld만 실행하려면
-해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
+샘플은 하나씩 실행한다. 일곱 개를 모두 확인하려면 일곱 번 호출한다. 브라우저 UI를 포함한
+ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
+여러 sample을 한 번에 도는 runner를 두지 않는 까닭은
+[공통 sample](../../../common/sample/README.ko.md)이 정한다.
 
 ## 10. 관련 문서
 

@@ -27,6 +27,7 @@ runtime reflection 대신 compile-time 타입으로 handler를 등록한다.
 | `DeliveryDispatch` | courier 선택, timeout 재배정, tracking과 customer push | Redis location store | JSON |
 | `GameQuest` | player별 quest owner Spot, event stream과 조회 모델 | Redis location store | JSON |
 | `ShoppingMall` | ChannelName service, 주문 workflow, event stream과 fanout 알림 | Redis location store | JSON |
+| `ZoneWorld` | Gateway와 ZoneNode 2개, Ops를 분리해 zone 이동, actor relocation, border sync와 운영 fanout을 확인한다 | Redis location store | JSON |
 
 TicTacToe만 peer endpoint를 수동으로 설정한다. 다른 샘플은 Spot과 Actor의 위치를 찾고 MeshNode peer를
 구성할 때 Redis location store를 사용한다. Application code가 peer 목록이나 연결 순서를 관리하지
@@ -41,35 +42,26 @@ Spot, Actor와 Logical Multicast는 같은 MeshNode를 사용한다. 전 수신�
 
 ## 실행
 
-Linux 또는 WSL에서 샘플 하나를 실행하려면 해당 runner를 호출한다.
+샘플마다 `run_sample.sh`와 `run_sample.ps1`이 있고, 한 번의 호출은 샘플 하나를 실행한다.
+실행 방법의 기준은
+[공통 sample 문서](../../../doc/framework/common/sample/README.ko.md)의
+「샘플 실행 스크립트와 Redis 격리 기준」 절이 소유한다.
+
+Linux 또는 WSL에서는 저장소 root에서 다음과 같이 호출한다.
 
 ```bash
-./framework/languages/cpp/samples/TicTacToe/run_sample.sh
 ./framework/languages/cpp/samples/Bingo/run_sample.sh
 ```
 
-현재 C++ 구현이 있는 일곱 sample을 순서대로 실행하려면 통합 runner를 사용한다. ZoneWorld는
-Gateway, ZoneNode 두 개와 Ops를 별도 process로 실행하고, bound session을 유지한 zone 변경,
-actor relocation, border sync와 운영 fanout을 검증한다.
-
-```bash
-./framework/languages/cpp/samples/run_samples.sh
-```
-
-DeliveryDispatch 샘플은 현재 Linux 또는 WSL용 `run_sample.sh`로 전체 client/server 흐름을 검증한다.
-
-일부 샘플만 실행할 때는 샘플 이름을 지정한다.
-
-```bash
-./framework/languages/cpp/samples/run_samples.sh Bingo SupportChat
-```
-
-Windows PowerShell에서도 같은 책임을 가진 runner를 사용한다.
+Windows PowerShell에서는 같은 샘플을 다음과 같이 호출한다.
 
 ```powershell
-.\framework\languages\cpp\samples\TicTacToe\run_sample.ps1
-.\framework\languages\cpp\samples\run_samples.ps1
+.\framework\languages\cpp\samples\Bingo\run_sample.ps1
 ```
+
+C++ 샘플은 일곱 개이므로 전부 확인하려면 호출도 일곱 번이다. 경로의 `Bingo` 자리에
+`Bingo`, `DeliveryDispatch`, `GameQuest`, `ShoppingMall`, `SupportChat`, `TicTacToe`,
+`ZoneWorld`를 차례로 넣어 한 번에 하나씩 실행한다.
 
 기본 빌드 디렉터리는 `framework/languages/cpp/build`이다. Runner는 build, 역할별 설정 파일 생성,
 서버 시작, readiness 확인, client self-check와 정리를 순서대로 수행한다.
