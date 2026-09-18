@@ -10,7 +10,7 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
 # 14. Picking a Sample — Start with the Example Closest to Your Problem
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Options and Defaults](16-options.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
+[Guide Home](README.en.md) | [Previous: Options and Defaults](16-options.en.md) | [Next: Reading Along: Bingo](50-bingo.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -96,6 +96,7 @@ receives it and pushes it to spectating clients.
 - Paired chapters: [Channel Messaging](20-channel-messaging.en.md) (ClientServer channel),
   [Spot](21-spot.en.md) (creating a User Spot), [STREAM](23-stream.en.md)
 - Scenario: [TicTacToe](../../../common/sample/tictactoe/README.en.md) · payload JSON
+- Reading along: [Reading Along: TicTacToe](51-tictactoe.en.md) — the sample's code in flow order
 
 ## 3. Bingo — Building an Online Game Server
 
@@ -137,6 +138,7 @@ keeps the same field and wire names.
   [Location](25-location.en.md)
 - Scenario: [Bingo](../../../common/sample/bingo/README.en.md) · payload Protobuf
 - The registration-code examples in chapters 06 and 07 come from this sample.
+- Reading along: [Reading Along: Bingo](50-bingo.en.md) — the sample's code in flow order
 
 ## 4. SupportChat — Building a Live Chat Support System
 
@@ -181,6 +183,7 @@ rooms/tasks at once** has the same architecture.
 - Paired chapters: [Session and Actor](24-actor-session.en.md), [Spot](21-spot.en.md)
   (timer), [STREAM](23-stream.en.md)
 - Scenario: [SupportChat](../../../common/sample/supportchat/README.en.md) · payload JSON
+- Reading along: [Reading Along: SupportChat](52-supportchat.en.md) — the sample's code in flow order
 
 ## 5. DeliveryDispatch — Building a Dispatch System
 
@@ -204,6 +207,7 @@ timeout-reassignment flows.
 - Paired chapters: [Channel Messaging](20-channel-messaging.en.md),
   [Actor](22-actor.en.md), [STREAM](23-stream.en.md)
 - Scenario: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md) · payload JSON
+- Reading along: [Reading Along: DeliveryDispatch](53-deliverydispatch.en.md) — the sample's code in flow order
 
 ## 6. ShoppingMall — Building an Order-Processing System
 
@@ -227,6 +231,7 @@ stalled orders. If the read model breaks, it can be rebuilt by replaying the eve
 - Scenario: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) · payload JSON
 - Event sourcing itself isn't a framework feature — it's a shape the application builds on
   top of a Spot.
+- Reading along: [Reading Along: ShoppingMall](54-shoppingmall.en.md) — the sample's code in flow order
 
 ## 7. GameQuest — Building a Quest Progression System
 
@@ -248,6 +253,7 @@ into a separate tier.
 
 - Paired chapters: [Spot](21-spot.en.md), [Session and Actor](24-actor-session.en.md)
 - Scenario: [GameQuest](../../../common/sample/event/gamequest.en.md) · payload JSON
+- Reading along: [Reading Along: GameQuest](55-gamequest.en.md) — the sample's code in flow order
 
 ## 8. ZoneWorld — Building a Zone-Sharded MMORPG and Ops Control
 
@@ -285,6 +291,7 @@ UI**, so you can watch boundary crossings and maintenance-mode changes in the br
 - Scenario: [ZoneWorld](../../../common/sample/zoneworld/README.en.md) · payload JSON
 - The server and runner are provided in all five languages and share the business behavior and
   verification criteria. The .NET and Node.js browser smoke tests use the same TypeScript client.
+- Reading along: [Reading Along: ZoneWorld](56-zoneworld.en.md) — the sample's code in flow order
 
 ## 9. Running It
 

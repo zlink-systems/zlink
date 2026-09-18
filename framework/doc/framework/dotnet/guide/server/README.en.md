@@ -153,9 +153,16 @@ endpoints and real-time connections run in the same process.
 | 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
 | 23 | [Options](16-options.en.md) | The option list, the defaults and when to change them |
 | 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
-| 25 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
-| 26 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
-| 27 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
+| 25 | [Reading Along: Bingo](50-bingo.en.md) | Authentication, matching, rooms, timers, multicast and cleanup in code order |
+| 26 | [Reading Along: TicTacToe](51-tictactoe.en.md) | Manual connection and registration, an Actor join onto another node |
+| 27 | [Reading Along: SupportChat](52-supportchat.en.md) | Several Actors on one session, metadata relay, the idle timer |
+| 28 | [Reading Along: DeliveryDispatch](53-deliverydispatch.en.md) | One-way sends, deadline records and reassignment, customer pushes |
+| 29 | [Reading Along: ShoppingMall](54-shoppingmall.en.md) | The owner Instance Spot, replay, next step and expected version |
+| 30 | [Reading Along: GameQuest](55-gamequest.en.md) | A per-player owner, best-effort pushes and reconciliation |
+| 31 | [Reading Along: ZoneWorld](56-zoneworld.en.md) | Capacity placement, boundary joins and relocation, fanout and observation |
+| 32 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
+| 33 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
+| 34 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
 
 The file number identifies the same chapter regardless of language. This table owns the
 reading order.

@@ -10,7 +10,7 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Node/Typ
 # 15. E2E Testing — Verifying the Whole System with a Client
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
+[Guide Home](README.en.md) | [Previous: Reading Along: ZoneWorld](56-zoneworld.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

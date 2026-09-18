@@ -208,7 +208,15 @@ nav:
       - Operations:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
           - Options: cpp/guide/server/16-options.md
-      - Samples: cpp/guide/server/14-samples.md
+      - Samples:
+          - Picking a sample: cpp/guide/server/14-samples.md
+          - Bingo: cpp/guide/server/50-bingo.md
+          - TicTacToe: cpp/guide/server/51-tictactoe.md
+          - SupportChat: cpp/guide/server/52-supportchat.md
+          - DeliveryDispatch: cpp/guide/server/53-deliverydispatch.md
+          - ShoppingMall: cpp/guide/server/54-shoppingmall.md
+          - GameQuest: cpp/guide/server/55-gamequest.md
+          - ZoneWorld: cpp/guide/server/56-zoneworld.md
       - Tests: cpp/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: cpp/guide/stream-connector/README.md
@@ -278,7 +286,15 @@ nav:
       - Operations:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
           - Options: dotnet/guide/server/16-options.md
-      - Samples: dotnet/guide/server/14-samples.md
+      - Samples:
+          - Picking a sample: dotnet/guide/server/14-samples.md
+          - Bingo: dotnet/guide/server/50-bingo.md
+          - TicTacToe: dotnet/guide/server/51-tictactoe.md
+          - SupportChat: dotnet/guide/server/52-supportchat.md
+          - DeliveryDispatch: dotnet/guide/server/53-deliverydispatch.md
+          - ShoppingMall: dotnet/guide/server/54-shoppingmall.md
+          - GameQuest: dotnet/guide/server/55-gamequest.md
+          - ZoneWorld: dotnet/guide/server/56-zoneworld.md
       - Tests: dotnet/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: dotnet/guide/stream-connector/README.md
@@ -346,7 +362,15 @@ nav:
       - Operations:
           - Operations and lifecycle: java/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
-      - Samples: java/guide/server/14-samples.md
+      - Samples:
+          - Picking a sample: java/guide/server/14-samples.md
+          - Bingo: java/guide/server/50-bingo.md
+          - TicTacToe: java/guide/server/51-tictactoe.md
+          - SupportChat: java/guide/server/52-supportchat.md
+          - DeliveryDispatch: java/guide/server/53-deliverydispatch.md
+          - ShoppingMall: java/guide/server/54-shoppingmall.md
+          - GameQuest: java/guide/server/55-gamequest.md
+          - ZoneWorld: java/guide/server/56-zoneworld.md
       - Tests: java/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: java/guide/stream-connector/README.md
@@ -412,7 +436,15 @@ nav:
       - Operations:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
-      - Samples: kotlin/guide/server/14-samples.md
+      - Samples:
+          - Picking a sample: kotlin/guide/server/14-samples.md
+          - Bingo: kotlin/guide/server/50-bingo.md
+          - TicTacToe: kotlin/guide/server/51-tictactoe.md
+          - SupportChat: kotlin/guide/server/52-supportchat.md
+          - DeliveryDispatch: kotlin/guide/server/53-deliverydispatch.md
+          - ShoppingMall: kotlin/guide/server/54-shoppingmall.md
+          - GameQuest: kotlin/guide/server/55-gamequest.md
+          - ZoneWorld: kotlin/guide/server/56-zoneworld.md
       - Tests: kotlin/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: kotlin/guide/stream-connector/README.md
@@ -478,7 +510,15 @@ nav:
       - Operations:
           - Operations and lifecycle: node/guide/server/12-operations.md
           - Options: node/guide/server/16-options.md
-      - Samples: node/guide/server/14-samples.md
+      - Samples:
+          - Picking a sample: node/guide/server/14-samples.md
+          - Bingo: node/guide/server/50-bingo.md
+          - TicTacToe: node/guide/server/51-tictactoe.md
+          - SupportChat: node/guide/server/52-supportchat.md
+          - DeliveryDispatch: node/guide/server/53-deliverydispatch.md
+          - ShoppingMall: node/guide/server/54-shoppingmall.md
+          - GameQuest: node/guide/server/55-gamequest.md
+          - ZoneWorld: node/guide/server/56-zoneworld.md
       - Tests: node/guide/server/15-e2e-testing.md
       - Stream connector:
           - Contents: node/guide/stream-connector/README.md
