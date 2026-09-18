@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import java.time.Duration
 import java.util.concurrent.CompletionStage
+import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamConnector
 import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
@@ -94,6 +95,15 @@ class ZLinkKotlinStreamConnector(
     val options: ZLinkStreamConnectorOptions
         get() = inner.options()
 
+    /**
+     * The reason the connection last ended, or `null` when it has never
+     * ended (common connector spec 32 §6.2, Java/Kotlin spec §12). The Java
+     * connector returns an [java.util.Optional]; Kotlin reads the same value
+     * as a nullable, so code that holds only this wrapper reaches the reason
+     * without pulling [inner] back out.
+     */
+    fun closeReason(): ZLinkStreamCloseReason? = inner.closeReason().orElse(null)
+
     //  Runtime-mutable diagnostics level (server spec 26 §4.1 / common
     //  connector spec §13). `inner.diagnosticsLevel()` / `setDiagnosticsLevel`
     //  do not follow the `getX`/`setX` naming Kotlin needs to synthesize a
@@ -162,8 +172,27 @@ class ZLinkKotlinStreamConnector(
     inline fun <reified TPayload> waitFor(name: String): ZLinkStreamTypedWaitCall<TPayload> =
         ZLinkStreamTypedWaitCall(inner.waitFor(name), TPayload::class.java)
 
+    /**
+     * Expects no message of [TPayload] with the name its own resolution rules
+     * give it (Java/Kotlin spec §12, §5). The named overload stays for a
+     * packet whose name does not follow from the type.
+     */
+    inline fun <reified TPayload> expectNone(): ZLinkStreamTypedExpectNoneCall<TPayload> =
+        ZLinkStreamTypedExpectNoneCall(inner.expectNone(TPayload::class.java))
+
     inline fun <reified TPayload> expectNone(name: String): ZLinkStreamTypedExpectNoneCall<TPayload> =
         ZLinkStreamTypedExpectNoneCall(inner.expectNone(name))
+
+    /**
+     * Waits for a sequence of [TPayload] with the name its own resolution
+     * rules give it (Java/Kotlin spec §12, §5). The named overload stays for a
+     * packet whose name does not follow from the type.
+     */
+    inline fun <reified TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload> =
+        ZLinkStreamTypedSequenceCall(
+            inner.waitForSequence(TPayload::class.java),
+            TPayload::class.java,
+        )
 
     inline fun <reified TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload> =
         ZLinkStreamTypedSequenceCall(inner.waitForSequence(name), TPayload::class.java)
