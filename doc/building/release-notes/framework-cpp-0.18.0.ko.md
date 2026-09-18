@@ -18,6 +18,7 @@ Stream connector의 공개 표면이 바뀝니다. 다섯 언어의 기능 차�
 - **기본 packet 이름이 `typeid(T).name()`에서 타입의 단순 이름으로 바뀝니다.** 컴파일러마다 달라지는 이름을 쓰지 않기 위해서입니다. 서버와 client가 합의하는 wire 이름이 달라지므로, 이름을 명시하지 않던 코드는 양쪽을 함께 올려야 합니다.
 - `on_disconnected` handler가 `std::optional<close_reason_t>`를 받습니다.
 - `codecs::on<T>(connector, ...)` framework helper도 `subscription_t`를 돌려줍니다.
+- 송신 payload가 한도를 넘으면 `frame_too_large` 대신 `validation_failed`를 돌려줍니다. `dispatch()`의 헤더 주석도 큐 전체를 비운다는 실제 동작에 맞춰 고쳤습니다. (#599)
 
 ## 공통 변경
 
@@ -30,6 +31,10 @@ Stream connector의 공개 표면이 바뀝니다. 다섯 언어의 기능 차�
 
 - 예약 record의 authority payload 자리에 응용 요청 바이트를 넣어 다른 언어로의 원격 Actor 생성이 막히던 것을 고쳤습니다. (#549)
 - 계약 시험이 파일을 읽을 때 줄바꿈을 각 플랫폼의 CRT에 맡겨, CRLF 체크아웃과 LF 체크아웃에서 결과가 달랐습니다. 그중 둘은 음성 단언이라 검사를 멈춘 채 통과하고 있었습니다. 읽는 자리 한 곳에서 정규화하도록 바꿨습니다. (#581)
+- Windows에서 C++ 샘플 실행 파일이 Core `zlink.dll`을 찾지 못해 readiness에 이르지 못하던 것을 고쳤습니다. 빌드 트리에 Core runtime을 함께 배치합니다. 실패한 샘플의 역할 로그를 지우던 규칙도 하나로 모아, 실패 시 증거가 남습니다. (#591)
+- Redis 위치 스토어의 scan이 일치하는 key마다 순차로 `HGET`·`ZREVRANGE`를 보내 전용 워커 스레드 하나에 몰리던 것을, 서버 측 Lua `EVAL` 한 번으로 바꿨습니다. Windows 부하에서 요청 하나가 수 초에 이르던 hop 지연이 줄었습니다. (#603)
+- poll 루프의 짧은 대기가 Windows 기본 스케줄러 타이머 주기(약 15.6 ms)에 반올림되어 최대 15배 느려지던 것을 고쳤습니다. 전용 waitable timer로 대기합니다. (#625)
+- close 경로에서 재개된 coroutine이 이미 파괴된 프레임에 접근해 클라이언트가 접근 위반으로 죽던 것을 고쳤습니다. coroutine 프레임의 소유자를 프레임 자신으로 정해, `task_t`가 handle을 들거나 파괴하지 않습니다. (#630)
 
 ## 설치
 

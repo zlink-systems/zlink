@@ -18,6 +18,7 @@ The stream connector public surface changes. Removing the capability differences
 - **The default packet name changes from `typeid(T).name()` to the type's simple name**, so the name no longer varies by compiler. The wire name the server and client agree on therefore changes: code that did not spell the name out must be upgraded on both sides together.
 - The `on_disconnected` handler receives `std::optional<close_reason_t>`.
 - The `codecs::on<T>(connector, ...)` framework helper also returns a `subscription_t`.
+- A send-payload-over-limit violation now returns `validation_failed` instead of `frame_too_large`. The `dispatch()` header comment was also corrected to describe draining the whole queue, its actual behavior. (#599)
 
 ## Shared Changes
 
@@ -30,6 +31,10 @@ The stream connector public surface changes. Removing the capability differences
 
 - Fixed the reservation record carrying application request bytes in the authority payload slot, which blocked remote Actor creation into other languages. (#549)
 - Contract tests read files leaving newline handling to each platform's CRT, so the same assertion behaved differently on a CRLF checkout and an LF checkout. Two of them were negative assertions that passed while checking nothing. Normalization now happens in one place. (#581)
+- Fixed Windows C++ sample executables failing to find the Core `zlink.dll`, which kept them from reaching readiness. The build tree now stages the Core runtime alongside them. The rule for keeping a failed sample's role logs was also unified into one place, so failures now leave evidence behind. (#591)
+- Changed the Redis location store's scan from sending a sequential `HGET`/`ZREVRANGE` pair per matching key, serialized on one dedicated worker thread, to a single server-side Lua `EVAL`. This reduces the Windows hop latency that previously stretched a single request to several seconds under load. (#603)
+- Fixed short waits in the poll loop being rounded up to the Windows default scheduler timer period (about 15.6 ms), slowing them down by up to 15x. They now wait on a dedicated waitable timer. (#625)
+- Fixed the client crashing with an access violation when a coroutine resumed on the close path touched an already-destroyed frame. The coroutine frame is now owned by the frame itself, so `task_t` no longer holds or destroys the handle. (#630)
 
 ## Installation
 

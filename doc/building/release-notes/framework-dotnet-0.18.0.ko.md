@@ -11,6 +11,7 @@ Stream connector의 공개 표면이 바뀝니다.
 - 연결 이벤트 세 종이 C# `event`에서 `IDisposable`을 돌려주는 메서드가 됩니다. `+=`로 등록하던 자리는 메서드 호출로 바꾸고, 돌려받은 값을 해제할 때까지 보관해야 합니다.
 - 오류는 닫힌 13개 코드로 통일됩니다. transport에 쓰기 전에 걸러지는 송신 한도 위반은 `ValidationFailed`입니다.
 - Client connector에서 계기(metrics)를 걷어냈습니다.
+- `close()`가 끊김 handler의 완료를 기다리지 않고, handler를 실행한 뒤 곧장 돌아옵니다. handler 안에서 `close()`를 부르던 코드의 교착이 풀립니다. (#590)
 
 ## 공통 변경
 
@@ -26,6 +27,9 @@ Stream connector의 공개 표면이 바뀝니다.
 - runtime descriptor의 변경이 loop를 깨우지 않아 게시가 미뤄지던 것을 고쳤습니다. 네 setter가 하나의 통로를 지나도록 모았습니다. (#516)
 - 샘플 teardown에서 강제 종료한 역할을 bash 실행이 실패로 만들지 않던 것을 고쳤습니다. 이전에는 강제 종료가 조용히 넘어갔습니다. (#575)
 - 샘플 회귀 시험이 줄바꿈을 글자로 못 박아 CRLF 체크아웃에서 실패하던 것을 고쳤습니다. (#578)
+- Windows에서 `.NET` ShoppingMall 샘플의 PowerShell 러너가 옮겨지는 planned-relocation Spot이 아니라 주문 Instance Spot의 소유권을 물어 relocation을 제대로 확인하지 못하던 것을 고쳤습니다. 러너가 주문을 직접 진행시키던 것도 없애 관측 전용으로 맞췄습니다. (#605)
+- `ZW-G3`의 새 object 판정이 zone-nw의 생존에 기대어 crash lane 배치에 따라 실패하던 것을 고쳤습니다. zone에 의존하지 않는 전용 fresh probe를 씁니다. (#567)
+- 제거된 `run_samples` 집계 러너를 읽어 실패하던 샘플 회귀 시험 3건을, 지금 러너가 남기는 증거를 근거로 다시 세우거나 걷어냈습니다. (#568)
 
 ## 설치
 

@@ -11,6 +11,7 @@ The stream connector public surface changes.
 - The three connection events change from C# `event`s to methods that return an `IDisposable`. Replace `+=` registrations with method calls and keep the returned value until you dispose it.
 - Errors are unified into a closed set of 13 codes. A send-limit violation, rejected before anything reaches the transport, is `ValidationFailed`.
 - Metrics were removed from the client connector.
+- `close()` no longer waits for the disconnect handler to finish; it runs the handler and returns right away. This releases the deadlock in code that called `close()` from inside that handler. (#590)
 
 ## Shared Changes
 
@@ -26,6 +27,9 @@ The stream connector public surface changes.
 - Fixed runtime descriptor mutations not waking the loop, which deferred publication. The four setters now pass through a single choke point. (#516)
 - Fixed sample teardown: a role that was force-killed no longer passes silently through the bash runner. (#575)
 - Fixed sample regression tests pinning newlines as literal characters, which failed on a CRLF checkout. (#578)
+- Fixed the `.NET` ShoppingMall sample's PowerShell runner querying ownership of the order's Instance Spot instead of the planned-relocation Spot that actually moves, so it could not properly confirm relocation. Also removed the runner advancing the order itself, so it stays observation-only. (#605)
+- Fixed `ZW-G3`'s new-object verdict depending on zone-nw's survival, which made it fail depending on which node the crash lane picked. It now uses a dedicated fresh-object probe that does not depend on any zone. (#567)
+- Rebuilt or removed three sample regression tests that failed by reading the deleted `run_samples` aggregate runner, basing each on the evidence the current runners actually leave. (#568)
 
 ## Installation
 

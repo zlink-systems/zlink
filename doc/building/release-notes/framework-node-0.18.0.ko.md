@@ -6,9 +6,11 @@ Framework 0.18.0는 binding 1.2.0과 Core 1.2.0을 사용합니다. Framework �
 
 ## 계약 변경
 
-Stream connector의 공개 API는 바뀌지 않습니다. 관찰 가능한 변화가 하나 있습니다.
+Stream connector의 공개 API는 바뀌지 않습니다. 관찰 가능한 변화가 셋 있습니다.
 
 - 배출 중일 때 `dispatch()`가 그 완료를 기다리지 않고 돌아옵니다. handler 안에서 `dispatch()`를 부르던 코드의 교착이 풀립니다.
+- 송신 payload가 한도를 넘으면 `FrameTooLarge` 대신, 공통 스펙이 정한 `ValidationFailed`를 돌려줍니다. C++도 같은 결함을 #599에서 고쳤습니다. (#618)
+- `close()`가 끊김 handler의 완료를 기다리지 않고, handler를 실행한 뒤 곧장 돌아옵니다. handler 안에서 `close()`를 부르던 코드의 교착이 풀립니다. (#590)
 
 ## 공통 변경
 
@@ -22,6 +24,8 @@ Stream connector의 공개 API는 바뀌지 않습니다. 관찰 가능한 변�
 - ZoneWorld 샘플이 WSL에서 반복 실패하던 것을 고쳤습니다. monitor 이벤트 배출이 수신 loop 안에 있어, 그 loop가 대기에 들어가면 배출도 함께 멈췄습니다. 전용 loop로 분리했습니다. (#538)
 - 계약 시험이 파일을 읽는 자리 145곳이 각각 줄바꿈 규칙을 가지고 있어 CRLF 체크아웃에서 어긋나던 것을 하나로 모았습니다. (#582)
 - 게이트가 없어진 집계 러너를 실행하고 계약 시험이 그 경로를 단언하던 것을 개별 러너로 옮겼습니다. (#588)
+- Node 23 이상에서 런타임 게이트가 `node --test`의 기본 리포터를 TAP으로 가정해, 통과한 시험을 전부 실패로 세던 것을 고쳤습니다. 리포터를 `--test-reporter=tap`으로 명시하고 지원 Node 버전을 `engines`에 적었습니다. (#520)
+- Windows에서 unity-webgl 계약 시험이 절대 경로를 그대로 동적 `import()`에 넘겨 `ERR_UNSUPPORTED_ESM_URL_SCHEME`로 실패하던 것을 고쳤습니다. 다른 시험처럼 `pathToFileURL(...).href`를 씁니다. (#522)
 
 ## 설치
 
