@@ -26,12 +26,14 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
+import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
@@ -466,6 +468,34 @@ final class KotlinConnectorWrapperTest {
             }
         }
     }
+
+    //  #600. The wrapper is the only surface a Kotlin caller holds, so a
+    //  reason or a wait form that lives only on the Java connector is out of
+    //  reach for that caller. Each assertion below fails if the wrapper
+    //  member it exercises is removed: the two type-only waits stop
+    //  compiling, and closeReason() has no substitute the wrapper offers.
+    @Test
+    fun kotlinConnectorReadsTheCloseReasonFromTheWrapper() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            //  Common spec 32 §6.2: never ended means no reason yet.
+            assertNull(connector.closeReason())
+            connector.connect().await()
+            assertNull(connector.closeReason())
+
+            connector.close().await()
+            //  The reason is recorded on the disconnect notification, which
+            //  close() does not order itself against, so read it until it
+            //  settles rather than on the first look.
+            withTimeout(2_000) {
+                while (connector.closeReason() == null) {
+                    yield()
+                }
+            }
+            assertEquals(ZLinkStreamCloseReason.CLIENT_CLOSE, connector.closeReason())
+        }
+    }
+
 
     @Test
     fun kotlinAssertionsUseJavaFailureClassification() = runBlocking {
