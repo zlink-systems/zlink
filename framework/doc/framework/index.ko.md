@@ -432,13 +432,13 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 있고, 처음부터 끝까지 그 안에서 읽힌다. 장 머리의 전환 줄로 같은 장을 다른 언어에서 볼
 수 있다.
 
-| 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 |
-| --- | --- | --- | --- |
-| C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) |
-| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) |
-| Java | [서버](java/guide/server/README.ko.md) | [퀵스타트](java/quickstart.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) |
-| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) |
-| Node.js | [서버](node/guide/server/README.ko.md) | [퀵스타트](node/quickstart.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) |
+| 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 | 내려받기 |
+| --- | --- | --- | --- | --- |
+| C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip) |
+| `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-dotnet.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip) |
+| Java | [서버](java/guide/server/README.ko.md) | [퀵스타트](java/quickstart.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip) |
+| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip) |
+| Node.js | [서버](node/guide/server/README.ko.md) | [퀵스타트](node/quickstart.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) | [tutorial](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip) · [samples](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip) |
 
 **client 쪽 가이드 둘**은 서버 framework와 따로 배포되는 라이브러리를 다룬다.
 Stream Connector는 client가 STREAM endpoint에 접속하는 라이브러리이고(Unity ·

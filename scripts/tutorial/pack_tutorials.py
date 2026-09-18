@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""tutorial을 언어별 zip으로 묶는다.
+"""tutorial과 samples를 언어별 zip으로 묶는다.
 
-독자가 tutorial 하나를 돌려 보려고 저장소 전체를 clone할 이유가 없다. 실제 소스는 언어당
-30~140KB이고 나머지는 전부 빌드 산출물이다.
+독자가 하나를 돌려 보려고 저장소 전체를 clone할 이유가 없다. 실제 소스는 빌드 산출물을 뺀
+뒤에는 작다.
 
 `git archive`가 담을 파일을 정한다. 커밋된 파일만 들어가므로 `bin`·`obj`·`node_modules`·
 `dist`를 제외하는 규칙을 따로 관리하지 않아도 된다. 그 규칙은 `.gitignore`가 이미 갖고 있다.
 
-tutorial은 배포된 패키지만 참조하므로(NuGet · npm · CMake `find_package`) 받은 그대로
-빌드된다. 릴리즈 시점에 묶으면 그 릴리즈의 버전이 이미 박혀 있다.
+tutorial과 samples 모두 배포된 패키지만 참조하므로(NuGet · npm · CMake `find_package`) 받은
+그대로 빌드된다. samples는 저장소를 못 찾으면 package mode로 넘어가고, 그때 쓰는 버전은
+`sync-version`이 갱신한다. 릴리즈 시점에 묶으면 그 릴리즈의 버전이 이미 박혀 있다.
 
 **`git archive`가 그대로 내지 못하는 것 둘을 여기서 바로잡는다.**
 
@@ -34,6 +35,9 @@ import zipfile
 #  Java와 Kotlin은 gradle 프로젝트 하나를 공유하므로 함께 묶는다. 둘을 나누면
 #  `settings.gradle.kts`와 wrapper가 한쪽에만 들어가 다른 쪽이 빌드되지 않는다.
 LANGUAGES = ("cpp", "dotnet", "java", "node")
+
+#  묶는 절. 저장소 경로와 zip 이름의 가운데 토막이다.
+SECTIONS = ("tutorial", "samples")
 
 #  Windows 전용 script는 CRLF여야 한다. `.gitattributes`가 정한 것과 같다.
 CRLF_SUFFIXES = (".bat", ".cmd", ".ps1")
@@ -73,8 +77,9 @@ def executable(name: str) -> bool:
     return p.name in EXECUTABLE_NAMES or p.suffix in EXECUTABLE_SUFFIXES
 
 
-def pack(lang: str, ref: str, out_dir: pathlib.Path) -> tuple[int, int] | None:
-    src = "framework/languages/%s/tutorial" % lang
+def pack(lang: str, section: str, ref: str,
+         out_dir: pathlib.Path) -> tuple[int, int] | None:
+    src = "framework/languages/%s/%s" % (lang, section)
     listing = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", ref, src],
         capture_output=True, text=True)
@@ -86,8 +91,9 @@ def pack(lang: str, ref: str, out_dir: pathlib.Path) -> tuple[int, int] | None:
     raw = run(["git", "-c", "core.autocrlf=false", "archive", "--format=zip",
                "%s:%s" % (ref, src)])
 
-    prefix = "zlink-tutorial-%s/" % lang
-    target = out_dir / ("zlink-tutorial-%s.zip" % lang)
+    name = "zlink-%s-%s" % (section, lang)
+    prefix = name + "/"
+    target = out_dir / (name + ".zip")
     count = 0
     with zipfile.ZipFile(io.BytesIO(raw)) as source, \
             zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as dest:
@@ -113,20 +119,23 @@ def main() -> int:
     os.chdir(root)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("%-10s %9s %6s  %s" % ("언어", "크기", "파일", "산출물"))
+    print("%-10s %-10s %9s %6s  %s" % ("절", "언어", "크기", "파일", "산출물"))
     made = 0
-    for lang in LANGUAGES:
-        result = pack(lang, ref, out_dir)
-        if result is None:
-            print("%-10s %9s %6s  (추적 파일 없음)" % (lang, "-", "-"))
-            continue
-        count, size = result
-        print("%-10s %8.0fK %6d  %s"
-              % (lang, size / 1024, count, out_dir / ("zlink-tutorial-%s.zip" % lang)))
-        made += 1
+    for section in SECTIONS:
+        for lang in LANGUAGES:
+            result = pack(lang, section, ref, out_dir)
+            name = "zlink-%s-%s.zip" % (section, lang)
+            if result is None:
+                print("%-10s %-10s %9s %6s  (추적 파일 없음)"
+                      % (section, lang, "-", "-"))
+                continue
+            count, size = result
+            print("%-10s %-10s %8.0fK %6d  %s"
+                  % (section, lang, size / 1024, count, out_dir / name))
+            made += 1
 
     print()
-    print("압축을 풀면 zlink-tutorial-<언어>/ 아래에 tutorial이 그대로 나온다.")
+    print("압축을 풀면 zlink-<절>-<언어>/ 아래에 project가 그대로 나온다.")
     return 0 if made else 1
 
 

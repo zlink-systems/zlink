@@ -30,7 +30,7 @@ class ClientModule {}
 // This process's own HTTP surface -- a plain node:http server, not a NestJS
 // HTTP module. See README "differences" for why.
 function startHttpServer(route: ZLinkRouteClient): http.Server {
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const match = request.method === 'GET' ? /^\/hello\/([^/]+)$/.exec(url.pathname) : null;
     if (match === null) {
@@ -38,16 +38,15 @@ function startHttpServer(route: ZLinkRouteClient): http.Server {
       return;
     }
     const name = decodeURIComponent(match[1]);
-    route.requestToChannel('greeting', new Hello(name))
-      .submit<Greeting>()
-      .then((reply) => {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify(reply.text));
-      })
-      .catch((error: unknown) => {
-        response.writeHead(500, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-      });
+    try {
+      const reply = await route.requestToChannel('greeting', new Hello(name))
+        .submit<Greeting>();
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(reply.text));
+    } catch (error: unknown) {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    }
   });
   server.listen(5080, '127.0.0.1');
   return server;
