@@ -9,5 +9,5 @@
 | [.NET 공개 계약](../../../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | public 타입과 시그니처 |
 | [Stream Connector 공통 스펙](../../../common/spec/stream-connector/32-stream-connector.ko.md) | **정본** — 대상 환경, transport, wire 계약 |
 
-> **웹(브라우저·WASM) 빌드에는 이 connector를 쓸 수 없다.** Unity WebGL과 Godot Web은
+> **웹(브라우저·WASM) 빌드에는 이 connector를 사용할 수 없다.** Unity WebGL과 Godot Web은
 > [Node.js/TypeScript connector](../../../node/guide/stream-connector/README.ko.md)를 사용한다.

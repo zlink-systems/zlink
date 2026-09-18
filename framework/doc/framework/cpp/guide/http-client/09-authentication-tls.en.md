@@ -82,7 +82,7 @@ If no certificate is presented, the server rejects the handshake and it ends as 
 
 ## Builds Without OpenSSL
 
-In a build without OpenSSL, an `https://` request closes with `request_protocol_error`
+In a build without OpenSSL, an `https://` request closes with `protocol_error`
 ("HTTPS support requires OpenSSL"). `http://` is unaffected.
 
 [Next: Redirect · Retry · Cookie →](10-redirects-retries-cookies.en.md)

@@ -5,10 +5,10 @@
 `submit_raw()`/`submit<T>()` return a `zlink::framework::task_t`. There are three ways to consume
 the result.
 
-## Turning On Coroutine Execution
+## Naming The Coroutine Scheduler
 
-By default, the client keeps the same blocking submit semantics as existing code. To free up the
-calling thread while waiting on HTTP, specify coroutine execution in the client configuration.
+Coroutine execution is the builder's default, so there is nothing to turn on. Call the argument-less
+`.coroutines()` to state that the built-in default scheduler is the one you want.
 
 ```cpp
 auto client = zlink::http_client::client_t::create ("http://127.0.0.1:18080")
@@ -16,8 +16,8 @@ auto client = zlink::http_client::client_t::create ("http://127.0.0.1:18080")
   .build ();
 ```
 
-`.coroutines()` uses the HTTP client's internal scheduler. This scheduler does not reveal
-Boost.Asio, Boost.Beast, or OpenSSL runtime types in the public header.
+The built-in default scheduler does not reveal Boost.Asio, Boost.Beast, or OpenSSL runtime types in
+the public header.
 
 For a case like a server runtime, where you need to directly decide where the coroutine resumes,
 inject a framework queue adapter as the resume scheduler.
@@ -63,7 +63,7 @@ notify_match_result (zlink::http_client::client_t &client, const match_result_t 
         co_return;
     }
     throw zlink::framework::framework_exception_t (
-      zlink::framework::framework_error_kind_t::request_failed,
+      zlink::framework::framework_error_kind_t::internal_failure,
       "match result was not accepted");
 }
 ```

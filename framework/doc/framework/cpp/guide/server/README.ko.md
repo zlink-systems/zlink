@@ -4,6 +4,11 @@ title: "가이드 홈 · C++"
 
 # ZLink Framework C++ — 사용자 가이드
 
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/server/README.ko.md) · [Java](../../../java/guide/server/README.ko.md) · [Kotlin](../../../kotlin/guide/server/README.ko.md) · [Node/TypeScript](../../../node/guide/server/README.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
 **실시간 메시징이 중요한 서버 시스템**을 여러 프로세스로 나눠 만드는 C++
 애플리케이션 프레임워크다.
 
@@ -26,7 +31,7 @@ int main (int argc, char **argv)
 
 ---
 
-## 이 프레임워크로 무엇을 만드는가
+## 만드는 시스템
 
 여러 서버 프로세스가 역할을 나눠 협력하고, 상태 변화를 실시간으로 클라이언트에
 전달해야 하는 시스템에 맞게 설계됐다.
@@ -41,35 +46,9 @@ int main (int argc, char **argv)
 공통 구조는 하나다 — 역할별 서버 프로세스가 typed 메시지로 통신하고, 클라이언트는
 실시간 연결(stream)로 상태 변화를 받는다.
 
-```mermaid
-flowchart LR
-    Client["클라이언트 앱"]
-    subgraph Entry["진입 서버"]
-        HTTP["HTTP API"]:::infra
-        ApiC["채널 client"]:::channel
-    end
-    subgraph Core["도메인 서버"]
-        CoreS["채널 server"]:::channel
-        SpotN["SPOT<br/>(상태 단위)"]:::spot
-        StreamN["stream"]:::stream
-        ActorG["actor gateway"]:::actor
-    end
-    Registry["Registry<br/>(discovery)"]:::infra
-
-    Client -- "① HTTP 요청" --> HTTP
-    HTTP --> ApiC
-    ApiC -- "② 서버 간 메시지" --> CoreS
-    CoreS --> SpotN
-    Client -- "③ 실시간 접속" --> StreamN
-    StreamN --> ActorG --> SpotN
-    ApiC & CoreS -.->|"주소 해석"| Registry
-
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology.html"
+        title="역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 각 서버 프로세스는 독립 실행 파일이고 서로 TCP로 연결된다. 하나의 서버 안에
 HTTP 입구, 다른 서버와의 통신 경로, 클라이언트 연결, 상태 단위 관리가 모두
@@ -103,7 +82,7 @@ class open_conversation_handler_t {
 ```
 
 request-reply 외에 fanout(pub/sub)과 route mesh(주소 라우팅) 패턴도 제공한다.
-[5장 →](05-channel-messaging.ko.md)
+[Channel 메시징 →](20-channel-messaging.ko.md)
 
 ---
 
@@ -112,7 +91,7 @@ request-reply 외에 fanout(pub/sub)과 route mesh(주소 라우팅) 패턴도 �
 SPOT은 게임 룸, 지원 대화, 주문 처리 단위처럼 **"하나의 상태 영역"** 과 그 참여자를
 묶는 실행 단위다. 한 SPOT 안에서 일어나는 모든 것 — 참여자 패킷, 타이머, 입퇴장 —
 은 **직렬로** 처리된다. std::mutex 없이 상태에 접근할 수 있고, 코루틴으로 비동기
-처리를 써도 같은 SPOT에 두 요청이 겹치지 않는다.
+처리를 사용해도 같은 SPOT에 두 요청이 겹치지 않는다.
 
 ```cpp
 class conversation_spot_t : public zlink::framework::spot_t,
@@ -134,7 +113,7 @@ class conversation_spot_t : public zlink::framework::spot_t,
 ```
 
 배정·할당을 담당하는 entry spot(노드당 1개)과 상태 본체인 room spot(단위마다 1개)으로
-나뉜다. 주기 작업은 timer로 등록한다. [6장 →](06-spot.ko.md)
+나뉜다. 주기 작업은 timer로 등록한다. [Spot →](21-spot.ko.md)
 
 ---
 
@@ -158,7 +137,7 @@ class support_session_t : public zlink::framework::packet_stream_session_t {
 ```
 
 클라이언트 쪽 접속은 별도 산출물인 stream connector가 담당한다.
-[8장 →](08-actor-session.ko.md) · [9장 →](09-stream.ko.md)
+[8장 →](24-actor-session.ko.md) · [9장 →](23-stream.ko.md)
 
 ---
 
@@ -179,7 +158,7 @@ options.http ()
   .map_readiness ("/ready");
 ```
 
-[20장 →](20-http-hosting.ko.md)
+[20장 →](42-http-hosting.ko.md)
 
 ---
 
@@ -196,7 +175,7 @@ options.http ()
 - **Monitoring / Health** — socket·discovery·spot·타이머 이벤트를 typed 구독으로
   받는다. `/ready`, `/healthz` endpoint에 health check를 연결한다.
 
-[18장 →](18-di-container.ko.md) · [19장 →](19-configuration.ko.md) · `11. Monitoring` 장
+[18장 →](40-di-container.ko.md) · [19장 →](41-configuration.ko.md) · `11. Monitoring` 장
 
 ---
 
@@ -220,7 +199,7 @@ room_mesh.objects ()
   .add_spot_factory<bingo_room_spot_t> (sample_names_t::room_spot);
 ```
 
-[10장 →](10-location.ko.md)
+[10장 →](25-location.ko.md)
 
 ---
 
@@ -228,27 +207,37 @@ room_mesh.objects ()
 
 | 순서 | 문서 | 내용 |
 |----|------|------|
-| 1 | [1. 개요](01-overview.ko.md) | 전체 기능 지도, 통합 4축과 전체 topology |
-| 2 | [2. 시작하기](02-getting-started.ko.md) | CMake 연동, 첫 앱, 핸들러 작성, 실행과 확인 |
-| 3 | [3. 핵심 개념](03-concepts.ko.md) | channel · Spot · Actor · stream · relocation |
-| 4 | [4. Backpressure](04-backpressure.ko.md) | 처리보다 도착이 빠를 때의 동작과 영향을 주는 옵션 |
-| 5 | [5. 채널 메시징](05-channel-messaging.ko.md) | request-reply, fanout, route mesh, channel client |
-| 6 | [6. SPOT](06-spot.ko.md) | room/stage/zone, 직렬 실행, timer |
-| 7 | [7. Actor와 Spot](07-actor-spot.ko.md) | actor 호스팅, membership, relocation |
-| 8 | [8. Actor · Session](08-actor-session.ko.md) | actor manager, session actor, gateway relay |
-| 9 | [9. Stream](09-stream.ko.md) | stream session, stream connector |
-| 10 | [10. Location](10-location.ko.md) | location store, 자동 연결, 운영 조회 |
-| 11 | [11. Monitoring](11-monitoring.ko.md) | 상태 관측, 메시지 흐름, health |
-| 12 | [12. 운영](12-operations.ko.md) | 런타임 메트릭, graceful drain, readiness |
-| 13 | [13. 주요 타입 사용 색인](13-interface-catalog.ko.md) | 기능별 public 타입 색인과 얻는 방법 |
-| 14 | [14. 샘플 고르기](14-samples.ko.md) | TicTacToe · Bingo 샘플과 기능 매핑 |
-| 15 | [15. E2E 테스트](15-e2e-testing.ko.md) | client로 시스템 전체를 검증하는 방법 |
-| 16 | [16. Options](16-options.ko.md) | 옵션 목록, 기본값과 변경 시점 |
-| 17 | [17. ZLink를 어디에 쓰나](17-alternative.ko.md) | 내부 서비스 통신·실시간 상태 패턴, gRPC/mesh 비교 |
-| 18 | [18. DI 컨테이너](18-di-container.ko.md) | 수명 3종, 등록 방법, 핸들러 자동 주입, captive dependency |
-| 19 | [19. Configuration](19-configuration.ko.md) | 설정 소스(cli/env/json), 우선순위, section/bind |
-| 20 | [20. HTTP Hosting](20-http-hosting.ko.md) | embedded HTTP server, route handler |
-| 21 | [21. 실행·구성 모델](21-execution-model.ko.md) | 핸들러 모델, `task_t`/`co_await`, app 수명주기, module |
+| 1 | [개요](01-overview.ko.md) | 무엇을 푸는가, 기존 방식과 무엇이 달라지는가 |
+| 2 | [퀵스타트](../../quickstart.ko.md) | 설치, 두 process가 서로 호출하는 최소 project, 첫 실행 점검 |
+| 3 | [핵심 개념](03-concepts.ko.md) | channel·Spot·Actor·session이 각각 무엇인가 |
+| 4 | [Channel 메시징](20-channel-messaging.ko.md) | 이름으로 부르는 경로 — 등록과 호출 |
+| 5 | [Spot](21-spot.ko.md) | 여럿이 함께 사용하는 자리를 id로 만들고 부르기 |
+| 6 | [Actor](22-actor.ko.md) | 개체 하나를 id로 만들고 부르기 |
+| 7 | [STREAM](23-stream.ko.md) | mesh 밖의 client가 연결 하나로 붙기 |
+| 8 | [Session과 Actor 연결](24-actor-session.ko.md) | 연결 하나를 Actor 하나에 묶기 |
+| 9 | [Location](25-location.ko.md) | id로 지금 있는 node를 조회하기 |
+| 10 | [모니터링](26-monitoring.ko.md) | 기능별 가이드 자리 표시 — 본문은 아직 없다 |
+| 11 | [실행 모델](32-execution-model.ko.md) | 두 queue, 직렬화 범위, 실행권 |
+| 12 | [Backpressure](33-backpressure.ko.md) | 처리보다 도착이 빠를 때와 영향을 주는 옵션 |
+| 13 | [활성화와 수명](34-activation-lifetime.ko.md) | 종류별 생성 시점, lifecycle callback, 주입 수명 |
+| 14 | [Actor membership](35-actor-membership.ko.md) | Spot 사이 이동, 예약과 상한 |
+| 15 | [Timer와 worker](36-timer-worker.ko.md) | 주기 실행, 줄 밖 실행, 실행권 반납 |
+| 16 | [Relocation](37-relocation.ko.md) | 옮겨도 남는 것, adapter, 이동 단위 |
+| 17 | [Channel 동작 원리](30-channel-patterns.ko.md) | 패턴 차이, 대상 선택, pub/sub, 연결과 discovery |
+| 18 | [Handler와 메시지 처리](31-handler-dispatch.ko.md) | 등록 변형, filter, codec, handler 종류 |
+| 19 | [STREAM의 동작 원리](38-stream-boundary.ko.md) | 등록 검증, 오류 귀속, 응답 token, 실행 방식 |
+| 20 | [Session 묶음의 동작 원리](39-session-binding.ko.md) | 묶는 개수, 경로 갱신, 끊김 통지, 실패 |
+| 21 | [ZLink를 어디에 쓰나](17-alternative.ko.md) | 사용처, 문제 신호, 기술 선택 경계, 라이선스 |
+| 22 | [운영과 lifecycle](12-operations.ko.md) | 런타임 메트릭, relocate, drain, readiness 연결 |
+| 23 | [Options](16-options.ko.md) | 옵션 목록, 기본값과 바꾸는 시점 |
+| 24 | [샘플 고르기](14-samples.ko.md) | 어떤 샘플을 먼저 볼지 고르고 실행하는 방법 |
+| 25 | [E2E 테스트](15-e2e-testing.ko.md) | client library로 시스템 전체를 검증하기 |
+| 26 | [주요 타입 사용 색인](13-interface-catalog.ko.md) | 계약 인터페이스를 검증 코드로 색인 |
+| 27 | [DI 컨테이너](40-di-container.ko.md) | ZLink host — 수명 3종, 등록, handler 자동 주입 |
+| 28 | [Configuration](41-configuration.ko.md) | ZLink host — 설정 소스, 우선순위, section 바인딩 |
+| 29 | [HTTP Hosting](42-http-hosting.ko.md) | ZLink host — embedded HTTP server와 route handler |
+| 30 | [실행과 설정 모델](43-execution-model.ko.md) | ZLink host — thread 모델과 설정이 만나는 자리 |
+| 31 | [모니터링](26-monitoring.ko.md) | 재작성 대기 — 상태 snapshot과 진단 |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~17장은 다섯 언어가 공유하고,
 18~21장은 C++에만 있다 — DI·configuration·HTTP hosting·실행 모델은 .NET이 런타임에서
@@ -260,21 +249,11 @@ room_mesh.objects ()
 
 ## 다이어그램 읽는 법
 
-이 가이드의 모든 다이어그램은 같은 시각 언어를 쓴다 — 색이 곧 개념이다.
+이 가이드의 모든 다이어그램은 같은 시각 언어를 사용한다 — 색이 곧 개념이다.
 
-```mermaid
-flowchart LR
-    CH["채널<br/>(메시징 경로)"]:::channel
-    SP["SPOT<br/>(직렬 실행 영역)"]:::spot
-    AC["actor / session"]:::actor
-    ST["stream<br/>(외부 경계)"]:::stream
-    RG["registry / 인프라"]:::infra
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds.html"
+        title="구성도에 나오는 다섯 가지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-element-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 여러 장이 같은 TicTacToe/Bingo 토폴로지를 그리며, 장마다 확대 위치만 바뀐다.
 
@@ -284,3 +263,7 @@ flowchart LR
   [zlink::http_client 사용자 가이드](../http-client/README.ko.md)
 - 설계 계약(초안)은 [doc/spec/](../../README.ko.md)에 있다.
   가이드와 어긋나면 코드와 spec이 정답이다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

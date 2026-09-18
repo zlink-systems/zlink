@@ -38,8 +38,12 @@ import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
+import systems.zlink.stream.connector.ZLinkFlowOrigin
+import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamErrorCode
+import systems.zlink.stream.connector.ZLinkStreamException
+import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall
 
 final class KotlinConnectorWrapperTest {
@@ -65,8 +69,8 @@ final class KotlinConnectorWrapperTest {
 
     @Test
     fun kotlinCompressionDslPreservesReceivedMessageLimit() {
-        //  The 20-argument constructor carries waitTimeout and typedCodec as
-        //  well; the earlier 19-argument shape this test used no longer exists.
+        //  수신 한도를 기본값과 다르게 두어야 복사가 그 값을 보존하는지 볼 수 있다.
+        //  `ZLinkStreamConnectorOptions`의 구성 요소 순서를 그대로 따른다.
         val connectorOptions = ZLinkStreamConnectorOptions(
             URI.create("tcp://127.0.0.1:7200"),
             ZLinkStreamDispatchMode.MANUAL,
@@ -88,9 +92,20 @@ final class KotlinConnectorWrapperTest {
             null,
             null,
             null,
+            null,
         )
 
+        //  Java spec 03 12: 옵션을 복사하는 확장은 지금 정의된 옵션을 모두 보존한다.
+        //  수신 한도도 그중 하나다.
         assertEquals(32 * 1024, connectorOptions.maxReceivePayloadSize())
+        assertEquals(
+            32 * 1024,
+            connectorOptions.withoutStreamCompression().maxReceivePayloadSize(),
+        )
+        assertEquals(
+            32 * 1024,
+            connectorOptions.withDefaultStreamCompression().maxReceivePayloadSize(),
+        )
         assertEquals(ZLinkStreamCompression.LZ4, connectorOptions.compression())
         assertNotNull(connectorOptions.compressionCodec())
     }
@@ -110,6 +125,112 @@ final class KotlinConnectorWrapperTest {
         assertTrue(ZLinkKotlinStreamConnector::class.java.methods.none { method ->
             method.name == "disconnect" || method.name == "reconnect"
         })
+    }
+
+    @Test
+    fun kotlinSendCallCarriesPacketNameMetadataAndCompress() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+
+                //  Java spec 03 12: the Kotlin send builder has the same
+                //  packetName/metadata/compress steps as the Java one.
+                connector.send(payload("Echo", "send"))
+                    .packetName("Renamed")
+                    .metadata("seq", "7")
+                    .await()
+
+                val sent = server.readApplicationFrame()
+                assertEquals(1, sent.kind)
+                assertEquals("Renamed", sent.name)
+                assertEquals(0x02, sent.flags and 0x02)
+
+                //  compress() reaches the wire as the compressed flag.
+                connector.send(payload("Echo", "a".repeat(64)))
+                    .compress()
+                    .await()
+                val compressed = server.readApplicationFrame()
+                assertEquals(0x04, compressed.flags and 0x04)
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun kotlinFlowContextSurvivesSuspensionPoints() = runBlocking {
+        val flow = ZLinkStreamMessage(
+            "Push",
+            payload("Push", "body"),
+            mapOf(),
+            "0192f0c2-1c3a-7000-8000-0123456789ab",
+            ZLinkFlowOrigin.INBOUND,
+        )
+
+        assertEquals(null, currentZLinkStreamFlow())
+
+        withZLinkStreamFlow(flow) {
+            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
+            assertEquals(ZLinkFlowOrigin.INBOUND, currentZLinkStreamFlow()?.flowOrigin())
+
+            //  A plain ThreadLocal would be lost here: the continuation may
+            //  resume on another thread (Java spec 03 7.1).
+            yield()
+            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
+
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
+            }
+            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
+        }
+
+        //  The previous context is restored on the way out.
+        assertEquals(null, currentZLinkStreamFlow())
+    }
+
+    @Test
+    fun kotlinDiagnosticsLevelHasASuspendingPair() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                //  Common connector spec 32 13: the two surfaces change the
+                //  same value.
+                connector.diagnosticsLevel = ZLinkStreamDiagnosticsLevel.NORMAL
+                assertEquals(ZLinkStreamDiagnosticsLevel.NORMAL, connector.diagnosticsLevel)
+
+                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel)
+                assertEquals(
+                    ZLinkStreamDiagnosticsLevel.OFF,
+                    connector.options.diagnosticsLevel(),
+                )
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun kotlinFailuresCarryTheStreamErrorCode() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+                //  Java spec 03 12: Kotlin adds no exception hierarchy of
+                //  its own and propagates ZLinkStreamException as is.
+                val failure = Assertions.assertThrows(ZLinkStreamException::class.java) {
+                    runBlocking {
+                        connector.waitFor<String>("Never")
+                            .timeout(ofMillis(50))
+                            .await()
+                    }
+                }
+                assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, failure.errorCode())
+            } finally {
+                connector.close().await()
+            }
+        }
     }
 
     @Test
@@ -552,6 +673,7 @@ final class KotlinConnectorWrapperTest {
             return Frame(
                 kind = kind,
                 codec = codec,
+                flags = flags,
                 requestSeq = requestSeq,
                 name = String(nameBytes, StandardCharsets.UTF_8),
                 payload = ByteArray(0),
@@ -578,6 +700,7 @@ final class KotlinConnectorWrapperTest {
     private data class Frame(
         val kind: Int,
         val codec: Int = 0,
+        val flags: Int = 0,
         val requestSeq: Long?,
         val name: String,
         val payload: ByteArray,

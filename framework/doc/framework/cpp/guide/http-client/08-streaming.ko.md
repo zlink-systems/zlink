@@ -2,7 +2,7 @@
 
 # 8. Streaming
 
-응답이나 요청 body가 메모리에 다 올리기엔 클 때 streaming 경로를 쓴다.
+응답이나 요청 body가 메모리에 다 올리기엔 클 때 streaming 경로를 사용한다.
 
 ## 다운로드: download(sink)
 
@@ -67,12 +67,16 @@ body는 sink로 새지 않는다**. 최종 응답 body만 전달된다.
 retry가 필요하면 호출자가 실패 시 sink/provider를 새로 준비해 다시 호출한다.
 
 ```cpp
+using kind_t = zlink::framework::framework_error_kind_t;
+
 for (int attempt = 0; attempt < 3; ++attempt) {
     std::ofstream out (path, std::ios::binary | std::ios::trunc);   // 매 시도 새로
     auto result = client.get ("/replays/r-99182.bin")
                     .download ([&out] (std::string_view c) { out.write (c.data (), c.size ()); })
                     .result ();
-    if (result || !result.error ()->is_retriable ()) {
+    if (result
+        || (result.error_kind () != kind_t::unavailable
+            && result.error_kind () != kind_t::deadline_exceeded)) {
         break;
     }
 }

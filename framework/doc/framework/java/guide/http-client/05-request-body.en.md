@@ -3,7 +3,7 @@
 # 5. Request Body
 
 Body sources are **mutually exclusive**. You can use only one of `body`, `bodyStream`, `form`, or
-`multipart` — specifying two or more fails with an exception.
+`multipart` — specifying two or more fails with `PROTOCOL_ERROR`.
 
 ## Typed JSON
 

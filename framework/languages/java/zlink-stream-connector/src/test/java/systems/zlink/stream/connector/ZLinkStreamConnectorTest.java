@@ -202,7 +202,9 @@ final class ZLinkStreamConnectorTest {
             ConnectorTestAwait.await(connector.dispatch());
 
             assertEquals(0, connector.pendingDispatchCount());
-            assertEquals(0, connector.receivedCount("Ping"));
+            //  Common connector spec 32 10: receivedCount counts what
+            //  arrived and dispatching it does not lower the count.
+            assertEquals(1, connector.receivedCount("Ping"));
             assertEquals(1, handled.get());
         }
     }
@@ -357,8 +359,14 @@ final class ZLinkStreamConnectorTest {
             createConnector(options(ZLinkStreamDispatchMode.MANUAL));
         Object rawPayload = payload("RawPayload", "raw");
 
-        assertThrows(IllegalArgumentException.class, () -> connector.send(rawPayload));
-        assertThrows(IllegalArgumentException.class, () -> connector.request(rawPayload));
+        assertEquals(
+            ZLinkStreamErrorCode.VALIDATION_FAILED,
+            assertThrows(ZLinkStreamException.class,
+                () -> connector.send(rawPayload)).errorCode());
+        assertEquals(
+            ZLinkStreamErrorCode.VALIDATION_FAILED,
+            assertThrows(ZLinkStreamException.class,
+                () -> connector.request(rawPayload)).errorCode());
         ((ZLinkStreamEncodedPayload) rawPayload).payload().close();
     }
 
@@ -445,10 +453,12 @@ final class ZLinkStreamConnectorTest {
                 createConnector(compressedOptions(server.endpoint(), ZLinkStreamDispatchMode.MANUAL, 8));
             ConnectorTestAwait.await(connector.connect());
 
-            assertThrows(IllegalArgumentException.class, () ->
-                connector.send(payload("Compressed", "A".repeat(1024)))
-                    .compress()
-                    .submit());
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class, () ->
+                    connector.send(payload("Compressed", "A".repeat(1024)))
+                        .compress()
+                        .submit()).errorCode());
         }
     }
 
@@ -521,7 +531,13 @@ final class ZLinkStreamConnectorTest {
                 new byte[] {0x40, 0x03}).join();
 
             CompletionException ex = assertThrows(CompletionException.class, replyFuture::join);
-            assertTrue(ex.getCause() instanceof IllegalArgumentException);
+            //  Common connector spec 32 8/9: a compressed inbound payload
+            //  that does not fit the receive limit is DecompressionFailed,
+            //  and 9.2 requires the caller to be able to read that code.
+            assertTrue(ex.getCause() instanceof ZLinkStreamException);
+            assertEquals(
+                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                ((ZLinkStreamException) ex.getCause()).errorCode());
         }
     }
 
@@ -906,7 +922,11 @@ final class ZLinkStreamConnectorTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof TimeoutException);
+            assertTrue(ex.getCause() instanceof ZLinkStreamException);
+            assertEquals(
+                ZLinkStreamErrorCode.REQUEST_TIMEOUT,
+                ((ZLinkStreamException) ex.getCause()).errorCode());
+            assertTrue(ex.getCause().getCause() instanceof TimeoutException);
             assertEquals(0, connector.pendingDispatchCount());
         }
     }
@@ -1161,13 +1181,19 @@ final class ZLinkStreamConnectorTest {
         ZLinkStreamConnector connector =
             createConnector(options(ZLinkStreamDispatchMode.MANUAL));
         try {
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.on("$zlink.heartbeat", message ->
-                    CompletableFuture.completedFuture(null)));
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.send(payload("$zlink.send", "hello")));
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.request(payload("$zlink.request", "hello")));
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.on("$zlink.heartbeat", message ->
+                        CompletableFuture.completedFuture(null))).errorCode());
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.send(payload("$zlink.send", "hello"))).errorCode());
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.request(payload("$zlink.request", "hello"))).errorCode());
         } finally {
             ConnectorTestAwait.await(connector.close());
         }
@@ -1180,13 +1206,19 @@ final class ZLinkStreamConnectorTest {
         try {
             String tooLong = "a".repeat(256);
 
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.on(tooLong, message ->
-                    CompletableFuture.completedFuture(null)));
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.send(payload(tooLong, "hello")));
-            assertThrows(IllegalArgumentException.class,
-                () -> connector.request(payload(tooLong, "hello")));
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.on(tooLong, message ->
+                        CompletableFuture.completedFuture(null))).errorCode());
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.send(payload(tooLong, "hello"))).errorCode());
+            assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(ZLinkStreamException.class,
+                    () -> connector.request(payload(tooLong, "hello"))).errorCode());
         } finally {
             ConnectorTestAwait.await(connector.close());
         }
@@ -1194,18 +1226,25 @@ final class ZLinkStreamConnectorTest {
 
     @Test
     void uriSchemeAndTransportMismatchIsRejected() {
-        assertThrows(IllegalArgumentException.class, () -> createConnector(
-            new ZLinkStreamConnectorOptions(
-                URI.create("http://127.0.0.1:7000"),
-                ZLinkStreamDispatchMode.MANUAL,
-                Duration.ofSeconds(1),
-                1)));
-        assertThrows(IllegalArgumentException.class, () -> createConnector(
-            new ZLinkStreamConnectorOptions(
-                URI.create("127.0.0.1:7000"),
-                ZLinkStreamDispatchMode.MANUAL,
-                Duration.ofSeconds(1),
-                1)));
+        assertEquals(
+            ZLinkStreamErrorCode.CONFIGURATION_ERROR,
+            assertThrows(ZLinkStreamException.class, () -> createConnector(
+                new ZLinkStreamConnectorOptions(
+                    URI.create("http://127.0.0.1:7000"),
+                    ZLinkStreamDispatchMode.MANUAL,
+                    Duration.ofSeconds(1),
+                    1))).errorCode());
+        assertEquals(
+            ZLinkStreamErrorCode.CONFIGURATION_ERROR,
+            assertThrows(ZLinkStreamException.class, () -> createConnector(
+                //  No scheme at all: java.net.URI rejects "127.0.0.1:7000"
+                //  itself, so the authority-only form is what reaches the
+                //  connector's own scheme check.
+                new ZLinkStreamConnectorOptions(
+                    URI.create("//127.0.0.1:7000"),
+                    ZLinkStreamDispatchMode.MANUAL,
+                    Duration.ofSeconds(1),
+                    1))).errorCode());
     }
 
     @Test
@@ -1280,7 +1319,7 @@ final class ZLinkStreamConnectorTest {
 
     @Test
     void receivePayloadLimitMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () ->
+        assertThrows(ZLinkStreamException.class, () ->
             createConnector(options(
                 URI.create("tcp://127.0.0.1:1"),
                 ZLinkStreamDispatchMode.MANUAL,

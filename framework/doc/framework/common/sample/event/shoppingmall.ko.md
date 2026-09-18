@@ -172,7 +172,7 @@ projection을 직접 변경하지 않으며, `GetOrderStateReq`도 조회 외의
 |---|---|---|
 | process가 바뀌어도 `OrderId`로 현재 owner를 찾는다. | global Spot message | Caller가 global Spot ID를 지정하면 Framework가 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/00-foundation/04-interaction-model.ko.md) |
 | 없는 주문 workflow를 첫 command에서 만들 수 있다. | Instance intent | Missing Instance Spot에서만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/00-foundation/04-interaction-model.ko.md#7-spot과-actor) |
-| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint를 application route로 조립하지 않는다. [RouteMesh topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
+| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint로 application route를 직접 만들지 않는다. [RouteMesh topology](../../spec/server/02-channel-transport/01-channel-topology.ko.md) |
 | 요청 완료를 확인한다. | Spot request/reply | Request는 typed reply, timeout 또는 terminal error로 완료된다. [상호작용 모델 §4](../../spec/server/00-foundation/04-interaction-model.ko.md#4-send와-request) |
 | 한 주문의 전이를 순서대로 처리한다. | Spot handler turn | Application state 변경을 하나의 owner 흐름에 두고 handler 밖의 경쟁 writer를 만들지 않는다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
 | JSON message를 언어별로 같은 wire 의미로 사용한다. | Framework typed JSON codec | JSON 기본 codec은 message별 등록 없이 선택된다. [Framework API §9](../../spec/server/00-foundation/06-framework-api.ko.md#12-codec) |
@@ -646,7 +646,7 @@ Server evidence는 Client scenario가 끝난 뒤 확인한다.
   끝난 뒤 runner가 직접 호출한다.
 - **Client는 public transport로 호출한다.** 내부 channel·mesh API로 CommerceApi에 직접 말하지
   않는다. 그렇게 하면 §9가 시험하려는 public order API 표면이 시험되지 않는다.
-- Runner가 self-check hook에 보내는 식별자는 **이번 실행이 실제로 만든 값**을 쓴다. 미리 적어 둔
+- Runner가 self-check hook에 보내는 식별자는 **이번 실행이 실제로 만든 값**을 사용한다. 미리 적어 둔
   order ID를 보내지 않는다 — 그 ID가 이번 실행과 무관해져도 통과해 버린다.
 
 완료 marker는 둘이다.
@@ -657,11 +657,11 @@ Server evidence는 Client scenario가 끝난 뒤 확인한다.
 | `shoppingmall-placement=completed` | Runner | §10.1 표의 모든 행 통과 |
 
 **Runner는 `shoppingmall=completed`를 직접 확인한다.** Client 프로세스의 종료 코드로 대신하지
-않는다. `PASS ShoppingMall.<Lang>` 같은 언어별 placement marker는 쓰지 않는다 — §10 6단계가
+않는다. `PASS ShoppingMall.<Lang>` 같은 언어별 placement marker는 사용하지 않는다 — §10 6단계가
 말하는 runner placement marker는 위의 `shoppingmall-placement=completed` 하나다.
 
 Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
-적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 대기 없이 한 번만 읽지 않는다. 다섯 언어 모두
+적용하며 **`.sh`와 `.ps1`이 같은 값을 사용한다.** 대기 없이 한 번만 읽지 않는다. 다섯 언어 모두
 `.sh`와 `.ps1`을 함께 제공한다.
 
 ## 11. 완료 기준

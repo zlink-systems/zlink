@@ -2,12 +2,12 @@
 
 # 7. 비동기
 
-`submitRaw()` / `submit<T>()` / `download(sink)`는 모두 `Promise`를 돌려준다. Node에서는
+`submitRaw()` / `async<T>()` / `download(sink)`는 모두 `Promise`를 돌려준다. Node에서는
 `async`/`await`가 코루틴 역할을 한다.
 
 ## non-blocking 보장
 
-undici는 libuv event loop 기반 비동기 소켓을 쓴다. 따라서 응답을 기다리는 동안
+undici는 libuv event loop 기반 비동기 소켓을 사용한다. 따라서 응답을 기다리는 동안
 **event loop 스레드는 막히지 않는다.** 런타임의 비동기 I/O가 이를 제공하므로 별도의
 worker scheduler가 필요 없다.
 
@@ -15,10 +15,10 @@ worker scheduler가 필요 없다.
 async function notifyMatchResult(client: ZLinkHttpClient, result: MatchResult): Promise<void> {
   const response = await client.post(`/matches/${result.matchId}/result`)
     .body(result)
-    .submit<AckRes>();
+    .async<AckRes>();
 
   if (!response.body.accepted) {
-    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.RequestFailed, 'match result was not accepted');
+    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.InternalFailure, 'match result was not accepted');
   }
 }
 ```

@@ -11,11 +11,11 @@ a fluent builder on top of undici's low-level layer, hiding that complexity and 
 framework's error/codec model.
 
 ```ts
-const profile = await client.get('/players/7281').submit<PlayerProfile>();
+const profile = await client.get('/players/7281').async<PlayerProfile>();
 ```
 
 It's not a JSON-only client. It's a general-purpose HTTP client, and the typed JSON path
-(`body(dto)` / `submit<T>()`) is a convenience layer built on top of it.
+(`body(dto)` / `async<T>()`) is a convenience layer built on top of it.
 
 ## Design Principles
 
@@ -36,7 +36,7 @@ auto-redirect, auto-decompress, or cookie handling, letting the wrapper control 
 
 ## Execution Model
 
-- `submitRaw()` / `submit<T>()` / `download(sink)` return a `Promise`. While `await`ing, HTTP I/O is
+- `submitRaw()` / `async<T>()` / `download(sink)` return a `Promise`. While `await`ing, HTTP I/O is
   handled on the libuv event loop's asynchronous sockets, and **the event loop thread is not
   occupied.**
 - Node has no synchronous blocking HTTP access (no blocking path).

@@ -39,7 +39,10 @@ public static class ApiServerHostFactory
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(ApiServerHostFactory));
+            // --8<-- [start:doc-codec-register]
+            // Every payload this process sends is encoded with Protobuf instead of the default codec.
             options.Codecs.Use(ZLinkProtobufCodec.Default);
+            // --8<-- [end:doc-codec-register]
             options.AddRouteMesh(SampleNames.PlayMeshName)
                 .SetRoutingIdPrefix("api")
                 .Listen(node.PlayMeshEndpoint)

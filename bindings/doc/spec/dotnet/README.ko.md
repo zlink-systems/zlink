@@ -26,7 +26,7 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 
 이 바인딩은 공통 바인딩 아키텍처 맵을 .NET 명명으로 따른다.
 `Contracts/<Category>`가 공개 계약 소스를 소유하고 `Runtime/<Category>`가
-구현을 소유한다. 다른 바인딩은 다른 대소문자 표기나 패키지 이름을 쓸 수
+구현을 소유한다. 다른 바인딩은 다른 대소문자 표기나 패키지 이름을 사용할 수
 있지만, 이 문서는 동일한 맵을 .NET으로 투영한 것이다.
 
 리뷰어가 처음 읽는 코드는 `Contracts/` 아래의 공개 계약이어야 한다. 런타임
@@ -86,7 +86,7 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 - Perf: `bindings/dotnet/perf/`.
 
 - `Contracts/`의 공개 시그니처에는 P/Invoke 선언, `SafeHandle` 세부사항, 마샬링 전용으로 쓰이는 네이티브 struct mirror, request 펌프 타입이 들어가지 않는다.
-- 구체 값 타입은 ownership을 위해 내부적으로 네이티브 기반 저장소를 쓸 수 있지만, .NET은 VM이 관리하는 버퍼를 빌려 쓰는 zero-copy send 경로를 공개 또는 기본 동작으로 노출하거나 사용하지 않는다.
+- 구체 값 타입은 ownership을 위해 내부적으로 네이티브 기반 저장소를 사용할 수 있지만, .NET은 VM이 관리하는 버퍼를 빌려 사용하는 zero-copy send 경로를 공개 또는 기본 동작으로 노출하거나 사용하지 않는다.
 - 네이티브 브리지 선언과 마샬링 전용 mirror는 여전히 `Runtime/Native/`에 둔다.
 - `Contracts/`와 `Runtime/`은 저장소상 고정 폴더다.
 - `Systems.Zlink` 네임스페이스와 NuGet 패키지 표면은 그 계약을 .NET으로 투영한 결과다.
@@ -164,7 +164,7 @@ bindings/dotnet/
 `Runtime/Buffers`, `Runtime/Handles`, `Runtime/Options`는 구현 지원 카테고리다.
 .NET 바인딩에는 숨겨야 할 실제 네이티브 ownership, routing-id 인코딩,
 옵션 검증 결정이 존재하기 때문에 이 폴더들이 존재한다. 다른 바인딩은 이
-지원 영역들에 다른 이름을 쓸 수 있지만, 그 세부 내용을 공개 계약 파일로
+지원 영역들에 다른 이름을 사용할 수 있지만, 그 세부 내용을 공개 계약 파일로
 옮기지 않는다.
 
 ## API 변경 원칙
@@ -374,7 +374,7 @@ SPOT은 `ISpot`이라는 단일 핸들 계약으로 유지한다. 호출자가 �
 
 - `ISpotNode`는 node 설정, peer 연결, Spot 생성, Actor 작업, topology 조회 역할을 별도 인터페이스로 나누어 조합할 수 있다. 그래도 기본 생성 경로와 사용자-facing 반환 타입은 `ISpotNode`이며, 역할 인터페이스가 런타임 구현 타입을 노출하면 안 된다.
 - SPOT 콜백 등록에는 명명된 콜백 delegate를 사용해 공개 시그니처가 래퍼 context 객체를 추가하지 않고도 콜백의 의미를 기술하도록 한다.
-- 등록 메서드는 현재 핸들러가 저장되거나 교체되기 때문에 `Set...Handler` 이름을 쓴다. `On...` 이름은 이벤트가 발생할 때 호출되는 메서드 전용이다.
+- 등록 메서드는 현재 핸들러가 저장되거나 교체되기 때문에 `Set...Handler` 이름을 사용한다. `On...` 이름은 이벤트가 발생할 때 호출되는 메서드 전용이다.
 - 이 delegate들은 SPOT 핸들 계약에서만 사용되므로 `ISpot` 옆에 선언한다.
 - Lifecycle data type은 actor 모델과 함께 둔다. 메시지 part를 소유하는 lifecycle event envelope는 복제 가능한 record가 아니라 sealed class로 둔다.
 - Actor operation 계약은 join, management, session binding으로 나눈다.
@@ -637,7 +637,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 - recv/sub API는 호출자 제공 저장소 형태를 사용한다.
 - 서비스 제어/admission receive 예외는 데이터 플레인의 호출자 제공 저장소와
   다른 부분이 문서화된다.
-- perf 의미는 `bindings/c/perf`와 일치한다. private 런타임 단축 경로를 써서
+- perf 의미는 `bindings/c/perf`와 일치한다. private 런타임 단축 경로를 사용해서
   측정의 의미를 바꾸지 않는다.
 - `Contracts/`의 공개 시그니처는 `Runtime/Native/`, raw handle, 네이티브
   struct mirror, request 진행 타입, 런타임 구현 클래스를 노출하지 않는다.

@@ -1247,11 +1247,11 @@ public static class Scenarios
 
         var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        player.Connector.Disconnected += (message, _) =>
+        _ = player.Connector.OnDisconnected((message, _) =>
         {
             disconnected.TrySetResult(message.CloseReason);
             return ValueTask.CompletedTask;
-        };
+        });
         Console.WriteLine(
             $"scenario ZW-B8 armed actor={playerId} target={pair.TargetZoneId}");
         var armFile = options.FaultArmFile;

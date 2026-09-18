@@ -38,8 +38,10 @@ services.AddZLinkHttpClient("player-api", http => http
 ```
 
 A handler is injected the `ZLinkHttpServerClient` of the same name. `ZLinkHttpClient` created by the
-static factory is for client-side code, so it doesn't provide a one-way `Async()`. Neither client
-provides a `Yield` on the HTTP request builder.
+static factory is for client-side code, so it provides neither a one-way `Async()` nor a `Yield` on
+its `ZLinkHttpRequestBuilder`. The `ZLinkHttpServerRequestBuilder` returned by
+`ZLinkHttpServerClient` adds both the one-way `Async()` and a `Yield<T>()` that gives back the
+shared Spot gate.
 
 ## Client Reuse And The Connection Pool
 

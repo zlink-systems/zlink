@@ -99,7 +99,7 @@ Types the application inherits to build are split from context the framework han
 **A Spot handler is a member function of the Spot.** Register it in `configure ()` as
 `add_handler<&TSpot::method> ()`. There's one exception — **only the timer has a separate
 handler type**, registered with `add_timer<THandler> ()`, and that type's `handle` takes
-both the target Spot and the tick ([6. Spot](06-spot.en.md) §6.1).
+both the target Spot and the tick ([Spot](21-spot.en.md) §6.1).
 
 | Timer-related type | What it does |
 | --- | --- |
@@ -144,7 +144,7 @@ Both the creation result and the join completion are **three-way types**. Split 
 | `stream_snapshot_t` | Status query |
 
 **A C++ session branches from a single `on_packet`, not a handler registry.** This is where
-its shape differs from the other four languages ([9. STREAM](09-stream.en.md)).
+its shape differs from the other four languages ([STREAM](23-stream.en.md)).
 
 ## 6. Location And Relocation
 
@@ -174,7 +174,7 @@ then.
 | `framework_exception_t` | A failure. `kind ()` · `is_retriable ()` |
 | `logger_t<TOwner>` | The logger received via DI |
 
-Usage of the observation surfaces is covered in [11. Monitoring](11-monitoring.en.md).
+Usage of the observation surfaces is covered in [Monitoring](26-monitoring.en.md).
 
 ## 8. Where They Come From
 
@@ -186,11 +186,11 @@ Usage of the observation surfaces is covered in [11. Monitoring](11-monitoring.e
 | A startup-phase builder returns it | The `mesh_node_builder_t` family · `stream_node_options_builder_t` |
 | A call returns it | `*_call_t` · `*_result_t` · `*_ref_t` |
 
-DI injection rules are covered in [18. DI Container](18-di-container.en.md).
+DI injection rules are covered in [18. DI Container](40-di-container.en.md).
 
 ## 9. Related Documents
 
 - Exact signatures: [C++ exact interface table of contents](../../../common/spec/server/languages/cpp/interfaces/README.en.md)
-- The execution model and `task_t` / `result_t`: [21. Execution & Configuration Model](21-execution-model.en.md)
+- The execution model and `task_t` / `result_t`: [21. Execution & Configuration Model](43-execution-model.en.md)
 - Options and defaults: [16. Options](16-options.en.md)
-- Observation surfaces: [11. Monitoring](11-monitoring.en.md)
+- Observation surfaces: [Monitoring](26-monitoring.en.md)

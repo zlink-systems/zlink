@@ -10,6 +10,13 @@ using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    /// <summary>
+    ///     Meter the connector used to own. Instrumentation is not part of the client
+    ///     connector contract, so the connector now publishes nothing under this name; the
+    ///     tests below hold that line.
+    /// </summary>
+    private const string RemovedConnectorMeterName = "zlink.framework.stream_connector";
+
     private static readonly ConnectorMetricCollector ConnectorMetrics = new();
 
     [Fact]
@@ -68,7 +75,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task AutomaticReconnectRecordsOneAttemptButInitialConnectRecordsNone()
+    public async Task AutomaticReconnectRecoversTheSessionAndRecordsNoMetric()
     {
         var metrics = ConnectorMetrics.BeginScope();
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -101,12 +108,9 @@ public sealed partial class StreamConnectorTests
         await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => connector.IsConnected, TimeSpan.FromSeconds(5));
 
-        Assert.Equal(1, metrics.SumLong("zlink.stream.reconnects"));
-        var reconnect = Assert.Single(metrics.Samples("zlink.stream.reconnects"));
-        Assert.Equal("tcp", reconnect.Tags["transport"]);
-        Assert.Equal("connected", reconnect.Tags["outcome"]);
-        Assert.Equal("transport_closed", reconnect.Tags["reason"]);
-        metrics.AssertInstrument("zlink.stream.reconnects", "{reconnect}", typeof(Counter<long>));
+        // The connector reconnects, and it does so without emitting instrumentation:
+        // metrics belong to the server framework, not to the client connector.
+        Assert.Equal(0, metrics.Count("zlink.stream.reconnects"));
         await server;
     }
 
@@ -189,11 +193,8 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task ThrowingMetricsListenerDoesNotChangeRequestResult()
     {
+        var metrics = ConnectorMetrics.BeginScope();
         using var throwOnMeasurement = ConnectorMetrics.ThrowOnMeasurement();
-        ZlinkStreamRuntimeMetrics.RecordReconnect(
-            "tcp",
-            "failed",
-            "connect_failed");
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
@@ -233,6 +234,9 @@ public sealed partial class StreamConnectorTests
             .Async();
 
         Assert.Equal("reply"u8.ToArray(), reply.Payload.ToArray());
+        // A listener that throws on every measurement cannot reach the request path,
+        // because a full send/request round trip publishes no measurement at all.
+        Assert.Equal(0, metrics.Count("zlink.stream.reconnects"));
         await server;
     }
 
@@ -240,11 +244,14 @@ public sealed partial class StreamConnectorTests
     public void TestMetricReaderRetainsOnlyABoundedSnapshot()
     {
         var metrics = ConnectorMetrics.BeginScope();
+
+        // The connector publishes no instrument of its own any more, so this test drives
+        // the collector from a meter of the same name to keep its bounded retention
+        // covered.
+        using var meter = new Meter(RemovedConnectorMeterName);
+        var counter = meter.CreateCounter<long>("zlink.stream.reconnects", "{reconnect}");
         for (var index = 0; index < ConnectorMetricCollector.MaxRetainedSamples * 2; index++)
-            ZlinkStreamRuntimeMetrics.RecordReconnect(
-                "tcp",
-                "failed",
-                "connect_failed");
+            counter.Add(1);
 
         Assert.Equal(
             ConnectorMetricCollector.MaxRetainedSamples,
@@ -269,7 +276,7 @@ public sealed partial class StreamConnectorTests
         {
             _listener.InstrumentPublished = (instrument, meterListener) =>
             {
-                if (instrument.Meter.Name != ZlinkStreamRuntimeMetrics.MeterName) return;
+                if (instrument.Meter.Name != RemovedConnectorMeterName) return;
                 _instruments[instrument.Name] = instrument;
                 meterListener.EnableMeasurementEvents(instrument);
             };

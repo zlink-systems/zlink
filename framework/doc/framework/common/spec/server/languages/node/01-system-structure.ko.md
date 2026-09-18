@@ -88,7 +88,7 @@ subpath는 제공하지 않는다. 정확한 계약은
 
 ### 4.1 Provider token
 
-**주입에 쓰는 token 심볼은 `@zlink-systems/nestjs` package root가 export한다.**
+**주입에 사용하는 token 심볼은 `@zlink-systems/nestjs` package root가 export한다.**
 
 **항상 등록되는 provider:**
 

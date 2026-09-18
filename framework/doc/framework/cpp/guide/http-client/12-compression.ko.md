@@ -36,7 +36,7 @@ auto board = client.get ("/leaderboard")
 - **`download(sink)`에는 적용되지 않음** — streaming 다운로드는 원시 bytes를
   그대로 전달한다 ([8. Streaming](08-streaming.ko.md)). 압축된 대용량 파일은
   받아서 호출자가 해제한다.
-- 손상된 압축 body는 `payload_decode_failed`로 닫힌다
+- 손상된 압축 body는 `protocol_error`로 닫힌다
   ([13. 에러 처리](13-error-handling.ko.md)).
 
 [다음: 에러 처리 →](13-error-handling.ko.md)

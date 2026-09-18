@@ -23,7 +23,10 @@ inline app_t &add_bingo_api_server (app_t &app, const sample_topology_t &topolog
     app.logging ().use_file (flow_log_path (topology.log_dir, "api-" + topology.api_node));
     auto &options = app.add_zlink_framework ();
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    // --8<-- [start:doc-codec-register]
+    // Every payload this process sends is encoded with Protobuf instead of the default codec.
     options.codecs ().use (zlink::framework_codecs::protobuf ());
+    // --8<-- [end:doc-codec-register]
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "location:");

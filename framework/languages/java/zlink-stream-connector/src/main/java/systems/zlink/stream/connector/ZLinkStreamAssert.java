@@ -54,6 +54,11 @@ public final class ZLinkStreamAssert {
     }
 
     private static ZLinkStreamError classify(Throwable failure) {
+        //  Spec 32 9.2: when the connector itself reports a failure it
+        //  carries the code, so read it instead of guessing from the type.
+        if (failure instanceof ZLinkStreamException coded) {
+            return coded.error();
+        }
         ZLinkStreamErrorCode code;
         if (failure instanceof TimeoutException) {
             code = failure.getMessage() != null && failure.getMessage().startsWith("connect timed out")

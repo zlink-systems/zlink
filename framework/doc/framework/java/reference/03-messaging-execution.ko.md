@@ -37,8 +37,8 @@ subscriber 수신은 기다리지 않는다. 큐 여유가 없으면 socket send
 단절은 `UNAVAILABLE`, runtime 종료 중이면 `SHUTTING_DOWN`인 `ZLinkFrameworkException`으로
 완료한다.
 
-**선택 기준.** Reply가 필요 없는 fire-and-forget에 쓴다. Reply가 필요하면 `requestToChannel`을
-쓴다.
+**선택 기준.** Reply가 필요 없는 fire-and-forget에 사용한다. Reply가 필요하면 `requestToChannel`을
+사용한다.
 
 ---
 
@@ -67,16 +67,16 @@ ChannelName에 ready target이 없으면 `NOT_FOUND`, route 단절은 `UNAVAILAB
 `SHUTTING_DOWN`인 `ZLinkFrameworkException`으로 완료한다. `ZLinkRequestFailureException`은
 `TIMEOUT`/`CANCELLED`/`SHUTDOWN` 중 하나로 완료한다.
 
-**선택 기준.** Reply 값이 필요할 때 쓴다. One-way면 `sendToChannel`을 쓴다. `yield`는 `SpotWide`
+**선택 기준.** Reply 값이 필요할 때 사용한다. One-way면 `sendToChannel`을 사용한다. `yield`는 `SpotWide`
 handler 안에서 다른 request나 worker가 진행 중일 때, 자신의 대기가 형제 job을 막지 않게 하려고
-쓴다.
+사용한다.
 
 ---
 
 ## `sendToNode`
 
 MeshName과 target Node RID를 직접 지정해 one-way message를 보낸다. ChannelName 기반 선택이 아니라
-특정 MeshNode 하나를 관리할 때 쓴다.
+특정 MeshNode 하나를 관리할 때 사용한다.
 
 ```java
 routeClient.sendToNode("play", RoutingId.from("play-node-1"), new DrainRequested())
@@ -85,11 +85,11 @@ routeClient.sendToNode("play", RoutingId.from("play-node-1"), new DrainRequested
 
 **옵션.** `sendToChannel`과 동일하다 — `.metadata(...)`, terminal `.submit()`.
 
-**완료 결과.** `sendToChannel`과 같은 완료 kind를 쓴다. 대상 RID가 Object Client(handler 등록이
+**완료 결과.** `sendToChannel`과 같은 완료 kind를 사용한다. 대상 RID가 Object Client(handler 등록이
 불가능한 RID)이면 다른 target으로 넘기지 않고 `NOT_FOUND`로 완료한다.
 
-**선택 기준.** 업무 object(actor·spot)의 배치나 메시징에는 쓰지 않는다 — 그 경우에는
-ActorId·SpotId·ChannelName을 쓴다. Node direct는 운영 목적으로 특정 node를 지목할 때만 쓴다.
+**선택 기준.** 업무 object(actor·spot)의 배치나 메시징에는 사용하지 않는다 — 그 경우에는
+ActorId·SpotId·ChannelName을 사용한다. Node direct는 운영 목적으로 특정 node를 지목할 때만 사용한다.
 
 ---
 
@@ -136,15 +136,15 @@ fanoutClient.publish("lobby.events", "region.eu", new PlayerJoined("player-1"))
 않는다 — target이 0개여도 정상 완료한다. 시작한 뒤에는 개별 target 실패를 전체 실패로 바꾸지 않고
 재시도하지 않는다.
 
-**선택 기준.** 발행자가 구독자를 알지 못해야 하는 관찰·통지에 쓴다. 특정 대상에 보내는 메시징이면
-`sendToChannel`이나 `requestToChannel`을 쓴다.
+**선택 기준.** 발행자가 구독자를 알지 못해야 하는 관찰·통지에 사용한다. 특정 대상에 보내는 메시징이면
+`sendToChannel`이나 `requestToChannel`을 사용한다.
 
 ---
 
 ## Codec 등록 (구성 시점)
 
-다른 항목과 달리 terminal이 아니라 host 구성 시점의 등록 호출이다. JSON만 쓰는 application은 이
-항목을 쓸 필요가 없다.
+다른 항목과 달리 terminal이 아니라 host 구성 시점의 등록 호출이다. JSON만 사용하는 application은 이
+항목을 사용할 필요가 없다.
 
 ```java
 options.codecs().use(ZLinkMessagePackCodec.defaultCodec());
@@ -163,7 +163,7 @@ implementation("systems.zlink:zlink-framework-codec-msgpack")
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Host 시작 전에만 호출한다.
 
-**선택 기준.** JSON이 아닌 content type(MessagePack, Protobuf 등)을 쓸 때 쓴다. 공식
+**선택 기준.** JSON이 아닌 content type(MessagePack, Protobuf 등)을 사용할 때 사용한다. 공식
 `ZLinkMessagePackCodec.defaultCodec()`/`ZLinkProtobufCodec.defaultCodec()` 외에 `ZLinkCodecExtension`을
 직접 구현해 custom serializer를 등록할 수도 있다.
 

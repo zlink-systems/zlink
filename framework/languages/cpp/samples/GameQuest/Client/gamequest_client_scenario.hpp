@@ -44,7 +44,9 @@ class gamequest_client_scenario_t
                     "player-alice initial join should have no active quests");
 
             auto first_progress = api_a.wait_for<quest_progress_notify_t> ()
-                                    .where ([] (const quest_progress_notify_t &notify) {
+                                    .where (
+                                      [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
+                                        const auto &notify = notify_message.payload;
                                         return notify.player_id == "player-alice"
                                                && notify.progress.quest_id
                                                     == quest_ids_t::first_hunt
@@ -60,11 +62,13 @@ class gamequest_client_scenario_t
             dump_event_id_if_mismatch ("first kill", "player-alice-kill-1", first_kill);
             ensure (first_kill && first_kill.value ().event_id == "player-alice-kill-1",
                     "first kill event id mismatch");
-            ensure (first_progress.get ().progress.current_count == 1,
+            ensure (first_progress.get ().payload.progress.current_count == 1,
                     "first hunt progress push mismatch");
 
             auto first_hunt_completed = api_a.wait_for<quest_completed_notify_t> ()
-                                          .where ([] (const quest_completed_notify_t &notify) {
+                                          .where (
+                                            [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
+                                              const auto &notify = notify_message.payload;
                                               return notify.player_id == "player-alice"
                                                      && notify.progress.quest_id
                                                           == quest_ids_t::first_hunt
@@ -84,7 +88,7 @@ class gamequest_client_scenario_t
                                 .result ();
             ensure (third_kill && third_kill.value ().event_id == "player-alice-kill-3",
                     "third kill event id mismatch");
-            ensure (first_hunt_completed.get ().progress.status == quest_status_t::reward_granted,
+            ensure (first_hunt_completed.get ().payload.progress.status == quest_status_t::reward_granted,
                     "first hunt completion push mismatch");
 
             auto duplicate = api_a.request (
@@ -108,7 +112,9 @@ class gamequest_client_scenario_t
                     "player-bob did not see the offline herb progress");
 
             auto herb_completed = api_b.wait_for<quest_completed_notify_t> ()
-                                    .where ([] (const quest_completed_notify_t &notify) {
+                                    .where (
+                                      [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
+                                        const auto &notify = notify_message.payload;
                                         return notify.player_id == "player-bob"
                                                && notify.progress.quest_id
                                                     == quest_ids_t::herb_gathering
@@ -117,7 +123,7 @@ class gamequest_client_scenario_t
                                     .timeout (std::chrono::seconds (12))
                                     .to_future ("herb completion wait failed");
             api_b.send (collect_item_req_t{"player-bob", "healing-herb", 4, "herb-2"}).submit ();
-            ensure (herb_completed.get ().progress.status == quest_status_t::reward_granted,
+            ensure (herb_completed.get ().payload.progress.status == quest_status_t::reward_granted,
                     "herb completion push mismatch");
 
             /* projection 재생성(§14): 표시용 projection을 지운 뒤 event stream만으로 같은
@@ -207,7 +213,9 @@ class gamequest_client_scenario_t
             ensure (static_cast<bool> (alice_rejoined),
                     "player-alice rejoin on the second node failed");
             auto ruins_completed = alice_b.wait_for<quest_completed_notify_t> ()
-                                     .where ([] (const quest_completed_notify_t &notify) {
+                                     .where (
+                                       [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
+                                         const auto &notify = notify_message.payload;
                                          return notify.player_id == "player-alice"
                                                 && notify.progress.quest_id
                                                      == quest_ids_t::visit_ruins;
@@ -215,7 +223,7 @@ class gamequest_client_scenario_t
                                      .timeout (std::chrono::seconds (12))
                                      .to_future ("ruins completion wait after reconnect failed");
             alice_b.send (enter_area_req_t{"player-alice", "ruins", "enter-ruins"}).submit ();
-            ensure (ruins_completed.get ().progress.status == quest_status_t::reward_granted,
+            ensure (ruins_completed.get ().payload.progress.status == quest_status_t::reward_granted,
                     "reconnected player did not receive the notify on the new node");
 
             /* §9-8: the close contract is the one-way ClosePlayerQuestMsg.  The
@@ -272,14 +280,18 @@ class gamequest_client_scenario_t
             ensure (scale_a_joined && scale_b_joined,
                     "GameQuest scale-out player join failed");
             auto scale_a_progress = scale_a.wait_for<quest_progress_notify_t> ()
-                                      .where ([] (const quest_progress_notify_t &notify) {
+                                      .where (
+                                        [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
+                                          const auto &notify = notify_message.payload;
                                           return notify.player_id == "player-scale-a"
                                                  && notify.progress.current_count == 1;
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-a progress wait failed");
             auto scale_b_progress = scale_b.wait_for<quest_progress_notify_t> ()
-                                      .where ([] (const quest_progress_notify_t &notify) {
+                                      .where (
+                                        [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
+                                          const auto &notify = notify_message.payload;
                                           return notify.player_id == "player-scale-b"
                                                  && notify.progress.current_count == 1;
                                       })
@@ -295,8 +307,8 @@ class gamequest_client_scenario_t
               .submit ();
             ensure (scale_a_event && scale_a_event.value ().event_id == "player-scale-a-scale-kill-1",
                     "GameQuest scale-out event id mismatch");
-            ensure (scale_a_progress.get ().progress.current_count == 1
-                      && scale_b_progress.get ().progress.current_count == 1,
+            ensure (scale_a_progress.get ().payload.progress.current_count == 1
+                      && scale_b_progress.get ().payload.progress.current_count == 1,
                     "GameQuest scale-out progress push mismatch");
 
             /* §9-9: make a Ready owner observable to the runner, then wait for
@@ -310,7 +322,9 @@ class gamequest_client_scenario_t
                                   .result ();
             ensure (static_cast<bool> (owner_joined), "owner-failure player join failed");
             auto owner_progress = owner_failure.wait_for<quest_progress_notify_t> ()
-                                    .where ([] (const quest_progress_notify_t &notify) {
+                                    .where (
+                                      [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
+                                        const auto &notify = notify_message.payload;
                                         return notify.player_id == "player-owner-failure"
                                                && notify.progress.quest_id
                                                     == quest_ids_t::first_hunt
@@ -327,7 +341,7 @@ class gamequest_client_scenario_t
             ensure (owner_setup && owner_setup.value ().event_id
                       == "player-owner-failure-owner-ready-kill",
                     "owner-failure setup event id mismatch");
-            ensure (owner_progress.get ().progress.current_count == 1,
+            ensure (owner_progress.get ().payload.progress.current_count == 1,
                     "owner-failure owner did not process the setup event");
             std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure" << std::endl;
             wait_for_release (owner_loss_release_file);

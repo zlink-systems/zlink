@@ -446,7 +446,7 @@ socket bind 전에 configuration error다. 값은 MeshNode lifecycle 시작 전�
 제공하지 않는다. Worker의 `idle_timeout(...)`과는 별개의 설정이며 서로 값을 상속하지 않는다.
 정리 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지 않는다. 유휴
 판정 조건, `spot_close_reason_t::idle_evicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 
 Descriptor capacity는 candidate filter에만 사용한다. Framework는 선택한 node에서 Location Store의 typed
 bundle reservation을 원자적으로 얻은 뒤에만 factory를 실행한다. Actor는 Actor slot 하나, Spot은 Spot 전체
@@ -859,7 +859,7 @@ API에 노출하지 않는다.
 
 ## 4. Messaging API
 
-사용자 코드에서 raw socket 대신 주입받아 쓰는 messaging 표면은 아래와 같다.
+사용자 코드에서 raw socket 대신 주입받아 사용하는 messaging 표면은 아래와 같다.
 
 ```cpp
 namespace zlink::framework {

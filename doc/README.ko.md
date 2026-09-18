@@ -39,8 +39,8 @@
 | 문서 | 설명 |
 |------|------|
 | [Framework 서비스 개요](../framework/doc/framework/common/guide/server/03-concepts.ko.md) | Framework 서비스와 객체 모델 개요 |
-| [Spot](../framework/doc/framework/common/guide/server/06-spot.ko.md) | Spot 생성·메시징·수명 |
-| [Actor](../framework/doc/framework/common/guide/server/07-actor-spot.ko.md) | Actor 모델과 Spot membership |
+| [Spot](../framework/doc/framework/common/guide/server/21-spot.ko.md) | Spot 생성·메시징·수명 |
+| [Actor](../framework/doc/framework/common/guide/server/22-actor.ko.md) | id로 만들고 호출하는 개체 단위 상태 |
 
 ### Reference
 | 문서 | 설명 |

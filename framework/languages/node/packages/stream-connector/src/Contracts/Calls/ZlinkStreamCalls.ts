@@ -38,8 +38,14 @@ export interface ZlinkStreamExpectNoneCall<TPayload = ZlinkStreamEncodedPayload>
   run(signal?: AbortSignal): Promise<void>;
 }
 
+/**
+ * Spec stream-connector 32 §10.1: the predicates and the returned values are
+ * messages, not payloads. A payload-only predicate cannot read the packet name
+ * or the metadata, so `TPayload` is the type of the payload the message carries
+ * and never the value handed to `expect(...)`.
+ */
 export interface ZlinkStreamSequenceCall<TPayload = ZlinkStreamEncodedPayload> {
-  expect(predicate: (payload: TPayload) => boolean): ZlinkStreamSequenceCall<TPayload>;
+  expect(predicate: (message: ZlinkStreamMessage<TPayload>) => boolean): ZlinkStreamSequenceCall<TPayload>;
   timeout(timeoutMs: number): ZlinkStreamSequenceCall<TPayload>;
-  run(signal?: AbortSignal): Promise<readonly TPayload[]>;
+  run(signal?: AbortSignal): Promise<readonly ZlinkStreamMessage<TPayload>[]>;
 }

@@ -9,7 +9,7 @@ transparently decodes the response if it's encoded as `gzip` or `deflate`.
 const response = await ZLinkHttpClient.create('https://api.internal')
   .compression()
   .get('/large-report')
-  .submit<Report>();
+  .async<Report>();
 ```
 
 ## Wrapper-Controlled Decoding
@@ -22,7 +22,7 @@ with `node:zlib`**. The reason is to align the semantics with the zlink contract
 - Enforces `maxResponseBodySize` against the **decoded size**.
 - `download(sink)` streaming chunks are **not decoded** (delivered as received).
 
-If the body is corrupted, it's reported as `payloadDecodeFailed`; if the decoded size exceeds the
-limit, as `requestFailed`.
+If the body is corrupted, it's reported as `ProtocolError`; if the decoded size exceeds the
+limit, as `Unavailable`.
 
 [Next: Error Handling →](13-error-handling.en.md)

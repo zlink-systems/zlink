@@ -82,7 +82,7 @@ zlink_connect(other_socket, endpoint);
 
 ### DNS 이름 사용
 
-connect 시 호스트명을 쓰면 내부적으로 DNS를 resolve한다.
+connect 시 호스트명을 사용하면 내부적으로 DNS를 resolve한다.
 
 ```c
 /* Connect using DNS name */

@@ -158,7 +158,7 @@ ingress hold에 계속 넣는다.
 
 **hold에 들어간 record는 그동안 host permit을 계속 쥔다.** Core에서 꺼낸 뒤로는 Core의 byte
 회계가 끝나므로, permit을 놓으면 그 record가 어느 counter에도 잡히지 않고 hold가 제한 없이
-자란다. 쥐고 있으면 쓰는 permit이 늘어 경계에서 `PAUSED`가 나가고 보내는 쪽이 늦춰진다
+자란다. 쥐고 있으면 사용하는 permit이 늘어 경계에서 `PAUSED`가 나가고 보내는 쪽이 늦춰진다
 ([Application job queue와 backpressure §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)).
 permit은 새 owner에서 그 job의 handler가 시작되기 직전에 반납한다.
 
@@ -515,7 +515,7 @@ Target은 예상한 source owner와 generation을 조건으로 주고, 자기 no
 | Restore 유효시간까지 owner 변경을 확인하지 못함 | `location_update_failed` Error를 기록한다. 준비한 Actor 또는 Spot, queue와 relocation state를 제거하고 Session route를 갱신하지 않는다. |
 
 Cutover와 Session route update에는 완료 reply가 없다. Source와 Session owner는 Location
-Store를 대신 쓰지 않는다.
+Store를 대신 사용하지 않는다.
 
 ## 7. Actor relocation 중 Session
 
@@ -649,7 +649,7 @@ Store가 일시적으로 실패하면 `StoreRetry`(§4.5) → CAS가 성공하�
 - Source나 Session owner가 수행하는 Location Store owner 변경
 - ACK timeout 뒤 source owner로 되돌리는 추측성 rollback
 - 서로 다른 TCP connection의 message에 전역 순서를 부여하는 방식
-- Target에서 부분 조립한 payload stage를 명시적 실패 대신 복구해 계속 쓰는 방식 — checksum이나
+- Target에서 부분 조립한 payload stage를 명시적 실패 대신 복구해 계속 사용하는 방식 — checksum이나
   길이 불일치는 항상 명시적 `relocationFailed` reply로 끝나며, target이 부분 조립을 스스로
   수선하지 않는다
 - Prepare·chunk·CAS를 도착 순서나 가장 최근 시각 같은 신호로 relocation에 귀속시키는 방식 —
@@ -658,7 +658,7 @@ Store가 일시적으로 실패하면 `StoreRetry`(§4.5) → CAS가 성공하�
 - **같은 target queue에 대해 Actor Join prewarm prepare 두 개를 동시에 살려 두는 방식.** 새
   identity가 도착하면 기존 prepare를 중단하며, 가장 최근 시도가 항상 이긴다 — 두 prepare가
   같은 target queue를 동시에 점유하면 나중에 도착한 identity가 이전 prepare의 조립 buffer를
-  덮어쓸 위험이 생기기 때문이다.
+  덮어사용할 위험이 생기기 때문이다.
 
 Runtime memory, frame size, Store page와 payload처럼 모든 기능에 적용되는 기존 resource
 제한은 그대로 적용한다. 이 제한을 relocation 전용 상태나 새로운 공개 설정으로 복제하지

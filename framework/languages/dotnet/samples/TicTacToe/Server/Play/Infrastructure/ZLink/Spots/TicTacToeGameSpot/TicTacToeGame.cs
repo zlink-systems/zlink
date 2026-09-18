@@ -279,11 +279,13 @@ internal sealed class TicTacToeGame(
             player.ActorId,
             after.RoomId,
             wins);
+        // --8<-- [start:doc-multicast-publish]
         await Context.Outbound.Publish(
                 SampleTopics.PlayerMilestoneChannel,
                 SampleTopics.PlayerMilestone,
                 new PlayerWinMilestoneEvent(after.RoomId, player.ActorId, player.DisplayName, wins))
             .Async(cancellationToken);
+        // --8<-- [end:doc-multicast-publish]
         logger.LogInformation(
             "game spot: milestone publish submitted. actor={ActorId}, roomId={RoomId}",
             player.ActorId,

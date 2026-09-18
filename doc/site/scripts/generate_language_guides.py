@@ -17,12 +17,16 @@
     정해지지 않아 링크할 수 없지만, 생성판은 정해져 있다.
   - 그 언어의 읽는 순서대로 앞뒤 장 nav를 붙인다. 순서는 각 언어 README의 표가 소유한다.
 
-`common/guide/server/*.ko.md`와 `*.en.md`를 각각 독립된 로케일로 처리한다. 두 언어 모두
+`common/guide/<절>/*.ko.md`와 `*.en.md`를 각각 독립된 로케일로 처리한다. 두 언어 모두
 같은 파일 이름 규칙(`NN-slug.<ko|en>.md`)을 쓰고, 언어별 디렉터리에 같은 확장자로 생성한다.
 소스 디렉터리에 어느 한쪽 로케일 파일이 아직 없으면 그 로케일은 조용히 건너뛴다 — `en`
 소스가 아직 없는 초기 상태에서도 `ko` 생성은 그대로 동작해야 한다.
 
-상대 링크는 손대지 않는다. `common/guide/server/`와 `<lang>/guide/server/`는 깊이가 같아
+**절은 `SECTIONS`가 정한다.** `server`(서버 가이드)와 `stream-connector`가 같은 규칙으로
+돈다. 절을 늘리려면 그 목록에 이름을 더하고 `common/guide/<이름>/`에 소스를, 언어마다
+`<lang>/guide/<이름>/README.<로케일>.md`에 읽는 순서 표를 둔다.
+
+상대 링크는 손대지 않는다. `common/guide/<절>/`과 `<lang>/guide/<절>/`은 깊이가 같아
 `../../../common/spec/server/...` 같은 링크가 그대로 성립한다.
 
 실행:
@@ -42,12 +46,22 @@ import surface_terms  # noqa: E402
 SITE_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SITE_DIR.parents[1]
 FRAMEWORK = REPO_ROOT / "framework" / "doc" / "framework"
-COMMON = FRAMEWORK / "common" / "guide" / "server"
+#  같은 규칙으로 도는 절. 각각 `common/guide/<이름>/`에 소스가 있고, 언어마다
+#  `<lang>/guide/<이름>/`에 생성된다.
+SECTIONS = ("server", "stream-connector")
+
+
+def common_dir(section: str) -> Path:
+    return FRAMEWORK / "common" / "guide" / section
+
+
+def lang_dir_for(lang: str, section: str) -> Path:
+    return FRAMEWORK / lang / "guide" / section
 
 #  탭 라벨 → 언어 디렉터리.
 LANGUAGES = {
-    "C#/.NET": "dotnet",
     "C++": "cpp",
+    "C#/.NET": "dotnet",
     "Java": "java",
     "Kotlin": "kotlin",
     "Node/TypeScript": "node",
@@ -60,7 +74,7 @@ STRINGS = {
         "front_matter": "---\ntitle: \"{title} · {label}\"\n---\n\n",
         "banner": (
             "<!-- generated:start -->\n"
-            "<!-- 이 파일은 `common/guide/server/{source}`에서 생성한다."
+            "<!-- 이 파일은 `common/guide/{section}/{source}`에서 생성한다."
             " 직접 고치지 않는다.\n"
             "     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/"
             "generate_language_guides.py`로 다시 만든다. -->\n"
@@ -78,7 +92,7 @@ STRINGS = {
         "front_matter": "---\ntitle: \"{title} · {label}\"\n---\n\n",
         "banner": (
             "<!-- generated:start -->\n"
-            "<!-- This file is generated from `common/guide/server/{source}`."
+            "<!-- This file is generated from `common/guide/{section}/{source}`."
             " Do not edit directly.\n"
             "     Edit the common source instead, then regenerate with"
             " `python3 doc/site/scripts/"
@@ -102,7 +116,7 @@ NAV_RE = re.compile(
     re.S)
 
 
-def language_switch(current: str, name: str, suffix: str) -> str:
+def language_switch(current: str, name: str, suffix: str, section: str) -> str:
     """같은 장의 다른 언어로 가는 줄.
 
     탭에서는 한 번 눌러 언어를 바꿀 수 있었다. 생성판은 언어별 파일이라 그 경로가
@@ -113,15 +127,18 @@ def language_switch(current: str, name: str, suffix: str) -> str:
         if lang == current:
             parts.append(f"**{label}**")
         else:
-            parts.append(f"[{label}](../../../{lang}/guide/server/{name})")
+            parts.append(f"[{label}](../../../{lang}/guide/{section}/{name})")
+    #  `{ .zlink-langswitch }`는 attr_list가 이 문단에 class를 붙이는 표기다.
+    #  extra.css가 그 class를 상단 언어 선택기 모양으로 낸다.
     return ("<!-- language-switch:start -->\n"
             f"{STRINGS[suffix]['switch_label']} — " + " · ".join(parts)
-            + "\n<!-- language-switch:end -->\n\n")
+            + "\n{ .zlink-langswitch }\n"
+            + "<!-- language-switch:end -->\n\n")
 
 
-def reading_order(lang_dir: str, suffix: str) -> list[str]:
+def reading_order(lang_dir: str, suffix: str, section: str) -> list[str]:
     """그 언어 README의 읽는 순서 표에서 장 파일 목록을 읽는다."""
-    readme = FRAMEWORK / lang_dir / "guide" / "server" / f"README.{suffix}.md"
+    readme = lang_dir_for(lang_dir, section) / f"README.{suffix}.md"
     if not readme.exists():
         raise SystemExit(STRINGS[suffix]["no_order_table"].format(readme=readme))
     order = []
@@ -198,12 +215,12 @@ def link_chapter_refs(text: str, available: dict[str, str], suffix: str) -> str:
 SHARES_WITH = {"kotlin": "java"}
 
 
-def redirect_missing(text: str, lang_dir: str, suffix: str) -> str:
+def redirect_missing(text: str, lang_dir: str, suffix: str, section: str) -> str:
     donor = SHARES_WITH.get(lang_dir)
     if donor is None:
         return text
-    target_dir = FRAMEWORK / lang_dir / "guide" / "server"
-    donor_dir = FRAMEWORK / donor / "guide" / "server"
+    target_dir = lang_dir_for(lang_dir, section)
+    donor_dir = lang_dir_for(donor, section)
 
     def repl(m: re.Match) -> str:
         link = m.group(1)
@@ -258,7 +275,9 @@ def insert_after_title(body: str, block: str) -> str:
     return block + body
 
 
-def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
+def generate_locale(suffix: str, check_only: bool,
+                    section: str) -> tuple[int, list[str]]:
+    COMMON = common_dir(section)
     sources = sorted(COMMON.glob(f"*.{suffix}.md"))
     if not sources:
         return 0, []
@@ -267,9 +286,9 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
     stale: list[str] = []
     written = 0
     for label, lang_dir in LANGUAGES.items():
-        target_dir = FRAMEWORK / lang_dir / "guide" / "server"
-        raw_order = reading_order(lang_dir, suffix)
-        #  순서 표는 공통 장을 `../../../common/guide/server/...`로 가리킨다. 그 장들은
+        target_dir = lang_dir_for(lang_dir, section)
+        raw_order = reading_order(lang_dir, suffix, section)
+        #  순서 표는 공통 장을 `../../../common/guide/<절>/...`로 가리킨다. 그 장들은
         #  이 디렉터리에 생성되므로 형제가 된다. 다른 언어를 가리키는 항목(kotlin의
         #  Java 16장)만 외부 링크로 남는다.
         order: list[str] = []
@@ -286,10 +305,13 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
         titles: dict[str, str] = {}
         for entry in order:
             name = Path(entry).name
+            #  읽는 순서 표는 그 절 밖의 문서도 담는다(언어별 quickstart).
+            #  상대 경로를 먼저 풀어 보고, 안 되면 형제 파일과 공통 정본에서 찾는다.
+            relative = (target_dir / entry).resolve()
             local = target_dir / name
             src = COMMON / name
-            path = local if local.exists() else src
-            if path.exists():
+            path = next((c for c in (relative, local, src) if c.exists()), None)
+            if path is not None:
                 titles[entry] = chapter_title(path)
 
         generated = {src.name for src in sources} & set(siblings)
@@ -300,14 +322,14 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
             body = NAV_RE.sub("", body)
             body, _ = surface_terms.translate(body, label)
             body = link_chapter_refs(body, available, suffix)
-            body = redirect_missing(body, lang_dir, suffix)
+            body = redirect_missing(body, lang_dir, suffix, section)
             content = (s["front_matter"].format(
                            title=chapter_title(src), label=label)
-                       + s["banner"].format(source=src.name) + "\n"
+                       + s["banner"].format(source=src.name, section=section) + "\n"
                        + insert_after_title(
                            body,
                            nav_block(order, src.name, titles, suffix)
-                           + language_switch(lang_dir, src.name, suffix)))
+                           + language_switch(lang_dir, src.name, suffix, section)))
             content = re.sub(r"\n{3,}", "\n\n", content).rstrip() + "\n"
 
             out = target_dir / src.name
@@ -317,7 +339,9 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
             if check_only:
                 stale.append(str(out.relative_to(REPO_ROOT)))
                 continue
-            out.write_text(content, encoding="utf-8")
+            #  줄바꿈은 LF로 고정한다. Windows에서 기본값으로 쓰면 CRLF가 되어
+            #  생성물 전체가 내용 변화 없이 수정된 것으로 보인다.
+            out.write_text(content, encoding="utf-8", newline="")
             written += 1
 
     return written, stale
@@ -327,11 +351,14 @@ def generate(check_only: bool) -> int:
     total_written = 0
     total_stale: list[str] = []
     total_sources = 0
-    for suffix in ("ko", "en"):
-        written, stale = generate_locale(suffix, check_only)
-        total_written += written
-        total_stale.extend(stale)
-        total_sources += len(list(COMMON.glob(f"*.{suffix}.md")))
+    for section in SECTIONS:
+        if not common_dir(section).is_dir():
+            continue          #  아직 공통 소스가 없는 절은 건너뛴다
+        for suffix in ("ko", "en"):
+            written, stale = generate_locale(suffix, check_only, section)
+            total_written += written
+            total_stale.extend(stale)
+            total_sources += len(list(common_dir(section).glob(f"*.{suffix}.md")))
 
     if check_only:
         if total_stale:
@@ -345,7 +372,8 @@ def generate(check_only: bool) -> int:
         return 0
 
     print(f"생성: {total_written}개 갱신 "
-          f"(언어 {len(LANGUAGES)} × 공통 소스 파일 {total_sources}개)")
+          f"(언어 {len(LANGUAGES)} × 공통 소스 파일 {total_sources}개, "
+          f"절 {', '.join(SECTIONS)})")
     return 0
 
 

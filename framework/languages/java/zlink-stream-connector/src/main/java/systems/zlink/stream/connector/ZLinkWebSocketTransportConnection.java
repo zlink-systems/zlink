@@ -51,12 +51,17 @@ final class ZLinkWebSocketTransportConnection
     @Override
     public CompletionStage<?> onBinary(WebSocket socket, ByteBuffer data, boolean last) {
         if (!last) {
-            fail(new IllegalArgumentException("fragmented WebSocket frames are not supported"));
+            fail(ZLinkStreamException.of(
+                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
+                "fragmented WebSocket frames are not supported"));
             socket.request(1);
             return CompletableFuture.completedFuture(null);
         }
         if (data.remaining() > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
-            fail(new IllegalArgumentException("websocket frame exceeds max receive payload size"));
+            //  Spec 32 9: a received frame over the limit is FrameTooLarge.
+            fail(ZLinkStreamException.of(
+                ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                "websocket frame exceeds max receive payload size"));
             socket.request(1);
             return CompletableFuture.completedFuture(null);
         }
@@ -102,7 +107,7 @@ final class ZLinkWebSocketTransportConnection
         WebSocket current = webSocket;
         if (current == null) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("websocket is not connected"));
+                ZLinkStreamException.disconnected("websocket is not connected"));
         }
         return current.sendBinary(ByteBuffer.wrap(frame), true)
             .thenApply(ignored -> null);
@@ -141,10 +146,15 @@ final class ZLinkWebSocketTransportConnection
             if (failure == null) {
                 failure = ex;
             }
-            opened.completeExceptionally(ex);
             pending = new ArrayDeque<>(waiters);
             waiters.clear();
         }
+        //  Every future is completed outside the monitor, as the TLS
+        //  transport does. Completing the connect future inside it would run
+        //  the lifecycle continuation and the application connect() code
+        //  while this monitor is held, and onBinary and readFrameAsync need
+        //  that same monitor to take a frame in.
+        opened.completeExceptionally(ex);
         for (CompletableFuture<ZLinkStreamWireProtocol.Frame> waiter : pending) {
             waiter.completeExceptionally(ex);
         }

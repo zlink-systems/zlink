@@ -5,6 +5,10 @@ final class ZLinkConnectorFlowContext {
 
     private ZLinkConnectorFlowContext() { }
 
+    static State current() {
+        return CURRENT.get();
+    }
+
     static State currentOrApplication() {
         State current = CURRENT.get();
         return current == null ? new State(ZLinkConnectorFlowIds.next(), 3) : current;

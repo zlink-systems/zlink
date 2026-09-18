@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "find asks the Store and stops there",
+    "subtitle": "What comes back is the node it is on now · nothing reaches the object",
+    "output": "25-location-find-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "knows only the id",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "room-42 → node A",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 0,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "R"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "label": "asks where it is now",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "R",
+      "label": "recorded as node A",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "C",
+      "to": "R",
+      "label": "a call gives the id alone",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The answer is not an address to send to",
+      "items": [
+        "find reads the Store only, so it does not confirm that the object is actually alive. The node name it returns is the record at that moment.",
+        "A call gives the id alone. The Framework reads the same record again, so a target that moves in between is still reached."
+      ]
+    }
+  ]
+}

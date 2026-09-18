@@ -8,7 +8,7 @@ zlink HTTP client는 framework handler와 관리 도구가 같은 framework 오�
 계약으로 HTTP를 호출하도록 제공하는 companion client다. 각 언어의 대표 HTTP
 전송 스택을 fluent builder 뒤로 감추지만, 일반 HTTP library를 대체하는 범용
 client가 아니다. JSON 전용 client도 아니며, typed JSON 경로는 raw HTTP 경로 위에
-얹은 framework codec 편의 계층이다.
+더해진 framework codec 편의 계층이다.
 
 바닥부터 만들지 않는다. 전송은 언어별 대표 스택에 위임하되, **의미론
 (redirect, retry, cookie, 압축, 인증 스크럽)은 래퍼가 직접 소유**하여 5개

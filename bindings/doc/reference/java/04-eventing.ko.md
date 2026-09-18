@@ -36,8 +36,8 @@ try (SocketMonitor monitor = socket.monitorOpen(MonitorEventType.CONNECTED, Moni
 **Completion result.** 모든 member는 동기다. `SocketMonitor extends
 AutoCloseable`이다.
 
-**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 쓰고 시점 스냅샷엔
-`status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 사용하고 시점 스냅샷엔
+`status()`를 사용한다.
 
 ---
 
@@ -67,7 +67,7 @@ auto-high-water-mark telemetry 스냅샷. Java `record`다 — 모든 component�
 **선택 기준.** `stateFlags`를 직접 디코딩하는 대신 `isReady()`를 호출한다.
 socket의 실제 send/receive HWM이 설정한 `CommonSocketOptions` 값(Sockets
 category)과 다른 이유를 진단할 땐 connection-bucket과 auto-HWM-plan
-component를 쓴다.
+component를 사용한다.
 
 ---
 
@@ -105,7 +105,7 @@ try (Poller poller = Zlink.createPoller()) {
 block하며, `events`를 그 자리에서 채우고 준비된 개수를 반환한다(이후
 `events.readyCount()`로도 읽을 수 있다).
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. 감시하는 event만
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. 감시하는 event만
 바뀔 땐 `remove` + `add` 대신 `modify`를 선호한다. `wait` 호출마다 새로
 할당하는 대신, receive에 `Received`를 재사용하는 것과 같은 방식으로
 `PollEvents` buffer 하나를 재사용한다.
@@ -148,7 +148,7 @@ instance를 그 자리에서 변경한다 — public contract 표면이 아니�
 
 **선택 기준.** `revents(index)`를 손으로 bit-test하는 대신
 `hasEvent(index, flag)`를 선호한다. caller가 진짜로 boxed `PollEvent`
-record가 필요할 때만 `eventAt(index)`를 쓴다 — 개별 accessor를 순회하면
+record가 필요할 때만 `eventAt(index)`를 사용한다 — 개별 accessor를 순회하면
 hot polling loop에서 그 할당을 피할 수 있다.
 
 ---
@@ -199,7 +199,7 @@ try (ZlinkTimer timer = Zlink.createTimer()) {
 **Completion result.** 모든 member는 동기다. `ZlinkTimer extends
 AutoCloseable`이다.
 
-**선택 기준.** 만료를 pull하려면 `recv`를 쓰고 socket과 함께 하나의 wait에서 multiplex하려면
+**선택 기준.** 만료를 pull하려면 `recv`를 사용하고 socket과 함께 하나의 wait에서 multiplex하려면
 `Poller.add(ZlinkTimer, long)`로 등록한다.
 
 ---

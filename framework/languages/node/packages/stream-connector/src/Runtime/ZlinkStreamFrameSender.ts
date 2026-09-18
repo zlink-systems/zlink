@@ -8,15 +8,13 @@ import type {
 import type { ZlinkStreamFrameProtocol } from './Protocol/ZlinkStreamFrameProtocol';
 import { throwIfAborted } from './ZlinkStreamSupport';
 import type { ZlinkFlowContext } from './ZlinkFlowContext';
-import type { ZlinkStreamRuntimeMetrics } from './ZlinkStreamRuntimeMetrics';
 
 export class ZlinkStreamFrameSender {
   private readonly pendingWrites = new Set<Promise<void>>();
 
   constructor(
     private readonly protocol: ZlinkStreamFrameProtocol,
-    private readonly flowContext: ZlinkFlowContext,
-    private readonly metrics: ZlinkStreamRuntimeMetrics
+    private readonly flowContext: ZlinkFlowContext
   ) {}
 
   async send(
@@ -68,7 +66,6 @@ export class ZlinkStreamFrameSender {
     this.pendingWrites.add(write);
     try {
       await write;
-      this.metrics.outbound(frame.byteLength);
     } finally {
       this.pendingWrites.delete(write);
     }

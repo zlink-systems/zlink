@@ -55,7 +55,12 @@ class play_server_host_factory_t
         room_mesh.objects ()
           .server ()
           .add_entry_spot<bingo_entry_spot_t> ()
+          // --8<-- [start:doc-execution-mode]
+          // spot_wide is the default. Naming it here keeps the choice visible:
+          // every callback of this room runs through one gate.
           .add_spot_factory<bingo_room_spot_t> (sample_names_t::room_spot)
+          .set_execution_mode (user_spot_execution_mode_t::spot_wide)
+          // --8<-- [end:doc-execution-mode]
           .set_relocation_coordination_mode (
             spot_relocation_coordination_mode_t::application_signaled)
           .preserve_state_with<bingo_room_relocation_adapter_t> ()

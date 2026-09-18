@@ -35,7 +35,7 @@ concrete class다(이 binding의 다른 대부분의 contract와 달리
 
 **언어간 비대칭, 여기서 다시 명시.** 이 binding의
 `RecvResult`/`ConnectResult`/`ConfigResult`는 dotnet/cpp/java/rust가
-이 family 중 하나 이상에서 쓰는 더 작은 집합이 아니라 node의 더
+이 family 중 하나 이상에서 사용하는 더 작은 집합이 아니라 node의 더
 완전한 값 집합과 일치한다 — 다른 모든 언어의 Errors category에 이미
 문서화된 것과 같은 비대칭이다. 더 작은 집합이 빠진 값을 가져야
 하는지, 이 binding의 더 완전한 집합을 줄여야 하는지는 스펙 차원의

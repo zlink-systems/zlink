@@ -205,4 +205,4 @@ Handshake failure는 session이 만들어지기 전 runtime monitoring에만 기
 
 **wire 값이 계약이다.** `stream_close_reason_t`의 1~6은
 [Stream Connector §4.6](../../../../stream-connector/32-stream-connector.ko.md)의 `session-closing` payload와 같은 값이다.
-**enum을 정수로 cast해 wire 값으로 쓰지 않는다** — codec이 명시적으로 변환한다.
+**enum을 정수로 cast해 wire 값으로 사용하지 않는다** — codec이 명시적으로 변환한다.

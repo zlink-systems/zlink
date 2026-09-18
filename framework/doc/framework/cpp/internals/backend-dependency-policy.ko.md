@@ -101,11 +101,11 @@ Framework의 protobuf codec extension(`extensions/framework-codec-protobuf`)이 
 | 항목 | 범위 |
 |---|---|
 | protobuf 버전 | **3.21.12 ~ 33.x** |
-| `protoc`와 runtime | **같은 릴리스를 쓴다.** 서로 다른 릴리스를 섞지 않는다 |
+| `protoc`와 runtime | **같은 릴리스를 사용한다.** 서로 다른 릴리스를 섞지 않는다 |
 
 **두 버전 사이에서 공개 API의 반환형이 바뀐다.** `MessageLite::GetTypeName()`이 33.x에서
 `const std::string &`에서 `absl::string_view`로 바뀌었다. codec은 양쪽에서 컴파일되어야 하므로
-반환값을 `std::string`으로 명시 변환해 쓴다 — `const char *`와 `string_view`는 `operator+`가 없다.
+반환값을 `std::string`으로 명시 변환해 사용한다 — `const char *`와 `string_view`는 `operator+`가 없다.
 
 **이 범위를 벗어나는 버전으로 올릴 때는 반환형과 연산자 호환을 먼저 확인한다.** 이전에 이 검사가
 없어서 `protoc` 3.21.12와 dependency 33.4가 어긋난 채로 남아 있었고, **설정에 따라 빌드가 되기도

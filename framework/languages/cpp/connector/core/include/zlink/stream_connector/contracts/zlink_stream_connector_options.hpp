@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
 #include <zlink/stream_connector/contracts/compression.hpp>
 
 #include <chrono>
@@ -48,8 +49,15 @@ struct connector_options_t
     /// Remote stream endpoint URI.
     std::string endpoint;
 
-    /// Transport used to open the endpoint.
-    transport_t transport = transport_t::tcp;
+    /// Transport used to open the endpoint. Empty means the endpoint scheme
+    /// decides (stream-connector §3.1).
+    ///
+    /// A fixed default cannot be told apart from a caller who wrote that same
+    /// value, so a `ws://` endpoint given on its own would be rejected against
+    /// a default of tcp. When a value is present it is the transport, and a
+    /// value that disagrees with the endpoint scheme is a
+    /// `configuration_error`.
+    std::optional<transport_t> transport;
 
     /// Maximum time allowed for a connect attempt, including configured reconnect attempts.
     std::chrono::milliseconds connect_timeout{5000};
@@ -99,8 +107,21 @@ struct connector_options_t
     /// Default compression preference for connector calls that opt into compression.
     compression_t compression = compression_t::lz4;
 
-    /// Codec used when payload_compressed is set. nullptr disables compression.
+    /// Codec used when payload_compressed is set.
+    ///
+    /// Defaults to the built-in LZ4 codec, which the connector drops when
+    /// compression is `compression_t::none`. Leaving a codec of your own here
+    /// while compression is off is a `configuration_error` (stream-connector
+    /// §6.3): the two items disagree.
     std::shared_ptr<const compression_codec_t> compression_codec = lz4_compression_codec ();
+
+    /// Typed payload codec injection point (stream-connector §5.4). Empty
+    /// selects the JSON codec.
+    std::shared_ptr<const typed_codec_t> typed_codec;
+
+    /// Packet-name resolver injection point (stream-connector §5.4). Empty
+    /// selects the default naming rule of §5.
+    std::shared_ptr<const packet_name_resolver_t> name_resolver;
 };
 
 } // namespace zlink::stream_connector

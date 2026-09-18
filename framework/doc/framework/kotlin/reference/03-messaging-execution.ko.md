@@ -9,7 +9,7 @@
 [Kotlin channel messaging exact interface](../../common/spec/server/languages/kotlin/interfaces/channel-messaging.ko.md)가
 소유한다.
 
-Kotlin application은 Java `ZLinkRouteClient`/`ZLinkFanoutClient`를 직접 쓰지 않는다 — 이 Kotlin
+Kotlin application은 Java `ZLinkRouteClient`/`ZLinkFanoutClient`를 직접 사용하지 않는다 — 이 Kotlin
 전용 client와 call wrapper가 Java call을 내부에 보관하며 일반 완료는 `await()`, 현재 Spot turn을
 반납하는 완료는 `yield()`로 투영한다.
 
@@ -19,7 +19,7 @@ Kotlin application은 Java `ZLinkRouteClient`/`ZLinkFanoutClient`를 직접 쓰�
 
 One-way message를 보낸다. `ZLinkKotlinClient.sendToChannel(...)`과
 `ZLinkKotlinRouteClient.sendToChannel(...)`/`sendToNode(...)`가 같은 반환 타입
-`ZLinkKotlinMessageSendCall`을 쓴다.
+`ZLinkKotlinMessageSendCall`을 사용한다.
 
 ```kotlin
 routeClient.sendToChannel("game.api", PlayerOnline("player-1")).await()
@@ -35,8 +35,8 @@ routeClient.sendToChannel("game.api", PlayerOnline("player-1")).await()
 **완료 결과.** Java 레퍼런스의 `sendToChannel`/`sendToNode` 완료 kind와 같다 — 실패는 Java stage의
 exception을 그대로 전달한다.
 
-**선택 기준.** Reply가 필요 없는 fire-and-forget에 쓴다. Reply가 필요하면
-`requestToChannel`/`requestToNode`를 쓴다.
+**선택 기준.** Reply가 필요 없는 fire-and-forget에 사용한다. Reply가 필요하면
+`requestToChannel`/`requestToNode`를 사용한다.
 
 ---
 
@@ -66,7 +66,7 @@ extension으로, 내부에서 `TReply::class`를 `KClass<TReply>`를 받는 base
 
 **완료 결과.** Java 레퍼런스의 `requestToChannel`/`requestToNode` 완료 kind와 같다.
 
-**선택 기준.** Reply 값이 필요할 때 쓴다. One-way면 `sendToChannel`/`sendToNode`를 쓴다.
+**선택 기준.** Reply 값이 필요할 때 사용한다. One-way면 `sendToChannel`/`sendToNode`를 사용한다.
 
 ---
 

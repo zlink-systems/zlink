@@ -179,11 +179,29 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public void DisconnectEventCarriesTheFrozenCloseReasonContract()
     {
-        var eventInfo = typeof(IZlinkStreamConnector).GetEvent(nameof(IZlinkStreamConnector.Disconnected));
-        Assert.NotNull(eventInfo);
+        // The three connection events are registration methods returning IDisposable,
+        // never C# events: an event hands the caller nothing to unsubscribe with
+        // (stream-connector spec §7, .NET spec §3).
+        Assert.Empty(typeof(IZlinkStreamConnector).GetEvents());
+        AssertMethod(
+            typeof(IZlinkStreamConnector),
+            nameof(IZlinkStreamConnector.OnDisconnected),
+            typeof(IDisposable),
+            (typeof(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>), false));
+        AssertMethod(
+            typeof(IZlinkStreamConnector),
+            nameof(IZlinkStreamConnector.OnErrorReceived),
+            typeof(IDisposable),
+            (typeof(Func<ZlinkStreamError, CancellationToken, ValueTask>), false));
+        AssertMethod(
+            typeof(IZlinkStreamConnector),
+            nameof(IZlinkStreamConnector.OnConnectionStateChanged),
+            typeof(IDisposable),
+            (typeof(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>), false));
         Assert.Equal(
-            typeof(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>),
-            eventInfo!.EventHandlerType);
+            typeof(ZlinkStreamCloseReason?),
+            typeof(IZlinkStreamConnector).GetProperty(
+                nameof(IZlinkStreamConnector.CloseReason))!.PropertyType);
         Assert.Equal(
             new[]
             {

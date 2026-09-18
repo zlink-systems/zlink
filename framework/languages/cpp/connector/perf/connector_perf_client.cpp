@@ -240,7 +240,7 @@ run_wait (zlink::stream_e2e_client::coroutine_connector_t &client,
                     .packet_name ("connector.perf.push")
                     .timeout (timeout)
                     .async ();
-    co_return packet;
+    co_return packet.payload;
 }
 
 std::thread start_loopback_server (zlink::context_t &context,

@@ -49,7 +49,7 @@ upstream PUB에 전송한다. 공개 API 사용법은 같다.
 > 또 SUB은 구독이 **없으면** 아무것도 받지 못하지만,
 > XSUB은 구독 없이도 전부 받는다.
 
-**프록시 패턴에서 XSUB/XPUB을 쓰는 이유:**
+**프록시 패턴에서 XSUB/XPUB을 사용하는 이유:**
 
 ```mermaid
 flowchart LR
@@ -97,7 +97,7 @@ zlink_submit_result_t rc = zlink_publish(
 ### 구독자 (SUB)
 
 `zlink_subscribe()`는 토픽과 payload record 전체를 한 번에 받는다.
-콜백 표면은 없다. poller에서 `ZLINK_POLLIN`을 관찰한 뒤 이 함수로 꺼내 쓰는
+콜백 표면은 없다. poller에서 `ZLINK_POLLIN`을 관찰한 뒤 이 함수로 꺼내 사용하는
 것이 기본 패턴이다.
 
 ```c
@@ -136,7 +136,7 @@ if (rc == ZLINK_RECV_OK) {
 
 > **참고:** PUB/SUB 계열 4소켓에서 `zlink_send()`/`zlink_recv()`는
 > 모두 `ZLINK_SUBMIT_NOT_SUPPORTED` / `ZLINK_RECV_NOT_SUPPORTED` 이다. 발행은
-> `zlink_publish()`, 수신은 `zlink_subscribe()`를 쓴다.
+> `zlink_publish()`, 수신은 `zlink_subscribe()`를 사용한다.
 
 > **PUB/XPUB 기본값:** `ZLINK_PUB_OPT_NODROP` 의 기본값은 `0` 이다.
 > HWM 이 찼을 때 그 구독자에게 보내는 메시지를 조용히 drop 하고
@@ -213,7 +213,7 @@ zlink_submit_result_t rc = zlink_publish(
 
 토픽은 와이어(프로토콜 전송 레벨)에서 첫 프레임으로 전송되고,
 `zlink_subscribe()`가 토픽과 payload part를 분리해 반환한다.
-호출자가 토픽 프레임을 직접 조립할 필요는 없다.
+호출자가 토픽 프레임을 직접 만들 필요는 없다.
 
 > **참고:** `zlink_publish(pub, NULL, &part, ...)`처럼 `topic_id_`를
 > NULL로 전달하면 첫 메시지 프레임이 와이어 prefix 규칙에 따라 토픽으로
@@ -364,7 +364,7 @@ msleep(100);  /* wait for subscription propagation */
 
 ### 방향 제약
 
-PUB/SUB는 각각 전용 API만 쓸 수 있다:
+PUB/SUB는 각각 전용 API만 사용할 수 있다:
 
 ```c
 /* PUB: zlink_publish()로만 송신. 수신 불가 */
@@ -391,7 +391,7 @@ zlink_send(sub, &parts[3], 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);     /* ZLINK_S
 
 XPUB/XSUB는 구독 프레임을 애플리케이션에서 직접 다룰 수 있는
 고급 publish-subscribe 소켓이다. 프록시/브로커 구축, 구독 모니터링,
-Last-Value Caching에 쓴다.
+Last-Value Caching에 사용한다.
 
 ### SUB vs XSUB — 핵심 차이
 
@@ -440,8 +440,8 @@ flowchart LR
 | 3 | SUB | `zlink_subscribe()` | 최종 소비 |
 
 > **핵심:** `zlink_proxy(xsub, xpub, NULL)`의 데이터 릴레이는 내부
-> recv/send 경로를 쓰며, 공개 `zlink_send()`/`zlink_recv()` API를
-> 쓰지 않는다. 사용자가 직접 XSUB recv → XPUB send를 호출할 필요는 없다.
+> recv/send 경로를 사용하며, 공개 `zlink_send()`/`zlink_recv()` API를
+> 사용하지 않는다. 사용자가 직접 XSUB recv → XPUB send를 호출할 필요는 없다.
 
 #### 구독 전파 흐름
 
@@ -478,9 +478,9 @@ flowchart LR
 
 > `zlink_send()` / `zlink_recv()`는 PUB/SUB 계열 4소켓 모두
 > `ZLINK_SUBMIT_NOT_SUPPORTED` / `ZLINK_RECV_NOT_SUPPORTED` 이다.
-> 발행은 `zlink_publish()`, 수신은 `zlink_subscribe()` 전용 API를 쓴다.
+> 발행은 `zlink_publish()`, 수신은 `zlink_subscribe()` 전용 API를 사용한다.
 
-> Proxy 패턴에서 XSUB/XPUB을 쓰는 방법은
+> Proxy 패턴에서 XSUB/XPUB을 사용하는 방법은
 > [Proxy 가이드](03-6-proxy.ko.md)를 참고.
 
 ## 9. 구독 프레임 형식

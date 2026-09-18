@@ -31,7 +31,7 @@ structured record를 기록한다. Provider 호출 실패는 원래 message oper
 바꾸지 않고 별도 진단으로 격리한다. Kotlin은 message-flow observer, runtime error sink,
 file path나 raw event DTO를 추가하지 않는다.
 
-**선택 기준.** Startup에서 진단 상세도와 sampling을 Kotlin DSL로 묶어 설정할 때 쓴다.
+**선택 기준.** Startup에서 진단 상세도와 sampling을 Kotlin DSL로 묶어 설정할 때 사용한다.
 
 ---
 

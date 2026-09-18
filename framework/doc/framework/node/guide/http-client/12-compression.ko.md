@@ -9,7 +9,7 @@
 const response = await ZLinkHttpClient.create('https://api.internal')
   .compression()
   .get('/large-report')
-  .submit<Report>();
+  .async<Report>();
 ```
 
 ## 래퍼 통제 해제
@@ -22,7 +22,7 @@ undici `request`는 응답을 자동 해제하지 않는다. 그래서 **래퍼�
 - **decoded 크기**를 `maxResponseBodySize`로 강제한다.
 - `download(sink)` streaming chunk는 **해제하지 않는다**(받은 그대로 전달).
 
-본문이 손상됐으면 `payloadDecodeFailed`, decoded 크기가 한도를 넘으면 `requestFailed`로
+본문이 손상됐으면 `ProtocolError`, decoded 크기가 한도를 넘으면 `Unavailable`로
 보고된다.
 
 [다음: 에러 처리 →](13-error-handling.ko.md)

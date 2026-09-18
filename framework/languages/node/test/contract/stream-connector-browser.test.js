@@ -29,11 +29,15 @@ test('package root rejects tcp and tls immediately', () => {
       () => browserEntry.zlinkStreamConnectorFactory.create({ endpoint }),
       (error) => error.error?.code === browserEntry.ZlinkStreamErrorCode.ConfigurationError
     );
-    assert.throws(
-      () => new browserEntry.DefaultZlinkStreamConnector({ endpoint }),
-      (error) => error.error?.code === browserEntry.ZlinkStreamErrorCode.ConfigurationError
-    );
   }
+});
+
+// TypeScript spec section 4: the factory is the only way in. The concrete class
+// is not part of the package root, so a consumer cannot name the implementation
+// type the other four connectors also keep private.
+test('package root does not export the implementation class', () => {
+  assert.equal(browserEntry.DefaultZlinkStreamConnector, undefined);
+  assert.equal(typeof browserEntry.zlinkStreamConnectorFactory.create, 'function');
 });
 
 test('package root dispatches every stream frame in one native WebSocket message', async () => {

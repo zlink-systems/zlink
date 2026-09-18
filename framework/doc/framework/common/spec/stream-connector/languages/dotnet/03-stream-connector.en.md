@@ -30,7 +30,7 @@ snapshot.
 This document doesn't repeat listing the
 [snapshot](../../../server/00-foundation/02-glossary.en.md#snapshot)'s member — it fixes the
 **surface structure and `.NET`-specific meaning.** The verification
-procedure is owned by [this document §14](#14-regression-test).
+procedure is owned by [this document §13](#13-regression-test).
 
 **The target it's responsible for is a native build** (desktop/server,
 Unity, Godot C#). Unity's native build uses the same
@@ -57,8 +57,10 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 {
     bool IsConnected { get; }
     ZlinkStreamConnectionState State { get; }
+    ZlinkStreamCloseReason? CloseReason { get; } // the last close reason; null if never disconnected (§10)
     ZlinkStreamConnectorOptions Options { get; }
     int PendingDispatchCount { get; }
+    int ReceivedCount(string name);             // the received count per packet name (§8)
 
     IZlinkStreamLifecycleCall Connect { get; }
     IZlinkStreamLifecycleCall Close { get; }
@@ -72,17 +74,49 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
 
-    event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
-    event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>?           Disconnected;
-    event Func<ZlinkStreamError, CancellationToken, ValueTask>?                  ErrorReceived;
+    IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
+    IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
+    IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
 }
 ```
 
-- **An event handler is called in registration order.** A handler
+- **The connection events are registration methods, not C#
+  `event`s.** An `event` returns nothing at subscription time, so it does
+  not satisfy common spec §7 — a client that manages subscriptions
+  against the lifetime of one screen would have to keep the delegate it
+  registered.
+- **A handler is called in registration order.** A handler
   failure doesn't end the connector runtime — it's reported as a
   `UserCallbackFailed` error.
 - `PendingDispatchCount` is a **value for diagnosing dispatch pump
   status.** **It isn't used for application flow control.**
+- **`ReceivedCount(name)` returns the received count per packet name**
+  ([Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue)).
+  Consuming does not lower it, it is independent of the dispatch mode, and it
+  restarts at zero when the connection is established.
+- **Every registration surface returns an `IDisposable`**
+  ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)).
+  `On(...)`, `OnConnectionStateChanged`, `OnDisconnected`, and
+  `OnErrorReceived` are alike. Calling `Dispose()` twice isn't treated as an
+  error.
+
+`.NET` carries an error as a `ZlinkStreamError`, and a throwing surface
+puts that value in a `ZlinkStreamException`
+([Common Spec §9.2](../../32-stream-connector.en.md#92-delivery--the-receiver-must-be-able-to-read-the-code)).
+The caller reads the error code through `ZlinkStreamException.Error.Code`.
+
+```csharp
+public sealed record ZlinkStreamError(
+    ZlinkStreamErrorCode Code,      // the closed set of 13 codes in common spec §9
+    string Message,
+    Exception? Exception = null);   // the causing exception; null when there is none
+
+public sealed class ZlinkStreamException(ZlinkStreamError error)
+    : Exception(error.Message, error.Exception)
+{
+    public ZlinkStreamError Error { get; } = error; // where the code is read
+}
+```
 
 ## 4. Call Builder
 
@@ -140,9 +174,19 @@ public interface IZlinkStreamWaitCall
 `ExpectNone<TPayload>`, `WaitForSequence<TPayload>`, each returning a
 typed builder.
 
-**`IZlinkStreamPacketNameResolver` decides packet identity.** The
-default resolver prioritizes `ZlinkStreamPacketNameAttribute`, and uses
-the type name if the attribute is absent.
+**`IZlinkStreamPacketNameResolver` decides packet identity.** The means
+of attaching a packet name to a type that
+[Common Spec §5](../../32-stream-connector.en.md#5-packet-model)
+requires is an attribute. The default resolver prioritizes this
+attribute, and uses the type name if it is absent.
+
+```csharp
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
+public sealed class ZlinkStreamPacketNameAttribute(string name) : Attribute
+{
+    public string Name { get; } = name; // the packet name attached to the type
+}
+```
 
 - **A per-operation `PacketName(...)` override is allowed.** For an
   already-encoded raw payload and external protocol interop. **This is
@@ -157,6 +201,16 @@ The codec surface is `IZlinkStreamPayloadCodec` and
 `IZlinkStreamCompressionCodec`. `ZlinkStreamJsonCodec` is the default
 payload codec, and specifying `CompressionCodec` uses that
 implementation instead of the built-in one.
+
+The two injection points of
+[Common Spec §5.4](../../32-stream-connector.en.md#54-codec) are the
+following properties of `ZlinkStreamConnectorOptions`.
+
+```csharp
+public IZlinkStreamPayloadCodec? PayloadCodec { get; init; }          // ZlinkStreamJsonCodec when null
+public IZlinkStreamPacketNameResolver NameResolver { get; init; }
+    = new ZlinkStreamPacketNameResolver();                            // the default resolver
+```
 
 If a Framework codec extension must also provide the STREAM header
 value, it implements the Stream Connector package's
@@ -233,8 +287,23 @@ surface is below.
 IZlinkStreamWaitCall       WaitFor(string name);        // waits until it arrives
 IZlinkStreamExpectNoneCall ExpectNone(string name);     // whether it doesn't arrive during .Within(window)
 IZlinkStreamSequenceCall   WaitForSequence(string name); // .Expect(p).Expect(p)… in order
+```
 
-// typed: ZlinkStreamTypedConnectorExtensions provides WaitFor<T>/ExpectNone<T>/WaitForSequence<T>
+The typed surface is an extension method on
+`ZlinkStreamTypedConnectorExtensions`. Each surface carries **both
+an overload that decides the packet name from `TPayload` and one where
+the caller states it**
+([Common Spec §10.1.1](../../32-stream-connector.en.md#1011-push-observation-surface--the-waitfor-family)).
+With no name given, `Options.NameResolver` decides the name from
+`typeof(TPayload)`.
+
+```csharp
+public static ZlinkStreamTypedWaitBuilder<TPayload>       WaitFor<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedWaitBuilder<TPayload>       WaitFor<TPayload>(this IZlinkStreamConnector connector, string name);
+public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(this IZlinkStreamConnector connector, string name);
+public static ZlinkStreamTypedSequenceBuilder<TPayload>   WaitForSequence<TPayload>(this IZlinkStreamConnector connector);
+public static ZlinkStreamTypedSequenceBuilder<TPayload>   WaitForSequence<TPayload>(this IZlinkStreamConnector connector, string name);
 ```
 
 The typed builder for negative observation and order verification
@@ -259,12 +328,16 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 }
 ```
 
-- `ExpectNone(name).Within(TimeSpan).Async(ct)` — **throws an error**
-  if it arrives within the window. The symmetric of `WaitFor`.
+- `ExpectNone(name).Within(TimeSpan).Async(ct)` — **throws a
+  `ZlinkStreamException` carrying `ValidationFailed`** if it arrives
+  within the window. The symmetric of `WaitFor`.
 - `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` —
   confirms a push of the same name arrives **in predicate order**, and
-  returns the payload list. Verifies **"arrived in order"**, not "N
-  arrived."
+  returns `IReadOnlyList<ZlinkStreamMessage<TPayload>>`. Verifies
+  **"arrived in order"**, not "N arrived."
+- **The predicate and the return value handle
+  `ZlinkStreamMessage<TPayload>`.** The argument `Where(...)` and
+  `Expect(...)` receive is the message, not the payload.
 - **A status-only surface isn't provided.** Since status is a payload
   field, it's expressed as `WaitFor<T>(name).Where(p => p.Status == …)`.
   The connector doesn't know which field is status.
@@ -290,10 +363,14 @@ this as the `ZlinkStreamTransport` enum (`Tcp`, `Tls`, `WebSocket`,
 ## 10. Close Reason
 
 The value set and meaning is owned by
-[Common Spec §6.3](../../32-stream-connector.en.md#63-close-reason).
-`.NET` expresses this as the `ZlinkStreamCloseReason` enum and
-**exposes it as the `Disconnected` event's argument
-`ZlinkStreamDisconnected.CloseReason`.**
+[Common Spec §6.2](../../32-stream-connector.en.md#62-close-reason).
+`.NET` expresses this as the `ZlinkStreamCloseReason` enum.
+
+**The read surface is the `IZlinkStreamConnector.CloseReason`
+property** (§3). Its type is `ZlinkStreamCloseReason?`, and it is `null`
+when the connector has never disconnected. The `Disconnected` event's
+argument `ZlinkStreamDisconnected.CloseReason` is a surface added on top
+of that property.
 
 **The `session-closing` frame's wire value is 1-6, and the `.NET`
 enum's internal ordinal is 0-5.** Since the codec explicitly converts
@@ -311,28 +388,46 @@ and the close reason as `ZlinkStreamCloseReason.TransportError`.
 **A connector outbound operation generates a UUIDv7 `flow_id` once,
 with no separate public option.** A follow-up operation started inside
 a callback **reuses the current inbound flow, and once the callback
-ends, cleans up the ambient flow.**
+ends, cleans up the ambient flow.** Since `.NET` provides an ambient
+execution context, a send call carries no argument stating the flow
+([Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)).
+
+A received message exposes the flow pair through the properties below.
+
+```csharp
+public sealed record ZlinkStreamMessage<TPayload>(
+    string Name,
+    ZlinkStreamMetadata Metadata,
+    TPayload Payload,
+    string? FlowId = null,                    // null when the diagnostics level is Off (§13)
+    ZlinkStreamFlowOrigin? FlowOrigin = null);
+
+public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
+```
+
+**The `flow_origin` wire value is 1–4, and the `ZlinkStreamFlowOrigin` internal
+ordinal is 0–3.** The same care the close reason needs (§10) applies here. The
+codec converts between the two explicitly, so **the enum is never cast to an
+integer and used as the wire value.**
 
 The wire representation is owned by
 [Common Spec §4.2](../../32-stream-connector.en.md) and
 [flow-correlation](../../../server/06-observability/04-flow-correlation.en.md).
 
-## 12. Metric
-
-The connector metric follows
-[Stream Connector Common Contract §6.2](../../32-stream-connector.en.md#62-connector-reconnect-instrument)'s
-name and closed label. The `.NET` connector publishes
-`zlink.stream.reconnects` to the `System.Diagnostics.Metrics`
-provider, and the application and E2E read it with `MeterListener`.
-**A metric listener failure doesn't change the send/request result or
-connection state.**
-
-## 13. Options And Validation
+## 12. Options And Validation
 
 **The default value is owned by
 [Common Spec §6.1](../../32-stream-connector.en.md).** `.NET`
 expresses this as a property of `ZlinkStreamConnectorOptions`
 (+ `ZlinkStreamHeartbeatOptions`, `ZlinkStreamReconnectOptions`).
+
+The **unlimited reconnect** that
+[Common Spec §6](../../32-stream-connector.en.md#6-connection-lifecycle)
+requires is expressed as `null` on a nullable `int`.
+
+```csharp
+public int? MaxAttempts { get; init; } = 3; // null means unlimited; otherwise it must be positive
+```
 
 The common contract's diagnostics level
 ([common spec §13](../../32-stream-connector.en.md#13-diagnostics-level)) is projected as
@@ -356,10 +451,18 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 {
     ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
 
-    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);      // changes the value without waiting
+    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level); // the async pair changing the same value
     // ...
 }
 ```
+
+`SetDiagnosticsLevelAsync` is the pair matching `.NET`'s async idiom,
+and it does not replace the synchronous surface
+[Common Spec §13](../../32-stream-connector.en.md#13-diagnostics-level)
+requires. The synchronous surface does not wait for the async pair to
+complete, so calling it inside a receive callback never makes that call
+wait on its own completion.
 
 `DiagnosticsLevel` reads straight through to `Options.DiagnosticsLevel`, and it always matches
 the level most recently applied by `SetDiagnosticsLevel` (so does the value `Options` exposes).
@@ -378,16 +481,25 @@ affects work already under way, only the next processing point that starts after
 
 **Validation contract:**
 
+The validation timing is owned by
+[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
+In `.NET`, `ZlinkStreamConnectorFactory.Create(options)` checks every
+option, and on a validation failure it builds no `IZlinkStreamConnector`
+instance and delivers the failure to the caller.
+
 | Violation | Failure |
 |---|---|
-| No endpoint | `ArgumentException` |
-| Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` **before starting connection** |
-| An invalid timeout/queue size/heartbeat/reconnect combination | `ValidationFailed` |
+| No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
+| Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
+| A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
+| An invalid timeout/queue size/heartbeat/reconnect combination | `ZlinkStreamException`'s `ValidationFailed` |
+| An undefined `ZlinkStreamDiagnosticsLevel` value | `ZlinkStreamException`'s `ValidationFailed` |
 
 Every timeout and queue size option must be **positive**, and the
-preview length **can't be negative.**
+preview length **can't be negative.** `MaxAttempts` must be `null` or
+positive.
 
-## 14. Regression Test
+## 13. Regression Test
 
 | Test Case | Verification Standard |
 |---------------|-----------|

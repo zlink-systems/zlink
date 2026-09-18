@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "filter는 node가 받는 message를 감싼다",
+    "subtitle": "등록 순서대로 들어가고 반대 순서로 빠져나온다 · Spot handler는 감싸지 않는다",
+    "output": "31-filter-scope.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 120, "gapY": 86, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "IN", "type": "frontend", "label": "받은 message", "sublabel": "channel · node 직접 · fanout", "row": 0, "col": 0 },
+    { "id": "F1", "type": "external", "label": "첫 번째 filter", "sublabel": "먼저 등록", "row": 0, "col": 1 },
+    { "id": "F2", "type": "external", "label": "두 번째 filter", "sublabel": "나중 등록", "row": 0, "col": 2 },
+    { "id": "H", "type": "backend", "label": "handler", "sublabel": "node가 등록", "row": 0, "col": 3 },
+    { "id": "SP", "type": "backend", "label": "Spot handler", "sublabel": "Spot이 등록", "row": 1, "col": 3 }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "filter가 감싸는 범위",
+      "wraps": ["F1", "F2", "H"],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    { "from": "IN", "to": "F1", "variant": "default" },
+    { "from": "F1", "to": "F2", "label": "next", "variant": "default" },
+    { "from": "F2", "to": "H", "label": "next", "variant": "default" },
+    { "from": "H", "to": "F2", "label": "반대 순서로 복귀", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "IN", "to": "SP", "label": "filter를 지나지 않는다", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "등록 순서가 실행 순서다",
+      "items": [
+        "등록한 순서대로 handler 앞을 지나고, next가 끝나면 반대 순서로 빠져나온다. 각 filter는 next를 최대 한 번 호출한다.",
+        "filter가 감싸는 것은 node가 받는 message다. Spot과 Actor가 소유한 handler, Spot이 등록하는 구독, STREAM session handler는 지나지 않는다."
+      ]
+    }
+  ]
+}

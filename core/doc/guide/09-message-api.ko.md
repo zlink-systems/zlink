@@ -13,12 +13,12 @@ title: "Message API와 ownership"
 
 `zlink_msg_t`는 message part 하나를 소유한다. 사용 전에 초기화하고, ownership이 move되거나 send에
 전달해 소비되지 않았다면 정확히 한 번 close한다. Whole-message send는 성공·실패 모두 배열의 모든
-part를 소비하며, 소비된 슬롯은 빈 초기화 상태로 남아 그대로 close하거나 다시 쓸 수 있다.
+part를 소비하며, 소비된 슬롯은 빈 초기화 상태로 남아 그대로 close하거나 다시 사용할 수 있다.
 
 ## Part 생성
 
 - `zlink_msg_init()`은 빈 part를 만든다.
-- `zlink_msg_init_size()`는 쓸 수 있는 storage를 할당한다.
+- `zlink_msg_init_size()`는 사용할 수 있는 storage를 할당한다.
 - `zlink_msg_init_data()`는 caller가 제공한 data와 release callback을 연결한다.
 - `zlink_msg_copy()`는 storage를 공유하고 `zlink_msg_move()`는 ownership을 옮긴다.
 

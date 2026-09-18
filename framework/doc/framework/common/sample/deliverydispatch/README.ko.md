@@ -448,7 +448,7 @@ delivery를 각각 구독하므로, 구독 호출마다 찍으면 두 번이 되
 
 그 단계를 실행하지 않으면 이 행들은 통과할 수 없으며, 통과하지 못하는 것이 맞다.
 
-`topology=ready`는 쓰지 않는다. 이 문자열은 구현마다 bind 전·후·runner 자체 출력으로 갈려
+`topology=ready`는 사용하지 않는다. 이 문자열은 구현마다 bind 전·후·runner 자체 출력으로 갈려
 같은 리터럴이 서로 다른 순간을 뜻했다. Readiness는 위 표의 두 행으로만 확인한다.
 
 완료 marker는 셋이며 client가 출력한다.
@@ -463,7 +463,7 @@ delivery를 각각 구독하므로, 구독 호출마다 찍으면 두 번이 되
 대신하지 않는다 — 내일 client가 marker를 안 찍어도 runner가 알아채야 한다.
 
 Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
-적용하며 `.sh`와 `.ps1`이 같은 값을 쓴다. 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
+적용하며 `.sh`와 `.ps1`이 같은 값을 사용한다. 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
 다섯 언어 모두 `.sh`와 `.ps1`을 함께 제공한다 — 지금 C++·Java·Kotlin에는 `.ps1`이 없다.
 
 모든 행이 통과하면 runner가 마지막에 `deliverydispatch-placement=completed`를 출력한다. 한

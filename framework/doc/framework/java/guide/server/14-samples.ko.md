@@ -10,11 +10,12 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Java"
 # 14. 샘플 고르기 — 내 문제에 가까운 예제부터
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 13. 주요 타입 사용 색인](13-interface-catalog.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
+[가이드 홈](README.ko.md) | [이전: 16. Options — 설정 목록과 기본값](16-options.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
-다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [C++](../../../cpp/guide/server/14-samples.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/14-samples.ko.md) · [Node/TypeScript](../../../node/guide/server/14-samples.ko.md)
+다른 언어로 보기 — [C++](../../../cpp/guide/server/14-samples.ko.md) · [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/14-samples.ko.md) · [Node/TypeScript](../../../node/guide/server/14-samples.ko.md)
+{ .zlink-langswitch }
 <!-- language-switch:end -->
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 어떤 샘플부터 보면 좋은지 고르는
@@ -36,9 +37,9 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Java"
 | 온라인 게임 서버 전체 — framework 기능도 가장 많이 나온다 | [Bingo](#3-bingo--온라인-게임-서버-구축) | 접속 gateway·인증/매칭·룸 서버로 나눈 통상적인 게임 서버 구성 |
 | 라이브 채팅 상담 시스템 | [SupportChat](#4-supportchat--라이브-채팅-상담-시스템-구축) | 상담원 한 명이 여러 대화를 동시에 처리하는 actor·라우팅 구성 |
 | 배차 시스템 | [DeliveryDispatch](#5-deliverydispatch--배차-시스템-구축) | 요청 생성 → 수행자 선택 → 무응답 시 재배정 → 당사자에게 전달 |
-| 주문 처리 시스템 | [ShoppingMall](#6-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 쓰는 무손실 event sourcing |
+| 주문 처리 시스템 | [ShoppingMall](#6-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 사용하는 무손실 event sourcing |
 | 퀘스트·미션 진행 시스템 | [GameQuest](#7-gamequest--퀘스트-진행-시스템-구축) | 유실을 허용하는 대신 실시간성을 얻는 owner 처리 |
-| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 노드에 무언가를 할 때 어떤 표면을 고르는가 |
+| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 node에 무언가를 할 때 어떤 표면을 고르는가 |
 
 기능 쪽에서 거꾸로 고르려면 [01. Overview](01-overview.ko.md)의 도입 순서를
 먼저 본다.
@@ -67,10 +68,9 @@ sample이다. C++은 모든 sample에서 handler를 직접 등록하지만, 수�
 100에 도달하면 room Spot이 milestone을 Logical Multicast로 publish하고, 다른 Play 서버의
 Entry Spot에 등록된 observer handler가 그것을 받아 관전 client로 push한다.
 
-- 짝이 되는 장: [05-channel-messaging](05-channel-messaging.ko.md)(ClientServer channel),
-  [06-spot](06-spot.ko.md)(User Spot 생성), [09-stream](09-stream.ko.md)
+- 짝이 되는 장: [Channel 메시징](20-channel-messaging.ko.md)(ClientServer channel),
+  [Spot](21-spot.ko.md)(User Spot 생성), [STREAM](23-stream.ko.md)
 - 시나리오: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) · payload JSON
-- [02. Getting Started](02-getting-started.ko.md)이 이 샘플을 따라간다. 처음 읽는다면 여기부터.
 
 ## 3. Bingo — 온라인 게임 서버 구축
 
@@ -102,9 +102,9 @@ framework가 current owner를 찾아 remote Spot join을 실행한다. 이후 ro
 payload는 이 샘플만 Protobuf다. 역할과 계약 수가 많은 gateway형 게임이라 언어별 샘플이
 같은 필드와 wire 이름을 유지하도록 schema를 기준으로 두었다.
 
-- 짝이 되는 장: [06-spot](06-spot.ko.md)(세 종류 Spot이 모두 나온다),
-  [07-actor-spot](07-actor-spot.ko.md), [08-actor-session](08-actor-session.ko.md),
-  [10-location](10-location.ko.md)
+- 짝이 되는 장: [활성화와 수명](34-activation-lifetime.ko.md)(종류별 차이가 모두 나온다),
+  [Actor](22-actor.ko.md), [Session과 Actor 연결](24-actor-session.ko.md),
+  [Location](25-location.ko.md)
 - 시나리오: [Bingo](../../../common/sample/bingo/README.ko.md) · payload Protobuf
 - 06과 07의 등록 코드 예시가 이 샘플에서 나온다.
 
@@ -144,8 +144,8 @@ session이 bind되어 대화 상태가 그대로 이어지고, 일정 시간 메
 이 구성은 상담에만 해당하지 않는다. **한 사용자가 여러 방·여러 작업에 동시에 참여하는
 시스템**은 모두 같은 모양이 된다.
 
-- 짝이 되는 장: [08-actor-session](08-actor-session.ko.md), [06-spot](06-spot.ko.md)(timer),
-  [09-stream](09-stream.ko.md)
+- 짝이 되는 장: [Session과 Actor 연결](24-actor-session.ko.md), [Timer와 worker](36-timer-worker.ko.md),
+  [STREAM](23-stream.ko.md)
 - 시나리오: [SupportChat](../../../common/sample/supportchat/README.ko.md) · payload JSON
 
 ## 5. DeliveryDispatch — 배차 시스템 구축
@@ -159,13 +159,13 @@ framework의 어느 기능에 대응되는지** 보여 주는 것이다. 택시 
 <iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-delivery.html" target="_blank">↗ 크게 보기</a></p>
 
-외부 경계는 그대로 웹 기술을 쓴다. 고객은 HTTP로 배송을 만들고 stream으로 상태를 받는다.
+외부 경계는 그대로 웹 기술을 사용한다. 고객은 HTTP로 배송을 만들고 stream으로 상태를 받는다.
 바뀌는 것은 그 안쪽이다 — session map이나 socket registry를 직접 두는 대신 고객 actor에
 bind된 session이 그 자리를 대신하고, 배송원 선택과 재배정은 dispatch worker와 courier
 actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배차 두 흐름을 모두 검증한다.
 
-- 짝이 되는 장: [05-channel-messaging](05-channel-messaging.ko.md),
-  [07-actor-spot](07-actor-spot.ko.md), [09-stream](09-stream.ko.md)
+- 짝이 되는 장: [Channel 메시징](20-channel-messaging.ko.md),
+  [Actor](22-actor.ko.md), [STREAM](23-stream.ko.md)
 - 시나리오: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md) · payload JSON
 
 ## 6. ShoppingMall — 주문 처리 시스템 구축
@@ -178,13 +178,13 @@ actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배
 <p><a href="/common/diagrams/14-shoppingmall.html" target="_blank">↗ 크게 보기</a></p>
 
 이 샘플에서 owner Spot의 이득은 처리량이 아니다. **재시도와 중단에 안전한 다단계 처리를
-saga 오케스트레이터·조율 상태·스케줄러·outbox 같은 별도 조율 계층 없이 순차 코드로 쓴다는
-점**이 핵심이다. 웹 구성에서 바깥 인프라로 조립하던 "진행 지점 저장 · 다음 단계 조율 ·
+saga 오케스트레이터·조율 상태·스케줄러·outbox 같은 별도 조율 계층 없이 순차 코드로 사용한다는
+점**이 핵심이다. 웹 구성에서 바깥 인프라로 직접 만들던 "진행 지점 저장 · 다음 단계 조율 ·
 멈춘 작업 재개"가 이벤트 스트림 하나로 접힌다. 중복 클릭은 멱등 키로, 이전 owner가 남아
 있는 순간은 기대 버전으로, 멈춘 주문은 명시적 재개 명령으로 처리한다. 조회 모델은 깨지면
 이벤트를 다시 재생해 만든다.
 
-- 짝이 되는 장: [06-spot](06-spot.ko.md), [12-operations](12-operations.ko.md)
+- 짝이 되는 장: [Spot](21-spot.ko.md), [12-operations](12-operations.ko.md)
 - 시나리오: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) · payload JSON
 - event sourcing 자체는 framework 기능이 아니라 application이 Spot 위에 올린 구성이다.
 
@@ -203,8 +203,8 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 명시적 재개 같은 무손실 장치를 두지 않고, 누락은 snapshot 기반 보정으로 흡수한다. 실제
 재화 지급처럼 무손실이 필요한 부분은 별도 tier로 분리한다.
 
-- 짝이 되는 장: [06-spot](06-spot.ko.md),
-  [08-actor-session](08-actor-session.ko.md)
+- 짝이 되는 장: [Spot](21-spot.ko.md),
+  [Session과 Actor 연결](24-actor-session.ko.md)
 - 시나리오: [GameQuest](../../../common/sample/event/gamequest.ko.md) · payload JSON
 
 ## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
@@ -212,7 +212,7 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 > ZoneWorld는 다섯 framework 언어에 모두 구현된 공통 sample이다. 각 구현은 이 장과 공통
 > 시나리오가 정한 topology, actor relocation, 운영 fanout과 browser 검증 기준을 따른다.
 
-월드를 구역으로 나눠 `ZoneNode` 여러 대가 나눠 맡고, 어느 노드가 어느 구역을 맡는지는
+월드를 구역으로 나눠 `ZoneNode` 여러 대가 나눠 맡고, 어느 node가 어느 구역을 맡는지는
 Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 actor가 인접 zone Spot에
 join하고, owner가 다르면 relocation이 일어나지만 client 연결은 유지된다. bound session이
 없는 봇 actor도 Spot timer로 같은 경계 이동을 한다.
@@ -220,23 +220,23 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 <iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.html" title="ZoneWorld 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-zoneworld.html" target="_blank">↗ 크게 보기</a></p>
 
-이 샘플의 교육 목표는 **"여러 노드에 무언가를 한다"가 상황마다 다른 표면을 요구한다**는
+이 샘플의 교육 목표는 **"여러 node에 무언가를 한다"가 상황마다 다른 표면을 요구한다**는
 것이다.
 
-| 하려는 일 | 쓰는 표면 |
+| 하려는 일 | 사용하는 표면 |
 | --- | --- |
-| 어느 노드가 등록·연결됐는지 본다 | runtime event — 요청이 아니라 변화 알림이고, 종료된 노드에는 요청할 대상이 없다 |
-| 전 노드에 공지한다 | classic fanout — 발행자가 노드 목록을 갖지 않는다 |
-| 특정 노드를 점검 모드로 바꾼다 | desired state + fanout — 각 노드가 자기 `NodeId` 몫만 적용한다 |
+| 어느 node가 등록·연결됐는지 본다 | runtime event — 요청이 아니라 변화 알림이고, 종료된 node에는 요청할 대상이 없다 |
+| 전 node에 공지한다 | classic fanout — 발행자가 node 목록을 갖지 않는다 |
+| 특정 node를 점검 모드로 바꾼다 | desired state + fanout — 각 node가 자기 `NodeId` 몫만 적용한다 |
 | 한 zone의 모든 플레이어에게 보낸다 | zone Spot → 소속 actor들 → 각자의 bound session |
 | 특정 플레이어 한 명에게 보낸다 | 그 actor → 자기 bound session |
 
 경계 근처 상태는 인접 zone별 topic으로 Logical Multicast한다. 하나의 topic을 여러 zone이
 구독하면 무관한 플레이어까지 전달되기 때문에 보내는 zone과 받는 zone을 topic 이름에 모두
-넣는다. **브라우저 UI가 있는 유일한 샘플**이라 경계 이동과 노드 점검 전환을 눈으로 확인한다.
+넣는다. **브라우저 UI가 있는 유일한 샘플**이라 경계 이동과 node 점검 전환을 눈으로 확인한다.
 
-- 짝이 되는 장: [07-actor-spot](07-actor-spot.ko.md)(relocation),
-  [11. Monitoring](11-monitoring.ko.md), [12-operations](12-operations.ko.md)
+- 짝이 되는 장: [Relocation](37-relocation.ko.md),
+  `11. Monitoring` 장, [12-operations](12-operations.ko.md)
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
 - server와 runner는 다섯 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
   browser smoke는 같은 TypeScript client를 사용한다.
@@ -261,7 +261,7 @@ ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/r
 
 - 샘플의 언어 중립 시나리오와 검증 기준: [공통 sample](../../../common/sample/README.ko.md)
 - 언어별 샘플 디렉터리 구성: 각 언어 샘플 루트의 `README`
-- 기능별 사용법: [05-channel-messaging](05-channel-messaging.ko.md) ~
+- 기능별 사용법: [Channel 메시징](20-channel-messaging.ko.md) ~
   [12-operations](12-operations.ko.md)
 
 <script>

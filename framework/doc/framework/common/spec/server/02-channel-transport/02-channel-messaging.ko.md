@@ -131,7 +131,7 @@ Framework는 후보마다 누적값 하나를 유지하며 다음 절차로 targ
    식별자는 topology마다 다르다 — RouteMesh 경로는
    [NodeRid](../00-foundation/02-glossary.ko.md#meshnode), ClientServer 경로는 Server RID다. 비교는
    식별자의 byte 열을 부호 없는 값으로 앞에서부터 비교하며, 짧은 쪽이 접두사이면 짧은 쪽이
-   앞선다. 연결 경로나 등록 출처처럼 같은 target을 가리키는 다른 값을 식별자로 쓰면
+   앞선다. 연결 경로나 등록 출처처럼 같은 target을 가리키는 다른 값을 식별자로 사용하면
    구현마다 순서가 갈린다.
 3. 고른 후보의 누적값에서 후보 전체의 weight 합을 뺀다.
 
@@ -165,7 +165,7 @@ target에는 같은 문서 [§4의 물리 연결 그림](01-channel-topology.ko.
 기존 RouteMesh peer 연결로 보내며 Channel 등록은 새 socket을 만들지 않는데, MeshNode는 자기
 자신과 peer 연결을 맺지 않는다. 따라서 자기 자신만 그 ChannelName의 Server인 MeshNode에서
 RouteMesh select-one을 호출하면 후보가 없으며, 이때는 target 없음으로 실패한다. 같은
-process에서 처리하려면 ClientServer 경로를 쓴다.
+process에서 처리하려면 ClientServer 경로를 사용한다.
 
 두 경로는 후보가 아직 없을 때의 처리도 다르다. RouteMesh는 위와 같이 즉시 target 없음으로
 실패한다. ClientServer는 ready 후보가 없으면 호출 시점에 제한된 시간 동안 기다린 뒤
@@ -237,7 +237,7 @@ RID 또는 server identity를 application 결과로 반환하지 않는다.
   - 누적값 상태와 cursor 증가는 하나의 순서로 정렬한다. 후보 교체와 선택이 동시에 일어나면
     어느 상태를 기준으로 고른 것인지 정해지지 않기 때문이다. 단일 cursor를 여러 스레드가
     증가시키면 그 동기화 비용이 send 경로에 남으므로, channel별로 선택 경로를 하나만 두거나
-    shard별 독립 상태를 쓴다. Shard별 독립 상태는 shard마다 결과 순서가 달라져 위 재현성
+    shard별 독립 상태를 사용한다. Shard별 독립 상태는 shard마다 결과 순서가 달라져 위 재현성
     계약을 만족하지 못하므로, channel별 단일 경로를 택한다.
   - 후보 배열·정렬·집합 생성은 호출 경로에 두지 않는다. 후보 목록과 선택 순서를 함께
     준비해 두고, 호출은 읽기만 한다.
@@ -249,7 +249,7 @@ RouteMesh는 논리 node를 고른 뒤 그 NodeRid로 직접 지정해 보내고
 후보 server 중 하나를 고른 뒤 그 server 전용 연결로 제출한다. 두 경로 모두 target을 정한
 뒤 이미 존재하는 연결로 보내므로, 하위 transport에는 그 시점에 고를 여지가 남지 않는다.
 
-ClientServer transport가 등록되지 않은 channel에서만 쓰는 수동 연결 fallback은 다르다. 이
+ClientServer transport가 등록되지 않은 channel에서만 사용하는 수동 연결 fallback은 다르다. 이
 경로는 socket 하나에 후보 endpoint를 모두 알리고 대상을 지정하지 않은 채 제출하므로, 실제
 선택은 Core의 load balancer가 한다.
 
@@ -434,7 +434,7 @@ send timeout이 만료될 때의 오류는
 정한 전달 보장은 바뀌지 않는다. `NoDrop`은 HWM 때문에 일부 subscriber만 event를 잃는 동작을
 막을 뿐이다.
 
-Spot의 [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast)는 PUB/SUB socket을 쓰지 않고
+Spot의 [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast)는 PUB/SUB socket을 사용하지 않고
 MeshNode 연결로 각 참여 node에 전달하므로 이 손실 규칙의 대상이 아니다.
 
 ### Subscriber가 받는 topic

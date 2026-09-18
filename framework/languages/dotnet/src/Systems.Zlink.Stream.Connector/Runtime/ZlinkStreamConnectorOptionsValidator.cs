@@ -1,12 +1,26 @@
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
+/// <summary>
+///     Checks every connector option before a connection is attempted
+///     (stream-connector spec §6.3, .NET spec §12).
+/// </summary>
+/// <remarks>
+///     Every failure leaves through <see cref="ZlinkStreamException" /> so the caller can
+///     read the code off it. A standard .NET exception would not carry one, leaving the
+///     caller unable to tell <see cref="ZlinkStreamErrorCode.ValidationFailed" /> from
+///     <see cref="ZlinkStreamErrorCode.ConfigurationError" /> (spec §9.2).
+/// </remarks>
 internal static class ZlinkStreamConnectorOptionsValidator
 {
     public static void Validate(ZlinkStreamConnectorOptions options)
     {
-        if (options.Endpoint is null) throw new ArgumentException("Endpoint is required.", nameof(options));
+        if (options.Endpoint is null) throw Validation("Endpoint is required.");
 
+        // Endpoint scheme and transport agreement, plus unsupported schemes.
         ZlinkStreamTransportFactory.ValidateTransport(options);
+
+        if (options.Transport is { } transport && !Enum.IsDefined(transport))
+            throw Validation("Transport is invalid.");
 
         if (options.NameResolver is null)
             throw Validation("NameResolver is required.");
@@ -30,8 +44,12 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxReceivePayloadSize must be positive.");
         if (options.MaxPendingDispatchCallbacks <= 0)
             throw Validation("MaxPendingDispatchCallbacks must be positive.");
+        if (!Enum.IsDefined(options.DispatchMode))
+            throw Validation("DispatchMode is invalid.");
         if (!Enum.IsDefined(options.DiagnosticsLevel))
             throw Validation("DiagnosticsLevel is invalid.");
+
+        ValidateCompression(options);
     }
 
     private static void ValidateHeartbeat(ZlinkStreamHeartbeatOptions heartbeat)
@@ -56,6 +74,19 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("Reconnect BackoffFactor must be at least 1.0.");
         if (reconnect.MaxAttempts <= 0)
             throw Validation("Reconnect MaxAttempts must be null or positive.");
+    }
+
+    private static void ValidateCompression(ZlinkStreamConnectorOptions options)
+    {
+        if (!Enum.IsDefined(options.Compression))
+            throw Validation("Compression is invalid.");
+
+        // A codec paired with compression turned off is two options disagreeing, which
+        // is a ConfigurationError rather than an out-of-range value (spec §6.3).
+        if (options.Compression == ZlinkStreamCompression.None && options.CompressionCodec is not null)
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ConfigurationError,
+                "CompressionCodec cannot be set when Compression is None.");
     }
 
     private static ZlinkStreamException Validation(string message) =>

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Three kinds of Spot — what creates them",
+    "subtitle": "A different party creates each one, which decides who names the id and which callbacks arrive",
+    "output": "34-spot-kinds-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 80,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "F",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "Object Server startup",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "application",
+      "sublabel": "creates via spot manager",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "M",
+      "type": "frontend",
+      "label": "first message",
+      "sublabel": "arrives for that id",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "E",
+      "type": "backend",
+      "label": "Entry Spot",
+      "sublabel": "one per Object Server",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "U",
+      "type": "backend",
+      "label": "User Spot",
+      "sublabel": "room · stage · zone",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "I",
+      "type": "backend",
+      "label": "Instance Spot",
+      "sublabel": "a unit of work per id",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "F",
+      "to": "E",
+      "label": "created at startup",
+      "variant": "default"
+    },
+    {
+      "from": "A",
+      "to": "U",
+      "label": "create one",
+      "variant": "default"
+    },
+    {
+      "from": "M",
+      "to": "I",
+      "label": "arrival is creation",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The creator decides the rest",
+      "items": [
+        "An Entry Spot, created by the Framework, has no stable type and no place to refuse creation.",
+        "An Instance Spot has no create call. The first message selects or creates the instance and is then handled by it."
+      ]
+    }
+  ]
+}

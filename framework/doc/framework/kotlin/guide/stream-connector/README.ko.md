@@ -11,13 +11,15 @@ network connection을 만들지는 않는다.
 
 ## 1. 의존성 추가
 
-사용 중인 ZLink 배포 버전을 `<version>`에 지정한다. Kotlin 모듈이 Java connector를 public
-dependency로 제공하므로 application에서 connector 모듈을 다시 선언하지 않는다.
+Kotlin 모듈이 Java connector를 public dependency로 제공하므로 application에서 connector 모듈을
+다시 선언하지 않는다. **다만 이 아티팩트는 `zlink-framework-core`도 함께 데려온다.** client에
+connector만 필요하면 `zlink-stream-connector`를 직접 선언하고 `CompletionStage.await()`로
+coroutine 경계를 만든다.
 
 ```kotlin
 dependencies {
     // Java connector와 coroutine await, typed wait, Flow wrapper를 함께 제공한다.
-    implementation("systems.zlink:zlink-framework-kotlin:<version>")
+    implementation("systems.zlink:zlink-framework-kotlin:0.16.0")
 }
 ```
 

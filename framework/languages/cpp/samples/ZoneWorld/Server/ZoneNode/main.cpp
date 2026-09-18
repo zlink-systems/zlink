@@ -947,8 +947,10 @@ int main (int argc, char **argv)
         if (configuration.mesh_advertise_host)
             mesh.set_advertise_host (*configuration.mesh_advertise_host);
         mesh.listen (configuration.mesh_endpoint);
+        // --8<-- [start:doc-multi-channel-register]
         mesh.channel (names_t::zone_channel).server ();
         mesh.channel (names_t::report_channel).client ();
+        // --8<-- [end:doc-multi-channel-register]
         mesh.channel (names_t::ops_channel (configuration.node_id))
           .server ()
           .add_request_handler<apply_maintenance_handler_t, apply_node_maintenance_req_t,

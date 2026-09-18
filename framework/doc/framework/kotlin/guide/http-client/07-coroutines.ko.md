@@ -7,7 +7,7 @@
 
 ## non-blocking 보장
 
-내부 전송은 네이티브 비동기 I/O를 쓰고 `suspend` 확장이 그 `CompletionStage`를
+내부 전송은 네이티브 비동기 I/O를 사용하고 `suspend` 확장이 그 `CompletionStage`를
 `kotlinx-coroutines-jdk8`의 `await()`로 잇는다. 따라서 응답을 기다리는 동안 **어떤 스레드도
 park되지 않는다.** redirect 루프·retry 루프도 hop 사이에 스레드를 점유하지 않는다.
 
@@ -15,7 +15,8 @@ park되지 않는다.** redirect 루프·retry 루프도 hop 사이에 스레드
 suspend fun notifyMatchResult(client: ZLinkHttpClient, result: MatchResult) {
     val ack = client.post("/matches/${result.matchId}/result").body(result).await<AckRes>()
     if (!ack.body().accepted) {
-        throw ZLinkFrameworkException("match result was not accepted")
+        throw ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted")
     }
 }
 ```
@@ -26,7 +27,7 @@ suspend fun notifyMatchResult(client: ZLinkHttpClient, result: MatchResult) {
 ## handler에서 — suspend로 합성
 
 framework handler·actor·spot 코드는 suspend 함수 안에서 `await`/`fetch`를 직접 호출해
-순차로 합성한다. `runBlocking`은 handler 스레드를 막으므로 쓰지 않는다.
+순차로 합성한다. `runBlocking`은 handler 스레드를 막으므로 사용하지 않는다.
 
 | 호출 위치 | 권장 |
 |-----------|------|
@@ -42,15 +43,19 @@ framework handler·actor·spot 코드는 suspend 함수 안에서 `await`/`fetch
 val results = (1..20).map { async { client.get("/r").awaitRaw() } }.awaitAll()
 ```
 
-## resume dispatcher
+## 재개 스레드
 
-`await()`는 호출한 coroutine의 `CoroutineDispatcher`에서 재개된다. 재개 위치를 바꾸려면
+suspend 확장은 dispatcher를 지정하지 않고 `CompletionStage`에 continuation을 연결한다. 따라서 continuation은
+호출한 coroutine의 dispatcher가 아니라 **transport executor 스레드**(`zlink-http-client`)에서
+재개된다. 이어지는 계산을 특정 dispatcher에 두려면 그 계산을
 `withContext(dispatcher) { ... }`로 감싼다.
 
 ```kotlin
-val report = withContext(Dispatchers.IO) {
-    client.get("/reports/summary").fetch<Report>()
-}
+val report = client.get("/reports/summary").fetch<Report>()
+val rendered = withContext(Dispatchers.Default) { render(report) }
 ```
+
+coroutine을 취소해도 이미 제출된 HTTP operation은 취소되지 않는다. 취소는 호출자의 대기만
+끝내고, retry와 body 읽기는 그대로 진행된다.
 
 [다음: Streaming →](08-streaming.ko.md)

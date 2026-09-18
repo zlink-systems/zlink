@@ -555,7 +555,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
                 using var currentFlow = ZLinkFlowContext.Enter(
                     decoded.FlowId,
-                    decoded.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
+                    decoded.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
                     _flow.CaptureEnabled,
                     ZLinkFlowOrigin.Inbound);
 

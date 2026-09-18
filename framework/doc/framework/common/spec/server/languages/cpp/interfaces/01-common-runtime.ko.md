@@ -304,7 +304,7 @@ logical timer registration과 callback metadata만 사용한다.
 | **actor factory 중복 정책** | 같은 actor id 중복은 **`already_exists`**, actor id/type 불일치는 **`type_mismatch`** 로 보고한다 |
 
 **`actor_ref_t`의 `node_rid`·`actor_id`·`generation`은 bind·relay·push round-trip에서 보존된다.**
-**local actor relay와 remote actor relay는 같은 public 표면을 쓴다.**
+**local actor relay와 remote actor relay는 같은 public 표면을 사용한다.**
 
 ## 7. Public 타입 카탈로그
 

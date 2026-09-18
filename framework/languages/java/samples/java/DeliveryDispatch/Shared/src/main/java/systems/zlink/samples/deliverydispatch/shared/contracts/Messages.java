@@ -17,6 +17,7 @@ public final class Messages {
         Failed
     }
 
+    // --8<-- [start:doc-explicit-packet-name]
     @ZLinkPacket("CreateDeliveryReq")
     public record CreateDeliveryReq(
         String deliveryId,
@@ -24,6 +25,7 @@ public final class Messages {
         String pickupAddress,
         String dropoffAddress) {
     }
+    // --8<-- [end:doc-explicit-packet-name]
 
     public record CreateDeliveryRes(String deliveryId) {
     }

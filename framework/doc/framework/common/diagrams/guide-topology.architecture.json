@@ -1,0 +1,171 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다",
+    "subtitle": "HTTP로 들어온 요청은 채널을 지나 SPOT에 닿고, 실시간 연결은 stream으로 들어온다",
+    "output": "guide-topology.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 4,
+    "gapX": 150,
+    "gapY": 84,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "CL",
+      "type": "frontend",
+      "label": "클라이언트 앱",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "HTTP",
+      "type": "external",
+      "label": "HTTP API",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "APIC",
+      "type": "backend",
+      "label": "채널 client",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "REG",
+      "type": "database",
+      "label": "Registry",
+      "sublabel": "discovery",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "ST",
+      "type": "messagebus",
+      "label": "stream",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "CORES",
+      "type": "backend",
+      "label": "채널 server",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "AG",
+      "type": "messagebus",
+      "label": "actor gateway",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "SPOT",
+      "type": "frontend",
+      "label": "SPOT",
+      "sublabel": "상태 단위",
+      "row": 2,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "진입 서버",
+      "wraps": [
+        "HTTP",
+        "APIC"
+      ],
+      "pad": 26
+    },
+    {
+      "kind": "region",
+      "label": "도메인 서버",
+      "wraps": [
+        "ST",
+        "CORES",
+        "AG",
+        "SPOT"
+      ],
+      "pad": 26
+    }
+  ],
+  "connections": [
+    {
+      "from": "CL",
+      "to": "HTTP",
+      "label": "① HTTP 요청",
+      "variant": "default"
+    },
+    {
+      "from": "HTTP",
+      "to": "APIC",
+      "variant": "default"
+    },
+    {
+      "from": "APIC",
+      "to": "CORES",
+      "label": "② 서버 간 메시지",
+      "variant": "default",
+      "labelDy": 38
+    },
+    {
+      "from": "CORES",
+      "to": "SPOT",
+      "variant": "default"
+    },
+    {
+      "from": "CL",
+      "to": "ST",
+      "label": "③ 실시간 접속",
+      "variant": "default"
+    },
+    {
+      "from": "ST",
+      "to": "AG",
+      "variant": "default"
+    },
+    {
+      "from": "AG",
+      "to": "SPOT",
+      "variant": "default"
+    },
+    {
+      "from": "APIC",
+      "to": "REG",
+      "label": "주소 해석",
+      "variant": "dashed"
+    },
+    {
+      "from": "CORES",
+      "to": "REG",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "두 갈래로 들어온다",
+      "items": [
+        "요청은 HTTP API → 채널 client → 채널 server → SPOT으로 간다. 서버끼리는 주소가 아니라 이름으로 부른다.",
+        "실시간 연결은 stream으로 들어와 actor gateway를 지나 같은 SPOT에 닿는다.",
+        "채널 client와 채널 server는 Registry에서 이름에 해당하는 node를 찾는다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

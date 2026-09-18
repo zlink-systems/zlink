@@ -43,7 +43,7 @@ locationQuery.topology(filter, pageSize = 200).collect { entry -> ... }
 ```
 
 **옵션.** `listTopology`/`listServiceSummaries`의 `page` 인자는 `ZLinkPageRequest.firstPage()`를
-기본값으로 쓴다 — 나머지 filter·page 의미는 Java 레퍼런스의 `listTopology`/`listServiceSummaries`
+기본값으로 사용한다 — 나머지 filter·page 의미는 Java 레퍼런스의 `listTopology`/`listServiceSummaries`
 항목과 같다. `topology(filter, pageSize = 100)`는 `Flow<ZLinkLocationTopologyEntry>`를 반환하며
 내부에서 continuation token을 따라 다음 페이지를 자동으로 이어 조회한다.
 
@@ -51,7 +51,7 @@ locationQuery.topology(filter, pageSize = 200).collect { entry -> ... }
 authority row, Store key, provider version과 scan cursor는 추가하지 않는다.
 
 **선택 기준.** 한 페이지 결과만 필요하면 suspend 확장을, 전체 항목을 순회하려면 `Flow` 버전을
-쓴다.
+사용한다.
 
 ---
 

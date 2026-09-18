@@ -2,8 +2,8 @@
 
 [레퍼런스 목차](README.ko.md)
 
-이 category는 STREAM session 코드 안에서 쓰는 진입점(`IZLinkSessionClient`, `IZLinkSessionActors`,
-`IZLinkSessionActor`, `IZLinkStream`)과 Actor 코드 안에서 bound session에 쓰는 진입점
+이 category는 STREAM session 코드 안에서 사용하는 진입점(`IZLinkSessionClient`, `IZLinkSessionActors`,
+`IZLinkSessionActor`, `IZLinkStream`)과 Actor 코드 안에서 bound session에 사용하는 진입점
 (`IZLinkBoundSession`)을 다룬다. 정확한 signature는
 [STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-stream-session.ko.md)와
 [Bound STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.ko.md)가
@@ -59,8 +59,8 @@ await Context.Client
 **완료 결과.** messaging-execution category의 one-way 완료 kind와 같다 — socket send
 timeout까지 기다린 뒤 없으면 `DeadlineExceeded`, connection 단절은 `Unavailable`.
 
-**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 쓴다. Client의
-request에 답할 때는 `Reply`를 쓴다.
+**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 사용한다. Client의
+request에 답할 때는 `Reply`를 사용한다.
 
 ---
 
@@ -83,8 +83,8 @@ await Context.Client
 STREAM socket send timeout만 사용한다. Timeout이나 cancellation 뒤에는 late reply를 보내지
 않는다.
 
-**선택 기준.** `ZLinkSessionDispatchContext.CanReply`가 true인 packet(request)에만 쓴다. Client가
-보낸 것이 아닌 새 메시지를 보내려면 `Send`를 쓴다.
+**선택 기준.** `ZLinkSessionDispatchContext.CanReply`가 true인 packet(request)에만 사용한다. Client가
+보낸 것이 아닌 새 메시지를 보내려면 `Send`를 사용한다.
 
 ---
 
@@ -128,7 +128,7 @@ operation이다. `NotifyDisconnectedAsync`는 connection이 유지된 상태에�
 notification이며 callback terminal까지 기다린다. Physical disconnect는 Framework가 자동으로
 현재 binding 전체에 통지하므로 이 호출이 그 대체 경로는 아니다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 쓴다. Request에 대한 응답은
+**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 사용한다. Request에 대한 응답은
 Session 쪽 `Reply`가 처리한다.
 
 ---
@@ -150,15 +150,15 @@ await Context.BoundSession
 새 request operation을 제공하지 않는다 — client request에 대한 reply는 Actor request handler의
 반환값으로 처리한다.
 
-**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 쓴다. Session 쪽에서 직접 보내려면 위
-`Send`(Session 코드 안) 항목을 쓴다. 연결을 끊으려면 `Context.BoundSession.DisconnectAsync(ct)`를
-쓴다.
+**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 사용한다. Session 쪽에서 직접 보내려면 위
+`Send`(Session 코드 안) 항목을 사용한다. 연결을 끊으려면 `Context.BoundSession.DisconnectAsync(ct)`를
+사용한다.
 
 ---
 
 ## `Write` (raw transport handle)
 
-Typed call을 거치지 않고 STREAM transport에 직접 payload를 쓴다. Session callback의 `IZLinkStream`
+Typed call을 거치지 않고 STREAM transport에 직접 payload를 사용한다. Session callback의 `IZLinkStream`
 handle에서 호출한다.
 
 ```csharp
@@ -172,10 +172,10 @@ bool written = stream.Write(ZLinkMessage.From(rawFrame), SendFlags.None);
 | `flags: SendFlags` | `SendFlags.None` | 저수준 전송 flag |
 
 **완료 결과.** 동기 `bool`을 반환한다 — admission 성공 여부만 알려주며 typed call과 같은 예외
-기반 완료 kind를 쓰지 않는다.
+기반 완료 kind를 사용하지 않는다.
 
-**선택 기준.** Typed `Send`/`Reply` call이 감당하지 못하는 저수준 전송이 필요할 때만 쓴다. 일반
-업무 메시징에는 `Send`나 `Reply`를 쓴다.
+**선택 기준.** Typed `Send`/`Reply` call이 감당하지 못하는 저수준 전송이 필요할 때만 사용한다. 일반
+업무 메시징에는 `Send`나 `Reply`를 사용한다.
 
 ---
 
@@ -194,8 +194,8 @@ await stream.CloseAsync();   // transport handle에서 직접 닫는다
 **완료 결과.** 연결을 닫는다. 이미 닫힌 연결에 다시 호출해도 이 문서가 정의하는 별도 예외 계약은
 없다 — 정확한 재호출 의미는 exact interface를 확인한다.
 
-**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 쓴다. Actor 쪽에서 bound
-client 연결을 끊으려면 `Context.BoundSession.DisconnectAsync(ct)`를 쓴다.
+**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 사용한다. Actor 쪽에서 bound
+client 연결을 끊으려면 `Context.BoundSession.DisconnectAsync(ct)`를 사용한다.
 
 ---
 
@@ -212,8 +212,8 @@ await Context.BoundSession.DisconnectAsync(ct);
 
 **완료 결과.** Bound session과의 연결을 끊는다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 쓴다. Session 쪽에서
-직접 끊으려면 `CloseAsync` 항목을 쓴다.
+**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 사용한다. Session 쪽에서
+직접 끊으려면 `CloseAsync` 항목을 사용한다.
 
 ---
 

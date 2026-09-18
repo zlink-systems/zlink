@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`zlink-http-client-kotlin`은 Kotlin 애플리케이션이 HTTP API를 호출할 때 쓰는 client-side
+`zlink-http-client-kotlin`은 Kotlin 애플리케이션이 HTTP API를 호출할 때 사용하는 client-side
 산출물이다. cookie jar·redirect 횟수 제한·압축 통제 같은 설정을 fluent builder와 DSL 뒤로
 숨기고 framework의 에러·코덱 모델과 맞춘다. 모든 제출은 coroutine `suspend` 함수다.
 
@@ -13,14 +13,14 @@ val profile = client.get("/players/7281").fetch<PlayerProfile>()
 ```
 
 JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
-(`body(dto)` / `await<T>()` / `fetch<T>()`)는 그 위에 얹은 편의 계층이다.
+(`body(dto)` / `await<T>()` / `fetch<T>()`)는 그 위에 더해진 편의 계층이다.
 
 ## 설계 원칙
 
 - **coroutine 우선.** 모든 제출은 `suspend` 함수이며 호출한 coroutine의 dispatcher에서
   재개된다. blocking 메서드는 없다.
 - **DSL + fluent builder.** client 구성은 `zlinkHttpClient(url) { ... }` DSL로, request 구성은
-  메서드 체인으로 쓴다.
+  메서드 체인으로 사용한다.
 - **공개 표면에 transport 타입 없음.** `ZLinkHttpClient`·`HttpResponse`·`RawHttpResponse`만
   노출하고 내부 transport 타입은 드러나지 않는다.
 
@@ -33,7 +33,7 @@ JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
 | 회귀 테스트 | `src/test/kotlin/...` | private |
 
 `zlink-http-client-kotlin`은 검증된 `zlink-http-client` 전송 런타임을 전이 의존으로 가져와
-재사용하고 그 위에 coroutine 확장과 DSL만 얹는다.
+재사용하고 그 위에 coroutine 확장과 DSL만 추가한다.
 
 ## 실행 모델
 

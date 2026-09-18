@@ -439,6 +439,12 @@ class KotlinPublicSurfaceContractTest {
                 "withoutStreamCompression" to 1, "await" to 2,
                 "awaitReply" to 2, "waitFor" to 1,
                 "messages" to 1, "errors" to 1,
+                // The connector keeps its current flow in a thread local
+                // (stream-connector/languages/java/03-stream-connector.ko.md 7.1).
+                // A coroutine resumes on whatever thread is free, so these
+                // three carry that flow across suspension points.
+                "currentZLinkStreamFlow" to 1, "withZLinkStreamFlow" to 1,
+                "collectInStreamFlow" to 1,
             ),
         )
         assertFacadeMethodCounts(
@@ -516,7 +522,11 @@ class KotlinPublicSurfaceContractTest {
             "ZLinkKotlinStreamConnector",
             mapOf(
                 "isConnected" to 1, "getState" to 1, "getOptions" to 1,
-                "getDiagnosticsLevel" to 1, "setDiagnosticsLevel" to 1,
+                // stream-connector/32-stream-connector.ko.md 13 asks for a
+                // synchronous surface and, where the language is idiomatic
+                // about it, a matching asynchronous pair. In Kotlin that is
+                // the property setter plus a suspending function.
+                "getDiagnosticsLevel" to 1, "setDiagnosticsLevel" to 2,
                 "getPendingDispatchCount" to 1, "receivedCount" to 1,
                 "on" to 2, "onErrorReceived" to 1,
                 "onDisconnected" to 1, "onConnectionStateChanged" to 1,
@@ -529,7 +539,15 @@ class KotlinPublicSurfaceContractTest {
             ),
         )
         assertPublicMethodCounts("ZLinkKotlinLifecycleCall", mapOf("await" to 1))
-        assertPublicMethodCounts("ZLinkKotlinSendCall", mapOf("await" to 1))
+        assertPublicMethodCounts(
+            "ZLinkKotlinSendCall",
+            mapOf(
+                // The one-way send builder carries the same steps as the
+                // Java ZLinkStreamSendCall.
+                "packetName" to 1, "metadata" to 2, "compress" to 1,
+                "submit" to 1, "await" to 1,
+            ),
+        )
         assertPublicMethodCounts(
             "ZLinkStreamTypedWaitCall",
             mapOf("timeout" to 1, "where" to 1, "await" to 1),
@@ -568,7 +586,7 @@ class KotlinPublicSurfaceContractTest {
     @Test
     fun `documented Kotlin APIs retain their exact JVM descriptors`() {
         val expectedHashes = mapOf(
-            "ZLinkConnectorExtensionsKt" to "a83aa6550a9fd806bd21496bfd1eafac476f4ae368cd99fb624b22bc1931a76f",
+            "ZLinkConnectorExtensionsKt" to "39fdd5a75da4800236ac22699b124c48d7c36082a8dea82a7fb6e26ea2dab3cc",
             "ZLinkCoroutineHandlerOptionsKt" to "67fda6a26015bcd374098db883ec13f012b2536da914e6b3e8fb0f6aea9e86f4",
             "ZLinkCoroutineTurnAwaitKt" to "0e58ca9d82f2e14d26e4763e955296534d7ce8e863c8fdd5b5231148a5661d5f",
             "ZLinkDispatchOptionsExtensionsKt" to "2638e59c7f57be05d687be9f366dda0c5421d8ee59fa4105a82e52d7f13fa110",
@@ -583,7 +601,7 @@ class KotlinPublicSurfaceContractTest {
             //  the time because this module test source did not compile (#513).
             "ZLinkKotlinStreamConnector" to "560cc2ff8277106e578a168bdf31f37033aec52755fce4fc155cf7aec2912b4f",
             "ZLinkKotlinLifecycleCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
-            "ZLinkKotlinSendCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
+            "ZLinkKotlinSendCall" to "dca3ddd35276a190fa5f79289f2771312f7305178cc1260a31fa00e1a99b8e44",
             "ZLinkStreamTypedWaitCall" to "6385a73bc528712e6d0f31512ba8f29c1951b2c347c48b6001f03c34e80d84f4",
         )
         // Report every drifted type at once. Failing on the first one left the remaining

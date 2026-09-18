@@ -14,7 +14,7 @@ and C# call boundary that reaches it
 Package Manager → **Add package from git URL**:
 
 ```
-https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.14.0
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.16.0
 ```
 
 Always pin the tag. `framework-node/v<version>` is the tag of the

@@ -59,17 +59,17 @@ Framework는 마지막 정상 확인 뒤 connection을 유지할 수 있는 시�
 | Peer deadline | 15초 | Connection 하나가 정상 확인 없이 유지될 수 있는 시간 |
 
 - **Mesh peer liveness 판단은 runtime 전체에서 하나의 구조가 소유한다.** 이 판단을
-  subsystem마다 나누고 서로 다른 주기를 쓰면, 같은 peer를 한 subsystem에서는 available로,
+  subsystem마다 나누고 서로 다른 주기를 사용하면, 같은 peer를 한 subsystem에서는 available로,
   다른 subsystem에서는 unavailable로 판단하는 구간이 생긴다.
 - **Framework builder는 이 두 값을 공개하지 않으며, channel·handler·peer마다 다른 값을
   지정할 수도 없다.** 값을 조정 가능하게 만드는 것 자체가 세 연결 방식이 같은 기준을
-  쓴다는 계약을 어긴다.
-- **업무 message 수신을 생존 신호로 쓰지 않는다.** 방향이 비대칭이기 때문이다 — peer에서
+  사용한다는 계약을 어긴다.
+- **업무 message 수신을 생존 신호로 사용하지 않는다.** 방향이 비대칭이기 때문이다 — peer에서
   message를 계속 받아도 이 node가 보낸 message가 peer에 도착하는지는 알 수 없다. 수신만으로
   liveness를 판단하면 한쪽 방향만 끊긴 연결을 정상으로 본다. 일반 application message가
   connection의 deadline을 연장하지 않는 이유가 이것이다(§3).
 - **경과 시간·deadline·retention은 언어 runtime의 monotonic clock 하나로 측정한다.** Wall
-  clock은 timestamp 표기에만 쓴다. 연결 확인 주기, peer deadline, operation deadline, terminal
+  clock은 timestamp 표기에만 사용한다. 연결 확인 주기, peer deadline, operation deadline, terminal
   record retention, readiness 대기 상한처럼 "얼마나 지났는가"를 묻는 모든 판정이 대상이다. 호스트
   wall clock의 조정·점프는 이 판정을 바꾸지 않는다. 내부 확인 조건: runtime 코드에서 wall clock
   값의 차로 경과 시간을 계산하는 곳이 없다(정적 검사).
@@ -204,7 +204,7 @@ application record를 모두 받지 못한 subscriber는 해당 publisher를 not
   다른 축으로 독점할 수 있기 때문이다. 다음 회전은 이번에 멈춘 connection의 다음부터
   시작한다. 항상 처음부터 순회하면 상한을 두어도 뒤쪽 connection이 계속 밀린다.
 - **하나의 socket이 여러 peer를 대표하는 경우에는 socket이 아니라 peer 단위로 회계한다.**
-  socket 단위로 세면 그 socket 뒤의 한 peer가 다른 peer의 몫까지 쓴다.
+  socket 단위로 세면 그 socket 뒤의 한 peer가 다른 peer의 몫까지 사용한다.
 
 **건수 상한은 회전 하나당 최대 64개로 고정한다.** Byte 상한과 경과 시간 상한은
 **언어별 재량**이다 — 값이 달라도 회전 시작점이 항상 멈춘 connection의 다음부터

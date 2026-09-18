@@ -30,8 +30,8 @@ Request execution runs on top of .NET's asynchronous primitives.
 - `AsyncRaw()` / `Async<T>()` / `DownloadAsync(sink)` return a `ValueTask<T>`.
 - No blocking terminator that synchronously pulls out the completion value is provided.
 - A standalone client provides `Async` and a callback. A server client injected through DI also
-  provides a one-way `Async()` with no normal completion value. The HTTP request builder has no
-  `Yield` that gives back Spot execution authority.
+  provides a one-way `Async()` with no normal completion value. A standalone client's
+  `ZLinkHttpRequestBuilder` has no `Yield` that gives back Spot execution authority.
 
 There's one practical takeaway to remember from this model:
 

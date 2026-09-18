@@ -55,10 +55,14 @@ public interface ZLinkStreamConnector {
     ZLinkStreamConnectionState state();
     ZLinkStreamConnectorOptions options();
 
+    // 마지막 종료 사유. 한 번도 끊긴 적이 없으면 비어 있다(아래 "세션 종료 사유").
+    Optional<ZLinkStreamCloseReason> closeReason();
+
     // 실행 중 diagnostics level 읽기/쓰기(§4.1, 서버 스펙 26 §4.1). connector를 다시
     // 만들지 않고 level을 바꾼다. options().diagnosticsLevel()은 항상 이 값과 같다.
     ZLinkStreamDiagnosticsLevel diagnosticsLevel();
     void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+    CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
 
     int pendingDispatchCount();
     int receivedCount(String name);
@@ -105,13 +109,17 @@ public final class ZLinkStreamConnectorFactory {
 ```
 
 Java는 event를 `on...` registration으로 노출한다. .NET의 event와 의미는 같다.
-등록 해제는 반환된 `AutoCloseable`로 한다.
+**등록 해제는 반환된 `AutoCloseable`의 `close()`로 하며, 같은 값을 두 번 닫아도 오류로 처리하지
+않는다**([공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)). push handler와
+error·disconnect·connection state handler가 모두 같은 반환 타입을 사용한다.
 
 **세션 종료 사유 (close reason).** 값 집합과 의미는
-[공통 스펙 §6.3](../../32-stream-connector.ko.md#63-종료-사유)가 소유한다. Java는 이를 닫힌 enum
+[공통 스펙 §6.2](../../32-stream-connector.ko.md#62-종료-사유)가 소유한다. Java는 이를 닫힌 enum
 `ZLinkStreamCloseReason`(`CLIENT_CLOSE`, `IDLE_TIMEOUT`, `HEARTBEAT_TIMEOUT`, `SERVER_DRAIN`,
-`PROTOCOL_ERROR`, `TRANSPORT_ERROR`)으로 표현하고, **`ZLinkStreamDisconnectedHandler`가 받는
-disconnect 이벤트의 `ZLinkStreamCloseReason closeReason()`으로 노출한다.**
+`PROTOCOL_ERROR`, `TRANSPORT_ERROR`)으로 표현한다. **읽기 표면은 connector의
+`Optional<ZLinkStreamCloseReason> closeReason()` method다.** 한 번도 끊긴 적이 없으면
+`Optional.empty()`를 반환한다. `ZLinkStreamDisconnectedHandler`가 받는 disconnect 이벤트의
+`ZLinkStreamCloseReason closeReason()`은 이 읽기 표면에 추가하는 것이다.
 `waitFor(...)`는 특정 packet name의 server push를 한 번 기다리는 call builder를 반환한다.
 필요한 message만 고를 때는 builder의 `where(...)`를 사용한다. timeout이 지나면 반환된
 `CompletionStage`가 timeout 실패로 끝난다. 별도 timeout을 지정하지 않으면 connector
@@ -144,7 +152,7 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamDispatchMode dispatchMode,      // default MANUAL
     Duration requestTimeout,                   // default 30s
     Duration waitTimeout,                      // default 5s
-    int maxReconnectAttempts,                  // default 3
+    int maxReconnectAttempts,                  // default 3. UNLIMITED_RECONNECT_ATTEMPTS(-1)이 무제한이다
     Duration connectTimeout,                   // default 5s
     int maxSendPayloadSize,                    // default 64 * 1024
     int maxReceivePayloadSize,                 // default 64 * 1024
@@ -158,11 +166,20 @@ public record ZLinkStreamConnectorOptions(
     boolean skipServerCertificateValidation,
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
-    ZLinkStreamPacketNameResolver nameResolver,
-    ZLinkStreamTypedCodec typedCodec,
+    ZLinkStreamPacketNameResolver nameResolver, // 공통 스펙 §5.4의 name resolver 주입점
+    ZLinkStreamTypedCodec typedCodec,           // 공통 스펙 §5.4의 typed payload codec 주입점
     ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
+
+    // 공통 스펙 §6이 요구하는 무제한 reconnect를 표현하는 이름 붙인 상수다.
+    public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
 }
 ```
+
+**옵션 검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다.**
+Java는 `ZLinkStreamConnectorFactory.create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
+`ZLinkStreamConnector` 인스턴스를 만들지 않고 `ZLinkStreamException`(§11)으로 실패한다. 값 하나가
+허용 범위를 벗어나면 `VALIDATION_FAILED`, 항목 사이가 맞지 않으면 `CONFIGURATION_ERROR`를 담는다.
+`maxReconnectAttempts`는 `UNLIMITED_RECONNECT_ATTEMPTS`이거나 양수여야 한다.
 
 ### 4.1 Diagnostics level
 
@@ -190,8 +207,13 @@ public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLe
 // ZLinkStreamConnector에 선언된다(§3). Application은 connector를 다시 만들지 않고
 // level을 읽고 바꾼다.
 ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);      // 기다리지 않고 값을 바꾼다
+CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
 ```
+
+`setDiagnosticsLevelAsync`는 다른 연산의 terminal과 같은 `CompletionStage`를 돌려주는 비동기 짝이며,
+공통 스펙 §13이 요구하는 동기 표면을 대신하지 않는다. 동기 표면은 비동기 짝의 완료를 기다리지
+않으므로 dispatch callback 안에서 호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
 
 내부는 원자적 셀(`AtomicReference`)로 현재 level을 보관한다. `options()`가 반환하는
 `diagnosticsLevel()`은 항상 이 셀의 현재 값과 일치한다. 각 처리 지점(하나의 outbound
@@ -244,8 +266,23 @@ public record ZLinkStreamMessage<TPayload>(
     String packetName,
     TPayload payload,
     Map<String, String> metadata,
-    String flowId,
+    String flowId,                // diagnostics level이 OFF이면 null(§4.1)
     ZLinkFlowOrigin flowOrigin) implements ZLinkStreamFlow {
+}
+```
+
+`flowId`와 `flowOrigin`이 [공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)가
+요구하는 수신 flow 노출이다. JVM은 ambient 실행 문맥을 제공하므로 송신 call에 flow를 명시하는
+인자를 두지 않는다(§7.1).
+
+[공통 스펙 §5](../../32-stream-connector.ko.md#5-packet-모델)가 요구하는 **타입에 packet 이름을
+붙이는 수단은 annotation이다.**
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ZLinkStreamPacketName {
+    String value();   // 타입에 붙이는 packet 이름
 }
 ```
 
@@ -331,15 +368,41 @@ Connector instance의 mutable 필드나 thread ID로 current flow를 추정하�
 
 **push 관측 — connector 메서드**(`waitFor`와 같은 자리). 각각 builder를 반환한다.
 
+각 표면은 **호출자가 packet 이름을 명시하는 overload와 payload type에서 결정하는 overload를
+함께** 둔다([공통 스펙 §10.1.1](../../32-stream-connector.ko.md#1011-push-관측-표면--waitfor-계열)).
+type overload는 options의 `nameResolver`가 이름을 결정한다.
+
 ```java
-ZLinkStreamWaitCall       waitFor(String name);          // 도달할 때까지 대기
-ZLinkStreamExpectNoneCall expectNone(String name);       // .within(window) 동안 오지 않는지
-ZLinkStreamSequenceCall   waitForSequence(String name);  // .expect(p).expect(p)…를 순서대로
+ZLinkStreamWaitCall       waitFor(String name);              // 도달할 때까지 대기
+ZLinkStreamWaitCall       waitFor(Class<?> payloadType);
+ZLinkStreamExpectNoneCall expectNone(String name);           // .within(window) 동안 오지 않는지
+ZLinkStreamExpectNoneCall expectNone(Class<?> payloadType);
+ZLinkStreamSequenceCall   waitForSequence(String name);      // .expect(p).expect(p)…를 순서대로
+ZLinkStreamSequenceCall   waitForSequence(Class<?> payloadType);
+
+public interface ZLinkStreamExpectNoneCall {
+    ZLinkStreamExpectNoneCall within(Duration window);       // 관찰 구간. 지정해야 한다
+    CompletionStage<Void> submit();
+}
+
+public interface ZLinkStreamSequenceCall {
+    // 도착 순서대로 적용할 다음 술어를 더한다. 인자는 payload가 아니라 message다.
+    ZLinkStreamSequenceCall expect(
+        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate);
+    <TPayload> ZLinkStreamSequenceCall expect(
+        Class<TPayload> payloadType,
+        Predicate<ZLinkStreamMessage<TPayload>> predicate);
+    ZLinkStreamSequenceCall timeout(Duration timeout);
+    CompletionStage<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> submit();
+    <TPayload> CompletionStage<List<ZLinkStreamMessage<TPayload>>> submit(
+        Class<TPayload> payloadType);
+}
 ```
 
-- `expectNone(name).within(Duration).submit()` — window 안에 도착하면 **예외를 던진다**. `waitFor`의 대칭.
-- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 payload 목록을 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
-- **status 전용 표면을 두지 않는다.** status는 payload 필드이므로 `waitFor(T.class).where(p -> p.status() == …)`로 표현한다.
+- `expectNone(name).within(Duration).submit()` — window 안에 도착하면 **`VALIDATION_FAILED`를 담은 `ZLinkStreamException`으로 실패한다**. `waitFor`의 대칭.
+- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 `List<ZLinkStreamMessage<TPayload>>`를 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- **술어와 반환은 `ZLinkStreamMessage`를 다룬다.** `where(...)`와 `expect(...)`가 받는 인자도 payload가 아니라 message다.
+- **status 전용 표면을 두지 않는다.** status는 payload 필드이므로 `waitFor(T.class).where(T.class, m -> m.payload().status() == …)`로 표현한다.
 
 - **도메인 REST 폴링은 이 표면이 아니다.** 그건 `ZLinkHttpClient`의 일이다.
 
@@ -421,7 +484,28 @@ public enum ZLinkStreamConnectionState {
 ## 11. Error Code
 
 오류의 의미는 [공통 스펙 §9](../../32-stream-connector.ko.md)가 소유한다. Java는 닫힌 enum으로
-표현한다.
+표현한다. [공통 스펙 §9.2](../../32-stream-connector.ko.md#92-전달--받는-쪽이-코드를-읽을-수-있어야-한다)가
+요구하는 **코드를 담는 전용 예외 타입은 `ZLinkStreamException`이다.**
+
+```java
+public record ZLinkStreamError(
+    ZLinkStreamErrorCode code,   // 아래 닫힌 13개 값
+    String message,
+    Throwable exception) {       // 원인 예외. 없으면 null
+}
+
+public final class ZLinkStreamException extends RuntimeException {
+    public ZLinkStreamException(ZLinkStreamError error);
+    public ZLinkStreamError error();           // 코드를 읽는 자리다
+    public ZLinkStreamErrorCode errorCode();   // error().code()의 단축이다
+}
+```
+
+connector가 던지거나 `CompletionStage`를 실패로 완료할 때 쓰는 예외는 `ZLinkStreamException`
+하나다. **`IllegalArgumentException`·`IllegalStateException` 같은 언어 표준 예외를 그대로 던지지
+않는다** — 그 타입에는 코드를 담을 자리가 없어 호출자가 `VALIDATION_FAILED`인지
+`CONFIGURATION_ERROR`인지 판정하지 못한다. 옵션 검증 실패(§4)와 대기 표면의 위반(§7.2)도 같은
+예외로 전달한다.
 
 ```java
 public enum ZLinkStreamErrorCode {
@@ -447,6 +531,10 @@ Kotlin module은 Java connector 위의 thin wrapper다. lifecycle과 request처�
 있는 작업은 Kotlin wrapper의 suspend `await()`로 기다린다. 이 `await()`는 Java
 `CompletionStage`를 coroutine suspension으로 기다린다. one-way send도 `await()`로 완료와
 실패를 기다리지만 전송 결과나 admission status는 받지 않는다.
+
+**Kotlin은 별도 예외 계층을 두지 않고 Java의 `ZLinkStreamException`(§11)을 그대로 전파한다.**
+`await()`가 실패하면 같은 예외가 호출 지점에서 발생하며, 호출자는 `error().code()`로 오류
+코드를 읽는다.
 
 ```kotlin
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector

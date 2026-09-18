@@ -1,28 +1,39 @@
-# C++ Quickstart — 빈 프로젝트에서 첫 요청까지
+# C++ Quickstart — 설치부터 첫 요청까지
 
-> **이 장의 계약 소유 문서** — 없다. API의 정식 계약은
-> [C++ 스펙](../common/spec/server/languages/cpp/README.ko.md)이 다룬다.
+!!! info "이 장을 읽고 나면"
+
+    패키지를 설치하고, 두 process가 서로 호출하는 최소 project를 실행할 수 있다.
 
 저장소의 [`framework/languages/cpp/quickstart/`](../../../languages/cpp/quickstart/)
-프로젝트다. 아래 코드 블록은 사이트를 빌드할 때 그 파일에서 읽는다.
+프로젝트다. 아래 코드 블록은 사이트를 빌드할 때 그 파일에서 읽는다. location store 없이
+process 둘이 서로의 endpoint를 직접 지정해 request/reply 한 번을 주고받는다.
 
-location store 없이 process 둘이 서로의 endpoint를 직접 지정해 request/reply 한 번을
-주고받는다. 다음 단계는 [설치와 첫 동작](guide/server/02-getting-started.ko.md)이다.
+## 1. 설치
 
-## 설치 경로
+- CMake 3.20 이상, C++20 컴파일러. framework가 C++20 coroutine을 사용한다.
+  `CMakePresets.json`을 사용하는 [Visual Studio 2022](#7-visual-studio-2022) 경로는 3.21 이상이 필요하다
+- nlohmann_json·Boost·liblz4·libprotobuf·OpenSSL·opentelemetry-cpp
 
-C++은 세 가지 경로가 있다. 셋 다 같은 결과를 낸다 — 무엇을 이미 쓰고 있는지로 고른다.
+`zlink`는 아직 공식 vcpkg registry와 ConanCenter에 없다. 이 저장소가 overlay port와 Conan
+recipe를 함께 담고 있으므로 설치 경로는 셋이지만, **지금 끝까지 도는 것은 GitHub Release
+경로뿐이다.**
 
-| 경로 | 언제 |
+| 경로 | 지금 상태 |
 |---|---|
-| vcpkg | 이미 vcpkg를 쓰는 프로젝트 |
-| Conan | 이미 Conan을 쓰는 프로젝트 |
-| GitHub Release | 패키지 관리자를 쓰지 않을 때. source archive 세 개를 차례로 빌드한다 |
+| GitHub Release | source archive 세 개를 차례로 빌드한다. 끝까지 확인했다 |
+| vcpkg overlay port | overlay port 세 개에 결함이 남아 있어 그대로는 설치되지 않는다 |
+| Conan recipe | recipe 세 개에 결함이 남아 있어 그대로는 설치되지 않는다 |
 
-`zlink`는 아직 공식 vcpkg 레지스트리와 ConanCenter에 없다. 이 저장소가 제공하는 overlay
-port와 recipe를 쓴다.
+확인한 명령과 막히는 지점은 프로젝트의
+[`README.md`](../../../languages/cpp/quickstart/README.md)에 있다. 아래 §1.1과 §1.2는 그 결함이
+해결되면 그대로 사용할 수 있도록 남겨 둔 절차다.
 
-### vcpkg
+### 1.1 vcpkg
+
+!!! warning "이 경로는 아직 끝까지 설치되지 않는다"
+
+    overlay port와 recipe에 남은 결함 때문에 지금은 중간에서 멈춘다. 첫 설치는
+    [GitHub Release](#13-github-release)로 한다.
 
 ```bash
 git clone https://github.com/zlink-systems/zlink.git
@@ -30,14 +41,19 @@ vcpkg install zlink zlink-cpp zlink-framework \
   --overlay-ports=zlink/vcpkg/ports --triplet=x64-linux
 ```
 
-소비자 프로젝트는 vcpkg toolchain을 쓴다.
+소비자 프로젝트는 vcpkg toolchain을 사용한다.
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 ```
 
-### Conan
+### 1.2 Conan
+
+!!! warning "이 경로는 아직 끝까지 설치되지 않는다"
+
+    overlay port와 recipe에 남은 결함 때문에 지금은 중간에서 멈춘다. 첫 설치는
+    [GitHub Release](#13-github-release)로 한다.
 
 ```bash
 git clone https://github.com/zlink-systems/zlink.git
@@ -46,32 +62,41 @@ conan create zlink/bindings/cpp/packaging/conan --build=missing -s compiler.cpps
 conan create zlink/framework/languages/cpp/packaging/conan --build=missing -s compiler.cppstd=gnu20
 ```
 
-소비자 프로젝트의 `conanfile.txt`에 `zlink-framework/0.14.0`을 적고 `conan install`한다.
+소비자 project의 `conanfile.txt`에 `zlink-framework/0.16.0`을 적고 `conan install`한다.
 
-### GitHub Release
+### 1.3 GitHub Release
 
 세 아카이브를 차례로 빌드해 설치한다 — `core/vX.Y.Z` → `cpp/vX.Y.Z` → `framework-cpp/vA.B.C`.
 순서와 실제 명령은 프로젝트의
 [`README.md`](../../../languages/cpp/quickstart/README.md)에 있다.
 
-이 경로에서는 서드파티를 직접 갖춘다. `nlohmann_json`·Boost·liblz4·libprotobuf·OpenSSL은
+이 경로에서는 third-party 의존을 직접 설치한다. `nlohmann_json`·Boost·liblz4·libprotobuf·OpenSSL은
 배포판 패키지로 설치하고, `opentelemetry-cpp`는 배포판 패키지가 없어 소스로 빌드한다.
 framework가 링크하는 것은 `opentelemetry-cpp::api` 하나이므로 `-DOTELCPP_WITH_API_ONLY=ON`이면
 헤더만 빌드된다.
 
-## 전제
+### 1.4 필요할 때 추가하는 target
 
-- CMake 3.20 이상, C++20 컴파일러
+| target | 언제 추가하나 |
+| --- | --- |
+| `zlink::framework_locations_redis` | Redis location store로 자동 연결을 사용할 때([Location](guide/server/25-location.ko.md)) |
+| `zlink::framework_codec_protobuf` · `_messagepack` | 기본 JSON codec 대신 사용할 때([Handler와 메시지 처리](guide/server/31-handler-dispatch.ko.md#3-codec--payload를-바이트로-바꾼다)) |
+| `zlink::stream_connector` | 외부 client(게임 client·모바일)를 만들 때([STREAM](guide/server/23-stream.ko.md)) |
+| `zlink::http_client` | 서버에서 HTTP를 호출할 때([HTTP Client 가이드](guide/http-client/README.ko.md)) |
 
-## 1. 소비자 쪽 CMake
+라이선스는 계층마다 다르다 — core·binding은 MPL-2.0, framework는 FSL-1.1-ALv2,
+`zlink::http_client`는 Apache-2.0이다. 서비스를 만들어 파는 데 드는 비용은 없다
+([ZLink의 적용 범위](guide/server/17-alternative.ko.md#8-라이선스--사용하는-데-드는-비용)).
 
-세 단계 설치가 끝나면 소비자가 적을 것은 이게 전부다.
+## 2. 소비자 쪽 CMake
+
+세 단계 설치가 끝나면 소비자 project의 CMake는 다음과 같다.
 
 ```cmake title="CMakeLists.txt"
 --8<-- "framework/languages/cpp/quickstart/CMakeLists.txt"
 ```
 
-## 2. 공유 계약
+## 3. 공유 계약
 
 메시지 타입에 `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`가 필요하다. 기본 JSON serializer가
 ADL로 `to_json`/`from_json`을 찾으므로 bare struct는 직렬화되지 않는다.
@@ -80,18 +105,18 @@ ADL로 `to_json`/`from_json`을 찾으므로 bare struct는 직렬화되지 않�
 --8<-- "framework/languages/cpp/quickstart/Shared/messages.hpp"
 ```
 
-## 3. 처리하는 쪽
+## 4. 처리하는 쪽
 
 `object_role` 기본값이 `server`라 그대로 두면 location store를 요구한다. 이 구성에서는
-`none`으로 지정한다. `routing_id`는 필수다. Wildcard bind host에서 `advertise_host`를 생략하면 같은 address
-family의 loopback을 광고한다. Container나 여러 host에서 remote process가 그 loopback으로 접속할
+`none`으로 지정한다. `routing_id`는 필수다. `0.0.0.0`으로 bind하고 `advertise_host`를 생략하면 같은 address family의
+loopback(`127.0.0.1`)을 광고한다. Container나 여러 host에서 remote process가 그 loopback으로 접속할
 수 없으면 접속 가능한 `advertise_host`를 지정한다.
 
 ```cpp title="Server/main.cpp"
 --8<-- "framework/languages/cpp/quickstart/Server/main.cpp"
 ```
 
-## 4. 호출하는 쪽
+## 5. 호출하는 쪽
 
 HTTP handler는 경로 파라미터를 인자로 받지 않는다. `http_request_t`를 받아
 `request.route_values`에서 꺼낸다.
@@ -100,7 +125,7 @@ HTTP handler는 경로 파라미터를 인자로 받지 않는다. `http_request
 --8<-- "framework/languages/cpp/quickstart/Client/main.cpp"
 ```
 
-## 5. 실행
+## 6. 실행
 
 ```bash
 cd framework/languages/cpp/quickstart
@@ -116,7 +141,7 @@ curl http://127.0.0.1:5083/hello/world
 
 응답은 `"hello, world"`, 상태 코드 200이다.
 
-## 6. Visual Studio 2022
+## 7. Visual Studio 2022
 
 Windows에서는 CMake 명령 대신 Visual Studio로 열어도 된다. 필요한 것은 **Desktop
 development with C++** 워크로드와 그 안의 **C++ CMake tools for Windows** 구성 요소다.
@@ -151,7 +176,17 @@ preset은 프로젝트의 `CMakePresets.json`에 있다. 값을 바꿔야 하면
 --8<-- "framework/languages/cpp/quickstart/CMakePresets.json"
 ```
 
-## 옮겨 갈 것
+## 8. 첫 실행이 안 될 때 확인할 항목
+
+| 증상 | 확인할 항목 |
+| --- | --- |
+| `find_package`가 실패한다 | `CMAKE_PREFIX_PATH`가 framework install prefix를 가리키는지, 세 단계 설치를 모두 마쳤는지 확인한다 |
+| server가 location store를 요구한다 | `set_object_role`을 `none`으로 지정했는지 확인한다 |
+| startup이 실패한다 | 두 process의 mesh 이름이 같은지, `routing_id`를 지정했는지 확인한다 |
+| 메시지가 직렬화되지 않는다 | 메시지 타입에 `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`를 붙였는지 확인한다 |
+| 호출이 대상 없음으로 끝난다 | 받는 쪽이 그 channel 이름을 server 역할로 등록했는지, 두 process가 peer로 연결됐는지 확인한다 |
+
+## 9. 옮겨 갈 것
 
 | 파일 | 내용 |
 |---|---|
@@ -160,5 +195,13 @@ preset은 프로젝트의 `CMakePresets.json`에 있다. 값을 바꿔야 하면
 | `Server/main.cpp` | `add_route_mesh` → `listen` → `set_object_role(none)`·`set_routing_id`·`set_advertise_host` → handler 등록 |
 | `Client/main.cpp` | client 역할 지정, `peer_connections().connect(...)`, `request_to_channel(...)` |
 
-수동 연결 대신 location store를 쓰는 구성은
-[10. Location](guide/server/10-location.ko.md)이 다룬다.
+## 10. 다음으로 읽을 것
+
+이 두 process는 endpoint를 서로 직접 적어 연결한다. 서버를 늘리거나 다른 주소로 다시 시작해도
+호출 코드를 그대로 두려면 자동 연결이 필요하고, 그것은
+[Location](guide/server/25-location.ko.md)이 다룬다.
+
+- 개념을 먼저 확인할 때 — [핵심 개념](guide/server/03-concepts.ko.md)
+- 이름으로 호출하는 경로 — [Channel 메시징](guide/server/20-channel-messaging.ko.md)
+- id로 호출하는 상태 객체 — [Spot](guide/server/21-spot.ko.md) · [Actor](guide/server/22-actor.ko.md)
+- 완결된 업무 흐름을 볼 때 — [샘플 고르기](guide/server/14-samples.ko.md)

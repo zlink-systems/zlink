@@ -38,8 +38,8 @@ event별로 다르고, `RoutingId`는 event가 가진 경우에만 존재한다.
 **완료 결과.** 모두 동기다. `ISocketMonitor`는 `IDisposable`/`IAsyncDisposable`이다 —
 `Close()`는 disposal semantic을 기다리지 않고 resource를 반환한다.
 
-**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 쓰고 시점 스냅샷엔
-`Status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 사용하고 시점 스냅샷엔
+`Status()`를 사용한다.
 
 ---
 
@@ -66,7 +66,7 @@ auto-high-water-mark telemetry 스냅샷.
 
 **선택 기준.** `StateFlags`를 직접 디코딩하는 대신 `IsReady`를 읽는다. socket의 실제
 send/receive HWM이 설정한 `CommonSocketOptions` 값(Sockets category)과 다른 이유를
-진단할 땐 connection-bucket과 auto-HWM-plan 그룹을 쓴다.
+진단할 땐 connection-bucket과 auto-HWM-plan 그룹을 사용한다.
 
 ---
 
@@ -97,10 +97,10 @@ int count = poller.Wait(ready, TimeSpan.FromSeconds(1));
 | `Wait(Span<PollEvent> destination, TimeSpan timeout)` | — | source 하나 이상이 ready 상태이거나 `timeout`이 지날 때까지 block |
 
 **완료 결과.** 등록/제거 member는 block 없이 동기다. `Wait`는 `timeout`까지
-block하며, `destination.Length`까지 결과를 쓰고 쓴 개수를 반환한다(timeout이면 `0`).
+block하며, `destination.Length`까지 결과를 사용하고 사용한 개수를 반환한다(timeout이면 `0`).
 `IPoller`는 `IDisposable`/`IAsyncDisposable`이다.
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. 감시하는 event만 바뀔 땐
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. 감시하는 event만 바뀔 땐
 source의 위치를 잃지 않도록 `Remove` + `Add` 대신 `Modify`를 선호한다.
 
 ---
@@ -177,7 +177,7 @@ int ready = ZlinkPoll.Poll(new IZlinkSocket[] { dealer, sub }, timeoutMs: 1000);
 
 **선택 기준.** 작고 고정된 집합에 대한 임시 one-off wait엔 `ZlinkPoll.Poll`을,
 감시 대상 집합이 시간에 따라 바뀌거나 timer를 socket과 함께 multiplex해야 할 땐
-`IPoller`를 쓴다.
+`IPoller`를 사용한다.
 
 ---
 

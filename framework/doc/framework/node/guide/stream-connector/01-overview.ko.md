@@ -10,7 +10,7 @@ client와 Unity WebGL, Cocos Creator web, Godot Web에서 같은 package root를
 | 환경 | package | transport |
 |------|---------|-----------|
 | 브라우저 계열 | `@zlink-systems/stream-connector` | `ws`, `wss` |
-| Node.js | connector 실행 비대상 | 서버와 browser runner만 실행 |
+| Node.js | connector의 제품 실행 환경이 아니다 | 서버 process와 browser test runner만 담당한다 |
 
 브라우저는 OS socket을 열 수 없으므로 `tcp://`와 `tls://` endpoint를 구성 오류로 즉시 거부한다.
 WebSocket handshake, frame 처리와 TLS 인증서 검증은 플랫폼이 수행한다. connector에는 인증서 검증을

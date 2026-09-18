@@ -40,7 +40,7 @@ socket 기반 contract엔 둘 다 없다.
 **Completion result.** `bind`/`close`는 반환값 없이 동기다.
 
 **선택 기준.** 아래 모든 구체 socket type이 이 Protocol을 확장하고
-자신만의 `connect`/`disconnect`/send/recv 표면을 더한다.
+자신만의 `connect`/`disconnect`/send/recv 표면을 추가한다.
 
 ---
 
@@ -104,7 +104,7 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 교환을 시작하기 전에 `send_high_water_mark`/`receive_high_water_mark`,
 `linger_ms`를 설정한다. transport 자신의 TCP keep-alive와 독립적으로
 ZMTP 레벨 liveness 감지를 조정하려면 세 `heartbeat_*` property를
-쓴다.
+사용한다.
 
 ---
 
@@ -132,7 +132,7 @@ if pair.recv_into(received):
 **Completion result.** `recv_into`는 `DONT_WAIT`가 설정되고
 메시지가 없을 때만 `False`를 반환한다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer
 라우팅이 없고 load-balance하지 않는다.
 
 ---
@@ -177,7 +177,7 @@ router = create_router_socket(ctx)
 await router.send(peer_rid).message(b"hello").submit()
 ```
 
-**Options.** ROUTER는 DEALER와 같은 managed send/request terminal을 쓴다.
+**Options.** ROUTER는 DEALER와 같은 managed send/request terminal을 사용한다.
 Core가 선택된 application pipe와 paired completion pipe를 함께 유지하며,
 binding은 별도 completion-control channel이 아닌 terminal 결과를 노출한다.
 
@@ -194,7 +194,7 @@ binding은 별도 completion-control channel이 아닌 terminal 결과를 노출
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
 응답 request/reply엔 `request(routing_id)`/`reply(routing_id, token)`을
-쓴다. Token은 opaque하고 socket-owned이며 one-shot이다.
+사용한다. Token은 opaque하고 socket-owned이며 one-shot이다.
 
 ---
 
@@ -203,7 +203,7 @@ binding은 별도 completion-control channel이 아닌 terminal 결과를 노출
 PUB는 매칭되는 구독자가 없으면 버리는 topic-filtered 메시지를
 publish하고, SUB는 구독을 socket option으로 설정하는 방식으로
 구독하며, XPUB/XSUB는 각각 구독자-event 노출과 메시지로 실어 나르는
-구독을 더한다.
+구독을 추가한다.
 
 ```python
 pub = create_pub_socket(ctx)
@@ -239,8 +239,8 @@ if sub.subscribe_into(msg):
 **선택 기준.** `receive_subscription_event_into`로 구독자 변동을
 관찰하거나 `PubSocketOptions.manual`/`approve_subscribe`/
 `reject_subscribe`로 수동 admission을 하려면 특별히 `XPubSocket`을
-쓴다. 구독을 일반 메시지로 실어 날라야 할 때만 특별히 `XSubSocket`을
-쓴다 — 두 Protocol의 member 집합이 동일하므로 선택은 전적으로 어떤
+사용한다. 구독을 일반 메시지로 실어 날라야 할 때만 특별히 `XSubSocket`을
+사용한다 — 두 Protocol의 member 집합이 동일하므로 선택은 전적으로 어떤
 factory를 호출하는지(`create_sub_socket` vs `create_xsub_socket`)에
 달려 있다.
 
@@ -248,7 +248,7 @@ factory를 호출하는지(`create_sub_socket` vs `create_xsub_socket`)에
 
 ## `StreamSocket`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP
 peer와 framed packet을 직접 주고받는다.
 
 ```python
@@ -310,9 +310,9 @@ awaitable/blocking terminal을 제공하고 reply·publish `submit()`은 동기�
 Managed send/request/reply terminal은 `SendFlags.DONT_WAIT`를 받지 않는다.
 
 **선택 기준.** part마다 `.message(...)`를 chain하는 대신 한 호출로
-여러 part를 추가하려면 `messages(*payloads)`를 쓴다. `asyncio` 코드에서는
+여러 part를 추가하려면 `messages(*payloads)`를 사용한다. `asyncio` 코드에서는
 awaitable terminal을 우선하고 호출 thread가 block해도 될 때만 동기
-terminal을 쓴다.
+terminal을 사용한다.
 
 ---
 

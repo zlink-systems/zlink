@@ -28,9 +28,11 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
 
     @Override
     public ZLinkStreamExpectNoneCall within(Duration window) {
-        Objects.requireNonNull(window, "window");
+        if (window == null) {
+            throw ZLinkStreamException.validationFailed("window is required");
+        }
         if (window.isNegative()) {
-            throw new IllegalArgumentException("window must not be negative");
+            throw ZLinkStreamException.validationFailed("window must not be negative");
         }
         return new DefaultZLinkStreamExpectNoneCall(connector, name, window);
     }
@@ -38,7 +40,7 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
     @Override
     public CompletionStage<Void> submit() {
         if (window == null) {
-            throw new IllegalStateException("expectNone requires within(window)");
+            throw ZLinkStreamException.validationFailed("expectNone requires within(window)");
         }
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
             CompletableFuture<Void> result = new CompletableFuture<>();
@@ -55,7 +57,9 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
                 .whenComplete((message, error) -> {
                     if (message != null) {
                         message.payload().payload().close();
-                        result.completeExceptionally(new IllegalStateException(
+                        //  Spec 32 10.1: every failure of an observation
+                        //  surface is ValidationFailed.
+                        result.completeExceptionally(ZLinkStreamException.validationFailed(
                             "Expected no '" + name + "' message within " + window + "."));
                     } else if (error instanceof TimeoutException
                         || (error instanceof CompletionException
@@ -72,7 +76,7 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
         CompletableFuture<Void> result = new CompletableFuture<>();
         AutoCloseable subscription = connector.on(name, message -> {
             message.payload().payload().close();
-            result.completeExceptionally(new IllegalStateException(
+            result.completeExceptionally(ZLinkStreamException.validationFailed(
                 "Expected no '" + name + "' message within " + window + "."));
             return CompletableFuture.completedFuture(null);
         });

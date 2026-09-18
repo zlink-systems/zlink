@@ -4,6 +4,11 @@ title: "Guide Home · C++"
 
 # ZLink Framework C++ — User Guide
 
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/README.en.md) · [Java](../../../java/guide/server/README.en.md) · [Kotlin](../../../kotlin/guide/server/README.en.md) · [Node/TypeScript](../../../node/guide/server/README.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
 A C++ application framework for building **server systems where real-time messaging
 matters** out of several cooperating processes.
 
@@ -27,7 +32,7 @@ encoding.
 
 ---
 
-## What This Framework Builds
+## Systems It Is Built For
 
 It's designed for systems where several server processes split responsibilities and
 cooperate, and where a state change must reach the client in real time.
@@ -42,35 +47,9 @@ cooperate, and where a state change must reach the client in real time.
 There's one common shape — role-specific server processes talk in typed messages, and the
 client receives state changes over a real-time connection (stream).
 
-```mermaid
-flowchart LR
-    Client["Client app"]
-    subgraph Entry["Entry server"]
-        HTTP["HTTP API"]:::infra
-        ApiC["Channel client"]:::channel
-    end
-    subgraph Core["Domain server"]
-        CoreS["Channel server"]:::channel
-        SpotN["SPOT<br/>(state unit)"]:::spot
-        StreamN["stream"]:::stream
-        ActorG["actor gateway"]:::actor
-    end
-    Registry["Registry<br/>(discovery)"]:::infra
-
-    Client -- "① HTTP request" --> HTTP
-    HTTP --> ApiC
-    ApiC -- "② server-to-server message" --> CoreS
-    CoreS --> SpotN
-    Client -- "③ real-time connection" --> StreamN
-    StreamN --> ActorG --> SpotN
-    ApiC & CoreS -.->|"address resolution"| Registry
-
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
+        title="Servers talk in typed messages by role; clients receive over a stream" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
 
 Each server process is an independent executable connected to the others over TCP. HTTP
 ingress, the communication path to other servers, client connections, and state-unit
@@ -104,7 +83,7 @@ class open_conversation_handler_t {
 ```
 
 Besides request-reply, it also provides fanout (pub/sub) and route mesh (address routing)
-patterns. [Chapter 5 →](05-channel-messaging.en.md)
+patterns. [Channel messaging →](20-channel-messaging.en.md)
 
 ---
 
@@ -137,7 +116,7 @@ class conversation_spot_t : public zlink::framework::spot_t,
 
 It splits into the entry spot (one per node), responsible for assignment/placement, and the
 room spot (one per unit), the state body itself. Periodic work is registered as a timer.
-[Chapter 6 →](06-spot.en.md)
+[Spot →](21-spot.en.md)
 
 ---
 
@@ -161,7 +140,7 @@ class support_session_t : public zlink::framework::packet_stream_session_t {
 ```
 
 The client-side connection is handled by a separate deliverable, the stream connector.
-[Chapter 8 →](08-actor-session.en.md) · [Chapter 9 →](09-stream.en.md)
+[Chapter 8 →](24-actor-session.en.md) · [Chapter 9 →](23-stream.en.md)
 
 ---
 
@@ -182,7 +161,7 @@ options.http ()
   .map_readiness ("/ready");
 ```
 
-[Chapter 20 →](20-http-hosting.en.md)
+[Chapter 20 →](42-http-hosting.en.md)
 
 ---
 
@@ -199,7 +178,7 @@ Built-in support for what a production server needs.
 - **Monitoring / Health** — receive socket, discovery, spot, and timer events as typed
   subscriptions. Wire health checks to `/ready` and `/healthz` endpoints.
 
-[Chapter 18 →](18-di-container.en.md) · [Chapter 19 →](19-configuration.en.md) · `11. Monitoring` chapter
+[Chapter 18 →](40-di-container.en.md) · [Chapter 19 →](41-configuration.en.md) · `11. Monitoring` chapter
 
 ---
 
@@ -223,7 +202,7 @@ room_mesh.objects ()
   .add_spot_factory<bingo_room_spot_t> (sample_names_t::room_spot);
 ```
 
-[Chapter 10 →](10-location.en.md)
+[Chapter 10 →](25-location.en.md)
 
 ---
 
@@ -231,27 +210,37 @@ room_mesh.objects ()
 
 | Order | Document | Content |
 |----|------|------|
-| 1 | [1. Overview](01-overview.en.md) | A map of the full feature set, the four integration axes, and the overall topology |
-| 2 | [2. Getting Started](02-getting-started.en.md) | CMake integration, the first app, writing a handler, running and checking it |
-| 3 | [3. Core Concepts](03-concepts.en.md) | Channel · Spot · Actor · stream · relocation |
-| 4 | [4. Backpressure](04-backpressure.en.md) | How the system behaves when arrival outpaces processing, and the options that affect it |
-| 5 | [5. Channel Messaging](05-channel-messaging.en.md) | Request-reply, fanout, route mesh, channel client |
-| 6 | [6. SPOT](06-spot.en.md) | room/stage/zone, serial execution, timer |
-| 7 | [7. Actor And Spot](07-actor-spot.en.md) | Actor hosting, membership, relocation |
-| 8 | [8. Actor · Session](08-actor-session.en.md) | Actor manager, session actor, gateway relay |
-| 9 | [9. Stream](09-stream.en.md) | Stream session, stream connector |
-| 10 | [10. Location](10-location.en.md) | Location store, auto-connect, operational queries |
-| 11 | [11. Monitoring](11-monitoring.en.md) | State observation, message flow, health |
-| 12 | [12. Operations](12-operations.en.md) | Runtime metrics, graceful drain, readiness |
-| 13 | [13. Key Type Usage Index](13-interface-catalog.en.md) | An index of public types by feature and how to obtain them |
-| 14 | [14. Picking A Sample](14-samples.en.md) | TicTacToe · Bingo samples mapped to features |
-| 15 | [15. E2E Testing](15-e2e-testing.en.md) | How to verify the whole system with the client |
-| 16 | [16. Options](16-options.en.md) | The option list, defaults, and when they can change |
-| 17 | [17. Where ZLink Fits](17-alternative.en.md) | Internal service communication/real-time state patterns, comparison to gRPC/mesh |
-| 18 | [18. DI Container](18-di-container.en.md) | The three lifetimes, how to register, handler auto-injection, captive dependency |
-| 19 | [19. Configuration](19-configuration.en.md) | Config sources (cli/env/json), priority, section/bind |
-| 20 | [20. HTTP Hosting](20-http-hosting.en.md) | Embedded HTTP server, route handler |
-| 21 | [21. Execution/Composition Model](21-execution-model.en.md) | The handler model, `task_t`/`co_await`, app lifecycle, module |
+| 1 | [Overview](01-overview.en.md) | What it solves and how it differs from the usual way |
+| 2 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
+| 3 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
+| 4 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
+| 5 | [Spot](21-spot.en.md) | Creating and calling a shared place by id |
+| 6 | [Actor](22-actor.en.md) | Creating and calling one entity by id |
+| 7 | [STREAM](23-stream.en.md) | A client outside the mesh attaching over one connection |
+| 8 | [Session and Actor](24-actor-session.en.md) | Binding one connection to one Actor |
+| 9 | [Location](25-location.en.md) | Looking up the node something is on by id |
+| 10 | [Monitoring](26-monitoring.en.md) | A placeholder in the feature guide — no body yet |
+| 11 | [The Execution Model](32-execution-model.en.md) | Two queues, the serialization scope, the turn |
+| 12 | [Backpressure](33-backpressure.en.md) | When arrival outruns processing, and the options that affect it |
+| 13 | [Activation and Lifetime](34-activation-lifetime.en.md) | Creation time per kind, lifecycle callbacks, injection lifetime |
+| 14 | [Actor Membership](35-actor-membership.en.md) | Moving between Spots, reservations and limits |
+| 15 | [Timers and Workers](36-timer-worker.en.md) | Periodic execution, running outside the line, giving the turn back |
+| 16 | [Relocation](37-relocation.en.md) | What survives a move, the adapter, the unit |
+| 17 | [How Channels Work](30-channel-patterns.en.md) | Pattern differences, target selection, pub/sub, connection and discovery |
+| 18 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
+| 19 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
+| 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
+| 21 | [Where ZLink Applies](17-alternative.en.md) | Where it fits, the signals, the boundary, the license |
+| 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
+| 23 | [Options](16-options.en.md) | The option list, the defaults and when to change them |
+| 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
+| 25 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
+| 26 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
+| 27 | [DI Container](40-di-container.en.md) | ZLink host — the three lifetimes, registration, handler injection |
+| 28 | [Configuration](41-configuration.en.md) | ZLink host — sources, precedence, section binding |
+| 29 | [HTTP Hosting](42-http-hosting.en.md) | ZLink host — the embedded HTTP server and route handlers |
+| 30 | [Execution and Configuration Model](43-execution-model.en.md) | ZLink host — where the thread model meets configuration |
+| 31 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
 
 The file number identifies the same chapter regardless of language. Chapters 1–17 are shared
 across all five languages, and chapters 18–21 are C++-only — DI, configuration, and HTTP
@@ -267,19 +256,9 @@ and come back to chapter 4.
 
 Every diagram in this guide uses the same visual language — color maps to concept.
 
-```mermaid
-flowchart LR
-    CH["Channel<br/>(messaging path)"]:::channel
-    SP["SPOT<br/>(serial execution region)"]:::spot
-    AC["actor / session"]:::actor
-    ST["stream<br/>(external boundary)"]:::stream
-    RG["registry / infrastructure"]:::infra
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
+        title="The five kinds in the diagram" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
 
 Several chapters draw the same TicTacToe/Bingo topology, and only the zoomed-in location
 changes per chapter.
@@ -290,3 +269,7 @@ changes per chapter.
   [zlink::http_client user guide](../http-client/README.en.md)
 - The design contract (draft) lives in [doc/spec/](../../README.en.md). When it conflicts
   with the guide, the code and the spec are authoritative.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

@@ -184,7 +184,7 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
   listener, topology와 workload 값을 시작 뒤 생성하는 endpoint 파일에 의존할 수 없기 때문이다.
 - **Role executable은 config 파일 하나를 읽는다.** Endpoint·timeout을 환경 변수로 다시
   전달하면 설정 소유자가 둘이 되기 때문이다.
-- **Client용 manifest에는 실제 listener 조회값 또는 검증된 예약값을 쓴다.** Port 0으로
+- **Client용 manifest에는 실제 listener 조회값 또는 검증된 예약값을 사용한다.** Port 0으로
   시작한 listener의 입력값 `0`은 접속 주소가 아니기 때문이다([Listener identity][listener]).
 
 Role config는 identity(`runId`, `cellId`, `role`, `roleInstance`), listener bind/advertise 입력,
@@ -213,7 +213,7 @@ Manifest는 같은 identity와 config hash를 가지며 `roles`는 process별 �
 
 Port 숫자는 형식 예시이며 예약 범위나 기본값이 아니다. `streamEndpoint`는 CS connector,
 `applicationTriggerUrl`은 server-driven standalone client, `metrics.baseUrl`은 admin client가
-소비한다. `transportEndpoints`는 server 구성·진단의 실제 endpoint이며 trigger 주소로 쓰지 않는다.
+소비한다. `transportEndpoints`는 server 구성·진단의 실제 endpoint이며 trigger 주소로 사용하지 않는다.
 각 server role의 `applicationTriggerUrl`은 §16의 window 시작에도 사용한다.
 CS 외 role의 `streamEndpoint`는 `null`이다.
 Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항목을 갖는다.
@@ -269,7 +269,7 @@ framework/languages/<lang>/perf/
 `-- perf-results/
 ```
 
-Casing은 언어 관례를 따르되 같은 언어 안에서 일관되게 쓴다.
+Casing은 언어 관례를 따르되 같은 언어 안에서 일관되게 사용한다.
 
 ### 6.1 top-level 책임
 
@@ -346,7 +346,7 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 Scenario 파일은 §8.4 이름에 대응한다. 한 scenario의 비교 셀은 같은 파일의 설정으로 실행한다.
 `PerfRunPlan`은 CS ID 분할, `ConnectionPool`은 public 연결 준비·정리,
 `ScenarioRunner`는 phase, `MetricsClient`는 admin 호출, `ResultWriter`는 원본 저장을 맡는다.
-Correlation과 in-flight 계측을 server에서도 쓰면 `Shared`에 한 번만 둔다.
+Correlation과 in-flight 계측을 server에서도 사용하면 `Shared`에 한 번만 둔다.
 
 ### 7.2 server 폴더
 
@@ -485,7 +485,7 @@ Actor echo 완료로 세거나 확인되지 않은 reply 경로를 perf가 만�
 
 ### 10.2 `cs-remote-session-actor-echo`
 
-Session과 Actor를 별도 process에 배치했을 때 remote hop과 relay가 더하는 비용을 묻는다.
+Session과 Actor를 별도 process에 배치했을 때 remote hop과 relay가 추가하는 비용을 묻는다.
 측정 호출은 [Session binding 계약][binding]을 따르며 local 셀과 Actor 수·payload를 맞춘다.
 
 | 항목 | 측정 조건 |
@@ -639,7 +639,7 @@ Spot에서 Channel로 보낸 send가 원래 Spot의 별도 send handler로 돌�
 
 ### 10.8 `spot-worker-offload-echo`
 
-Public CPU worker에 제출한 계산과 결과 전달이 local Spot echo 비용에 더하는 시간을 묻는다.
+Public CPU worker에 제출한 계산과 결과 전달이 local Spot echo 비용에 추가하는 시간을 묻는다.
 Worker 실행과 terminal은 [Submit §3][submit]·[execution][turn]을 참조한다.
 
 | 항목 | 측정 조건 |
@@ -1010,7 +1010,7 @@ perf-results/<run-id>/
 Sequence 파일은 PS만 생성한다. 일반 measured에서는 message-flow 파일을 만들기 위해 tracing을
 추가로 켜지 않는다. 진단 실행은 §21에 따라 표준 성능 결과와 분리한다.
 `variant`는 `<mode>-<terminal>-<topology>-s<spotCount>-n<subscriberCount>-<configHash>`다.
-비적용 count/topology는 경로에서 `na`로 쓴다. `configHash`는 phase 시작 전에 고정한 비교 입력
+비적용 count/topology는 경로에서 `na`로 사용한다. `configHash`는 phase 시작 전에 고정한 비교 입력
 JSON UTF-8 bytes의 SHA-256 전체 lowercase hex다. 그 정확한 입력 bytes를 config에 보존한다.
 
 비교 입력에는 language, mode, terminal, topology/discovery, execution mode, Spot/Actor mapping 규칙·개수,
@@ -1096,7 +1096,7 @@ logicalPayloadBytes:U64, observedSerializedBytes:U64|null}` 배열이다. Direct
 Public 관측이 없으면 observedSerializedBytes를 null+reason으로 둔다. 이 관측을 얻으려고
 measured path에서 message를 두 번 serialize하지 않는다. Logical bytes를 wire bytes로 부르지 않는다.
 
-Elapsed·deadline·retention은 [시간원 계약][liveness]에 맞춰 monotonic clock을 쓴다.
+Elapsed·deadline·retention은 [시간원 계약][liveness]에 맞춰 monotonic clock을 사용한다.
 Ticks 단위는 **nanosecond**이며 native clock의 frequency에서 변환한 값을 기록한다.
 Clock metadata의 type은 아래와 같다. Nullable alignment field는 자기 process RTT에는
 비적용이며, 공통 domain을 주장할 때는 근거와 오차를 채운다.
@@ -1115,7 +1115,7 @@ ClockMetadata {
   evidence: Text[]                      // public OS/runtime 근거 또는 alignment 산출물 경로
 }
 ```
-Unix timestamp는 UTC 표기에만 쓰며 elapsed 계산에 사용하지 않는다.
+Unix timestamp는 UTC 표기에만 사용하며 elapsed 계산에 사용하지 않는다.
 
 공통 domain은 epoch와 단위가 같음을 공개 OS/runtime 근거로 확인한 경우에만 선언한다.
 Process가 같아도 worker의 clock epoch가 다르면 직접 차감하지 않는다.
@@ -1250,7 +1250,7 @@ PerfResult {
 }
 ```
 
-Public status의 64-bit field도 §15.2 표현을 쓰며 원래 type은 해당 exact interface를 참조한다.
+Public status의 64-bit field도 §15.2 표현을 사용하며 원래 type은 해당 exact interface를 참조한다.
 Public metric `value`는 선언이 integer이면 문자열, 실수이면 finite number다.
 Histogram·label·unit을 임의로 바꿔 같은 provider metric처럼 export하지 않는다.
 `index.json`은 `{schemaVersion:2, runId, cells:[{cellId, resultFile, status}]}`다.
@@ -1304,7 +1304,7 @@ Timing evidence는 unique 수신당 한 행이다. 최종 latency histogram도 �
 ### 15.5 Null과 reason
 
 - **비적용·관측 미지원·표본 부재를 null과 reason으로 구분한다.** 0은 관측한 값이 실제
-  0일 때만 쓸 수 있기 때문이다.
+  0일 때만 사용할 수 있기 때문이다.
 - **미지원 metric과 미구현 scenario를 구분한다.** 내부 metric의 null은 유효하지만 필수
   공개 호출을 실행하지 못한 셀은 `unsupported`이며 완료로 세지 않기 때문이다.
 

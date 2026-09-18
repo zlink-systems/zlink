@@ -56,7 +56,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
         Objects.requireNonNull(payloadType, "payloadType");
         Objects.requireNonNull(predicate, "predicate");
         if (codec == null) {
-            throw new IllegalStateException(
+            throw ZLinkStreamException.configurationError(
                 "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         return expect(message -> predicate.test(decodeMessage(message, payloadType)));
@@ -64,9 +64,11 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
 
     @Override
     public ZLinkStreamSequenceCall timeout(Duration timeout) {
-        Objects.requireNonNull(timeout, "timeout");
+        if (timeout == null) {
+            throw ZLinkStreamException.validationFailed("timeout is required");
+        }
         if (timeout.isNegative()) {
-            throw new IllegalArgumentException("timeout must not be negative");
+            throw ZLinkStreamException.validationFailed("timeout must not be negative");
         }
         return new DefaultZLinkStreamSequenceCall(connector, name, timeout, codec, predicates);
     }
@@ -74,7 +76,8 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
     @Override
     public CompletionStage<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> submit() {
         if (predicates.isEmpty()) {
-            throw new IllegalStateException("waitForSequence requires at least one expectation");
+            throw ZLinkStreamException.validationFailed(
+                "waitForSequence requires at least one expectation");
         }
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
             CompletableFuture<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> result =
@@ -88,10 +91,13 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                     return;
                 }
                 CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter;
+                List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> abandoned;
                 synchronized (sequenceLock) {
                     waiter = currentWaiter.getAndSet(null);
-                    closeMessages(messages);
+                    abandoned = List.copyOf(messages);
+                    messages.clear();
                 }
+                closeMessages(abandoned);
                 if (waiter != null) {
                     waiter.cancel(false);
                 }
@@ -108,10 +114,9 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             new AtomicReference<>(CompletableFuture.completedFuture(null));
         AutoCloseable subscription = connector.on(name, message -> {
             CompletableFuture<Void> turn = new CompletableFuture<>();
-            CompletableFuture<Void> predecessor;
-            synchronized (sequenceLock) {
-                predecessor = processingTail.getAndSet(turn);
-            }
+            //  getAndSet is already the atomic swap this needs; a lock around
+            //  it adds nothing.
+            CompletableFuture<Void> predecessor = processingTail.getAndSet(turn);
             predecessor.whenComplete((ignored, predecessorError) ->
                 processGenericMessage(
                     message,
@@ -175,7 +180,10 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                 closeCurrent = true;
             } else if (!matches) {
                 closeCurrent = true;
-                failure = new IllegalStateException(
+                //  Spec 32 10.1: this surface checks that messages
+                //  arrived in the given order, and a violation is
+                //  ValidationFailed.
+                failure = ZLinkStreamException.validationFailed(
                     "Message '" + name + "' arrived out of the expected sequence.");
             } else {
                 messages.add(message);
@@ -206,12 +214,14 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             currentWaiter) {
         long remainingNanos = deadline - System.nanoTime();
         if (remainingNanos <= 0) {
-            synchronized (sequenceLock) {
-                if (!result.isCancelled()
-                    && result.completeExceptionally(new TimeoutException(
-                        "Timed out waiting for '" + name + "' sequence."))) {
-                    closeMessages(messages);
-                }
+            //  result is the future the application holds. Completing it
+            //  runs its dependents on this thread, so it is completed with
+            //  no lock of this call held - otherwise application code would
+            //  run inside sequenceLock and could order its own lock against
+            //  a lock it cannot see.
+            if (result.completeExceptionally(new TimeoutException(
+                "Timed out waiting for '" + name + "' sequence."))) {
+                closeMessages(takeMessages(messages, sequenceLock));
             }
             return;
         }
@@ -227,22 +237,35 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
         waiter
             .whenComplete((message, error) -> {
                 boolean continueSequence = false;
+                boolean closeCurrent = false;
+                List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> completed = null;
                 synchronized (sequenceLock) {
                     currentWaiter.compareAndSet(waiter, null);
-                    if (error != null) {
-                        if (result.completeExceptionally(error)) {
-                            closeMessages(messages);
-                        }
-                    } else if (result.isCancelled()) {
-                        closeMessage(message);
-                    } else {
-                        messages.add(message);
-                        if (messages.size() == predicates.size()) {
-                            result.complete(List.copyOf(messages));
+                    if (error == null) {
+                        if (result.isCancelled()) {
+                            closeCurrent = true;
                         } else {
-                            continueSequence = true;
+                            messages.add(message);
+                            if (messages.size() == predicates.size()) {
+                                completed = List.copyOf(messages);
+                                messages.clear();
+                            } else {
+                                continueSequence = true;
+                            }
                         }
                     }
+                }
+                if (closeCurrent) {
+                    closeMessage(message);
+                }
+                //  Same rule as the timeout path above: the application
+                //  future is completed with no lock held.
+                if (error != null) {
+                    if (result.completeExceptionally(error)) {
+                        closeMessages(takeMessages(messages, sequenceLock));
+                    }
+                } else if (completed != null && !result.complete(completed)) {
+                    closeMessages(completed);
                 }
                 if (continueSequence) {
                     awaitNext(
@@ -262,7 +285,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
         Class<TPayload> payloadType) {
         Objects.requireNonNull(payloadType, "payloadType");
         if (codec == null) {
-            throw new IllegalStateException(
+            throw ZLinkStreamException.configurationError(
                 "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> source = submit();
@@ -290,6 +313,22 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             }
         });
         return result;
+    }
+
+    /**
+     * Empties the accumulated messages under the lock and hands them back, so
+     * the caller closes them without holding it and no later path can close
+     * the same message twice.
+     */
+    private static List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> takeMessages(
+        List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> messages,
+        Object sequenceLock) {
+        synchronized (sequenceLock) {
+            List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> taken =
+                List.copyOf(messages);
+            messages.clear();
+            return taken;
+        }
     }
 
     private static void closeMessages(

@@ -347,7 +347,7 @@ C++가 노출하는 모든 안정 코어 기능은 다음 소유 규칙을 따�
 
 C++ 바인딩은 코어 C 계약 위에 얹힌 작은 네이티브 C++ 라이브러리처럼 느껴진다.
 
-- 공개 리소스 객체는 문서화된 수명에 따라 네이티브 핸들을 소유하거나 빌려 쓰는 RAII
+- 공개 리소스 객체는 문서화된 수명에 따라 네이티브 핸들을 소유하거나 빌려 사용하는 RAII
   클래스다.
 - 소멸자는 호출자가 네이티브 close 순서를 몰라도 리소스를 해제한다. 리소스 소멸자와 그
   외 단순하지 않은 메서드는 `.cpp` 파일에서 out-of-line으로 정의한다.
@@ -357,10 +357,10 @@ C++ 바인딩은 코어 C 계약 위에 얹힌 작은 네이티브 C++ 라이브
 - message, routing id, received metadata, topic message, result, error, enum, option
   같은 공개 값 타입은 구체로 유지한다.
 - 공개 리소스 헤더는 네이티브 핸들 레이아웃, callback 상태, request 상태, ABI 민감 저장소가
-  계약에 새어 나가는 것을 막기 위해 Pimpl 등 불투명 구현 상태를 쓴다.
-- 템플릿, 오버로드, move 의미는 호출자 ownership을 단순화하거나 복사를 피할 때만 쓴다.
+  계약에 새어 나가는 것을 막기 위해 Pimpl 등 불투명 구현 상태를 사용한다.
+- 템플릿, 오버로드, move 의미는 호출자 ownership을 단순화하거나 복사를 피할 때만 사용한다.
   명확한 도메인 타입의 대체로 템플릿 기계장치를 노출하지 않는다.
-- 가상 인터페이스는 호출자가 대체 동작을 필요로 할 때만 쓴다. 기본적으로 모든 핸들을
+- 가상 인터페이스는 호출자가 대체 동작을 필요로 할 때만 사용한다. 기본적으로 모든 핸들을
   추상 인터페이스로 감싸지 않는다.
 - multipart send, publish, request, reply, actor, SPOT operation은 빌더를 필수로 한다.
   이렇게 해야 네이티브 request 상태가 숨고 ownership이 분명해진다.
@@ -434,12 +434,12 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   operation은 move-only fluent 빌더를 반환한다.
 - 빌더 시작 메서드는 대상 identity, topic, channel, routing ID와 `reply_token_t`만
   받는다. payload, flag, timeout, async submit 선택은 빌더 단계에서 한다.
-- SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 쓴다.
-  SPOT topic publish는 `publish(topic)`을 그대로 쓴다.
+- SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 사용한다.
+  SPOT topic publish는 `publish(topic)`을 그대로 사용한다.
 - operation 시작 메서드와 같은 이름의 단일 payload 단축 오버로드를 추가하지 않는다.
   `send(message)`, `send(routing_id, message)`, `publish(topic, message)`,
   `send_to_channel(channel, message)`, `send_to_spot(..., message)`는 공개 계약 멤버가
-  아니다. 호출자는 `send(...).message(message).submit()`을 쓴다.
+  아니다. 호출자는 `send(...).message(message).submit()`을 사용한다.
 - multipart payload는 `message(...)`를 반복 호출해 쌓는다. `messages(...)` 편의 메서드는
   동일한 빌더 계약에 위임하고 `Contracts/`에 선언될 때만 허용한다.
 - Dealer socket은 `request_frame(...)`이나 `reply(request_token, parts)` 같은 프로토콜
@@ -576,17 +576,17 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
   (소유권 이전, 호출자 empty) · `message_t::clone()`(독립 버퍼 깊은 복사)이며, `move`는 C
   API를 직접 감싼다(C++ move 시맨틱과 별개). 정의는 [Message ownership 공통 계약](../message-ownership.ko.md)
   §"명시적 Copy / Move / Clone".
-- data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 쓴다.
+- data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 사용한다.
 - 수신 결과의 수명 API는 [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약)의
   C++ 출력 객체 설명을 따른다.
 - Actor join 요청 수신처럼 service 제어/입장 수신 경로는 C++ 호출자에게 더 명확하면
-  optional이나 타입 지정 결과 반환을 써도 된다. 다만 data 없음과 강한 수신 실패는 여전히
+  optional이나 타입 지정 결과 반환을 사용해도 된다. 다만 data 없음과 강한 수신 실패는 여전히
   구분해야 한다.
 - callback은 네이티브 callback 수명과 사용자 callable 수명을 내부에서 일관되게 유지한다.
 
 ## 에러와 result 정책
 
-바인딩은 예외 또는 타입 지정 result 객체 중 무엇을 써도 되지만, 공개 형태는 코어 의미를
+바인딩은 예외 또는 타입 지정 result 객체 중 무엇을 사용해도 되지만, 공개 형태는 코어 의미를
 보존한다.
 
 - data 없음과 일시적 backpressure는 강한 실패와 구분해 유지한다.
@@ -621,11 +621,11 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - 사용자는 비공개 헬퍼 헤더와 비공개 런타임 소스 경로가 필요 없다.
 - 추상화가 실제 복잡도를 줄이지 않는 한 값 타입은 구체로 남는다.
 - 공개 API는 네이티브 part 루프, raw 핸들, callback userdata를 숨긴다.
-- handler 등록은 `set_..._handler` 이름을 쓰고, 공개 `on_...` 별칭은 두지 않는다.
+- handler 등록은 `set_..._handler` 이름을 사용하고, 공개 `on_...` 별칭은 두지 않는다.
 - 공개 헬퍼/free function과 빌더 편의 메서드는 런타임 헬퍼가 아니라 `Contracts/`에
   선언한다.
 - service 제어/입장 수신 예외는 data-plane의 호출자 제공 저장소와 다를 때 문서화한다.
-- perf 테스트는 C perf와 동일한 측정 의미를 쓴다.
+- perf 테스트는 C perf와 동일한 측정 의미를 사용한다.
 
 ## Actor와 Spot 라우트 결과
 

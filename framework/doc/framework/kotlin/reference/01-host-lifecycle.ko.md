@@ -39,7 +39,7 @@ if (relocation.outcome() == ZLinkFrameworkRelocationOutcome.RELOCATED) {
 취소하지 않는다 — `relocate`/`shutdown`의 완료 kind·조건은 Java 레퍼런스와 동일하다.
 
 **선택 기준.** Kotlin coroutine 코드에서 host lifecycle operation을 기다릴 때 항상 이 확장 함수를
-쓴다. 별도 `relocateAsync`, `shutdownAsync`, `awaitStopped` 같은 전용 suspend wrapper는 없다 —
+사용한다. 별도 `relocateAsync`, `shutdownAsync`, `awaitStopped` 같은 전용 suspend wrapper는 없다 —
 Java 반환값에 `await()`만 이어 붙인다.
 
 ---
@@ -48,7 +48,7 @@ Java 반환값에 `await()`만 이어 붙인다.
 
 Host의 현재 상태 조회는 Java `status()`를 그대로 호출한다(coroutine bridge가 필요 없는 동기
 호출). 상태 변화 스트리밍은 Java `Flow.Publisher`를 Kotlin `Flow`로 잇는 공통 `asFlow()` bridge를
-쓴다.
+사용한다.
 
 ```kotlin
 val status = frameworkRuntime.status()
@@ -65,7 +65,7 @@ monitoring publisher나 이미 시작한 host operation을 취소하지 않는�
 `status()`/`loss()` 의미는 Java 레퍼런스와 동일하다.
 
 **선택 기준.** Java 레퍼런스의 `status`/`observe` 항목과 같다 — coroutine 코드에서 자연스럽게
-쓰려면 `Flow` 변환만 추가한다.
+사용하려면 `Flow` 변환만 추가한다.
 
 ---
 

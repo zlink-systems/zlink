@@ -38,10 +38,10 @@ block을 가진 독립 struct다. PUB/SUB/XPUB/XSUB 4개 타입은 public trait�
 **Completion result.** 이 메서드 전부가 `Result`를 반환한다, 대응하는
 lifecycle 호출에 error 경로가 없는 다른 언어와 다르다.
 
-**선택 기준.** TLS 설정을 점진적으로 조립해야 할 때(예: 서로 다른 설정
+**선택 기준.** TLS 설정을 단계적으로 구성해야 할 때(예: 서로 다른 설정
 소스에서 값이 도착할 때) 개별 `set_tls_cert`/`set_tls_key` 등 setter를
 호출한다. 일반적인 한 번의 호출로 끝나는 경우엔 결합된
-`set_tls_server`/`set_tls_client`를 쓴다.
+`set_tls_server`/`set_tls_client`를 사용한다.
 
 ---
 
@@ -111,7 +111,7 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 **Completion result.** `recv`는 `RecvFlags::DONT_WAIT`가 설정되고
 메시지가 없을 때만 `Ok(false)`를 반환한다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer 라우팅이
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer 라우팅이
 없고 load-balance하지 않는다.
 
 ---
@@ -178,7 +178,7 @@ channel로 노출되지 않는다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
 응답 request/reply엔 `request(peer_rid)`/`reply(rid, reply_token)`을
-쓴다. Token은 opaque하고 socket-owned이며 one-shot이다.
+사용한다. Token은 opaque하고 socket-owned이며 one-shot이다.
 
 ---
 
@@ -187,7 +187,7 @@ channel로 노출되지 않는다.
 PUB는 매칭되는 구독자가 없으면 버리는 topic-filtered 메시지를
 publish하고, SUB는 구독을 socket option으로 설정하는 방식으로
 구독하며, XPUB/XSUB는 각각 구독자-event 노출과 메시지로 실어 나르는
-구독을 더한다. 넷 다 public trait이 아니라 내부
+구독을 추가한다. 넷 다 public trait이 아니라 내부
 `impl_pubsub_common!` macro를 통해 lifecycle/TLS 표면을 공유한다.
 
 ```rust
@@ -225,8 +225,8 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 
 **선택 기준.** `receive_subscription_event`로 구독자 변동을 관찰하거나
 `PubSocketOptions::set_manual`/`approve_subscribe`/`reject_subscribe`로
-수동 admission을 하려면 특별히 `XPubSocket`을 쓴다. 구독을 일반
-메시지로 실어 날라야 할 때만 특별히 `XSubSocket`을 쓴다 — 두 타입의
+수동 admission을 하려면 특별히 `XPubSocket`을 사용한다. 구독을 일반
+메시지로 실어 날라야 할 때만 특별히 `XSubSocket`을 사용한다 — 두 타입의
 method 집합이 동일하므로 선택은 전적으로 어떤 생성자를 호출하는지
 (`ctx.sub_socket()` vs `ctx.xsub_socket()`)에 달려 있다.
 
@@ -234,7 +234,7 @@ method 집합이 동일하므로 선택은 전적으로 어떤 생성자를 호�
 
 ## `StreamSocket`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP peer와
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와
 framed packet을 직접 주고받는다.
 
 ```rust

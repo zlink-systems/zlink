@@ -87,7 +87,20 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     {
         var payload = frameSender.DecompressIfNeeded(header, wirePayload);
         var payloadObject = new ZlinkStreamEncodedPayload(header.Codec, payload);
-        var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(header.Name, header.Metadata, payloadObject);
+
+        // The flow pair travels with the message so application code can align its own
+        // logs with the server trace (stream-connector spec §5.5). At Off the header
+        // carries no captured flow, so both values stay null.
+        var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+            header.Name,
+            header.Metadata,
+            payloadObject,
+            header.FlowId,
+            header.FlowOrigin);
+
+        // Counted on arrival, before any surface takes it: the value must not depend on
+        // whether a handler is registered or on the dispatch mode (spec §10).
+        receivedMessages.CountArrival(header.Name);
         var handlers = typedHandlers.Snapshot(header.Name);
         if (handlers.Count == 0) receivedMessages.Record(message);
 

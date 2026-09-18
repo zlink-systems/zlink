@@ -342,7 +342,7 @@ SyncQuestProgressReq를 보낸다. Spot은 authoritative fact를 읽어 현재 f
 Ready owner process가 종료되면 현재 Spot operation은 Unavailable로 끝난다. Framework는
 새 QuestMission node를 선택해 실패한 operation을 자동 재제출하지 않는다. Explicit Close가
 authority release까지 완료된 뒤의 새 Instance intent는 새 generation에서 event stream을 replay할
-수 있다. 이 두 경우를 crash failover로 같은 흐름에 쓰지 않는다.
+수 있다. 이 두 경우를 crash failover로 같은 흐름에 사용하지 않는다.
 
 ## 8. 구현 구조
 
@@ -458,7 +458,7 @@ Server evidence는 client scenario가 끝난 뒤 확인한다.
 
 다만 **두 로그 파일을 한 번의 검색에 함께 넘겨 "둘 중 하나라도 맞으면 통과"가 되게 하지 않는다.**
 `grep -q`에 파일 두 개를 넘기면 정확히 그렇게 동작한다. 합계를 세고 하한과 비교한다 — 그래야 한
-흐름이 통째로 사라졌을 때 걸린다.
+흐름이 통째로 사라졌을 때 이 조건에 해당한다.
 
 `unavailable` 행은 **죽은 Mission node가 찍을 수 없다.** 실패한 Spot send를 받아 낸 살아 있는
 Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission 로그를 합쳐** 세고
@@ -469,7 +469,7 @@ Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission �
 
 - §9-8은 `ClosePlayerQuestMsg` 뒤 다음 intent를 실행해야 성립한다. dotnet·java·kotlin은 이미 Mission
   self-check endpoint로 그 message를 보낼 수 있다. node는 같은 자리에서 `ClosePlayerQuestReq/Res`를
-  쓰고 있고, cpp는 handler는 있으나 client에 노출된 통로가 없다 — 둘 다 **샘플 계약을 맞추면 되고
+  사용하고 있고, cpp는 handler는 있으나 client에 노출된 통로가 없다 — 둘 다 **샘플 계약을 맞추면 되고
   framework 변경은 필요 없다.**
 - §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나
   message type 없이 기존 `KillMonsterReq`로 가능하지만, **runner가 owner-ready 표시를 읽어 그
@@ -492,7 +492,7 @@ rehydrate·scale-out처럼 한 언어만 돌리던 단계는 별도 marker를 �
 사실은 위 표의 `replayed`·`processed` 행이 이미 담고 있다.
 
 Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 readiness와 evidence에 같이
-적용하며 **`.sh`와 `.ps1`이 같은 값을 쓴다.** 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
+적용하며 **`.sh`와 `.ps1`이 같은 값을 사용한다.** 대기 없이 한 번만 읽거나 고정 sleep 뒤 읽지 않는다.
 다섯 언어 모두 `.sh`와 `.ps1`을 함께 제공한다 — 지금 C++·Java에는 `.ps1`이 없다.
 
 모든 행이 통과하면 runner가 마지막에 `gamequest-placement=completed`를 출력한다. 한 행이라도

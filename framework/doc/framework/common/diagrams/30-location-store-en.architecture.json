@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Location Store — where who-is-where is written down",
+    "subtitle": "each process writes its own address, and another process reads it to connect",
+    "output": "30-location-store-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 130,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "A",
+      "type": "backend",
+      "label": "server node",
+      "sublabel": "writes its own address",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "server node",
+      "sublabel": "writes its own address",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "an external store such as Redis",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "reads the address and connects",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "A",
+      "to": "S",
+      "label": "register",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "C",
+      "label": "look up",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Why no address goes into a configuration file",
+      "items": [
+        "Each process writes its address and the names it serves into the Store at startup, and refreshes that record while it lives. The record disappears when it stops.",
+        "The caller reads the Store to find where to connect. Adding servers or restarting one at a different address changes nothing on the calling side.",
+        "Which node a Spot or Actor is on right now is recorded here too. A Store is required in order to use Spots and Actors."
+      ]
+    }
+  ]
+}

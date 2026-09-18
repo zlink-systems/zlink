@@ -41,7 +41,7 @@ structured record를 기록한다(예: Micrometer `MeterRegistry`를 구성하�
 바꾸지 않고 별도 진단으로 격리한다. Dispatch option은 file path, callback observer,
 runtime error sink나 raw event DTO를 노출하지 않는다.
 
-**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 쓴다.
+**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 사용한다.
 
 ---
 
@@ -55,7 +55,7 @@ Application Job Queue backpressure)를
 **선택 기준.** `ZLinkFrameworkRuntimeStatus.capacity()`에서 서로 독립적인 `coreHwm()`과
 `applicationJobQueue()` snapshot을 읽는다. 하나의 queue limit으로 취급하지 말고 accounted byte와
 사용 중 permit, capacity waiter, wait count·duration을 연관 지어 본다. 특정 MeshName·ChannelName의 가용성은
-topology-discovery category의 상태 조회 항목을 쓴다.
+topology-discovery category의 상태 조회 항목을 사용한다.
 
 ---
 
@@ -87,7 +87,7 @@ Framework operation이 실패하면 `ZLinkFrameworkException.kind()`로 원인 �
 않는다 — operation의 완료 조건, idempotency와 업무 상태를 확인해 application이 직접 판단한다.
 
 **선택 기준.** 각 category 항목의 "완료 결과"에 나온 kind를 이 표로 되짚어 대응 방법을 정할 때
-쓴다.
+사용한다.
 
 ---
 

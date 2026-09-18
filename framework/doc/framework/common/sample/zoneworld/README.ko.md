@@ -68,7 +68,7 @@ headless runner는 server별 self-check를 실행하며, 브라우저 client는 
 - border sync와 announce는 publish이며 target handler 완료를 성공 기준으로 사용하지 않는다.
 - 점검 모드는 desired state를 store에 기록하고 fanout으로 전 node에 알린다. target Spot의
   `OnActorJoin` admission이 **유일한** 최종 판정자다. source/Entry의 maintenance cache는
-  관측·최적화 용도로만 쓰며 그 값으로 client-facing terminal 결과를 만들지 않는다. 점검 중
+  관측·최적화 용도로만 사용하며 그 값으로 client-facing terminal 결과를 만들지 않는다. 점검 중
   허용 범위는 같은 zone 내부 이동뿐이다(같은 NodeId의 다른 zone 이동도 거부한다).
 - runtime node 상태는 polling이 아니라 runtime event와 explicit report로 관찰한다.
   Registered는 ZoneNode explicit report 기반이며, 마지막 report 후 15초(report 주기 5초의
@@ -112,14 +112,14 @@ store는 resource 표에서 설명하며 이동·publish 시간 순서는 §7 se
 - **ready 신호 문자열을 고정한다.** ZoneNode는 준비를 마치면 표준 출력에
   `topology=ready node=<NodeId> zones=<쉼표로 이은 ZoneId>`를 정확히 한 줄 낸다. zone이
   없으면 `zones=` 뒤를 비운다. runner가 이 줄을 기다려 다음 단계로 넘어가므로 언어마다
-  문자열이 다르면 같은 runner 절차를 쓸 수 없다. 이 줄에 다른 field를 덧붙이지 않는다.
+  문자열이 다르면 같은 runner 절차를 사용할 수 없다. 이 줄에 다른 field를 덧붙이지 않는다.
 - **Bootstrap은 zone 2개를 확보한 뒤에 ready를 알린다.** ZoneNode는 startup에서 claim을
   시도하고, 자기 census가 zone 2개가 될 때까지 반복한다. 확보하기 전에 ready를 알리면
   `ZW-C1`이 "두 ZoneNode의 Registered·Connected 각각 정확"을 단언할 때 zone을 갖지 않은
   node도 통과시켜 단언의 뜻이 달라진다. factory만 등록하고 첫 요청에서 zone Spot을 만드는
   구현은 이 조건을 만족하지 않는다.
 - **claim 재시도는 `250 ms` 간격으로 최대 `120`회다.** 다른 ZoneNode가 아직 뜨지 않아
-  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 쓰고도 zone
+  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 사용하고도 zone
   2개를 확보하지 못하면 startup 실패로 끝낸다 — 조용히 zone 없이 ready를 알리지 않는다.
   간격과 횟수를 언어마다 다르게 두면 같은 시나리오가 언어별로 다른 시점에 실패해 판정이
   갈리므로 값을 고정한다.
@@ -725,7 +725,7 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 **ZW-E5의 판정 연결은 ZoneNode 정지를 시작하기 전에 연다.** 순서는 다음으로 고정한다.
 
 1. 판정 연결이 대상 NodeId의 `Connected=false`를 관측한다. ZW-C2와 같은 runtime event다.
-   `Registered=false`는 §2.2의 15초 report TTL 전환이므로(ZW-C3) 이 판정에 쓰지 않는다.
+   `Registered=false`는 §2.2의 15초 report TTL 전환이므로(ZW-C3) 이 판정에 사용하지 않는다.
 2. runner가 이전 process의 종료를 확인한 뒤 replacement를 시작한다.
 3. **같은 연결이** `Registered=true`이고 `Connected=true`인 status를 관측한다.
 4. 그 뒤에 `NodeDiagnosticsReq`를 **한 번** 보내 maintenance 복원을 판정한다.

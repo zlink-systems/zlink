@@ -108,7 +108,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 ```
 
 `zlink_get_router_option()`을 호출할 때 `*optvallen_`은 `optval_`의 입력 용량이다. 성공하면
-실제로 쓴 byte 수로 갱신된다.
+실제로 사용한 byte 수로 갱신된다.
 
 ### `ZLINK_ROUTER_OPT_MANDATORY`
 
@@ -244,7 +244,7 @@ zlink_set_router_option(router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof(m
 
 ### 패턴 4: 프록시(ROUTER-DEALER)
 
-ROUTER를 frontend로, DEALER를 backend로 써서 멀티스레드 서버를 구성한다. 전체 프록시
+ROUTER를 frontend로, DEALER를 backend로 사용해서 멀티스레드 서버를 구성한다. 전체 프록시
 예제는 [DEALER §5 패턴 3](03-3-dealer.ko.md#5-사용-패턴)을 참고한다.
 그 예제의 ROUTER 쪽은 frontend로 바인딩한 평범한 `zlink_socket(ctx, ZLINK_SOCKET_ROUTER)`다.
 

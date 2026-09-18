@@ -46,10 +46,10 @@ const auto &profile = response.body;             // ③ DTO
 ## status 코드는 어떻게 처리되나
 
 `submit<T>()`는 **4xx/5xx를 실패로 취급**한다 — `result_t`가
-`request_failed`("HTTP request failed with status 404")로 닫히고 `value()`에
+`internal_failure`("HTTP request failed with status 404")로 닫히고 `value()`에
 접근할 수 없다. typed 경로는 "성공 응답을 DTO로 받는" 경로이기 때문이다.
 
-status를 직접 분기하고 싶으면 `submit_raw()`를 쓴다. raw 경로는 status가 몇이든
+status를 직접 분기하고 싶으면 `submit_raw()`를 사용한다. raw 경로는 status가 몇이든
 응답 자체를 성공으로 돌려준다.
 
 ```cpp
@@ -68,7 +68,7 @@ switch (raw.value ().status) {
 ## DTO 디코딩
 
 `from_json` ADL 함수가 있으면 `submit<T>`/`fetch<T>`가 응답 body를 그 타입으로
-디코딩한다. 디코딩 실패는 `payload_decode_failed`로 보고된다.
+디코딩한다. 디코딩 실패는 `protocol_error`로 보고된다.
 
 ```cpp
 struct create_game_http_res_t

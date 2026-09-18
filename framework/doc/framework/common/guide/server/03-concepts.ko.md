@@ -1,13 +1,11 @@
 # 3. 핵심 개념
 
-> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
-> [상호작용 모델](../../../common/spec/server/00-foundation/04-interaction-model.ko.md)이 개념의 정식 의미를,
-> [언어별 handler 인터페이스 계약](../../../common/spec/server/languages/README.ko.md)이
-> 인터페이스의 정식 정의를 소유한다. 이 문서는 그 의미가 코드에서 어떤 모양으로 보이는지
-> 정리한다.
+!!! info "이 장을 읽고 나면"
+
+    channel · Spot · Actor · STREAM · Location이 각각 무엇이고 언제 고르는지 알 수 있다.
 
 ZLink framework는 **channel · spot · actor · stream · location**을 핵심 개념으로
-제공한다. 나머지 챕터는 전부 이 개념들의 변주다.
+제공한다. 뒤의 장은 이 개념들을 각각 자세히 다룬다.
 아래에서 차례로 보고, 중간에 actor·spot이 다른 node로 옮겨가는
 [relocation](#5-relocation--다른-node로-옮겨가기)을 함께 다룬다. 각 개념을 실제로
 작성하고 운영하는 방법은 뒤의 전용 장이 소유한다.
@@ -128,12 +126,14 @@ MeshNode 하나에 두 역할을 함께 추가한 모양은 이렇다.
 
 
 peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연결은
-[10-location](10-location.ko.md)이 다룬다.
+[Location](25-location.ko.md)이 다룬다.
 
-> **주의:** `MeshName`과 `ChannelName`은 서로 다른 이름이다. 하나의 mesh에 여러
+!!! warning "MeshName과 ChannelName은 다른 이름이다"
+
+     하나의 mesh에 여러
 > `ChannelName`을 등록할 수 있고, 서로 다른 mesh에서 같은 `ChannelName`을 사용할 수도 있다.
 
-"channel"이라는 이름을 쓰는 등록은 아래와 같고, 소켓을 공유하는지가 다르다.
+"channel"이라는 이름을 사용하는 등록은 아래와 같고, 소켓을 공유하는지가 다르다.
 
 | 종류 | 소켓 |
 | --- | --- |
@@ -141,18 +141,18 @@ peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연�
 | ClientServer channel | MeshNode와 별개인 자기 소켓을 연다 |
 | fanout channel | 독자적인 PUB/SUB 소켓을 연다 |
 
-pub/sub도 두 갈래다. route mesh channel 위에서 Spot끼리 주고받는 **Logical Multicast**는
-mesh 소켓을 그대로 쓰고, **fanout channel**은 자기 소켓으로 등록한 prefix와 publish topic이 일치하는 연결된
+pub/sub은 다음 두 종류다. route mesh channel 위에서 Spot끼리 주고받는 **Logical Multicast**는
+mesh 소켓을 그대로 사용하고, **fanout channel**은 자기 소켓으로 등록한 prefix와 publish topic이 일치하는 연결된
 구독자에게 전달한다. 셋의 구조 비교와 사용법은
-[05-channel-messaging §1](05-channel-messaging.ko.md#1-channel-종류)이 다룬다.
+[Channel 메시징](20-channel-messaging.ko.md#2-channel-메시징의-구성)이 다룬다.
 
 ## 2. spot — 상태를 소유하고 순서대로 처리하는 단위
 
 게임 방 하나, 길드 하나, 경매 물건 하나처럼 **여러 요청이 같은 상태를 동시에 건드리는
 대상**이 있다.
 이를 직접 만들면 그 상태를 지금 어느 process가 들고 있는지 찾아 요청을 그리로 보내는
-일과, 도착한 요청들이 상태를 동시에 건드리지 않게 막는 일을 함께 챙겨야 한다.
-상태를 process 메모리에 두면 앞의 라우팅을 직접 관리해야 하고, DB나 Redis에 두면
+일과, 도착한 요청들이 상태를 동시에 읽고 쓰지 않게 막는 일을 함께 구현해야 한다.
+상태를 process 메모리에 두면 앞의 routing을 직접 관리해야 하고, DB나 Redis에 두면
 요청마다 읽고 쓰면서 락을 잡아야 한다.
 
 spot은 이 둘을 framework가 맡는다. 대상을 **메모리에 살아 있는 객체 하나**로 두고,
@@ -172,7 +172,9 @@ spot은 MeshNode의 **Object role**에 등록한다. 같은 MeshNode의 Channel 
 
 spot은 만들어지는 시점에 따라 **Entry Spot · User Spot · Instance Spot** 세 종류로
 나뉘고, 어떤 작업이 동시에 실행되는지는 **execution mode**가 정한다. 세 종류의 차이,
-execution mode 선택, 등록·lifecycle·timer·outbound는 [06-spot](06-spot.ko.md)이 다룬다.
+execution mode는 [실행 모델](32-execution-model.ko.md)이, 등록과 lifecycle은
+[활성화와 수명](34-activation-lifetime.ko.md)이, timer는
+[Timer와 worker](36-timer-worker.ko.md)가 다룬다.
 
 ## 3. actor — ID로 식별되는 상태 객체
 
@@ -183,7 +185,7 @@ actor는 **ID로 식별되는 상태 보유 객체**다. 같은 ID로 온 메시
 <iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.html" title="actor — id로 식별" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-actor-route.html" target="_blank">↗ 크게 보기</a></p>
 
-상세는 [07-actor-spot](07-actor-spot.ko.md).
+상세는 [Actor](22-actor.ko.md)와 [Actor membership](35-actor-membership.ko.md).
 
 ## 4. stream — 외부 client 연결
 
@@ -204,8 +206,8 @@ gateway node에 두고 actor는 다른 node에 두어도, relay 경로는 framew
 actor가 [relocation](#5-relocation--다른-node로-옮겨가기)으로 옮겨가도 같은 session이
 새 위치로 이어진다.
 
-상세는 [09-stream](09-stream.ko.md), session과 actor를 bind하는 방법은
-[08-actor-session](08-actor-session.ko.md)이 다룬다.
+상세는 [STREAM](23-stream.ko.md), session과 actor를 bind하는 방법은
+[Session과 Actor 연결](24-actor-session.ko.md)이 다룬다.
 
 ## 5. relocation — 다른 node로 옮겨가기
 
@@ -235,19 +237,20 @@ actor P를 그 node로 옮긴다. 그래서 node A와 node B라는 이름은 app
 <iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.html" title="host relocate — spot과 actor를 통째로 이전" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/03-host-relocate.html" target="_blank">↗ 크게 보기</a></p>
 
-상태를 들고 있는 서버는 그 상태 때문에 함부로 내릴 수 없어서, 점검이나 배포를 하려면
+상태를 보유한 서버는 그 상태 때문에 임의로 종료할 수 없어서, 점검이나 배포를 하려면
 연결을 끊고 기다리게 만드는 것이 보통이다. Host
 Relocate는 spot과 actor의 state를 그대로 유지하면서 다른 node로 옮겨 node A를 비운다.
 호출하는 쪽은 여전히 `room-42`라는 같은 id로 요청하므로 이전 사실을 알 필요가 없다.
-결과적으로 **stateful 서비스를 stateless 서비스처럼 무중단으로 교체**할 수 있다.
+결과적으로 stateful 서비스를 stateless 서비스처럼 **무중단으로 교체**할 수 있다.
 
 두 경로 모두 **같은 relocation policy**를 따른다. 이동할 때 application 상태를 어떻게
 할지(옮기지 않음 · 새로 만듦 · 그대로 복원)를 spot·actor factory 등록에서 하나
 고정하며, 실행 중에는 바꾸지 않는다.
 
-policy 종류와 선택 기준은 [07-actor-spot §1](07-actor-spot.ko.md), actor join 호출과
-완료 결과 수신은 [07-actor-spot §5](07-actor-spot.ko.md), 무중단 점검·배포로서의
-Host Relocate와 이전 단위 구분은 [12-operations §2](12-operations.ko.md)가 다룬다.
+policy 종류와 선택 기준은 [Relocation](37-relocation.ko.md#21-factory-등록이-고르는-이동-정책), actor join 호출과
+완료 결과 수신은 [Actor membership](35-actor-membership.ko.md#23-결과를-받는-자리), 무중단 점검·배포로서의
+Host Relocate와 이전 단위 구분은
+[Relocate](12-operations.ko.md#2-relocate--상태를-유지한-채-다른-host로-옮기기)가 다룬다.
 
 ## 6. location — 주소 해석
 
@@ -256,11 +259,10 @@ Application 코드는 channel 이름 같은 논리 이름만 사용하고, 실�
 descriptor로 store에 등록하고, 호출하는 쪽은 논리 이름으로 store에서 대상을 찾아
 연결한다. 서버 구성이 바뀌면 연결도 갱신된다.
 
-사용법은 [10-location](10-location.ko.md), 계약은
-[공통 스펙](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md)이 정의한다.
+사용법은 [Location](25-location.ko.md)이 다룬다.
 
 store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원한다 — 개발·테스트와
-소규모 고정 배포에 사용한다([05-channel-messaging §6](05-channel-messaging.ko.md)).
+소규모 고정 배포에 사용한다([Channel 동작 원리](20-channel-messaging.ko.md)).
 같은 MeshNode에서 두 방식을 함께 사용할 수는 없다.
 
 > **샘플에서 보기 — [TicTacToe](../../../common/sample/tictactoe/README.ko.md).** 이 개념들이
@@ -277,9 +279,9 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 > 각 개념이 어떤 문제를 푸는지는 위에서 봤고, **함께 놓이면 어떤 모양인지**는
 > 이 샘플이 보여 준다.
 
-## 7. 무엇을 하려면 어디서 시작하나
+## 7. 작업별 시작 표면
 
-개념을 잡았으면 다음 질문은 "그래서 어느 표면을 잡느냐"다. 시작 지점은 **여덟 갈래**이고,
+개념을 확인했으면 다음 질문은 어느 표면에서 시작하느냐다. 시작 지점은 다음과 같고,
 전부 DI나 현재 handler context에서 얻는다. **application이 transport socket이나 endpoint를
 직접 고르지 않는다.**
 
@@ -294,13 +296,74 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 | classic pub/sub 발행 | fanout client | fanout ChannelName과 필요하면 topic |
 | STREAM client에 보내거나 응답 | session client | 현재 session |
 
-정확한 타입 이름은 언어를 따른다 — `13. Interface 카탈로그` 장이 소유한다.
+정확한 타입 이름은 언어를 따른다 — [주요 타입 사용 색인](13-interface-catalog.ko.md)에 있다.
 
-**완료의 뜻은 두 갈래로 통일되어 있다.** send 계열은 **보낼 자리가 수락**하면 반환값 없이
+**완료의 뜻은 두 표면에서 같다.** send 계열은 **보낼 자리가 수락**하면 반환값 없이
 끝나고, request 계열은 **reply · timeout · route 오류** 중 하나로 끝난다. 어느 표면을
-쓰든 같다([04-backpressure §3](04-backpressure.ko.md#3-api에-드러나는-backpressure)).
+쓰든 같다([33-backpressure §3](33-backpressure.ko.md#3-api에-드러나는-backpressure)).
 
-## 8. Framework가 맡는 것과 맡지 않는 것
+## 8. 이름 표기 규칙
+
+=== "C#/.NET"
+
+    가이드 전체에서 다음 표기를 일관되게 사용한다.
+
+    - **framework adapter가 노출하는 모든 public 타입**(interface, record, enum,
+      attribute, exception, DI 확장 method)은 `ZLink` prefix(대문자 `L`)를 사용한다. 예:
+      `IZLinkRouteClient`, `IZLinkMessageContext`, `[ZLinkRequest]`, `AddZLinkFramework`,
+      `ZLinkFrameworkException`.
+    - **단, client 측 Stream Connector 패키지**(`Zlink.Stream.Connector`)의
+      타입은 `Zlink` prefix(소문자 `l`)를 사용한다. 예: `IZlinkStreamConnector`,
+      `ZlinkStreamConnectorOptions`, `ZlinkStreamMessage`. 이는 connector가 서버
+      framework 패키지에 의존하지 않는 독립 client library이기 때문이다.
+    - **하부 zlink core C API**는 `zlink_*` snake_case다.
+    - NuGet package id는 `Zlink` 또는 `Zlink.*`를 사용한다. namespace와 assembly
+      이름은 기존 값을 유지하며 package id와 별개다.
+
+    > 정리하면: **서버 framework = `ZLink`, client connector = `Zlink`.** 한 코드에
+    > 두 표기가 같이 보이면 오타가 아니라 위 규칙 때문이다.
+
+=== "C++"
+
+    가이드 전체에서 다음 표기를 일관되게 사용한다.
+
+    - C++ framework public 타입과 함수는 `zlink::framework` 네임스페이스에 둔다.
+    - 타입 이름은 `_t` 접미사를 사용한다. 예: `spot_context_t`, `message_context_t`.
+    - facade header는 `#include <zlink/framework.hpp>`, CMake target은 `zlink::framework`다.
+    - client 측 HTTP 요청은 framework가 아니라 별도 `zlink::http_client` 산출물이 맡는다.
+    - 하부 zlink core C API는 `zlink_*` snake_case다.
+
+=== "Java"
+
+    가이드 전체에서 다음 표기를 일관되게 사용한다.
+
+    - Java framework public 타입은 `ZLink` prefix(대문자 `L`)를 사용한다. 예:
+      `ZLinkRouteClient`, `ZLinkMessageContext`, `ZLinkFrameworkOptions`.
+    - annotation도 같은 prefix다. 예: `@ZLinkRequest`, `@ZLinkSpotActorSend`.
+    - Maven 좌표와 패키지는 `systems.zlink.*`다.
+    - client 측 Stream Connector는 서버 framework 아티팩트에 의존하지 않는 독립 library다.
+    - 하부 zlink core C API는 `zlink_*` snake_case다.
+
+=== "Kotlin"
+
+    Java 표기를 그대로 사용한다. Kotlin 레이어가 추가하는 표면도 같은 규칙이다.
+
+    - public 타입은 `ZLink` prefix(대문자 `L`)를 사용한다.
+    - coroutine 확장은 `suspend` 함수이거나 `Flow`를 돌려준다.
+    - Maven 좌표와 패키지는 `systems.zlink.*`다.
+    - 하부 zlink core C API는 `zlink_*` snake_case다.
+
+=== "Node/TypeScript"
+
+    가이드 전체에서 다음 표기를 일관되게 사용한다.
+
+    - 계약 타입은 `ZLink` prefix(대문자 `L`)를 사용한다. 예: `ZLinkRouteClient`.
+    - 데코레이터는 소문자로 시작한다. 예: `zlinkRequestHandler`.
+    - 주입 토큰은 대문자 SNAKE다. 예: `ZLINK_ROUTE_CLIENT`.
+    - npm 패키지는 `@zlink-systems/*`다.
+    - 하부 zlink core C API는 `zlink_*` snake_case다.
+
+## 9. Framework가 맡는 것과 맡지 않는 것
 
 **아래는 전부 framework가 안에서 처리한다.** application 코드에 나타나지 않는다.
 
@@ -323,14 +386,14 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 서버 사이 통신과 실시간 상태 서버가 이 framework의 자리다. 인터넷에 직접 노출하는
 edge의 정책은 그 앞단이 소유한다.
 
-## 9. 관련 문서
+## 10. 관련 문서
 
 - request/send/pub-sub 전체 사용법과 handler 작성·`async` 실행 모델:
-  [05-channel-messaging](05-channel-messaging.ko.md)
-- spot 종류·실행 모델·handler 수명과 DI scope: [06-spot](06-spot.ko.md)
+  [Channel 메시징](20-channel-messaging.ko.md)
+- Spot 종류·생성 시점·주입 수명: [활성화와 수명](34-activation-lifetime.ko.md)
 - host 수명주기와 운영: [12-operations](12-operations.ko.md)
-- 등록 지점과 계층 구조: `01. Overview` 장
-- 전체 인터페이스/attribute/context: [언어별 handler 인터페이스 계약](../../../common/spec/server/languages/README.ko.md)
+- 등록 지점과 계층 구조: [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점)
+- 전체 interface·attribute·context: [주요 타입 사용 색인](13-interface-catalog.ko.md)
 - 실행 코드로 보고 싶을 때 고를 샘플: [14-samples](14-samples.ko.md)
 
 <script>

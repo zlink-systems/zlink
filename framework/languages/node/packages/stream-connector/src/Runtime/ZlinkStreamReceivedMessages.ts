@@ -37,6 +37,16 @@ export class ZlinkStreamReceivedMessages {
   private queueHead = 0;
   private queuedCount = 0;
   private drainTask: Promise<void> | undefined;
+  // True for as long as `drain` is on the stack, handler awaits included. It
+  // marks the execution context a registered handler runs in, so a `dispatch`
+  // made from inside a handler is recognised as re-entry rather than a fresh
+  // pump. It is not a lock: a single event loop admits no second thread, and
+  // nothing ever waits for this flag to fall.
+  private draining = false;
+  // Spec stream-connector 32 §10: arrivals per packet name on the current
+  // connection. It is raised where a packet arrives, never where one is taken,
+  // so consuming does not lower it and the dispatch mode does not change it.
+  private readonly receivedCounts = new Map<string, number>();
 
   /**
    * @param deliverOnArrival `Immediate` runs registered handlers on the receive
@@ -97,7 +107,18 @@ export class ZlinkStreamReceivedMessages {
     });
   }
 
+  /** Spec stream-connector 32 §10: arrivals under `name` on this connection. */
+  receivedCount(name: string): number {
+    return this.receivedCounts.get(name) ?? 0;
+  }
+
+  /** A newly established connection counts from 0 again (spec §10). */
+  resetReceivedCounts(): void {
+    this.receivedCounts.clear();
+  }
+
   enqueue(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal): void {
+    this.receivedCounts.set(message.name, (this.receivedCounts.get(message.name) ?? 0) + 1);
     for (const observer of [...this.observers.get(message.name) ?? []]) {
       if (observer(message)) {
         return;
@@ -113,8 +134,18 @@ export class ZlinkStreamReceivedMessages {
   /**
    * Runs the registered handlers the receive path left queued. `Manual` calls
    * this from `dispatch`; `Immediate` has already drained on arrival.
+   *
+   * A handler that calls `dispatch` arrives back here from inside the drain it
+   * was started by. `scheduleDrain` would find `drainTask` already set and
+   * return, and the await below would then be the drain waiting on itself —
+   * a deadlock with neither timeout nor error. The drain loop already takes
+   * every message a handler exists for, so there is nothing a second drain
+   * would deliver and returning is the whole of the correct behaviour.
    */
   async pump(): Promise<void> {
+    if (this.draining) {
+      return;
+    }
     this.scheduleDrain();
     await this.drainTask;
   }
@@ -146,23 +177,28 @@ export class ZlinkStreamReceivedMessages {
   }
 
   private async drain(): Promise<void> {
-    for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
-      const queued = this.queue[index];
-      if (queued === undefined) continue;
-      this.removeAt(index);
-      const { message, signal } = queued;
-      const handlers = [...this.handlers.get(message.name)!];
-      for (const handler of handlers) {
-        try {
-          await handler(message, signal);
-        } catch (cause) {
-          await this.events.publishError({
-            code: ZlinkStreamErrorCode.UserCallbackFailed,
-            message: 'Typed message handler failed.',
-            cause
-          }, signal);
+    this.draining = true;
+    try {
+      for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
+        const queued = this.queue[index];
+        if (queued === undefined) continue;
+        this.removeAt(index);
+        const { message, signal } = queued;
+        const handlers = [...this.handlers.get(message.name)!];
+        for (const handler of handlers) {
+          try {
+            await handler(message, signal);
+          } catch (cause) {
+            await this.events.publishError({
+              code: ZlinkStreamErrorCode.UserCallbackFailed,
+              message: 'Typed message handler failed.',
+              cause
+            }, signal);
+          }
         }
       }
+    } finally {
+      this.draining = false;
     }
   }
 

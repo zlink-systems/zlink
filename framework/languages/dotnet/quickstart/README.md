@@ -1,7 +1,7 @@
 # ZLink .NET quickstart
 
-`framework/doc/framework/dotnet/guide/server/02-getting-started.ko.md` §2 "최소 예제 —
-두 process가 서로 호출한다"와 같은 시나리오를 실제로 빌드·실행되는 프로젝트로 둔 것이다.
+`framework/doc/framework/dotnet/quickstart.ko.md`가 읽어 가는 프로젝트다. 실제로
+빌드·실행된다.
 Redis도 location store도 없이, endpoint를 직접 적는 수동 연결로 request/reply 하나를
 돌린다. 이 저장소 밖에서도 nuget.org의 게시 패키지만으로 빌드된다.
 

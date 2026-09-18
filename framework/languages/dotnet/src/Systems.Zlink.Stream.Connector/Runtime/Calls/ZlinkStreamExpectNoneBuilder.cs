@@ -17,7 +17,9 @@ internal sealed class ZlinkStreamExpectNoneBuilder : IZlinkStreamExpectNoneCall
     public IZlinkStreamExpectNoneCall Within(TimeSpan window)
     {
         if (window <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(window), "Observation window must be greater than zero.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "ExpectNone observation window must be greater than zero.");
         _window = window;
         return this;
     }
@@ -30,17 +32,16 @@ internal sealed class ZlinkStreamExpectNoneBuilder : IZlinkStreamExpectNoneCall
                      ?? throw ZlinkStreamConnector.Error(
                          ZlinkStreamErrorCode.ValidationFailed,
                          "ExpectNone requires Within(window).");
-        try
-        {
-            await _connector.WaitForEncodedAsync(name, null, window, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            return;
-        }
 
-        throw new InvalidOperationException(
+        var message = await _connector.WaitForEncodedAsync(name, null, window, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The negative observation holds exactly when nothing arrived; an arrival is the
+        // violation and violations are ValidationFailed (stream-connector spec §10.1).
+        if (message is null) return;
+
+        throw ZlinkStreamConnector.Error(
+            ZlinkStreamErrorCode.ValidationFailed,
             $"Expected no '{name}' stream message within {window}.");
     }
 }

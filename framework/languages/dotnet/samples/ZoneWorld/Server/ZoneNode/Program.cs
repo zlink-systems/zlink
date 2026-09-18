@@ -102,16 +102,18 @@ builder.Services.AddZLinkFramework(options =>
                 // only placement input and limits each process to two local Zone Spot owners.
                 .StableTypeLimit(2)
                 .DisableRelocation());
+    // --8<-- [start:doc-multi-channel-register]
     mesh.Channel(ZoneWorldNames.ZoneChannel).Server();
+
+    // The report channel carries this node's identity: Ops reads the socket events on its
+    // server side and needs to know *which node* connected or went away (§8.1).
+    mesh.Channel(ZoneWorldNames.ReportChannel).Client();
+    // --8<-- [end:doc-multi-channel-register]
 
     options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
         .EnableSubscriber()
         .AddHandler<WorldAnnounceSubscriber, WorldAnnounceEvent>()
         .AddHandler<NodeMaintenanceChangedSubscriber, NodeMaintenanceChangedEvent>();
-
-    // The report channel carries this node's identity: Ops reads the socket events on its
-    // server side and needs to know *which node* connected or went away (§8.1).
-    mesh.Channel(ZoneWorldNames.ReportChannel).Client();
 });
 
 if (hostsZones)

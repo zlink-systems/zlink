@@ -47,8 +47,8 @@ payload storage가 반환된다. 이 메시지를 소비하는 submit(아래 Soc
 발생하지만, disposing은 여전히 안전하고 여전히 필요하다.
 
 **선택 기준.** outbound payload를 만들 땐 크기 지정 또는 스냅샷 복사 생성자/factory를
-쓴다. 추가 복사 없이 그대로 읽거나 쓸 땐 `AsSpan()`/`AsReadOnlySpan()`을, 독립된
-managed 복사가 허용될 땐 `ToArray()`/`GetString()`을 쓴다.
+사용한다. 추가 복사 없이 그대로 읽거나 사용할 땐 `AsSpan()`/`AsReadOnlySpan()`을, 독립된
+managed 복사가 허용될 땐 `ToArray()`/`GetString()`을 사용한다.
 
 ---
 
@@ -64,7 +64,7 @@ bool ok = dealer.Recv(received);
 **옵션.** 인자 없음 — `Received`는 public 생성자가 없다, `Create()`만 있다.
 
 **완료 결과.** `Received`를 동기로 반환한다. caller가 소유하며 반드시 dispose해야 한다.
-receive API(Sockets category)는 성공적인 호출마다 내부 상태를 덮어쓴다.
+receive API(Sockets category)는 성공적인 호출마다 내부 상태를 덮어사용한다.
 
 **선택 기준.** receive loop·스레드마다 `Received` 하나를 만들어 호출마다 새로
 할당하는 대신 재사용한다.
@@ -103,7 +103,7 @@ envelope이 소유한 message part를 해제한다. `Reply()`/`Send()`는 아래
 operation-builder 형태의 builder를 반환한다.
 
 **선택 기준.** `MessageType`/`ReplyToken`으로 분기해 envelope이 reply 가능한지 판단한다.
-source route를 따로 찾지 않고 요청에 답하려면 `Reply()`를 쓴다.
+source route를 따로 찾지 않고 요청에 답하려면 `Reply()`를 사용한다.
 
 ---
 
@@ -207,7 +207,7 @@ received.Reply().Message(Message.From("ok")).Submit();
 | `RequestSubmitOperation.Submit()` | `IReadOnlyList<Message>` | completion queue가 reply를 낼 때까지 blocking, caller가 part dispose |
 
 **선택 기준.** async 코드에서는 `.Async()`를, blocking 가능한 thread에서는 `.Submit()`을
-쓴다. 목적지 route를 손으로 재구성하는 대신 `Received` envelope의 `Reply()`/`Send()`를 쓴다.
+사용한다. 목적지 route를 손으로 재구성하는 대신 `Received` envelope의 `Reply()`/`Send()`를 사용한다.
 
 ---
 

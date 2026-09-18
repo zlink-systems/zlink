@@ -39,7 +39,7 @@ internal sealed class ZlinkStreamHeaderCodec
                 "Flow id and flow origin must be present together.");
         if (header.FlowId is not null && !ZlinkStreamFlowId.IsValid(header.FlowId))
             throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ValidationFailed, "Flow id must be UUIDv7.");
-        if (header.FlowOrigin is { } origin && !Enum.IsDefined(origin))
+        if (header.FlowOrigin is { } origin && FlowOriginToWire(origin) is null)
             throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ValidationFailed, "Flow origin is invalid.");
 
         var flags = header.Flags;
@@ -105,7 +105,7 @@ internal sealed class ZlinkStreamHeaderCodec
         {
             Encoding.ASCII.GetBytes(header.FlowId!, buffer.AsSpan(offset, ZlinkStreamFlowId.EncodedLength));
             offset += ZlinkStreamFlowId.EncodedLength;
-            buffer[offset++] = (byte)header.FlowOrigin!.Value;
+            buffer[offset++] = FlowOriginToWire(header.FlowOrigin!.Value)!.Value;
         }
 
         return buffer;
@@ -201,8 +201,8 @@ internal sealed class ZlinkStreamHeaderCodec
             {
                 flowId = Encoding.ASCII.GetString(span.Slice(offset, ZlinkStreamFlowId.EncodedLength));
                 offset += ZlinkStreamFlowId.EncodedLength;
-                flowOrigin = (ZlinkStreamFlowOrigin)span[offset++];
-                if (!ZlinkStreamFlowId.IsValid(flowId) || !Enum.IsDefined(flowOrigin.Value))
+                flowOrigin = FlowOriginFromWire(span[offset++]);
+                if (!ZlinkStreamFlowId.IsValid(flowId) || flowOrigin is null)
                     throw ZlinkStreamConnector.Error(
                         ZlinkStreamErrorCode.FrameDecodeFailed,
                         "Helper header flow fields are invalid.");
@@ -231,6 +231,35 @@ internal sealed class ZlinkStreamHeaderCodec
         return new ZlinkStreamHeader(
             kind, codec, flags, requestSeq, name, metadata, correlationId, flowId, flowOrigin);
     }
+
+    /// <summary>
+    ///     Converts a <see cref="ZlinkStreamFlowOrigin" /> to its <c>flow_origin</c> wire
+    ///     value. The wire values are 1..4 while the enum ordinals are 0..3, so the two
+    ///     never travel through an integer cast (.NET spec §11).
+    /// </summary>
+    internal static byte? FlowOriginToWire(ZlinkStreamFlowOrigin origin) =>
+        origin switch
+        {
+            ZlinkStreamFlowOrigin.Inbound => (byte)1,
+            ZlinkStreamFlowOrigin.Timer => (byte)2,
+            ZlinkStreamFlowOrigin.Application => (byte)3,
+            ZlinkStreamFlowOrigin.Lifecycle => (byte)4,
+            _ => null
+        };
+
+    /// <summary>
+    ///     Converts a <c>flow_origin</c> wire value back to <see cref="ZlinkStreamFlowOrigin" />,
+    ///     or <see langword="null" /> when the byte is outside the closed set.
+    /// </summary>
+    internal static ZlinkStreamFlowOrigin? FlowOriginFromWire(byte wire) =>
+        wire switch
+        {
+            1 => ZlinkStreamFlowOrigin.Inbound,
+            2 => ZlinkStreamFlowOrigin.Timer,
+            3 => ZlinkStreamFlowOrigin.Application,
+            4 => ZlinkStreamFlowOrigin.Lifecycle,
+            _ => null
+        };
 
     private static void ValidateOutboundPacketName(ZlinkStreamMessageKind kind, string name)
     {

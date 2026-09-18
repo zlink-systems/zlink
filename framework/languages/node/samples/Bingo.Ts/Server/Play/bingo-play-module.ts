@@ -1,4 +1,5 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
+import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
@@ -46,11 +47,17 @@ function createBingoPlayModule() {
             .listen(config.playSpotEndpoint);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(BingoEntrySpot);
+          // --8<-- [start:doc-execution-mode]
+          // SpotWide is the default. Naming it here keeps the choice visible:
+          // every callback of this room runs through one gate.
           objectServer.addSpotFactory(
             SampleNames.roomSpotType,
             BingoRoomSpot,
-            (factory) => factory.disableRelocation()
+            (factory) => factory
+              .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
+              .disableRelocation()
           );
+          // --8<-- [end:doc-execution-mode]
           objectServer.addActorFactory(
             SampleNames.playerActorType,
             PlayerActorFactory,

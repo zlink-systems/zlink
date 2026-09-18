@@ -1,7 +1,8 @@
 package systems.zlink.stream.connector;
 
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 public interface ZLinkStreamConnector {
     boolean isConnected();
@@ -9,6 +10,15 @@ public interface ZLinkStreamConnector {
     ZLinkStreamConnectionState state();
 
     ZLinkStreamConnectorOptions options();
+
+    /**
+     * The reason the connection last ended, or empty when it has never
+     * ended (common connector spec 32 6.2). A failed first connect also
+     * leaves a reason here, and reconnecting does not clear it. The
+     * {@code closeReason()} an {@link ZLinkStreamDisconnected} event carries
+     * adds to this surface rather than replacing it.
+     */
+    Optional<ZLinkStreamCloseReason> closeReason();
 
     /**
      * Current diagnostics level. Application can read this without
@@ -28,15 +38,20 @@ public interface ZLinkStreamConnector {
      * through one send/receive never produces an inconsistent decision.
      */
     /**
-     * Synchronous compatibility bridge. Do not call from a framework execution
-     * context such as a handler or callback; use
-     * {@link #setDiagnosticsLevelAsync} there.
+     * Changes the diagnostics level without waiting (common connector spec
+     * 32 13). Changing a level is a single value write, so there is no
+     * completion for a caller to wait on; implementing this on top of the
+     * asynchronous pair would make a call inside a receive callback wait for
+     * its own completion. Safe to call from a handler or callback.
      */
-    default void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
-        setDiagnosticsLevelAsync(level).join();
-    }
+    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
 
-    CompletableFuture<Void> setDiagnosticsLevelAsync(
+    /**
+     * The asynchronous pair of {@link #setDiagnosticsLevel}, returning the
+     * same kind of terminal every other operation returns. It changes the
+     * same value and does not replace the synchronous surface.
+     */
+    CompletionStage<Void> setDiagnosticsLevelAsync(
         ZLinkStreamDiagnosticsLevel level);
 
     int pendingDispatchCount();
@@ -132,16 +147,20 @@ public interface ZLinkStreamConnector {
     private ZLinkStreamTypedCodec requireTypedCodec() {
         ZLinkStreamTypedCodec codec = options().typedCodec();
         if (codec == null) {
-            throw new IllegalStateException(
-                "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
+            //  A missing codec is a disagreement between the option set and
+            //  the API being used, so spec 32 9 calls it ConfigurationError.
+            throw new ZLinkStreamException(new ZLinkStreamError(
+                ZLinkStreamErrorCode.CONFIGURATION_ERROR,
+                "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec"));
         }
         return codec;
     }
 
     private ZLinkStreamEncodedPayload encodeTypedPayload(Object payload) {
         if (payload instanceof ZLinkStreamEncodedPayload) {
-            throw new IllegalArgumentException(
-                "raw encoded payload must use the ZLinkStreamEncodedPayload overload");
+            throw new ZLinkStreamException(new ZLinkStreamError(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                "raw encoded payload must use the ZLinkStreamEncodedPayload overload"));
         }
         return requireTypedCodec().encode(
             options().nameResolver().resolve(payload.getClass()),

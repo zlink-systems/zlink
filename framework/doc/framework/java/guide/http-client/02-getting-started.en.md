@@ -7,7 +7,7 @@
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation(project(":zlink-http-client"))
+    implementation("systems.zlink:zlink-http-client:0.16.0")
 }
 ```
 
@@ -41,14 +41,16 @@ HttpResponse<CreateGameRes> res = ZLinkHttpClient.create("https://game-api.examp
     .toCompletableFuture().join();
 ```
 
-## Blocking One-Liner (Test/CLI)
+## Taking Just The Body
 
 ```java
-Leaderboard board = ZLinkHttpClient.create("http://127.0.0.1:18080")
+CompletionStage<Leaderboard> board = ZLinkHttpClient.create("http://127.0.0.1:18080")
     .get("/leaderboard").fetch(Leaderboard.class);
 ```
 
-`fetch(Type)` waits for the result, returning the typed body and throwing failures as an exception.
-It's not used on a handler thread ([Chapter 7](07-async.en.md)).
+`fetch(Type)` hands over only the decoded body as a `CompletionStage<T>`. A failure is reported as
+an exceptional completion of the stage. In a test or CLI, take the value with
+`.toCompletableFuture().join()`; on a handler thread, compose it with `thenCompose`
+([Chapter 7](07-async.en.md)).
 
 [Next: Client Configuration →](03-client-configuration.en.md)

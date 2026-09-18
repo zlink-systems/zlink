@@ -54,7 +54,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _pending,
             _taskRunner,
             _callbacks,
-            connectTransport);
+            connectTransport,
+            _receivedMessages.ResetForConnection);
         _frameSender = new ZlinkStreamFrameSender(
             options,
             _headerCodec,
@@ -85,27 +86,33 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         Dispatch = new ZlinkStreamLifecycleCall(DispatchCoreAsync);
     }
 
-    public event Func<ZlinkStreamError, CancellationToken, ValueTask>? ErrorReceived
+    public IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler)
     {
-        add => _callbacks.AddErrorReceived(value);
-        remove => _callbacks.RemoveErrorReceived(value);
+        ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfDisposed();
+        return _callbacks.AddErrorReceived(handler);
     }
 
-    public event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>? Disconnected
+    public IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler)
     {
-        add => _callbacks.AddDisconnected(value);
-        remove => _callbacks.RemoveDisconnected(value);
+        ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfDisposed();
+        return _callbacks.AddDisconnected(handler);
     }
 
-    public event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged
+    public IDisposable OnConnectionStateChanged(
+        Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler)
     {
-        add => _callbacks.AddConnectionStateChanged(value);
-        remove => _callbacks.RemoveConnectionStateChanged(value);
+        ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfDisposed();
+        return _callbacks.AddConnectionStateChanged(handler);
     }
 
     public bool IsConnected => _lifecycle.IsConnected;
 
     public ZlinkStreamConnectionState State => _lifecycle.State;
+
+    public ZlinkStreamCloseReason? CloseReason => _lifecycle.LastCloseReason;
 
     public ZlinkStreamConnectorOptions Options { get; }
 
@@ -126,12 +133,12 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         return _receivedMessages.Count(name);
     }
 
+    /// <remarks>
+    ///     The synchronous surface writes the value and returns. It does not run the
+    ///     asynchronous pair and block on it, so a receive callback that changes the level
+    ///     never waits on its own completion (stream-connector spec §13).
+    /// </remarks>
     public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
-    {
-        SetDiagnosticsLevelAsync(level).GetAwaiter().GetResult();
-    }
-
-    public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
     {
         ThrowIfDisposed();
         if (!Enum.IsDefined(level))
@@ -140,6 +147,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         // The change applies to processing points that read the level after this
         // write; frames already built are not revisited (stream-connector spec §13).
         Options.SetDiagnosticsLevelLive(level);
+    }
+
+    public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
+    {
+        SetDiagnosticsLevel(level);
         return Task.CompletedTask;
     }
 
@@ -185,7 +197,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         return new ZlinkStreamSequenceBuilder(this, name);
     }
 
-    public ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> WaitForEncodedAsync(
+    public ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>?> WaitForEncodedAsync(
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         TimeSpan timeout,

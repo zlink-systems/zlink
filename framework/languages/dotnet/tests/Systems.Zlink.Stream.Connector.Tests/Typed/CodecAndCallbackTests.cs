@@ -421,11 +421,11 @@ public sealed partial class StreamConnectorTests
             Compression = ZlinkStreamCompression.None,
             DispatchMode = ZlinkStreamDispatchMode.Immediate
         });
-        connector.ErrorReceived += (receivedError, _) =>
+        _ = connector.OnErrorReceived((receivedError, _) =>
         {
             error.TrySetResult(receivedError);
             return ValueTask.CompletedTask;
-        };
+        });
         using var subscription = connector.On<Pong>("disabled-pong", (_, _) =>
             throw new InvalidOperationException(
                 "Handler must not receive compressed payload when compression is disabled."));
@@ -484,11 +484,11 @@ public sealed partial class StreamConnectorTests
             MaxReceivePayloadSize = 8,
             DispatchMode = ZlinkStreamDispatchMode.Immediate
         });
-        connector.ErrorReceived += (receivedError, _) =>
+        _ = connector.OnErrorReceived((receivedError, _) =>
         {
             error.TrySetResult(receivedError);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async();
 

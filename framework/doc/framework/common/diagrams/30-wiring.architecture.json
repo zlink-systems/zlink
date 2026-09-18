@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "세 패턴은 서로 다른 소켓을 연다",
+    "subtitle": "한 process가 세 구성을 모두 쓰면 listener도 따로 생긴다",
+    "output": "30-wiring.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 140, "gapY": 78, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "P", "type": "frontend", "label": "내 process", "sublabel": "세 구성을 모두 쓴다", "row": 1, "col": 0 },
+    { "id": "M", "type": "external", "label": "ROUTER :7201", "sublabel": "MeshNode 1개", "row": 0, "col": 1 },
+    { "id": "S", "type": "external", "label": "listener :7211", "sublabel": "ClientServer channel", "row": 1, "col": 1 },
+    { "id": "B", "type": "external", "label": "PUB :7212", "sublabel": "Fanout publisher", "row": 2, "col": 1 },
+    { "id": "MP", "type": "backend", "label": "peer node", "sublabel": "channel 여럿이 공유", "row": 0, "col": 2 },
+    { "id": "SC", "type": "backend", "label": "client", "sublabel": "이 주소로 연결", "row": 1, "col": 2 },
+    { "id": "BS", "type": "backend", "label": "subscriber", "sublabel": "SUB 소켓", "row": 2, "col": 2 }
+  ],
+  "connections": [
+    { "from": "P", "to": "M", "variant": "default" },
+    { "from": "P", "to": "S", "variant": "default" },
+    { "from": "P", "to": "B", "variant": "default" },
+    { "from": "M", "to": "MP", "label": "mesh 연결 1개", "variant": "default" },
+    { "from": "S", "to": "SC", "label": "channel 전용", "variant": "default" },
+    { "from": "B", "to": "BS", "label": "PUB/SUB", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "channel을 늘려도 소켓은 늘지 않는다 — RouteMesh만",
+      "items": [
+        "RouteMesh는 MeshNode마다 ROUTER listener 하나를 열고 그 위의 모든 channel이 같은 연결을 공유한다. ChannelName을 추가해도 socket이나 node 간 연결은 늘지 않는다.",
+        "ClientServer는 channel마다 자기 listener를 열고, Fanout은 PUB/SUB 소켓 쌍을 따로 연다. 둘 다 mesh 연결을 쓰지 않는다."
+      ]
+    }
+  ]
+}

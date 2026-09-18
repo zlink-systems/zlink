@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The logical id stays; only the execution site moves",
+    "subtitle": "State goes directly over the mesh connection · only the new owner is written to the store",
+    "output": "37-relocation-move-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "the id does not change",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "A",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "departing node",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "arriving node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "only the owner changes",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "messages, timers and captured state",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "S",
+      "label": "writes the new owner",
+      "variant": "default"
+    },
+    {
+      "from": "C",
+      "to": "S",
+      "label": "read again on every call",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "C",
+      "to": "B",
+      "label": "the id alone reaches the arriving node",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The moving state does not pass through the store",
+      "items": [
+        "The messages not yet run, the timer registrations and the captured state go straight from the departing node to the arriving node over the mesh connection.",
+        "What is written to the store is one new owner. The caller needs no new address — the logical id is unchanged."
+      ]
+    }
+  ]
+}

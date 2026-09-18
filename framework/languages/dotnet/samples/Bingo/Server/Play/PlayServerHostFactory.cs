@@ -69,6 +69,9 @@ public static class PlayServerHostFactory
                     SampleNames.PlayerActorType,
                     factory => factory
                         .PreserveStateWith<PlayerActorRelocationAdapter>())
+                // --8<-- [start:doc-execution-mode]
+                // SpotWide is the default. Naming it here keeps the choice visible:
+                // every callback of this room runs through one gate.
                 .AddSpotFactory<BingoRoom>(
                     SampleNames.RoomSpotType,
                     factory => factory
@@ -76,6 +79,7 @@ public static class PlayServerHostFactory
                         .RelocationCoordinationMode(
                             ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                         .PreserveStateWith<BingoRoomRelocationAdapter>());
+            // --8<-- [end:doc-execution-mode]
             mesh.Channel(SampleNames.RoomChannel).Server();
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });

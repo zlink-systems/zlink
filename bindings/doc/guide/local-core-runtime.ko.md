@@ -33,7 +33,7 @@ C++는 `./bindings/cpp/build.sh OFF OFF`로 빌드한다. C는
 
 Node 네이티브 addon은 `cd bindings/node && npm run rebuild-native`로 다시
 빌드한다. `binding.gyp`는 local일 때 export된 include/lib 디렉터리를 사용한다.
-JavaScript 샘플은 별도 native addon이 없으므로 빌드된 Node addon을 그대로 쓴다.
+JavaScript 샘플은 별도 native addon이 없으므로 빌드된 Node addon을 그대로 사용한다.
 
 ## Python
 

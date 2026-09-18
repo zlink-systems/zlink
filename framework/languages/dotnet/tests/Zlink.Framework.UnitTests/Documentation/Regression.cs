@@ -28,7 +28,6 @@ public sealed class RegressionTests
     /// </summary>
     private static readonly string[] LanguageGuideDocuments =
     [
-        "11-monitoring.ko.md",
         "13-interface-catalog.ko.md",
         "16-options.ko.md"
     ];
@@ -41,19 +40,28 @@ public sealed class RegressionTests
     [
         //  01은 dotnet 원문을 그대로 두고 코드와 언어별 사실만 탭으로 감쌌다.
         "01-overview.ko.md",
-        "02-getting-started.ko.md",
         "03-concepts.ko.md",
-        "04-backpressure.ko.md",
-        "05-channel-messaging.ko.md",
-        "06-spot.ko.md",
-        "07-actor-spot.ko.md",
-        "08-actor-session.ko.md",
-        "09-stream.ko.md",
-        "10-location.ko.md",
         "12-operations.ko.md",
         "14-samples.ko.md",
         "15-e2e-testing.ko.md",
-        "17-alternative.ko.md"
+        "17-alternative.ko.md",
+        "20-channel-messaging.ko.md",
+        "21-spot.ko.md",
+        "22-actor.ko.md",
+        "23-stream.ko.md",
+        "24-actor-session.ko.md",
+        "25-location.ko.md",
+        "26-monitoring.ko.md",
+        "30-channel-patterns.ko.md",
+        "31-handler-dispatch.ko.md",
+        "32-execution-model.ko.md",
+        "33-backpressure.ko.md",
+        "34-activation-lifetime.ko.md",
+        "35-actor-membership.ko.md",
+        "36-timer-worker.ko.md",
+        "37-relocation.ko.md",
+        "38-stream-boundary.ko.md",
+        "39-session-binding.ko.md"
     ];
 
     [Fact]
@@ -217,9 +225,38 @@ public sealed class RegressionTests
     }
 
     /// <summary>
+    /// 두 층으로 다시 쓰는 장이다(`doc/plan/guide-rewrite.ko.md`). 작성 가이드 §1.4가
+    /// "독자를 스펙으로 내보내지 않는다"를 정하므로 이 장들은 소유 스펙 머리말을 두지
+    /// 않는다. 옛 형식의 장과 섞이지 않게 여기서 갈라 둔다.
+    /// </summary>
+    private static readonly string[] RewriteLayerGuideDocuments =
+    [
+        "20-channel-messaging.ko.md",
+        "21-spot.ko.md",
+        "22-actor.ko.md",
+        "23-stream.ko.md",
+        "24-actor-session.ko.md",
+        "25-location.ko.md",
+        "30-channel-patterns.ko.md",
+        "31-handler-dispatch.ko.md",
+        "32-execution-model.ko.md",
+        "34-activation-lifetime.ko.md",
+        "35-actor-membership.ko.md",
+        "36-timer-worker.ko.md",
+        "37-relocation.ko.md",
+        "38-stream-boundary.ko.md",
+        "39-session-binding.ko.md",
+        "26-monitoring.ko.md",
+        "01-overview.ko.md",
+        "03-concepts.ko.md",
+        "17-alternative.ko.md"
+    ];
+
+    /// <summary>
     /// 공통 정본은 코드가 스니펫이라 코드 층위는 체커가 보지만 산문은 아무도 대조하지
-    /// 않는다. 그래서 챕터마다 계약을 소유하는 스펙 문서를 머리에 밝히고 그것과 맞춘다
-    /// (런북 §11 게이트 4). 소유 문서가 없는 챕터는 없다고 밝힌다.
+    /// 않는다. 그래서 옛 형식의 챕터는 계약을 소유하는 스펙 문서를 머리에 밝히고 그것과
+    /// 맞춘다(런북 §11 게이트 4). 소유 문서가 없는 챕터는 없다고 밝힌다. 다시 쓰는 층의
+    /// 장은 반대로 그 머리말을 두지 않는다.
     /// </summary>
     [Fact]
     public void CommonGuideNarrative_DeclareTheSpecThatOwnsTheirContract()
@@ -229,12 +266,17 @@ public sealed class RegressionTests
         {
             "14-samples.ko.md",
             "15-e2e-testing.ko.md",
-            "17-alternative.ko.md",
         };
 
         foreach (var document in CommonGuideDocuments)
         {
             var text = File.ReadAllText(Path.Combine(GetCommonGuideServerRoot(), document));
+            if (RewriteLayerGuideDocuments.Contains(document, StringComparer.Ordinal))
+            {
+                Assert.DoesNotContain("**이 장의 계약 소유 문서**", text, StringComparison.Ordinal);
+                continue;
+            }
+
             if (withoutOwningSpec.Contains(document, StringComparer.Ordinal))
             {
                 Assert.Contains("이 장에는 계약을 소유하는 스펙 문서가 없다", text, StringComparison.Ordinal);

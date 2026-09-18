@@ -5,7 +5,7 @@
 <!-- framework-adapter-nav:end -->
 [Kotlin 계약 목차](../README.ko.md) · [Java interface](../../java/interfaces/README.ko.md)
 
-Kotlin package는 Java와 JVM service runtime을 공유한다. 아래 문서는 Java type을 그대로 쓰는 범위와 Kotlin
+Kotlin package는 Java와 JVM service runtime을 공유한다. 아래 문서는 Java type을 그대로 사용하는 범위와 Kotlin
 전용 coroutine·DSL signature를 기능별로 고정한다.
 
 Kotlin의 codec extension은 Java `ZLinkCodecRegistrar`를 그대로 사용한다. Kotlin DSL의 등록

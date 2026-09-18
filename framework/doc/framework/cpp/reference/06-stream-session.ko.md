@@ -2,8 +2,8 @@
 
 [레퍼런스 목차](README.ko.md)
 
-이 category는 STREAM session 코드 안에서 쓰는 진입점(`packet_stream_session_t`, `stream_t`,
-`session_actor_manager_t`, `session_actor_t`)과 Actor 코드 안에서 bound session에 쓰는 진입점
+이 category는 STREAM session 코드 안에서 사용하는 진입점(`packet_stream_session_t`, `stream_t`,
+`session_actor_manager_t`, `session_actor_t`)과 Actor 코드 안에서 bound session에 사용하는 진입점
 (`bound_session_t`)을 다룬다. 정확한 signature는
 [STREAM session exact interface](../../common/spec/server/languages/cpp/interfaces/06-stream-session.ko.md)와
 [Actor exact interface](../../common/spec/server/languages/cpp/interfaces/05-actors.ko.md)가 소유한다.
@@ -41,7 +41,7 @@ public:
 header framing과 queue admission을 끝낸 뒤 packet마다 호출한다. Handshake 실패는 session이
 만들어지기 전이므로 `on_error`가 아니라 runtime monitoring에만 기록된다.
 
-**선택 기준.** `stream-session` topology를 쓰는 모든 host가 구현한다. `context.can_reply`가
+**선택 기준.** `stream-session` topology를 사용하는 모든 host가 구현한다. `context.can_reply`가
 `true`인 packet에만 `reply_packet`으로 응답할 수 있다.
 
 ---
@@ -72,8 +72,8 @@ co_await stream
 값은 millisecond 올림 뒤 `1..INT_MAX`여야 하고 deadline 뒤 late admission이나 replay는 없다. Reply에는
 이 modifier를 적용하지 않는다.
 
-**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 쓴다. Client의
-request에 답할 때는 `reply_packet`을 쓴다.
+**선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 사용한다. Client의
+request에 답할 때는 `reply_packet`을 사용한다.
 
 ---
 
@@ -100,8 +100,8 @@ co_await stream
 completion으로 끝난다. Caller의 request timeout은 wire로 전달되지 않으므로 이 reply의 admission
 deadline은 STREAM socket send timeout만 사용한다. Timeout 뒤에는 late reply를 보내지 않는다.
 
-**선택 기준.** `session_message_context_t::can_reply`가 `true`인 packet(request)에만 쓴다. Client가
-보낸 것이 아닌 새 메시지를 보내려면 `write_packet`을 쓴다.
+**선택 기준.** `session_message_context_t::can_reply`가 `true`인 packet(request)에만 사용한다. Client가
+보낸 것이 아닌 새 메시지를 보내려면 `write_packet`을 사용한다.
 
 ---
 
@@ -116,7 +116,7 @@ zlink::framework::session_actor_t bound =
 ```
 
 **옵션.** 이 호출에는 modifier가 없다 — `actor_ref_t`만 받는다. 반환하는 `request_call_t<session_actor_t>`는
-messaging-execution category의 request call과 같은 `.timeout(...)`/terminal 모양을 쓴다.
+messaging-execution category의 request call과 같은 `.timeout(...)`/terminal 모양을 사용한다.
 
 **완료 결과.** `bind`는 매번 새 binding을 만든다. `bind_or_get`은 이미 bound된 같은 incarnation이
 있으면 그것을 반환한다. Binding은 `actor_id + object_generation`의 exact incarnation 하나로
@@ -151,7 +151,7 @@ notification이며 callback terminal까지 기다린다. Physical disconnect는 
 binding을 제거하거나 이전 binding을 복원하지 않는다. 같은 generation의 relocation route 갱신은 rebind가
 아니므로 disconnect callback을 실행하지 않는다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 쓴다. Request에 대한 응답은
+**선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 사용한다. Request에 대한 응답은
 Session 쪽 `reply_packet`이 처리한다.
 
 ---
@@ -174,8 +174,8 @@ co_await context_.bound_session()
 새 request operation을 제공하지 않는다 — client request에 대한 reply는 Actor request handler의
 반환값으로 처리한다.
 
-**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 쓴다. Session 쪽에서 직접 보내려면 위
-`write_packet` 항목을 쓴다. 연결을 끊으려면 `bound_session_t::disconnect()`를 쓴다.
+**선택 기준.** Actor 코드 쪽에서 bound client로 push할 때 사용한다. Session 쪽에서 직접 보내려면 위
+`write_packet` 항목을 사용한다. 연결을 끊으려면 `bound_session_t::disconnect()`를 사용한다.
 
 ---
 
@@ -192,8 +192,8 @@ co_await stream.close();
 **완료 결과.** 연결을 닫는다. 이미 닫힌 연결에 다시 호출해도 이 문서가 정의하는 별도 예외 계약은
 없다 — 정확한 재호출 의미는 exact interface를 확인한다.
 
-**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 쓴다. Actor 쪽에서 bound
-client 연결을 끊으려면 `bound_session_t::disconnect()`를 쓴다.
+**선택 기준.** Application이 자발적으로 이 STREAM 연결을 끊어야 할 때 사용한다. Actor 쪽에서 bound
+client 연결을 끊으려면 `bound_session_t::disconnect()`를 사용한다.
 
 ---
 
@@ -209,8 +209,8 @@ co_await context_.bound_session().disconnect();
 
 **완료 결과.** Bound session과의 연결을 끊는다.
 
-**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 쓴다. Session 쪽에서
-직접 끊으려면 `close` 항목을 쓴다.
+**선택 기준.** Actor 쪽 코드에서 특정 client 연결을 더 유지할 필요가 없을 때 사용한다. Session 쪽에서
+직접 끊으려면 `close` 항목을 사용한다.
 
 ---
 

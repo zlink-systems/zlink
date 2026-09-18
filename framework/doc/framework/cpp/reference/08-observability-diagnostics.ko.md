@@ -36,10 +36,10 @@ options.configure_dispatch()
 structured record를 기록한다. Provider 호출 실패는 원래 message operation의 terminal
 결과를 바꾸지 않고 별도 진단으로 격리한다. Dispatch option은 file path, callback
 observer, runtime error sink나 raw event DTO를 노출하지 않는다.
-`send`와 `publish`는 reply path가 없으므로 unhandled 정책에 `reply_error`를 쓸 수 없다.
+`send`와 `publish`는 reply path가 없으므로 unhandled 정책에 `reply_error`를 사용할 수 없다.
 
-**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 쓴다. 실행 중 level만 바꾸려면
-host-lifecycle category의 `app_t::set_message_flow_mode`를 쓴다.
+**선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 사용한다. 실행 중 level만 바꾸려면
+host-lifecycle category의 `app_t::set_message_flow_mode`를 사용한다.
 
 ---
 
@@ -67,8 +67,8 @@ auto observation = framework_runtime.observe(
 `core_hwm_status_t`와 `application_job_queue_status_t` snapshot이 들어 있다. 하나의 queue limit으로
 취급하지 말고 accounted byte와 `permits_in_use`, `capacity_waiters`, wait count·duration을 연관 지어 본다.
 
-**선택 기준.** Host 전체의 lifecycle 상태나 capacity backpressure를 진단할 때 쓴다. 특정
-MeshName·ChannelName의 가용성은 topology-discovery category의 상태 조회 항목을 쓴다.
+**선택 기준.** Host 전체의 lifecycle 상태나 capacity backpressure를 진단할 때 사용한다. 특정
+MeshName·ChannelName의 가용성은 topology-discovery category의 상태 조회 항목을 사용한다.
 
 ---
 
@@ -101,7 +101,7 @@ Framework operation이 실패하면 `framework_exception_t::kind()`로 원인 �
 판단한다.
 
 **선택 기준.** 각 category 항목의 "완료 결과"에 나온 kind를 이 표로 되짚어 대응 방법을 정할 때
-쓴다.
+사용한다.
 
 ---
 

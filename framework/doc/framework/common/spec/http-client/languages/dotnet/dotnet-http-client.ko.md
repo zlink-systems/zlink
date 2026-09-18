@@ -11,7 +11,7 @@
 `Zlink.HttpClient`는 .NET에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
 JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder 스타일로
 `System.Net.Http`의 낮은 수준 설정을 흡수한다. typed 경로
-(`Body(dto)`/`Async<T>()`/`Fetch<T>()`)는 그 위에 얹은 편의 계층이다.
+(`Body(dto)`/`Async<T>()`/`Fetch<T>()`)는 그 위에 더해진 편의 계층이다.
 
 이 client는 `Zlink.Framework.Contracts`의 오류·codec 계약을 참조하며
 `Zlink.Framework` server runtime assembly를 참조하지 않는다. 이는 .NET의 package

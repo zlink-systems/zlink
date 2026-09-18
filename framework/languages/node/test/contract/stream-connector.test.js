@@ -597,11 +597,17 @@ test('stream connector test helpers observe absence and ordered payloads through
   await instance.dispatch();
   transportFactory.connection.pushFrame(sendFrame('Notice', 'second'));
   await instance.dispatch();
-  const payloads = await sequence;
-  assert.deepEqual(payloads.map((payload) => new TextDecoder().decode(payload.payload)), ['first', 'second']);
+  // Spec 32 section 10.1: the call answers with messages, so the packet name and
+  // the metadata are readable next to the payload.
+  const messages = await sequence;
+  assert.deepEqual(messages.map((message) => message.name), ['Notice', 'Notice']);
+  assert.deepEqual(
+    messages.map((message) => new TextDecoder().decode(message.payload.payload)),
+    ['first', 'second']
+  );
 
   const outOfOrder = instance.waitForSequence('Notice')
-    .expect((payload) => new TextDecoder().decode(payload.payload) === 'first')
+    .expect((message) => new TextDecoder().decode(message.payload.payload) === 'first')
     .timeout(1000)
     .run();
   const outOfOrderRejected = assert.rejects(() => outOfOrder, (error) =>
@@ -2034,6 +2040,251 @@ async function waitFor(predicate, timeoutMs) {
   }
 }
 
+// Spec stream-connector 32 section 10: receivedCount(name) counts what arrived.
+test('stream connector counts received packets per name without lowering them on consumption', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+  assert.equal(instance.receivedCount('Notice'), 0);
+
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'first'));
+  await instance.dispatch();
+  assert.equal(instance.receivedCount('Notice'), 1);
+
+  // A wait surface consumes the packet, and the count stays where it was.
+  const observed = await instance.waitFor('Notice').timeout(1000).submit();
+  assert.equal(observed.name, 'Notice');
+  assert.equal(instance.receivedCount('Notice'), 1);
+
+  // A registered handler in Manual mode changes nothing either: the packet is
+  // counted where it arrives, not where the pump hands it over.
+  const delivered = [];
+  instance.on('Notice', (message) => { delivered.push(message); });
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'second'));
+  await instance.dispatch();
+  assert.equal(delivered.length, 1);
+  assert.equal(instance.receivedCount('Notice'), 2);
+  assert.equal(instance.receivedCount('Unseen'), 0);
+  await instance.close();
+});
+
+test('stream connector counts received packets the same way in immediate dispatch', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    heartbeat: { enabled: false }
+  });
+  const delivered = [];
+  instance.on('Notice', (message) => { delivered.push(message); });
+  await instance.connect();
+
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'first'));
+  for (let attempt = 0; attempt < 500 && delivered.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  assert.equal(delivered.length, 1);
+  assert.equal(instance.receivedCount('Notice'), 1);
+  await instance.close();
+});
+
+test('stream connector restarts received counts when a connection is established', async () => {
+  const transportFactory = new ReconnectingTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'first'));
+  await instance.dispatch();
+  assert.equal(instance.receivedCount('Notice'), 1);
+  await instance.close();
+
+  const reconnected = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  await reconnected.connect();
+  assert.equal(reconnected.receivedCount('Notice'), 0);
+  await reconnected.close();
+});
+
+// Spec stream-connector 32 section 10.1: both ways of naming a packet exist.
+test('stream wait surfaces accept a payload constructor as well as a name', async () => {
+  class Notice {
+    static get packetName() { return 'Notice'; }
+  }
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+
+  const waited = instance.waitFor(Notice).timeout(1000).submit();
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'typed'));
+  await instance.dispatch();
+  assert.equal((await waited).name, 'Notice');
+
+  await instance.expectNone(Notice).within(5).run();
+
+  const sequence = instance.waitForSequence(Notice).expect(() => true).timeout(1000).run();
+  transportFactory.connection.pushFrame(sendFrame('Notice', 'typed again'));
+  await instance.dispatch();
+  assert.deepEqual((await sequence).map((message) => message.name), ['Notice']);
+  await instance.close();
+});
+
+// Spec stream-connector 32 section 5: a static member names the type, and the
+// constructor name is only the fallback.
+test('default packet name resolver prefers the static packetName member', () => {
+  class WithStatic {
+    static get packetName() { return 'inventory.changed'; }
+  }
+  class WithoutStatic {}
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory()
+  });
+
+  assert.equal(instance.options.nameResolver.resolve(WithStatic), 'inventory.changed');
+  assert.equal(instance.options.nameResolver.resolve(WithoutStatic), 'WithoutStatic');
+});
+
+// Spec stream-connector 32 section 6: null means unlimited.
+test('stream connector accepts null reconnect attempts as unlimited and rejects bad numbers', () => {
+  const unlimited = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    reconnect: { maxAttempts: null }
+  });
+  assert.equal(unlimited.options.reconnect.maxAttempts, null);
+
+  for (const maxAttempts of [0, -1]) {
+    assert.throws(
+      () => connector.zlinkStreamConnectorFactory.create({
+        endpoint: 'ws://127.0.0.1:19000',
+        transportFactory: new MemoryTransportFactory(),
+        reconnect: { maxAttempts }
+      }),
+      (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+    );
+  }
+});
+
+test('stream connector keeps retrying while reconnect attempts are unlimited', async () => {
+  const transportFactory = new FlakyTransportFactory(4);
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: null },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+
+  assert.equal(transportFactory.attempts, 5);
+  assert.equal(instance.isConnected, true);
+  await instance.close();
+});
+
+// Spec stream-connector 32 section 6: the wait is a value in [50%, 100%] of the
+// base delay, so clients that dropped together do not return together.
+test('stream connector randomizes the wait between reconnect attempts', async () => {
+  const baseDelayMs = 200;
+  const factors = [0, 0.5, 0.9999];
+  const flaky = new FlakyTransportFactory(3);
+  const originalRandom = Math.random;
+  let index = 0;
+  Math.random = () => factors[Math.min(index++, factors.length - 1)];
+  const attemptAt = [];
+  const timedFactory = {
+    async connect(options, signal) {
+      attemptAt.push(Date.now());
+      return await flaky.connect(options, signal);
+    }
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: timedFactory,
+    reconnect: { initialDelayMs: baseDelayMs, maxDelayMs: baseDelayMs, backoffFactor: 1, maxAttempts: 4 },
+    heartbeat: { enabled: false }
+  });
+  try {
+    await instance.connect();
+  } finally {
+    Math.random = originalRandom;
+  }
+
+  assert.equal(attemptAt.length, 4);
+  const waits = attemptAt.slice(1).map((value, position) => value - attemptAt[position]);
+  const expected = factors.map((factor) => Math.round(baseDelayMs * (0.5 + factor * 0.5)));
+  for (const [position, wait] of waits.entries()) {
+    // A timer never fires early, and a busy event loop may fire it late.
+    assert.ok(
+      wait >= expected[position] - 20 && wait <= expected[position] + 250,
+      `wait ${wait}ms is not close to the expected ${expected[position]}ms`
+    );
+    assert.ok(
+      wait >= baseDelayMs * 0.5 - 20 && wait <= baseDelayMs + 250,
+      `wait ${wait}ms left the 50%-100% window of ${baseDelayMs}ms`
+    );
+  }
+  await instance.close();
+});
+
+test('stream connector runs the disconnect handler when reconnect attempts are spent', async () => {
+  const transportFactory = new FlakyTransportFactory(5);
+  let disconnected = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+  instance.onDisconnected(() => { disconnected += 1; });
+
+  await assert.rejects(() => instance.connect(), /Connect failed/);
+
+  assert.equal(transportFactory.attempts, 2);
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
+  assert.equal(disconnected, 1);
+  assert.equal(instance.closeReason, 'TransportError');
+});
+
+test('zlinkStreamAssert.ensure refuses an empty diagnostic message', () => {
+  assert.throws(
+    () => connector.zlinkStreamAssert.ensure(true, '   '),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+      && /non-empty diagnostic message/.test(error.error.message)
+  );
+  assert.throws(
+    () => connector.zlinkStreamAssert.ensure(false, ''),
+    (error) => /non-empty diagnostic message/.test(error.error.message)
+  );
+  connector.zlinkStreamAssert.ensure(true, 'still fine');
+});
+
+class ReconnectingTransportFactory {
+  constructor() {
+    this.connection = new MemoryConnection();
+  }
+
+  async connect() {
+    return this.connection;
+  }
+}
+
 function sendFrame(name, payload) {
   return protocolCodecs.ZlinkStreamFrameCodec.encode(
     protocolCodecs.ZlinkStreamHeaderCodec.encode({
@@ -2107,3 +2358,223 @@ class FlakyTransportFactory {
     return this.connection;
   }
 }
+
+// Issue #583 (1): `dispatch` inside a registered handler is re-entry, not a
+// second pump. The handler runs from inside the drain the pump is awaiting, so
+// a pump that waited for the drain task again would be waiting for itself.
+test('a dispatch made from inside a message handler returns instead of waiting on its own drain', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  const order = [];
+  instance.on('Nested', async () => {
+    order.push('nested-enter');
+    await instance.dispatch();
+    order.push('nested-exit');
+  });
+  instance.on('Follow', () => { order.push('follow'); });
+
+  await instance.connect();
+  transportFactory.connection.pushFrame(sendFrame('Nested', 'first'));
+  transportFactory.connection.pushFrame(sendFrame('Follow', 'second'));
+
+  await withTimeout(instance.dispatch(), 2000, 'dispatch from inside a handler');
+
+  // The nested call is a no-op, and the drain it re-entered still delivers the
+  // rest of the queue afterwards.
+  assert.deepEqual(order, ['nested-enter', 'nested-exit', 'follow']);
+});
+
+// Issue #583 (2): `connect` waits for the disconnect task, so the disconnect
+// handler must run outside it. A handler that reconnects would otherwise wait
+// for the task its own caller has not yet left.
+test('a disconnect handler may call connect without waiting on the disconnect that ran it', async () => {
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = async () => { throw new Error('old transport failed'); };
+  const newConnection = new MemoryConnection();
+  let connectCalls = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  let handlerFailure;
+  instance.onDisconnected(async () => {
+    await withTimeout(instance.connect(), 2000, 'connect from the disconnect handler')
+      .catch((error) => { handlerFailure = error; });
+  });
+
+  await instance.connect();
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    3000
+  );
+  assert.equal(handlerFailure, undefined);
+});
+
+// Issue #583 (2): `publishDisconnected` settles every handler, so a handler
+// promise that never settles never lets it return. The reconnect the spec has
+// on by default must not sit behind that.
+test('a disconnect handler that never settles does not cost the connector its reconnect', async () => {
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = async () => { throw new Error('old transport failed'); };
+  const newConnection = new MemoryConnection();
+  let connectCalls = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+  let handlerEntered = false;
+  let releaseHandler;
+  // Unsettled for the whole reconnect window. It is released at the end only so
+  // that the shared cleanup, which notifies the same handler once more, can
+  // finish; nothing under test waits for it.
+  const unsettled = new Promise((resolve) => { releaseHandler = resolve; });
+  instance.onDisconnected(() => {
+    handlerEntered = true;
+    return unsettled;
+  });
+
+  await instance.connect();
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    3000
+  );
+  assert.equal(handlerEntered, true);
+  releaseHandler();
+});
+
+// Issue #583 (3): the batch loop awaits application code between frames, and a
+// disconnect can complete inside that await. Every frame after it belongs to a
+// connection the connector no longer holds.
+test('frames left in a batch of a connection that was torn down mid-batch are dropped', async () => {
+  const closingFrame = protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: 'session-closing',
+      metadata: connector.ZlinkStreamMetadataMap.empty
+    }),
+    Uint8Array.from([1, 4, 0, 0])
+  );
+  const late = sendFrame('LateInBatch', 'stale');
+  const batch = new Uint8Array(closingFrame.length + late.length);
+  batch.set(closingFrame, 0);
+  batch.set(late, closingFrame.length);
+
+  let delivered = false;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false },
+    transportFactory: {
+      async connect() {
+        return {
+          async write() {},
+          async read() {
+            if (delivered) return undefined;
+            delivered = true;
+            return batch;
+          },
+          async close() {}
+        };
+      }
+    }
+  });
+  const received = [];
+  instance.on('LateInBatch', (message) => received.push(message));
+
+  await instance.connect();
+  await instance.dispatch();
+  assert.equal(instance.closeReason, 'ServerDrain');
+  // The receive loop finishes the batch after that pump has returned, so the
+  // verdict is only meaningful once the loop has had its turn and a second
+  // pump has had the chance to deliver whatever the batch left queued.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await instance.dispatch();
+
+  assert.deepEqual(received, []);
+  // Spec stream-connector 32 section 10 counts arrivals on the current
+  // connection, and this frame arrived on one that no longer exists.
+  assert.equal(instance.receivedCount('LateInBatch'), 0);
+});
+
+// Issue #583 (4): the interval fires on the clock, not on the previous tick.
+test('an unfinished heartbeat tick suppresses the tick the interval asks for next', async () => {
+  const writes = [];
+  const releases = [];
+  const connection = new MemoryConnection();
+  connection.write = (frame) => {
+    writes.push(frame);
+    return new Promise((resolve) => { releases.push(resolve); });
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { intervalMs: 1, timeoutMs: 60000 }
+  });
+
+  await instance.connect();
+  await waitFor(() => writes.length === 1, 1000);
+  // Dozens of interval periods pass while the first ping is still unwritten.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(writes.length, 1);
+
+  for (const release of releases.splice(0)) {
+    release();
+  }
+  await instance.close();
+});
+
+// Spec stream-connector 32 §7: `close` runs the disconnect handler and returns
+// without waiting for it. A handler that calls `close` would otherwise wait for
+// the `closeTask` its own caller is still inside, and the two would wait for
+// each other. The same shape as the `dispatch` and `connect` cases of #583.
+test('a disconnect handler may call close without waiting on the close that ran it', async () => {
+  // Deliberately outside the shared cleanup: `close` is the subject here, and
+  // the cleanup's own close would re-enter it. Heartbeat is off, so this
+  // connector holds no timer once the scenario is done with it.
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  let handlerEntered = false;
+  let nestedSettled = false;
+  let nestedFailure;
+  instance.onDisconnected(async () => {
+    handlerEntered = true;
+    // Settled through callbacks rather than a bare await, so that a build
+    // without the fix leaves a pending promise nobody reports as unhandled.
+    await instance.close().then(
+      () => { nestedSettled = true; },
+      (error) => { nestedSettled = true; nestedFailure = error; }
+    );
+  });
+
+  await instance.connect();
+  await withTimeout(instance.close(), 2000, 'close called from inside a disconnect handler');
+
+  // The handler ran before `close` returned; only its completion was left
+  // unwaited for.
+  assert.equal(handlerEntered, true);
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+  await waitFor(() => nestedSettled, 2000);
+  assert.equal(nestedFailure, undefined);
+});

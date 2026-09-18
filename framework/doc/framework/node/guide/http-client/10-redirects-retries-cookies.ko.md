@@ -13,7 +13,7 @@ redirect 처리를 반복한다.
 - 메서드 rewrite: `303`, 또는 `301`/`302` + `POST` → `GET`으로 바꾸고 본문을 제거한다.
 - **`Authorization` 보존 규칙**: same-origin(scheme+host+port 동일) redirect에서는
   `Authorization`을 보존하고 cross-origin으로는 제거한다.
-- `max` 횟수를 넘기면 `requestFailed`로 실패한다.
+- `max` 횟수를 넘기면 `Unavailable`로 실패한다.
 - 지원 location: 절대(`http(s)://...`)와 path-absolute(`/...`).
 
 ## Retry
@@ -28,7 +28,7 @@ redirect 처리를 반복한다.
 ## Cookie jar
 
 `cookies()`로 활성화한다. `fetch`/undici는 서버사이드 영속 cookie jar가 없으므로 래퍼
-소유 jar를 쓴다. 좁은 의미론을 따른다:
+소유 jar를 사용한다. 좁은 의미론을 따른다:
 
 - host 정확 매칭으로 저장(`Domain` 속성 미지원).
 - 기본 `Path=/`. `Path`/`Secure`/`Max-Age` 속성만 해석하고 `Domain`/`Expires`는 무시.

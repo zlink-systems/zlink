@@ -8,7 +8,7 @@ title: "Spot·Actor routing"
 
 > 이 문서는 global SpotId·ActorId로 보낸 message가 현재 owner를 찾아 도착하는 경로, Session에
 > bind된 Actor로 가는 경로와 request의 reply가 되돌아가는 경로를 정의한다. 위치 조회를 얼마나
-> 자주 하는지, 언제 cache를 쓰고 언제 무효화하는지도 함께 다룬다.
+> 자주 하는지, 언제 cache를 사용하고 언제 무효화하는지도 함께 다룬다.
 >
 > **병합 범위** — 이 문서는 [45. target 선택과 route cache](08-routing.ko.md)의
 > §1·§1.1·§2(positive route cache 자체, resolver 결과 타입, cache 수명, relocation cache 무효화)만
@@ -91,7 +91,7 @@ Source runtime은 다음 순서로 처리한다.
 5. Target은 자신이 같은 logical ID의 current owner인지, current Ready object가 있는지,
    local admission이 가능한지 확인한 뒤 application queue에 넣는다. Object generation은
    application handler의 target 일치 조건으로 검사하지 않는다
-   ([§2.6](#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)).
+   ([§2.6](#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)).
 
 Location Store가 global object마다 기록한 current owner, incarnation, owner
 generation과 lease 정보를 authority라 한다. Framework는 current Ready
@@ -134,7 +134,7 @@ Relay 통지는 Framework가 소유하는 infrastructure record이며 applicatio
 
 찾은 owner가 여전히 그 object를 소유하는지, 같은 ID로 새 incarnation이 만들어졌다면
 어느 쪽이 message를 처리하는지는
-[§2.6](#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)이 정한다.
+[§2.6](#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)이 정한다.
 
 Local owner와 remote owner에는 같은 handler, metadata와 completion 계약을 적용한다.
 
@@ -212,7 +212,7 @@ Relay는 original operation ID, `ObjectGeneration`, payload와 reply route를
 
 이 generation 검사는 relocation이 설치한 Message Follow route가 같은 incarnation의 이동에
 속하는지 확인하는 것이며, 일반 message의 target을 제한하는 검사가 아니다
-([§2.6](#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)).
+([§2.6](#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)).
 
 `PerActor` User Spot relocation 중 `ToActor`는 Spot authority가 아니라 Actor별
 current owner route를 사용한다. Spot authority가 target으로 바뀌어도 아직 source에
@@ -279,7 +279,7 @@ object generation, authority generation과 target node를 검증해야 한다. �
 중복 억제는 전용 registry가 맡는다. Key는 source와 target route fence의 모든 field를
 포함한다 — object kind와 논리 ID뿐 아니라 object generation, target node RID·generation,
 authority owner generation과 owner lease generation도 source와 target 양쪽 값으로
-비교한다. 일부 generation만 key로 쓰면 이전 route에서 남은 표식이 새 target으로 보내야
+비교한다. 일부 generation만 key로 사용하면 이전 route에서 남은 표식이 새 target으로 보내야
 할 통지까지 막을 수 있다.
 
 ```mermaid
@@ -301,7 +301,7 @@ stateDiagram-v2
 completion은 각각의 기존 owner가 계속 관리하므로, suppression 상태가 원래 operation의
 terminal 결과를 만들거나 바꾸지 않는다.
 
-### 2.6 ObjectGeneration을 어디에 쓰고 어디에 쓰지 않는가
+### 2.6 ObjectGeneration을 어디에 사용하고 어디에 사용하지 않는가
 
 일반 Actor·Spot message는 global logical ID만 target으로 사용한다. Actor send/request는
 `ActorId`, Instance Spot을 포함한 Spot send/request는 `SpotId`가 가리키는 current Ready
@@ -324,7 +324,7 @@ object로 전달한다. `ActorRef`·`SpotRef`와 그 안의
 | Resolve 뒤 일어난 일 | 결과 |
 |---|---|
 | 같은 owner에서 object가 close·destroy되고 같은 ID로 새 incarnation이 만들어졌다 | Target queue가 수락하는 시점의 current Ready object가 처리한다. Actor와 Instance Spot을 포함한 모든 Spot direct message에 동일하게 적용한다. |
-| Owner process가 종료되었거나 owner가 다른 node로 바뀌어 찾은 route를 쓸 수 없다 | Current operation을 [`Unavailable`](../00-foundation/07-framework-error-model.ko.md)로 끝낸다. 이 정책(자동 재제출·자동 재활성화 없음)은 [장애 정책 §4.2](../05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot)가 소유한다. |
+| Owner process가 종료되었거나 owner가 다른 node로 바뀌어 찾은 route를 사용할 수 없다 | Current operation을 [`Unavailable`](../00-foundation/07-framework-error-model.ko.md)로 끝낸다. 이 정책(자동 재제출·자동 재활성화 없음)은 [장애 정책 §4.2](../05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot)가 소유한다. |
 
 두 경우 모두 Framework는 실패한 operation을 새 owner에게 **자동으로 다시 보내지 않는다.**
 Application이 새 call을 시작하면 그때 logical ID의 current Ready owner를 다시 확인한다. 이

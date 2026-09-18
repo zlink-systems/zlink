@@ -12,7 +12,7 @@ hint, the application checks the operation's idempotency and side effects to dec
 |------|--------|
 | Request format, redirect, or response decode error | `ProtocolError` |
 | DNS, proxy CONNECT, or target connection failure | `Unavailable` |
-| Response body or decompressed size limit exceeded | `CapacityExceeded` |
+| Response body or decompressed size limit exceeded | `Rejected` |
 | Request timeout | `DeadlineExceeded` |
 | HTTP status 400 or above | `InternalFailure` |
 

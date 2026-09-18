@@ -485,7 +485,7 @@ Relocation unit마다 다음 시점을 기록한다. 각 시점은 그 사건이
 
 각 unit은 기본 1초 이내를 목표로 한다. **이 값은 timeout도 correctness 조건도 아니며**,
 [Actor와 Spot relocation 전체 흐름의 `RelocationCutoverWaitTimeout`(기본 1,000 ms)](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)과
-숫자는 같지만 다른 값이다 — 이 1초는 warning 임계값으로만 쓰는 관측용 목표이고,
+숫자는 같지만 다른 값이다 — 이 1초는 warning 임계값으로만 사용하는 관측용 목표이고,
 `RelocationCutoverWaitTimeout`은 cutover 대기가 끝나면 target이 CAS와 queue 개방으로
 넘어가는 protocol fallback 시한이다. 초과해도 relocation을 취소하거나 source로 되돌리지
 않는다. Framework는 같은 operation을 one-way cutover submit이 terminal result에 도달할 때까지 계속하고 warning과

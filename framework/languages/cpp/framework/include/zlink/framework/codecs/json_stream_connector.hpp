@@ -54,20 +54,23 @@ template <typename T> packet_t encode_packet (const T &value)
     return packet;
 }
 
+/* Returns the registration handle (stream-connector §7): the caller keeps it
+ * for as long as the handler must run. */
 template <typename T>
-connector_t &
+[[nodiscard]] subscription_t
 on (connector_t &connector, std::string packet_name, std::function<void (const T &)> callback)
 {
-    return connector.on<packet_t> (std::move (packet_name),
-                                   [callback = std::move (callback)] (const packet_t &packet) {
-                                       T value{};
-                                       decode_payload (packet.codec, packet.payload, value);
-                                       callback (std::move (value));
-                                   });
+    return connector.on<packet_t> (
+      std::move (packet_name),
+      [callback = std::move (callback)] (const message_t<packet_t> &message) {
+          T value{};
+          decode_payload (message.payload.codec, message.payload.payload, value);
+          callback (std::move (value));
+      });
 }
 
 template <typename T>
-connector_t &on (connector_t &connector, std::function<void (const T &)> callback)
+[[nodiscard]] subscription_t on (connector_t &connector, std::function<void (const T &)> callback)
 {
     return on<T> (connector, detail::message_packet_name<T> (), std::move (callback));
 }

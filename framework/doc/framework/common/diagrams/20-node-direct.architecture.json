@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "업무 호출은 이름, 운영 호출은 node RID",
+    "subtitle": "업무 호출은 담당 node를 지정하지 않는다",
+    "output": "20-node-direct.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 120,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "APP",
+      "type": "frontend",
+      "label": "업무 서버",
+      "sublabel": "이름만 안다",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "담당 node 선택",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "SRV",
+      "type": "backend",
+      "label": "담당 node",
+      "sublabel": "누구인지 모름",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "OPS",
+      "type": "frontend",
+      "label": "운영 도구",
+      "sublabel": "node RID를 안다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "N1",
+      "type": "backend",
+      "label": "play-node-1",
+      "sublabel": "그 node 자체",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "APP",
+      "to": "FW",
+      "label": "channel 이름",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "SRV",
+      "variant": "default"
+    },
+    {
+      "from": "OPS",
+      "to": "N1",
+      "label": "node RID",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "node RID는 운영 호출에만 쓴다",
+      "items": [
+        "업무 호출은 논리 이름을 준다. node RID는 그 node 자체가 대상인 운영 호출에만 쓴다."
+      ]
+    }
+  ]
+}

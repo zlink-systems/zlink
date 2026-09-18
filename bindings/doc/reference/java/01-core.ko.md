@@ -55,7 +55,7 @@ context.recalculateAutoHwm();
 않는다. `recalculateAutoHwm()`은 여전히 `AutoHwmProfile`로 구성된
 socket(Sockets category)에 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 스레드에서 socket을 쓰는 context를 닫기 전에
+**선택 기준.** 여러 스레드에서 socket을 사용하는 context를 닫기 전에
 `shutdown()`을 호출해 스레드가 무기한 block되는 걸 피한다. `AutoHwmProfile`
 변경은 `Context.recalculateAutoHwm()`과 짝지어 즉시 적용한다.
 
@@ -161,8 +161,8 @@ RoutingId restored = RoutingId.fromHex(previouslyPrinted.toHex());
 
 **선택 기준.** 사람이 부여한 identity엔 `from(String)`을, 숫자·UUID 형태
 identity엔 `from(long)`/`from(UUID)`를, 이미 binary이거나 더 큰 buffer의
-slice인 identity엔 raw byte overload(범위 overload 포함)를 쓴다. 내구성
-있는 round trip엔 `toHex()`/`fromHex()`를 쓴다 — `toString()`은 표시
+slice인 identity엔 raw byte overload(범위 overload 포함)를 사용한다. 내구성
+있는 round trip엔 `toHex()`/`fromHex()`를 사용한다 — `toString()`은 표시
 전용이다.
 
 ---
@@ -190,9 +190,9 @@ int[] version = Zlink.version();
 수식어가 없다** — application 코드에서 도달할 수 없다.
 
 **선택 기준.** 동적으로 로드된 native library가 기대와 일치하는지
-확인하려면 `version()`을 쓴다. 기동 시점에 선택적 transport를 분기하려면
-`has(...)`를 쓴다. `strerror`는 다른 곳(Errors category)에서 드러난 native
-error code와 함께 진단할 때 쓴다.
+확인하려면 `version()`을 사용한다. 기동 시점에 선택적 transport를 분기하려면
+`has(...)`를 사용한다. `strerror`는 다른 곳(Errors category)에서 드러난 native
+error code와 함께 진단할 때 사용한다.
 
 ---
 
@@ -234,8 +234,8 @@ try (ZlinkThread thread = Zlink.createThread(() -> doWork())) {
 caller가 각각을 소유하고 close해야 한다(셋 다 `AutoCloseable`).
 
 **선택 기준.** 스레드 전체에서 안전한 공유 count엔 `createAtomicCounter`를
-쓴다. 벤치마킹엔 `createStopwatch`를 쓴다. zlink 런타임이 수명주기를
-소유해야 할 땐 `java.lang.Thread`를 직접 쓰는 대신 `createThread`를 쓴다.
+사용한다. 벤치마킹엔 `createStopwatch`를 사용한다. zlink 런타임이 수명주기를
+소유해야 할 땐 `java.lang.Thread`를 직접 사용하는 대신 `createThread`를 사용한다.
 
 ---
 
@@ -269,7 +269,7 @@ dotnet의 public `Zlink.Sleep(TimeSpan)`/`Zlink.MultipartClose(...)` 짝과
 
 **선택 기준.** 단순 fire-and-forget forwarding loop엔 `proxy`를, 다른
 스레드에서 `control`로 loop을 일시정지·재개·종료해야 하면
-`proxySteerable`을 쓴다. public `multipartClose` 대응물이 없으므로 각
+`proxySteerable`을 사용한다. public `multipartClose` 대응물이 없으므로 각
 part는 `Message.close()`(Messaging category)로 개별 close한다.
 
 ---

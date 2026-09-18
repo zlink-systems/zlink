@@ -11,7 +11,7 @@ title: "16. Options — 설정 목록과 기본값 · C++"
 > **이 장의 계약 소유 문서** — [C++ configuration과 host 공개 계약](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md)이
 > 다룬다. 이 챕터는 그 표면을 목록으로 정리해 무엇을 정할 수 있고 정하지 않으면
 > 어떻게 되는지를 보여준다. 설정 파일에서 값을 읽어 오는 방법은
-> [19. Configuration](19-configuration.ko.md)이 다룬다.
+> [19. Configuration](41-configuration.ko.md)이 다룬다.
 
 이 챕터는 **무엇을 정할 수 있고 정하지 않으면 어떻게 되는지**를 모은다. 각 옵션이
 무엇을 바꾸는지는 해당 기능 챕터가 설명하고, 여기서는 자리와 기본값을 본다.
@@ -58,7 +58,7 @@ return app.run (argc, argv);
 | `configure_dispatch ()` | 진단 수준·message flow(§4), Core HWM·Application job queue(§3.2) | `errors`, 두 profile 모두 `balanced` |
 | `configure_locations ()` | location store 동작(§5) | §5 표 |
 | `add_location_store (...)` | 위치 결정 store | 없으면 단일 node 구성 |
-| `services ()` | DI 등록([18. DI 컨테이너](18-di-container.ko.md)) | — |
+| `services ()` | DI 등록([18. DI 컨테이너](40-di-container.ko.md)) | — |
 
 `set_default_request_timeout`은 **0 이하를 거부한다.** 값이 잘못되면 시작 단계에서
 `framework_exception_t`가 난다.
@@ -70,7 +70,7 @@ return app.run (argc, argv);
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `listen (endpoint)` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
-| `set_bind_host` · `set_advertise_host` | bind 주소와 광고 주소를 나눠 쓸 때 | Network listener identity §2.1의 기본값(wildcard bind는 loopback) |
+| `set_bind_host` · `set_advertise_host` | bind 주소와 광고 주소를 나눠 사용할 때 | Network listener identity §2.1의 기본값(wildcard bind는 loopback) |
 | `set_routing_id (...)` | 이 node의 식별자 | 자동 생성 |
 | `set_object_role (...)` | Object role — spot · actor 배치 여부 | 배치하지 않음 |
 | `set_placement_weight (int)` | 새 object 배치 선택 가중치 | 100 |
@@ -94,7 +94,7 @@ return app.run (argc, argv);
 | `receive_timeout` · `send_timeout` | 지정하면 그 방향의 대기 상한 | 없음 |
 
 두 high-water mark의 동작 원리와 값을 고르는 기준은
-[4. Backpressure](04-backpressure.ko.md)가 다룬다.
+[Backpressure](33-backpressure.ko.md)가 다룬다.
 `0`은 기본값이 아니라 **무제한**이다. 자동 계산에 맡기려면 값을 지정하지 않는다.
 
 `mailbox_*` 두 값은 **시작 전에만** 설정한다. `0`은 무제한이 아니라 Framework profile이
@@ -117,7 +117,7 @@ job 수를 host instance 전체에서 제한한다.
 Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
 `1..2,147,483,647`이며 `0`은 unlimited가 아니라 startup configuration error다. 두 profile은
 같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
-[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
+[Backpressure](33-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -129,7 +129,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | `trace_sample_rate (double)` | 표본 비율 | 1.0 |
 | `include_message_sizes (bool)` | payload byte를 함께 남길지 | 남기지 않음 |
 
-수준별 기록 범위와 standard provider 연동은 [11. Monitoring](11-monitoring.ko.md)이 다룬다.
+수준별 기록 범위와 standard provider 연동은 [모니터링](26-monitoring.ko.md)이 다룬다.
 
 ## 5. Location 옵션
 
@@ -162,11 +162,11 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | `register_session<TSession> ()` | 연결마다 만들 session 타입 | 지정해야 한다 |
 | `set_tls_server (cert, key, require_client_cert)` | TLS 구성 | 평문 |
 
-> **`enable_actor_dispatch ()`는 STREAM node마다 한 번만 부른다.** 같은 node에 두 번
+> **`enable_actor_dispatch ()`는 STREAM node마다 한 번만 호출한다.** 같은 node에 두 번
 > 부르면 `request_protocol_error`로 던진다.
 
-STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 쓴다.
-[9. STREAM](09-stream.ko.md)을 본다.
+STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 사용한다.
+[STREAM](23-stream.ko.md)을 본다.
 
 ## 7. 실행 중 바꿀 수 있는 것
 
@@ -179,7 +179,7 @@ STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 쓴다.
 
 둘 다 `0`으로 두면 **새 배정만 멈춘다.** 이미 있는 object와 연결은 그대로 살아 있다.
 무중단 배포에서 이 node로 새 트래픽이 가지 않게 한 뒤 relocation을 시작하는 순서로
-쓴다([12. 운영](12-operations.ko.md) §4).
+사용한다([12. 운영](12-operations.ko.md) §4).
 
 ## 8. 반드시 정해야 하는 것
 
@@ -191,7 +191,7 @@ STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 쓴다.
 | STREAM node의 `bind` 주소와 session 타입 | `add_stream_node (...)` |
 | fanout publisher의 endpoint | `add_fanout_channel (...).enable_publisher (...)` |
 | Spot·Actor를 배치할 node의 Object role | `set_object_role (object_role_t::server)` |
-| 여러 node를 쓸 때의 location store | `add_location_store (...)` |
+| 여러 node를 사용할 때의 location store | `add_location_store (...)` |
 
 ## 9. 자주 발생하는 문제
 
@@ -211,6 +211,6 @@ STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 쓴다.
 ## 10. 관련 문서
 
 - 정식 계약: [C++ configuration과 host 공개 계약](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md)
-- 설정 파일에서 값 읽기: [19. Configuration](19-configuration.ko.md)
-- 상한이 무엇을 바꾸는지: [4. Backpressure](04-backpressure.ko.md)
+- 설정 파일에서 값 읽기: [19. Configuration](41-configuration.ko.md)
+- 상한이 무엇을 바꾸는지: [Backpressure](33-backpressure.ko.md)
 - 가중치로 트래픽을 빼는 절차: [12. 운영](12-operations.ko.md)

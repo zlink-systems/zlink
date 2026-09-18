@@ -39,8 +39,8 @@ let status = monitor.status()?;
 socket type이 구현하는 sealed marker trait다 — crate 사용자는 custom
 타입에 대해 이걸 구현할 수 없다.
 
-**선택 기준.** caller-driven pull loop에는 `recv`/`recv_with_flags`를 쓰고
-시점 스냅샷에는 `status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
+**선택 기준.** caller-driven pull loop에는 `recv`/`recv_with_flags`를 사용하고
+시점 스냅샷에는 `status()`를 사용한다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
@@ -64,8 +64,8 @@ monitor_hwm_bytes })`는 명시한 mask와 byte HWM을 적용한다.
 
 **Completion result.** 해당 없음 — 순수 값 타입.
 
-**선택 기준.** 전체 event에는 `open()`을 쓰고 subscription 또는 monitor
-queue byte HWM을 명시해야 할 때는 `open_with_options()`를 쓴다.
+**선택 기준.** 전체 event에는 `open()`을 사용하고 subscription 또는 monitor
+queue byte HWM을 명시해야 할 때는 `open_with_options()`를 사용한다.
 
 ---
 
@@ -96,7 +96,7 @@ bit-test해야 한다.
 **Completion result.** 해당 없음 — monitor가 전달하는 불변 값.
 
 **선택 기준.** 다루는 6개 lifecycle transition엔 명명된 `is_*`
-predicate를 쓴다. 그 외 event 종류는 `event.0`을 문서화된 bit 값과
+predicate를 사용한다. 그 외 event 종류는 `event.0`을 문서화된 bit 값과
 직접 비교한다(전체 mask 표는 core의 Errors/Eventing 스펙 참고).
 
 ---
@@ -127,7 +127,7 @@ method `is_ready()`/`is_closed()` 둘.
 **선택 기준.** `state_flags`를 직접 디코딩하는 대신
 `is_ready()`/`is_closed()`를 호출한다. socket의 실제 send/receive
 HWM이 설정한 `CommonSocketOptions` 값(Sockets category)과 다른 이유를
-진단할 땐 connection-bucket과 auto-HWM-plan 필드를 쓴다.
+진단할 땐 connection-bucket과 auto-HWM-plan 필드를 사용한다.
 
 ---
 
@@ -160,13 +160,13 @@ trait다 — crate 사용자는 custom 타입에 대해 이걸 구현할 수 없
 
 **Completion result.** 등록/제거 member는 `Result<(), ConfigError>`를
 반환한다. `wait`는 `Result<usize, RecvError>`(준비된 개수)를 반환하며,
-`events.len()`까지 결과를 그 자리에 쓴다. `modify_socket`은
+`events.len()`까지 결과를 그 자리에 사용한다. `modify_socket`은
 `POLLCOMPLETION`을 원자적으로 추가·제거하며 native registration 변경과
 함께 completion-drain owner를 이전한다. Public poller가 그 bit를 소유하는
 동안 owner는 `wait()`를 계속 호출해 completion을 drain·settle해야 한다.
 동시에 blocking terminal이 필요하면 다른 execution context에서 수행한다.
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. `wait` 호출마다
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. `wait` 호출마다
 할당하는 대신 `Vec<PollEvent>` buffer 하나를 재사용한다.
 
 ---
@@ -175,7 +175,7 @@ trait다 — crate 사용자는 custom 타입에 대해 이걸 구현할 수 없
 
 `PollEvent`는 `Poller::wait`가 보고하는 준비된 source 하나다. `PollItem`
 은 `Poller` 대신 standalone `poll(...)` 자유 함수(Core category)가
-쓰는 raw poll descriptor다.
+사용하는 raw poll descriptor다.
 
 **Options — `PollEvent`**(`Default` 구현, 모든 필드 public).
 
@@ -198,7 +198,7 @@ trait다 — crate 사용자는 custom 타입에 대해 이걸 구현할 수 없
 
 **선택 기준.** `PollEvent::source_kind`/`slot`으로 분기해 각
 `Poller::wait` 결과를 대응하는 socket·descriptor·timer로 연결한다.
-`PollItem`은 `Poller`가 아니라 standalone `poll(...)` 함수와만 쓴다.
+`PollItem`은 `Poller`가 아니라 standalone `poll(...)` 함수와만 사용한다.
 
 ---
 
@@ -218,7 +218,7 @@ let count = timer.recv()?;
 | Member | 의미 |
 | --- | --- |
 | `new() -> Result<Self, ConfigError>` | timer를 생성 |
-| `start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError>` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, `Duration`/밀리초 기반 `start`를 쓰는 다른 모든 언어와 다르다; `repeat_count == 0`은 무제한 |
+| `start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError>` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, `Duration`/밀리초 기반 `start`를 사용하는 다른 모든 언어와 다르다; `repeat_count == 0`은 무제한 |
 | `stop(&self) -> Result<(), ConfigError>` | fire를 멈춤; `start`로 재시작 가능 |
 | `recv(&self) -> Result<Option<u64>, RecvError>` | 누적 fire count, 대기 중인 게 없으면 `Ok(None)` |
 

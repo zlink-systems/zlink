@@ -199,7 +199,7 @@ Framework 기본 표면은 session, session context, stream과 message까지만 
 raw transport나 framework 기본 runtime에 특정 codec 구현을 직접 섞지 않는다.
 
 Session handler는 codec별 helper를 직접 호출하지 않는다. JSON·Protobuf·MessagePack·custom
-codec을 바꿔도 업무 코드는 같은 decode 표면을 쓴다.
+codec을 바꿔도 업무 코드는 같은 decode 표면을 사용한다.
 
 Server framework, HTTP client host와 stream connector는 codec 번호, content-type과 typed
 payload 선택 계약을 공유하지만 registry instance는 공유하지 않는다. Server는 server root별
@@ -220,7 +220,7 @@ Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 se
 올려주는 축으로만 제한한다.
 
 세션이 닫힐 때의 종료 사유는
-[Stream Connector §6.3](../../stream-connector/32-stream-connector.ko.md#63-종료-사유)의
+[Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의
 닫힌 집합과 정합하며, 계기는
 [runtime-metrics §4](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 

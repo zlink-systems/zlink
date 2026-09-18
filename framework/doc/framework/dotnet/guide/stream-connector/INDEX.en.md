@@ -14,7 +14,7 @@ game engines** (Unity, Godot C#).
 
 The connector's API surface (options, send/request, codec, errors) is covered by the
 [.NET Public Contract](../../../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md)
-and [.NET Framework Guide 09 — STREAM](../../../common/guide/server/09-stream.en.md). This guide
+and [Common Server Guide 23 — STREAM](../../../common/guide/server/23-stream.en.md). This guide
 focuses on **engine integration**.
 
 ## Connectors For Other Languages

@@ -34,7 +34,7 @@ registry가 닫힌 스트림 참조를 유지해 "송신 ok, 수신 무" 블랙�
   경계). 수신 완료를 caller 성공 조건으로 되돌리지 않는다.
 - push는 per-binding FIFO에 넣고 offload executor로 detach한다. `task_t`는
   eager라서 코루틴을 그대로 호출하면 ROUTER admission까지 동기로 진입해 actor
-  턴을 블록한다 — actor 턴에서 push를 시작할 때는 반드시 detach 경로를 쓴다.
+  턴을 블록한다 — actor 턴에서 push를 시작할 때는 반드시 detach 경로를 사용한다.
 - **stream 동기 dispatch는 같은 세션 lane에서의 동기 재진입을 지원하지 않는다.**
   `stream_session_dispatcher_t::dispatch()`(`stream_runtime.cpp`)는 세션별
   serial lane(`serial_execution_queue_t`, `serial_lane_policy_t::session`)에

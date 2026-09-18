@@ -2,6 +2,8 @@ package systems.zlink.framework.kotlin
 
 
 import java.util.concurrent.CompletableFuture
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +33,8 @@ import systems.zlink.stream.connector.ZLinkStreamExpectNoneCall
 import systems.zlink.stream.connector.ZLinkStreamMessageHandler
 import systems.zlink.stream.connector.ZLinkStreamSequenceCall
 import systems.zlink.stream.connector.ZLinkStreamAssert
+import systems.zlink.stream.connector.ZLinkStreamFlow
+import systems.zlink.stream.connector.ZLinkStreamFlowScope
 
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector =
     ZLinkKotlinStreamConnector(this)
@@ -97,6 +101,15 @@ class ZLinkKotlinStreamConnector(
     var diagnosticsLevel: ZLinkStreamDiagnosticsLevel
         get() = inner.diagnosticsLevel()
         set(value) = inner.setDiagnosticsLevel(value)
+
+    /**
+     * The suspending pair of the [diagnosticsLevel] setter (common connector
+     * spec 32 13). It changes the same value; the property setter stays the
+     * synchronous surface and does not wait for this one.
+     */
+    suspend fun setDiagnosticsLevel(level: ZLinkStreamDiagnosticsLevel) {
+        inner.setDiagnosticsLevelAsync(level).await()
+    }
 
     val pendingDispatchCount: Int
         get() = inner.pendingDispatchCount()
@@ -170,15 +183,37 @@ class ZLinkKotlinLifecycleCall(
     }
 }
 
-class ZLinkKotlinSendCall(
-    private val submitter: () -> CompletionStage<Void>,
+/**
+ * The Kotlin one-way send builder (Java spec 03 12). It carries the same
+ * `packetName`/`metadata`/`compress` steps the Java `ZLinkStreamSendCall`
+ * has; without them a Kotlin caller that needs any of those has to drop out
+ * of the wrapper and use the Java call.
+ */
+class ZLinkKotlinSendCall private constructor(
+    private val raw: ZLinkStreamSendCall?,
+    private val typed: ZLinkTypedStreamSendCall?,
 ) {
-    constructor(inner: ZLinkStreamSendCall) : this({ inner.submit() })
+    constructor(inner: ZLinkStreamSendCall) : this(inner, null)
 
-    constructor(inner: ZLinkTypedStreamSendCall) : this({ inner.submit() })
+    constructor(inner: ZLinkTypedStreamSendCall) : this(null, inner)
+
+    fun packetName(name: String): ZLinkKotlinSendCall =
+        ZLinkKotlinSendCall(raw?.packetName(name), typed?.packetName(name))
+
+    fun metadata(key: String, value: String): ZLinkKotlinSendCall =
+        ZLinkKotlinSendCall(raw?.metadata(key, value), typed?.metadata(key, value))
+
+    fun metadata(metadata: Map<String, String>): ZLinkKotlinSendCall =
+        ZLinkKotlinSendCall(raw?.metadata(metadata), typed?.metadata(metadata))
+
+    fun compress(): ZLinkKotlinSendCall =
+        ZLinkKotlinSendCall(raw?.compress(), typed?.compress())
+
+    fun submit(): CompletionStage<Void> =
+        raw?.submit() ?: typed!!.submit()
 
     suspend fun await() {
-        submitter().await()
+        submit().await()
     }
 }
 
@@ -268,6 +303,52 @@ object ZLinkKotlinStreamAssert {
     }
 }
 
+/**
+ * Carries the connector's flow context across suspension points.
+ *
+ * The connector keeps the current flow in a thread local (Java spec 03 7.1).
+ * A coroutine can resume on a different thread than the one that suspended
+ * it, so without a [ThreadContextElement] an outbound call made after a
+ * suspension point loses the inbound flow and starts a new `APPLICATION`
+ * one. This element installs the captured flow on whatever thread the
+ * continuation resumes on and restores that thread's previous flow when it
+ * suspends again.
+ */
+class ZLinkStreamFlowContextElement(
+    private val flow: ZLinkStreamFlow?,
+) : ThreadContextElement<ZLinkStreamFlowScope>, CoroutineContext.Element {
+    companion object Key : CoroutineContext.Key<ZLinkStreamFlowContextElement>
+
+    override val key: CoroutineContext.Key<ZLinkStreamFlowContextElement>
+        get() = Key
+
+    override fun updateThreadContext(context: CoroutineContext): ZLinkStreamFlowScope =
+        ZLinkStreamFlowScope.enter(flow)
+
+    override fun restoreThreadContext(
+        context: CoroutineContext,
+        oldState: ZLinkStreamFlowScope,
+    ) {
+        oldState.close()
+    }
+}
+
+/**
+ * The flow the calling thread currently runs under, or `null` outside an
+ * inbound handler. Pair it with [ZLinkStreamFlowContextElement] to keep that
+ * flow across suspension points.
+ */
+fun currentZLinkStreamFlow(): ZLinkStreamFlow? = ZLinkStreamFlowScope.current()
+
+/**
+ * Runs [block] with [flow] installed as the connector flow for every thread
+ * the coroutine resumes on.
+ */
+suspend fun <T> withZLinkStreamFlow(
+    flow: ZLinkStreamFlow?,
+    block: suspend () -> T,
+): T = kotlinx.coroutines.withContext(ZLinkStreamFlowContextElement(flow)) { block() }
+
 fun ZLinkStreamConnector.messages(
     packetName: String,
 ): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> = callbackFlow {
@@ -282,6 +363,24 @@ fun ZLinkStreamConnector.messages(
     }
     awaitClose {
         registration.close()
+    }
+}
+
+/**
+ * Collects a push stream with each message's own flow installed while
+ * [action] runs. An outbound call [action] makes then continues that flow
+ * instead of starting a new `APPLICATION` one, and it keeps doing so across
+ * [action]'s own suspension points.
+ *
+ * The flow is installed around [action] rather than around the emission,
+ * because changing the coroutine context between a flow's emitter and its
+ * collector is not allowed.
+ */
+suspend fun <TPayload> Flow<ZLinkStreamMessage<TPayload>>.collectInStreamFlow(
+    action: suspend (ZLinkStreamMessage<TPayload>) -> Unit,
+) {
+    collect { message ->
+        withZLinkStreamFlow(message) { action(message) }
     }
 }
 

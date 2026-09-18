@@ -99,7 +99,8 @@ record ZLinkStreamConnectorRequestCall(
         Objects.requireNonNull(replyType, "replyType");
         ZLinkStreamTypedCodec codec = connector.options().typedCodec();
         if (codec == null) {
-            throw new IllegalStateException("typed stream reply API requires ZLinkStreamConnectorOptions.typedCodec");
+            throw ZLinkStreamException.configurationError(
+                "typed stream reply API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<ZLinkStreamEncodedPayload> source = submit();
         CompletableFuture<TReply> result = new CompletableFuture<>();
@@ -131,7 +132,11 @@ record ZLinkStreamConnectorRequestCall(
         try {
             return codec.decode(reply, replyType);
         } catch (RuntimeException ex) {
-            throw new IllegalStateException(
+            //  A reply that does not decode as the requested type is a
+            //  frame the connector could not turn into a value, so spec 32 9
+            //  files it under FrameDecodeFailed.
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
                 "failed to decode stream reply request="
                     + payload.packetName()
                     + " reply="
@@ -145,9 +150,11 @@ record ZLinkStreamConnectorRequestCall(
     }
 
     private static void requirePositive(Duration value, String name) {
-        Objects.requireNonNull(value, name);
+        if (value == null) {
+            throw ZLinkStreamException.validationFailed(name + " is required");
+        }
         if (value.isZero() || value.isNegative()) {
-            throw new IllegalArgumentException(name + " must be positive");
+            throw ZLinkStreamException.validationFailed(name + " must be positive");
         }
     }
 

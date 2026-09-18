@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Actor는 Spot 안에서 산다",
+    "subtitle": "만들어진 Actor는 Entry Spot에 속하고, 호출은 actor id로 그 Spot까지 간다",
+    "output": "22-actor-membership.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "호출 node",
+      "sublabel": "actor id만 안다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "지금 있는 Spot을 찾는다",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "P",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "User Spot",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "P"
+      ],
+      "pad": 34
+    },
+    {
+      "kind": "security-group",
+      "label": "lobby — Entry Spot",
+      "wraps": [
+        "P"
+      ],
+      "pad": 12
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "FW",
+      "label": "player-7로 보낸다",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "P",
+      "label": "이 Spot에서 실행된다",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "R",
+      "label": "방에 들어가면 옮겨 간다",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "handler가 Spot과 Actor를 함께 받는 이유",
+      "items": [
+        "Actor는 언제나 어떤 Spot에 속해 있다. 만들어진 직후의 자리가 Entry Spot이고, 방에 들어가면 그 User Spot으로 옮겨 간다.",
+        "그래서 actor id로 보낸 message는 그 Actor가 지금 속한 Spot 안에서 실행되고, handler는 Spot과 Actor를 함께 받는다."
+      ]
+    }
+  ]
+}

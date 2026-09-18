@@ -22,14 +22,14 @@ owner를 찾아 그 Actor의 queue에 넣는다 — 매 message마다 위치를 
 갱신한다. 이 주제는 이 전체 흐름 — Spot의 종류와 차이, 메시지가 Spot까지 도달하는
 경로, MeshNode의 identity와 배치, Actor의 identity와 lifecycle, Spot·Actor
 membership과 relocation, global 주소로 Spot을 만들고 부르는 방법, Spot 위에 상위
-모델을 얹는 경계, 위치 조회와 routing, 객체 종류의 내부 구현 — 을 아홉 개 문서로
+모델을 적용하는 경계, 위치 조회와 routing, 객체 종류의 내부 구현 — 을 아홉 개 문서로
 나눠 설명한다.
 
 ## 2. 누가 무엇을 결정하는가
 
 | 주체 | 결정·소유하는 것 |
 |---|---|
-| Application | Actor·Spot 생성 의도([Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)), global ID로 보내는 message target, Session bind에 쓰는 특정 `ActorRef`를 정한다. Actor나 Spot을 실제로 실행하는 MeshNode인 [Owner](../00-foundation/02-glossary.ko.md#owner)의 주소나 route를 직접 지정하지 않는다. |
+| Application | Actor·Spot 생성 의도([Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)), global ID로 보내는 message target, Session bind에 사용하는 특정 `ActorRef`를 정한다. Actor나 Spot을 실제로 실행하는 MeshNode인 [Owner](../00-foundation/02-glossary.ko.md#owner)의 주소나 route를 직접 지정하지 않는다. |
 | Framework(source runtime) | Global ID를 owner route로 바꾸고, positive route cache를 관리하며, relocation 뒤 Message Follow로 이전 route에 도착한 message를 우회시킨다. |
 | Framework(target runtime) | 자신이 current owner인지, object가 Ready인지, local admission이 가능한지 확인한 뒤 application queue에 넣는다. |
 | [Location Store](../00-foundation/02-glossary.ko.md#location-store) | 각 Spot의 현재 owner와 상태를 여러 node가 함께 확인하도록 보관하는 저장소로서, Spot·Actor마다 current owner, incarnation, owner generation과 lease를 authority로 기록한다. |
@@ -64,7 +64,7 @@ flowchart TB
 | [04. Actor 모델](04-actor-model.ko.md) | Actor의 identity, queue, control과 Create/GetOrCreate/Find/destroy lifecycle을 정의한다. |
 | [05. Spot·Actor membership](05-spot-actor-membership.ko.md) | Actor가 현재 어느 Entry Spot 또는 User Spot에 속하는지를 나타내는 [Actor membership](../00-foundation/02-glossary.ko.md#actor-membership) 관계, Actor join/commit 순서와 relocation policy를 정의한다. |
 | [06. Spot 주소와 메시징](06-spot-address-messaging.ko.md) | Spot identity·reference, User Spot Create/GetOrCreate, route cache와 close를 정의한다. |
-| [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) | Spot 계약 위에 room·stage 같은 상위 실행 모델을 얹는 경계를 정의한다. |
+| [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) | Spot 계약 위에 room·stage 같은 상위 실행 모델을 적용하는 경계를 정의한다. |
 | [08. Spot·Actor routing](08-routing.ko.md) | Global ID routing, bound-session relay와 reply route, positive route cache와 relocation 뒤 우회 경로를 정의한다. |
 | [09. 객체 종류와 활성화](09-object-lifecycle.ko.md) | 객체 종류를 코드에서 구분하는 방법, cold activation, 정리 대상과 memory 회계를 다루는 구현 스펙이다. |
 | [10. Spot timer](10-spot-timer.ko.md) | Spot이 등록하는 반복·지연 callback의 계약 — timer generation과 cancel, 밀렸을 때의 overrun policy, 등록 수가 늘어도 자원이 비례해 늘지 않는 구현을 정의한다. |
@@ -82,14 +82,14 @@ flowchart TB
 | 같은 객체를 여러 caller가 동시에 만들려 하면 무엇이 이기는가 | [05. Spot·Actor membership](05-spot-actor-membership.ko.md) · [09. 객체 종류와 활성화](09-object-lifecycle.ko.md) |
 | Actor가 Spot에 join하는 순서는 무엇이고 다른 node면 무엇이 다른가 | [05. Spot·Actor membership](05-spot-actor-membership.ko.md) |
 | global SpotId·ActorId로 보낸 message는 현재 owner를 어떻게 찾는가 | [08. Spot·Actor routing](08-routing.ko.md) §2 |
-| Session에 bind된 Actor로 보낸 message는 어떤 경로를 쓰는가 | [08. Spot·Actor routing](08-routing.ko.md) §3 |
+| Session에 bind된 Actor로 보낸 message는 어떤 경로를 사용하는가 | [08. Spot·Actor routing](08-routing.ko.md) §3 |
 | 이동(relocation) 중에는 message가 어디로 가는가 | [05. Spot·Actor membership](05-spot-actor-membership.ko.md) · [08. Spot·Actor routing](08-routing.ko.md) §2.5 |
 | Actor·Spot이 이동한 뒤에도 이전 경로로 온 message는 어떻게 되는가 | [08. Spot·Actor routing](08-routing.ko.md) §2.5 · [09. 객체 종류와 활성화](09-object-lifecycle.ko.md) §4 |
 | 실행 중인 객체를 언제 정리하고 무엇으로 재사용을 막는가 | [09. 객체 종류와 활성화](09-object-lifecycle.ko.md) §5·§6 |
 | Spot timer는 밀리면 어떻게 되는가, 몇 개까지 등록해도 자원이 늘지 않는가 | [10. Spot timer](10-spot-timer.ko.md) |
-| 매 message마다 위치를 다시 조회하는가, 캐시를 쓰는가 | [08. Spot·Actor routing](08-routing.ko.md) §2.2 |
+| 매 message마다 위치를 다시 조회하는가, 캐시를 사용하는가 | [08. Spot·Actor routing](08-routing.ko.md) §2.2 |
 | 실패하면 무엇이 남는가(`NotFound`, `Unavailable`, `InvalidOperation` …) | 각 문서의 실패·관측 절 |
-| Spot 위에 room·stage 같은 상위 모델을 얹으려면 무엇을 지켜야 하는가 | [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) |
+| Spot 위에 room·stage 같은 상위 모델을 적용하려면 무엇을 지켜야 하는가 | [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) |
 
 ## 6. 읽는 순서
 
@@ -99,8 +99,8 @@ flowchart TB
 4. [04. Actor 모델](04-actor-model.ko.md) — Spot 위에 사는 Actor의 identity·queue·lifecycle을 안다.
 5. [05. Spot·Actor membership](05-spot-actor-membership.ko.md) — Actor가 Spot에 join·commit되는 정확한 순서와 relocation policy를 안다.
 6. [06. Spot 주소와 메시징](06-spot-address-messaging.ko.md) — global SpotId로 User/Instance Spot을 만들고 부르는 방법을 안다.
-7. [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) — Spot 계약 위에 상위 모델을 얹는 경계를 안다(짧고 응용적이므로 뒤로 둔다).
-8. [08. Spot·Actor routing](08-routing.ko.md) — 지금까지 나온 모든 대상(Spot·Actor·session-bound Actor)에 실제로 message를 보낼 때 어떤 route를 쓰고 언제 위치를 다시 조회하는지 하나로 모아 안다.
+7. [07. Stage wrapper on Spot](07-stage-wrapper-on-spot.ko.md) — Spot 계약 위에 상위 모델을 적용하는 경계를 안다(짧고 응용적이므로 뒤로 둔다).
+8. [08. Spot·Actor routing](08-routing.ko.md) — 지금까지 나온 모든 대상(Spot·Actor·session-bound Actor)에 실제로 message를 보낼 때 어떤 route를 사용하고 언제 위치를 다시 조회하는지 하나로 모아 안다.
 9. [09. 객체 종류와 활성화](09-object-lifecycle.ko.md) — 구현자 전용: 객체 종류를 코드에서 어떻게 구분하고 언제 만들고 정리하는지 안다(구현 스펙이므로 마지막에 읽는다).
 10. [10. Spot timer](10-spot-timer.ko.md) — Spot에 반복 작업을 걸 때 언제 실행되고 밀리면 무엇을 받는지 안다.
 

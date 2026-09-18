@@ -133,7 +133,7 @@ connector
 
 ## codec
 
-기본 codec은 JSON이다. raw bytes를 직접 보내야 하는 경우에만 raw packet을 직접 조립한다.
+기본 codec은 JSON이다. raw bytes를 직접 보내야 하는 경우에만 raw packet을 직접 만든다.
 MessagePack이나 Protobuf는 stream connector 전용 feature가 아니라 framework codec extension으로 등록한다.
 
 ```cpp
@@ -151,7 +151,7 @@ codec_t 값:
 | `message_pack` | framework MessagePack codec extension이 등록한 패킷 |
 | `protobuf` | framework Protobuf codec extension이 등록한 패킷 |
 
-## raw packet 직접 조립
+## raw packet 직접 만들기
 
 DTO 없이 `packet_t`를 직접 만들 수 있다.
 

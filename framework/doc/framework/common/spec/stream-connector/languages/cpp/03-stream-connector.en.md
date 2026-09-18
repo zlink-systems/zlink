@@ -28,6 +28,19 @@ options at creation and doesn't expose the implementation detail type.
 static connector_t connector_factory_t::create(connector_options_t options);
 ```
 
+**Every option is checked in `connect`**
+([Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation)).
+The C++ core throws nothing and `create` returns a value, so the
+creation surface has no channel for a validation failure. `connect` is
+therefore the earliest point at which C++ can report one, and the
+rejection comes **before a connection is made.** A single value out of
+range is
+`error_code_t::validation_failed`, and a mismatch between options is
+`error_code_t::configuration_error` — a conflict between the endpoint
+scheme and `transport`, a transport this build doesn't support, and a
+`compression_codec` given together with `compression_t::none` fall into
+the latter.
+
 ## 2. `connector_t`
 
 `connector_t` provides the entry point for connection state, lifecycle,
@@ -48,6 +61,7 @@ connection_state_t state() const;
 std::optional<stream_close_reason_t> close_reason() const;
 connector_options_t options() const;
 std::size_t pending_dispatch_count() const;
+std::size_t received_count(std::string_view packet_name) const; // the received count per packet name.
 
 result_t<void> connect();                                  // waits for the connection result in the current call.
 void connect(std::function<void(result_t<void>)> callback); // receives the connection result as a callback.
@@ -56,15 +70,73 @@ void close(std::function<void(result_t<void>)> callback);   // receives the clos
 result_t<void> dispatch();                                 // runs one pending callback of Manual mode.
 ```
 
+**`received_count` returns the received count per packet name**
+([Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue)).
+Consuming does not lower it, it is independent of the dispatch mode, and it
+restarts at zero when the connection is established.
+
+A received message is a `message_t<TPayload>`. The `on<T>` handler and
+the `wait_for` family handle this type.
+
+```cpp
+enum class flow_origin_t : std::uint8_t {
+    inbound = 1, timer = 2, application = 3, lifecycle = 4
+};
+
+template <typename TPayload>
+struct message_t {
+    std::string packet_name;
+    TPayload payload;                          // the payload decoded with the typed codec
+    metadata_t metadata;
+    std::string flow_id;                       // empty when the diagnostics level is off (§6)
+    std::optional<flow_origin_t> flow_origin;  // an empty value under the same condition
+};
+```
+
+`flow_id` and `flow_origin` are the received-flow exposure
+[Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)
+requires. The C++ runtime holds the current flow in the context where it
+runs a handler, so a send call carries no argument stating the flow
+(§5.1).
+
 A push callback is registered with `on<T>(...)`. In
 `dispatch_mode_t::manual`, `dispatch()` runs the callback, and in
 `dispatch_mode_t::immediate`, the receive path runs the callback. The
 `wait_for` family directly consumes a matching packet from the receive
 queue in both modes.
 
-`close_reason()` returns an empty value if it hasn't disconnected yet.
-The close reason's closed value and meaning is owned by
-[Common Spec §6.3](../../32-stream-connector.en.md#63-close-reason).
+**A handler registration returns a `subscription_t` that deregisters
+it** ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)).
+The push handler and the error/disconnect/connection state handlers all
+return the same type.
+
+```cpp
+class subscription_t {   // move-only; the destructor releases a remaining registration
+public:
+    void unsubscribe();  // calling it twice isn't treated as an error
+    bool active() const;
+};
+
+template <typename TMessage>
+subscription_t on(std::function<void(const message_t<TMessage>&)> callback);
+template <typename TMessage>
+subscription_t on(std::string packet_name,
+                  std::function<void(const message_t<TMessage>&)> callback);
+subscription_t on_error(std::function<void(const error_t&)> callback);
+subscription_t on_disconnected(std::function<void(std::optional<stream_close_reason_t>)> callback);
+subscription_t on_connection_state_changed(
+    std::function<void(const connection_state_changed_t&)> callback);
+```
+
+A deregistered handler isn't run by a later `dispatch()`.
+
+**The close reason's read surface is the `close_reason()` method.** It
+returns an empty value if the connector hasn't disconnected yet, and a
+reconnect doesn't clear it — it keeps the last close's reason. The
+`on_disconnected` handler taking the reason as an argument is a surface
+added on top of that read surface. The close reason's closed value and
+meaning is owned by
+[Common Spec §6.2](../../32-stream-connector.en.md#62-close-reason).
 enum values 1-6 are the same as the `session-closing` wire value, but
 the codec explicitly converts them and doesn't cast the enum to an
 integer to build a frame.
@@ -74,6 +146,25 @@ integer to build a frame.
 A typed `send` and `request` decide the packet name from the message
 type. A raw packet overload is also provided. Each call returns a
 builder, and executes only once the terminator `submit` is called.
+
+The **means of attaching a packet name to a type** that
+[Common Spec §5](../../32-stream-connector.en.md#5-packet-model)
+requires is a static member. C++ has no attribute or annotation, so the
+name goes on the payload type.
+
+```cpp
+struct order_changed_t {
+    static constexpr const char* packet_name = "order.changed"; // the packet name attached to the type
+    // ...
+};
+```
+
+`connector_options_t::name_resolver` (§6) prioritizes this static member
+and uses the type's simple name when it is absent. **A mangled name the
+compiler builds is never used as a packet name** — its value changes
+with the build environment, so the server would fail to find the handler
+for the same type. A name the caller states with the builder's
+`packet_name(...)` takes priority over both.
 
 ```cpp
 send_call_t send(const TMessage& message);
@@ -90,20 +181,25 @@ request_call_t& metadata(std::string key, std::string value);
 request_call_t& metadata(metadata_t metadata);
 request_call_t& timeout(std::chrono::milliseconds timeout);
 request_call_t& compress();
-result_t<TReply> submit<TReply>(); // waits for a matching-correlation reply and decodes it as TReply.
-void submit<TReply>(std::function<void(result_t<TReply>)> callback);
+template <typename TReply>
+result_t<TReply> submit(); // waits for a matching-correlation reply and decodes it as TReply.
+template <typename TReply>
+void submit(std::function<void(result_t<TReply>)> callback);
 ```
 
-A single push wait is handled by `wait_call_t<TMessage>`.
+A single push wait is handled by `wait_call_t<TMessage>`. The predicate
+and the return value handle `message_t<TMessage>`, not the payload (§2).
 
 ```cpp
-wait_call_t<TMessage> wait_for<TMessage>();
-wait_call_t<TMessage> wait_for<TMessage>(std::string packet_name);
+template <typename TMessage>
+wait_call_t<TMessage> wait_for();
+template <typename TMessage>
+wait_call_t<TMessage> wait_for(std::string packet_name);
 
-wait_call_t<TMessage>& where(std::function<bool(const TMessage&)> predicate);
+wait_call_t<TMessage>& where(std::function<bool(const message_t<TMessage>&)> predicate);
 wait_call_t<TMessage>& timeout(std::chrono::milliseconds timeout);
-result_t<TMessage> submit(); // consumes and decodes one matching unread packet.
-void submit(std::function<void(result_t<TMessage>)> callback);
+result_t<message_t<TMessage>> submit(); // consumes and decodes one matching unread packet.
+void submit(std::function<void(result_t<message_t<TMessage>>)> callback);
 ```
 
 The one-way `submit()` doesn't return a result. Since the C++ connector
@@ -114,7 +210,8 @@ keep the existing result type and also provide a callback completion
 path.
 
 Typed `send`, `request`, `on`, and `wait_for` all use the single codec
-put in `connector_options_t::typed_codec` together. If not specified,
+put in `connector_options_t::typed_codec` — the injection point of
+[Common Spec §5.4](../../32-stream-connector.en.md#54-codec) — together. If not specified,
 the JSON codec is used. Protobuf, MessagePack, and a user codec
 extension provide a `typed_codec_t` implementation, put into options
 once when building a connector. A public API for registering a codec
@@ -135,12 +232,16 @@ from the type name and an overload where the caller specifies the
 packet name are provided.
 
 ```cpp
-expect_none_call_t<TMessage> expect_none<TMessage>();
-expect_none_call_t<TMessage> expect_none<TMessage>(std::string packet_name);
+template <typename TMessage>
+expect_none_call_t<TMessage> expect_none();
+template <typename TMessage>
+expect_none_call_t<TMessage> expect_none(std::string packet_name);
 expect_none_call_t<packet_t> expect_none(std::string packet_name);
 
-wait_for_sequence_call_t<TMessage> wait_for_sequence<TMessage>();
-wait_for_sequence_call_t<TMessage> wait_for_sequence<TMessage>(std::string packet_name);
+template <typename TMessage>
+wait_for_sequence_call_t<TMessage> wait_for_sequence();
+template <typename TMessage>
+wait_for_sequence_call_t<TMessage> wait_for_sequence(std::string packet_name);
 wait_for_sequence_call_t<packet_t> wait_for_sequence(std::string packet_name);
 ```
 
@@ -156,23 +257,26 @@ auto result = connector.expect_none<order_changed_t>()
 
 A sequence observation applies each `expect` predicate to a push of the
 same name in arrival order. It uses one overall timeout, and on
-success returns the decoded payload list. This is a contract that
-verifies arrival **in the specified order**, not simply whether N
-arrived.
+success returns a `std::vector<message_t<TMessage>>`. The argument a
+predicate receives is the message too, not the payload. This is a
+contract that verifies arrival **in the specified order**, not simply
+whether N arrived.
 
 ```cpp
 auto result = connector.wait_for_sequence<order_changed_t>()
-                .expect([](const auto& value) { return value.status == status_t::paid; })
-                .expect([](const auto& value) { return value.status == status_t::shipped; })
+                .expect([](const auto& message) { return message.payload.status == status_t::paid; })
+                .expect([](const auto& message) { return message.payload.status == status_t::shipped; })
                 .timeout(std::chrono::seconds(2)) // the overall time limit satisfying both predicates.
                 .submit();
 ```
 
 Both builders provide the `result_t`-returning form of `submit()` and
-the `submit(...)` form that takes a callback. A status-only method
-isn't provided. Since status is a payload field, a single observation
-is expressed as `wait_for<T>().where(...)`, and a sequence observation
-as `wait_for_sequence<T>().expect(...)`. Domain REST polling is the
+the `submit(...)` form that takes a callback. These surfaces fail
+with `error_code_t::validation_failed`. A status-only method isn't
+provided. Since status is a payload field, a single observation is
+expressed as
+`wait_for<T>().where([](const auto& m) { return m.payload.status == …; })`,
+and a sequence observation as `wait_for_sequence<T>().expect(...)`. Domain REST polling is the
 HTTP client's responsibility and isn't included in the connector
 interface.
 
@@ -230,10 +334,45 @@ enum class error_code_t
 };
 ```
 
-A synchronous operation that can fail returns `result_t<T>` or
+C++ uses both branches of
+[Common Spec §9.2](../../32-stream-connector.en.md#92-delivery--the-receiver-must-be-able-to-read-the-code).
+
+**The connector core delivers by value and throws nothing**, because a
+game engine build with exceptions disabled uses the core as is. A
+synchronous operation that can fail returns `result_t<T>` or
 `result_t<void>`. Success is confirmed with an explicit bool
 conversion, and on failure, `error_t` is read with `error()` and
 `error_code()`. The callback form also delivers the same `result_t`.
+
+```cpp
+struct error_t {
+    error_code_t code;    // where the code is read
+    std::string message;
+};
+```
+
+**E2E and tooling use a throwing adapter.** The adapter is a separate
+CMake target, `zlink::stream_connector_throwing`, and it doesn't change
+the core contract.
+
+```cpp
+#include <zlink/stream_connector_throwing.hpp>
+
+namespace zlink::stream_connector_throwing
+{
+class stream_connector_error : public std::runtime_error
+{
+public:
+    zlink::stream_connector::error_code_t code() const noexcept; // where the code is read
+};
+
+template <typename T> T value_or_throw(result_t<T> result); // throws stream_connector_error on failure
+inline void value_or_throw(result_t<void> result);
+}
+```
+
+Both branches deliver the same `error_code_t` value, and whichever is
+used, the receiver reads which of the 13 codes in common spec §9 it is.
 Error kind and meaning is owned by the
 [common spec](../../32-stream-connector.en.md).
 
@@ -254,29 +393,34 @@ connect/request/wait timeout, heartbeat, reconnect, send/receive
 payload bound, TLS
 validation, dispatch mode, and compression. The default value and
 validation rule follow
-[Common Spec §6.1](../../32-stream-connector.en.md).
+[Common Spec §6.1](../../32-stream-connector.en.md), and §1 fixes the
+validation timing.
 
-The Connector metric is delivered to the public sink below. If the sink
-isn't configured, only metric recording is skipped, and connector
-behavior doesn't change.
+The **unlimited reconnect** that
+[Common Spec §6](../../32-stream-connector.en.md#6-connection-lifecycle)
+requires is expressed as an empty `std::optional<int>`.
+
+The **unspecified transport** that
+[Common Spec §3.1](../../32-stream-connector.en.md#31-endpoint-scheme--transport)
+requires is expressed as an empty `std::optional<transport_t>`. An empty value
+lets the endpoint scheme decide the transport; a value present is the stated
+transport, and a mismatch with the endpoint scheme is
+`error_code_t::configuration_error`. A fixed default would make a configuration
+given only a `ws://` endpoint indistinguishable from one stating
+`transport_t::tcp`.
 
 ```cpp
-using connector_metric_attributes_t =
-  std::map<std::string, std::variant<std::string, std::int64_t, double, bool>>;
-
-class connector_metric_sink_t {
-public:
-    virtual ~connector_metric_sink_t() = default;
-    virtual void add_counter(
-      std::string_view name,
-      std::string_view unit,
-      std::uint64_t value,
-      const connector_metric_attributes_t &attributes) noexcept = 0;
+struct reconnect_options_t {
+    bool enabled = true;
+    std::chrono::milliseconds initial_delay{250};
+    std::chrono::milliseconds max_delay{5000};
+    double backoff_factor = 2.0;
+    std::optional<int> max_attempts = 3; // an empty value means unlimited; otherwise it must be positive
 };
 
 struct connector_options_t {
     std::string endpoint;
-    transport_t transport = transport_t::tcp;
+    std::optional<transport_t> transport;  // an empty value lets the endpoint scheme decide the transport.
     std::chrono::milliseconds connect_timeout{5000};
     std::chrono::milliseconds request_timeout{30000};
     std::chrono::milliseconds wait_timeout{5000};
@@ -288,9 +432,15 @@ struct connector_options_t {
     dispatch_mode_t dispatch_mode = dispatch_mode_t::manual;
     compression_t compression = compression_t::lz4;
     std::shared_ptr<const compression_codec_t> compression_codec;
-    std::shared_ptr<const typed_codec_t> typed_codec; // the default JSON codec if empty
-    std::shared_ptr<connector_metric_sink_t> metric_sink;
+    std::shared_ptr<const typed_codec_t> typed_codec;         // the codec injection point of common spec §5.4; the default JSON codec if empty
+    std::shared_ptr<const packet_name_resolver_t> name_resolver; // the name resolver injection point of common spec §5.4; §3's default rule if empty
     diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
+};
+
+class packet_name_resolver_t {
+public:
+    virtual ~packet_name_resolver_t() = default;
+    virtual std::string resolve(std::string_view type_name) const = 0;
 };
 
 // The contract is owned by common spec §13. Default errors. At off, outbound frames
@@ -299,13 +449,6 @@ struct connector_options_t {
 // regardless of the level.
 enum class diagnostics_level_t { off, errors, normal, detailed };
 ```
-
-`zlink.stream.reconnects`'s name and closed attribute follow
-[Common Spec §6.2](../../32-stream-connector.en.md#62-connector-reconnect-instrument).
-The application and E2E read the counter from the sink implementation.
-The sink is fixed as `noexcept` so it doesn't let an exception escape
-its boundary, and a metric processing failure doesn't change send,
-request, or connection state.
 
 `options()` returns a copy of the configuration the
 [factory](../../../server/00-foundation/02-glossary.en.md#factory) applied. The value the
@@ -326,9 +469,20 @@ class connector_t {
 public:
     // ...
     diagnostics_level_t diagnostics_level() const;
-    void set_diagnostics_level(diagnostics_level_t level);
+    void set_diagnostics_level(diagnostics_level_t level); // changes the value without waiting
+    void set_diagnostics_level_async(                      // the async pair changing the same value
+      diagnostics_level_t level,
+      std::function<void(result_t<void>)> callback);
 };
 ```
+
+`set_diagnostics_level_async` is the async pair shaped like the callback
+completion path the connector core puts on `connect`/`close`, and it
+does not replace the synchronous surface
+[Common Spec §13](../../32-stream-connector.en.md#13-diagnostics-level)
+requires. The synchronous surface does not wait for the async pair to
+complete, so calling it inside a receive callback never makes that call
+wait on its own completion.
 
 `diagnostics_level()` returns the level currently in effect.
 `set_diagnostics_level(level)` changes it starting with the next

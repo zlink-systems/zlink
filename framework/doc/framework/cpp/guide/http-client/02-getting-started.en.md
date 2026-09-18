@@ -8,7 +8,8 @@ Just link the `zlink::http_client` target. Since the public header doesn't expos
 extra dependency setup is needed on the consumer side.
 
 ```cmake
-find_package(zlink CONFIG REQUIRED)
+find_package(zlink_framework_cpp CONFIG REQUIRED)
+find_package(zlink_http_client_cpp CONFIG REQUIRED)
 
 add_executable(matchmaker_cli src/main.cpp)
 target_link_libraries(matchmaker_cli PRIVATE zlink::http_client)

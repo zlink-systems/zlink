@@ -89,7 +89,7 @@ enum 타입의 `getResult()`를 호출하거나, exception 타입 전체에 걸�
 일반 exception으로 보고되지 않는다 — 대신 Sockets/Messaging category의
 `boolean` 반환 `recv`/`submit` 관례를 참고한다. raw errno로부터 올바른
 타입의 exception을 만들어야 하는 custom native interop 경로를 구현할
-때만 `ZlinkException.fromErrno(...)`/`fromLastError(...)`를 쓴다 — 일반
+때만 `ZlinkException.fromErrno(...)`/`fromLastError(...)`를 사용한다 — 일반
 application 코드는 이걸 호출할 필요가 없다, 모든 내장 API가 이미 스스로
 올바른 타입의 exception을 던지기 때문이다.
 

@@ -1,11 +1,5 @@
 # ZLink HTTP Client For Kotlin — 사용자 가이드
 
-> **⚠️ 이 가이드는 최신이 아니다.** 현재 리뷰·정비가 끝난 가이드는
-> [`.NET` 가이드](../../../dotnet/README.ko.md) 하나뿐이다. 이 문서는 그 이전 상태이며,
-> **`.NET` 가이드가 완성되면 이 문서를 삭제하고 그것을 기준으로 다시 쓴다.**
->
-> **계약을 확인할 때는 이 문서를 믿지 말고 [spec 트리](../../../common/spec/server/README.ko.md)를 본다.**
-
 `zlink-http-client-kotlin`은 Kotlin coroutine으로 HTTP API를 호출하는 client다. zlink 스타일
 DSL과 fluent builder로 client·request를 구성하고 모든 제출은 진짜 `suspend` 함수라 응답을
 기다리는 동안 **어떤 스레드도 park되지 않는다**.

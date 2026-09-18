@@ -27,7 +27,9 @@ internal sealed class ZlinkStreamSequenceBuilder : IZlinkStreamSequenceCall
     public IZlinkStreamSequenceCall Timeout(TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(timeout), "Sequence timeout must be greater than zero.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "WaitForSequence timeout must be greater than zero.");
         _state.SetTimeout(timeout);
         return this;
     }
@@ -48,13 +50,23 @@ internal sealed class ZlinkStreamSequenceBuilder : IZlinkStreamSequenceCall
         for (var index = 0; index < _expectations.Count; index++)
         {
             var remaining = timeout - elapsed.Elapsed;
+            // Both a timeout and an out-of-order arrival are violations of this
+            // observation, so both are ValidationFailed (stream-connector spec §10.1).
             if (remaining <= TimeSpan.Zero)
-                throw new TimeoutException($"Timed out waiting for '{name}' stream message sequence.");
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    $"Timed out after {timeout} waiting for the '{name}' stream message sequence.");
 
             var message = await _connector.WaitForEncodedAsync(name, null, remaining, cancellationToken)
                 .ConfigureAwait(false);
+            if (message is null)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    $"Timed out after {timeout} waiting for the '{name}' stream message sequence.");
+
             if (!_expectations[index](message))
-                throw new InvalidOperationException(
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.ValidationFailed,
                     $"Stream message '{name}' arrived out of the expected sequence at index {index}.");
             messages.Add(message);
         }

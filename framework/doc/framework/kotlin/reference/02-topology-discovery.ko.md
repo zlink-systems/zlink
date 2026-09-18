@@ -40,14 +40,14 @@ options.routeMesh("play") {
 
 **완료 결과.** Java builder를 그대로 반환한다 — 새 의미를 추가하지 않는다.
 
-**선택 기준.** Kotlin 코드에서 중첩 구성을 receiver 스타일로 쓰고 싶을 때 이 DSL을 쓴다. Java
+**선택 기준.** Kotlin 코드에서 중첩 구성을 receiver 스타일로 사용하고 싶을 때 이 DSL을 사용한다. Java
 builder를 직접 호출해도 동작은 같다.
 
 ---
 
 ## `useCoroutineHandlers(...)` (구성 시점)
 
-Handler dispatch에 쓸 `CoroutineDispatcher`(선택적으로 `CoroutineScope`)를 지정한다.
+Handler dispatch에 사용할 `CoroutineDispatcher`(선택적으로 `CoroutineScope`)를 지정한다.
 
 ```kotlin
 options.useCoroutineHandlers(Dispatchers.Default)
@@ -66,7 +66,7 @@ options.useCoroutineHandlers(applicationScope, Dispatchers.Default)
 **완료 결과.** 반환값 없이 동기로 등록된다.
 
 **선택 기준.** Suspending handler(`ZLinkSuspendingRequestHandler` 등, messaging-execution·spot-instance·
-actor-relocation category 참고)를 쓰는 host가 dispatcher를 명시할 때 쓴다. Java 레퍼런스의
+actor-relocation category 참고)를 사용하는 host가 dispatcher를 명시할 때 사용한다. Java 레퍼런스의
 `useVirtualThreadHandlers()`/`useHandlerExecutor(...)`와는 상호 배타적으로 선택한다.
 
 ---
@@ -90,7 +90,7 @@ actor-relocation category와 같다 — Actor factory builder에는 relocation �
 호출하면 startup configuration error다.
 
 **선택 기준.** `TActor`/`TFactory` 타입 인자를 `Class<T>`로 직접 넘기지 않고 reified generic으로
-쓰고 싶을 때 이 DSL을 쓴다.
+사용하고 싶을 때 이 DSL을 사용한다.
 
 ---
 
@@ -115,7 +115,7 @@ host-wide 옵션"(stream compression) 항목과 같다.
 
 **완료 결과.** Java builder를 그대로 반환한다.
 
-**선택 기준.** Kotlin 코드에서 receiver 스타일로 diagnostics·압축 설정을 묶고 싶을 때 쓴다.
+**선택 기준.** Kotlin 코드에서 receiver 스타일로 diagnostics·압축 설정을 묶고 싶을 때 사용한다.
 
 ---
 

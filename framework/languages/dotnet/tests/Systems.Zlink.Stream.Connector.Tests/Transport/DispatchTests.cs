@@ -121,7 +121,16 @@ public sealed partial class StreamConnectorTests
 
         Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, handled);
         Assert.Equal(2, connector.ReceivedCount("buffered-before-handler"));
-        Assert.Equal(0, connector.ReceivedCount("handled"));
+
+        // ReceivedCount counts arrivals, so a handler taking every message leaves it at
+        // the number received (stream-connector spec §10)...
+        Assert.Equal(messageCount, connector.ReceivedCount("handled"));
+
+        // ...while the unread history really is empty, which the wait surface shows by
+        // finding nothing to consume.
+        var nothingLeft = await Assert.ThrowsAsync<ZlinkStreamException>(
+            async () => await connector.WaitFor("handled").Timeout(TimeSpan.FromMilliseconds(50)).Async());
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, nothingLeft.Error.Code);
     }
 
     [Fact]
@@ -207,11 +216,11 @@ public sealed partial class StreamConnectorTests
         });
         var remoteError = new TaskCompletionSource<ZlinkStreamError>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += (error, _) =>
+        _ = connector.OnErrorReceived((error, _) =>
         {
             if (error.Code == ZlinkStreamErrorCode.RemoteError) remoteError.TrySetResult(error);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async();
         await server;
@@ -256,11 +265,11 @@ public sealed partial class StreamConnectorTests
         });
         var decodeError = new TaskCompletionSource<ZlinkStreamError>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += (error, _) =>
+        _ = connector.OnErrorReceived((error, _) =>
         {
             if (error.Code == ZlinkStreamErrorCode.FrameDecodeFailed) decodeError.TrySetResult(error);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async();
         await server;

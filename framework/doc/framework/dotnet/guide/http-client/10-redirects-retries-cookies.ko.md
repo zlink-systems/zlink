@@ -15,7 +15,7 @@
 - **`Authorization` 보존 규칙**: same-origin(scheme+host+port 동일) redirect에서는
   `Authorization`을 보존하고 cross-origin으로는 제거한다. .NET auto-redirect는
   same-origin에서도 `Authorization`을 보존하지 않으므로 래퍼 루프가 필요하다.
-- `max` 횟수를 넘기면 `InternalFailure`로 실패한다.
+- `max` 횟수를 넘기면 `ProtocolError`로 실패한다.
 - 지원 location: 절대(`http(s)://...`)와 path-absolute(`/...`). 그 외 상대 경로는
   지원하지 않는다.
 
@@ -31,7 +31,7 @@
 ## Cookie jar
 
 `Cookies()`로 활성화한다. 네이티브 `CookieContainer`(RFC 6265 전체) 대신 래퍼 소유
-jar를 쓴다. 좁은 의미론을 따른다:
+jar를 사용한다. 좁은 의미론을 따른다:
 
 - host 정확 매칭으로 저장(`Domain` 속성 미지원).
 - 기본 `Path=/`. `Path`/`Secure`/`Max-Age` 속성만 해석하고 `Domain`/`Expires`는 무시.

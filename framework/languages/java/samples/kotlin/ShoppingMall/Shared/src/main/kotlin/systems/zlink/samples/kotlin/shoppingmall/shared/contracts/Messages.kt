@@ -26,6 +26,7 @@ data class OrderState(
 
 // ----- client HTTP-style contracts -----
 
+// --8<-- [start:doc-explicit-packet-name]
 @ZLinkPacket("StartOrderReq")
 data class StartOrderReq(
     val cartId: String,
@@ -33,6 +34,7 @@ data class StartOrderReq(
     val paymentMethodId: String,
     val idempotencyKey: String,
 )
+// --8<-- [end:doc-explicit-packet-name]
 
 data class StartOrderRes(val orderId: String, val status: String)
 

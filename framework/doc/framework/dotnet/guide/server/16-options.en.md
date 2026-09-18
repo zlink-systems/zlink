@@ -25,24 +25,9 @@ check the relevant row when a reason to change it comes up, and use the default 
 
 The same setting has a different scope depending on where you specify it.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TD
-  R["① Root options<br/>process-wide defaults"]:::root
-  subgraph BUILD["② Builder — applies to one only"]
-    direction LR
-    M["MeshNode"]:::unit
-    F["fanout channel"]:::unit
-    S["STREAM node"]:::unit
-  end
-  RT["③ Runtime option<br/>a value changed while running"]:::rt
-  R --> BUILD
-  BUILD -.->|"after app.Run()"| RT
-  classDef root fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef unit fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef rt fill:#fff3e0,stroke:#e65100,color:#bf360c
-  style BUILD fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/16-option-scope-en.html"
+        title="The same setting reaches differently depending on where it is set" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/16-option-scope-en.html" target="_blank">↗ Open larger</a></p>
 
 ```csharp
 builder.Services.AddZLinkFramework(options =>
@@ -93,16 +78,16 @@ Values applied across the whole process.
 | `MaintenanceWave` | The maintenance group name this process belongs to | None | Grouping nodes to maintain/replace in sequence |
 | `Worker` | The thread pool heavy work is handed off to | Max `processor count × 2` (min 2) · 30s idle · 1024 queue | Handing off a lot of slow computation/I/O to a worker |
 
-- Choosing a codec and registering your own serializer: [05-channel-messaging](05-channel-messaging.en.md#7-serialization-codec)
-- The difference between discovering and exposing a handler: [05-channel-messaging](05-channel-messaging.en.md#3-exposing-a-handler-on-a-channel)
-- The scope a filter applies to: [05-channel-messaging](05-channel-messaging.en.md#5-filter--common-processing)
-- Worker calls: [06-spot](06-spot.en.md#6-timer-and-worker)
+- Choosing a codec and registering your own serializer: [Handlers and message processing](31-handler-dispatch.en.md#3-codecs--turning-a-payload-into-bytes)
+- The difference between discovering and exposing a handler: [Channel messaging](20-channel-messaging.en.md#3-routemesh)
+- The scope a filter applies to: [Handlers and message processing](31-handler-dispatch.en.md#2-filters--collecting-shared-processing-in-one-place)
+- Worker calls: [Timers and workers](36-timer-worker.en.md#2-workers--running-outside-the-line)
 - The deployment flow that uses version/maintenance groups: [12-operations](12-operations.en.md)
 
 `AddLocationStore(...)` and `AddRelocationStore(...)` are also registered at the root. The
 auto-connect that finds a peer by logical name is covered by
-[10-location](10-location.en.md); the store used when moving state to another node is
-covered by [07-actor-spot](07-actor-spot.en.md).
+[Location](25-location.en.md); the store used when moving state to another node is
+covered by [Relocation](37-relocation.en.md).
 
 > **Metadata only lets through a key you've opened.** Unless you specify per-direction
 > allowed keys with `AllowSessionToActor` and `AllowActorToSession`, no value passes at all.
@@ -129,9 +114,9 @@ builder `AddRouteMesh(name)` returns, and apply only to that one node.
 | `PeerConnections.Connect(endpoint)` | A peer endpoint to connect to manually | None | A setup that doesn't use auto-connect |
 
 The registrations done in `Objects().Server()` and `Channel(name).Server()` (stable type,
-relocation policy, channel weight) are covered by [06-spot](06-spot.en.md) and
-[05-channel-messaging](05-channel-messaging.en.md). Manual connection is covered by
-[05-channel-messaging](05-channel-messaging.en.md#6-connection-control).
+relocation policy, channel weight) are covered by [06-spot](21-spot.en.md) and
+[Channel messaging](20-channel-messaging.en.md). Manual connection is covered by
+[How channels work](30-channel-patterns.en.md#6-connection-and-discovery).
 
 ### 3.1 Backpressure — Send-Wait Behavior
 
@@ -148,7 +133,7 @@ await client.SendToChannel("profile", command).Async(ct);
 ```
 
 Why the peer's delay becomes this side's wait, and when the ceiling locks and unlocks, is
-covered by [04-backpressure](04-backpressure.en.md). This section and the next only cover
+covered by [33-backpressure](33-backpressure.en.md). This section and the next only cover
 the options that set values within that behavior. Flow control itself is owned by Core, and
 the exact contract is covered by [the core guide's socket option](../../../../../../core/doc/guide/12-socket-options.en.md).
 
@@ -162,7 +147,7 @@ the exact contract is covered by [the core guide's socket option](../../../../..
 sets the manual ceiling for the publish socket Spots use to exchange events. For an unset
 direction, Core calculates the HWM from the context budget and physical-queue census. The
 framework does not calculate a separate connection-count bucket table
-([04-backpressure §4.1](04-backpressure.en.md#41-core-hwm--the-byte-budget-owned-by-core)).
+([33-backpressure §4.1](33-backpressure.en.md#41-core-hwm--the-byte-budget-owned-by-core)).
 
 | Setting | What it sets | Raising it | Lowering it |
 | --- | --- | --- | --- |
@@ -202,7 +187,7 @@ These are values on `IZLinkInboundDispatchOptions`, returned by `ConfigureInboun
 The memory limit and Core budget must be positive. The manual queued-job limit is
 `1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
 use the same labels but are independent enums and calculations. See
-[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+[Backpressure](33-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 for saturation behavior and production measurement.
 
 ## 4. Error Handling And Diagnostics
@@ -236,13 +221,13 @@ dispatch.Diagnostics
 | `SetSampleRate(double)` | The fraction to record | When traffic is heavy enough that recording everything is a burden |
 | `IncludeMessageSizes(bool)` | Whether to record message size | Need to check payload size |
 
-How to read the record left here is covered by [11-monitoring](11-monitoring.en.md).
+How to read the record left here is covered by [Monitoring](26-monitoring.en.md).
 
 ## 5. Location Options
 
 `ConfigureLocations()` sets the interval and validity period for refreshing location
 information. Registration and [relocation](03-concepts.en.md#5-relocation--moving-to-another-node)
-behavior are covered by [10-location](10-location.en.md).
+behavior are covered by [Location](25-location.en.md).
 
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
@@ -259,14 +244,14 @@ behavior are covered by [10-location](10-location.en.md).
 
 [STREAM](03-concepts.en.md#4-stream--external-client-connections) is a connection-oriented channel to
 an external client like mobile or a game. Specify the following on the node that receives
-that connection. Usage is covered by [09-stream](09-stream.en.md).
+that connection. Usage is covered by [STREAM](23-stream.en.md).
 
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
 | `AddStreamNode(name).Bind(...)` | The endpoint a client connects to | None | Always needed |
 | `SetBindHost` · `SetAdvertiseHost` | The bind/advertise address | The root `ConfigureNetwork()` value | Container deployment |
 | `SetTlsServer(cert, key, requireClientCertificate)` | The server certificate and whether a client certificate is required | Off | Exposing this directly to the outside |
-| `EnableActorDispatch()` | Hands an incoming packet to the bound actor | Off | A setup that ties the connection to an actor ([08-actor-session](08-actor-session.en.md)) |
+| `EnableActorDispatch()` | Hands an incoming packet to the bound actor | Off | A setup that ties the connection to an actor ([Session and Actor](24-actor-session.en.md)) |
 | `AddSession<T>()` | The session implementation that handles connection lifetime | None | Handling connect/authenticate/disconnect directly |
 | `ConfigureStreamCompression()` | Compression for payload exchanged with the client | LZ4 | Turning it off with `Disable()`, or swapping in your own codec |
 
@@ -282,7 +267,7 @@ are:
 | Diagnostics level | `IZLinkDiagnosticsRuntime` | `Level` — raise to `Detailed` only while tracing a cause, then revert |
 
 A weight value ranges `0..10000`, with a default of `100`. The operational flow is covered by
-[05-channel-messaging](05-channel-messaging.en.md#operational-drain--restore-runtime) and
+[How channels work](30-channel-patterns.en.md#43-stopping-only-new-requests-while-running) and
 [12-operations](12-operations.en.md).
 
 ## 8. What You Must Set
@@ -326,9 +311,13 @@ Everything else starts from its default.
   [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md) ·
   [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
 - Registration points and layering: [01-overview](01-overview.en.md#33-layering-and-registration-points)
-- Runtime observation and operations: [11-monitoring](11-monitoring.en.md) · [12-operations](12-operations.en.md)
+- Runtime observation and operations: [Monitoring](26-monitoring.en.md) · [12-operations](12-operations.en.md)
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where ZLink Fits](17-alternative.en.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

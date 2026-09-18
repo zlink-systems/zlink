@@ -15,6 +15,13 @@ export interface ZlinkStreamAssertions {
 
 export const zlinkStreamAssert: ZlinkStreamAssertions = {
   ensure(condition: boolean, message: string): asserts condition {
+    // A blank diagnostic turns a failed assertion into a `ValidationFailed`
+    // with nothing to read, which is the one case where the assertion helps
+    // least. The empty message is rejected whether the condition held or not,
+    // so the call site is corrected the first time it runs.
+    if (typeof message !== 'string' || message.trim().length === 0) {
+      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'zlinkStreamAssert.ensure requires a non-empty diagnostic message.');
+    }
     if (!condition) {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, message);
     }

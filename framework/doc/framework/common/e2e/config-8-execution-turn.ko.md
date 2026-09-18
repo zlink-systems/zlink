@@ -170,7 +170,7 @@ Yield 전에 읽은 Spot 상태는 다른 callback이 바꿀 수 있다. “Lost
 - 절차: 두 번째 handler가 counter를 20으로 바꾸고 완료한 것을 확인한다. Delay reply를 해제하여 첫
   continuation을 재개한다.
 - 검증: 첫 continuation은 current value 20을 다시 읽고 그 값을 기준으로 처리한다. Yield 전에 읽은 10을
-  그대로 쓰지 않는다.
+  그대로 사용하지 않는다.
 - 세부 동작: [Handler turn과 claim](../spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)과
   [`Yield` 시 gate와 claim](../spec/server/01-execution/README.ko.md)을
   검증한다.

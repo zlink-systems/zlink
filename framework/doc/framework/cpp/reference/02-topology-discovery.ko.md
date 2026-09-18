@@ -21,7 +21,7 @@ auto play = options.add_route_mesh("play")
   .set_placement_weight(100);
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ auto play = options.add_route_mesh("play")
 | `.set_placement_weight(int)` | 100(범위 `0..10000`) | 새 Actor·Spot을 이 node에 배치할 상대 가중치 |
 | `.set_actor_limit(int32_t)` / `.set_spot_limit(int32_t)` | `0`(무제한) | 이 node가 수용하는 Actor·Spot 상한 |
 | `.set_activation_concurrency(int32_t)` | 128(양수) | activation admission 동시 실행 상한 |
-| `.set_default_request_timeout(milliseconds)` | 이 MeshNode의 request 기본 timeout | `request_to_node`/`request_to_channel`(messaging-execution category)이 `.timeout(...)`을 생략했을 때 쓰는 값 |
+| `.set_default_request_timeout(milliseconds)` | 이 MeshNode의 request 기본 timeout | `request_to_node`/`request_to_channel`(messaging-execution category)이 `.timeout(...)`을 생략했을 때 사용하는 값 |
 | `.set_instance_spot_idle_timeout(milliseconds)` | `0`(정리하지 않음) | Instance Spot idle 회수 시간 |
 | `.configure_router_socket()` | `mesh_node_socket_config_t` 기본값 | 이 MeshNode ROUTER 소켓의 HWM·buffer·timeout(`max_message_size`, `send_high_water_mark` 등) |
 | `.channel(channel_name)` | — | 이 MeshNode의 RouteMesh Channel role 등록으로 진입. RouteMesh Channel 등록 항목을 참고 |
@@ -43,8 +43,8 @@ auto play = options.add_route_mesh("play")
 **완료 결과.** 반환값 없이 동기로 등록된다. 잘못된 조합(중복 MeshName, listener 설정 누락 등)은
 `app.run(...)`이 socket bind 전 검증에서 configuration error로 드러낸다.
 
-**선택 기준.** RouteMesh를 쓰는 모든 host가 최소 하나의 MeshNode를 등록할 때 쓴다. Manual peer만
-쓰고 분산 discovery가 필요 없는 node는 Location Store 없이 시작할 수 있다.
+**선택 기준.** RouteMesh를 사용하는 모든 host가 최소 하나의 MeshNode를 등록할 때 사용한다. Manual peer만
+사용하고 분산 discovery가 필요 없는 node는 Location Store 없이 시작할 수 있다.
 
 ---
 
@@ -74,7 +74,7 @@ play.add_actor_factory<player_actor_t, player_actor_factory_t>(
   });
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -105,7 +105,7 @@ play.channel("play.events").client();
 ```
 
 **옵션.** `channel(channel_name)` 뒤에는 `.client()` 또는 `.server()`를 정확히 한 번 호출한다.
-`.client()`는 송신 경로만 만들고 modifier가 없다. `.server()`에 자주 쓰는 modifier는 다음과 같다.
+`.client()`는 송신 경로만 만들고 modifier가 없다. `.server()`에 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -118,9 +118,9 @@ play.channel("play.events").client();
 노출되면 `app.run(...)`이 message를 받기 전 startup 설정 오류로 실패한다.
 
 **선택 기준.** `send_to_channel`/`request_to_channel`(messaging-execution category)로 받을
-handler를 등록할 때 `.server()`를 쓴다. 이 MeshNode가 다른 node의 Server만 호출하고 자신은
+handler를 등록할 때 `.server()`를 사용한다. 이 MeshNode가 다른 node의 Server만 호출하고 자신은
 handler를 두지 않으면 `.client()`만 등록한다. 서로 다른 프로세스 사이 통신이 필요하면
-`add_client_server_channel`을 대신 쓴다.
+`add_client_server_channel`을 대신 사용한다.
 
 ---
 
@@ -138,7 +138,7 @@ options.add_client_server_channel("payments.api").client()
   .connect("payments-1:6001");
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -147,11 +147,11 @@ options.add_client_server_channel("payments.api").client()
 | `.server().set_weight(int)` / `.add_send_handler`/`.add_request_handler` | RouteMesh Channel Server와 동일 | 가중치와 handler 등록 |
 | `.client().connect(endpoint)` | manual | 특정 Server에 수동 연결. 생략하면 automatic discovery로 target을 찾는다 |
 
-**완료 결과.** 반환값 없이 동기로 등록된다. Automatic discovery를 쓰는 Client·Server는 Location
+**완료 결과.** 반환값 없이 동기로 등록된다. Automatic discovery를 사용하는 Client·Server는 Location
 Store 등록이 없으면 startup 검증에서 configuration error로 드러난다.
 
-**선택 기준.** RouteMesh 멤버가 아닌 독립 서비스 사이의 request/reply나 one-way 메시징에 쓴다.
-같은 RouteMesh 안 node끼리는 RouteMesh Channel 등록을 대신 쓴다.
+**선택 기준.** RouteMesh 멤버가 아닌 독립 서비스 사이의 request/reply나 one-way 메시징에 사용한다.
+같은 RouteMesh 안 node끼리는 RouteMesh Channel 등록을 대신 사용한다.
 
 ---
 
@@ -174,7 +174,7 @@ options.add_fanout_channel("lobby.events")
   .connect("lobby-1:7001");
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -188,8 +188,8 @@ options.add_fanout_channel("lobby.events")
 **완료 결과.** 반환값 없이 동기로 등록된다. Automatic subscriber와 manual subscriber를 같은
 fanout channel에 함께 설정하면 startup 실패로 드러난다.
 
-**선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 쓴다. Reply가
-필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 쓴다.
+**선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 사용한다. Reply가
+필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 사용한다.
 
 ---
 
@@ -204,7 +204,7 @@ options.add_stream_node("public-gateway")
   .register_session<game_session_t>();
 ```
 
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
+**옵션.** 자주 사용하는 modifier는 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
@@ -218,7 +218,7 @@ options.add_stream_node("public-gateway")
 **완료 결과.** 반환값 없이 동기로 등록된다. TLS 설정 오류, `register_session` 중복 호출은
 startup 검증에서 configuration error로 드러난다.
 
-**선택 기준.** 외부 client가 STREAM 프로토콜로 직접 연결하는 gateway를 열 때 쓴다. 정확한
+**선택 기준.** 외부 client가 STREAM 프로토콜로 직접 연결하는 gateway를 열 때 사용한다. 정확한
 Session·Actor 연결 규칙은 stream-session category를 참고한다.
 
 ---
@@ -248,8 +248,8 @@ RouteMesh Channel Server membership이 없으면 이 연결 intent는 목록에 
 않는다. 어느 한쪽에라도 weight `0`을 포함한 Channel Server membership이 있으면 일반 peer
 admission·liveness 규칙을 적용한다.
 
-**선택 기준.** Automatic discovery(Location Store)를 쓰지 않고 고정된 peer 목록으로 RouteMesh를
-구성할 때 쓴다.
+**선택 기준.** Automatic discovery(Location Store)를 사용하지 않고 고정된 peer 목록으로 RouteMesh를
+구성할 때 사용한다.
 
 ---
 
@@ -285,7 +285,7 @@ public:
 `node_direct_send`/`node_direct_request`/`channel_send`/`channel_request`/`classic_fanout`을
 구분한다 — `channel_send`/`channel_request`는 RouteMesh와 ClientServer를 모두 포함한다.
 
-**선택 기준.** 개별 handler마다 반복할 공통 전처리·검증이 필요할 때 쓴다. Filter는 업무 reply를
+**선택 기준.** 개별 handler마다 반복할 공통 전처리·검증이 필요할 때 사용한다. Filter는 업무 reply를
 직접 만들지 않는다 — 거부만 표현하고 나머지는 handler가 처리한다. Spot·Actor handler와 STREAM
 session에는 적용하지 않는다.
 
@@ -311,14 +311,14 @@ options.set_application_version(2);
 options.handler_coroutine_workers(8);
 ```
 
-**옵션.** 자주 쓰는 항목은 다음과 같다.
+**옵션.** 자주 사용하는 항목은 다음과 같다.
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `.services()` | — | `service_collection_t`. Handler와 hosted component의 service lifetime(`add_singleton`/`add_scoped`/`add_transient`/`add_factory`) 등록 |
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 방향별 allowlist에 추가 |
-| `.configure_network()` | `bind_host()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
-| `.worker()` | `worker_options_t` 기본값 | worker pool의 최소·최대 thread 수와 idle timeout(`RunCpuWorker`/`RunIoWorker`가 쓰는 pool) |
+| `.configure_network()` | `bind_host()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 사용하는 기본 bind·advertise host |
+| `.worker()` | `worker_options_t` 기본값 | worker pool의 최소·최대 thread 수와 idle timeout(`RunCpuWorker`/`RunIoWorker`가 사용하는 pool) |
 | `.configure_dispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `balanced`, manual 값은 미지정 | `dispatch_options_t`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configure_stream_compression()` | 압축 없음 | STREAM 기본 압축 codec(`use_default()`/`use_lz4()`/`use(codec)`/`disable()`) |
 | `.set_application_version(version)` / `.set_maintenance_wave(wave)` | `0` / 없음(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
@@ -337,7 +337,7 @@ Application Job Queue는 별도의 job-count limit이다. Manual 범위는 `1..2
 [Core/Framework API 계약](../../common/spec/server/00-foundation/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값
-하나로 끝나는 host-wide 설정을 조정할 때 쓴다.
+하나로 끝나는 host-wide 설정을 조정할 때 사용한다.
 
 ---
 
@@ -362,7 +362,7 @@ placement.channel("play.api").weight(0); // 이 Channel Server를 선택 대상�
 **완료 결과.** 동기 get/set이다. 즉시 적용되며 별도 완료 신호가 없다. 등록되지 않은 ChannelName을
 조회하면 configuration error다.
 
-**선택 기준.** 운영 중 배치나 트래픽 비중을 조정할 때 쓴다. `max_message_size`를 포함한 transport
+**선택 기준.** 운영 중 배치나 트래픽 비중을 조정할 때 사용한다. `max_message_size`를 포함한 transport
 option은 이 경로로 바꿀 수 없다 — startup 전에만 설정한다.
 
 ---
@@ -398,9 +398,9 @@ auto observation = route_mesh_runtime.observe(
 (또는 `unique_ptr` 파괴)로 관찰을 끝낸다. Manual ChannelName만 등록한 fanout을
 `fanout_runtime_t`로 조회하면 configuration error다.
 
-**선택 기준.** 특정 MeshName·ChannelName의 가용성을 판단하거나 장애 범위를 좁힐 때 쓴다. Host
+**선택 기준.** 특정 MeshName·ChannelName의 가용성을 판단하거나 장애 범위를 좁힐 때 사용한다. Host
 전체 상태가 필요하면 host-lifecycle category의 `is_ready`/observability-diagnostics category의
-`status()`를 쓴다.
+`status()`를 사용한다.
 
 ---
 

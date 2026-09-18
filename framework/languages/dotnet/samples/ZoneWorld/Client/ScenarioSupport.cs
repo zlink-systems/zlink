@@ -38,7 +38,7 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
 
         if (options.StreamTrace)
         {
-            connector.ErrorReceived += (error, _) =>
+            _ = connector.OnErrorReceived((error, _) =>
             {
                 Console.Error.WriteLine(
                     "stream-trace error player={0} code={1} message={2}",
@@ -46,15 +46,15 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
                     error.Code,
                     error.Message);
                 return ValueTask.CompletedTask;
-            };
-            connector.Disconnected += (disconnected, _) =>
+            });
+            _ = connector.OnDisconnected((disconnected, _) =>
             {
                 Console.Error.WriteLine(
                     "stream-trace disconnected player={0} reason={1}",
                     playerId,
                     disconnected.CloseReason);
                 return ValueTask.CompletedTask;
-            };
+            });
         }
 
         await connector.Connect.Async(cancellationToken);

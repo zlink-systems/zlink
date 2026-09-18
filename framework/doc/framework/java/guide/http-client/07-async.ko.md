@@ -6,7 +6,7 @@
 
 ## non-blocking 보장
 
-`java.net.http.HttpClient.sendAsync`는 NIO selector 기반 비동기 I/O를 쓴다. 따라서 응답을
+`java.net.http.HttpClient.sendAsync`는 NIO selector 기반 비동기 I/O를 사용한다. 따라서 응답을
 기다리는 동안 **호출 스레드는 park되지 않는다.** 런타임의 비동기 I/O가 이를 제공하므로
 별도의 worker scheduler가 필요 없다.
 래퍼의 redirect 루프·retry 루프도 `CompletionStage` 체인으로 합성되어 hop 사이에 스레드를
@@ -19,7 +19,8 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
         .submit(AckRes.class)
         .thenAccept(response -> {
             if (!response.body().accepted()) {
-                throw new ZLinkFrameworkException("match result was not accepted");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted");
             }
         });
 }
@@ -31,27 +32,27 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
 ## handler 규칙 — `.get()`/`.join()` 금지
 
 > **framework handler 스레드에서는 `CompletionStage` 합성(`thenCompose`/`thenApply`/
-> `thenAccept`)만 쓰고 `.get()`/`.join()`은 쓰지 않는다.** 이 repo의 java
+> `thenAccept`)만 사용하고 `.get()`/`.join()`은 사용하지 않는다.** 이 repo의 java
 > `await`/`join`은 blocking이라 handler 스레드를 막는다.
 
 | 호출 위치 | 권장 |
 |-----------|------|
 | framework handler / actor / spot 코드 | `submit(Type).thenCompose(...)` |
-| 테스트 코드 | `fetch(Type)` 또는 `.toCompletableFuture().join()` |
-| client 시나리오·CLI·배치 | `fetch(Type)` |
+| 테스트 코드 | `fetch(Type).toCompletableFuture().join()` |
+| client 시나리오·CLI·배치 | `fetch(Type).toCompletableFuture().join()` |
 
 ## continuation 재개 위치
 
 Java에서는 `CompletableFuture`의 `*Async(fn, executor)` 조합으로 continuation 재개 위치를 제어한다. continuation을 특정 executor에서 재개하려면 `thenApplyAsync`/`thenComposeAsync`에
 executor를 넘긴다.
 
-## blocking: fetch(Type)
+## body만 받는 fetch(Type)
 
-`fetch(Type)`는 결과가 올 때까지 호출 스레드를 멈추고 typed body를 돌려주며 실패를 예외로
-던진다. 테스트·CLI 전용이다.
+`fetch(Type)`도 비동기다. `CompletionStage<T>`로 디코드된 body만 전달하며 실패는 stage의
+예외 완료로 보고된다.
 
 ```java
-Leaderboard board = client.get("/leaderboard").fetch(Leaderboard.class);
+CompletionStage<Leaderboard> board = client.get("/leaderboard").fetch(Leaderboard.class);
 ```
 
 [다음: Streaming →](08-streaming.ko.md)

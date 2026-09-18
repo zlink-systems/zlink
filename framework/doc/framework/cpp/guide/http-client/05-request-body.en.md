@@ -3,7 +3,7 @@
 # 5. Request Body
 
 There are five body sources. **Only one per request** can be used — mixing two or more is rejected
-with `request_protocol_error` ("single body source").
+with `protocol_error` ("single body source").
 
 | Source | Method | Content-Type |
 |------|--------|--------------|

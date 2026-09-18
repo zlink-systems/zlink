@@ -2,13 +2,13 @@
 
 # 5. Request Body
 
-body 소스는 **상호 배타**다. `body`, `bodyStream`, `form`, `multipart` 중 하나만 쓸 수
-있고 둘 이상 지정하면 `requestProtocolError`로 실패한다.
+body 소스는 **상호 배타**다. `body`, `bodyStream`, `form`, `multipart` 중 하나만 사용할 수
+있고 둘 이상 지정하면 `ProtocolError`로 실패한다.
 
 ## typed JSON
 
 ```ts
-await client.post('/games').body({ name: 'ranked-match-0611' }).submit<CreateGameRes>();
+await client.post('/games').body({ name: 'ranked-match-0611' }).async<CreateGameRes>();
 ```
 
 `body(value)`(1 인자)는 값을 JSON 직렬화하고 `content-type: application/json`을 설정한다.

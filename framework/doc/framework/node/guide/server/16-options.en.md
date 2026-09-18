@@ -104,7 +104,7 @@ Fields of the `ZLinkMeshNodeSocketConfig` that `configureRouterSocket()` returns
 > the current builder surface.
 
 How it works and how to pick values is covered by
-[4. Backpressure](04-backpressure.en.md).
+[Backpressure](33-backpressure.en.md).
 `0` is not the default — it means **unlimited.**
 
 ### 3.2 CPU Worker Pool
@@ -137,7 +137,7 @@ application job queue limits jobs waiting for handler start across the host inst
 The memory limit and Core budget must be positive. The manual queued-job limit is
 `1..2,147,483,647`; `0n` is a startup configuration error, not unlimited. The two profiles
 use the same labels but are independent enums and calculations. See
-[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+[Backpressure](33-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 for saturation behavior and production measurement.
 
 ## 4. Diagnostics
@@ -234,6 +234,6 @@ alive as-is.
 ## 10. Related Documents
 
 - The formal contract: [Node.js foundation and configuration public contract](../../../common/spec/server/languages/node/interfaces/01-foundation-configuration.en.md)
-- What each cap changes: [4. Backpressure](04-backpressure.en.md)
+- What each cap changes: [Backpressure](33-backpressure.en.md)
 - The procedure for draining traffic with weights: [12. Operations](12-operations.en.md)
 - Injection token list: [13. Key Interface Usage Index](13-interface-catalog.en.md) §1

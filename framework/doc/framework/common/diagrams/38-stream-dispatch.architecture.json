@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "연결 하나가 지나는 자리",
+    "subtitle": "Framework가 queue에 넣고 session callback을 부른다 · 오류는 귀속되는 곳이 다르다",
+    "output": "38-stream-dispatch.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "mesh 밖 client",
+      "sublabel": "연결 하나",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "Q",
+      "type": "external",
+      "label": "Framework queue",
+      "sublabel": "받기와 dispatch",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "session",
+      "sublabel": "연결 하나를 대표",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "O",
+      "type": "messagebus",
+      "label": "runtime 관측",
+      "sublabel": "session 밖의 오류",
+      "row": 2,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "Q",
+      "label": "packet 도착",
+      "variant": "default"
+    },
+    {
+      "from": "Q",
+      "to": "S",
+      "label": "callback 실행",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "Q",
+      "label": "응답 token 제출",
+      "variant": "dashed",
+      "labelAt": [
+        380,
+        296
+      ]
+    },
+    {
+      "from": "Q",
+      "to": "O",
+      "label": "handshake·socket 오류",
+      "variant": "default",
+      "labelAt": [
+        380,
+        374
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "오류가 귀속되는 곳이 갈린다",
+      "items": [
+        "session 오류 callback은 그 session에 귀속되는 transport 오류만 받는다. handshake 실패와 socket·node 단위 오류는 부를 session이 없거나 하나로 확정할 수 없어 runtime 관측으로 간다.",
+        "application handler의 예외는 handler 예외 처리 경로로 간다. 받기 loop를 직접 도는 표면은 없다."
+      ]
+    }
+  ]
+}

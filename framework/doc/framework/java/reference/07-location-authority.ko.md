@@ -11,7 +11,7 @@
 
 ## Location·Relocation Store 등록 (구성 시점)
 
-분산 discovery, Instance Spot cold activation 또는 Actor·Spot relocation을 쓰는 host가 Store
+분산 discovery, Instance Spot cold activation 또는 Actor·Spot relocation을 사용하는 host가 Store
 구현을 root에 등록한다.
 
 ```java
@@ -32,7 +32,7 @@ options.addRelocationStore(new ZLinkRedisRelocationStore(
 | --- | --- | --- |
 | `.addLocationStore(ZLinkLocationStore)` | 없으면 분산 discovery·relocation 불가 | exact read, conditional atomic write(`write`), bounded prefix scan(`scan`)을 제공하는 Store 하나 |
 | `.addRelocationStore(ZLinkRelocationStore)` | `recreateOnRelocation()`/`preserveStateWith(...)` factory나 Instance Spot factory가 하나라도 있으면 필수 | Framework가 발급한 reference에 immutable relocation payload를 저장하는 Store 하나 |
-| `ZLinkRedisLocationOptions.keyPrefix` / `ZLinkRedisRelocationOptions.keyPrefix` | 유효한 구성에는 반드시 비어 있지 않은 값을 지정해야 한다(둘이 같은 Redis를 쓰면 서로 달라야 함) | Redis key namespace |
+| `ZLinkRedisLocationOptions.keyPrefix` / `ZLinkRedisRelocationOptions.keyPrefix` | 유효한 구성에는 반드시 비어 있지 않은 값을 지정해야 한다(둘이 같은 Redis를 사용하면 서로 달라야 함) | Redis key namespace |
 | `.setConnectionString(value)` | 필수 | Redis 연결 설정 |
 | `.setOperationTimeout(value)` | 구현 기본값 | provider I/O 상한 |
 
@@ -40,7 +40,7 @@ options.addRelocationStore(new ZLinkRedisRelocationStore(
 등록하거나 필수 Store가 없으면 startup 검증에서 configuration error로 드러난다. `Store`가
 `AutoCloseable`을 구현하면 Framework가 dependent runtime을 먼저 종료한 뒤 정확히 한 번 닫는다.
 
-**선택 기준.** Manual peer만 쓰고 분산 location 기능이 필요 없는 node는 이 항목을 생략하고 시작할
+**선택 기준.** Manual peer만 사용하고 분산 location 기능이 필요 없는 node는 이 항목을 생략하고 시작할
 수 있다. 공식 Redis provider 외에 같은 `ZLinkLocationStore`/`ZLinkRelocationStore`(opt-in artifact
 `zlink-framework-provider-abstractions`만 의존)를 구현하는 다른 provider도 등록할 수 있다. 등록
 뒤에는 application이 Store operation을 직접 호출하거나 Store를 교체하지 않는다.
@@ -97,7 +97,7 @@ boolean ready = locationReadiness.isPeerReady("play", ZLinkLocationRole.SPOT, nu
 
 **완료 결과.** `CompletionStage<Boolean>`을 반환한다. 별도 실패 kind 없이 준비 여부만 알려준다.
 
-**선택 기준.** 특정 역할의 peer가 준비될 때까지 기다리는 startup 순서 제어나 헬스체크에 쓴다.
+**선택 기준.** 특정 역할의 peer가 준비될 때까지 기다리는 startup 순서 제어나 헬스체크에 사용한다.
 
 ---
 
@@ -114,8 +114,8 @@ ZLinkLocationRuntimeStatus status = locationQuery.getStatus().toCompletableFutur
 **완료 결과.** `ZLinkLocationRuntimeStatus`를 반환한다. Store 연결과 owner lease 갱신 상태를
 나타내는 field로 구성된다.
 
-**선택 기준.** Location 인프라 자체의 건강 상태를 진단할 때 쓴다. 특정 peer 준비 여부는
-`isPeerReady`를 쓴다.
+**선택 기준.** Location 인프라 자체의 건강 상태를 진단할 때 사용한다. 특정 peer 준비 여부는
+`isPeerReady`를 사용한다.
 
 ---
 
@@ -142,9 +142,9 @@ ZLinkLocationPage<ZLinkLocationTopologyEntry> page = locationQuery
 페이지다. Store key·version, owner lease generation, descriptor payload 같은 내부 정보는 반환하지
 않는다.
 
-**선택 기준.** 운영 도구에서 등록된 node나 서비스 현황을 사람이 볼 수 있는 형태로 조회할 때 쓴다.
+**선택 기준.** 운영 도구에서 등록된 node나 서비스 현황을 사람이 볼 수 있는 형태로 조회할 때 사용한다.
 단일 MeshName·ChannelName의 실시간 가용성 판단에는 topology-discovery category의 상태 조회
-항목을 쓴다.
+항목을 사용한다.
 
 ---
 

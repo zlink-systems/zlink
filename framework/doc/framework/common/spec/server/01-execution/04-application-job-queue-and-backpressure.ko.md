@@ -72,7 +72,7 @@ Core와 Framework profile은 같은 label을 사용할 수 있지만 서로 다�
   `PAUSED` receive-flow 절대 상태 하나뿐이다.** Framework는 Core HWM 설정이나 queued-byte
   counter를 상태 전이에 맞춰 변경하지 않는다.
 - **상한은 host 하나에 하나다.** Host 안에 MeshNode가 몇 개든, ClientServer channel이
-  몇 개든, socket과 연결이 몇 개든 `MaxQueuedApplicationJobs` 하나를 함께 쓴다.
+  몇 개든, socket과 연결이 몇 개든 `MaxQueuedApplicationJobs` 하나를 함께 사용한다.
   - 구성 요소마다 나누어 갖지 않는다.
   - 구성 요소 수만큼 곱하지 않는다.
   - 한 host 안에서 permit을 세는 자리는 하나뿐이다.
@@ -86,7 +86,7 @@ Ordinary ingress — Core나 binding에서 아직 permit을 받지 못한 record
 
 **같은 host 안에서 만든 job도 마찬가지다.** 같은 host의 Spot이나 Actor에게 보내는 send,
 publish의 local target처럼 network를 거치지 않고 곧바로 실행 대기열에 들어가는 job도 넣기
-전에 같은 host permit을 얻는다. 그러지 않으면 그 job이 대기열에서 기다려도 쓰는 permit이
+전에 같은 host permit을 얻는다. 그러지 않으면 그 job이 대기열에서 기다려도 사용하는 permit이
 늘지 않아 §6의 `PAUSED`가 나가지 않고, 한 host가 자기 자신을 밀어붙일 수 있다.
 
 **세는 것과 거는 것은 층이 다르다.** permit은 이 host가 받아서 handler를 기다리는 job을
@@ -101,11 +101,11 @@ publish의 local target처럼 network를 거치지 않고 곧바로 실행 대�
 | [ClientServer Channel](../00-foundation/02-glossary.ko.md#clientserver-channel)의 Server ROUTER | Client DEALER가 보낸 request와 send |
 
 Logical Multicast도 여기로 들어온다. 보내는 쪽이 remote node마다 한 번씩 보내고, 받은 node가
-자기 local Spot을 정한다. 한 record가 이 node의 Spot N개로 가면 permit도 N개를 쓴다.
+자기 local Spot을 정한다. 한 record가 이 node의 Spot N개로 가면 permit도 N개를 사용한다.
 
 ClientServer에서 Server ROUTER는 Client DEALER에게 먼저 보내지 않는다. 그래서 Client DEALER가
 받는 것은 자기가 보낸 호출의 답뿐이다. 답은 이 절 뒤에서 정하는 대로 permit을 거치지 않으므로,
-이 방향에는 permit을 쓰는 유입이 없다.
+이 방향에는 permit을 사용하는 유입이 없다.
 
 그 밖에 STREAM application packet, cross-node Session application record([STREAM 서버 session](../04-session/01-stream-session.ko.md),
 [Session과 Actor binding](../04-session/02-session-actor-binding.ko.md) 참고), handshake·bind·
@@ -297,7 +297,7 @@ resume permit count = floor(M * R / 100)
 resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서는 현재 상태를 유지한다.
 
 - **상태를 거는 대상은 이 host에게 요청이 들어오는 socket뿐이다.** `PAUSED`는 "나에게 그만
-  보내라"는 말이므로, 보낼 상대가 요청을 보내는 쪽일 때만 뜻이 있다. §3에서 permit을 쓰는
+  보내라"는 말이므로, 보낼 상대가 요청을 보내는 쪽일 때만 뜻이 있다. §3에서 permit을 사용하는
   유입이 들어오는 socket과 같은 집합이다.
 
   | socket | 이 host에게 요청이 오나 | `PAUSED`를 거나 |
@@ -329,7 +329,7 @@ resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서�
 
   도착한 것은 §3 순서대로 permit을 기다렸다가 하나도 빠짐없이 handler로 간다.
 
-  쓰고 있는 permit이 상한에 닿으면 더 받지 않는다. 받지 않은 것은 이쪽 Core queue에
+  사용하고 있는 permit이 상한에 닿으면 더 받지 않는다. 받지 않은 것은 이쪽 Core queue에
   그대로 쌓인다. 그러면 Core가 byte 상한에 걸리고, 보내는 쪽이 거기서 막힌다(§1).
 
 내부 확인 조건 — 새 socket은 현재 host pressure 상태를 적용한 뒤 receive 대상 registry에
@@ -352,7 +352,7 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
 
 ## 8. 보낼 때의 대기
 
-**Framework는 Core socket의 send와 request를 한 번 부른다.** 보낼 자리가 없어 기다리는 일은
+**Framework는 Core socket의 send와 request를 한 번 호출한다.** 보낼 자리가 없어 기다리는 일은
 §7대로 Core와 binding이 한다. Framework는 기다리는 줄을 따로 만들지 않고, 다시 보내지 않으며,
 같은 내용으로 두 번째 호출을 만들지 않는다.
 
@@ -361,7 +361,7 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
   값이 아니다([`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)).
 - **자리가 없다는 것은 오류가 아니다.** 어느 줄도 자리가 없다는 이유로 호출을 거부하거나
   받은 것을 버리지 않는다([오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)).
-- **이 규칙은 결과가 아직 정해지지 않은 구간에만 쓴다.** 이미 끝난 호출 뒤에 생긴 실패는
+- **이 규칙은 결과가 아직 정해지지 않은 구간에만 사용한다.** 이미 끝난 호출 뒤에 생긴 실패는
   호출자에게 돌려줄 결과가 없으므로 관측으로만 남긴다. publish가 시작된 뒤 local target을
   건너뛴 경우, 이동 중 one-way를 버린 경우, 끝난 send의 target이 받지 못한 경우가 그렇다.
 - **기다리는 동안 그 작업은 실행 권한을 쥐고 있지 않는다.** 쥔 채로 기다리면 같은 Spot의

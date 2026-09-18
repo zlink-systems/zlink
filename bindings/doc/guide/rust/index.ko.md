@@ -11,7 +11,7 @@ title: "Rust 바인딩 가이드"
 > **이 장의 계약 소유 문서** — [Rust bindings 스펙](../../spec/rust/README.ko.md)이
 > 다룬다. 이 장은 그 계약을 실제 샘플 코드로 보여준다.
 
-Rust에서 zlink를 쓰는 방법을 실제 샘플 코드 중심으로 설명합니다.
+Rust에서 zlink를 사용하는 방법을 실제 샘플 코드 중심으로 설명합니다.
 메시징 개념은 [코어 가이드](../../../../core/doc/guide/01-overview.ko.md)를 참고하세요.
 
 ---

@@ -22,7 +22,7 @@ var report = await ZLinkHttpClient.Create("https://api.internal")
 - **decoded 크기**를 `MaxResponseBodySize`로 강제한다.
 - `DownloadAsync(sink)` streaming chunk는 **해제하지 않는다**(받은 그대로 전달).
 
-본문이 손상됐으면 `ProtocolError`, decoded 크기가 한도를 넘으면 `CapacityExceeded`로
+본문이 손상됐으면 `ProtocolError`, decoded 크기가 한도를 넘으면 `Rejected`로
 보고된다.
 
 [다음: 에러 처리 →](13-error-handling.ko.md)

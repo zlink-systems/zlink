@@ -16,7 +16,7 @@ Sample과 E2E의 JSON 설정 파일, 환경 변수 금지와 typed binding 기�
 [Sample/E2E 설정 정책](../common/sample-e2e-configuration-policy.ko.md)을 따른다.
 
 **C++가 다른 언어보다 문서가 많은 이유** — `.NET`은 ASP.NET Core를, Node는 NestJS를, Java는
-Spring Boot를 빌려 쓰지만 **C++에는 빌릴 host가 없어 framework가 host·DI·configuration·logging·
+Spring Boot를 빌려 사용하지만 **C++에는 빌릴 host가 없어 framework가 host·DI·configuration·logging·
 HTTP를 직접 제공한다.**
 
 ## 별도 산출물 문서

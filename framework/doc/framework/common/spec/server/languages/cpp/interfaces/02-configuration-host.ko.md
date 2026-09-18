@@ -759,9 +759,9 @@ handler 안에서 다른 channel로 request를 보낼 때도 호출자는 낮은
 쌍이나 blocking wait를 보지 않아야 한다. `.NET`의 `await client.RequestAsync<TReply>(...)`와
 같은 읽기 수준을 C++에서는 아래처럼 표현한다.
 
-샘플 namespace에서는 `using zlink::framework::task_t;`를 두고 `task_t<T>`처럼 짧게 쓴다.
+샘플 namespace에서는 `using zlink::framework::task_t;`를 두고 `task_t<T>`처럼 짧게 사용한다.
 `zlink::framework::task_t<T>`를 handler signature마다 반복하면 async 의미보다 namespace
-노이즈가 먼저 보이기 때문이다. framework public contract 문서에서는 전체 이름을 쓸 수 있지만,
+노이즈가 먼저 보이기 때문이다. framework public contract 문서에서는 전체 이름을 사용할 수 있지만,
 application sample과 guide 예제는 짧은 alias를 기본으로 한다.
 
 ```cpp

@@ -1,0 +1,16 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+
+    <!-- tutorial은 저장소 안에서 빌드하더라도 배포된 패키지를 참조한다. 문서가 보여주는
+         코드와 독자가 nuget.org에서 받는 라이브러리를 같은 것으로 유지하기 위해서다.
+         저장소 소스와 대조해야 할 때만 -p:ZLinkTutorialUseLocalSource=true로 바꾼다. -->
+    <ZLinkTutorialUseLocalSource Condition="'$(ZLinkTutorialUseLocalSource)' == ''">false</ZLinkTutorialUseLocalSource>
+    <ZLinkTutorialDotnetRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</ZLinkTutorialDotnetRoot>
+  </PropertyGroup>
+
+</Project>

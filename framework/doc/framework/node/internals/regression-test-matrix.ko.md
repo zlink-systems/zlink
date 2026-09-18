@@ -69,7 +69,7 @@ CI workflow 가 만들어 내는 native artifact 조합은 위 네 플랫폼 ABI
 ## 3.1 Node Binding Parity Regression 항목
 
 > framework 는 `@zlink-systems/zlink` public API 위에만 올라간다. dotnet
-> `Runtime/Backend/DotNet/` 이 `bindings/dotnet` public surface 를 쓰는 것처럼,
+> `Runtime/Backend/DotNet/` 이 `bindings/dotnet` public surface 를 사용하는 것처럼,
 > Node backend adapter 도 binding internal/native 경로를 직접 우회하지 않는다.
 
 | 항목 | 계층 | 통과 기준 |
@@ -185,7 +185,7 @@ handler 실행 완료는 기다리지 않는다.
 | `configure()` handler registration | `integration-single-process` | `context.handlers.addPacket(...)`, `context.handlers.addHandler(...)`, `context.handlers.addSubscribe(...)` 등의 spot-local 등록이 descriptor에 반영된다 |
 | Entry Spot actor handler decorator registration | `integration-single-process` | `zlinkEntrySpotActorRequestHandler(...)` decorator 로 등록한 actor packet handler 가 대상 Entry Spot registry에 반영된다 |
 | user Spot actor handler decorator registration | `integration-single-process` | `zlinkSpotActorRequestHandler(...)` decorator 로 등록한 actor packet handler 가 대상 user Spot registry에 반영된다 |
-| Entry Spot packet callback concurrency | `integration-single-process` | Entry Spot 일반 packet handler는 user Spot과 같은 등록 표면을 쓰지만 Entry Spot 전체 실행 줄에 직렬화되지 않는다 |
+| Entry Spot packet callback concurrency | `integration-single-process` | Entry Spot 일반 packet handler는 user Spot과 같은 등록 표면을 사용하지만 Entry Spot 전체 실행 줄에 직렬화되지 않는다 |
 | `onInitialize(...)` handler resolve | `integration-single-process` | spot마다 분리된 DI scope가 정상 동작한다 |
 | `onClosing(...)` 정상 close callback | `integration-single-process` | `close(...)` 호출 시 spot 실행 문맥에서 한 번 호출된다 |
 | local spot publish | `integration-single-process` | subscriber가 정상 수신한다 |
@@ -303,7 +303,7 @@ backend gate 와 별도로 유지한다.
 | `npm run verify:abi-matrix` | `unit` | `framework-node` CI workflow, release 문서, package script 가 `win-x64`, `linux-x64`, `linux-arm64`, `darwin-arm64` 와 Node 20/22 gate 를 같은 목록으로 유지한다 |
 | `npm run verify:cross-language` | `integration-multi-process` | Node 와 dotnet TestHost 가 channel/stream 필수 경로 여섯 가지를 같은 프로토콜 의미로 통과시킨다 |
 | guide chapter map | `unit` | Node guide 12개 장이 dotnet guide 주요 장과 1:1로 매핑된다 |
-| sample public API import guard | `unit` | sample 이 framework/connector public API만 import하고 binding internal/native 경로를 직접 쓰지 않는다 |
+| sample public API import guard | `unit` | sample 이 framework/connector public API만 import하고 binding internal/native 경로를 직접 사용하지 않는다 |
 | sample readiness guard | `unit` | sample 이 sleep-only readiness masking을 사용하지 않고 observable readiness를 기다린다 |
 | Node client -> dotnet channel server request/reply | `integration-multi-process` | dotnet request handler가 같은 payload 의미로 reply한다 |
 | Node client -> dotnet channel server one-way send | `integration-multi-process` | dotnet send handler가 같은 packet 의미로 처리한다 |
@@ -500,7 +500,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
 | `EntryRoutingTests.EntrySpotRoutingId_IsApplied_ToNativeEntrySpot` | `entrySpot.routingId` 로 지정한 routing id 가 native Entry Spot facade 에 적용되고 Entry Spot activation 의 `spotRid` 로 노출된다. |
-| `LocationRuntimeTests.SpotRefResolver_Resolves_Created_Spot_By_Rid_And_Removes_Route` | Spot RID route는 Spot rid만 찾는 색인으로 쓰고, resolver가 유효한 spot location row의 owner node rid와 `SpotKind.User`를 보존한다. |
+| `LocationRuntimeTests.SpotRefResolver_Resolves_Created_Spot_By_Rid_And_Removes_Route` | Spot RID route는 Spot rid만 찾는 색인으로 사용하고, resolver가 유효한 spot location row의 owner node rid와 `SpotKind.User`를 보존한다. |
 | `ManagerTests.SpotManager_Create_List_Close_And_Publish_Work_Through_FrameworkRuntime` | `create`, `find`, `list`, `close` 와 scope 정리가 일관되게 동작한다. |
 
 ### Stage wrapper
@@ -508,7 +508,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
 | `E2E:SM-B7` | actor join 뒤 stage 역할의 Spot에서 packet이 lifecycle 순서에 맞게 처리된다. |
-| `E2E:SM-E3` | stage tick으로 쓰는 timer가 Spot 종료 뒤 추가 callback을 만들지 않는다. |
+| `E2E:SM-E3` | stage tick으로 사용하는 timer가 Spot 종료 뒤 추가 callback을 만들지 않는다. |
 | `E2E:SM-A5` | application stage wrapper가 Spot request, timer와 lifecycle을 public API로 실행한다. |
 
 ### Bootstrap/Overview

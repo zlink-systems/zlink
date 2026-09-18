@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.14.0
+// Package version: 0.16.0
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -31,7 +31,6 @@ var ZlinkStreamConnectorBundle = (() => {
   // packages/stream-connector/src/index.ts
   var index_exports = {};
   __export(index_exports, {
-    DefaultZlinkStreamConnector: () => DefaultZlinkStreamConnector,
     ZlinkStreamCodec: () => ZlinkStreamCodec,
     ZlinkStreamCompression: () => ZlinkStreamCompression,
     ZlinkStreamConnectionState: () => ZlinkStreamConnectionState,
@@ -715,6 +714,53 @@ var ZlinkStreamConnectorBundle = (() => {
     return new TextDecoder().decode(value);
   }
 
+  // packages/stream-connector/src/Runtime/ZlinkStreamAssertions.ts
+  var zlinkStreamAssert = {
+    ensure(condition, message) {
+      if (typeof message !== "string" || message.trim().length === 0) {
+        throw connectorError("validationFailed" /* ValidationFailed */, "zlinkStreamAssert.ensure requires a non-empty diagnostic message.");
+      }
+      if (!condition) {
+        throw connectorError("validationFailed" /* ValidationFailed */, message);
+      }
+    },
+    async expectFailure(action, errorKind) {
+      let failure;
+      try {
+        await action();
+      } catch (error) {
+        failure = error;
+      }
+      if (failure === void 0) {
+        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to fail.");
+      }
+      const streamError = unwrapStreamError(failure);
+      if (errorKind !== void 0 && streamError.code !== errorKind) {
+        throw connectorError(
+          "validationFailed" /* ValidationFailed */,
+          `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
+          failure
+        );
+      }
+      return streamError;
+    },
+    async expectTimeout(action) {
+      let failure;
+      try {
+        await action();
+      } catch (error) {
+        failure = error;
+      }
+      if (failure === void 0) {
+        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to time out.");
+      }
+      const code = unwrapStreamError(failure).code;
+      if (code !== "requestTimeout" /* RequestTimeout */ && code !== "connectTimeout" /* ConnectTimeout */) {
+        throw failure;
+      }
+    }
+  };
+
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamPacketNameValidator.ts
   function validateName(name, allowReserved = false) {
     if (name.length === 0) {
@@ -957,6 +1003,9 @@ var ZlinkStreamConnectorBundle = (() => {
       this.timeoutMs = timeoutMs;
       return this;
     }
+    // Spec stream-connector 32 §10.1: the predicate reads the whole message, and
+    // the call answers with the messages themselves, so a caller can assert on the
+    // packet name and the metadata and not only on the payload.
     async run(signal) {
       var _a;
       this.markExecuted();
@@ -965,13 +1014,13 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       const timeoutMs = (_a = this.timeoutMs) != null ? _a : this.connector.options.waitTimeoutMs;
       const deadline = Date.now() + timeoutMs;
-      const payloads = [];
+      const messages = [];
       for (const predicate of this.predicates) {
         const message = await this.connector.waitForMessage(
           this.name,
           Math.max(0, deadline - Date.now()),
           (candidate) => {
-            if (!predicate(candidate.payload)) {
+            if (!predicate(candidate)) {
               throw connectorError(
                 "validationFailed" /* ValidationFailed */,
                 `Message '${this.name}' arrived out of the expected sequence.`
@@ -981,9 +1030,9 @@ var ZlinkStreamConnectorBundle = (() => {
           },
           signal
         );
-        payloads.push(message.payload);
+        messages.push(message);
       }
-      return payloads;
+      return messages;
     }
     ensureConfigurable() {
       if (this.executed) {
@@ -1334,7 +1383,7 @@ var ZlinkStreamConnectorBundle = (() => {
     "detailed" /* Detailed */
   ]);
   function normalizeOptions(options, defaultTransportFactory) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D;
     const endpoint = options.endpoint;
     if (endpoint.trim().length === 0) {
       throw connectorError("configurationError" /* ConfigurationError */, "Endpoint must not be empty.");
@@ -1367,22 +1416,30 @@ var ZlinkStreamConnectorBundle = (() => {
         initialDelayMs: (_r = (_q = options.reconnect) == null ? void 0 : _q.initialDelayMs) != null ? _r : 250,
         maxDelayMs: (_t = (_s = options.reconnect) == null ? void 0 : _s.maxDelayMs) != null ? _t : 5e3,
         backoffFactor: (_v = (_u = options.reconnect) == null ? void 0 : _u.backoffFactor) != null ? _v : 2,
-        maxAttempts: (_x = (_w = options.reconnect) == null ? void 0 : _w.maxAttempts) != null ? _x : 3
+        maxAttempts: ((_w = options.reconnect) == null ? void 0 : _w.maxAttempts) === void 0 ? 3 : options.reconnect.maxAttempts
       },
-      maxSendPayloadSize: (_y = options.maxSendPayloadSize) != null ? _y : 64 * 1024,
-      maxReceivePayloadSize: (_z = options.maxReceivePayloadSize) != null ? _z : 64 * 1024,
-      dispatchMode: (_A = options.dispatchMode) != null ? _A : "manual" /* Manual */,
-      compression: (_B = options.compression) != null ? _B : "lz4" /* Lz4 */,
+      maxSendPayloadSize: (_x = options.maxSendPayloadSize) != null ? _x : 64 * 1024,
+      maxReceivePayloadSize: (_y = options.maxReceivePayloadSize) != null ? _y : 64 * 1024,
+      dispatchMode: (_z = options.dispatchMode) != null ? _z : "manual" /* Manual */,
+      compression: (_A = options.compression) != null ? _A : "lz4" /* Lz4 */,
       compressionCodec: resolveCompressionCodec2(options),
-      nameResolver: (_C = options.nameResolver) != null ? _C : { resolve: (type) => type.name },
-      transportFactory: (_D = options.transportFactory) != null ? _D : defaultTransportFactory,
+      nameResolver: (_B = options.nameResolver) != null ? _B : defaultPacketNameResolver,
+      transportFactory: (_C = options.transportFactory) != null ? _C : defaultTransportFactory,
       codec: options.codec,
-      meterProvider: options.meterProvider,
       // Spec 26 §4: the default diagnostics level is Errors, which preserves
       // the connector's established wire behavior.
-      diagnosticsLevel: (_E = options.diagnosticsLevel) != null ? _E : "errors" /* Errors */
+      diagnosticsLevel: (_D = options.diagnosticsLevel) != null ? _D : "errors" /* Errors */
     };
   }
+  var defaultPacketNameResolver = {
+    resolve(payloadType) {
+      const declared = payloadType.packetName;
+      if (typeof declared === "string" && declared.length > 0) {
+        return declared;
+      }
+      return payloadType.name;
+    }
+  };
   function resolveCompressionCodec2(options) {
     var _a;
     const compression = (_a = options.compression) != null ? _a : "lz4" /* Lz4 */;
@@ -1419,7 +1476,7 @@ var ZlinkStreamConnectorBundle = (() => {
     }
   }
   function validateReconnect(options) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     const enabled = (_a = options == null ? void 0 : options.enabled) != null ? _a : true;
     if (!enabled) {
       return;
@@ -1429,7 +1486,8 @@ var ZlinkStreamConnectorBundle = (() => {
     if (((_d = options == null ? void 0 : options.backoffFactor) != null ? _d : 2) < 1) {
       throw connectorError("validationFailed" /* ValidationFailed */, "Reconnect BackoffFactor must be at least 1.0.");
     }
-    if (((_e = options == null ? void 0 : options.maxAttempts) != null ? _e : 3) <= 0) {
+    const maxAttempts = (options == null ? void 0 : options.maxAttempts) === void 0 ? 3 : options.maxAttempts;
+    if (maxAttempts !== null && !(Number.isFinite(maxAttempts) && maxAttempts > 0)) {
       throw connectorError("validationFailed" /* ValidationFailed */, "Reconnect MaxAttempts must be null or positive.");
     }
   }
@@ -1554,6 +1612,16 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "queueHead", 0);
       __publicField(this, "queuedCount", 0);
       __publicField(this, "drainTask");
+      // True for as long as `drain` is on the stack, handler awaits included. It
+      // marks the execution context a registered handler runs in, so a `dispatch`
+      // made from inside a handler is recognised as re-entry rather than a fresh
+      // pump. It is not a lock: a single event loop admits no second thread, and
+      // nothing ever waits for this flag to fall.
+      __publicField(this, "draining", false);
+      // Spec stream-connector 32 §10: arrivals per packet name on the current
+      // connection. It is raised where a packet arrives, never where one is taken,
+      // so consuming does not lower it and the dispatch mode does not change it.
+      __publicField(this, "receivedCounts", /* @__PURE__ */ new Map());
     }
     on(name, handler) {
       validateName(name);
@@ -1602,9 +1670,19 @@ var ZlinkStreamConnectorBundle = (() => {
         }
       });
     }
-    enqueue(message, signal) {
+    /** Spec stream-connector 32 §10: arrivals under `name` on this connection. */
+    receivedCount(name) {
       var _a;
-      for (const observer of [...(_a = this.observers.get(message.name)) != null ? _a : []]) {
+      return (_a = this.receivedCounts.get(name)) != null ? _a : 0;
+    }
+    /** A newly established connection counts from 0 again (spec §10). */
+    resetReceivedCounts() {
+      this.receivedCounts.clear();
+    }
+    enqueue(message, signal) {
+      var _a, _b;
+      this.receivedCounts.set(message.name, ((_a = this.receivedCounts.get(message.name)) != null ? _a : 0) + 1);
+      for (const observer of [...(_b = this.observers.get(message.name)) != null ? _b : []]) {
         if (observer(message)) {
           return;
         }
@@ -1618,8 +1696,18 @@ var ZlinkStreamConnectorBundle = (() => {
     /**
      * Runs the registered handlers the receive path left queued. `Manual` calls
      * this from `dispatch`; `Immediate` has already drained on arrival.
+     *
+     * A handler that calls `dispatch` arrives back here from inside the drain it
+     * was started by. `scheduleDrain` would find `drainTask` already set and
+     * return, and the await below would then be the drain waiting on itself —
+     * a deadlock with neither timeout nor error. The drain loop already takes
+     * every message a handler exists for, so there is nothing a second drain
+     * would deliver and returning is the whole of the correct behaviour.
      */
     async pump() {
+      if (this.draining) {
+        return;
+      }
       this.scheduleDrain();
       await this.drainTask;
     }
@@ -1648,23 +1736,28 @@ var ZlinkStreamConnectorBundle = (() => {
       });
     }
     async drain() {
-      for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
-        const queued = this.queue[index];
-        if (queued === void 0) continue;
-        this.removeAt(index);
-        const { message, signal } = queued;
-        const handlers = [...this.handlers.get(message.name)];
-        for (const handler of handlers) {
-          try {
-            await handler(message, signal);
-          } catch (cause) {
-            await this.events.publishError({
-              code: "userCallbackFailed" /* UserCallbackFailed */,
-              message: "Typed message handler failed.",
-              cause
-            }, signal);
+      this.draining = true;
+      try {
+        for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
+          const queued = this.queue[index];
+          if (queued === void 0) continue;
+          this.removeAt(index);
+          const { message, signal } = queued;
+          const handlers = [...this.handlers.get(message.name)];
+          for (const handler of handlers) {
+            try {
+              await handler(message, signal);
+            } catch (cause) {
+              await this.events.publishError({
+                code: "userCallbackFailed" /* UserCallbackFailed */,
+                message: "Typed message handler failed.",
+                cause
+              }, signal);
+            }
           }
         }
+      } finally {
+        this.draining = false;
       }
     }
     removeAt(index) {
@@ -1710,10 +1803,9 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/ZlinkStreamFrameSender.ts
   var ZlinkStreamFrameSender = class {
-    constructor(protocol, flowContext, metrics) {
+    constructor(protocol, flowContext) {
       this.protocol = protocol;
       this.flowContext = flowContext;
-      this.metrics = metrics;
       __publicField(this, "pendingWrites", /* @__PURE__ */ new Set());
     }
     async send(connection, kind, name, payload, metadata, compress, requestSeq, signal, correlationId, explicitFlow) {
@@ -1739,7 +1831,6 @@ var ZlinkStreamConnectorBundle = (() => {
       this.pendingWrites.add(write);
       try {
         await write;
-        this.metrics.outbound(frame.byteLength);
       } finally {
         this.pendingWrites.delete(write);
       }
@@ -1768,17 +1859,29 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/ZlinkStreamReceiveDispatcher.ts
   var ZlinkStreamReceiveDispatcher = class {
-    constructor(protocol, pendingRequests, receivedMessages, frameSender, events, flowContext, metrics, serverClosing) {
+    constructor(protocol, pendingRequests, receivedMessages, frameSender, events, flowContext, serverClosing) {
       this.protocol = protocol;
       this.pendingRequests = pendingRequests;
       this.receivedMessages = receivedMessages;
       this.frameSender = frameSender;
       this.events = events;
       this.flowContext = flowContext;
-      this.metrics = metrics;
       this.serverClosing = serverClosing;
     }
-    async readAndDispatch(connection, signal, isCurrent) {
+    /**
+     * @param isCurrent Tells whether the connection this batch was read from is
+     *   still the connector's connection. It is asked again at the head of every
+     *   frame, not only after the read: `dispatch` awaits application code —
+     *   registered handlers in `Immediate`, the error handler on a failed frame —
+     *   and a disconnect and reconnect can complete inside that await. Without
+     *   the recheck the rest of a dead connection's batch lands on the new
+     *   connection's state, and the §10 arrival counts, which start at 0 when a
+     *   connection is established, take the stale frames on top.
+     * @param connectionForSend Resolves the connection a reply belongs on at the
+     *   moment it is written. The captured `connection` is the one the batch was
+     *   read from, which a reconnect may already have replaced.
+     */
+    async readAndDispatch(connection, signal, isCurrent, connectionForSend) {
       if ((connection == null ? void 0 : connection.read) === void 0) {
         return { available: false, inbound: false };
       }
@@ -1789,7 +1892,6 @@ var ZlinkStreamConnectorBundle = (() => {
       if (frameBytes === void 0) {
         return { available: false, inbound: false };
       }
-      this.metrics.inbound(frameBytes.byteLength);
       const flowEnabled = this.protocol.flowEnabled();
       let frames;
       try {
@@ -1802,8 +1904,11 @@ var ZlinkStreamConnectorBundle = (() => {
         return { available: true, inbound: false };
       }
       for (const frame of frames) {
+        if (isCurrent !== void 0 && !isCurrent()) {
+          break;
+        }
         try {
-          await this.dispatch(connection, frame.header, frame.payload, signal, flowEnabled);
+          await this.dispatch(connection, frame.header, frame.payload, signal, flowEnabled, connectionForSend);
         } catch (cause) {
           if (frame.header.kind === 5 /* Control */ && frame.header.name === ZLINK_STREAM_HEARTBEAT_PING) {
             throw cause;
@@ -1816,7 +1921,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       return { available: true, inbound: true };
     }
-    async dispatch(connection, header, payload, signal, flowEnabled) {
+    async dispatch(connection, header, payload, signal, flowEnabled, connectionForSend) {
       if (header.kind === 3 /* Response */ && header.requestSeq !== void 0) {
         try {
           if (!this.pendingRequests.resolve(header.requestSeq, {
@@ -1869,7 +1974,7 @@ var ZlinkStreamConnectorBundle = (() => {
         return;
       }
       if (header.kind === 5 /* Control */) {
-        await this.dispatchControl(connection, header, payload, signal);
+        await this.dispatchControl(connection, header, payload, signal, connectionForSend);
         return;
       }
       if (header.kind === 1 /* Send */) {
@@ -1883,8 +1988,8 @@ var ZlinkStreamConnectorBundle = (() => {
         }, signal);
       }
     }
-    async dispatchControl(connection, header, payload, signal) {
-      var _a;
+    async dispatchControl(connection, header, payload, signal, connectionForSend) {
+      var _a, _b;
       if (header.name === ZLINK_SESSION_CLOSING) {
         const closing = decodeSessionClosing(payload);
         await ((_a = this.serverClosing) == null ? void 0 : _a.call(this, closing.closeReason));
@@ -1895,7 +2000,11 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
         try {
-          await this.frameSender.sendControl(connection, ZLINK_STREAM_HEARTBEAT_PONG, signal);
+          await this.frameSender.sendControl(
+            (_b = connectionForSend == null ? void 0 : connectionForSend()) != null ? _b : connection,
+            ZLINK_STREAM_HEARTBEAT_PONG,
+            signal
+          );
         } catch (cause) {
           throw connectorError(
             "sendFailed" /* SendFailed */,
@@ -1928,15 +2037,17 @@ var ZlinkStreamConnectorBundle = (() => {
   }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamConnectorLifecycle.ts
+  function randomizedDelay(baseDelayMs) {
+    return Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
+  }
   var ZlinkStreamConnectorLifecycle = class {
-    constructor(options, pendingRequests, frameSender, receiveDispatcher, receivedMessages, events, metrics) {
+    constructor(options, pendingRequests, frameSender, receiveDispatcher, receivedMessages, events) {
       this.options = options;
       this.pendingRequests = pendingRequests;
       this.frameSender = frameSender;
       this.receiveDispatcher = receiveDispatcher;
       this.receivedMessages = receivedMessages;
       this.events = events;
-      this.metrics = metrics;
       __publicField(this, "receiveLoopAbort");
       __publicField(this, "receiveLoopSleeping", false);
       __publicField(this, "receiveLoopWake");
@@ -1945,6 +2056,7 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "connectionGeneration", 0);
       __publicField(this, "currentState", "created" /* Created */);
       __publicField(this, "heartbeatTimer");
+      __publicField(this, "heartbeatTickRunning", false);
       __publicField(this, "lastInboundAt", 0);
       __publicField(this, "closeTask");
       __publicField(this, "connectTask");
@@ -1982,6 +2094,7 @@ var ZlinkStreamConnectorBundle = (() => {
       return await this.connectTask;
     }
     async connectOnce(signal) {
+      var _a;
       await this.setState("connecting" /* Connecting */, void 0, signal);
       try {
         const connection = await this.connectWithReconnect(signal);
@@ -1997,6 +2110,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.currentConnection = connection;
         this.connectionGeneration += 1;
         this.disconnectedPublished = false;
+        this.receivedMessages.resetReceivedCounts();
         this.lastInboundAt = Date.now();
         await this.setState("connected" /* Connected */, void 0, signal);
         this.startHeartbeat();
@@ -2008,7 +2122,9 @@ var ZlinkStreamConnectorBundle = (() => {
           throw new ZlinkStreamException(error2);
         }
         const error = toStreamError(cause, "connectTimeout" /* ConnectTimeout */, "Connect failed.");
+        (_a = this.closeReasonValue) != null ? _a : this.closeReasonValue = "TransportError";
         await this.setState("disconnected" /* Disconnected */, error, signal);
+        await this.publishDisconnectedOnce(signal);
         throw new ZlinkStreamException(error);
       }
     }
@@ -2056,7 +2172,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       this.pendingRequests.failAll({ code: "disconnected" /* Disconnected */, message: "Connector closed." });
       await this.setState("closed" /* Closed */, void 0, signal);
-      await this.publishDisconnectedOnce(signal);
+      this.publishDisconnectedWithoutWaiting(signal);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
     }
@@ -2087,7 +2203,8 @@ var ZlinkStreamConnectorBundle = (() => {
       const result = await this.receiveDispatcher.readAndDispatch(
         connection,
         signal,
-        () => this.isCurrentConnection(connection, generation)
+        () => this.isCurrentConnection(connection, generation),
+        () => this.connectionForSend()
       );
       if (result.inbound && this.isCurrentConnection(connection, generation)) {
         this.lastInboundAt = Date.now();
@@ -2099,25 +2216,18 @@ var ZlinkStreamConnectorBundle = (() => {
       let delayMs = this.options.reconnect.initialDelayMs;
       let lastError;
       const maxAttempts = this.options.reconnect.enabled ? this.options.reconnect.maxAttempts : 1;
-      while (attempt < maxAttempts) {
+      const unlimited = maxAttempts === null;
+      while (unlimited || attempt < maxAttempts) {
         attempt += 1;
-        if (attempt > 1) {
-          this.metrics.reconnect();
-        }
-        const handshakeStartedAt = performance.now();
         try {
-          const connection = await this.options.transportFactory.connect(this.options, signal);
-          this.metrics.handshakeCompleted(handshakeStartedAt);
-          return connection;
+          return await this.options.transportFactory.connect(this.options, signal);
         } catch (cause) {
-          this.metrics.handshakeCompleted(handshakeStartedAt);
-          this.metrics.handshakeFailed(cause);
           lastError = toStreamError(cause, "connectTimeout" /* ConnectTimeout */, "Connect failed.");
-          if (!this.options.reconnect.enabled || attempt >= maxAttempts) {
+          if (!this.options.reconnect.enabled || !unlimited && attempt >= maxAttempts) {
             break;
           }
           await this.setState("reconnecting" /* Reconnecting */, lastError, signal);
-          await delay(delayMs, signal);
+          await delay(randomizedDelay(delayMs), signal);
           delayMs = Math.min(
             this.options.reconnect.maxDelayMs,
             Math.ceil(delayMs * this.options.reconnect.backoffFactor)
@@ -2133,15 +2243,25 @@ var ZlinkStreamConnectorBundle = (() => {
       if (!this.options.heartbeat.enabled) {
         return;
       }
-      this.heartbeatTimer = setInterval(() => {
-        void this.runHeartbeatTick();
+      const timer = setInterval(() => {
+        if (this.heartbeatTickRunning) {
+          return;
+        }
+        this.heartbeatTickRunning = true;
+        void this.runHeartbeatTick().finally(() => {
+          if (this.heartbeatTimer === timer) {
+            this.heartbeatTickRunning = false;
+          }
+        });
       }, this.options.heartbeat.intervalMs);
+      this.heartbeatTimer = timer;
     }
     stopHeartbeat() {
       if (this.heartbeatTimer !== void 0) {
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = void 0;
       }
+      this.heartbeatTickRunning = false;
     }
     // Spec stream-connector 32 §7: the receive loop runs in both dispatch modes.
     // `Manual` only changes what the loop does with a frame — it queues the
@@ -2260,15 +2380,17 @@ var ZlinkStreamConnectorBundle = (() => {
       if (this.disconnectTask !== void 0) {
         return await this.disconnectTask;
       }
-      this.disconnectTask = this.disconnectOnce(error).finally(() => {
+      this.disconnectTask = this.tearDownConnection(error).finally(() => {
         this.disconnectTask = void 0;
       });
-      return await this.disconnectTask;
+      await this.disconnectTask;
+      await this.announceDisconnect(error);
     }
     isCurrentConnection(connection, generation) {
       return !this.closeRequested && this.currentConnection === connection && this.connectionGeneration === generation;
     }
-    async disconnectOnce(error) {
+    /** Transport teardown only — no application callback runs from here. */
+    async tearDownConnection(error) {
       this.stopHeartbeat();
       this.stopReceiveLoop();
       const connection = this.currentConnection;
@@ -2278,22 +2400,74 @@ var ZlinkStreamConnectorBundle = (() => {
         await (connection == null ? void 0 : connection.close());
       } catch {
       }
+    }
+    /**
+     * Runs once the teardown promise has settled, so a handler reached from here
+     * may call `connect` without waiting for a task its own caller still holds.
+     * The reconnect is queued before the notification is awaited for the same
+     * reason: spec stream-connector 32 §6 has reconnect on by default, and a
+     * handler that is slow — or whose promise never settles at all — must not
+     * cost the connector the attempt. The state is already `Disconnected` and the
+     * state handlers are already invoked by the time the queued microtask runs,
+     * because `setState` records the state and hands the change to the handlers
+     * before it awaits any of them.
+     */
+    async announceDisconnect(error) {
       if (this.closeRequested) return;
-      await this.setState("disconnected" /* Disconnected */, error);
-      await this.publishDisconnectedOnce();
+      const announce = this.claimDisconnectedPublish();
+      const notified = (async () => {
+        await this.setState("disconnected" /* Disconnected */, error);
+        if (announce) {
+          await this.events.publishDisconnected();
+        }
+      })();
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
           void this.connect().catch(() => void 0);
         });
       }
+      await notified;
     }
     shouldReconnect() {
       return this.options.reconnect.enabled && !this.closeRequested;
     }
-    async publishDisconnectedOnce(signal) {
-      if (this.disconnectedPublished) return;
+    // Synchronous test-and-set, taken before any await, so the single disconnect
+    // notification the spec promises is claimed by exactly one caller even when
+    // the publishing itself is deferred.
+    claimDisconnectedPublish() {
+      if (this.disconnectedPublished) return false;
       this.disconnectedPublished = true;
+      return true;
+    }
+    async publishDisconnectedOnce(signal) {
+      if (!this.claimDisconnectedPublish()) return;
       await this.events.publishDisconnected(signal);
+    }
+    /**
+     * Spec stream-connector 32 §7: the connector runs the registered handler, it
+     * does not wait for it to finish. `close` returns once its own work is done —
+     * the drain, the transport close, the pending requests — having run the
+     * disconnect handler but without looking at whether that handler has ended.
+     *
+     * Starting the publish without awaiting it still runs every handler right
+     * here: an `async` function body runs synchronously up to its first `await`,
+     * and `publishDisconnected` reaches each handler before that point. So the
+     * handler has run by the time `close` returns, which is what the spec asks
+     * for, while a handler that calls `close` no longer waits for the very
+     * `closeTask` it is running inside. Java and C++ hand the handler to a queue
+     * and return the same way.
+     *
+     * `claimDisconnectedPublish` is taken by the same call and before any await,
+     * so deferring the completion never turns the one notification into two.
+     *
+     * Nothing awaits the promise, so a rejection would reach the process as an
+     * unhandled rejection and kill it. Handler failures are already contained
+     * where they were before this call stopped waiting — the `Promise.allSettled`
+     * in `publishDisconnected` — and this `catch` covers what is left rather than
+     * reporting the same failure a second time on the error surface.
+     */
+    publishDisconnectedWithoutWaiting(signal) {
+      void this.publishDisconnectedOnce(signal).catch(() => void 0);
     }
     async setState(current, error, signal) {
       const previous = this.currentState;
@@ -2478,9 +2652,6 @@ var ZlinkStreamConnectorBundle = (() => {
           this.readWaiter = void 0;
           resolve();
         };
-        if (this.hasQueuedMessage() || this.closed) {
-          this.wakeReader();
-        }
       });
     }
     wakeReader() {
@@ -2561,66 +2732,6 @@ var ZlinkStreamConnectorBundle = (() => {
     throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "WebSocket text messages are not supported.");
   }
 
-  // packages/stream-connector/src/Runtime/ZlinkStreamRuntimeMetrics.ts
-  var ZlinkStreamRuntimeMetrics = class {
-    constructor(options) {
-      this.options = options;
-      __publicField(this, "reconnects");
-      __publicField(this, "handshakeDuration");
-      __publicField(this, "handshakeFailures");
-      __publicField(this, "inboundBytes");
-      __publicField(this, "outboundBytes");
-      var _a;
-      const meter = (_a = options.meterProvider) == null ? void 0 : _a.getMeter("zlink.framework");
-      this.reconnects = meter == null ? void 0 : meter.createCounter("zlink.stream.reconnects", { unit: "{event}" });
-      this.handshakeDuration = meter == null ? void 0 : meter.createHistogram("zlink.stream.handshake.duration", { unit: "s" });
-      this.handshakeFailures = meter == null ? void 0 : meter.createCounter("zlink.stream.handshake.failures", { unit: "{failure}" });
-      this.inboundBytes = meter == null ? void 0 : meter.createCounter("zlink.stream.inbound.bytes", { unit: "By" });
-      this.outboundBytes = meter == null ? void 0 : meter.createCounter("zlink.stream.outbound.bytes", { unit: "By" });
-    }
-    reconnect() {
-      this.safe(() => {
-        var _a;
-        return (_a = this.reconnects) == null ? void 0 : _a.add(1, { transport: this.transportLabel() });
-      });
-    }
-    handshakeCompleted(startedAt) {
-      const seconds = (performance.now() - startedAt) / 1e3;
-      this.safe(() => {
-        var _a;
-        return (_a = this.handshakeDuration) == null ? void 0 : _a.record(seconds, { transport: this.transportLabel() });
-      });
-    }
-    handshakeFailed(error) {
-      const reason = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError") ? "canceled" : "transport_error";
-      this.safe(() => {
-        var _a;
-        return (_a = this.handshakeFailures) == null ? void 0 : _a.add(1, { transport: this.transportLabel(), reason });
-      });
-    }
-    inbound(byteCount) {
-      this.safe(() => {
-        var _a;
-        return (_a = this.inboundBytes) == null ? void 0 : _a.add(byteCount, { transport: this.transportLabel() });
-      });
-    }
-    outbound(byteCount) {
-      this.safe(() => {
-        var _a;
-        return (_a = this.outboundBytes) == null ? void 0 : _a.add(byteCount, { transport: this.transportLabel() });
-      });
-    }
-    transportLabel() {
-      return this.options.endpoint.startsWith("wss:") ? "wss" : "ws";
-    }
-    safe(record) {
-      try {
-        record();
-      } catch {
-      }
-    }
-  };
-
   // packages/stream-connector/src/Runtime/ZlinkStreamConnector.ts
   var DefaultZlinkStreamConnector = class {
     constructor(options) {
@@ -2641,9 +2752,8 @@ var ZlinkStreamConnectorBundle = (() => {
         configurable: true,
         get: () => this.diagnosticsLevelCell.level
       });
-      const metrics = new ZlinkStreamRuntimeMetrics(this.options);
       const protocol = new ZlinkStreamFrameProtocol(this.options);
-      this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
+      this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext);
       this.receivedMessages = new ZlinkStreamReceivedMessages(
         this.events,
         this.options.dispatchMode === "immediate" /* Immediate */
@@ -2655,7 +2765,6 @@ var ZlinkStreamConnectorBundle = (() => {
         this.frameSender,
         this.events,
         flowContext,
-        metrics,
         (reason) => this.lifecycle.serverClosing(reason)
       );
       this.lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -2664,8 +2773,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.frameSender,
         this.receiveDispatcher,
         this.receivedMessages,
-        this.events,
-        metrics
+        this.events
       );
     }
     get isConnected() {
@@ -2679,6 +2787,17 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     get pendingDispatchCount() {
       return this.pendingRequests.count;
+    }
+    /**
+     * Spec stream-connector 32 §10: how many packets carrying `name` arrived on
+     * the current connection. Arrivals are what is counted, so a message a
+     * handler dispatched or a wait surface consumed still counts, and `Manual`
+     * and `Immediate` report the same number. Establishing a connection resets
+     * the count to 0, a reconnect included.
+     */
+    receivedCount(name) {
+      validateName(name);
+      return this.receivedMessages.receivedCount(name);
     }
     /**
      * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
@@ -2695,14 +2814,20 @@ var ZlinkStreamConnectorBundle = (() => {
      * state update: it applies to processing points that read the level after
      * this call returns and is never applied retroactively to frames already
      * built. Rejects unknown values with {@link ZlinkStreamErrorCode.ConfigurationError}.
-     * Do not call this synchronous bridge from a framework execution context such
-     * as a handler or callback; use setDiagnosticsLevelAsync there.
+     * Spec stream-connector 32 §13: this surface changes the value without
+     * waiting for anything; it is not a blocking call over the asynchronous pair,
+     * which a receive callback would otherwise make wait for its own completion.
      */
     setDiagnosticsLevel(level) {
-      void this.setDiagnosticsLevelAsync(level);
-    }
-    setDiagnosticsLevelAsync(level) {
       this.diagnosticsLevelCell.set(level);
+    }
+    /**
+     * Asynchronous counterpart of {@link setDiagnosticsLevel} (spec
+     * stream-connector 32 §13). It changes the same value; awaiting it is how a
+     * caller observes the change, and it never replaces the synchronous surface.
+     */
+    setDiagnosticsLevelAsync(level) {
+      this.setDiagnosticsLevel(level);
       return Promise.resolve();
     }
     onErrorReceived(handler) {
@@ -2741,17 +2866,28 @@ var ZlinkStreamConnectorBundle = (() => {
       }, signal);
       return this.receivedMessages.on(name, encodedHandler);
     }
-    waitFor(name) {
-      validateName(name);
-      return new ZlinkStreamWaitBuilder(this, name);
+    waitFor(nameOrType) {
+      return new ZlinkStreamWaitBuilder(this, this.observedName(nameOrType));
     }
-    expectNone(name) {
-      validateName(name);
-      return new ZlinkStreamExpectNoneBuilder(this, name);
+    expectNone(nameOrType) {
+      return new ZlinkStreamExpectNoneBuilder(this, this.observedName(nameOrType));
     }
-    waitForSequence(name) {
+    waitForSequence(nameOrType) {
+      return new ZlinkStreamSequenceBuilder(this, this.observedName(nameOrType));
+    }
+    /**
+     * Spec stream-connector 32 §10.1: each wait surface offers both ways of
+     * naming a packet. A string is the name the caller states; a constructor
+     * goes through the options' `nameResolver`, which is the same resolver
+     * `send` and `request` use, so both paths land on one name for one type.
+     */
+    observedName(nameOrType) {
+      const name = typeof nameOrType === "function" ? this.options.nameResolver.resolve(nameOrType) : nameOrType;
+      if (typeof name !== "string") {
+        throw connectorError("validationFailed" /* ValidationFailed */, "Packet name must be a string or a payload constructor.");
+      }
       validateName(name);
-      return new ZlinkStreamSequenceBuilder(this, name);
+      return name;
     }
     waitForMessage(name, timeoutMs, predicate, signal) {
       validateName(name);
@@ -2887,50 +3023,6 @@ var ZlinkStreamConnectorBundle = (() => {
     const candidate = value;
     return typeof candidate.codec === "number" && candidate.payload instanceof Uint8Array;
   }
-
-  // packages/stream-connector/src/Runtime/ZlinkStreamAssertions.ts
-  var zlinkStreamAssert = {
-    ensure(condition, message) {
-      if (!condition) {
-        throw connectorError("validationFailed" /* ValidationFailed */, message);
-      }
-    },
-    async expectFailure(action, errorKind) {
-      let failure;
-      try {
-        await action();
-      } catch (error) {
-        failure = error;
-      }
-      if (failure === void 0) {
-        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to fail.");
-      }
-      const streamError = unwrapStreamError(failure);
-      if (errorKind !== void 0 && streamError.code !== errorKind) {
-        throw connectorError(
-          "validationFailed" /* ValidationFailed */,
-          `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
-          failure
-        );
-      }
-      return streamError;
-    },
-    async expectTimeout(action) {
-      let failure;
-      try {
-        await action();
-      } catch (error) {
-        failure = error;
-      }
-      if (failure === void 0) {
-        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to time out.");
-      }
-      const code = unwrapStreamError(failure).code;
-      if (code !== "requestTimeout" /* RequestTimeout */ && code !== "connectTimeout" /* ConnectTimeout */) {
-        throw failure;
-      }
-    }
-  };
 
   // packages/stream-connector/src/index.ts
   var zlinkStreamConnectorFactory = {

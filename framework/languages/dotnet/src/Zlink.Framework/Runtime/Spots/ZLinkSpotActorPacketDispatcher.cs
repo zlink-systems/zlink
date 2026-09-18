@@ -14,7 +14,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
     {
         using var currentFlow = ZLinkFlowContext.Enter(
             header.FlowId,
-            header.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
+            header.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         using var dispatch = runtimeState.EnterDispatch(header);

@@ -1,7 +1,7 @@
 # Java Framework 레퍼런스
 
 작성 규칙은 [레퍼런스 문서 작성 가이드](../../../../../doc/principal/documentation/reference-writing-guide.ko.md)를
-따른다. dotnet 레퍼런스(parity 참조 lane)와 같은 8개 category·순서를 그대로 쓰고, 각 항목은 Java
+따른다. dotnet 레퍼런스(parity 참조 lane)와 같은 8개 category·순서를 그대로 사용하고, 각 항목은 Java
 exact interface(`javap` inventory)를 직접 대조해 작성했다.
 
 - [Guide](../guide/server/README.ko.md) — Spring Boot 튜토리얼 관점.

@@ -248,6 +248,7 @@ class TicTacToeGame(
         if (player.wins < 99 || wins != 100) {
             return
         }
+        // --8<-- [start:doc-multicast-publish]
         context.outbound()
             .publish(
                 SampleNames.PlayNode,
@@ -260,5 +261,6 @@ class TicTacToeGame(
                 ),
             )
             .submit()
+        // --8<-- [end:doc-multicast-publish]
     }
 }

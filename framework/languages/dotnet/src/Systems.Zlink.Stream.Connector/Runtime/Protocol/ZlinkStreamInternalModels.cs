@@ -11,14 +11,6 @@ internal enum ZlinkStreamHeaderFlags : byte
     HasFlowId = 0x10
 }
 
-internal enum ZlinkStreamFlowOrigin : byte
-{
-    Inbound = 1,
-    Timer = 2,
-    Application = 3,
-    Lifecycle = 4
-}
-
 internal readonly record struct ZlinkStreamRequestSeq(ulong Value);
 
 internal sealed record ZlinkStreamHeader(

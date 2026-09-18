@@ -71,8 +71,8 @@ self-test, generated-asset check, decoder-fixture check와 schema의 golden fixt
 ### Machine-readable schema 관례
 
 생성기 입력은 언어별 추론 모델이 아니라 현재 schema다. `types` array가 이름 있는 layout을 선언한다.
-Primitive와 enum은 `encoding`과 `values`를 쓰고, 순서가 고정된 field는 `kind: "struct"`의 선언 순서
-`fields`를 쓰며, count가 있는 sequence는 `kind: "vector"`의 `countType`과 `item`을 쓴다. Length-delimited,
+Primitive와 enum은 `encoding`과 `values`를 사용하고, 순서가 고정된 field는 `kind: "struct"`의 선언 순서
+`fields`를 사용하며, count가 있는 sequence는 `kind: "vector"`의 `countType`과 `item`을 사용한다. Length-delimited,
 conditional, tagged layout은 각각 `lengthType`, `layout`, `cases`, `fields`, `encodingOrder`를 선언한다.
 `$ref`는 선언한 type을, `$bound`는 선언한 limit을 가리킨다. `constraints`, `trailingBytes`, `when`,
 `otherwise`는 encoder와 decoder 모두가 지켜야 하는 검증을 선언한다. Command body는 `commands`의 선언 순서
@@ -153,7 +153,7 @@ Flags는 뒤에 무엇이 더 붙는지를 정한다.
 | `0x04` | `sourceSpotId` | 같은 tail에 source Spot RID가 붙는다 | 붙지 않는다 |
 | `0x08` | `extension` | command body에 extension이 붙는다 | 붙지 않는다 |
 
-이 flag들은 schema가 허용하거나 요구한 command에서만 쓸 수 있다. 정의하지 않은 flag, frame
+이 flag들은 schema가 허용하거나 요구한 command에서만 사용할 수 있다. 정의하지 않은 flag, frame
 수, conditional tail 또는 trailing byte가 있으면 application dispatch 전에 protocol error로
 거부한다.
 
@@ -216,7 +216,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
-| ID | Command | 계층 | application payload | 쓸 수 있는 flag | 역할 |
+| ID | Command | 계층 | application payload | 사용할 수 있는 flag | 역할 |
 |---:|---|---|---|---|---|
 | 1 | `hello` | infrastructure | 없음 | — | 이 연결을 받아 달라고 자기 descriptor를 제안한다 |
 | 2 | `admit` | infrastructure | 없음 | — | selected connection 승인 |
@@ -263,7 +263,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
 
-표의 "계층"·"application payload"·"쓸 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
+표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이
 자기들끼리 주고받으며 application queue에 넣지 않는다. 알 수 없는 command, 반대 direction의
 infrastructure command와 topology에서 허용하지 않은 command도 마찬가지로 넣지 않는다.
@@ -343,8 +343,8 @@ connection의 admission이나 ready 상태를 바꾸지 못한다.
 ### ClientServer 방향
 
 - ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
-- ClientServer connection에서 service wire record는 infrastructure command에만 쓴다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
-- ClientServer connection의 application record는 service wire command를 쓰지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
+- ClientServer connection에서 service wire record는 infrastructure command에만 사용한다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
+- ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness
@@ -384,7 +384,7 @@ Payload: 5A 46 01 01
 
 - Subscriber는 publisher마다 전용 SUB socket을 사용한다.
 - 첫 유효한 application record 또는 그 publisher가 보낸 beacon에서, transport 연결·handshake·identity
-  확인이 모두 끝나 message target으로 쓸 수 있는 상태인
+  확인이 모두 끝나 message target으로 사용할 수 있는 상태인
   [Ready](../00-foundation/02-glossary.ko.md#ready)가 되고, 마지막 valid receive 뒤 15초가 지나면
   해당 publisher만 not-ready로 바꾼다.
 - Reserved topic의 frame 수나 payload가 정확하지 않으면 즉시 protocol error다.
@@ -651,7 +651,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### CRC-32C 규약과 capability
 
 - `relocationTransferChecksumProfile`이 나열하는 모든 checksum(`payloadChecksumCrc32c`,
-  `boundaryChecksumCrc32c`, 그리고 아래 남은 Store 경로가 쓰는
+  `boundaryChecksumCrc32c`, 그리고 아래 남은 Store 경로가 사용하는
   chunk·manifest checksum)은 같은 CRC-32C(Castagnoli) 규약을 사용한다: polynomial
   `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input·output, XOR output
   `0xFFFFFFFF`, `check("123456789") == 0xE3069283`.
@@ -659,7 +659,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   Prepare·Cutover manifest field 때문에 v12에서 올렸으며 네 runtime을 동시에 승급했다.
 - Target의 유효 수신 chunk-byte 상한은 admission-accept reply의 `receiveChunkLimitBytes`
   field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 협상 경로가 없는
-  `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 쓴다. 이 형태와 상한은
+  `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
   dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
@@ -769,7 +769,7 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 
 ### Terminal completion 추적
 
-- Target은 terminal completion과 delivery state를 새 immutable relocation root에 쓴 뒤 authority CAS로 `TerminalCompletionCount`와 `PendingRelayCount`를 함께 갱신한다.
+- Target은 terminal completion과 delivery state를 새 immutable relocation root에 사용한 뒤 authority CAS로 `TerminalCompletionCount`와 `PendingRelayCount`를 함께 갱신한다.
 - `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다.
 - Source는 terminal result를 수락하거나 이미 terminal임을 확인한 뒤 authenticated `replyRelayAck`을 보낸다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
@@ -795,7 +795,7 @@ send-ready callback이 폐기되어도 service-wire record와 schema 값은 유�
 
 ## Wire record와 shared capacity
 
-Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 쓴다. 분류 전 permit은 [수신과 dispatch loop](../01-execution/04-application-job-queue-and-backpressure.ko.md), ordinary record storage 수명은 [Payload 소유권](../01-execution/05-payload-ownership-and-codec.ko.md)이 소유한다.
+Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 사용한다. 분류 전 permit은 [수신과 dispatch loop](../01-execution/04-application-job-queue-and-backpressure.ko.md), ordinary record storage 수명은 [Payload 소유권](../01-execution/05-payload-ownership-and-codec.ko.md)이 소유한다.
 
 ## 12. 검증 요구
 
@@ -824,7 +824,7 @@ Schema self-test, 생성된 codec의 golden fixture decode 결과와 checked-in 
 
 **Terminal completion**
 - 남은 pending request terminal record 경로(§11 Root replacement)에서는 `Captured` CAS 전
-  crash를 durable replay로 처리하지 않는다. 최상위 record를 쓰고 검증하는 일이 authority CAS보다
+  crash를 durable replay로 처리하지 않는다. 최상위 record를 사용하고 검증하는 일이 authority CAS보다
   먼저이고, authority가 그 참조를 놓는 일이 record 삭제보다 먼저다.
 - `replyRelayAck` 없이 physical disconnect만으로 pending relay를 완료하지 않는다.
 

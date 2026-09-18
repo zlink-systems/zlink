@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The three patterns open different sockets",
+    "subtitle": "a process that uses all three ends up with three separate listeners",
+    "output": "30-wiring-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 78,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "P",
+      "type": "frontend",
+      "label": "my process",
+      "sublabel": "uses all three",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "M",
+      "type": "external",
+      "label": "ROUTER :7201",
+      "sublabel": "one MeshNode",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "external",
+      "label": "listener :7211",
+      "sublabel": "ClientServer channel",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "B",
+      "type": "external",
+      "label": "PUB :7212",
+      "sublabel": "Fanout publisher",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "MP",
+      "type": "backend",
+      "label": "peer node",
+      "sublabel": "shared by many channels",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "SC",
+      "type": "backend",
+      "label": "client",
+      "sublabel": "dials this address",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "BS",
+      "type": "backend",
+      "label": "subscriber",
+      "sublabel": "SUB socket",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "from": "P",
+      "to": "M",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "B",
+      "variant": "default"
+    },
+    {
+      "from": "M",
+      "to": "MP",
+      "label": "one mesh connection",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "SC",
+      "label": "channel only",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "BS",
+      "label": "PUB/SUB",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Adding a channel adds no socket — RouteMesh only",
+      "items": [
+        "RouteMesh opens one ROUTER listener per MeshNode and every channel on it shares that connection. Adding a ChannelName adds neither a socket nor a connection between nodes.",
+        "ClientServer opens its own listener per channel, and Fanout opens a separate PUB/SUB socket pair. Neither uses the mesh connection."
+      ]
+    }
+  ]
+}

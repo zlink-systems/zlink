@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "timer는 줄에 서고, worker는 줄 밖에서 돈다",
+    "subtitle": "같은 줄에 서야 상태를 만질 수 있다 · 줄 밖의 결과는 다시 줄로 들어온다",
+    "output": "36-timer-worker.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "T",
+      "type": "external",
+      "label": "timer",
+      "sublabel": "주기가 되면 tick",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "M",
+      "type": "messagebus",
+      "label": "도착한 message",
+      "sublabel": "바깥에서 온다",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "Q",
+      "type": "backend",
+      "label": "실행 줄",
+      "sublabel": "한 번에 하나씩",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "W",
+      "type": "frontend",
+      "label": "worker",
+      "sublabel": "줄 밖에서 실행",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Spot 하나",
+      "wraps": [
+        "Q"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "T",
+      "to": "Q",
+      "label": "tick도 줄에 선다",
+      "variant": "default"
+    },
+    {
+      "from": "M",
+      "to": "Q",
+      "label": "message도 같은 줄",
+      "variant": "default"
+    },
+    {
+      "from": "Q",
+      "to": "W",
+      "label": "오래 걸리는 일을 넘긴다",
+      "variant": "default"
+    },
+    {
+      "from": "W",
+      "to": "Q",
+      "label": "결과는 다시 줄로 들어온다",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "줄 밖에서 상태를 만지지 않는다",
+      "items": [
+        "tick이 줄에 서므로 timer 안에서 상태를 만져도 다른 처리와 섞이지 않는다. 그래서 lock이 필요 없다.",
+        "worker는 줄 밖에서 돌기 때문에 그 안에서 Spot의 상태를 읽거나 쓰지 않는다. 결과를 줄로 다시 넣어 그 자리에서 반영한다."
+      ]
+    }
+  ]
+}

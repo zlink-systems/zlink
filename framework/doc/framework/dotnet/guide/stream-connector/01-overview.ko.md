@@ -42,10 +42,11 @@
 |------|-----------|
 | Unity | `MonoBehaviour.Update()`에서 `Dispatch.Async()` |
 | Godot C# | `Node._Process(double)`에서 `Dispatch.Async()` |
-| 일반 애플리케이션 | 펌프가 필요 없으면 `Dispatch.Immediate`로 바꾼다 |
+| 일반 애플리케이션 | 펌프가 필요 없으면 옵션을 `DispatchMode = ZlinkStreamDispatchMode.Immediate`로 바꾼다 |
 
 **펌프하지 않으면 handler와 event는 실행되지 않는다.** `PendingDispatchCount`로 아직 처리하지
-않은 callback 수를 확인한다.
+않은 callback 수를 확인한다. 대기 queue는 `MaxPendingDispatchCallbacks`(기본 1024)까지만
+보관하고, 넘치면 버릴 수 있는 것 중 가장 오래된 것부터 버린다.
 
 ## transport 지원
 

@@ -14,7 +14,7 @@ title: "Foundation"
 ## 1. 무엇을 다루는가
 
 다른 모든 주제(execution, channel-transport, spot-actor, session, location-relocation,
-observability)는 이 주제가 정의하는 것을 전제로 쓴다. 공개 계약을 누가 소유하고 어떤
+observability)는 이 주제가 정의하는 것을 전제로 사용한다. 공개 계약을 누가 소유하고 어떤
 절차로 바꾸는지, 스펙 전체가 공유하는 domain term이 정확히 무엇을 뜻하는지, Framework가
 언어마다 독립적으로 구현하는 상위 계층에서 무엇을 하는지, 메시지 하나를 보낼 때 대상을
 어떻게 고르고 언제 완료로 보는지, 그 메시지의 typed payload·metadata·codec 형태가

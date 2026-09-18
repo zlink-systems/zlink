@@ -7,7 +7,7 @@
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation(project(":zlink-http-client-kotlin"))
+    implementation("systems.zlink:zlink-http-client-kotlin:0.16.0")
 }
 ```
 

@@ -113,7 +113,7 @@ Node.js runtime은 **단일 JS 스레드**다. 그 스레드를 막으면 framew
 
 대상이 로컬인지 원격인지는 제출 시점에 항상 알 수 있는 것이 아니므로, "로컬일 때만 막는다"는
 규칙도 세울 수 없다. **지킬 수 없는 약속을 표면에 두지 않는다** — Node.js framework 표면에는
-동기 blocking 종결자가 없다. Node application은 비동기 종결자(`submit(...)` → `Promise`)를 쓴다.
+동기 blocking 종결자가 없다. Node application은 비동기 종결자(`submit(...)` → `Promise`)를 사용한다.
 
 이 결정은 framework 표면에만 적용된다. **binding Node의 `submit_sync()`는 그대로 있다**
 ([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)) — binding은 framework runtime의 완료 배달에 의존하지 않는다.
@@ -344,7 +344,7 @@ Service wire의 request는 서로 다른 두 값을 함께 보존한다. 둘 다
 Terminal 결과가 필요한 operation의 `OperationId`는 두 word가 모두 0일 수 없다.
 
 Registry와 durable completion record는 두 word 전체를 보존한다. `low` word만
-key로 쓰면 서로 다른 operation을 같은 항목으로 판단할 수 있다.
+key로 사용하면 서로 다른 operation을 같은 항목으로 판단할 수 있다.
 
 `ReplyRouteId`도
 source owner lifecycle 안에서 대기 중인 request 사이에 중복할 수 없지만, 이 값만으로
@@ -498,7 +498,7 @@ completion으로 끝난다. Token claim 규칙은 [§8](#8-stream-reply-token)�
 | Kotlin | `.reply(...).await()` | suspending `Unit` |
 | Node | `.reply(...).submit(signal?)` | `Promise<void>` |
 
-`submit` 이름을 쓰는 언어에서도 반환 타입과 소유 계층으로 raw binding
+`submit` 이름을 사용하는 언어에서도 반환 타입과 소유 계층으로 raw binding
 reply(동기 one-shot)와 구분한다.
 
 ## 16. 언어별 표현

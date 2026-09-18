@@ -25,12 +25,12 @@ The semantics follow browser/general-client convention.
 | `307`, `308` | both method and body are preserved |
 
 - Location supports an absolute URL (`https://other-host/...`) and an absolute path (`/games/42`).
-  A relative path (`../x`) is not supported and closes as `request_failed`.
+  A relative path (`../x`) is not supported and closes as `internal_failure`.
 - If the absolute URL points to a different origin from the original request, the `Authorization`
   header isn't sent again. A redirect within the same origin keeps the authentication header. Since a
   differently-named secret header can't be distinguished from an ordinary header, don't put one into
   `default_header` or a per-request `header`.
-- Exceeding the limit (`follow_redirects(max)`) closes with `request_failed`
+- Exceeding the limit (`follow_redirects(max)`) closes with `internal_failure`
   ("exceeded the redirect limit").
 - When turned off (the default), a 3xx response is returned as-is, so you can branch on it directly.
 

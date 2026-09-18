@@ -280,7 +280,7 @@ CompletionStage<CartReply> reply = spotClient
 `ZLinkSpotCloseReason`의 값은 `EXPLICIT_CLOSE=0`, `HOST_SHUTDOWN=1`, `RELOCATION_OUT=2`,
 `IDLE_EVICTED=3`이다. `IDLE_EVICTED`는 Instance Spot 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다. Context의
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다. Context의
 `deadline`은 absolute `Instant`다. Java Spot closing callback에는 별도 Framework cancellation 인자를 추가하지
 않는다. Framework는 deadline에 stage completion 대기를 끝내고 bounded teardown을 진행한다.
 Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host [Shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)은 Actor

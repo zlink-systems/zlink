@@ -18,14 +18,18 @@ internal sealed class PlayEntrySpot(
 
     public void Configure()
     {
+        // --8<-- [start:doc-explicit-packet-name]
         // send: schedules the actor's room join.
         Context.Handlers.AddHandler<PlayActorJoinGameHandler>(nameof(JoinGameMsg));
         // request: enables milestone notifications for the actor.
         Context.Handlers.AddHandler<PlayActorObserveMilestoneHandler>(nameof(ObserveMilestoneReq));
+        // --8<-- [end:doc-explicit-packet-name]
+        // --8<-- [start:doc-multicast-subscribe]
         // subscribe: forwards milestone publications to observing actors.
         Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
             SampleTopics.PlayerMilestoneChannel,
             SampleTopics.PlayerMilestone);
+        // --8<-- [end:doc-multicast-subscribe]
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(

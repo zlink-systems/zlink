@@ -26,7 +26,7 @@ if (head && head.value ().status == 200) {
 }
 ```
 
-The path must start with `/`, or it throws `request_protocol_error`.
+The path must start with `/`, or it throws `protocol_error`.
 
 ## Query Parameters
 
@@ -79,7 +79,7 @@ auto ready = client.get ("/ready")
                .result ();
 ```
 
-A timeout exceeded is reported as `framework_error_kind_t::timeout` (retriable) —
+A timeout exceeded is reported as `framework_error_kind_t::deadline_exceeded` (retriable) —
 [13. Error Handling](13-error-handling.en.md).
 
 [Next: Request Body →](05-request-body.en.md)

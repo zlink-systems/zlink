@@ -65,11 +65,15 @@ public interface ZLinkStreamConnector {
     ZLinkStreamConnectionState state();
     ZLinkStreamConnectorOptions options();
 
+    // The last close reason. Empty when it has never disconnected (see "Session close reason").
+    Optional<ZLinkStreamCloseReason> closeReason();
+
     // Runtime read/write of the diagnostics level (§4.1, server spec 26 §4.1).
     // Changes the level without recreating the connector. options().diagnosticsLevel()
     // always agrees with this value.
     ZLinkStreamDiagnosticsLevel diagnosticsLevel();
     void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+    CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
 
     int pendingDispatchCount();
     int receivedCount(String name);
@@ -117,16 +121,23 @@ public final class ZLinkStreamConnectorFactory {
 ```
 
 Java exposes an event as an `on...` registration. The meaning is the
-same as .NET's event. Deregistration is done through the returned
-`AutoCloseable`.
+same as .NET's event. **Deregistration is done through the returned
+`AutoCloseable`'s `close()`, and closing the same value twice isn't
+treated as an error**
+([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)). The
+push handler and the error/disconnect/connection state handlers all use
+the same return type.
 
 **Session close reason.** The value set and meaning is owned by
-[Common Spec §6.3](../../32-stream-connector.en.md#63-close-reason).
+[Common Spec §6.2](../../32-stream-connector.en.md#62-close-reason).
 Java expresses this as the closed enum `ZLinkStreamCloseReason`
 (`CLIENT_CLOSE`, `IDLE_TIMEOUT`, `HEARTBEAT_TIMEOUT`, `SERVER_DRAIN`,
-`PROTOCOL_ERROR`, `TRANSPORT_ERROR`), and **exposes it as the disconnect
-event's `ZLinkStreamCloseReason closeReason()`, which
-`ZLinkStreamDisconnectedHandler` receives.**
+`PROTOCOL_ERROR`, `TRANSPORT_ERROR`). **The read surface is the
+connector's `Optional<ZLinkStreamCloseReason> closeReason()` method.**
+It returns `Optional.empty()` when the connector has never
+disconnected. The disconnect event's `ZLinkStreamCloseReason
+closeReason()`, which `ZLinkStreamDisconnectedHandler` receives, is a
+surface added on top of that read surface.
 `waitFor(...)` returns a call builder that waits once for a server push
 of a specific packet name. When only a specific message is needed, use
 the builder's `where(...)`. Once the timeout passes, the returned
@@ -168,7 +179,7 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamDispatchMode dispatchMode,      // default MANUAL
     Duration requestTimeout,                   // default 30s
     Duration waitTimeout,                      // default 5s
-    int maxReconnectAttempts,                  // default 3
+    int maxReconnectAttempts,                  // default 3. UNLIMITED_RECONNECT_ATTEMPTS(-1) means unlimited
     Duration connectTimeout,                   // default 5s
     int maxSendPayloadSize,                    // default 64 * 1024
     int maxReceivePayloadSize,                 // default 64 * 1024
@@ -182,11 +193,23 @@ public record ZLinkStreamConnectorOptions(
     boolean skipServerCertificateValidation,
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
-    ZLinkStreamPacketNameResolver nameResolver,
-    ZLinkStreamTypedCodec typedCodec,
+    ZLinkStreamPacketNameResolver nameResolver, // the name resolver injection point of common spec §5.4
+    ZLinkStreamTypedCodec typedCodec,           // the typed payload codec injection point of common spec §5.4
     ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
+
+    // The named constant expressing the unlimited reconnect common spec §6 requires.
+    public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
 }
 ```
+
+**The option validation timing is owned by
+[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).**
+In Java, `ZLinkStreamConnectorFactory.create(options)` checks every
+option, and on a validation failure it builds no `ZLinkStreamConnector`
+instance and fails with a `ZLinkStreamException` (§11). A single value
+out of range carries `VALIDATION_FAILED`, and a mismatch between
+options carries `CONFIGURATION_ERROR`. `maxReconnectAttempts` must be
+`UNLIMITED_RECONNECT_ATTEMPTS` or positive.
 
 ### 4.1 Diagnostics Level
 
@@ -216,8 +239,16 @@ value; the connector itself owns a runtime read/write API.
 // Declared on ZLinkStreamConnector (§3). The application reads and changes the level
 // without recreating the connector.
 ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);      // changes the value without waiting
+CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
 ```
+
+`setDiagnosticsLevelAsync` is the async pair returning the same
+`CompletionStage` every other operation's terminal returns, and it does
+not replace the synchronous surface common spec §13 requires. The
+synchronous surface does not wait for the async pair to complete, so
+calling it inside a dispatch callback never makes that call wait on its
+own completion.
 
 Internally, the current level is held in an atomic cell (`AtomicReference`).
 `options().diagnosticsLevel()` always agrees with the cell's current value. Each
@@ -277,8 +308,25 @@ public record ZLinkStreamMessage<TPayload>(
     String packetName,
     TPayload payload,
     Map<String, String> metadata,
-    String flowId,
+    String flowId,                // null when the diagnostics level is OFF (§4.1)
     ZLinkFlowOrigin flowOrigin) implements ZLinkStreamFlow {
+}
+```
+
+`flowId` and `flowOrigin` are the received-flow exposure
+[Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)
+requires. Since the JVM provides an ambient execution context, a send
+call carries no argument stating the flow (§7.1).
+
+The **means of attaching a packet name to a type** that
+[Common Spec §5](../../32-stream-connector.en.md#5-packet-model)
+requires is an annotation.
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ZLinkStreamPacketName {
+    String value();   // the packet name attached to the type
 }
 ```
 
@@ -377,21 +425,51 @@ is below.
 **Push observation — connector method** (the same spot as `waitFor`).
 Each returns a builder.
 
+Each surface carries **both an overload where the caller states the
+packet name and one that decides it from the payload type**
+([Common Spec §10.1.1](../../32-stream-connector.en.md#1011-push-observation-surface--the-waitfor-family)).
+For the type overload, options' `nameResolver` decides the name.
+
 ```java
-ZLinkStreamWaitCall       waitFor(String name);          // waits until it arrives
-ZLinkStreamExpectNoneCall expectNone(String name);       // whether it doesn't arrive during .within(window)
-ZLinkStreamSequenceCall   waitForSequence(String name);  // .expect(p).expect(p)… in order
+ZLinkStreamWaitCall       waitFor(String name);              // waits until it arrives
+ZLinkStreamWaitCall       waitFor(Class<?> payloadType);
+ZLinkStreamExpectNoneCall expectNone(String name);           // whether it doesn't arrive during .within(window)
+ZLinkStreamExpectNoneCall expectNone(Class<?> payloadType);
+ZLinkStreamSequenceCall   waitForSequence(String name);      // .expect(p).expect(p)… in order
+ZLinkStreamSequenceCall   waitForSequence(Class<?> payloadType);
+
+public interface ZLinkStreamExpectNoneCall {
+    ZLinkStreamExpectNoneCall within(Duration window);       // the observation window; must be given
+    CompletionStage<Void> submit();
+}
+
+public interface ZLinkStreamSequenceCall {
+    // adds the next predicate to apply in arrival order. Its argument is the message, not the payload.
+    ZLinkStreamSequenceCall expect(
+        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate);
+    <TPayload> ZLinkStreamSequenceCall expect(
+        Class<TPayload> payloadType,
+        Predicate<ZLinkStreamMessage<TPayload>> predicate);
+    ZLinkStreamSequenceCall timeout(Duration timeout);
+    CompletionStage<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> submit();
+    <TPayload> CompletionStage<List<ZLinkStreamMessage<TPayload>>> submit(
+        Class<TPayload> payloadType);
+}
 ```
 
-- `expectNone(name).within(Duration).submit()` — **throws an exception**
-  if it arrives within the window. The symmetric of `waitFor`.
+- `expectNone(name).within(Duration).submit()` — **fails with a
+  `ZLinkStreamException` carrying `VALIDATION_FAILED`** if it arrives
+  within the window. The symmetric of `waitFor`.
 - `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` —
   confirms a push of the same name arrives **in predicate order**, and
-  returns the payload list. Verifies **"arrived in order"**, not "N
-  arrived."
+  returns `List<ZLinkStreamMessage<TPayload>>`. Verifies **"arrived in
+  order"**, not "N arrived."
+- **The predicate and the return value handle `ZLinkStreamMessage`.**
+  The argument `where(...)` and `expect(...)` receive is the message,
+  not the payload.
 - **A status-only surface isn't provided.** Since status is a payload
   field, it's expressed as
-  `waitFor(T.class).where(p -> p.status() == …)`.
+  `waitFor(T.class).where(T.class, m -> m.payload().status() == …)`.
 
 - **Domain REST polling isn't this surface.** That's `ZLinkHttpClient`'s
   job.
@@ -485,7 +563,32 @@ Once a connection attempt fails, it switches to `DISCONNECTED`, so
 
 The error's meaning is owned by
 [Common Spec §9](../../32-stream-connector.en.md). Java expresses this
-as a closed enum.
+as a closed enum. The **dedicated exception type carrying the code**
+that
+[Common Spec §9.2](../../32-stream-connector.en.md#92-delivery--the-receiver-must-be-able-to-read-the-code)
+requires is `ZLinkStreamException`.
+
+```java
+public record ZLinkStreamError(
+    ZLinkStreamErrorCode code,   // the closed set of 13 values below
+    String message,
+    Throwable exception) {       // the causing exception; null when there is none
+}
+
+public final class ZLinkStreamException extends RuntimeException {
+    public ZLinkStreamException(ZLinkStreamError error);
+    public ZLinkStreamError error();           // where the code is read
+    public ZLinkStreamErrorCode errorCode();   // shorthand for error().code()
+}
+```
+
+`ZLinkStreamException` is the only exception the connector throws or
+completes a `CompletionStage` with. **A language-standard exception such
+as `IllegalArgumentException` or `IllegalStateException` is never thrown
+as is** — those types have no place to carry a code, so the caller
+cannot tell `VALIDATION_FAILED` from `CONFIGURATION_ERROR`. An option
+validation failure (§4) and a wait-surface violation (§7.2) are
+delivered through the same exception.
 
 ```java
 public enum ZLinkStreamErrorCode {
@@ -513,6 +616,11 @@ awaited with the Kotlin wrapper's suspend `await()`. This `await()`
 waits for the Java `CompletionStage` as a coroutine suspension. A
 one-way send also waits for completion and failure with `await()`, but
 doesn't receive a transport result or admission status.
+
+**Kotlin adds no exception hierarchy of its own — it propagates Java's
+`ZLinkStreamException` (§11) as is.** When `await()` fails, the same
+exception is raised at the call site, and the caller reads the error
+code through `error().code()`.
 
 ```kotlin
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector

@@ -80,6 +80,10 @@ constexpr header_flags_t operator| (header_flags_t lhs, header_flags_t rhs) noex
                                         | static_cast<std::uint8_t> (rhs));
 }
 
+/* Closed set of 13 error codes (stream-connector §9.1). An implementation
+ * neither adds nor removes a value: the per-error impact table (current
+ * operation, connection, close reason, automatic reconnect) is written
+ * against exactly these names. */
 enum class error_code_t
 {
     disconnected,
@@ -90,14 +94,11 @@ enum class error_code_t
     frame_decode_failed,
     frame_too_large,
     send_failed,
-    unsupported_codec,
     compression_failed,
     tls_validation_failed,
     decompression_failed,
     user_callback_failed,
-    remote_error,
-    closed,
-    canceled
+    remote_error
 };
 
 enum class connection_state_t

@@ -11,14 +11,15 @@ When using the Java `CompletionStage` surface directly, see the
 
 ## 1. Add The Dependency
 
-Specify the ZLink distribution version you're using for `<version>`. Since the Kotlin module
-provides the Java connector as a public dependency, the application doesn't declare the connector
-module again.
+Since the Kotlin module provides the Java connector as a public dependency, the application
+doesn't declare the connector module again. **That artifact also brings
+`zlink-framework-core` with it.** A client that needs the connector alone declares
+`zlink-stream-connector` directly and crosses into coroutines with `CompletionStage.await()`.
 
 ```kotlin
 dependencies {
     // Provides the Java connector along with coroutine await, typed wait, and the Flow wrapper.
-    implementation("systems.zlink:zlink-framework-kotlin:<version>")
+    implementation("systems.zlink:zlink-framework-kotlin:0.16.0")
 }
 ```
 

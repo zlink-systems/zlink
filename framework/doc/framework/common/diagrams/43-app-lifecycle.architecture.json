@@ -1,0 +1,108 @@
+{
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "app_t의 세 단계 — 구성, 서비스, 종료",
+    "subtitle": "run(argc, argv)는 블로킹이고 반환값이 종료 코드다",
+    "output": "43-app-lifecycle.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      60,
+      150
+    ],
+    "cols": 5,
+    "gapX": 130,
+    "gapY": 80,
+    "cellW": 130,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "BEGIN",
+      "type": "external",
+      "label": "create()",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "CONF",
+      "type": "frontend",
+      "label": "구성 단계",
+      "sublabel": "config · logging · 등록",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "SERVE",
+      "type": "backend",
+      "label": "서비스 중",
+      "sublabel": "채널·HTTP·spot dispatch",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "STOP",
+      "type": "messagebus",
+      "label": "종료",
+      "sublabel": "hosted service 정리",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "END",
+      "type": "external",
+      "label": "끝",
+      "row": 0,
+      "col": 4
+    }
+  ],
+  "connections": [
+    {
+      "from": "BEGIN",
+      "to": "CONF",
+      "variant": "default"
+    },
+    {
+      "from": "CONF",
+      "to": "SERVE",
+      "label": "run(argc, argv)",
+      "variant": "default"
+    },
+    {
+      "from": "SERVE",
+      "to": "STOP",
+      "label": "stop() · request_stop() · 신호",
+      "variant": "default",
+      "labelDy": 54
+    },
+    {
+      "from": "STOP",
+      "to": "END",
+      "label": "종료 코드 반환",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "구성 단계",
+      "items": [
+        "run 전에 모든 선언을 끝낸다 — config / logging, add_zlink_framework, add_hosted_service.",
+        "잘못된 구성은 구성 시점이나 run 시작에서 예외로 거부된다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "종료",
+      "items": [
+        "request_stop()은 비동기 요청(신호 핸들러 등), stop()은 동기 정지다.",
+        "등록된 hosted service를 역순으로 stop()한다. 채널·stream·HTTP도 hosted service로 편입돼 같은 경로로 정리된다."
+      ]
+    }
+  ],
+  "schema_version": 1
+}

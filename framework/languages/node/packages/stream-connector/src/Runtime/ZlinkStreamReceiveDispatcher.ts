@@ -17,7 +17,6 @@ import { connectorError, toStreamError, utf8Decode } from './ZlinkStreamSupport'
 import type { ZlinkFlowContext } from './ZlinkFlowContext';
 import { decodeSessionClosing, ZLINK_SESSION_CLOSING } from './Protocol/ZlinkSessionClosing';
 import type { ZlinkStreamCloseReason } from '../Contracts';
-import type { ZlinkStreamRuntimeMetrics } from './ZlinkStreamRuntimeMetrics';
 
 export interface ZlinkStreamReceiveResult {
   readonly available: boolean;
@@ -32,14 +31,27 @@ export class ZlinkStreamReceiveDispatcher {
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly events: ZlinkStreamConnectorEvents,
     private readonly flowContext: ZlinkFlowContext,
-    private readonly metrics: ZlinkStreamRuntimeMetrics,
     private readonly serverClosing?: (reason: ZlinkStreamCloseReason) => Promise<void>
   ) {}
 
+  /**
+   * @param isCurrent Tells whether the connection this batch was read from is
+   *   still the connector's connection. It is asked again at the head of every
+   *   frame, not only after the read: `dispatch` awaits application code —
+   *   registered handlers in `Immediate`, the error handler on a failed frame —
+   *   and a disconnect and reconnect can complete inside that await. Without
+   *   the recheck the rest of a dead connection's batch lands on the new
+   *   connection's state, and the §10 arrival counts, which start at 0 when a
+   *   connection is established, take the stale frames on top.
+   * @param connectionForSend Resolves the connection a reply belongs on at the
+   *   moment it is written. The captured `connection` is the one the batch was
+   *   read from, which a reconnect may already have replaced.
+   */
   async readAndDispatch(
     connection: ZlinkStreamConnection | undefined,
     signal?: AbortSignal,
-    isCurrent?: () => boolean
+    isCurrent?: () => boolean,
+    connectionForSend?: () => ZlinkStreamConnection
   ): Promise<ZlinkStreamReceiveResult> {
     if (connection?.read === undefined) {
       return { available: false, inbound: false };
@@ -51,7 +63,6 @@ export class ZlinkStreamReceiveDispatcher {
     if (frameBytes === undefined) {
       return { available: false, inbound: false };
     }
-    this.metrics.inbound(frameBytes.byteLength);
     // Spec 26 §4.1 / spec stream-connector 32 §13: this inbound read is one
     // processing point. The level is read exactly once here and threaded
     // through header decode and dispatch for every frame in the batch, so a
@@ -69,8 +80,11 @@ export class ZlinkStreamReceiveDispatcher {
       return { available: true, inbound: false };
     }
     for (const frame of frames) {
+      if (isCurrent !== undefined && !isCurrent()) {
+        break;
+      }
       try {
-        await this.dispatch(connection, frame.header, frame.payload, signal, flowEnabled);
+        await this.dispatch(connection, frame.header, frame.payload, signal, flowEnabled, connectionForSend);
       } catch (cause) {
         if (
           frame.header.kind === ZlinkStreamMessageKind.Control &&
@@ -92,7 +106,8 @@ export class ZlinkStreamReceiveDispatcher {
     header: ZlinkStreamHeader,
     payload: Uint8Array,
     signal: AbortSignal | undefined,
-    flowEnabled: boolean
+    flowEnabled: boolean,
+    connectionForSend?: () => ZlinkStreamConnection
   ): Promise<void> {
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
       try {
@@ -146,7 +161,7 @@ export class ZlinkStreamReceiveDispatcher {
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Control) {
-      await this.dispatchControl(connection, header, payload, signal);
+      await this.dispatchControl(connection, header, payload, signal, connectionForSend);
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Send) {
@@ -171,7 +186,8 @@ export class ZlinkStreamReceiveDispatcher {
     connection: ZlinkStreamConnection,
     header: ZlinkStreamHeader,
     payload: Uint8Array,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    connectionForSend?: () => ZlinkStreamConnection
   ): Promise<void> {
     if (header.name === ZLINK_SESSION_CLOSING) {
       const closing = decodeSessionClosing(payload);
@@ -183,7 +199,14 @@ export class ZlinkStreamReceiveDispatcher {
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
       try {
-        await this.frameSender.sendControl(connection, ZLINK_STREAM_HEARTBEAT_PONG, signal);
+        // The pong answers on the connection the connector holds now, not on
+        // the one this batch was read from: a reconnect inside an earlier
+        // frame's await would otherwise write it to a replaced transport.
+        await this.frameSender.sendControl(
+          connectionForSend?.() ?? connection,
+          ZLINK_STREAM_HEARTBEAT_PONG,
+          signal
+        );
       } catch (cause) {
         throw connectorError(
           ZlinkStreamErrorCode.SendFailed,

@@ -15,7 +15,7 @@
 통해 `socketCore`로부터 자동으로 promote되며, 타입마다 재선언되지 않는다.
 `StreamSocket`은 이 chain을 깬다: base를 embed 필드가 아니라 **명명된
 field**(`core *routedSocket`)로 가지므로 아무것도 promote되지 않는다 —
-노출하는 모든 메서드는 손으로 쓴 한 줄짜리 forward이며, 다른 모든 socket
+노출하는 모든 메서드는 손으로 사용한 한 줄짜리 forward이며, 다른 모든 socket
 type이 공짜로 얻는 여러 메서드(`Connect`, `Disconnect`, `DisconnectRID`,
 `CommonOptions()`, 그리고 그로 인해 개별 forward되지 않은 모든
 `CommonSocketOptions` accessor)가 `StreamSocket`엔 단순히 없다. 정확한
@@ -155,7 +155,7 @@ ok, err := pair.Recv(&received, contracts.RecvFlagsNone)
 **Completion result.** `Recv`는 `RecvFlagsDontWait`가 설정돼 있고
 메시지가 없을 때만 `(false, nil)`을 반환한다.
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer routing이
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer routing이
 없고 load-balance하지 않는다.
 
 ---
@@ -189,7 +189,7 @@ parts, err := dealer.Request().Message(payload).Submit(ctx)
 **선택 기준.** peer가 첫 메시지부터 관찰하도록 connect 전에
 `SetRoutingID`를 설정한다. DEALER엔 임의 token에 응답하는 프로토콜
 envelope helper가 없다 — 대신 수신 request context의
-`Received.Reply()`를 쓰거나 ROUTER의 명시적 reply 표면을 쓴다.
+`Received.Reply()`를 사용하거나 ROUTER의 명시적 reply 표면을 사용한다.
 
 ---
 
@@ -226,7 +226,7 @@ router.Reply(peerRID, replyToken).Message(reply).Submit(ctx)
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 곳에서
 ROUTER-시작 또는 ROUTER-응답 request/reply엔
-`Request(peerRID)`/`Reply(rid, token)`을 쓴다. Token은 receive에서 얻고 합성하거나
+`Request(peerRID)`/`Reply(rid, token)`을 사용한다. Token은 receive에서 얻고 합성하거나
 재사용하지 않는다.
 
 ---
@@ -271,15 +271,15 @@ receive/subscription 표면만 노출하며 managed send completion은 없다.
 `DontWait`에서 `(false, nil)` 관례를 따른다.
 
 **선택 기준.** subscriber 이탈을 관찰하려고 특별히 `XPubSocket`을
-`ReceiveSubscriptionEvent`와 함께 쓰거나, `PubSocketOptions.SetManual`/
-`ApproveSubscribe`/`RejectSubscribe`로 수동 admission을 쓴다.
-subscription을 일반 메시지로 실어야 할 때 특별히 `XSubSocket`을 쓴다.
+`ReceiveSubscriptionEvent`와 함께 사용하거나, `PubSocketOptions.SetManual`/
+`ApproveSubscribe`/`RejectSubscribe`로 수동 admission을 사용한다.
+subscription을 일반 메시지로 실어야 할 때 특별히 `XSubSocket`을 사용한다.
 
 ---
 
 ## `StreamSocket`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP peer와
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와
 직접 framed packet을 주고받는다. base를 embedding이 아니라 명명된
 field로 감싼다 — 이게 무엇을 빠뜨리는지는 이 category 맨 위 참고를
 본다.
@@ -306,7 +306,7 @@ ok, err := stream.RecvPacket(&packet, contracts.RecvFlagsNone)
 
 **Completion result.** 두 receive 형식 모두 `DontWait`에서 `(false, nil)` 관례를 따른다.
 
-**선택 기준.** Bind 전에 RAW 또는 PACKET을 정하고 일치하는 pull API를 쓴다.
+**선택 기준.** Bind 전에 RAW 또는 PACKET을 정하고 일치하는 pull API를 사용한다.
 `StreamSocket`은 이 binding의 공개 API 관점에서 아예 `Connect`/
 `Disconnect`가 불가능하다는 걸 기억한다 — bind-and-accept 전용이다.
 

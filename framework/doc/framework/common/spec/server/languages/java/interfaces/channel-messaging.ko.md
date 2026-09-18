@@ -11,8 +11,8 @@ handler turn·Spot turn·state lane 등 runtime 실행 문맥에서 부르면 `I
 공개 종결자는 backpressure를 노출하지 않는다(F1).
 
 **`submit_sync`는 interface의 `default` 메서드다.** 구현이 모든 call type에서 같다 — 문맥을 검사한 뒤
-같은 비동기 종결자를 기다린다. call type마다 다시 쓰면 같은 규칙이 여러 곳에 흩어지고 새 call type이
-빠뜨릴 수 있다. .NET도 default interface method로 같은 구조를 쓴다.
+같은 비동기 종결자를 기다린다. call type마다 다시 사용하면 같은 규칙이 여러 곳에 흩어지고 새 call type이
+빠뜨릴 수 있다. .NET도 default interface method로 같은 구조를 사용한다.
 Logical Multicast는 target별 제출 결과를 반환하거나 publish 전용 monitoring으로 집계하지 않는다.
 Remote Spot queue 제출과 remote·local handler 실행 또는 완료는 `CompletionStage` 완료 조건이 아니다.
 

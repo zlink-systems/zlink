@@ -12,7 +12,7 @@ Enabled with `followRedirects(max)`.
 - Method rewrite: `303`, or `301`/`302` + `POST`, is rewritten to `GET` with the body removed.
 - **`Authorization` preservation rule**: `Authorization` is preserved on a same-origin redirect
   (identical scheme+host+port) and removed cross-origin.
-- Exceeding the `max` count fails with an exception.
+- Exceeding the `max` count fails with `INTERNAL_FAILURE`.
 - Supported locations: absolute (`http(s)://...`) and path-absolute (`/...`).
 - The redirect loop doesn't occupy a thread between hops.
 

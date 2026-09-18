@@ -465,8 +465,8 @@ see messaging/service usage directly in Kotlin code.
 
 **Services**
 - [Framework service overview](../../../../framework/doc/framework/common/guide/server/03-concepts.en.md)
-  - [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.en.md)
-  - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.en.md)
+  - [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.en.md)
+  - [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.en.md)
 
 **Operations**
 - [Socket options](../../../../core/doc/guide/12-socket-options.en.md)

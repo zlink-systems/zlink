@@ -268,7 +268,13 @@ test('typescript stream connector specification matches the browser package decl
     [declarationShape(connector)],
     [...new Set(publicShapes.get('ZlinkStreamConnector') ?? [])]
   );
-  assert.match(specification, /waitFor<TPayload = ZlinkStreamEncodedPayload>\(name: string\)/);
+  // Common spec section 10.1: every wait surface offers both the stated name and
+  // the payload constructor, and section 10 requires the received-count surface.
+  assert.match(specification, /waitFor<TPayload = ZlinkStreamEncodedPayload>\(nameOrType: string \| Function\)/);
+  assert.match(specification, /expectNone<TPayload = ZlinkStreamEncodedPayload>\(nameOrType: string \| Function\)/);
+  assert.match(specification, /waitForSequence<TPayload = ZlinkStreamEncodedPayload>\(nameOrType: string \| Function\)/);
+  assert.match(specification, /receivedCount\(name: string\): number/);
+  assert.match(specification, /setDiagnosticsLevelAsync\(level: ZlinkStreamDiagnosticsLevel\): Promise<void>/);
   assert.match(specification, /on<TPayload = ZlinkStreamEncodedPayload>\(/);
   assert.match(specification, /flowFrom\(flow: ZlinkStreamFlow\): ZlinkStreamSendCall/);
   assert.match(specification, /flowFrom\(flow: ZlinkStreamFlow\): ZlinkStreamRequestCall/);

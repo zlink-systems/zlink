@@ -177,69 +177,30 @@ and the metric names, units, and labels are in
 Serving node. It's an operation that targets the whole host, and the call itself doesn't
 terminate the host.
 
-**What's preserved.** This means that what the client and other nodes were using remains
-unchanged after the move.
+After the move the logical ids, the work not yet run and the timers remain, and only the
+application state is carried over by the adapter registered on the factory. What survives, the order
+the procedure runs in and how far it can be rolled back are covered by
+[Relocation](37-relocation.en.md).
 
-| What's preserved | Meaning |
-| --- | --- |
-| SpotId/ActorId and `ObjectGeneration` | The logical ID the caller was using doesn't change. There's no need to re-announce the address |
-| A not-yet-executed message and the accepted journal | Work still sitting in the queue at seal time resumes execution on the target |
-| Timer registration and pending ticks | The name, period, options, and schedule cursor move together, so the target doesn't re-register them |
-| Application state | Moved through the `Capture`/`Restore` of the relocation adapter registered on the factory |
-| A bound STREAM session's route | The client session is left alone, and the route is changed to point at the new owner |
+This section covers **the operator's side** — when it can be called, what is configured, and when it
+is safe to terminate.
 
-The procedure:
+**When it cannot be called.** With no eligible destination it ends as blocked without changing this
+host's state. While a move or a shutdown is already under way, a new call is not accepted.
 
-1. Preflight confirms every stateful object and target capability/capacity. If there's no
-   eligible target, it ends in `Blocked` without changing source admission.
-2. The runtime publishes the host as `Relocating` and schedules an infrastructure notification
-   on the execution queue of each standalone Actor, Instance Spot, and User Spot aggregate.
-3. Target kind/version eligibility is confirmed before source dispatch stops. When the
-   notification reaches a turn boundary, only the currently executing turn finishes on the
-   source; it starts no new application turn. Transport reception remains open and later
-   messages enter the source ingress hold while target preparation is pending.
-4. At seal time, the message that didn't run, the accepted journal, the logical timer
-   registration/pending tick, and the optional Snapshot bytes are sent by the source directly
-   to the target over the mesh connection. The moving state never passes through the
-   Relocation Store, and the transfer stays within §2.2's chunk-size and in-flight-budget
-   settings. The target installs its temporary queue before factory/`Restore`, and
-   finishes journal staging before the owner/membership commit. Ordinary target staging uses
-   the shared Application Job Queue reservation before receive and returns it after finite
-   durable handoff to the retained-byte backlog. Relocation adds no outbound/inbound or
-   `Capture`/`Restore` capacity gate of its own; a backlog larger than the
-   live-job limit later acquires runnable-turn permits progressively.
-5. A `SpotWide` User Spot and its member Actors change owner/membership together in one
-   aggregate commit. An Entry Spot's and a `PerActor` User Spot's Actors are each moved
-   individually. Infrastructure relocation doesn't call the application's join/leave
-   callbacks.
-6. Relays the source hold after the target reports relay-ready, then submits the cutover
-   control one-way. The target performs its owner CAS, merges the ordered backlog, finishes
-   required lifecycle callbacks, and opens application dispatch. For a bound Actor it then
-   sends the Session owner a one-way target-route update; neither control has a completion
-   reply or ACK.
-7. Once dispatch has ended for every source unit and every cutover submit has succeeded, the
-   host transitions to `Relocated`. This source-side result does not mean it awaited target CAS or
-   Session route application. Connections and infrastructure stay up until `Shutdown(...)` is
-   called.
+### 2.1 The Unit That Moves
 
-A failure before the first relocation commit can restore the source queue and admission.
-After the first commit, there's no rollback to the source — target recovery continues, and
-exceeding the deadline ends in `ForceStopped`.
-
-### 2.1 Relocation Unit by Execution Mode
-
-Even within the same host, what is bundled into one relocation unit differs by Spot kind and
-execution mode. A `SpotWide` User Spot is a single aggregate together with its member Actors,
-so it commits together. An Entry Spot's and a `PerActor` User Spot's Actors are each an
-independent unit, so they move Actor by Actor, and in this case the Spot instance is a shell
-that doesn't carry state.
+What is bundled into one unit is decided by the Spot kind and the execution mode —
+[Relocation](37-relocation.en.md#4-the-unit-the-execution-mode-decides) covers that split. For
+operations it matters for one reason. **The larger the bundle, the wider the range that pauses at
+once.**
 
 <iframe class="zlink-diagram" src="/common/diagrams/12-relocation-en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-relocation-en.html" target="_blank">↗ View larger</a></p>
 
-Therefore, a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its
-relocation approach. Each member Actor's factory decides its own policy separately. An
-Instance Spot has no Actor, so the Spot itself is the relocation unit.
+A User Spot whose Actors move individually is a shell that carries no state itself, so its factory
+can only use the policy that creates it fresh on the destination. Each member Actor's factory
+decides its own policy separately.
 
 ### 2.2 Moving-State Transfer Settings
 
@@ -297,7 +258,7 @@ When possible, also confirm the `SafeToShutdown` publication (§2.3).
 A Spot's lifetime is independent of any request. A User/Instance Spot isn't closed just
 because an ordinary request finished. Likewise, preparing a nonexistent Instance Spot never
 starts from a separate address or manager create — only from attaching Instance intent to a
-SpotId direct call ([06-spot](06-spot.en.md) §5).
+SpotId direct call ([Spot](21-spot.en.md) §5).
 
 ## 4. Wiring Operational Calls and Readiness
 
@@ -499,7 +460,103 @@ something new is blocked — what's already accepted is processed through to com
 **Monitoring or observer callbacks never hold up termination.** Even if code observing
 status runs for a long time, maintenance never waits for it.
 
-## 5. MeshNode Runtime Control and Observation
+## 5. Location Readiness and Operational Queries
+
+Operational code uses the location readiness API to check whether a needed peer is Ready.
+It uses the location runtime query for overall status and paged topology.
+
+=== "C#/.NET"
+
+    ```csharp
+    app.MapGet("/ops/location", async (
+        IZLinkLocationReadiness readiness,
+        IZLinkLocationRuntimeQuery query,
+        CancellationToken ct) =>
+    {
+        var status = await query.GetStatusAsync(ct);
+        var page = await query.ListTopologyAsync(
+            new ZLinkLocationTopologyFilter(MeshName: "play"),
+            new ZLinkPageRequest(PageSize: 100),
+            ct);
+
+        var objectPeerReady = await readiness.IsPeerReadyAsync(
+            "play",
+            ZLinkLocationRole.Spot,
+            cancellationToken: ct);
+
+        return Results.Ok(new
+        {
+            status.StoreHealthy,
+            status.OwnerLeaseHealthy,
+            objectPeerReady,
+            topology = page.Items
+        });
+    });
+    ```
+
+=== "C++"
+
+    ```cpp
+    auto status = co_await query.get_status ();
+    auto page = co_await query.list_topology (
+      location_topology_filter_t{.mesh_name = "play"},
+      location_page_request_t{.page_size = 100});
+
+    auto object_peer_ready = co_await readiness.is_peer_ready ("play", location_role_t::spot);
+
+    // Assemble status.store_healthy · status.owner_lease_healthy · object_peer_ready · page.items
+    // into the operational endpoint's response.
+    ```
+
+=== "Java"
+
+    ```java
+    ZLinkLocationRuntimeStatus status = query.getStatus().toCompletableFuture().join();
+    ZLinkLocationPage<ZLinkLocationTopologyEntry> page = query
+        .listTopology(new ZLinkLocationTopologyFilter("play"), new ZLinkPageRequest(100))
+        .toCompletableFuture().join();
+
+    boolean objectPeerReady = readiness
+        .isPeerReady("play", ZLinkLocationRole.SPOT, null)
+        .toCompletableFuture().join();
+
+    // Assemble status.storeHealthy() · status.ownerLeaseHealthy() · objectPeerReady · page.items()
+    // into the operational endpoint's response.
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    val status = query.getStatus().await()
+    val page = query
+        .listTopology(ZLinkLocationTopologyFilter("play"), ZLinkPageRequest(100))
+        .await()
+
+    val objectPeerReady = readiness.isPeerReady("play", ZLinkLocationRole.SPOT, null).await()
+
+    // Assemble status.storeHealthy() · status.ownerLeaseHealthy() · objectPeerReady · page.items()
+    // into the operational endpoint's response.
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    const status = await query.getStatus();
+    const page = await query.listTopology({ meshName: 'play' }, { pageSize: 100 });
+
+    const objectPeerReady = await readiness.isPeerReady('play', ZLinkLocationRole.Spot);
+
+    // Assemble status.storeHealthy · status.ownerLeaseHealthy · objectPeerReady · page.items
+    // into the operational endpoint's response.
+    ```
+
+
+The operational query returns only health and topology intended for human inspection. Store keys,
+authority versions, owner tokens, and relocation records are internal Framework information
+and aren't returned. `NodeRid` is used only to map operational info back to the actual
+transport node.
+
+## 6. MeshNode Runtime Control and Observation
 
 A MeshNode registered with `AddRouteMesh` is operated through two DI singletons.
 
@@ -631,7 +688,7 @@ component event stream for one mesh. Host termination is owned by the framework 
     ```
 
 
-## 6. Host Lifecycle
+## 7. Host Lifecycle
 
 The Framework runtime is tied to the host's start/stop as its **lifecycle service.** The
 channel/SPOT/STREAM runtime is created based on the roles registered at startup, and cleaned
@@ -646,7 +703,7 @@ up at shutdown.
   service `stop()` → channel/SPOT/STREAM runtime cleanup.
 - Fold background work into the same lifecycle using the host's standard lifecycle service.
 
-### 6.1 Observing Status
+### 7.1 Observing Status
 
 Host `Relocate`/`Shutdown` state transitions are observed through the framework runtime's
 bounded status stream. The per-MeshName runtime provides a component snapshot, but doesn't
@@ -724,7 +781,7 @@ draining, stopped, error). The notation follows the language. The status's reloc
 termination results must match that operation's terminal result. To view it as numbers, use
 the `zlink.host.*` instruments from §1.
 
-## 7. Related Documents
+## 8. Related Documents
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §7 — the verification class `FrameworkRuntimeContracts`
@@ -733,7 +790,7 @@ the `zlink.host.*` instruments from §1.
   [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md)
 - Status observation and diagnostics: the `11. Monitoring` chapter
 - The Spot where the application decides the relocation boundary:
-  [06-spot §7](06-spot.en.md#7-signaling-when-relocation-may-begin)
+  [06-spot §7](37-relocation.en.md#3-when-state-is-captured--the-factory-registration-decides)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

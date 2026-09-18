@@ -8,7 +8,7 @@ title: "직렬 실행기 계층"
 
 > 이 문서는 Spot·Actor·STREAM session이 각자의 작업을 어떤 직렬 실행 단위에 올리는지,
 > 누가 그 단위의 수명을 소유하는지, 그리고 그 단위에 작업을 넣는 진입점이 무엇인지
-> 정의한다. 여기서 정하는 이름과 진입점은 네 언어 runtime이 표기만 바꿔 그대로 쓴다.
+> 정의한다. 여기서 정하는 이름과 진입점은 네 언어 runtime이 표기만 바꿔 그대로 사용한다.
 > 어떤 실행 mode에서 무엇이 동시에 실행될 수 있는지는 용어집이 소유하며, 이 문서는 그
 > mode에서 작업이 어느 queue를 지나는지를 정의한다.
 
@@ -22,7 +22,7 @@ runtime은 그 callback을 아무 thread에서나 실행하지 않고 **직렬 �
 | 주체 | 이 문서에서 정하는 것 |
 |---|---|
 | Application | 실행 mode를 등록 시점에 고른다. 자기 작업이 어느 queue로 갈지는 고르지 않는다 |
-| Runtime | 진입점마다 어느 queue를 쓸지 정하고, 그 queue의 수명을 소유한다 |
+| Runtime | 진입점마다 어느 queue를 사용할지 정하고, 그 queue의 수명을 소유한다 |
 
 [상태 소유와 state lane](06-state-ownership-and-lanes.ko.md)과 이 문서는 다른 문제를
 다룬다. state lane은 컴포넌트 하나가 **자기 mutable 상태**를 한 번에 한 turn만 만지게 하는
@@ -504,7 +504,7 @@ State lane의 기다리는 진입에 적용되는 재진입 검사는
 
 ## 9. 언어별 매핑
 
-이름은 §2·§3·§6에서 정한 것을 쓰고, 표기만 언어 관용구로 바꾼다.
+이름은 §2·§3·§6에서 정한 것을 사용하고, 표기만 언어 관용구로 바꾼다.
 
 | 언어 | 타입 | 메서드 | 필드 |
 |---|---|---|---|
@@ -513,12 +513,12 @@ State lane의 기다리는 진입에 적용되는 재진입 검사는
 | cpp | `spot_serial_executor_t` | `snake_case` | `_snake_case` |
 | node | `ZLinkSpotSerialExecutor` | `camelCase` | `camelCase` |
 
-의미를 바꾸는 개명은 하지 않는다. `executeActor`를 cpp에서 `execute_actor`로 쓰는 것은
-표기 변환이지만, `dispatch_actor`로 쓰는 것은 다른 이름을 짓는 것이다.
+의미를 바꾸는 개명은 하지 않는다. `executeActor`를 cpp에서 `execute_actor`로 사용하는 것은
+표기 변환이지만, `dispatch_actor`로 사용하는 것은 다른 이름을 짓는 것이다.
 
 §4의 두 단계 구조는 네 언어가 모두 갖고 있다. node도 `executeActor`가 Actor별 mailbox
 claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 shared Spot 실행 단위를
-쓴다 — Actor queue를 건너뛰는 것이 아니라 §4가 정한 "queue는 Actor마다, gate는 Spot 공유"
+사용한다 — Actor queue를 건너뛰는 것이 아니라 §4가 정한 "queue는 Actor마다, gate는 Spot 공유"
 그대로다.
 
 ## 10. 검증 요구

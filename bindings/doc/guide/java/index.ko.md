@@ -457,8 +457,8 @@ Kotlin 코드로 바로 볼 수 있습니다.
 
 **서비스**
 - [Framework 서비스 개요](../../../../framework/doc/framework/common/guide/server/03-concepts.ko.md)
-  - [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.ko.md)
-  - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.ko.md)
+  - [Spot](../../../../framework/doc/framework/common/guide/server/21-spot.ko.md)
+  - [Actor](../../../../framework/doc/framework/common/guide/server/22-actor.ko.md)
 
 **운영**
 - [소켓 옵션](../../../../core/doc/guide/12-socket-options.ko.md)

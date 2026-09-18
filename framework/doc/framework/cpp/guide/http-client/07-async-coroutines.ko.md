@@ -5,10 +5,10 @@
 `submit_raw()`/`submit<T>()`는 `zlink::framework::task_t`를 돌려준다. 결과를
 소비하는 방법은 세 가지다.
 
-## coroutine 실행 켜기
+## coroutine scheduler 지정
 
-기본 client는 기존 코드와 같은 blocking submit 의미를 유지한다. HTTP 대기 중 호출
-스레드를 비우려면 client 구성에서 coroutine 실행을 명시한다.
+coroutine 실행은 builder의 기본값이라 따로 켜지 않아도 된다. 내부 기본 scheduler를 쓰겠다고
+명시하려면 인자 없는 `.coroutines()`를 호출한다.
 
 ```cpp
 auto client = zlink::http_client::client_t::create ("http://127.0.0.1:18080")
@@ -16,8 +16,8 @@ auto client = zlink::http_client::client_t::create ("http://127.0.0.1:18080")
   .build ();
 ```
 
-`.coroutines()`는 HTTP client 내부 scheduler를 사용한다. 이 scheduler는 public header에
-Boost.Asio, Boost.Beast, OpenSSL runtime 타입을 드러내지 않는다.
+내부 기본 scheduler는 public header에 Boost.Asio, Boost.Beast, OpenSSL runtime 타입을
+드러내지 않는다.
 
 server runtime처럼 coroutine을 다시 실행할 위치를 직접 정해야 하는 경우에는 framework
 queue adapter를 resume scheduler로 주입한다.
@@ -63,7 +63,7 @@ notify_match_result (zlink::http_client::client_t &client, const match_result_t 
         co_return;
     }
     throw zlink::framework::framework_exception_t (
-      zlink::framework::framework_error_kind_t::request_failed,
+      zlink::framework::framework_error_kind_t::internal_failure,
       "match result was not accepted");
 }
 ```
@@ -99,7 +99,7 @@ client.post ("/games")
 ## 어디서 무엇을 쓰나 — blocking 규칙
 
 > **framework runtime/handler 스레드에서는 blocking 접근(`.result()`,
-> `fetch<T>()`)을 쓰지 않는다.** runtime 스레드를 멈추면 같은 스레드에서 처리될
+> `fetch<T>()`)을 사용하지 않는다.** runtime 스레드를 멈추면 같은 스레드에서 처리될
 > 다른 작업까지 막힌다.
 
 | 호출 위치 | 권장 |

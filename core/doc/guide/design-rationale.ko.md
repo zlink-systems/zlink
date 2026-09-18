@@ -48,7 +48,7 @@ API](09-message-api.ko.md)).
 ### Lock-Free — 스레드 간 통신에 YPipe
 
 스레드 사이 메시지 전달에 락 대신 CAS(Compare-And-Swap) 연산 기반 FIFO 큐(YPipe)를
-쓴다.
+사용한다.
 
 **사용자에게 의미**: 핫 패스에서 락 경합이 없어 멀티코어 확장이 잘 된다. 공개 socket 핸들
 API는 thread-safe해서 여러 스레드가 같은 소켓에 동시에 `send`할 수 있고, 다만 한 소켓에서

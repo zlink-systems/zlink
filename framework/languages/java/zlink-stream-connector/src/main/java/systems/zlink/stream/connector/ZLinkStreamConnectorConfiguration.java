@@ -51,12 +51,24 @@ final class ZLinkStreamConnectorConfiguration {
             options.skipServerCertificateValidation(), options.compressionCodec());
     }
 
+    /**
+     * Validates every option and builds the runtime configuration.
+     *
+     * <p>Common connector spec §6.3: all of the options are checked before a
+     * connection is attempted, a value outside its permitted range is
+     * {@code VALIDATION_FAILED}, and a disagreement between two options is
+     * {@code CONFIGURATION_ERROR}. §9.2 requires the caller to be able to
+     * read that code, so every rejection here is a
+     * {@link ZLinkStreamException}.
+     */
     static ZLinkStreamConnectorConfiguration from(ZLinkStreamConnectorOptions options) {
-        Objects.requireNonNull(options, "options");
-        Objects.requireNonNull(options.endpoint(), "endpoint");
+        requireOption(options, "options");
+        requireOption(options.endpoint(), "endpoint");
+        //  Scheme/transport agreement is a cross-option check, so
+        //  `transportFor` reports CONFIGURATION_ERROR (§3.1, §6.3).
         transportFor(options.endpoint());
-        Objects.requireNonNull(options.dispatchMode(), "dispatchMode");
-        Objects.requireNonNull(options.nameResolver(), "nameResolver");
+        requireOption(options.dispatchMode(), "dispatchMode");
+        requireOption(options.nameResolver(), "nameResolver");
         requirePositive(options.connectTimeout(), "connectTimeout");
         requirePositive(options.requestTimeout(), "requestTimeout");
         requirePositive(options.waitTimeout(), "waitTimeout");
@@ -64,26 +76,34 @@ final class ZLinkStreamConnectorConfiguration {
         requirePositive(options.heartbeatTimeout(), "heartbeatTimeout");
         if (options.heartbeatEnabled()
             && !options.heartbeatTimeout().minus(options.heartbeatInterval()).isPositive()) {
-            throw new IllegalArgumentException(
+            throw ZLinkStreamException.configurationError(
                 "heartbeatTimeout must be greater than heartbeatInterval");
         }
         requirePositive(options.reconnectInitialDelay(), "reconnectInitialDelay");
         requirePositive(options.reconnectMaxDelay(), "reconnectMaxDelay");
         if (options.reconnectBackoffFactor() < 1.0) {
-            throw new IllegalArgumentException("reconnectBackoffFactor must be at least 1.0");
+            throw ZLinkStreamException.validationFailed(
+                "reconnectBackoffFactor must be at least 1.0");
         }
         if (options.maxReconnectAttempts() < ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS
             || (options.reconnectEnabled() && options.maxReconnectAttempts() == 0)) {
-            throw new IllegalArgumentException("maxReconnectAttempts must be unlimited or positive");
+            throw ZLinkStreamException.validationFailed(
+                "maxReconnectAttempts must be unlimited or positive");
         }
         if (options.maxSendPayloadSize() <= 0) {
-            throw new IllegalArgumentException("maxSendPayloadSize must be positive");
+            throw ZLinkStreamException.validationFailed("maxSendPayloadSize must be positive");
         }
         if (options.maxReceivePayloadSize() <= 0) {
-            throw new IllegalArgumentException("maxReceivePayloadSize must be positive");
+            throw ZLinkStreamException.validationFailed("maxReceivePayloadSize must be positive");
         }
-        Objects.requireNonNull(options.compression(), "compression");
-        Objects.requireNonNull(options.diagnosticsLevel(), "diagnosticsLevel");
+        requireOption(options.compression(), "compression");
+        if (options.compression() == ZLinkStreamCompression.LZ4
+            && options.compressionCodec() == null) {
+            throw ZLinkStreamException.configurationError(
+                "compressionCodec is required when compression is lz4");
+        }
+        requireOption(options.typedCodec(), "typedCodec");
+        requireOption(options.diagnosticsLevel(), "diagnosticsLevel");
         return new ZLinkStreamConnectorConfiguration(options);
     }
 
@@ -144,17 +164,24 @@ final class ZLinkStreamConnectorConfiguration {
         boolean skipServerCertificateValidation,
         ZLinkStreamCompressionCodec compressionCodec) { }
 
+    private static <T> T requireOption(T value, String name) {
+        if (value == null) {
+            throw ZLinkStreamException.validationFailed(name + " is required");
+        }
+        return value;
+    }
+
     private static void requirePositive(Duration value, String name) {
-        Objects.requireNonNull(value, name);
+        requireOption(value, name);
         if (value.isZero() || value.isNegative()) {
-            throw new IllegalArgumentException(name + " must be positive");
+            throw ZLinkStreamException.validationFailed(name + " must be positive");
         }
     }
 
     private static ZLinkStreamTransport transportFor(URI endpoint) {
         String scheme = endpoint.getScheme();
         if (scheme == null || scheme.isBlank()) {
-            throw new IllegalArgumentException("endpoint URI scheme is required");
+            throw ZLinkStreamException.configurationError("endpoint URI scheme is required");
         }
         //  Endpoint notation policy §2.6: scheme is case-insensitive
         //  ("TCP://" must resolve the same as "tcp://").
@@ -163,7 +190,7 @@ final class ZLinkStreamConnectorConfiguration {
             case "tls" -> ZLinkStreamTransport.TLS;
             case "ws" -> ZLinkStreamTransport.WEB_SOCKET;
             case "wss" -> ZLinkStreamTransport.WEB_SOCKET_SECURE;
-            default -> throw new IllegalArgumentException(
+            default -> throw ZLinkStreamException.configurationError(
                 "unsupported endpoint URI scheme: " + scheme);
         };
     }

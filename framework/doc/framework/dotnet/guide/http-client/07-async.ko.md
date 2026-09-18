@@ -4,8 +4,8 @@
 
 `AsyncRaw()` / `Async<T>()` / `DownloadAsync(sink)`는 `ValueTask<T>`를 돌려준다.
 응답 결과가 필요 없는 server 호출에는 인자 없는 `Async()`를 사용한다. 정상 완료 값과
-전송 상태는 반환하지 않으며, 시작 전 실패만 비동기 오류로 전달한다. HTTP request builder에는
-Spot turn을 반납하는 `Yield<T>()`가 없다.
+전송 상태는 반환하지 않으며, 시작 전 실패만 비동기 오류로 전달한다. standalone client의
+`ZLinkHttpRequestBuilder`에는 Spot turn을 반납하는 `Yield<T>()`가 없다.
 
 ## non-blocking 보장
 

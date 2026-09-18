@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A Spot or Actor call goes where the id is",
+    "subtitle": "the caller gives only the id; RouteMesh finds which node holds it",
+    "output": "20-spot-actor-routing-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 130,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "knows only the id",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "F",
+      "type": "external",
+      "label": "RouteMesh",
+      "sublabel": "resolves the current location",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "P",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "P"
+      ],
+      "pad": 34
+    },
+    {
+      "kind": "security-group",
+      "label": "lobby Spot",
+      "wraps": [
+        "P"
+      ],
+      "pad": 12
+    },
+    {
+      "kind": "region",
+      "label": "node B",
+      "wraps": [
+        "R"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "F",
+      "label": "gives the id",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "P",
+      "label": "player-7",
+      "variant": "default"
+    },
+    {
+      "from": "F",
+      "to": "R",
+      "label": "room-42",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "An Actor exists only inside a Spot",
+      "items": [
+        "A Spot lives on a node and a Spot hosts its Actors. Calling player-7 goes to the lobby Spot that holds that actor.",
+        "A channel call picks one of the serving nodes. A Spot or Actor call goes where that id currently is."
+      ]
+    }
+  ]
+}

@@ -64,12 +64,14 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
     {
         /* Actor 생성과 위치 조회는 Framework의 ActorManager와 Actor Client가 담당한다.
          * Entry Spot은 actor에 도착한 application message만 처리한다. */
+        // --8<-- [start:doc-explicit-packet-name]
         _context.handlers ()
           .add_actor_request<&courier_entry_spot_t::bind_courier_session> (
             bind_courier_session_req_t::packet_name)
           .add_actor_send<&courier_entry_spot_t::offer_delivery> (offer_delivery_msg_t::packet_name)
           .add_actor_send<&courier_entry_spot_t::courier_decision> (
             courier_decision_msg_t::packet_name);
+        // --8<-- [end:doc-explicit-packet-name]
     }
 
     task_t<spot_actor_join_result_t> on_actor_join (std::string_view,

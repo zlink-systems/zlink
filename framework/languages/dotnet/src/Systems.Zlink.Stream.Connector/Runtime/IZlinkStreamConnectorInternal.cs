@@ -41,7 +41,12 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         TimeSpan timeout,
         Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback);
 
-    ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> WaitForEncodedAsync(
+    /// <summary>
+    ///     Consumes the next matching unread message, or yields <see langword="null" />
+    ///     when the timeout elapses first. Each wait surface turns that outcome into its
+    ///     own <see cref="ZlinkStreamErrorCode.ValidationFailed" /> result.
+    /// </summary>
+    ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>?> WaitForEncodedAsync(
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         TimeSpan timeout,

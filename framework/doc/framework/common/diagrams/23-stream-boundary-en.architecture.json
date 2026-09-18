@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "STREAM is the mesh's outer edge",
+    "subtitle": "Outside it is one connection · inside it is an ordinary node",
+    "output": "23-stream-boundary-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 150,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C1",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "outside, connector only",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "C2",
+      "type": "frontend",
+      "label": "game client",
+      "sublabel": "outside, connector only",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "backend",
+      "label": "stream node",
+      "sublabel": "one session per connection",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "N",
+      "type": "backend",
+      "label": "another node",
+      "sublabel": "channels · Spots · Actors",
+      "row": 1,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "mesh",
+      "wraps": [
+        "S",
+        "N"
+      ],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    {
+      "from": "C1",
+      "to": "S",
+      "label": "one TCP connection",
+      "variant": "default"
+    },
+    {
+      "from": "C2",
+      "to": "S",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "N",
+      "label": "an ordinary mesh call",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The client opens the connection; after that both sides send",
+      "items": [
+        "The client references no Framework. It attaches with a connector that knows only connections and packets, so a change in the mesh leaves it untouched.",
+        "One session object is made per connection, and the callbacks for that connection run in order."
+      ]
+    }
+  ]
+}

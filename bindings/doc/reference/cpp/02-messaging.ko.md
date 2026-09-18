@@ -51,10 +51,10 @@ frame이 성공적인 send에서 transport로 옮겨지고 instance는 invalid �
 보내지 않을 메시지를 해제하려면 `close()`를 호출한다.
 
 **선택 기준.** caller가 raw 소유권을 유지할 필요가 없는 데이터로 outbound
-payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)` factory를 쓴다.
+payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)` factory를 사용한다.
 `zlink::advanced::external_message_t::from(span, free_fn, hint)`(`message_t` 옆에
 선언된 no-copy overload)는 caller 소유 buffer를 복사 없이 메시지에 넘겨야 할 때만
-쓴다.
+사용한다.
 
 ---
 
@@ -144,8 +144,8 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 **완료 결과.** 둘 다 dispose나 async 동작이 없는 순수 데이터 struct다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets category)에서
-구독자 변동을 관찰할 때 쓴다. socket의 `subscription_at(index)` 값 반환 overload의
-반환 타입으로 `subscription_filter_t`를 쓴다.
+구독자 변동을 관찰할 때 사용한다. socket의 `subscription_at(index)` 값 반환 overload의
+반환 타입으로 `subscription_filter_t`를 사용한다.
 
 ---
 
@@ -176,7 +176,7 @@ std::move (received.reply ()).message (reply_msg).submit ();
 | `send_submit_operation_t` | `.message(...)` / `.submit()` / `.async()` | part 추가 뒤 blocking 또는 awaitable terminal 선택 |
 | `request_operation_t`/`request_submit_operation_t` | `send`와 동일 + `.timeout(std::chrono::milliseconds)` | send chain을 그대로 반영하며 reply 대기 timeout을 더함 |
 | `request_submit_operation_t` terminal | `.submit()` / `.async()` | blocking reply 결과 또는 completion-backed awaitable reply 결과 |
-| `reply_operation_t`/`reply_submit_operation_t` | `.message(...)` / `.submit()` | 수신 RID와 token을 쓰는 flag-free synchronous reply |
+| `reply_operation_t`/`reply_submit_operation_t` | `.message(...)` / `.submit()` | 수신 RID와 token을 사용하는 flag-free synchronous reply |
 
 **완료 결과.** 모두 동기 호출이다; part는 성공적인 submit에서만 소비된다.
 
@@ -189,8 +189,8 @@ std::move (received.reply ()).message (reply_msg).submit ();
 | `request_submit_operation_t::async()` | `async_result_t<std::vector<message_t>>` | awaitable reply, caller가 모든 반환 message를 소유 |
 
 **선택 기준.** coroutine에서는 `.async()`를, blocking 가능한 thread에서는 `.submit()`을
-쓴다. 목적지를 손으로
-재구성하는 대신 `received_t::reply()`/`send()`를 쓴다. `message()` overload가
+사용한다. 목적지를 손으로
+재구성하는 대신 `received_t::reply()`/`send()`를 사용한다. `message()` overload가
 `&&`-qualified이므로 항상 rvalue에서 chain한다 — lvalue builder는
 `.message(...)`를 직접 호출할 수 없다.
 

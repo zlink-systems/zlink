@@ -39,7 +39,7 @@ auto client = zlink::http_client::client_t::create ("https://game-api.example.in
 
 잘못된 값(빈 base_url, `ftp://` scheme, 0 이하 timeout, 0 bytes 응답 body 상한,
 빈 헤더 이름 등)은
-`build()` 또는 해당 setter에서 `request_protocol_error`로 즉시 던진다 —
+`build()` 또는 해당 setter에서 `protocol_error`로 즉시 던진다 —
 조용히 넘어가지 않는다.
 
 `default_header`로 넣은 헤더는 redirect 대상이 바뀌어도 그대로 적용된다. 비밀 값은
@@ -62,7 +62,7 @@ client.get ("/players/7281");   // 실제 target: /v2/players/7281
 같은 connection pool과 cookie jar를 공유한다.
 
 같은 origin으로 가는 요청은 **keep-alive 연결을 자동 재사용**한다. 서버가 그 사이
-연결을 닫았다면(stale) fresh 연결로 1회 자동 재시도하므로 호출자는 신경 쓸 것이
+연결을 닫았다면(stale) fresh 연결로 1회 자동 재시도하므로 호출자는 신경 사용할 것이
 없다.
 
 ```cpp

@@ -8,7 +8,7 @@
 공유 기반), `common_socket_options_t`와 타입별 서브클래스, 8개 구체 socket type,
 `send`/`publish`/`request`/`reply`는 Messaging category에 문서화된
 operation-builder family를 반환한다 — 이 category는 각 builder가 어디서 시작하고
-각 구체 타입이 고유하게 무엇을 더하는지만 다룬다. dotnet의 `ISocket`/
+각 구체 타입이 고유하게 무엇을 추가하는지만 다룬다. dotnet의 `ISocket`/
 `IStreamSocket` interface와 달리 C++는 기본적으로 role interface를 노출하지 않는다
 — 각 socket type은 구체 RAII class이며, `socket_t` 자체는 public 생성이 불가능하다
 (생성자가 `protected`). 정확한 signature는
@@ -86,7 +86,7 @@ socket.options ().submit_retry_mode (zlink::submit_retry_mode_t::local_failure);
 
 타입별 서브클래스(각각 대응하는 socket type의 참조로 생성):
 
-| 타입 | 더하는 것 |
+| 타입 | 추가하는 것 |
 | --- | --- |
 | `router_socket_options_t` | `mandatory()`, `handover()`, `probe()`, `connect_routing_id()`(`std::optional<routing_id_t>`), `request_timeout()`, `peer_weight()`(`peer_weight_t`) |
 | `dealer_socket_options_t` | `probe()`, `request_timeout()`, `peer_weight()` |
@@ -125,7 +125,7 @@ no data면 `recv_result_t` 값, binding-local 실패에서만 `errno`가 설정�
 `-1`이다(dotnet의 `bool`이 아니라 이 `int` 반환 관례는 이 category의 모든 구체
 socket type의 `recv`가 공유한다).
 
-**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 쓴다 — peer 라우팅이 없고
+**선택 기준.** 배타적 point-to-point 링크엔 PAIR를 사용한다 — peer 라우팅이 없고
 load-balance하지 않는다.
 
 ---
@@ -188,7 +188,7 @@ std::move (router.reply (peer_rid, reply_token)).message (reply).submit ();
 queue에서 settle된다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER 응답
-request/reply엔 `request(peer_rid)`/`reply(rid, reply_token)`을 쓴다. Token은 receive에서
+request/reply엔 `request(peer_rid)`/`reply(rid, reply_token)`을 사용한다. Token은 receive에서
 얻는 opaque socket-bound metadata이며 합성하지 않는다.
 
 ---
@@ -224,7 +224,7 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 
 **선택 기준.** `receive_subscription_event`로 구독자 변동을 관찰하거나
 `pub_socket_options_t::manual()`/`approve_subscribe`/`reject_subscribe`로 수동
-admission을 하려면 특별히 `xpub_socket_t`를 쓴다. 그 외엔 publish 자체는 둘이
+admission을 하려면 특별히 `xpub_socket_t`를 사용한다. 그 외엔 publish 자체는 둘이
 같게 동작한다.
 
 ---
@@ -234,7 +234,7 @@ admission을 하려면 특별히 `xpub_socket_t`를 쓴다. 그 외엔 publish �
 SUB는 구독을 socket option으로 설정하는 방식으로 topic을 구독하고, XSUB는 대신
 구독을 메시지로 실어 나른다. 둘 다 내부 `subscriber_socket_t` 기반에서
 파생한다 — 하지만 각 구체 타입이 다른 signature로 자신만의 public overload를
-다시 선언하므로, 기반의 형태는 caller가 직접 쓰는 public contract가 아니라
+다시 선언하므로, 기반의 형태는 caller가 직접 사용하는 public contract가 아니라
 내부 배관으로 취급한다.
 
 ```cpp
@@ -263,14 +263,14 @@ if (sub.subscribe (msg) == 0) { /* ... */ }
 **완료 결과.** `subscribe`/`subscribe_part`는 위와 같은 관례로 `int`를
 반환한다.
 
-**선택 기준.** 일반적인 경우엔 `sub_socket_t`를 쓴다. 구독을 일반 메시지로
-실어 날라야 할 때만 `xsub_socket_t`를 쓴다.
+**선택 기준.** 일반적인 경우엔 `sub_socket_t`를 사용한다. 구독을 일반 메시지로
+실어 날라야 할 때만 `xsub_socket_t`를 사용한다.
 
 ---
 
 ## `stream_socket_t`
 
-다른 모든 socket type이 쓰는 zlink wire protocol 밖에서, raw TCP peer와 framed
+다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와 framed
 packet을 직접 주고받는다.
 
 ```cpp
@@ -343,7 +343,7 @@ application이 다른 스레드에서 control socket을 통해 loop을 일시정
 
 **선택 기준.** `send_flags_t`/`recv_flags_t`는 scoped `enum class` 타입이 아니라
 `int`를 감싸는 class다 — `static const` member(`send_flags_t::dontwait`)를
-쓴다, dotnet의 `[Flags] enum SendFlags`와 다르다. 둘 중 어느 쪽이든 `dontwait`는
+사용한다, dotnet의 `[Flags] enum SendFlags`와 다르다. 둘 중 어느 쪽이든 `dontwait`는
 blocking 호출을 non-blocking으로 바꿔 block하는 대신 back-pressure/no-data를
 보고한다.
 

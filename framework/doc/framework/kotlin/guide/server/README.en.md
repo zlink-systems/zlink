@@ -4,29 +4,157 @@ title: "Guide Home · Kotlin"
 
 # ZLink Framework Kotlin — User Guide
 
-The order to use ZLink Framework in a Kotlin/Spring Boot environment. Chapters 03–17 share
-the same source across every language, and the example switches to Kotlin code when you pick
-the `.kt` tab.
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/server/README.en.md) · [C#/.NET](../../../dotnet/guide/server/README.en.md) · [Java](../../../java/guide/server/README.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/README.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+A Kotlin application framework for building **server systems where real-time
+messaging matters** out of several cooperating processes. It goes straight into
+Spring Boot, so there is no separate runtime to move to.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+```
+
+Register one handler and the framework takes care of message decoding, routing
+and encoding.
+
+---
+
+## Systems It Is Built For
+
+It is designed for systems where several server processes divide the roles
+between them and state changes reach the client in real time.
+
+| Domain | Core scenario |
+|--------|--------------|
+| **Real-time games** | Create a room -> player joins -> game state updates -> client push |
+| **Customer support chat** | Open a conversation -> assign an agent -> relay messages -> push conversation state |
+| **Order workflow** | Accept an order -> process each step -> change state -> notify the client |
+| **Delivery and dispatch** | Request a dispatch -> assign and accept -> track state -> real-time push |
+
+The shape they share is that server processes for each role talk in typed
+messages, and the client receives state changes over a real-time connection.
+
+<iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
+        title="Servers for each role talk in typed messages and the client receives over STREAM" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>
+
+---
+
+## Core Capabilities
+
+### Channel messaging — typed request-reply between servers
+
+A channel is a name given to a path between servers. One side sends a request to
+the channel name and the other side handles it and replies. Serialization (JSON ·
+MessagePack · Protobuf) is the framework's work.
+
+The sending side.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
+```
+
+The receiving side.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+```
+
+Besides request-reply there are the fanout (pub/sub) and route mesh (address
+routing) patterns.
+[Channel messaging →](20-channel-messaging.en.md)
+
+---
+
+### Spot — a unit of state without locks
+
+A Spot binds **one region of state** and its participants into an execution unit:
+a game room, a support conversation, a unit of order processing. Everything that
+happens inside one Spot — participant packets, timers, joins and leaves — is
+processed **serially**. State is reached without a lock, and two requests never
+overlap in the same Spot even when the handling is asynchronous.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/spots/GameRoom.kt:spot-class"
+```
+
+It divides into an entry spot that assigns (one per node) and a room spot that
+holds the state (one per unit). Periodic work is registered as a timer.
+[Spot →](21-spot.en.md)
+
+---
+
+### STREAM and Actor — the client's real-time connection
+
+A client's real-time two-way connection is a **STREAM**, and the server-side
+object standing for one connection is an **Actor**. When a client connects, a
+session creates the Actor, and the Actor joins a Spot to take part in handling
+its state.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/GameSession.kt:session-actor-relay"
+```
+
+The client side of the connection is a separate product, the stream connector.
+[STREAM →](23-stream.en.md) · [Binding a session to an Actor →](24-actor-session.en.md)
+
+---
+
+### Location — endpoints stay out of the code
+
+When several servers of the same role are up, the address of the one to connect
+to is not written in the code. A shared location store keeps the addresses, and
+each server looks up the node an id is on right now.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
+```
+
+[Location →](25-location.en.md)
+
+---
+
+### What Spring Boot provides
+
+The DI container, configuration, HTTP endpoints and logging are Spring Boot's own.
+ZLink Framework registers its handlers and meshes on top of them, so REST
+endpoints and real-time connections run in the same process.
+
+---
+
+## Table Of Contents
 
 | Order | Document | Content |
 |----|------|------|
-| 1 | [1. Overview](01-overview.en.md) | What the Kotlin layer adds, the four integration axes, and the overall topology |
-| 2 | [2. Getting Started](02-getting-started.en.md) | Dependencies, registration, the suspend handler, two ways to call |
-| 3 | [3. Core Concepts](03-concepts.en.md) | Channel · Spot · Actor · session · relocation |
-| 4 | [4. Backpressure](04-backpressure.en.md) | How the system behaves when arrival outpaces processing, and the options that affect it |
-| 5 | [5. Channel Messaging](05-channel-messaging.en.md) | Registering and calling request / send / pub-sub |
-| 6 | [6. Spot](06-spot.en.md) | A dynamic state unit such as a room · stage · zone |
-| 7 | [7. Actor And Spot](07-actor-spot.en.md) | Actor hosting, membership, relocation |
-| 8 | [8. Session And Actor Binding](08-actor-session.en.md) | Session ↔ Actor relay · binding · push |
-| 9 | [9. STREAM](09-stream.en.md) | External-client real-time connections and the Stream Connector |
-| 10 | [10. Location](10-location.en.md) | Registering a location store, auto-connect, operational queries |
-| 11 | [11. Monitoring](11-monitoring.en.md) | Receiving with a `Flow`, lambda observers |
-| 12 | [12. Operations](12-operations.en.md) | Runtime metrics, graceful drain, readiness |
-| 13 | [13. Key Type Usage Index](13-interface-catalog.en.md) | The suspend contract, the `.kotlin()` wrapper, extension functions |
-| 14 | [14. Picking A Sample](14-samples.en.md) | How to choose which sample to look at first and run it |
-| 15 | [15. E2E Testing](15-e2e-testing.en.md) | How to verify the whole system with the client |
-| 16 | [16. Options](../../../java/guide/server/16-options.en.md) | The option surface is the same as Java's |
-| 17 | [17. Where ZLink Fits](17-alternative.en.md) | Where it's used, the warning signs, and the boundary of the technology choice |
+| 1 | [Overview](01-overview.en.md) | What it solves and how it differs from the usual way |
+| 2 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
+| 3 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
+| 4 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
+| 5 | [Spot](21-spot.en.md) | Creating and calling a shared place by id |
+| 6 | [Actor](22-actor.en.md) | Creating and calling one entity by id |
+| 7 | [STREAM](23-stream.en.md) | A client outside the mesh attaching over one connection |
+| 8 | [Session and Actor](24-actor-session.en.md) | Binding one connection to one Actor |
+| 9 | [Location](25-location.en.md) | Looking up the node something is on by id |
+| 10 | [Monitoring](26-monitoring.en.md) | A placeholder in the feature guide — no body yet |
+| 11 | [The Execution Model](32-execution-model.en.md) | Two queues, the serialization scope, the turn |
+| 12 | [Backpressure](33-backpressure.en.md) | When arrival outruns processing, and the options that affect it |
+| 13 | [Activation and Lifetime](34-activation-lifetime.en.md) | Creation time per kind, lifecycle callbacks, injection lifetime |
+| 14 | [Actor Membership](35-actor-membership.en.md) | Moving between Spots, reservations and limits |
+| 15 | [Timers and Workers](36-timer-worker.en.md) | Periodic execution, running outside the line, giving the turn back |
+| 16 | [Relocation](37-relocation.en.md) | What survives a move, the adapter, the unit |
+| 17 | [How Channels Work](30-channel-patterns.en.md) | Pattern differences, target selection, pub/sub, connection and discovery |
+| 18 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
+| 19 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
+| 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
+| 21 | [Where ZLink Applies](17-alternative.en.md) | Where it fits, the signals, the boundary, the license |
+| 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
+| 23 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |
+| 24 | [E2E Testing](15-e2e-testing.en.md) | Verifying the whole system with the client library |
+| 25 | [Key Type Index](13-interface-catalog.en.md) | The contract interfaces indexed by their verification code |
+| 26 | [Monitoring](26-monitoring.en.md) | Awaiting rewrite — status snapshots and diagnostics |
 
 The file number identifies the same chapter regardless of language. This table owns the
 reading order.
@@ -36,12 +164,24 @@ implementation — it's a thin layer that adds coroutine idioms. So this guide w
 **only what differs from Java** and points everything else at the
 [Java guide](../../../java/guide/server/README.en.md).
 
-- **01, 02** — the dependency and registration code differs, so these are Kotlin-specific.
+- **01** — the dependency and registration code differs, so this is Kotlin-specific.
 - **11, 13, 16** — the surface matches Java; only the idiom differs. This guide writes up
   only the difference and points the rest at the Java chapter.
 
 The goal is not to keep two copies of the same content. When the Java document changes,
 Kotlin readers see the same document.
+
+## How To Read The Diagrams
+
+Every diagram in this guide uses the same visual language — the color is the
+concept.
+
+<iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds-en.html"
+        title="The five kinds that appear in the diagrams" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/guide-element-kinds-en.html" target="_blank">↗ Open larger</a></p>
+
+Several chapters draw the same topology; what changes from chapter to chapter is
+where it is magnified.
 
 ## Related Documents
 

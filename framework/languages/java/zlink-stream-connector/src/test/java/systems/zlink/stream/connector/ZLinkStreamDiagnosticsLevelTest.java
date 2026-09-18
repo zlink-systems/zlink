@@ -67,7 +67,9 @@ final class ZLinkStreamDiagnosticsLevelTest {
             ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
                 server.options(ZLinkStreamDispatchMode.MANUAL));
             try {
-                connector.setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel.NORMAL).join();
+                connector.setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel.NORMAL)
+                    .toCompletableFuture()
+                    .join();
                 assertEquals(ZLinkStreamDiagnosticsLevel.NORMAL, connector.diagnosticsLevel());
 
                 connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);

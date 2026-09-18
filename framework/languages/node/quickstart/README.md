@@ -1,8 +1,7 @@
 # ZLink Node/TypeScript quickstart
 
-The same scenario as `framework/doc/framework/common/guide/server/02-getting-started.ko.md`
-§2 "최소 예제 — 두 process가 서로 호출한다", built as a project that actually installs and
-runs. No Redis, no location store — a server process handles the `greeting` channel and a
+The project that `framework/doc/framework/node/quickstart.ko.md` reads from, built as a
+project that actually installs and runs. No Redis, no location store — a server process handles the `greeting` channel and a
 client process calls it through a manually-configured peer connection. Builds from npm.org
 only, outside this repository too.
 

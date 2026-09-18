@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A Spot is created on one of the nodes that registered it",
+    "subtitle": "the Framework picks where, the Location Store records it · after that you call by id alone",
+    "output": "21-spot-placement-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "knows only the id",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "picks one of the candidates",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "database",
+      "label": "Location Store",
+      "sublabel": "which node it is on",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "Spot",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "node B",
+      "sublabel": "registered the same stable type",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "R"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "FW",
+      "label": "create it",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "R",
+      "label": "creates it here",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "B",
+      "label": "was a candidate",
+      "variant": "dashed"
+    },
+    {
+      "from": "FW",
+      "to": "S",
+      "label": "records the location",
+      "variant": "default",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Neither the creator nor the caller picks a node",
+      "items": [
+        "The candidates are the nodes that registered the same stable type. The Framework decides which one it is created on, and what comes back is a single id.",
+        "Later calls give the id alone. The Framework reads which node it is on now from the Location Store and sends it there."
+      ]
+    }
+  ]
+}

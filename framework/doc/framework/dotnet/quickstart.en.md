@@ -1,24 +1,29 @@
-# .NET Quickstart — from an empty project to a first request
+# .NET Quickstart — from Install to a First Request
 
-> **Contract owner for this chapter** — none. The formal API contract is in the
-> [.NET spec](../common/spec/server/languages/dotnet/README.en.md).
+!!! info "What you get from this chapter"
+
+    You can install the packages and run a minimal project where two processes call each other.
 
 The project lives at
 [`framework/languages/dotnet/quickstart/`](../../../languages/dotnet/quickstart/). The code
-blocks below are read from those files when the site is built.
+blocks below are read from those files when the site is built. Without a location store, two
+processes name each other's endpoint directly and exchange one request/reply.
 
-Without a location store, two processes name each other's endpoint directly and exchange one
-request/reply. The next step is
-[Installation and first run](guide/server/02-getting-started.en.md).
-
-## Prerequisites
+## 1. Installation
 
 - .NET SDK 8.0 or later (`net8.0`)
 - Access to nuget.org
 
-## 1. Package versions
+Get it from NuGet. The minimal combination needed to build one server is the following.
 
-`Zlink` (the binding) is not listed. `Zlink.Framework` declares the version it depends on.
+```bash
+# The contract and runtime. It includes the core messaging engine (Zlink) transitively
+dotnet add package Zlink.Framework
+# DI/hosted service registration (AddZLinkFramework)
+dotnet add package Zlink.Framework.AspNetCore
+```
+
+**Do not list `Zlink` (the binding) yourself.** `Zlink.Framework` declares the version it depends on.
 
 ```xml title="Directory.Packages.props"
 --8<-- "framework/languages/dotnet/quickstart/Directory.Packages.props"
@@ -28,6 +33,20 @@ request/reply. The next step is
 --8<-- "framework/languages/dotnet/quickstart/nuget.config"
 ```
 
+Packages to add when you need them:
+
+| Package | When to add it |
+| --- | --- |
+| `Zlink.Framework.Locations.Redis` | When using the Redis location store for auto-connect ([Location](guide/server/25-location.en.md)) |
+| `Zlink.Framework.Codecs.Protobuf` · `.MessagePack` | To use instead of the default JSON codec ([Handlers and Message Processing](guide/server/31-handler-dispatch.en.md#3-codecs--turning-a-payload-into-bytes)) |
+| `Zlink.Stream.Connector` | When building an external client (a game client, mobile) ([STREAM](guide/server/23-stream.en.md)) |
+| `Zlink.HttpClient` | When the server calls out over HTTP ([HTTP Client guide](guide/http-client/README.en.md)) |
+
+The license differs by layer — core/binding is
+MPL-2.0, framework is FSL-1.1-ALv2, and `Zlink.HttpClient` is Apache-2.0. There is no cost to
+building and selling a service
+([Where ZLink Applies](guide/server/17-alternative.en.md#8-license--the-cost-of-using-it)).
+
 ## 2. Shared contract
 
 ```csharp title="Shared/Contracts.cs"
@@ -36,8 +55,9 @@ request/reply. The next step is
 
 ## 3. The handling side
 
-`AddHandlersFromAssemblyOf` only discovers handler types. Which channel exposes one is a
-separate registration on `Channel(...).Server()`.
+A handler implementing `IZLinkRequestHandler<,>` is registered directly on
+`Channel(...).Server().AddRequestHandler<...>()`. That registration is what decides which channel
+exposes it.
 
 ```csharp title="Server/Program.cs"
 --8<-- "framework/languages/dotnet/quickstart/Server/Program.cs"
@@ -71,7 +91,16 @@ curl http://127.0.0.1:5080/hello/world
 
 The response is `"hello, world"` with status 200.
 
-## What to carry over
+## 6. What to check when the first run fails
+
+| Symptom | What to check |
+| --- | --- |
+| A package is not found | Check that the package names in section 1 were copied exactly. The binding version is not pinned separately |
+| Startup fails | Check that both processes name the same mesh, and that the listen endpoint does not collide with another process |
+| A call ends with no target | Check that the receiving side registered that channel name in the server role, and that the two processes are connected as peers |
+| No answer arrives | Check that the caller used `request`. A `send` receives no answer |
+
+## 7. What to carry over
 
 | File | Content |
 |---|---|
@@ -80,5 +109,13 @@ The response is `"hello, world"` with status 200.
 | `Server/Program.cs` | `AddRouteMesh` → `Listen` → `Channel(...).Server().AddRequestHandler<...>()` |
 | `Client/Program.cs` | `Channel(...).Client()`, `PeerConnections.Connect(...)`, `RequestToChannel(...).Async<T>()` |
 
-Replacing the manual `PeerConnections.Connect` with a location store is covered by
-[10. Location](guide/server/10-location.en.md).
+## 8. What to read next
+
+These two processes connect by writing each other's endpoint directly. Keeping the calling code
+unchanged while servers are added or restarted at another address needs automatic connection, and
+that is covered by [Location](guide/server/25-location.en.md).
+
+- To go over the concepts first — [Core Concepts](guide/server/03-concepts.en.md)
+- The path that calls by name — [Channel Messaging](guide/server/20-channel-messaging.en.md)
+- State objects called by id — [Spot](guide/server/21-spot.en.md) · [Actor](guide/server/22-actor.en.md)
+- To see a complete business flow — [Picking a Sample](guide/server/14-samples.en.md)

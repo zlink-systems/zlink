@@ -67,10 +67,10 @@ typed response와 callback에 `async`, one-way에 `submit`을 사용한다. Type
 | **one-way submission** | HTTP 요청이 전송 경계에 제출될 때까지 기다린다 | 현재 turn을 유지한다. 정상 완료 값은 없다 |
 | **response completion** | HTTP response가 도착할 때까지 기다린다 | 현재 turn을 유지한다 |
 
-**Callback은 awaitable을 쓰지 않는 호출자**(CLI,
+**Callback은 awaitable을 사용하지 않는 호출자**(CLI,
 이벤트 루프 기반 client)를 위한 **별도 완료 경로**다. HTTP client는 그 경로도 함께 제공한다.
 
-Spot 실행 문맥에서 callback을 쓰면 호출은 기다리지 않고 그대로 진행하며, 완료 callback은 그 Spot
+Spot 실행 문맥에서 callback을 사용하면 호출은 기다리지 않고 그대로 진행하며, 완료 callback은 그 Spot
 실행 줄의 **새 turn**으로 큐에 들어간다. 완료 값으로 같은 turn의 판단을 이어가야 하면 callback 대신
 언어별 response completion terminator를 사용한다.
 
@@ -113,14 +113,14 @@ C++ HTTP client는 같은 scheduler seam을 `coroutines(resume_scheduler)`와
 
 ## 4. 서버 표면과 등록
 
-**서버(Spot handler·channel handler)에서 쓰는 HTTP client는 DI로 주입받는다.** 정적 팩토리로
+**서버(Spot handler·channel handler)에서 사용하는 HTTP client는 DI로 주입받는다.** 정적 팩토리로
 handler 안에서 client를 만들지 않는다 — 연결 pool과 turn seam을 잃는다.
 
 - **application이 명명 등록한다.** baseUrl, 인증, timeout, retry 정책은 서비스마다 다르므로
   framework가 기본 client 하나를 자동 등록하지 않는다.
 - 등록 표면의 형태는 channel 등록과 같다: 구성 단계에서 이름과 정책을 함께 등록하고, handler는
   그 이름으로 주입받는다.
-- **정적 팩토리 진입점은 client-side 전용으로 남긴다.** CLI와 client 시나리오가 쓴다.
+- **정적 팩토리 진입점은 client-side 전용으로 남긴다.** CLI와 client 시나리오가 사용한다.
 
 | 표면 | 누가 쓰나 | terminator |
 |------|-----------|------------|
@@ -138,7 +138,7 @@ typed body의 encode/decode는 그 registry가 담당한다. raw body API는 reg
 ## 6. 오류 모델
 
 **HTTP client는 자체 예외 계층을 만들지 않는다.** framework 공용 오류 모델
-([Framework 오류 모델](../server/00-foundation/07-framework-error-model.ko.md))의 error kind를 그대로 쓴다. **HTTP client
+([Framework 오류 모델](../server/00-foundation/07-framework-error-model.ko.md))의 error kind를 그대로 사용한다. **HTTP client
 전용 error kind를 새로 만들지 않는다.**
 
 | 상황 | kind |
@@ -160,5 +160,5 @@ typed body의 encode/decode는 그 registry가 담당한다. raw body API는 reg
 | turn 반납 | HTTP response completion을 `RunIoWorker` 안에서 실행하고 Worker `Yield`로 기다릴 때만 shared Spot gate를 반납한다 |
 | 표면 제한 | DI와 단독 사용 모두 HTTP request builder에 `Yield`를 노출하지 않는다 |
 | 등록 | 서버 표면이 DI 주입으로만 얻어지고, handler 안에서 정적 팩토리로 client를 만들지 않는다 |
-| 오류 kind | HTTP client 전용 kind가 없고 framework 공용 kind만 쓴다 |
+| 오류 kind | HTTP client 전용 kind가 없고 framework 공용 kind만 사용한다 |
 | builder | body 소스를 섞으면 `ProtocolError`로 실패한다 |

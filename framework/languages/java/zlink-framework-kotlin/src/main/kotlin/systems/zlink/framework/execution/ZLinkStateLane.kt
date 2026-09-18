@@ -25,6 +25,16 @@ internal class ZLinkStateLane {
     private val mailbox = ConcurrentLinkedQueue<WorkItem>()
     private val scheduled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
+
+    /**
+     * Makes accepting work and closing the lane mutually exclusive.
+     *
+     * Reading [closed] and then posting is a decision plus an action. Without this gate the close
+     * side can pass between the two, observe an empty mailbox and cancel the scope, after which the
+     * post's drain never launches and the caller waits on a completion that nothing will resume.
+     * Nothing suspends inside the gate.
+     */
+    private val admission = Any()
     private val drained = CompletableDeferred<Unit>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -40,30 +50,34 @@ internal class ZLinkStateLane {
      */
     internal suspend fun <T> run(work: suspend () -> T): T {
         requireNotReentrant()
-        check(!closed.get()) { "The state lane is closed." }
 
         val completion = CompletableDeferred<T>()
-        mailbox.add(
-            WorkItem {
-                try {
-                    completion.complete(work())
-                } catch (error: Throwable) {
-                    completion.completeExceptionally(error)
-                }
-            },
-        )
-        scheduleDrain()
+        synchronized(admission) {
+            check(!closed.get()) { "The state lane is closed." }
+            mailbox.add(
+                WorkItem {
+                    try {
+                        completion.complete(work())
+                    } catch (error: Throwable) {
+                        completion.completeExceptionally(error)
+                    }
+                },
+            )
+            scheduleDrain()
+        }
         return completion.await()
     }
 
     /** Queues [work] without waiting for its result. */
     internal fun tryPost(work: suspend () -> Unit): Boolean {
-        if (closed.get()) {
-            return false
-        }
+        synchronized(admission) {
+            if (closed.get()) {
+                return false
+            }
 
-        mailbox.add(WorkItem(work))
-        scheduleDrain()
+            mailbox.add(WorkItem(work))
+            scheduleDrain()
+        }
         return true
     }
 
@@ -110,13 +124,20 @@ internal class ZLinkStateLane {
 
     /** Closes the lane after all already accepted work has run. */
     internal suspend fun closeAndJoin() {
-        if (closed.compareAndSet(false, true)) {
-            if (!scheduled.get() && mailbox.isEmpty()) {
-                drained.complete(Unit)
-                scope.cancel()
-            } else {
-                scheduleDrain()
+        var finishHere = false
+        synchronized(admission) {
+            if (closed.compareAndSet(false, true)) {
+                if (!scheduled.get() && mailbox.isEmpty()) {
+                    finishHere = true
+                } else {
+                    scheduleDrain()
+                }
             }
+        }
+        if (finishHere) {
+            // Outside the gate, and safe there: closed is set, so no further work is accepted.
+            drained.complete(Unit)
+            scope.cancel()
         }
         drained.await()
     }

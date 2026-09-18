@@ -1,0 +1,32 @@
+<Project>
+
+  <!-- csproj가 <ZLinkTutorialFramework>true</ZLinkTutorialFramework>를 선언한
+       프로젝트에만 framework 참조를 건다. Shared처럼 계약만 담는 프로젝트는
+       선언하지 않으므로 아무것도 붙지 않는다.
+
+       참조 형태는 ZLinkTutorialUseLocalSource가 정한다(기본값 false — 배포된 패키지).
+       props가 아니라 targets에 두는 이유는, csproj 본문에서 설정한 속성은 props를
+       읽는 시점에는 아직 보이지 않기 때문이다. -->
+
+  <ItemGroup Condition="'$(ZLinkTutorialFramework)' == 'true' and '$(ZLinkTutorialUseLocalSource)' != 'true'">
+    <PackageReference Include="Zlink.Framework" />
+    <PackageReference Include="Zlink.Framework.AspNetCore" />
+    <PackageReference Include="Zlink.Framework.Locations.Redis" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ZLinkTutorialFramework)' == 'true' and '$(ZLinkTutorialUseLocalSource)' == 'true'">
+    <ProjectReference Include="$(ZLinkTutorialDotnetRoot)/src/Zlink.Framework/Zlink.Framework.csproj" />
+    <ProjectReference Include="$(ZLinkTutorialDotnetRoot)/src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj" />
+    <ProjectReference Include="$(ZLinkTutorialDotnetRoot)/src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj" />
+  </ItemGroup>
+
+  <!-- 외부 client는 framework가 아니라 stream connector만 참조한다. -->
+  <ItemGroup Condition="'$(ZLinkTutorialStreamConnector)' == 'true' and '$(ZLinkTutorialUseLocalSource)' != 'true'">
+    <PackageReference Include="Zlink.Stream.Connector" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ZLinkTutorialStreamConnector)' == 'true' and '$(ZLinkTutorialUseLocalSource)' == 'true'">
+    <ProjectReference Include="$(ZLinkTutorialDotnetRoot)/src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -359,7 +359,7 @@ cross-node Join에서는 source handler와 scope를 정리하고 target activati
 `ZLinkSpotCloseReason`의 numeric 값은 `ExplicitClose=0`, `HostShutdown=1`, `RelocationOut=2`,
 `IdleEvicted=3`이다. `IdleEvicted`는 Instance Spot 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 `Deadline`은 closing operation의 absolute deadline이다. Framework는 callback invocation 전에는
 `cleanupCancellationToken`을 취소하지 않고 [deadline](../../../00-foundation/02-glossary.ko.md#deadline)이 끝날 때 취소한다. 이미 취소된 handler token을 재사용하지
 않는다. Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host Shutdown은

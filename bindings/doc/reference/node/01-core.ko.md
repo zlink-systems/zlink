@@ -55,7 +55,7 @@ ctx.recalculateAutoHwm();
 않는다. `recalculateAutoHwm()`은 아직 `AutoHwmProfile`이 설정된 socket에
 대해서만 automatic HWM을 재계산한다.
 
-**선택 기준.** 여러 스레드/worker에서 socket을 쓰는 중인 context엔
+**선택 기준.** 여러 스레드/worker에서 socket을 사용하는 중인 context엔
 `close()` 전에 `shutdown()`을 호출한다. auto-HWM profile이나
 message-unit option을 바꾼 후엔 새 sizing을 즉시 적용하려고
 `recalculateAutoHwm()`을 호출한다.
@@ -168,8 +168,8 @@ const restored = RoutingId.fromHex(previouslyPrinted.toHex());
 
 **선택 기준.** 사람이 부여한 identity엔 `from(string)`을, 숫자 identity엔
 `from(number)`를, identity가 이미 binary일 때(16-byte UUID의 raw byte
-포함)는 `Buffer`/`Uint8Array` overload를 쓴다. 내구성 있는 raw-byte round
-trip 전용으로 `toHex()`/`fromHex()`를 쓴다 — `toString()`은 표시 전용이며
+포함)는 `Buffer`/`Uint8Array` overload를 사용한다. 내구성 있는 raw-byte round
+trip 전용으로 `toHex()`/`fromHex()`를 사용한다 — `toString()`은 표시 전용이며
 가역성이 보장되지 않는다.
 
 ---
@@ -198,9 +198,9 @@ number]` tuple(major/minor/patch)을 반환한다. `strerror`는 `string`을
 반환한다. `has`는 `boolean`을 반환한다.
 
 **선택 기준.** 링크된 native library 버전이 application이 기대하는
-버전과 일치하는지 확인하려면 `version()`을 쓴다. 기동 시점에
+버전과 일치하는지 확인하려면 `version()`을 사용한다. 기동 시점에
 `has(...)`로 선택적 transport에 분기한다. `strerror`는 다른 곳(Errors
-category)에서 드러난 native error code와 함께 진단용으로 쓴다.
+category)에서 드러난 native error code와 함께 진단용으로 사용한다.
 
 ---
 
@@ -243,10 +243,10 @@ thread.join();
 반환한다.
 
 **선택 기준.** 별도 `set()` 호출 없이 공유 counter가 0이 아닌 시작값이
-필요할 땐 `createAtomicCounter(initial)`을 쓴다. 벤치마킹엔
-`createStopwatch()`를 쓴다 — `intermediate()`는 몇 번이든 호출하고,
+필요할 땐 `createAtomicCounter(initial)`을 사용한다. 벤치마킹엔
+`createStopwatch()`를 사용한다 — `intermediate()`는 몇 번이든 호출하고,
 `stop()`은 정확히 한 번 호출한다. zlink 런타임이 수명주기를 소유해야 할
-땐 Node의 `worker_threads`를 직접 쓰는 대신 `createThread`를 쓴다.
+땐 Node의 `worker_threads`를 직접 사용하는 대신 `createThread`를 사용한다.
 
 ---
 
@@ -279,9 +279,9 @@ worker 스레드에서 실행한다.
 
 **선택 기준.** 단순한 fire-and-forget forwarding loop엔 `proxy`를,
 application이 다른 스레드에서 control socket을 통해 loop을
-일시정지·재개·종료해야 할 땐 `proxySteerable`을 쓴다. 수신되거나 구성된
+일시정지·재개·종료해야 할 땐 `proxySteerable`을 사용한다. 수신되거나 구성된
 multipart 배열의 모든 `Message`를 손으로 짠 loop 대신 한 호출로
-해제하려면 `multipartClose`를 쓴다.
+해제하려면 `multipartClose`를 사용한다.
 
 ---
 

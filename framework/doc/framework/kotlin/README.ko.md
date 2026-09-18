@@ -22,7 +22,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 ## 0. Kotlin 표면 한눈에
 
 `zlink-framework-kotlin`은 새 transport를 만들지 않는다. Java framework가 노출하는
-같은 channel·Spot·actor·stream 위에 coroutine 표면만 얹는다.
+같은 channel·Spot·actor·stream 위에 coroutine 표면만 추가한다.
 
 | Java 표면 | Kotlin 표면 |
 |-----------|-------------|
@@ -38,7 +38,7 @@ Coroutine handler configuration의 정확한 signature는 Kotlin interfaces가 �
 
 ## 2. 공개 계약 spec
 
-Kotlin은 같은 Spring Boot runtime 위에 coroutine 확장을 더한다. 그대로 사용하는
+Kotlin은 같은 Spring Boot runtime 위에 coroutine 확장을 추가한다. 그대로 사용하는
 Java 타입은 Java spec을 따르고, Kotlin에서 새로 노출하는 `suspend`, `Flow`, adapter
 시그니처는 Kotlin spec을 따른다.
 

@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "An Actor lives inside a Spot",
+    "subtitle": "a created Actor belongs to the Entry Spot, and a call by actor id reaches that Spot",
+    "output": "22-actor-membership-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 140,
+    "gapY": 86,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "calling node",
+      "sublabel": "knows only the actor id",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "FW",
+      "type": "external",
+      "label": "Framework",
+      "sublabel": "finds the Spot it is in now",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "P",
+      "type": "messagebus",
+      "label": "player-7",
+      "sublabel": "Actor",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "R",
+      "type": "backend",
+      "label": "room-42",
+      "sublabel": "User Spot",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "node A",
+      "wraps": [
+        "P"
+      ],
+      "pad": 34
+    },
+    {
+      "kind": "security-group",
+      "label": "lobby — Entry Spot",
+      "wraps": [
+        "P"
+      ],
+      "pad": 12
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "FW",
+      "label": "sends to player-7",
+      "variant": "default"
+    },
+    {
+      "from": "FW",
+      "to": "P",
+      "label": "runs inside this Spot",
+      "variant": "default"
+    },
+    {
+      "from": "P",
+      "to": "R",
+      "label": "moves when it enters a room",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Why a handler receives both the Spot and the Actor",
+      "items": [
+        "An Actor always belongs to some Spot. The place it lands right after creation is the Entry Spot, and entering a room moves it to that User Spot.",
+        "So a message sent to an actor id runs inside the Spot that Actor belongs to now, and the handler receives both the Spot and the Actor."
+      ]
+    }
+  ]
+}

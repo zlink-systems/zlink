@@ -12,7 +12,7 @@ title: "16. Options — Setting List And Defaults · C++"
 > [C++ configuration and host public contract](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.en.md).
 > This chapter organizes that surface as a list, showing what you can set and what happens
 > when you don't. Reading values from a config file is covered by
-> [19. Configuration](19-configuration.en.md).
+> [19. Configuration](41-configuration.en.md).
 
 This chapter gathers **what you can set and what happens if you don't.** What each option
 changes is explained by that feature's own chapter — here we look at where it lives and its
@@ -60,7 +60,7 @@ until the first call — it's **blocked by an exception at startup.**
 | `configure_dispatch ()` | Diagnostics level/message flow (§4), Core HWM, and the application job queue (§3.2) | `errors`; both profiles use `balanced` |
 | `configure_locations ()` | Location store behavior (§5) | The §5 table |
 | `add_location_store (...)` | The location-resolution store | Single-node configuration if omitted |
-| `services ()` | DI registration ([18. DI Container](18-di-container.en.md)) | — |
+| `services ()` | DI registration ([18. DI Container](40-di-container.en.md)) | — |
 
 `set_default_request_timeout` **rejects anything at or below 0.** An invalid value throws
 `framework_exception_t` at startup.
@@ -96,7 +96,7 @@ Fields of the `mesh_node_socket_config_t` that `configure_router_socket ()` retu
 | `receive_timeout` · `send_timeout` | If set, the cap on waiting in that direction | None |
 
 How the two high-water marks work and how to pick their values is covered by
-[4. Backpressure](04-backpressure.en.md).
+[Backpressure](33-backpressure.en.md).
 `0` is not the default — it means **unlimited.** Leave the value unset to let it
 auto-calculate.
 
@@ -120,7 +120,7 @@ application job queue limits jobs waiting for handler start across the host inst
 The memory limit and Core budget must be positive. The manual queued-job limit is
 `1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
 use the same labels but are independent enums and calculations. See
-[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+[Backpressure](33-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 for saturation behavior and production measurement.
 
 ## 4. Diagnostics
@@ -134,7 +134,7 @@ The surface `configure_dispatch ()` returns.
 | `include_message_sizes (bool)` | Whether to record payload byte size too | Not recorded |
 
 The recording scope per level and standard provider integration are covered in
-[11. Monitoring](11-monitoring.en.md).
+[Monitoring](26-monitoring.en.md).
 
 ## 5. Location Options
 
@@ -171,7 +171,7 @@ Specified on the builder that `add_stream_node (name)` returns.
 > same node throws `request_protocol_error`.
 
 Even on the same profile, the STREAM socket uses smaller caps than a MeshNode. See
-[9. STREAM](09-stream.en.md).
+[STREAM](23-stream.en.md).
 
 ## 7. What You Can Change While Running
 
@@ -216,6 +216,6 @@ These have no default, so startup fails if you don't specify them.
 ## 10. Related Documents
 
 - The formal contract: [C++ configuration and host public contract](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.en.md)
-- Reading values from a config file: [19. Configuration](19-configuration.en.md)
-- What each cap changes: [4. Backpressure](04-backpressure.en.md)
+- Reading values from a config file: [19. Configuration](41-configuration.en.md)
+- What each cap changes: [Backpressure](33-backpressure.en.md)
 - The procedure for draining traffic with weights: [12. Operations](12-operations.en.md)

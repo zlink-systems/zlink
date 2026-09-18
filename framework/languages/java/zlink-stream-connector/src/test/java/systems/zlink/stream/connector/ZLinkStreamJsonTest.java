@@ -259,8 +259,18 @@ final class ZLinkStreamJsonTest {
         }
 
         @Override
-        public CompletableFuture<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level) {
+        public java.util.Optional<ZLinkStreamCloseReason> closeReason() {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
             this.diagnosticsLevel = java.util.Objects.requireNonNull(level, "diagnosticsLevel");
+        }
+
+        @Override
+        public CompletableFuture<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level) {
+            setDiagnosticsLevel(level);
             return CompletableFuture.completedFuture(null);
         }
 

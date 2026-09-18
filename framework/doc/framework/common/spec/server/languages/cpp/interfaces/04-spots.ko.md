@@ -425,7 +425,7 @@ Spot Actor Join / Relocation 관련 interface도 이 문서에 기록된 정식 
 `spot_close_reason_t`의 값은 `explicit_close=0`, `host_shutdown=1`, `relocation_out=2`,
 `idle_evicted=3`다. `idle_evicted`는 [Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot) 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 Context의
 `deadline`은 closing operation의 absolute UTC time이다. Framework는 callback invocation 전에는
 `cleanup_cancellation`에 stop을 요청하지 않고 deadline이 끝날 때 요청한다. Entry·User·[Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)만

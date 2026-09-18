@@ -27,7 +27,7 @@
 - 주 개발 기준은 `.NET 10` (`net10.0`)이다.
 - 최소 지원 C# 언어 버전은 `C# 12`다.
 - 문서와 샘플은 최소 지원 버전에서 성립하지 않는 `preview`, `latest`,
-  `C# 13`, `C# 14` 전용 문법을 전제로 쓰지 않는다.
+  `C# 13`, `C# 14` 전용 문법을 전제로 사용하지 않는다.
 
 바인딩 구현과 샘플이 더 높은 런타임에서 함께 개발되더라도, 공개 framework
 계약은 먼저 "어디까지를 최소 지원으로 볼 것인가"를 분명히 적어야 한다.
@@ -157,7 +157,7 @@ framework 문서의 public 이름 규칙은
 - Node/TypeScript: 메서드는 `camelCase`, 클래스는 `PascalCase`
 
 framework adapter 문서도 `sendWithRoutingId`, `request_callback`,
-`publishToTopic`, `recvTimeout` 같은 이름을 쓰지 않고, 가능하면 canonical
+`publishToTopic`, `recvTimeout` 같은 이름을 사용하지 않고, 가능하면 canonical
 action 이름을 유지해야 한다. 예를 들면 아래처럼 맞춘다.
 
 - `Send`, `Request`, `Publish`

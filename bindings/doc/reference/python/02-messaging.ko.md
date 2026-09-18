@@ -40,8 +40,8 @@ with copy:
 | `is_empty()` | `size()`가 0인지 |
 | `data` | property, zero-copy `memoryview`, 메시지가 열려있는 동안만 유효 |
 | `to_bytes()` | payload의 `bytes` 복사 |
-| `copy_to(destination, source_offset=0, destination_offset=0, length=None)` | payload(또는 범위)를 caller가 제공한 buffer로 복사, 쓴 byte 수 반환 |
-| `try_copy_to(destination)` | 쓴 byte 수를 반환, `destination`이 너무 작으면 `None` — `copy_to`의 예외를 던지지 않는 대안 |
+| `copy_to(destination, source_offset=0, destination_offset=0, length=None)` | payload(또는 범위)를 caller가 제공한 buffer로 복사, 사용한 byte 수 반환 |
+| `try_copy_to(destination)` | 사용한 byte 수를 반환, `destination`이 너무 작으면 `None` — `copy_to`의 예외를 던지지 않는 대안 |
 | `to_string(encoding="utf-8")` | payload를 텍스트로 디코딩 |
 | `ref_count()` | native reference count, 진단 전용 |
 | `close()` | message를 해제 |
@@ -50,7 +50,7 @@ with copy:
 `with`/`async with` 둘 다 지원한다.
 
 **선택 기준.** outbound payload를 만들 땐 `Message.allocate(size)`나
-복사하는 `Message.from_(data)`를 쓴다. 독립된 복사가 필요 없을 땐
+복사하는 `Message.from_(data)`를 사용한다. 독립된 복사가 필요 없을 땐
 `to_bytes()`보다 zero-copy `data` `memoryview`를 선호한다 — 다만
 메시지가 열려있는 동안만이다, view가 메시지 자신의 storage를 그대로
 가리키기 때문이다.
@@ -171,7 +171,7 @@ member로 선언하지 않는다.
 없다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets
-category)에서 구독자 변동을 관찰할 때 쓴다. 이 Protocol이 속성 이름을
+category)에서 구독자 변동을 관찰할 때 사용한다. 이 Protocol이 속성 이름을
 나열하지 않으므로 정확한 속성 이름은 runtime 구현이나 스펙을 직접
 참고한다.
 

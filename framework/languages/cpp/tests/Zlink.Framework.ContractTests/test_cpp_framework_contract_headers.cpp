@@ -75,6 +75,8 @@
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 #include <zlink/stream_connector/contracts/version.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_assert.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
+#include <zlink/stream_connector/contracts/zlink_stream_subscription.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_factory.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>

@@ -415,7 +415,7 @@ accepted record에 저장한 일치하는 request-source lease expiry만 termina
 제공하지 않는다. STREAM worker의 `idleTimeoutMs`와는 별개의 설정이며 서로 값을 상속하지 않는다. 정리
 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지 않는다. 유휴 판정 조건,
 `ZLinkSpotCloseReason.IdleEvicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-쓰지-않고-남아-있는-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
 
 Framework가 모든 registration에서 만든 fully encoded MeshNode descriptor는 1 MiB 이하여야 한다.
 Spot type과 stateful object capability collection은 각각 최대 1024개다. Runtime은 완성된 descriptor를 socket

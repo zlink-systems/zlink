@@ -41,7 +41,6 @@ import { ZlinkStreamConnectorLifecycle } from './ZlinkStreamConnectorLifecycle';
 import { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import { BrowserZlinkFlowContext, type ZlinkFlowContext } from './ZlinkFlowContext';
 import { BrowserStreamTransportFactory } from './Transport/BrowserWebSocketConnection';
-import { ZlinkStreamRuntimeMetrics } from './ZlinkStreamRuntimeMetrics';
 
 export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   static readonly heartbeatPingName = ZLINK_STREAM_HEARTBEAT_PING;
@@ -64,7 +63,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     // Spec 26 §4.1 / spec stream-connector 32 §13: the level is a runtime
     // control, not a construction-time constant. `options.diagnosticsLevel`
     // is redefined as a live getter over the cell so every reader of
-    // `this.options` (protocol, metrics, application code) observes the
+    // `this.options` (protocol, application code) observes the
     // current level instead of the value captured at connector creation.
     this.diagnosticsLevelCell = new ZlinkStreamDiagnosticsLevelCell(this.options.diagnosticsLevel);
     Object.defineProperty(this.options, 'diagnosticsLevel', {
@@ -72,9 +71,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       configurable: true,
       get: () => this.diagnosticsLevelCell.level
     });
-    const metrics = new ZlinkStreamRuntimeMetrics(this.options);
     const protocol = new ZlinkStreamFrameProtocol(this.options);
-    this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
+    this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext);
     this.receivedMessages = new ZlinkStreamReceivedMessages(
       this.events,
       this.options.dispatchMode === ZlinkStreamDispatchMode.Immediate
@@ -86,7 +84,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.frameSender,
       this.events,
       flowContext,
-      metrics,
       (reason) => this.lifecycle.serverClosing(reason)
     );
     this.lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -95,8 +92,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.frameSender,
       this.receiveDispatcher,
       this.receivedMessages,
-      this.events,
-      metrics
+      this.events
     );
   }
 
@@ -117,6 +113,18 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   }
 
   /**
+   * Spec stream-connector 32 §10: how many packets carrying `name` arrived on
+   * the current connection. Arrivals are what is counted, so a message a
+   * handler dispatched or a wait surface consumed still counts, and `Manual`
+   * and `Immediate` report the same number. Establishing a connection resets
+   * the count to 0, a reconnect included.
+   */
+  receivedCount(name: string): number {
+    validateName(name);
+    return this.receivedMessages.receivedCount(name);
+  }
+
+  /**
    * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
    * Reflects the level set by the most recent {@link setDiagnosticsLevel}
    * call, or the construction-time option (default
@@ -132,15 +140,21 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
    * state update: it applies to processing points that read the level after
    * this call returns and is never applied retroactively to frames already
    * built. Rejects unknown values with {@link ZlinkStreamErrorCode.ConfigurationError}.
-   * Do not call this synchronous bridge from a framework execution context such
-   * as a handler or callback; use setDiagnosticsLevelAsync there.
+   * Spec stream-connector 32 §13: this surface changes the value without
+   * waiting for anything; it is not a blocking call over the asynchronous pair,
+   * which a receive callback would otherwise make wait for its own completion.
    */
   setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void {
-    void this.setDiagnosticsLevelAsync(level);
+    this.diagnosticsLevelCell.set(level);
   }
 
+  /**
+   * Asynchronous counterpart of {@link setDiagnosticsLevel} (spec
+   * stream-connector 32 §13). It changes the same value; awaiting it is how a
+   * caller observes the change, and it never replaces the synchronous surface.
+   */
   setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void> {
-    this.diagnosticsLevelCell.set(level);
+    this.setDiagnosticsLevel(level);
     return Promise.resolve();
   }
 
@@ -193,19 +207,33 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return this.receivedMessages.on(name, encodedHandler);
   }
 
-  waitFor<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamWaitCall<TPayload> {
-    validateName(name);
-    return new ZlinkStreamWaitBuilder<TPayload>(this, name);
+  waitFor<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamWaitCall<TPayload> {
+    return new ZlinkStreamWaitBuilder<TPayload>(this, this.observedName(nameOrType));
   }
 
-  expectNone<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamExpectNoneCall<TPayload> {
-    validateName(name);
-    return new ZlinkStreamExpectNoneBuilder<TPayload>(this, name);
+  expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload> {
+    return new ZlinkStreamExpectNoneBuilder<TPayload>(this, this.observedName(nameOrType));
   }
 
-  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(name: string): ZlinkStreamSequenceCall<TPayload> {
+  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload> {
+    return new ZlinkStreamSequenceBuilder<TPayload>(this, this.observedName(nameOrType));
+  }
+
+  /**
+   * Spec stream-connector 32 §10.1: each wait surface offers both ways of
+   * naming a packet. A string is the name the caller states; a constructor
+   * goes through the options' `nameResolver`, which is the same resolver
+   * `send` and `request` use, so both paths land on one name for one type.
+   */
+  private observedName(nameOrType: string | Function): string {
+    const name = typeof nameOrType === 'function'
+      ? this.options.nameResolver.resolve(nameOrType)
+      : nameOrType;
+    if (typeof name !== 'string') {
+      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Packet name must be a string or a payload constructor.');
+    }
     validateName(name);
-    return new ZlinkStreamSequenceBuilder<TPayload>(this, name);
+    return name;
   }
 
   waitForMessage<TPayload>(

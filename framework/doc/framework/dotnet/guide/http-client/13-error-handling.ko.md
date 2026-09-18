@@ -12,7 +12,7 @@ application은 operation의 idempotency와 side effect를 확인해 다음 동�
 |------|--------|
 | 요청 형식, redirect 또는 응답 decode 오류 | `ProtocolError` |
 | DNS, proxy CONNECT 또는 target 연결 실패 | `Unavailable` |
-| 응답 본문 또는 압축 해제 크기 제한 초과 | `CapacityExceeded` |
+| 응답 본문 또는 압축 해제 크기 제한 초과 | `Rejected` |
 | 요청 timeout | `DeadlineExceeded` |
 | HTTP status 400 이상 | `InternalFailure` |
 

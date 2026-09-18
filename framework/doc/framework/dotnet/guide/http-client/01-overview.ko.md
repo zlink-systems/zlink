@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 쓰는 client package다.
+`Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 사용하는 client package다.
 Client 설정과 request 설정을 fluent builder로 구성하며, redirect·cookie·압축·재시도
 정책을 호출부마다 다시 작성하지 않아도 된다.
 
@@ -14,7 +14,7 @@ var profile = await client.Get("/players/7281").Fetch<PlayerProfile>();
 ```
 
 JSON 전용 client가 아니다. 일반 HTTP client이며 typed 경로
-(`Body(dto)` / `Fetch<T>()` / `Async<T>()`)는 그 위에 얹은 편의 계층이다.
+(`Body(dto)` / `Fetch<T>()` / `Async<T>()`)는 그 위에 더해진 편의 계층이다.
 
 ## 사용 원칙
 
@@ -31,8 +31,8 @@ JSON 전용 client가 아니다. 일반 HTTP client이며 typed 경로
   돌려준다.
 - 완료 값을 동기로 꺼내는 blocking terminator는 제공하지 않는다.
 - standalone client는 `Async`와 callback을 제공한다. DI로 주입받는 server client는
-  정상 완료 값이 없는 one-way `Async()`도 제공한다. HTTP request builder에는
-  Spot 실행 권한을 반납하는 `Yield`가 없다.
+  정상 완료 값이 없는 one-way `Async()`도 제공한다. standalone client의
+  `ZLinkHttpRequestBuilder`에는 Spot 실행 권한을 반납하는 `Yield`가 없다.
 
 이 모델의 실용적 결론 하나만 기억하면 된다:
 

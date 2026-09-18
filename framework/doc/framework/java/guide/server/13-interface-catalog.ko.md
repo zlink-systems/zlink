@@ -10,7 +10,7 @@ title: "13. 주요 타입 사용 색인 · Java"
 
 > **이 장의 계약 소유 문서** —
 > [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md)가
-> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 쓰는 public interface를
+> 정확한 signature를 소유한다. 이 챕터는 application에서 자주 사용하는 public interface를
 > 기능별로 찾는 안내서다.
 
 Java 표면은 **어떻게 얻는지**로 나눠 읽으면 빠르다. bean으로 주입받는 것, 직접 구현하는
@@ -63,7 +63,7 @@ public class OrderService {
 ## 2. Topology 등록
 
 `ZLinkFrameworkConfigurer`가 받는 `ZLinkFrameworkOptions` 아래의 builder들이다. Spring
-컨텍스트 시작 뒤에는 쓸 수 없다.
+컨텍스트 시작 뒤에는 사용할 수 없다.
 
 | Interface | 무엇을 등록하나 |
 | --- | --- |
@@ -116,7 +116,7 @@ timer 관련 타입은 `ZLinkTimer`(취소 핸들) · `ZLinkTimerOptions` ·
 worker 관련 타입은 `ZLinkWorkerCall<T>` · `ZLinkWorkerTask<T>`(동기) ·
 `ZLinkIoWorkerTask<T>`(비동기) · `ZLinkWorkerCancellation`이고, 실패는
 `ZLinkWorkerQueueFullException` · `ZLinkWorkerTimeoutException` ·
-`ZLinkWorkerFailedException`으로 갈린다.
+`ZLinkWorkerFailedException`으로 달라진다.
 
 ## 4. Actor
 
@@ -156,7 +156,7 @@ worker 관련 타입은 `ZLinkWorkerCall<T>` · `ZLinkWorkerTask<T>`(동기) ·
 
 | Interface | 성격 |
 | --- | --- |
-| `ZLinkLocationStore` · `ZLinkRelocationStore` | 직접 구현하거나 제공 구현을 쓴다 |
+| `ZLinkLocationStore` · `ZLinkRelocationStore` | 직접 구현하거나 제공 구현을 사용한다 |
 | `ZLinkRedisLocationStore` · `ZLinkRedisLocationOptions` | Redis 구현과 설정 |
 | `ZLinkRedisRelocationStore` · `ZLinkRedisRelocationOptions` | 〃 |
 | `ZLinkLocationOptions` | 동작 값([16. Options](16-options.ko.md) §5) |
@@ -187,9 +187,9 @@ store를 직접 구현할 일은 드물다. `ZLinkStore*` · `ZLinkBlob*` 계열
 | `ZLinkFrameworkException` | 런타임 실패. `kind()` · `retriable()`로 가른다 |
 | `ZLinkRequestFailureException` | request가 실패로 끝났다. `ZLinkRequestFailureReason`을 담는다 |
 | `ZLinkOperationCanceledException` | 취소됐다 |
-| `ZLinkWorkerQueueFullException` 외 | worker 실패 세 갈래 |
+| `ZLinkWorkerQueueFullException` 외 | worker 실패의 세 가지 타입 |
 
-`ZLinkFrameworkErrorKind`가 실패 갈래를 담는 enum이다.
+`ZLinkFrameworkErrorKind`가 실패 종류를 담는 enum이다.
 
 ## 9. 어디서 오는가
 
@@ -202,11 +202,11 @@ store를 직접 구현할 일은 드물다. `ZLinkStore*` · `ZLinkBlob*` 계열
 | 호출이 돌려준다 | `*Call` · `*Result` · `*Response` · `*Snapshot` |
 
 **handler와 Spot·Actor·Session은 bean이 아니다.** framework가 만들고 생성자 인자만
-Spring 컨테이너에서 주입된다([2. 시작하기](02-getting-started.ko.md) §3).
+Spring 컨테이너에서 주입된다([퀵스타트](../../quickstart.ko.md) §3).
 
 ## 10. 관련 문서
 
 - 정확한 signature: [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md)
-- 등록 진입점: [2. 시작하기](02-getting-started.ko.md)
+- 등록 진입점: [퀵스타트](../../quickstart.ko.md)
 - 옵션과 기본값: [16. Options](16-options.ko.md)
-- 관측 표면: [11. Monitoring](11-monitoring.ko.md)
+- 관측 표면: [모니터링](26-monitoring.ko.md)

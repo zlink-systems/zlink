@@ -45,7 +45,7 @@ impl.X` alias이고 모든 함수/상수는 `internal/native`(export되지 않�
 
 `bindings/doc/spec/<lang>/`의 모든 문서는 English 원본, Korean 번역이다(framework의
 interface-catalog 관례와 반대). 이 레퍼런스 트리도 같은 방향을 따른다 — `.en.md`를
-먼저, `.ko.md`를 나중에 쓰고, 모든 spec 인용은 같은 로케일의 spec 파일을 가리킨다.
+먼저, `.ko.md`를 나중에 사용하고, 모든 spec 인용은 같은 로케일의 spec 파일을 가리킨다.
 
 ## Category
 

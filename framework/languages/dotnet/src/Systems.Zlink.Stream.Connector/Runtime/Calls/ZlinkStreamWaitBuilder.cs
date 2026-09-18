@@ -34,11 +34,16 @@ internal sealed class ZlinkStreamWaitBuilder : IZlinkStreamWaitCall
         CancellationToken cancellationToken = default)
     {
         _state.EnsureNotExecuted();
-        return await _connector.WaitForEncodedAsync(
-                _state.ResolveMessageName(),
-                _predicate,
-                _state.Timeout ?? _connector.Options.WaitTimeout,
-                cancellationToken)
+        var name = _state.ResolveMessageName();
+        var timeout = _state.Timeout ?? _connector.Options.WaitTimeout;
+        var message = await _connector.WaitForEncodedAsync(name, _predicate, timeout, cancellationToken)
             .ConfigureAwait(false);
+
+        // A wait surface reports every violation as ValidationFailed carried by
+        // ZlinkStreamException (stream-connector spec §10.1, §9.2).
+        return message
+               ?? throw ZlinkStreamConnector.Error(
+                   ZlinkStreamErrorCode.ValidationFailed,
+                   $"Timed out after {timeout} waiting for '{name}' stream message.");
     }
 }

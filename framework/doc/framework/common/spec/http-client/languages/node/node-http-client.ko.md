@@ -11,7 +11,7 @@
 `@zlink-systems/http-client`는 Node에서 HTTP request를 보내기 위한 별도 client-side
 산출물이다. JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder 스타일로
 undici의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`async<T>()`)는 그 위에
-얹은 편의 계층이다.
+더해진 편의 계층이다.
 
 이 산출물의 Framework dependency는 `@zlink-systems/framework`다. 공용 오류·codec 계약의
 의존 방향은 [01 범위와 아키텍처 §1.3](../../01-scope-and-architecture.ko.md#13-framework와의-관계--단방향-의존)가 소유한다.

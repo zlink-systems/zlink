@@ -22,6 +22,20 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     ZlinkStreamConnectionState State { get; }
 
     /// <summary>
+    ///     Gets the reason the connection last ended, or <see langword="null" /> when this
+    ///     connector has never lost a connection.
+    /// </summary>
+    /// <remarks>
+    ///     Readable at any time, so code that missed the disconnect event still reads the
+    ///     same value (stream-connector spec §6.2, .NET spec §10). A first connect that
+    ///     fails also leaves a reason here — <see cref="ZlinkStreamErrorCode.ConnectTimeout" />
+    ///     and <see cref="ZlinkStreamErrorCode.TlsValidationFailed" /> record
+    ///     <see cref="ZlinkStreamCloseReason.TransportError" />. Reconnecting does not clear
+    ///     the value; it keeps the reason of the last close.
+    /// </remarks>
+    ZlinkStreamCloseReason? CloseReason { get; }
+
+    /// <summary>
     ///     Gets the options used by this connector. <see cref="ZlinkStreamConnectorOptions.DiagnosticsLevel" />
     ///     on this instance always reflects the level most recently applied through
     ///     <see cref="SetDiagnosticsLevel" />.
@@ -56,12 +70,17 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     /// </exception>
     /// <exception cref="ObjectDisposedException">The connector has already been disposed.</exception>
     /// <remarks>
-    ///     Do not call this synchronous bridge from a framework execution context such as a handler
-    ///     or callback; use <see cref="SetDiagnosticsLevelAsync" /> there.
+    ///     This surface writes the value and returns; it never blocks on an asynchronous
+    ///     counterpart, so calling it inside a receive callback creates no cycle in which the
+    ///     call waits on its own completion (stream-connector spec §13, .NET spec §12).
     /// </remarks>
     void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
 
-    /// <summary>Atomically changes the connector's diagnostics level asynchronously.</summary>
+    /// <summary>
+    ///     Asynchronous counterpart of <see cref="SetDiagnosticsLevel" />, provided for the
+    ///     .NET idiom. Both surfaces change the same value; this one does not replace the
+    ///     synchronous surface.
+    /// </summary>
     Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level);
 
     /// <summary>
@@ -85,28 +104,45 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IZlinkStreamLifecycleCall Dispatch { get; }
 
     /// <summary>
-    ///     Raised when the endpoint sends an error message.
-    /// </summary>
-    event Func<ZlinkStreamError, CancellationToken, ValueTask>? ErrorReceived;
-
-    /// <summary>
-    ///     Raised after the connector becomes disconnected.
-    /// </summary>
-    event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>? Disconnected;
-
-    /// <summary>
-    ///     Raised when the connection state changes.
-    /// </summary>
-    event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged;
-
-    /// <summary>
-    ///     Gets the number of received messages with <paramref name="name" />.
+    ///     Registers a handler invoked when the endpoint sends an error message.
     /// </summary>
     /// <remarks>
-    ///     The count represents messages still retained in the bounded unread
-    ///     history. A wait operation removes the message it consumes. The value is
-    ///     intended for diagnostics and scenario assertions rather than production
-    ///     flow control.
+    ///     Connection events are registration methods rather than C# events because an
+    ///     <c>event</c> hands back nothing to unsubscribe with (stream-connector spec §7,
+    ///     .NET spec §3). Dispose the returned registration to remove the handler;
+    ///     disposing it twice is not an error, and a removed handler runs on no later
+    ///     dispatch.
+    /// </remarks>
+    IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
+
+    /// <summary>
+    ///     Registers a handler invoked after the connector becomes disconnected.
+    /// </summary>
+    /// <remarks>
+    ///     Dispose the returned registration to remove the handler.
+    /// </remarks>
+    IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
+
+    /// <summary>
+    ///     Registers a handler invoked when the connection state changes.
+    /// </summary>
+    /// <remarks>
+    ///     Dispose the returned registration to remove the handler.
+    /// </remarks>
+    IDisposable OnConnectionStateChanged(
+        Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
+
+    /// <summary>
+    ///     Gets the number of messages received with <paramref name="name" /> on the
+    ///     current connection.
+    /// </summary>
+    /// <remarks>
+    ///     The value counts arrivals, not retained messages: consuming a message through
+    ///     a wait surface or dispatching it to an <see cref="On" /> handler leaves the
+    ///     count unchanged, and the count is the same in both dispatch modes because it
+    ///     advances when the packet arrives (stream-connector spec §10). The baseline is
+    ///     the moment a connection is established — every reconnect starts again at zero.
+    ///     The value serves scenario assertions and diagnostics, never flow control.
     /// </remarks>
     int ReceivedCount(string name);
 

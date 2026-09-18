@@ -41,7 +41,8 @@ It's not a JSON-only client. It's a general-purpose HTTP client, and the typed J
 - `submitRaw()` / `submit(Type)` / `download(sink)` return a `CompletionStage`. With
   `java.net.http`'s NIO-selector-based asynchronous I/O, the calling thread is not occupied while
   waiting on the network.
-- `fetch(Type)` is a blocking access, for tests/CLI only.
+- `fetch(Type)` also returns a `CompletionStage`. It hands the decoded body alone to a caller
+  that needs no status or header.
 
 The detailed rules are covered in [7. Async](07-async.en.md).
 

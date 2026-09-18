@@ -38,8 +38,8 @@ const status = monitor.status();
 
 **Completion result.** 모든 member는 동기다.
 
-**선택 기준.** caller-driven pull loop에는 `recv`를 쓰고 시점 스냅샷에는
-`status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
+**선택 기준.** caller-driven pull loop에는 `recv`를 사용하고 시점 스냅샷에는
+`status()`를 사용한다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
@@ -90,7 +90,7 @@ auto-high-water-mark telemetry 스냅샷. 순수 읽기 전용 interface다.
 **선택 기준.** `stateFlags`를 직접 디코딩하는 대신 `isReady()`를
 호출한다. socket의 실제 send/receive HWM이 설정한
 `CommonSocketOptions` 값(Sockets category)과 다른 이유를 진단할 땐
-connection-bucket과 auto-HWM-plan 필드를 쓴다.
+connection-bucket과 auto-HWM-plan 필드를 사용한다.
 
 ---
 
@@ -126,7 +126,7 @@ Socket을 `PollEventFlag.PollCompletion`으로 등록했다면 owner가 `wait()`
 계속 호출해 binding이 native completion을 drain·settle하게 해야 한다.
 두 역할이 모두 필요하면 별도 execution context에서 blocking terminal을 수행한다.
 
-**선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. 감시하는 event만
+**선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. 감시하는 event만
 바뀔 땐 `remove` + `add` 대신 `modify`를 선호한다. `wait` 호출마다 새로
 만드는 대신 `PollEvents` buffer 하나를 재사용한다.
 
@@ -179,7 +179,7 @@ materialize 메서드가 선언돼 있지 않다).
 | 상수 | 사용처 | 값 |
 |---|---|---|
 | `MonitorSourceKind` | `MonitorStatus.sourceKind` | `Socket` — 소스 자체 주석에 따르면 **"Core raw API는 socket source만 정의한다"** |
-| `MonitorEventType` | `Socket.monitorOpen(events)`(Sockets category), `MonitorEvent.event` | `Connected`, `ConnectDelayed`, `ConnectRetried`, `Listening`, `BindFailed`, `Accepted`, `AcceptFailed`, `Closed`, `CloseFailed`, `Disconnected`, `MonitorStopped`, `HandshakeFailedNoDetail`, `ConnectionReady`, `HandshakeFailedProtocol`, `HandshakeFailedAuth`, `PeerWeightChanged` — 여기엔 `All` member가 없다. 대신 Sockets category의 `SOCKET_MONITOR_EVENT_ALL` 상수를 쓴다 |
+| `MonitorEventType` | `Socket.monitorOpen(events)`(Sockets category), `MonitorEvent.event` | `Connected`, `ConnectDelayed`, `ConnectRetried`, `Listening`, `BindFailed`, `Accepted`, `AcceptFailed`, `Closed`, `CloseFailed`, `Disconnected`, `MonitorStopped`, `HandshakeFailedNoDetail`, `ConnectionReady`, `HandshakeFailedProtocol`, `HandshakeFailedAuth`, `PeerWeightChanged` — 여기엔 `All` member가 없다. 대신 Sockets category의 `SOCKET_MONITOR_EVENT_ALL` 상수를 사용한다 |
 
 ---
 

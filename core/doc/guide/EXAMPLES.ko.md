@@ -42,7 +42,7 @@ client.Send().Message(Message.From("PING")).Submit();
 
 - 빌드 시 `#region guide:<name>` 블록을 가이드의 대응 코드 블록에 주입.
 - 이러면 가이드 코드가 **샘플에서 자동 생성**되어 drift가 구조적으로 불가능해진다.
-- 현재 문서 빌드는 `--8<--` snippet 경로 지시자(따옴표로 감싼 `path:section` 인자)를 쓰며, `#region guide` 자동 추출은
+- 현재 문서 빌드는 `--8<--` snippet 경로 지시자(따옴표로 감싼 `path:section` 인자)를 사용하며, `#region guide` 자동 추출은
   추출 스크립트와 CI 단계가 필요하므로 후속 작업으로 둔다.
 
 ## 3. 검증 (회귀)
@@ -50,7 +50,7 @@ client.Send().Message(Message.From("PING")).Submit();
 - 샘플 runner로 빌드·실행해 검증한다 — 가이드가 참조하는 샘플이 깨지면 잡힌다(일부는 CI smoke).
 - (권장) 가이드 코드 블록이 참조하는 샘플 파일이 실제로 존재하는지 검사하는
   링크 체크를 문서 회귀 테스트에 추가한다.
-- 추측 API 금지: 가이드에 쓴 메서드는 해당 바인딩의 `Contracts/`·소스에 실재해야
+- 추측 API 금지: 가이드에 사용한 메서드는 해당 바인딩의 `Contracts/`·소스에 실재해야
   한다([스타일 규약 §7](STYLE.ko.md)).
 
 ## 4. 작성자 체크리스트
