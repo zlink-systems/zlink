@@ -106,6 +106,17 @@
 .md-typeset .highlight { margin: 1.3em 0; }
 .md-typeset code { word-break: normal; }
 
+/* 좁은 화면에서는 코드를 한 단 줄인다. 모바일에서 코드 블록의 절반 넘게가 가로로
+   스크롤됐는데, 넘치는 양의 중앙값이 9~10자였다. 코드에 가로 스크롤 자체는 정상이지만
+   열 자 모자라서 스크롤되는 것은 불필요한 마찰이다. 글자와 여백을 줄이면 한 줄에 담기는
+   글자가 38자에서 48자로 는다.
+
+   정말 긴 줄은 여전히 스크롤된다. 그건 원본 코드의 줄 길이 문제라 글자 크기로 풀 수 없다. */
+@media screen and (max-width: 44.9375em) {
+  .md-typeset pre > code { font-size: 0.66rem; }
+  .md-typeset .highlight > pre > code { padding: 0.9em 0.85em; }
+}
+
 /* 코드 블록의 경계.
 
    Material 기본은 아주 옅은 회색 배경뿐이라 흰 바탕에서 블록이 어디서 시작해
