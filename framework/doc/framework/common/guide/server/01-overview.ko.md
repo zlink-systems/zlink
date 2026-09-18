@@ -630,8 +630,8 @@ Kafka(주황)가 처리 경로 **밖으로** 나가 전파·보존만 맡는다(
 **서버 간 호출의 LB도 사라진다.** 주문 처리는 재고·결제 같은 다른 서비스를 동기
 호출하는데, 기존 방식은 그 경로마다 K8s Service나 service discovery로 상대를 찾아
 분배해야 한다(주소를 코드에 하드코딩할 수는 없으니까). ZLink에서는 `"inventory"` 같은
-**channel name으로 부르고 location store가 현재 사용 가능한 peer를 알려 주므로**, 서버 간
-호출용 LB 계층이 따로 필요 없다 — 그래서 after 그림에서 주황 `서버 간 호출용 LB`가
+channel name으로 부르고 location store가 현재 사용 가능한 peer를 알려 주므로, **서버 간
+호출용 LB 계층이 따로 필요 없다** — 그래서 after 그림에서 주황 `서버 간 호출용 LB`가
 사라진다.
 
 **남는 것은 남는다.** 클라이언트 HTTP 진입은 여전히 stateless라 L7 LB/Ingress가 평소처럼

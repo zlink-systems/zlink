@@ -29,8 +29,8 @@ title: "Timer와 worker · C++"
 
 ## 1. Timer — 주기 실행
 
-Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 **그 Spot의 실행 queue에 들어가므로**
-handler 안에서 Spot 상태를 그대로 다룬다. 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
+Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+**handler 안에서 Spot 상태를 그대로 다룬다.** 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
 
 이름은 같은 Spot 안에서 유일하다. 주기가 `0` 이하이면 등록 시점에 설정 오류다.
 

@@ -97,7 +97,7 @@ conversation Spot에 대응하고, 참여자·메시지 순서·typing 상태·�
 
 이 도메인의 기술적 어려움은 **상담원 한 명이 여러 고객을 동시에 응대**한다는 데서 나온다.
 고객은 대화 하나만 가지므로 자기 actor가 곧 그 대화의 참여자다. 상담원은 그럴 수 없다 —
-framework에서 **한 actor는 동시에 한 Spot에만 속하고**, 새 Spot에 join하면 이전 Spot에서
+framework에서 **한 actor는 동시에 한 Spot에만 속한다.** 새 Spot에 join하면 이전 Spot에서
 leave되기 때문이다. 상담원 actor 하나로는 대화 세 건에 동시에 들어가 있을 수 없다.
 
 그래서 상담원 쪽 actor를 두 종류로 나눈다.

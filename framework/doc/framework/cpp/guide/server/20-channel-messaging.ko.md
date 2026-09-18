@@ -270,8 +270,8 @@ channel 이름이 들어온다.
 --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:spot-request-call"
 ```
 
-이것이 channel 호출과 다른 점이다. channel은 담당 node 중 **하나를 고르지만**, Spot·Actor는
-**그 id의 대상이 있는 곳으로** 간다. 그래서 정해진 대상이 받아야 하는 메시지는 channel이
+이것이 channel 호출과 다른 점이다. channel은 담당 node 중 **아무 하나**를 고르고, Spot·Actor는
+**그 id의 대상이 있는 곳**으로 간다. 그래서 정해진 대상이 받아야 하는 메시지는 channel이
 아니라 이 경로를 사용한다.
 
 등록, lifecycle, 상태 관리, 위치 이동은 [Spot](21-spot.ko.md)과
