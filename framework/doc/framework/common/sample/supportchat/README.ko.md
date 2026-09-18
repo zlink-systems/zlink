@@ -67,7 +67,7 @@ WaitingForClose를 거쳐 Closed가 된다.
 resource 표에 두고, authentication·assignment·typing의 시간 순서는 §7 sequence diagram에
 둔다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology.html" title="시스템 구성과 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Session만 client-facing STREAM endpoint를 제공한다.
@@ -330,7 +330,7 @@ id가 아니라 상담원 identity actor id다. client가 사람 단위로 parti
 capacity를 가진 상태다. Customer가 상담을 열면 Support가 새 Conversation Spot을 만들고
 customer actor를 join한다. 배정 가능한 Agent가 없으면 WaitingForAgent에서 대기한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join.html" title="인증, 상담 생성과 agent join" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join.html" title="인증, 상담 생성과 agent join" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-auth-join.html" target="_blank">↗ 크게 보기</a></p>
 
 scheduled=true는 join 예약을 의미하며 membership commit 완료가 아니다. 양쪽 client가
@@ -343,7 +343,7 @@ SendChatMessageRes, Customer에는 ChatMessageNotify를 보낸다. Customer repl
 되며 반대 방향으로 같은 흐름을 따른다. SetTypingMsg는 상대방에 TypingChangedNotify가
 도착하면 효과를 확인하고, 요청자 response를 기다리지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing.html" title="채팅과 typing" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing.html" title="채팅과 typing" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-chat-typing.html" target="_blank">↗ 크게 보기</a></p>
 
 Chat response는 접수·검증과 MessageSeq 확정을 뜻하지만 상대방이 읽었음을 뜻하지 않는다.
@@ -364,7 +364,7 @@ runner는 idle 판정 전에 일반 typed `SendChatMessageReq`를 보내고, res
 heartbeat나 transport keepalive가 아니며, control packet·임의의 sleep·log line으로 idle
 deadline을 대신 늘려서는 안 된다. 실제 idle과 grace 동작은 별도의 bounded wait로 확인한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close.html" title="idle, close와 reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close.html" title="idle, close와 reconnect" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-idle-close.html" target="_blank">↗ 크게 보기</a></p>
 
 reconnect는 actor와 Conversation state를 새로 만들지 않는다. Agent는 roster actor를 다시
@@ -378,7 +378,7 @@ relay하고, customer의 map miss는 customer identity actor로 relay한다.
 책임으로 구현한다. Session은 stream과 binding만, Api는 인증·생성 edge만, Support는 대화 상태만
 소유한다. 이 경계를 합치면 언어별 sample의 reconnect와 idle 흐름을 비교할 수 없게 된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure.html" title="구현 구조 — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |

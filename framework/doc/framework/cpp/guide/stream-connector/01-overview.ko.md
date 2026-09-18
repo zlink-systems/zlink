@@ -10,7 +10,7 @@ title: "Stream Connector 개요 · C++"
 # Stream Connector 개요
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [다음: 설치와 첫 연결](02-getting-started.ko.md)
+[목차](README.ko.md) | [다음: 설치와 첫 연결](02-getting-started.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

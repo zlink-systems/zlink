@@ -29,8 +29,8 @@ title: "Timer와 worker · Node/TypeScript"
 
 ## 1. Timer — 주기 실행
 
-Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 **그 Spot의 실행 queue에 들어가므로**
-handler 안에서 Spot 상태를 그대로 다룬다. 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
+Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Spot의 실행 queue에 들어가므로
+**handler 안에서 Spot 상태를 그대로 다룬다.** 등록은 timer handle을 돌려주며, 그 handle로 나중에 취소한다.
 
 이름은 같은 Spot 안에서 유일하다. 주기가 `0` 이하이면 등록 시점에 설정 오류다.
 
@@ -70,7 +70,7 @@ timer handler가 받는 tick은 예정 대비 지연과 건너뛴 tick 수를 �
 지연이 커지는 것은 그 Spot의 줄이 밀린다는 신호다. handler가 그 값을 읽어 부하를 보고하면
 운영에서 원인을 찾을 자리가 생긴다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker.html" title="timer는 줄에 서고, worker는 줄 밖에서 돈다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker.html" title="timer는 줄에 서고, worker는 줄 밖에서 돈다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 2. Worker — 줄 밖에서 실행하기

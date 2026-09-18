@@ -53,7 +53,7 @@ patterns is a change to the registration only.**
 The three arrangements are not just different names: **they open different sockets.** A process
 that uses all three ends up with three separate listeners.
 
-<iframe class="zlink-diagram" src="/common/diagrams/30-wiring-en.html" title="The three patterns open different sockets" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/30-wiring-en.html" title="The three patterns open different sockets" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-wiring-en.html" target="_blank">↗ View larger</a></p>
 
 | | Listener it opens | Unit of connection | When you add a channel |
@@ -220,7 +220,7 @@ The initial value is set at registration. Give it with `SetWeight(...)` where th
 registered. Leave it out and it is `100`. Changing it while running is covered by
 [Stopping Only New Requests While Running](#43-stopping-only-new-requests-while-running).
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · adding a node reflected automatically" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · adding a node reflected automatically" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-node-select-en.html" target="_blank">↗ View larger</a></p>
 
 ### 4.3 Stopping Only New Requests While Running
@@ -400,7 +400,7 @@ The **Location Store** that keeps appearing in the table above is a store kept o
 Framework. It is a component of the system, used by running processes to find one another. The
 tutorials and samples use Redis.
 
-<iframe class="zlink-diagram" src="/common/diagrams/30-location-store-en.html" title="Location Store — where who-is-where is written down" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/30-location-store-en.html" title="Location Store — where who-is-where is written down" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-location-store-en.html" target="_blank">↗ View larger</a></p>
 
 What it does is simple. **Each process writes its own address and the names it serves into the

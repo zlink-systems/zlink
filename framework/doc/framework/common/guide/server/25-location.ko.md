@@ -18,7 +18,7 @@ application이 그 기록을 직접 읽는 방법을 다루며, Store가 무엇�
 "이 방이 지금 어느 서버에 있는가"를 표시할 때, 또는 대상을 옮긴 뒤 기록이 실제로 바뀌었는지
 확인할 때 사용한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/25-location-find.html" title="find는 Store에 묻고 끝난다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/25-location-find.html" title="find는 Store에 묻고 끝난다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/25-location-find.html" target="_blank">↗ 크게 보기</a></p>
 
 돌아오는 값은 그 시점의 기록이다. 대상이 실제로 응답하는지까지 확인하지 않으므로, **살아

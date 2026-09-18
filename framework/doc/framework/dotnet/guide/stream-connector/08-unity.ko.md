@@ -51,11 +51,12 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
             Endpoint = new Uri("wss://example.com/stream")
         });
 
-        _connector.ConnectionStateChanged += (change, _) =>
+        //  돌려주는 값을 Dispose하면 등록이 풀린다. 여기서는 connector와 함께 끝난다.
+        _connector.OnConnectionStateChanged((change, _) =>
         {
             Debug.Log($"ZLink stream state: {change.Current}");
             return ValueTask.CompletedTask;
-        };
+        });
 
         _connector.On("game.update", (message, _) =>
         {

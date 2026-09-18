@@ -3,50 +3,216 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "전체 topology",
-    "subtitle": "진입 서버 · 도메인 서버 · location store",
+    "subtitle": "API 서버 · 세션 서버 · 도메인 서버 · location store",
     "output": "01-topology.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 86, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      160
+    ],
+    "cols": 4,
+    "gapX": 96,
+    "gapY": 84,
+    "cellW": 128,
+    "cellH": 60
+  },
   "components": [
-    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 1, "col": 0 },
-    { "id": "http", "type": "external", "label": "ASP.NET Core HTTP", "sublabel": "POST /games", "row": 0, "col": 1 },
-    { "id": "apic", "type": "frontend", "label": "route client", "row": 1, "col": 1 },
-    { "id": "cores", "type": "frontend", "label": "MeshNode", "sublabel": "channel member", "row": 1, "col": 2 },
-    { "id": "spotn", "type": "backend", "label": "SPOT node", "sublabel": "entry + room spots", "row": 1, "col": 3 },
-    { "id": "streamn", "type": "database", "label": "stream node", "row": 2, "col": 2 },
-    { "id": "actorg", "type": "messagebus", "label": "session relay", "row": 2, "col": 3 },
-    { "id": "store", "type": "external", "label": "Location store", "sublabel": "descriptor rows", "row": 3, "col": 1 }
+    {
+      "id": "client",
+      "type": "external",
+      "label": "클라이언트 앱",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "http",
+      "type": "external",
+      "label": "HTTP endpoint",
+      "row": 0,
+      "col": 1,
+      "sublabel": "POST /games"
+    },
+    {
+      "id": "apic",
+      "type": "frontend",
+      "label": "channel client",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "streamn",
+      "type": "database",
+      "label": "STREAM node",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "relay",
+      "type": "messagebus",
+      "label": "session relay",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "nodeh",
+      "type": "frontend",
+      "label": "node handler",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "ispot",
+      "type": "backend",
+      "label": "Instance Spot",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "espot",
+      "type": "backend",
+      "label": "entry spot",
+      "row": 2,
+      "col": 3,
+      "sublabel": "배정"
+    },
+    {
+      "id": "uspot",
+      "type": "backend",
+      "label": "user spot",
+      "row": 3,
+      "col": 3,
+      "sublabel": "actor"
+    },
+    {
+      "id": "store",
+      "type": "external",
+      "label": "Location store",
+      "row": 3,
+      "col": 0,
+      "sublabel": "descriptor rows"
+    }
   ],
   "boundaries": [
-    { "kind": "region", "label": "진입 서버 (예: Api)", "wraps": ["http", "apic"] },
-    { "kind": "region", "label": "도메인 서버 (예: Play)", "wraps": ["cores", "spotn", "streamn", "actorg"] }
+    {
+      "kind": "region",
+      "label": "API 서버 (예: Api)",
+      "wraps": [
+        "http",
+        "apic"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "세션 서버 (예: Session)",
+      "wraps": [
+        "streamn",
+        "relay"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "도메인 서버 (예: Play)",
+      "wraps": [
+        "nodeh",
+        "ispot",
+        "espot",
+        "uspot"
+      ]
+    }
   ],
   "connections": [
-    { "from": "client", "to": "http", "label": "1 HTTP 요청", "variant": "emphasis" },
-    { "from": "http", "to": "apic", "variant": "default" },
-    { "from": "apic", "to": "cores", "label": "2 channel request", "variant": "emphasis", "labelDy": -22 },
-    { "from": "cores", "to": "spotn", "variant": "default" },
-    { "from": "client", "to": "streamn", "label": "3 stream 실시간 접속", "variant": "emphasis" },
-    { "from": "streamn", "to": "actorg", "label": "relay", "variant": "default" },
-    { "from": "actorg", "to": "spotn", "variant": "default" },
-    { "from": "apic", "to": "store", "label": "주소 해석", "variant": "dashed", "labelDy": 22 },
-    { "from": "cores", "to": "store", "label": "등록", "variant": "dashed" }
+    {
+      "from": "client",
+      "to": "http",
+      "label": "1 HTTP 요청",
+      "variant": "emphasis"
+    },
+    {
+      "from": "http",
+      "to": "apic",
+      "variant": "default"
+    },
+    {
+      "from": "apic",
+      "to": "nodeh",
+      "label": "2a ClientServer channel",
+      "variant": "emphasis",
+      "labelDy": -22
+    },
+    {
+      "from": "apic",
+      "to": "ispot",
+      "label": "2b RouteMesh channel",
+      "variant": "emphasis",
+      "labelDy": -22
+    },
+    {
+      "from": "client",
+      "to": "streamn",
+      "label": "3 STREAM 접속",
+      "variant": "emphasis"
+    },
+    {
+      "from": "streamn",
+      "to": "relay",
+      "label": "relay",
+      "variant": "default"
+    },
+    {
+      "from": "relay",
+      "to": "espot",
+      "label": "4 RouteMesh channel",
+      "variant": "emphasis"
+    },
+    {
+      "from": "relay",
+      "to": "uspot",
+      "label": "actor가 처리",
+      "variant": "default",
+      "labelDy": 22
+    },
+    {
+      "from": "apic",
+      "to": "store",
+      "label": "주소 해석",
+      "variant": "dashed",
+      "labelDy": 22
+    },
+    {
+      "from": "streamn",
+      "to": "store",
+      "label": "등록",
+      "variant": "dashed"
+    }
   ],
   "cards": [
     {
       "dot": "cyan",
       "title": "구성",
       "items": [
-        "진입 서버: ASP.NET Core HTTP로 외부 요청을 받아 domain 서버에 위임",
-        "도메인 서버: MeshNode channel membership + SPOT + session relay + stream node",
-        "클라이언트 앱: HTTP로 요청, stream으로 실시간 상태 수신"
+        "API 서버: HTTP 요청을 받아 ClientServer channel로 node handler를 부르거나, RouteMesh channel로 Instance Spot에 요청한다",
+        "세션 서버: STREAM node가 client 연결을 받아 session relay하고, RouteMesh channel로 spot의 actor에 전달한다",
+        "도메인 서버: node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "STREAM을 따로 두는 이유",
+      "items": [
+        "STREAM node를 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다 — 연결 수와 상태 처리량이 따로 늘기 때문이다"
       ]
     },
     {
       "dot": "slate",
       "title": "Location store = discovery만",
-      "items": ["서버 주소 정보만 관리 — 점선은 store 조회로 endpoint를 찾는 연결(데이터 경로 아님)"]
+      "items": [
+        "서버 주소 정보만 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며 데이터 경로가 아니다"
+      ]
     }
   ]
 }

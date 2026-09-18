@@ -153,6 +153,7 @@ plugins:
             # Framework 언어별 서버 가이드. 5개 언어가 같은 라벨을 공유한다.
             # 구획 이름은 doc/plan/guide-rewrite.ko.md의 목차가 정한다.
             Guide home: 가이드 홈
+            Contents: 목차
             Getting started: 시작
             Feature guide: 기능별 가이드
             How it works: 동작 원리
@@ -338,7 +339,7 @@ nav:
           - Options: cpp/guide/server/16-options.md
       - Tests: cpp/guide/server/15-e2e-testing.md
       - Stream connector:
-          - Home: cpp/guide/stream-connector/README.md
+          - Contents: cpp/guide/stream-connector/README.md
           - Stream Connector Overview: cpp/guide/stream-connector/01-overview.md
           - Installation and the First Connection: cpp/guide/stream-connector/02-getting-started.md
           - Connector Options: cpp/guide/stream-connector/03-connector-options.md
@@ -351,7 +352,7 @@ nav:
           - 10 — Packaging: cpp/guide/stream-connector/10-packaging.md
           - 11 — Performance Testing: cpp/guide/stream-connector/11-performance.md
       - HTTP client:
-          - Home: cpp/guide/http-client/README.md
+          - Contents: cpp/guide/http-client/README.md
           - 1. Overview: cpp/guide/http-client/01-overview.md
           - 2. Getting Started: cpp/guide/http-client/02-getting-started.md
           - 3. Client Configuration: cpp/guide/http-client/03-client-configuration.md
@@ -407,7 +408,7 @@ nav:
           - Options: dotnet/guide/server/16-options.md
       - Tests: dotnet/guide/server/15-e2e-testing.md
       - Stream connector:
-          - Home: dotnet/guide/stream-connector/README.md
+          - Contents: dotnet/guide/stream-connector/README.md
           - Stream Connector Overview: dotnet/guide/stream-connector/01-overview.md
           - Installation and the First Connection: dotnet/guide/stream-connector/02-getting-started.md
           - Connector Options: dotnet/guide/stream-connector/03-connector-options.md
@@ -418,7 +419,7 @@ nav:
           - Unity (Native Build): dotnet/guide/stream-connector/08-unity.md
           - Godot C#: dotnet/guide/stream-connector/09-godot-csharp.md
       - HTTP client:
-          - Home: dotnet/guide/http-client/README.md
+          - Contents: dotnet/guide/http-client/README.md
           - 1. Overview: dotnet/guide/http-client/01-overview.md
           - 2. Getting Started: dotnet/guide/http-client/02-getting-started.md
           - 3. Client Configuration: dotnet/guide/http-client/03-client-configuration.md
@@ -474,7 +475,7 @@ nav:
           - Options: java/guide/server/16-options.md
       - Tests: java/guide/server/15-e2e-testing.md
       - Stream connector:
-          - Home: java/guide/stream-connector/README.md
+          - Contents: java/guide/stream-connector/README.md
           - Stream Connector Overview: java/guide/stream-connector/01-overview.md
           - Installation and the First Connection: java/guide/stream-connector/02-getting-started.md
           - Connector Options: java/guide/stream-connector/03-connector-options.md
@@ -483,7 +484,7 @@ nav:
           - Connection Lifecycle: java/guide/stream-connector/06-lifecycle.md
           - Error Handling: java/guide/stream-connector/07-error-handling.md
       - HTTP client:
-          - Home: java/guide/http-client/README.md
+          - Contents: java/guide/http-client/README.md
           - 1. Overview: java/guide/http-client/01-overview.md
           - 2. Getting Started: java/guide/http-client/02-getting-started.md
           - 3. Client Configuration: java/guide/http-client/03-client-configuration.md
@@ -539,7 +540,7 @@ nav:
           - Options: java/guide/server/16-options.md
       - Tests: kotlin/guide/server/15-e2e-testing.md
       - Stream connector:
-          - Home: kotlin/guide/stream-connector/README.md
+          - Contents: kotlin/guide/stream-connector/README.md
           - Stream Connector Overview: kotlin/guide/stream-connector/01-overview.md
           - Installation and the First Connection: kotlin/guide/stream-connector/02-getting-started.md
           - Connector Options: kotlin/guide/stream-connector/03-connector-options.md
@@ -548,7 +549,7 @@ nav:
           - Connection Lifecycle: kotlin/guide/stream-connector/06-lifecycle.md
           - Error Handling: kotlin/guide/stream-connector/07-error-handling.md
       - HTTP client:
-          - Home: kotlin/guide/http-client/README.md
+          - Contents: kotlin/guide/http-client/README.md
           - 1. Overview: kotlin/guide/http-client/01-overview.md
           - 2. Getting Started: kotlin/guide/http-client/02-getting-started.md
           - 3. Client Configuration: kotlin/guide/http-client/03-client-configuration.md
@@ -604,7 +605,7 @@ nav:
           - Options: node/guide/server/16-options.md
       - Tests: node/guide/server/15-e2e-testing.md
       - Stream connector:
-          - Home: node/guide/stream-connector/README.md
+          - Contents: node/guide/stream-connector/README.md
           - Stream Connector Overview: node/guide/stream-connector/01-overview.md
           - Installation and the First Connection: node/guide/stream-connector/02-getting-started.md
           - Connector Options: node/guide/stream-connector/03-connector-options.md
@@ -615,7 +616,7 @@ nav:
           - Browser: node/guide/stream-connector/08-browser.md
           - Unity WebGL: node/guide/stream-connector/09-unity-webgl.md
       - HTTP client:
-          - Home: node/guide/http-client/README.md
+          - Contents: node/guide/http-client/README.md
           - 1. Overview: node/guide/http-client/01-overview.md
           - 2. Getting Started: node/guide/http-client/02-getting-started.md
           - 3. Client Configuration: node/guide/http-client/03-client-configuration.md

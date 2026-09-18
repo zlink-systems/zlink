@@ -36,7 +36,7 @@ A call makes the target do something. A lookup **reads the location without touc
 target.** Use it to show which server a room is on right now on an operations screen, or to
 confirm that the record changed after a target was moved.
 
-<iframe class="zlink-diagram" src="/common/diagrams/25-location-find-en.html" title="find asks the Store and stops there" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/25-location-find-en.html" title="find asks the Store and stops there" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/25-location-find-en.html" target="_blank">↗ View larger</a></p>
 
 What comes back is the record as it stands at that moment. It does not confirm that the target

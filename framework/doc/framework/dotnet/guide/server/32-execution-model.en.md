@@ -57,7 +57,7 @@ its execution mode.**
 | User Spot, `PerActor` | Serializes per Actor and per Spot lane. Different lanes may run at the same time | Each Actor owns its own. State shared between lanes belongs in an external store |
 | Instance Spot | Serializes the Spot queue's handlers and timers. There is no Actor queue | The Spot instance owns it |
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="Spot execution model — SpotWide and PerActor" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="Spot execution model — SpotWide and PerActor" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/06-spot-en.html" target="_blank">↗ View larger</a></p>
 
 The execution mode is fixed when the factory is registered and is not changed while running.
@@ -67,7 +67,7 @@ The execution mode is fixed when the factory is registered and is not changed wh
 `SpotWide` is the default. Every callback bound for that Spot — another Actor's message, a timer,
 a lifecycle callback — passes one common gate and runs one turn at a time in a single lane.
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree-en.html" title="SpotWide — lock-free sequential execution" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree-en.html" title="SpotWide — lock-free sequential execution" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/06-spotwide-lockfree-en.html" target="_blank">↗ View larger</a></p>
 
 No two turns run at the same instant, so **a handler touches the state of the Spot and of its

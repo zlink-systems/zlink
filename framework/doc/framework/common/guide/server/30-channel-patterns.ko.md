@@ -32,7 +32,7 @@ discovery, 시작 단계 검증, 그리고 실패했을 때 호출한 쪽이 보
 각 구성은 이름만 다른 것이 아니라 **서로 다른 socket을 연다.** 한 process가 이들을 모두 사용하면
 listener도 셋이 따로 생긴다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/30-wiring.html" title="세 패턴은 서로 다른 소켓을 연다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/30-wiring.html" title="세 패턴은 서로 다른 소켓을 연다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-wiring.html" target="_blank">↗ 크게 보기</a></p>
 
 | | 여는 listener | 연결 단위 | channel을 늘리면 |
@@ -242,7 +242,7 @@ ClientServer를 사용한다.
 않으면 `100`이다. 실행 중 변경은 [실행 중에 새 요청만 멈추기](#43-실행-중에-새-요청만-멈추기)가
 다룬다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-node-select.html" title="round-robin 분산 · node 추가 자동 반영" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select.html" title="round-robin 분산 · node 추가 자동 반영" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-node-select.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 4.3 실행 중에 새 요청만 멈추기
@@ -514,7 +514,7 @@ topic을 담고 있다. 네트워크에서 대상을 줄이지는 못해도, 한
 앞의 표에 계속 나오는 **Location Store**는 Framework 밖에 두는 저장소다. 시스템의 구성 요소
 하나이며, 실행 중인 process들이 서로를 찾는 데 사용한다. 튜토리얼과 샘플은 Redis를 사용한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/30-location-store.html" title="Location Store — 누가 어디 있는지 적어 두는 곳" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/30-location-store.html" title="Location Store — 누가 어디 있는지 적어 두는 곳" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-location-store.html" target="_blank">↗ 크게 보기</a></p>
 
 **각 process가 시작할 때 자기 주소와 자기가 맡은 이름을 Store에 적고**, 살아

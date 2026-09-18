@@ -10,7 +10,7 @@ receiving a push. This chapter covers the rules that binding keeps.
 
 ## 1. How Many May Be Bound — Several per Session, One per Actor
 
-<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape-en.html" title="A session binds several; an Actor binds to one" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape-en.html" title="A session binds several; an Actor binds to one" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/39-binding-shape-en.html" target="_blank">↗ View larger</a></p>
 
 **One session may bind several Actors at once.** A single connection may use a player Actor and a

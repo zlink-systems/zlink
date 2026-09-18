@@ -80,7 +80,7 @@ fall into roughly four patterns. Boxes like login/auth, gateway, and DB cache sh
 repeatedly no matter which pattern you pick — but since there's no common framework backing
 them, a team picks its genre's pattern and rebuilds that structure from the socket up.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-existing-en.html" target="_blank">↗ View larger</a></p>
 
 - **① Zone-sharding.** The world is split into geographic regions, one server (node) owns
@@ -142,7 +142,7 @@ There's no need to rebuild from the socket for each one.
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Green (bold border) is the SPOT-family primitive. This is exactly where it contrasts with
@@ -189,7 +189,7 @@ internal implementation, not exposed on the public API, and application code doe
 even if they're replaced later — this backend boundary is explained separately by
 [internals/backend-dependency-policy](../../../node/internals/backend-dependency-policy.en.md).
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
 **As code.** Declare one room, and write that room's progression logic.
@@ -254,13 +254,13 @@ execution unit.
 
 **The existing approach** — lock acquire/release makes a round trip on every request.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
 address the request will arrive at.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 A request for the same guild always passes through the same GuildSpot's queue, so the second
@@ -321,13 +321,13 @@ pushes — both ways shows the difference right in the picture.
 **The existing approach** — the components for the real-time feature (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — every orange piece disappears, leaving one location store that
 provides node/actor/spot location information.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Three pieces of infrastructure — the sticky LB, pub/sub broker, and distributed lock —
@@ -390,7 +390,7 @@ pieces right in the picture.
 **The existing approach** — the pipeline pieces for ordered processing (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — this doesn't replace Kafka. **On the order-processing path**, the
@@ -398,7 +398,7 @@ pipeline pieces (orange) disappear, and Kafka stays in its natural role (gray) �
 confirmed facts to independent systems and preserving events that need replay, as a durable
 log.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 The key thing across the two pictures is that Kafka's color changes. Kafka (orange), which
@@ -546,7 +546,7 @@ registration.
 
 ### 3.3 Layering and Registration Points
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers-en.html" target="_blank">↗ View larger</a></p>
 
 Put the host framework you already use (ASP.NET Core · Spring Boot · NestJS · C++ host) at
@@ -600,7 +600,7 @@ What you declare, and where, comes down to three spots.
 
 ## 4. The Four Integration Axes, Summarized
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-lang-java-en.html" title="ZLink layers — Java" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-lang-java-en.html" title="ZLink layers — Java" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-lang-java-en.html" target="_blank">↗ View larger</a></p>
 
 | Axis | What the user sees | Guide chapter |
@@ -618,16 +618,23 @@ What you declare, and where, comes down to three spots.
 An example showing how each feature fits together. Each feature's own chapter zooms into
 part of this map.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
-- **Entry server** — receives an external request over ASP.NET Core HTTP and delegates to
-  the domain server.
-- **Domain server** — MeshNode channel membership + SPOT (state unit) + session relay +
-  stream node.
-- **Location store** — manages server address information. The dotted lines are connections
-  that find an endpoint through a store lookup.
-- **Client app** — sends requests over HTTP, and receives real-time state over stream.
+- **API server** — takes the HTTP request and hands it to the domain server. There are two
+  ways to hand it over. A request one handler can settle calls a node handler over a
+  **ClientServer channel**; a request a unit of state must take goes to an Instance Spot over
+  a **RouteMesh channel**.
+- **Session server** — takes the client's real-time connection. The STREAM node receives the
+  message, the session relay passes it over a **RouteMesh channel**, and the actor in the user
+  spot an entry spot assigned handles it.
+- **Domain server** — node handlers and spots hold the state and process requests serially.
+- **Location store** — manages server address information. The dotted lines are store lookups
+  that find an endpoint, not a data path.
+
+**A STREAM node can live in the domain server, but that is not the usual shape.** Connection
+count and state throughput grow separately, so it commonly sits in its own server, the way the
+HTTP entry does.
 
 ## 6. Who This Guide Is for, and Its Scope
 

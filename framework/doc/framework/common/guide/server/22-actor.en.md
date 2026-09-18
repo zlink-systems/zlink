@@ -18,7 +18,7 @@ An Actor does not float on its own. Right after creation it belongs to an **Entr
 entering a room moves it to that User Spot. The Entry Spot is the Spot the Framework creates when
 the Object Server starts, and it is the default place for an Actor that belongs to no room yet.
 
-<iframe class="zlink-diagram" src="/common/diagrams/22-actor-membership-en.html" title="An Actor lives inside a Spot" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/22-actor-membership-en.html" title="An Actor lives inside a Spot" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/22-actor-membership-en.html" target="_blank">↗ View larger</a></p>
 
 **That is why a handler receives both the Spot and the Actor.** A message sent to an actor id

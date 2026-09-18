@@ -74,7 +74,7 @@ correlation은 framework가 처리한다.
 등장하지만 — 그걸 받쳐 주는 공통 프레임워크는 없어서, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 - **① zone 분할.** 월드를 지리적 구역으로 나눠 구역마다 서버(노드)가
@@ -126,7 +126,7 @@ correlation은 framework가 처리한다.
 
 위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 초록(굵은 테두리)이 SPOT 계열 primitive다. 위 "기존 방식" 그림과 대조되는 지점은
@@ -172,7 +172,7 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 [internals/backend-dependency-policy](../../../node/internals/backend-dependency-policy.ko.md)가
 별도로 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 쓴다.
@@ -235,12 +235,12 @@ task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &reque
 
 **기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 길드로 온 요청은 항상 같은 GuildSpot의 큐를 통과하므로, 두 번째 요청은 첫
@@ -294,13 +294,13 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 
 **기존 방식** — 실시간 기능을 위한 구성 요소(주황)가 본체만큼 추가된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 주황 조각이 전부 사라지고, node·actor·spot 위치정보를 제공하는
 location store 하나가 남는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사라진다. 순서는
@@ -355,14 +355,14 @@ stateful stream processor(Kafka Streams/Flink)로 상태를 소비자 곁에 두
 
 **기존 방식** — 순서 처리를 위한 파이프라인 조각(주황)이 본체만큼 추가된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.html" title="주문 처리 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.html" title="주문 처리 — 기존 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — Kafka를 대체하는 것이 아니다. **주문 처리 경로에서** 파이프라인
 조각(주황)이 사라지고, Kafka는 자기 본연의 자리 — 확정된 사실을 독립 시스템들에
 전파하고 replay가 필요한 이벤트를 보존하는 durable log — 로 남는다(회색).
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-order-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 두 그림에서 Kafka의 색이 바뀐다. 처리 경로 **안에서** 순서를 담당하던
@@ -375,8 +375,8 @@ Kafka(주황)가 처리 경로 **밖으로** 나가 전파·보존만 맡는다(
 **서버 간 호출의 LB도 사라진다.** 주문 처리는 재고·결제 같은 다른 서비스를 동기
 호출하는데, 기존 방식은 그 경로마다 K8s Service나 service discovery로 상대를 찾아
 분배해야 한다(주소를 코드에 하드코딩할 수는 없으니까). ZLink에서는 `"inventory"` 같은
-**channel name으로 부르고 location store가 현재 사용 가능한 peer를 알려 주므로**, 서버 간
-호출용 LB 계층이 따로 필요 없다 — 그래서 after 그림에서 주황 `서버 간 호출용 LB`가
+channel name으로 부르고 location store가 현재 사용 가능한 peer를 알려 주므로, **서버 간
+호출용 LB 계층이 따로 필요 없다** — 그래서 after 그림에서 주황 `서버 간 호출용 LB`가
 사라진다.
 
 **남는 것은 남는다.** 클라이언트 HTTP 진입은 여전히 stateless라 L7 LB/Ingress가 평소처럼
@@ -409,7 +409,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 
 ```cpp
 // 같은 order_id의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 조립하지 않는다.
+// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 만들지 않는다.
 // C++ Spot handler는 Spot member 함수다.
 task_t<start_order_workflow_res_t>
 order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
@@ -505,7 +505,7 @@ auto reply = co_await client
 
 ### 3.3 계층 구조와 등록 지점
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-layers.html" title="계층 구조 — host 위에 ZLink, 그 위에 비즈니스 로직" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-layers.html" title="계층 구조 — host 위에 ZLink, 그 위에 비즈니스 로직" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers.html" target="_blank">↗ 크게 보기</a></p>
 
 쓰던 host framework(ASP.NET Core · Spring Boot · NestJS · C++ host)를 바닥에 두고, 거기에
@@ -558,7 +558,7 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 ## 4. 통합 4축 요약
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-lang-cpp.html" title="ZLink 계층 — C++" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-lang-cpp.html" title="ZLink 계층 — C++" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-lang-cpp.html" target="_blank">↗ 크게 보기</a></p>
 
 | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
@@ -575,13 +575,20 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 각 기능이 어떻게 맞물리는지 보여주는 예시다. 이 지도를 각 기능 장이 확대해 들어간다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology.html" target="_blank">↗ 크게 보기</a></p>
 
-- **진입 서버** - ASP.NET Core HTTP로 외부 요청을 받아 domain 서버에 위임한다.
-- **도메인 서버** - MeshNode channel membership + SPOT(상태 단위) + session relay + stream node.
-- **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회를 통해 endpoint를 찾는 연결이다.
-- **클라이언트 앱** - HTTP로 요청을 보내고, stream으로 실시간 상태를 받는다.
+- **API 서버** - HTTP 요청을 받아 도메인 서버로 넘긴다. 넘기는 길은 둘이다. handler 하나가
+  처리하면 되는 요청은 **ClientServer channel**로 node handler를 부르고, 상태 단위가 받아야
+  하는 요청은 **RouteMesh channel**로 Instance Spot에 보낸다.
+- **세션 서버** - client의 실시간 연결을 받는다. STREAM node가 받은 메시지를 session relay가
+  **RouteMesh channel**로 넘기면, entry spot이 배정한 user spot의 actor가 처리한다.
+- **도메인 서버** - node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다.
+- **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며
+  데이터 경로가 아니다.
+
+**STREAM node를 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다.** 연결 수와 상태
+처리량이 따로 늘기 때문에, HTTP 입구처럼 별도 서버로 두는 구성이 흔하다.
 
 ## 6. 가이드의 대상과 범위
 

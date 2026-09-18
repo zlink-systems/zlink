@@ -70,7 +70,7 @@ The base topology only expresses the placement of Client and server components a
 structural connections. The Location Store is placed in the resource table, and the time order of
 authentication/assignment/typing belongs to the §7 sequence diagrams.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology-en.html" title="System Configuration And Topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology-en.html" title="System Configuration And Topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Only Session provides the client-facing STREAM endpoint.
@@ -335,7 +335,7 @@ either empty or has capacity. When the Customer opens a conversation, Support cr
 Conversation Spot and joins the customer actor. If no Agent is assignable, it waits at
 WaitingForAgent.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join-en.html" title="Authentication, Conversation Creation, And Agent Join" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join-en.html" title="Authentication, Conversation Creation, And Agent Join" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-auth-join-en.html" target="_blank">↗ View larger</a></p>
 
 `scheduled=true` means the join was scheduled, not that membership commit is complete. Agent join
@@ -349,7 +349,7 @@ becomes MessageSeq 2 and follows the same flow in the opposite direction. For `S
 effect is confirmed once `TypingChangedNotify` arrives at the counterpart, and it doesn't wait for a
 response to the requester.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing-en.html" title="Chat And Typing" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing-en.html" title="Chat And Typing" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-chat-typing-en.html" target="_blank">↗ View larger</a></p>
 
 A chat response means acceptance, validation, and MessageSeq confirmation, but it doesn't mean the
@@ -372,7 +372,7 @@ This message is not a heartbeat or transport keepalive; a control packet, arbitr
 line must not replace it. The actual idle and grace behavior is checked with a separate bounded
 wait.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close-en.html" title="Idle, Close, And Reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close-en.html" title="Idle, Close, And Reconnect" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-idle-close-en.html" target="_blank">↗ View larger</a></p>
 
 Reconnecting doesn't recreate the actor or the Conversation state. The Agent re-binds the roster
@@ -389,7 +389,7 @@ binding, Api owns only the authentication/creation edge, and Support owns only t
 state. Merging this boundary makes the reconnect and idle flows incomparable across per-language
 samples.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure-en.html" title="Implementation Structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure-en.html" title="Implementation Structure — Client · Shared · Server" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-structure-en.html" target="_blank">↗ View larger</a></p>
 
 <script>

@@ -44,7 +44,7 @@ title: "Relocation · C#/.NET"
 **이동 중인 상태는 Location Store를 거치지 않는다.** 떠나는 node가 도착 node로 mesh 연결을 통해
 직접 보낸다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move.html" title="논리 id는 그대로, 실행 위치만 옮긴다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move.html" title="논리 id는 그대로, 실행 위치만 옮긴다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 2. application이 맡는 부분 — adapter

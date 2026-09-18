@@ -66,7 +66,7 @@ event sourcing은 Framework의 일반 저장 기능이 아니라 이 sample이 �
 전형적인 stateless web backend에서는 다음 구성 요소가 주문별 순서, 조율 상태, 외부 효과 재시도와
 조회 결과 전달을 나누어 담당한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web.html" title="기존 방식 — 상태 저장 없는 웹 백엔드" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web.html" title="기존 방식 — 상태 저장 없는 웹 백엔드" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-existing-web.html" target="_blank">↗ 크게 보기</a></p>
 
 이 구성은 단순한 CRUD보다 많은 책임을 외부 infrastructure에 둔다. 상태 DB와 lock 또는 version은
@@ -109,7 +109,7 @@ projection 장애 복구와 Ready owner crash 정책은 여전히 sample/Applica
 server component로 배치하지 않는다. Request, response와 상태 전이의 시간 순서는 §7 sequence
 diagram에서 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology.html" title="기본 topology — Client와 서버 배치" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology.html" title="기본 topology — Client와 서버 배치" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 `CommerceApi`와 `OrderWorkflow`는 `shoppingmall.workflow` RouteMesh를 공유한다. 두 역할은 모두
@@ -420,7 +420,7 @@ status를 되돌리지 않는다. `ReservationId`와 `PaymentId`는 `OrderId`와
 
 ### 7.1 주문 시작과 성공 처리
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success.html" title="주문 시작과 성공 처리 흐름" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success.html" title="주문 시작과 성공 처리 흐름" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-start-success.html" target="_blank">↗ 크게 보기</a></p>
 
 새 주문의 `StartOrderRes`는 `Created` 경계를 확인하면 반환된다. 예약·승인·확정은 background
@@ -433,7 +433,7 @@ projection을 갱신한다. 이후 external module 결과에 따라 다음 event
 
 ### 7.2 재고 실패와 결제 실패 보상
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation.html" title="재고 실패와 결제 실패 보상" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation.html" title="재고 실패와 결제 실패 보상" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-failure-compensation.html" target="_blank">↗ 크게 보기</a></p>
 
 재고 예약이 거절되면 Payment module을 호출하지 않는다. Payment가 거절되면 이미 기록한
@@ -443,7 +443,7 @@ Workflow가 성공 event와 실패 event 중 하나를 선택할 수 있다.
 
 ### 7.3 중복 시작과 중단 뒤 재개
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume.html" title="중복 시작과 중단 후 재개" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume.html" title="중복 시작과 중단 후 재개" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-duplicate-resume.html" target="_blank">↗ 크게 보기</a></p>
 
 동시 시작에서는 `CommerceStateStore`의 mapping reservation에서 먼저 성공한 요청이 `OrderId`를
@@ -470,7 +470,7 @@ relocation이 없는 성공 분기와 같아야 한다. 이 흐름은 crash fail
 
 ### 7.4 조회와 projection 재생성
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild.html" title="조회와 프로젝션 재생성" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild.html" title="조회와 프로젝션 재생성" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lookup-rebuild.html" target="_blank">↗ 크게 보기</a></p>
 
 `GetOrderStateReq`는 read model만 읽으며 주문을 진행시키지 않는다. Projection이 삭제되거나
@@ -480,7 +480,7 @@ projection 반영 전에 process가 중단된 경우, 재개 명령은 terminal 
 
 ### 7.5 lifecycle과 failure 경계
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle.html" title="Lifecycle과 실패 경계" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle.html" title="Lifecycle과 실패 경계" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 | 현재 authority 상태 | Instance message의 의미 | Sample 결과 |
@@ -504,7 +504,7 @@ release, fencing, event와 external effect recovery를 먼저 public contract로
 위치에서 찾을 수 있어야 한다. Project, package, namespace와 file extension은 언어별로 달라도 되지만
 역할을 합치거나 public surface를 임의로 추가하지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure.html" title="구현 구조 — ShoppingMall" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure.html" title="구현 구조 — ShoppingMall" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-implementation-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 |

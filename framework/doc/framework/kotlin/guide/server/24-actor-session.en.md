@@ -35,7 +35,7 @@ A connection and an entity have different lifetimes. When the same player drops 
 connection is a new one and the entity is the one that was already there. So **the connection is
 made to point at its entity**, and packets after that are received by the entity.
 
-<iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding-en.html" title="Binding one connection to one entity" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding-en.html" title="Binding one connection to one entity" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding-en.html" target="_blank">↗ View larger</a></p>
 
 The session does not disappear once bound. Packets the session knows are handled by the session

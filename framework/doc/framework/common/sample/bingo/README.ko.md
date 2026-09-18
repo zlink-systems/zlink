@@ -59,7 +59,7 @@ Ready owner가 비정상 종료되었을 때 다른 node에 object를 자동으�
 Client가 직접 연결하는 역할은 Session뿐이다. API, Matchmaking과 Play는 server 간 channel과
 RouteMesh로 통신한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology.html" title="시스템 구성과 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 | 논리 연결 | 역할 |
@@ -381,7 +381,7 @@ application state 변경, 완료 조건과 diagram에서 생략한 실패 경계
 
 ### 7.1 인증과 binding
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding.html" title="인증과 binding" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding.html" title="인증과 binding" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-auth-binding.html" target="_blank">↗ 크게 보기</a></p>
 
 1. Client가 Session STREAM으로 `AuthenticateReq`를 보낸다.
@@ -395,7 +395,7 @@ Framework가 binding route를 갱신한다.
 
 ### 7.2 Matching과 game start
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start.html" title="Matching과 game start" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start.html" title="Matching과 game start" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-matching-start.html" target="_blank">↗ 크게 보기</a></p>
 
 1. `player-1`이 `MatchBingoReq`를 보낸다.
@@ -421,7 +421,7 @@ state를 재개 뒤에도 그대로 유효하다고 가정하지 않는다. Obse
 
 ### 7.3 Card, draw와 winner 결정
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw.html" title="Card·draw와 winner 결정" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw.html" title="Card·draw와 winner 결정" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-card-draw.html" target="_blank">↗ 크게 보기</a></p>
 
 1. 두 player는 start push를 확인한 뒤 서로 다른 deterministic card를 제출한다.
@@ -436,7 +436,7 @@ Card 검증, draw deck, mark와 winner 판정은 domain module이 소유한다. 
 
 ### 7.4 Reward 관찰
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ 크게 보기</a></p>
 
 Game room은 종료 결과를 먼저 확정하고 player push를 제출한 뒤 `bingo.room.reward` topic에
@@ -476,7 +476,7 @@ Game 종료 뒤 player Actor cleanup은 별도 순서로 실행한다.
 - disconnect cleanup만으로 actor destroy가 실행되지 않는다.
 - stream disconnect는 bound session을 정리하지만 actor를 즉시 destroy하지 않는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup.html" title="종료 cleanup" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup.html" title="종료 cleanup" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-end-cleanup.html" target="_blank">↗ 크게 보기</a></p>
 
 1. Room은 cleanup이 한 번만 시작되도록 상태를 기록한다.
@@ -520,7 +520,7 @@ Application Job Queue 포화는 이 결과의 원인이 아니다. Sample은 이
 표현은 달라도 된다. 그러나 한 언어에서만 역할을 합치거나 다른 layer로 옮겨 구조를 다시 해석하게
 만들면 안 된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure.html" title="Bingo 구현 구조" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure.html" title="Bingo 구현 구조" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 |

@@ -10,7 +10,7 @@ title: "설치와 첫 연결 · C++"
 # 설치와 첫 연결
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: Stream Connector 개요](01-overview.ko.md) | [다음: Connector 옵션](03-connector-options.ko.md)
+[목차](README.ko.md) | [이전: Stream Connector 개요](01-overview.ko.md) | [다음: Connector 옵션](03-connector-options.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

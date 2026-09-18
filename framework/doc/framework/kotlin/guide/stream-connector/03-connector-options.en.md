@@ -10,7 +10,7 @@ title: "Connector Options · Kotlin"
 # Connector Options
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: Installation and the First Connection](02-getting-started.en.md) | [Next: Sending Packets](04-sending.en.md)
+[Contents](README.en.md) | [Previous: Installation and the First Connection](02-getting-started.en.md) | [Next: Sending Packets](04-sending.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

@@ -72,7 +72,7 @@ in, like a payment PSP or a separate inventory service.
 In a typical stateless web backend, the following components separately handle per-order ordering,
 coordination state, external-effect retry, and delivering lookup results.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web-en.html" title="Existing approach — stateless web backend" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web-en.html" title="Existing approach — stateless web backend" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-existing-web-en.html" target="_blank">↗ View larger</a></p>
 
 This composition puts more responsibility on external infrastructure than simple CRUD. The state DB
@@ -117,7 +117,7 @@ components. `OrderEventStore`, `OrderReadModelStore`, `CommerceStateStore`, Inve
 are resources, so they're not placed as server components in the diagram below. The time order of
 requests, responses, and state transitions is explained in the §7 sequence diagrams.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology-en.html" title="Basic topology — client and server placement" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology-en.html" title="Basic topology — client and server placement" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-topology-en.html" target="_blank">↗ View larger</a></p>
 
 `CommerceApi` and `OrderWorkflow` share the `shoppingmall.workflow` RouteMesh. Both roles can be
@@ -435,7 +435,7 @@ conditions, and the scope where automatic failover isn't provided.
 
 ### 7.1 Order Start And Success Processing
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success-en.html" title="Order start and success processing" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success-en.html" title="Order start and success processing" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-start-success-en.html" target="_blank">↗ View larger</a></p>
 
 A new order's `StartOrderRes` returns once the `Created` boundary is confirmed. Reservation,
@@ -450,7 +450,7 @@ external module's result.
 
 ### 7.2 Inventory Failure And Payment Failure Compensation
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation-en.html" title="Inventory failure and payment failure compensation" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation-en.html" title="Inventory failure and payment failure compensation" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-failure-compensation-en.html" target="_blank">↗ View larger</a></p>
 
 If the inventory reservation is rejected, the Payment module isn't called. If Payment is rejected, a
@@ -461,7 +461,7 @@ between a success event and a failure event.
 
 ### 7.3 Duplicate Start And Resume After Interruption
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume-en.html" title="Duplicate start and resume after interruption" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume-en.html" title="Duplicate start and resume after interruption" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-duplicate-resume-en.html" target="_blank">↗ View larger</a></p>
 
 On a concurrent start, whichever request first succeeds at reserving the mapping in
@@ -491,7 +491,7 @@ failover or owner-loss recovery.
 
 ### 7.4 Lookup And Projection Regeneration
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild-en.html" title="Lookup and projection regeneration" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild-en.html" title="Lookup and projection regeneration" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lookup-rebuild-en.html" target="_blank">↗ View larger</a></p>
 
 `GetOrderStateReq` only reads the read model — it doesn't progress the order. Even if the projection
@@ -502,7 +502,7 @@ same state.
 
 ### 7.5 Lifecycle And The Failure Boundary
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle-en.html" title="Lifecycle and the failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle-en.html" title="Lifecycle and the failure boundary" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lifecycle-en.html" target="_blank">↗ View larger</a></p>
 
 | Current Authority State | Meaning Of The Instance Message | Sample Result |
@@ -527,7 +527,7 @@ Every supported language places `Client`, `Shared`, `Server` in the same order, 
 logical components must be findable in the same location. The project, package, namespace, and file
 extension can vary per language, but roles aren't merged or the public surface arbitrarily expanded.
 
-<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure-en.html" title="Implementation structure — ShoppingMall" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure-en.html" title="Implementation structure — ShoppingMall" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-implementation-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language |

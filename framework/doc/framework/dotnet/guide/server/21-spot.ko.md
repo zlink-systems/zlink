@@ -37,7 +37,7 @@ title: "Spot · C#/.NET"
 Spot은 id를 가진다. 같은 id로 보낸 메시지는 언제나 같은 Spot에 도착하고, 그 Spot 안에서
 **한 번에 하나씩** 실행된다. 그래서 Spot의 필드는 lock 없이 다뤄도 된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/21-spot-placement.html" title="Spot은 등록한 node 중 한 곳에 만들어진다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/21-spot-placement.html" title="Spot은 등록한 node 중 한 곳에 만들어진다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/21-spot-placement.html" target="_blank">↗ 크게 보기</a></p>
 
 만드는 쪽도 호출하는 쪽도 node를 고르지 않는다. 그 점이 channel과 같고, **대상이 하나로

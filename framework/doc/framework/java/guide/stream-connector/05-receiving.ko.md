@@ -10,7 +10,7 @@ title: "packet 수신 · Java"
 # packet 수신
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: packet 송신](04-sending.ko.md) | [다음: 연결 생명주기](06-lifecycle.ko.md)
+[목차](README.ko.md) | [이전: packet 송신](04-sending.ko.md) | [다음: 연결 생명주기](06-lifecycle.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

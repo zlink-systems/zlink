@@ -1,323 +1,266 @@
 ---
-title: "16. Options — Configuration List And Defaults · C#/.NET"
+title: "Options and Defaults · C#/.NET"
 ---
 
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/server/16-options.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
+
+# Options and Defaults
+
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where ZLink Fits](17-alternative.en.md)
+[Guide Home](README.en.md) | [Previous: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md) | [Next: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md)
 <!-- framework-adapter-nav:end -->
 
-# 16. Options — Configuration List And Defaults
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/server/16-options.en.md) · **C#/.NET** · [Java](../../../java/guide/server/16-options.en.md) · [Kotlin](../../../kotlin/guide/server/16-options.en.md) · [Node/TypeScript](../../../node/guide/server/16-options.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
 
-> **The documents that own this chapter's contract** —
-> [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md)
-> and
-> [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
-> define the exact signatures and value ranges. This chapter helps you **list that surface
-> out and judge when to change it.**
+!!! info "What you get from this chapter"
 
-The earlier chapters explain features and cover only the settings needed at that point. This
-chapter is one place that collects every setting you can specify.
+    You learn what you can set, what value applies when you do not set it, and which values can
+    still be changed after the host has started.
 
-**Most of them work fine unchanged.** That's why every table below lists the default —
-check the relevant row when a reason to change it comes up, and use the default until then.
+Option names and defaults are the same in all five languages. What differs is the spelling and
+the way you set them, and the tabs in each section show that. **Most options work without being
+set.** Check the default on the line that matters when you have a reason to change it, and use
+it as it is until then.
 
-## 1. Where A Setting Applies
+## 1. Where Settings Are Made and What They Cover
 
-The same setting has a different scope depending on where you specify it.
+The same value has a different scope and a different window for change depending on where you
+set it.
 
-<iframe class="zlink-diagram" src="/common/diagrams/16-option-scope-en.html"
-        title="The same setting reaches differently depending on where it is set" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/16-option-scope-en.html" target="_blank">↗ Open larger</a></p>
+| Place | Scope | When it can change |
+| --- | --- | --- |
+| Root options | The default for this whole process | Before the host starts |
+| Node builder | That one MeshNode, channel, or STREAM node | Before the host starts |
+| Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
 ```csharp
 builder.Services.AddZLinkFramework(options =>
 {
-    options.Codecs.Use(ZLinkProtobufCodec.Default);   // ① Root — applies to every payload in this process.
-
-    var mesh = options.AddRouteMesh("play")           // ② Builder — applies only to this one node.
-        .Listen(node.MeshEndpoint)
-        .SetRoutingIdPrefix("play")
-        .SetSpotLimit(2_000);
+    options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
+    var mesh = options.AddRouteMesh("play")            // node builder
+        .Listen("tcp://0.0.0.0:5555")
+        .SetPlacementWeight(100);
     mesh.Channel("room").Server();
-});
-
-// ③ Runtime — changed while running.
-app.MapPost("/admin/drain", (IZLinkRouteMeshRuntimeOptions runtime) =>
-{
-    runtime.Channel("room").Weight = 0;               // Only stops accepting new requests. The connection is kept.
-    return Results.Ok();
 });
 ```
 
-| Spot | Scope | When it can change |
-| --- | --- | --- |
-| Root `options` | Process-wide default | Only before `app.Run()` |
-| Builder | That one node/channel/STREAM node | Only before `app.Run()` |
-| Runtime option | Some values already running | While running ([What Can Change While Running](#7-what-can-change-while-running)) |
-
-There's no surface to call a builder again after `app.Run()`. A bad combination isn't
-deferred to the first call — it's **blocked as an exception at host startup.**
+There is no surface that calls a builder again after the host has started. An invalid
+combination is not deferred to the first call — it **ends as a configuration error during
+startup.**
 
 ## 2. Root Options
 
-Values applied across the whole process.
-
-| Setting | What it sets | Default | When to change it |
-| --- | --- | --- | --- |
-| `DefaultRequestTimeout` | The ceiling a request waits for a response | 30s | The service's response is slower than that, or you want to fail faster |
-| `DefaultSocketSendTimeout` | The ceiling to wait when there's no slot to send into ([backpressure](#31-backpressure--send-wait-behavior)) | 1s | To tolerate congestion longer, or to fail faster |
-| `Codecs.Use(...)` | How the payload is turned into bytes | The built-in default codec | Fixing on Protobuf/MessagePack, or using your own serializer |
-| `AddHandlersFromAssemblyOf<T>()` | The assembly to find handler types in | Not searched | Letting handlers be discovered automatically |
-| `DisableImplicitHandlerAutoRegistration()` | Turns off auto-registration of discovered handlers | On | Controlling which handler opens on which channel purely through registration code |
-| `UseFilter<T>()` | Common processing to put in front of handlers | None | Gathering logging/validation/authorization in one place |
-| `ConfigureMetadata()` | The metadata keys allowed to pass between a client connection and an actor | No key allowed | Something like auth info needs to pass from the connection to the actor |
-| `ConfigureNetwork()` | The default `BindHost`/`AdvertiseHost` for every endpoint | Unspecified | The bind address and advertised address need to differ in a container/Kubernetes |
-| `ConfigureDispatch()` | Unhandled dispatch and diagnostics | Diagnostics use `Errors` | Tuning dispatch policy or diagnostics |
-| `ConfigureInboundDispatch()` | Core HWM and the application job queue | Both profiles use `Balanced` | Tuning the Core byte budget or the queued-job limit |
-| `ApplicationVersion` | This process's application version | `0` | Picking a relocation target by version during a zero-downtime deploy |
-| `MaintenanceWave` | The maintenance group name this process belongs to | None | Grouping nodes to maintain/replace in sequence |
-| `Worker` | The thread pool heavy work is handed off to | Max `processor count × 2` (min 2) · 30s idle · 1024 queue | Handing off a lot of slow computation/I/O to a worker |
-
-- Choosing a codec and registering your own serializer: [Handlers and message processing](31-handler-dispatch.en.md#3-codecs--turning-a-payload-into-bytes)
-- The difference between discovering and exposing a handler: [Channel messaging](20-channel-messaging.en.md#3-routemesh)
-- The scope a filter applies to: [Handlers and message processing](31-handler-dispatch.en.md#2-filters--collecting-shared-processing-in-one-place)
-- Worker calls: [Timers and workers](36-timer-worker.en.md#2-workers--running-outside-the-line)
-- The deployment flow that uses version/maintenance groups: [12-operations](12-operations.en.md)
-
-`AddLocationStore(...)` and `AddRelocationStore(...)` are also registered at the root. The
-auto-connect that finds a peer by logical name is covered by
-[Location](25-location.en.md); the store used when moving state to another node is
-covered by [Relocation](37-relocation.en.md).
-
-> **Metadata only lets through a key you've opened.** Unless you specify per-direction
-> allowed keys with `AllowSessionToActor` and `AllowActorToSession`, no value passes at all.
-> Since it fails silently — the value just disappears with no error — don't forget this
-> setting in a setup that passes authentication results from a connection to an actor.
-
-## 3. MeshNode Options
-
-A [MeshNode](03-concepts.en.md#1-channel--a-connection-between-servers) is the basic unit of a connection
-between servers, and one process creates one per mesh. The following are specified on the
-builder `AddRouteMesh(name)` returns, and apply only to that one node.
-
-| Setting | What it sets | Default | When to change it |
-| --- | --- | --- | --- |
-| `Listen(endpoint)` · `Listen(port)` | This node's own endpoint for other nodes to connect to | None | Always needed. Leave the port `0` to get one automatically |
-| `SetBindHost` · `SetAdvertiseHost` | A bind/advertise address just for this node | The root `ConfigureNetwork()` value | Each node needs a different address rule |
-| `SetRoutingIdPrefix(...)` | The prefix of an auto-issued identifier | None | The common case. Gets a new identifier on every restart, so it never mixes with the previous process |
-| `SetRoutingId(...)` | A fixed identifier for this node | None | Only when the same identifier must carry over even after replacing the process |
-| `SetPlacementWeight(int)` | The ratio at which a new Spot/actor is placed on this node | 100 | Mixing nodes of different specs, or halting new placement |
-| `SetSpotLimit(int)` | The ceiling on Spots this node can hold at once | Unlimited | Enforcing a memory limit by Spot count |
-| `SetActorLimit(int)` | The ceiling on this node's actor count | Unlimited | Setting a per-node cap on connected-user count |
-| `SetActivationConcurrency(int)` | The number of Spot/actor activations that can proceed concurrently | 128 | Limiting store load when activations pile up |
-| `SetDefaultRequestTimeout(...)` | The default wait ceiling for a request going out from this mesh | The root value (30s) | Only this mesh's response is slow or fast |
-| `PeerConnections.Connect(endpoint)` | A peer endpoint to connect to manually | None | A setup that doesn't use auto-connect |
-
-The registrations done in `Objects().Server()` and `Channel(name).Server()` (stable type,
-relocation policy, channel weight) are covered by [06-spot](21-spot.en.md) and
-[Channel messaging](20-channel-messaging.en.md). Manual connection is covered by
-[How channels work](30-channel-patterns.en.md#6-connection-and-discovery).
-
-### 3.1 Backpressure — Send-Wait Behavior
-
-A sent message leaves through a per-peer send queue, and once that queue hits its ceiling,
-the sender waits. At this point, **it waits up to `DefaultSocketSendTimeout` (1s by
-default) for a slot to open**, submits once the slot opens, and if it never opens, ends in a
-`DeadlineExceeded` exception. It's never auto-resent, so whether to retry is up to the
-application.
-
-```csharp
-await client.SendToChannel("profile", command).Async(ct);
-// This await finishing means only "my runtime accepted the submission."
-// It doesn't mean the peer received it or the handler finished.
-```
-
-Why the peer's delay becomes this side's wait, and when the ceiling locks and unlocks, is
-covered by [33-backpressure](33-backpressure.en.md). This section and the next only cover
-the options that set values within that behavior. Flow control itself is owned by Core, and
-the exact contract is covered by [the core guide's socket option](../../../../../../core/doc/guide/12-socket-options.en.md).
-
-> **Logical Multicast is judged separately per target.** Failing to submit to one target
-> doesn't roll back a target already accepted, and it doesn't return a per-target failure as
-> the publish result either.
-
-### 3.2 Options That Set The Backpressure Ceiling
-
-`ConfigureRouterSocket()` sets the ceiling for the socket this node uses; `ConfigureSpotPublisher()`
-sets the manual ceiling for the publish socket Spots use to exchange events. For an unset
-direction, Core calculates the HWM from the context budget and physical-queue census. The
-framework does not calculate a separate connection-count bucket table
-([33-backpressure §4.1](33-backpressure.en.md#41-core-hwm--the-byte-budget-owned-by-core)).
-
-| Setting | What it sets | Raising it | Lowering it |
-| --- | --- | --- | --- |
-| `SendHighWaterMark` | Bytes this node can hold, per peer, **to send**. `0` means unlimited | Absorbs more of a momentary burst | The sender waits sooner, surfacing congestion faster |
-| `ReceiveHighWaterMark` | Bytes this node can hold, per peer, **after receiving**. `0` means unlimited | Tolerates more processing delay | This node fails to pick messages up sooner, delaying the peer's send first |
-| `MailboxMessageBudget` · `MailboxByteBudget` | The message count and bytes one execution unit like a Spot/Actor can hold | A slow execution unit tolerates more of a burst | Surfaces a delayed execution unit sooner |
-| `ReceiveTimeout` · `SendTimeout` | The socket-level wait ceiling | — | The default behavior is enough in most cases |
-| `Linger` (publish socket) | How long to wait for a remaining message when closing | Doesn't drop the last publish on shutdown | The default is `0`, so it closes immediately |
-
-The two manual HWMs differ only in direction and apply to that socket-direction physical
-queue. They are not the Core-context-wide byte budget or the application job queue's job
-limit.
-
-**Raising the high-water mark isn't the default response.** A larger ceiling absorbs
-congestion into memory, which makes `DeadlineExceeded` show up later — and that delays
-learning the cause just as much. Raise it only for a short, clear burst window; if
-processing delay keeps happening, check the processing side (receiving node count, handler
-execution time) instead of the ceiling. Conversely, to fail fast and switch to a different
-path, lower the ceiling and shrink `DefaultSocketSendTimeout`.
-
-Leaving `MaxMessageSize` unlimited means one message can exceed the ceiling by any amount,
-making it impossible to compute the worst-case memory a queue can occupy. If you're planning
-process memory based on the byte ceiling, specify a finite value.
-
-### 3.3 Core HWM And The Application Job Queue
-
-These are values on `IZLinkInboundDispatchOptions`, returned by `ConfigureInboundDispatch()`.
-
-| Setting | What it sets | Default |
+| Option | What it sets | Default |
 | --- | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Memory-limit hint forwarded for Core budget calculation | `null` |
-| `CoreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | `null` (Auto) |
-| `CoreHwmProfile` | Core Auto-budget profile | `Balanced` |
-| `ApplicationJobQueueProfile` | Queued-job Auto profile | `Balanced` |
-| `MaxQueuedApplicationJobs` | Exact manual queued-job limit | `null` (Auto) |
+| Codec registration | Payload serialization format | Built-in JSON |
+| `BindHost` | The address a listener binds | `127.0.0.1` |
+| `AdvertiseHost` | The address given to peers | Not set — the bind address is used |
+| `DefaultRequestTimeout` | How long a request waits for its reply | 30 seconds |
+| `SessionReplacementCallbackTimeout` | How long a session replacement callback may run | 30 seconds |
+| Stream compression | STREAM payload compression | LZ4 in use |
+| Worker `MinThreads` · `MaxThreads` | Thread count of the CPU worker pool | 0 · twice the processor count |
+| Worker `IdleTimeout` | How long an idle thread is kept | 30 seconds |
+| `ApplicationVersion` · `MaintenanceWave` | Version and maintenance group a rolling update compares | 0 · not set |
+| Handler discovery, filters, metadata policy | What is registered and which keys may pass | Only what is registered |
+| Location store · relocation store | Stores for placement and state transfer | Single-node setup when absent |
 
-The memory limit and Core budget must be positive. The manual queued-job limit is
-`1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
-use the same labels but are independent enums and calculations. See
-[Backpressure](33-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
-for saturation behavior and production measurement.
+- **The bind address defaults to loopback.** Set the bind address and the advertised address
+  separately when a node or client on another host has to connect.
+- **STREAM compression starts enabled.** Turn it off explicitly in the compression settings.
+- **The CPU worker pool has no queue limit.** The Application job queue is what limits intake
+  (§3). `DefaultRequestTimeout` rejects values of `0` or below.
 
-## 4. Error Handling And Diagnostics
+## 3. Core HWM and Application Job Queue Limits
 
-`ConfigureDispatch()` sets **the behavior when an unregistered packet arrives** and **how
-much diagnostics is recorded.**
+Core HWM limits the bytes held by the ordinary queues, and the Application job queue limits the
+number of jobs waiting for a handler to start across the whole host. How both behave is covered
+by [Backpressure](33-backpressure.en.md#1-core-hwm-and-the-application-job-queue).
 
-```csharp
-var dispatch = options.ConfigureDispatch();
-dispatch.Unhandled.Request = ZLinkUnhandledDispatchAction.ReplyError;  // The sender receives it as an error.
-dispatch.Unhandled.Publish = ZLinkUnhandledDispatchAction.Drop;        // Drops an event no one's interested in.
-dispatch.Diagnostics
-    .SetLevel(ZLinkDiagnosticsLevel.Normal)
-    .IncludeMessageSizes(false);
-```
-
-`Unhandled` is set separately for the three directions request/send/publish.
-
-| Value | Behavior | When to pick it |
+| Option | What it sets | Default |
 | --- | --- | --- |
-| `ReplyError` | Sends an error response to the sender | The default for request. The caller needs to know right away |
-| `LogAndDrop` | Logs it and drops it | send/publish, when you want a record of the cause without breaking the flow |
-| `Drop` | Drops it silently | An event the subscriber isn't interested in mixes in normally |
-| `Throw` | Throws an exception | Surfacing a contract mismatch immediately during development/testing |
+| `CoreHwmMemoryLimitBytes` | Memory limit hint passed to the Core budget calculation | Not set |
+| `CoreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | Not set |
+| `CoreHwmProfile` | Core auto-budget profile | `Balanced` |
+| `ApplicationJobQueueProfile` | Profile used to compute the job limit | `Balanced` |
+| `MaxQueuedApplicationJobs` | Exact job limit that replaces the profile calculation | Not set |
+| `ApplicationJobQueuePauseThresholdPercent` | Usage at which intake pauses | 80 |
+| `ApplicationJobQueueResumeThresholdPercent` | Usage at which intake resumes | 60 |
 
-`Diagnostics` sets the following.
+The memory limit and the Core budget accept positive values only. The manual job limit ranges
+over `1..2,147,483,647`, and `0` is not unlimited but a startup configuration error. The two
+percentages range over `1..100` and `0..99`, and the resume value must be smaller than the pause
+value. Both profiles use the same labels but are independent values, and `Balanced` means 128
+jobs per processor.
 
-| Setting | What it sets | When to change it |
+## 4. Diagnostic Recording
+
+| Option | What it sets | Default |
 | --- | --- | --- |
-| `SetLevel(...)` | The record level, one of `Off` · `Errors` · `Normal` · `Detailed` | `Normal` normally; `Detailed` only when tracing a cause |
-| `SetSampleRate(double)` | The fraction to record | When traffic is heavy enough that recording everything is a burden |
-| `IncludeMessageSizes(bool)` | Whether to record message size | Need to check payload size |
+| Recording level | `Off` · `Errors` · `Normal` · `Detailed` | `Errors` |
+| `TraceSampleRate` | Share of normal flows recorded, ranging over `0.0..1.0` | 1.0 |
+| `IncludeMessageSizes` | Whether payload byte sizes are recorded too | Not recorded |
 
-How to read the record left here is covered by [Monitoring](26-monitoring.en.md).
+What happens to a packet that arrives with no handler is set in the same place. A request gets
+an error reply, while a send and a publish are recorded and dropped. The error-reply action
+cannot be chosen for a send or a publish because they have no reply path. This setting does not
+exist in C++, where only the default behavior applies. What each level records is covered by
+[Monitoring](26-monitoring.en.md#4-setting-the-diagnostics-level).
 
-## 5. Location Options
+!!! warning "The default for message size recording differs only on the JVM"
 
-`ConfigureLocations()` sets the interval and validity period for refreshing location
-information. Registration and [relocation](03-concepts.en.md#5-relocation--moving-to-another-node)
-behavior are covered by [Location](25-location.en.md).
+    Java and Kotlin start with `IncludeMessageSizes` enabled, while the other languages start
+    with it disabled. State the value explicitly to keep the volume of records aligned across a
+    mixed-language deployment.
 
-| Setting | What it sets | Default | When to change it |
-| --- | --- | --- | --- |
-| `OwnerLeaseRenewInterval` | The interval to renew your own ownership | 5s | Lengthen to reduce store write load |
-| `OwnerLeaseTtl` | The time before an ownership with stalled renewal expires | 15s | Shorten to detect failure faster; lengthen to tolerate a temporary delay |
-| `OwnerLeaseRenewTimeout` | The ceiling for one renewal attempt | 3s | When the store's response is slow |
-| `OwnerLeaseFencingMargin` | The margin to voluntarily give up authority ahead of expiry | 5s | Narrowing the moment two nodes could own the same target |
-| `PollingInterval` | The interval to re-read the store when there's no change notification | 1s | Balancing store load against how fast changes are reflected |
-| `StoreFailureGrace` | How long a store outage is tolerated | 30s | Once this passes, no new connection starts. Existing connections are kept |
-| `RouteCacheMaxAge` | How long a looked-up location is reused | 15s | `0` means no caching. Shorten if moves are frequent |
-| `MessageFollowDuration` | How long the previous owner node forwards messages to the new owner | 30s | `0` means it doesn't forward |
+## 5. MeshNode Options
 
-## 6. STREAM Options
-
-[STREAM](03-concepts.en.md#4-stream--external-client-connections) is a connection-oriented channel to
-an external client like mobile or a game. Specify the following on the node that receives
-that connection. Usage is covered by [STREAM](23-stream.en.md).
-
-| Setting | What it sets | Default | When to change it |
-| --- | --- | --- | --- |
-| `AddStreamNode(name).Bind(...)` | The endpoint a client connects to | None | Always needed |
-| `SetBindHost` · `SetAdvertiseHost` | The bind/advertise address | The root `ConfigureNetwork()` value | Container deployment |
-| `SetTlsServer(cert, key, requireClientCertificate)` | The server certificate and whether a client certificate is required | Off | Exposing this directly to the outside |
-| `EnableActorDispatch()` | Hands an incoming packet to the bound actor | Off | A setup that ties the connection to an actor ([Session and Actor](24-actor-session.en.md)) |
-| `AddSession<T>()` | The session implementation that handles connection lifetime | None | Handling connect/authenticate/disconnect directly |
-| `ConfigureStreamCompression()` | Compression for payload exchanged with the client | LZ4 | Turning it off with `Disable()`, or swapping in your own codec |
-
-## 7. What Can Change While Running
-
-The rest of the settings are fixed at startup. The settings that can change while running
-are:
-
-| Setting | Injected as | What it changes |
+| Option | What it sets | Default |
 | --- | --- | --- |
-| Channel weight | `IZLinkRouteMeshRuntimeOptions` | `Channel(name).Weight` — the ratio at which this node accepts new requests. `0` keeps the connection but stops accepting new requests |
-| Placement weight | `IZLinkRouteMeshRuntimeOptions` | `Mesh(name).PlacementWeight` — the ratio at which a new Spot/actor is placed on this node |
-| Diagnostics level | `IZLinkDiagnosticsRuntime` | `Level` — raise to `Detailed` only while tracing a cause, then revert |
+| `Listen` | This node's own address for peers to connect to | Must be set |
+| `BindHost` · `AdvertiseHost` | Bind and advertised address for this node alone | The root value |
+| `RoutingId` · `RoutingIdPrefix` | This node's identifier | Generated |
+| `ObjectRole` | Whether the node takes part in placement | See the note below |
+| `PlacementWeight` | Share of new placements, ranging over `0..10000` | 100 |
+| `ActorLimit` · `SpotLimit` | How many this node may hold at once | `0` — no limit |
+| `ActivationConcurrency` | Cold activations that may proceed at once | 128 |
+| `InstanceSpotIdleTimeout` | How long an idle Instance Spot is kept | `0` — never removed |
+| `DefaultRequestTimeout` | Limit for requests leaving this node | The root value (30 seconds) |
+| Peer connection | Peers to connect to manually | None — the location store finds them |
 
-A weight value ranges `0..10000`, with a default of `100`. The operational flow is covered by
-[How channels work](30-channel-patterns.en.md#43-stopping-only-new-requests-while-running) and
-[12-operations](12-operations.en.md).
+For both limits, `0` means no limit and a positive value ranges over `1..2,147,483,647`.
+`ActivationConcurrency` rejects `0` instead, because it limits the activations in progress
+rather than the number of objects.
 
-## 8. What You Must Set
+!!! warning "The placement default differs only in C++"
 
-There aren't many settings without a default that you have to specify yourself.
+    C++ starts as a `Server` that receives placements when `ObjectRole` is left unset, while the
+    other languages take no part in placement. State the role explicitly in C++ for a node that
+    is to hold no Spot or Actor.
 
-| Required setting | If you skip it |
+## 6. Send Waiting and Socket Limits
+
+| Option | What it sets | Default |
+| --- | --- | --- |
+| `SendTimeout` | How long a send waits for room | 1 second |
+| `ReceiveTimeout` | Wait limit in the receive direction | Not set |
+| `SendHighWaterMark` · `ReceiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
+
+Once a limit is reached, the sender waits up to `SendTimeout`, and the call ends as a deadline
+overrun if no room ever appears. Nothing is sent again automatically, so the application decides
+whether to retry. **Connections between MeshNodes have no message size limit setting** — that
+limit belongs to the STREAM node and the ClientServer listener
+([Backpressure](33-backpressure.en.md)).
+
+!!! warning "Where a manual HWM is set differs by language"
+
+    The surface for setting the per-direction byte limit directly exists only in some languages
+    and not in C++. When it is not set, the Core computes it from the physical queues, which
+    makes leaving the value unset the ordinary configuration. A setting that limits one execution
+    unit's mailbox by message count or bytes has no effect in any language.
+
+## 7. Location Options
+
+| Option | What it sets | Default |
+| --- | --- | --- |
+| `OwnerLeaseRenewInterval` | How often ownership is renewed | 5 seconds |
+| `OwnerLeaseTtl` | When ownership without renewal expires | 15 seconds |
+| `OwnerLeaseRenewTimeout` | Limit for one renewal attempt | 3 seconds |
+| `OwnerLeaseFencingMargin` | Margin for releasing authority before expiry | 5 seconds |
+| `PollingInterval` | How often a store without change notification is re-read | 1 second |
+| `StoreFailureGrace` | How long a store failure is tolerated | 30 seconds |
+| `RouteCacheMaxAge` | How long a resolved location is reused | 15 seconds |
+| `MessageFollowDuration` | How long the former owner forwards messages to the new owner | 30 seconds |
+| `SessionRelocationSealTimeout` | Limit for waiting on a session route update | 3 seconds |
+| `RelocationPayloadChunkLimit` | Size limit of one relocation payload chunk | 256 KiB |
+| `RelocationInFlightPayloadBudget` | Chunk bytes in flight on one connection | 16 MiB |
+| `RelocationNodeInFlightPayloadBudget` | The same limit across the whole node | `0` — not applied |
+| `RelocationCutoverWaitTimeout` | How long the cutover is awaited | 1 second |
+
+**The lease values move together.** `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout` must be
+smaller than `OwnerLeaseTtl - OwnerLeaseFencingMargin`. The defaults satisfy this at 8 seconds
+against 10 seconds, so ownership survives one failed renewal. `RouteCacheMaxAge` must be at
+least five seconds shorter than `MessageFollowDuration`, and `0` for either turns off the route
+cache and message forwarding respectively. Placement and transfer behavior are covered by
+[Location](25-location.en.md) and [Relocation](37-relocation.en.md).
+
+## 8. STREAM Node Options
+
+| Option | What it sets | Default |
+| --- | --- | --- |
+| `Bind` | The address clients connect to | Must be set |
+| `BindHost` · `AdvertiseHost` | Bind and advertised address | The root value |
+| Session registration | The session type created per connection | Must be set |
+| `MaxMessageSize` | Byte limit of one message sent by a client | 64 KiB |
+| TLS settings | Server certificate and whether a client certificate is required | Plaintext, no client certificate required |
+| Actor dispatch | Forwarding an incoming packet to the bound Actor | Off |
+
+`MaxMessageSize` applies only in the client-to-server direction, and `0` means no limit is
+imposed. A message over the limit does not reach the handler even in part, and the server closes
+the connection. Actor dispatch is enabled once per STREAM node, and a second call is an error.
+Which mesh the Actor is found in is decided by the global ActorId rather than an argument, so no
+mesh name is given alongside. The registration code is covered by [STREAM](23-stream.en.md) and
+[Session and Actor](24-actor-session.en.md).
+
+## 9. Values That Can Change While Running
+
+The values that can change after startup are the selection weights. The rest are fixed when the
+host starts.
+
+| Value | What it is for |
 | --- | --- |
-| A MeshNode's `Listen(...)` | Exception at host startup |
-| At least one channel or object role on a MeshNode | Exception at host startup |
-| Exactly one relocation policy on a Spot/actor factory | Exception at host startup |
-| A STREAM node's `Bind(...)` | Exception at host startup |
-| `AddLocationStore(...)` if using auto-connect, `PeerConnections.Connect(...)` if not | Can't find a peer to connect to |
-| The metadata key to pass between a connection and an actor | The value just fails to pass, with no error |
+| Channel weight | Share of new requests and sends this node is selected for |
+| Placement weight | Share of new Spots and Actors placed on this node |
 
-Everything else starts from its default.
+```csharp
+runtime.Mesh("play").PlacementWeight = 0;
+runtime.Channel("room").Weight = 0;
+```
 
-## 9. Common Problems
+Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**
+— existing objects and connections are kept. In a zero-downtime rollout, use it to keep new
+traffic away from this node before starting a relocation
+([Operations and Lifecycle](12-operations.en.md#4-wiring-operational-calls-and-readiness)).
 
-- **A setting changed, but it didn't take effect** → most options are fixed before
-  `app.Run()`. What can change while running is listed in
-  [§7](#7-what-can-change-while-running).
-- **Metadata isn't reaching the actor** → check whether `ConfigureMetadata()` allowed that
-  key for the right direction. An unallowed key disappears with no error.
-- **Another node can't connect in a container** → the bind address may be getting used as the
-  advertised address as-is. Use `ConfigureNetwork()` or the node's `SetAdvertiseHost` to
-  specify the address a peer should connect to.
-- **`send` ends in `DeadlineExceeded`** → it waited for a send slot and hit the ceiling
-  ([backpressure](#31-backpressure--send-wait-behavior)). Check the receiving side's
-  processing speed first, and if it's a short burst, raise `SendHighWaterMark` or
-  `DefaultSocketSendTimeout`.
-- **The store slows down when activations pile up** → lower `SetActivationConcurrency`
-  (default 128) to reduce concurrent activations.
+## 10. Values That Must Be Set
 
-## 10. Related Documents
+These have no default, and leaving them out either fails startup or produces behavior other than
+the one intended.
 
-- The interface index for the registration surface:
-  [13-interface-catalog §2 Topology Registration](13-interface-catalog.en.md#2-topology-registration)
-  — the verification class `BuilderContracts`
-- The exact signatures and value ranges:
-  [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md) ·
-  [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
-- Registration points and layering: [01-overview](01-overview.en.md#33-layering-and-registration-points)
-- Runtime observation and operations: [Monitoring](26-monitoring.en.md) · [12-operations](12-operations.en.md)
+| Value | When it is missing |
+| --- | --- |
+| The MeshNode `Listen` address | Configuration error at startup |
+| At least one channel role or object role on the MeshNode | Configuration error at startup |
+| The STREAM node `Bind` address and session type | Configuration error at startup |
+| Exactly one relocation policy per Spot or Actor factory | Configuration error at startup |
+| A relocation store when a state-carrying factory or an Instance Spot exists | Configuration error at startup |
+| A location store when several nodes are used | Peers cannot be found |
+| Metadata keys passed between a connection and an Actor | The value is dropped without an error |
 
----
-<!-- framework-adapter-nav:bottom:start -->
-[Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where ZLink Fits](17-alternative.en.md)
-<!-- framework-adapter-nav:bottom:end -->
+## 11. Common Problems
 
-<script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
-</script>
+- **A setting was changed but has no effect** — most options are fixed when the host starts. The
+  values that can change while running are listed in
+  [§9](#9-values-that-can-change-while-running).
+- **A node on another host cannot connect** — the bind address defaults to loopback. Set the bind
+  address and the advertised address separately.
+- **Memory keeps growing after a value was set to `0`** — `0` on a byte limit is unlimited. Leave
+  the value unset to let the Core compute it.
+- **Ownership keeps being lost** — the renewal interval plus the renewal timeout is larger than
+  the lifetime minus the margin.
+- **The connection drops on a large message from a client** — the STREAM size limit is 64 KiB.
+  Raise it on a node that receives large payloads.
+- **A weight of `0` was expected to drop existing connections** — a weight stops new assignments
+  only, and existing objects and connections are kept.
+
+## 12. Related Documents
+
+- What the limits change — [Backpressure](33-backpressure.en.md)
+- How to read the records — [Monitoring](26-monitoring.en.md)
+- How to drain traffic with a weight — [Operations and Lifecycle](12-operations.en.md)
+- Surface names per language — [Interface Catalog](13-interface-catalog.en.md)

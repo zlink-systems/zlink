@@ -10,7 +10,7 @@ title: "Stream Connector Overview · C++"
 # Stream Connector Overview
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Next: Installation and the First Connection](02-getting-started.en.md)
+[Contents](README.en.md) | [Next: Installation and the First Connection](02-getting-started.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

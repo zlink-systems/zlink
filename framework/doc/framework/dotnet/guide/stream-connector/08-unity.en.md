@@ -52,11 +52,12 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
             Endpoint = new Uri("wss://example.com/stream")
         });
 
-        _connector.ConnectionStateChanged += (change, _) =>
+        //  Disposing the returned value unregisters it. Here it ends with the connector.
+        _connector.OnConnectionStateChanged((change, _) =>
         {
             Debug.Log($"ZLink stream state: {change.Current}");
             return ValueTask.CompletedTask;
-        };
+        });
 
         _connector.On("game.update", (message, _) =>
         {

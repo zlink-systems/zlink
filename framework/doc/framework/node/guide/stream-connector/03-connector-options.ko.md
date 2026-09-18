@@ -10,7 +10,7 @@ title: "Connector 옵션 · Node/TypeScript"
 # Connector 옵션
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: 설치와 첫 연결](02-getting-started.ko.md) | [다음: packet 송신](04-sending.ko.md)
+[목차](README.ko.md) | [이전: 설치와 첫 연결](02-getting-started.ko.md) | [다음: packet 송신](04-sending.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

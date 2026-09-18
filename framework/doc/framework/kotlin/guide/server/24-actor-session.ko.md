@@ -33,7 +33,7 @@ Actor는 같은 연결로 보낼 수 있다.
 Actor는 이전 것이 그대로 남아 있다. 그래서 **연결이 자기 Actor를 가리키게 해 두고**, 그 뒤의
 packet은 그 Actor가 받는다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding.html" title="연결 하나를 개체 하나에 묶는다" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding.html" title="연결 하나를 개체 하나에 묶는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding.html" target="_blank">↗ 크게 보기</a></p>
 
 묶은 뒤에도 session은 사라지지 않는다. session이 아는 packet은 session이 먼저 처리하고,

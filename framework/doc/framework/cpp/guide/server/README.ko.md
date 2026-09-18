@@ -47,7 +47,7 @@ int main (int argc, char **argv)
 실시간 연결(stream)로 상태 변화를 받는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology.html"
-        title="역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다" loading="lazy" style="width:100%;border:0"></iframe>
+        title="역할별 서버가 typed 메시지로 통신하고, client는 stream으로 받는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 각 서버 프로세스는 독립 실행 파일이고 서로 TCP로 연결된다. 하나의 서버 안에
@@ -252,7 +252,7 @@ room_mesh.objects ()
 이 가이드의 모든 다이어그램은 같은 시각 언어를 사용한다 — 색이 곧 개념이다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/guide-element-kinds.html"
-        title="구성도에 나오는 다섯 가지" loading="lazy" style="width:100%;border:0"></iframe>
+        title="구성도에 나오는 다섯 가지" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-element-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 여러 장이 같은 TicTacToe/Bingo 토폴로지를 그리며, 장마다 확대 위치만 바뀐다.
