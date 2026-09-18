@@ -5131,7 +5131,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="22 102 878 598" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="22 102 914 702" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">전체 topology</title>
         <desc id="archify-diagram-description">API 서버 · 세션 서버 · 도메인 서버 · location store</desc>
         <!-- Definitions -->
@@ -5157,195 +5157,225 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="API 서버 (예: Api)" x="244" y="130" width="180" height="254" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="API 서버 (예: Api)" x="256" y="130" width="180" height="512" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="세션 서버 (예: Session)" x="244" y="418" width="404" height="110" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="세션 서버 (예: Session)" x="256" y="666" width="416" height="110" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="2" data-composition-frame-label="도메인 서버 (예: Play)" x="692" y="130" width="180" height="542" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="2" data-composition-frame-label="도메인 서버 (예: Play)" x="728" y="130" width="180" height="512" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="client" data-edge-to="http" data-edge-label="1 HTTP 요청" data-edge-key="0" data-composition-points="170,327;222,327;222,190;274,190" d="M 170 327 L 214 327 Q 222 327 222 319 L 222 198 Q 222 190 230 190 L 274 190" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="http" data-edge-to="apic" data-edge-key="1" data-composition-points="334,220;334,304" d="M 334 220 L 334 304" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="apic" data-edge-to="nodeh" data-edge-label="2a ClientServer channel" data-edge-key="2" data-composition-points="394,327;558,327;558,190;722,190" d="M 394 327 L 550 327 Q 558 327 558 319 L 558 198 Q 558 190 566 190 L 722 190" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="apic" data-edge-to="ispot" data-edge-label="2b RouteMesh channel" data-edge-key="3" data-composition-points="394,341;722,341" d="M 394 341 L 722 341" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="client" data-edge-to="streamn" data-edge-label="3 STREAM 접속" data-edge-key="4" data-composition-points="170,341;222,341;222,471;274,471" d="M 170 341 L 214 341 Q 222 341 222 349 L 222 463 Q 222 471 230 471 L 274 471" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="streamn" data-edge-to="relay" data-edge-label="relay" data-edge-key="5" data-composition-points="394,478;498,478" d="M 394 478 L 498 478" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="relay" data-edge-to="espot" data-edge-label="4 RouteMesh channel" data-edge-key="6" data-composition-points="618,471;722,471" d="M 618 471 L 722 471" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="relay" data-edge-to="uspot" data-edge-label="actor가 처리" data-edge-key="7" data-composition-points="618,485;670,485;670,622;722,622" d="M 618 485 L 662 485 Q 670 485 670 493 L 670 614 Q 670 622 678 622 L 722 622" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="apic" data-edge-to="store" data-edge-label="주소 해석" data-edge-key="8" data-composition-points="274,334;222,334;222,615;170,615" d="M 274 334 L 230 334 Q 222 334 222 342 L 222 607 Q 222 615 214 615 L 170 615" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="streamn" data-edge-to="store" data-edge-label="등록" data-edge-key="9" data-composition-points="274,485;222,485;222,629;170,629" d="M 274 485 L 230 485 Q 222 485 222 493 L 222 621 Q 222 629 214 629 L 170 629" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="client" data-edge-to="http" data-edge-label="1 HTTP 요청" data-edge-key="0" data-composition-points="170,317;228,317;228,190;286,190" d="M 170 317 L 220 317 Q 228 317 228 309 L 228 198 Q 228 190 236 190 L 286 190" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="http" data-edge-to="apic" data-edge-key="1" data-composition-points="346,220;346,294" d="M 346 220 L 346 294" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="apic" data-edge-to="nodeh" data-edge-label="2a ClientServer channel" data-edge-key="2" data-composition-points="406,317;582,317;582,190;758,190" d="M 406 317 L 574 317 Q 582 317 582 309 L 582 198 Q 582 190 590 190 L 758 190" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="apic" data-edge-to="ispot" data-edge-label="2b RouteMesh channel" data-edge-key="3" data-composition-points="406,331;758,331" d="M 406 331 L 758 331" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="spotc" data-edge-to="espot" data-edge-label="2c id로 Spot 호출" data-edge-key="4" data-composition-points="406,458;758,458" d="M 406 458 L 758 458" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="actorc" data-edge-to="uspot" data-edge-label="2d id로 Actor 호출" data-edge-key="5" data-composition-points="406,585;758,585" d="M 406 585 L 758 585" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="client" data-edge-to="streamn" data-edge-label="3 STREAM 접속" data-edge-key="6" data-composition-points="170,331;228,331;228,719;286,719" d="M 170 331 L 220 331 Q 228 331 228 339 L 228 711 Q 228 719 236 719 L 286 719" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="streamn" data-edge-to="relay" data-edge-label="relay" data-edge-key="7" data-composition-points="406,726;522,726" d="M 406 726 L 522 726" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="relay" data-edge-to="uspot" data-edge-label="4 RouteMesh channel" data-edge-key="8" data-composition-points="642,726;700,726;700,599;758,599" d="M 642 726 L 692 726 Q 700 726 700 718 L 700 607 Q 700 599 708 599 L 758 599" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="apic" data-edge-to="store" data-edge-label="주소 해석" data-edge-key="9" data-composition-points="286,324;228,324;228,585;170,585" d="M 286 324 L 236 324 Q 228 324 228 332 L 228 577 Q 228 585 220 585 L 170 585" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="streamn" data-edge-to="store" data-edge-label="등록" data-edge-key="10" data-composition-points="286,733;228,733;228,599;170,599" d="M 286 733 L 236 733 Q 228 733 228 725 L 228 607 Q 228 599 220 599 L 170 599" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-client" data-node-id="client" data-node-label="클라이언트 앱" tabindex="0" role="button" aria-label="Focus 클라이언트 앱, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
           <title>클라이언트 앱 · Architecture component</title>
-          <rect x="50" y="304" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="304" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 310) scale(0.6875)">
+          <rect x="50" y="294" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="294" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 300) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="110" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">클라이언트 앱</text>
+          <text data-node-label="" x="110" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">클라이언트 앱</text>
+        </g>
+
+        <g id="node-store" data-node-id="store" data-node-label="Location store" tabindex="0" role="button" aria-label="Focus Location store, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
+          <title>Location store · Architecture component</title>
+          <rect x="50" y="562" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="562" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 568) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" x="110" y="596" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location store</text>
         </g>
 
         <g id="node-http" data-node-id="http" data-node-label="HTTP endpoint" tabindex="0" role="button" aria-label="Focus HTTP endpoint, POST /games, API 서버 (예: Api)" aria-pressed="false" data-node-kind="external" data-node-sublabel="POST /games" data-node-context="API 서버 (예: Api)">
           <title>HTTP endpoint · POST /games · API 서버 (예: Api)</title>
-          <rect x="274" y="160" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="274" y="160" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(280 166) scale(0.6875)">
+          <rect x="286" y="160" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="286" y="160" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(292 166) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="334" y="188" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">HTTP endpoint</text>
-        <text data-detail="context" x="334" y="204" class="t-muted" font-size="9" text-anchor="middle">POST /games</text>
+          <text data-node-label="" data-detail-anchor="" x="346" y="188" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">HTTP endpoint</text>
+        <text data-detail="context" x="346" y="204" class="t-muted" font-size="9" text-anchor="middle">POST /games</text>
         </g>
 
         <g id="node-apic" data-node-id="apic" data-node-label="channel client" tabindex="0" role="button" aria-label="Focus channel client, API 서버 (예: Api)" aria-pressed="false" data-node-kind="frontend" data-node-context="API 서버 (예: Api)">
           <title>channel client · API 서버 (예: Api)</title>
-          <rect x="274" y="304" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="274" y="304" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(280 310) scale(0.6875)">
+          <rect x="286" y="294" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="286" y="294" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(292 300) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="334" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">channel client</text>
+          <text data-node-label="" x="346" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">channel client</text>
+        </g>
+
+        <g id="node-spotc" data-node-id="spotc" data-node-label="spot client" tabindex="0" role="button" aria-label="Focus spot client, API 서버 (예: Api)" aria-pressed="false" data-node-kind="frontend" data-node-context="API 서버 (예: Api)">
+          <title>spot client · API 서버 (예: Api)</title>
+          <rect x="286" y="428" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="286" y="428" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(292 434) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" x="346" y="462" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">spot client</text>
+        </g>
+
+        <g id="node-actorc" data-node-id="actorc" data-node-label="actor client" tabindex="0" role="button" aria-label="Focus actor client, API 서버 (예: Api)" aria-pressed="false" data-node-kind="frontend" data-node-context="API 서버 (예: Api)">
+          <title>actor client · API 서버 (예: Api)</title>
+          <rect x="286" y="562" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="286" y="562" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(292 568) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" x="346" y="596" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">actor client</text>
         </g>
 
         <g id="node-streamn" data-node-id="streamn" data-node-label="STREAM node" tabindex="0" role="button" aria-label="Focus STREAM node, 세션 서버 (예: Session)" aria-pressed="false" data-node-kind="database" data-node-context="세션 서버 (예: Session)">
           <title>STREAM node · 세션 서버 (예: Session)</title>
-          <rect x="274" y="448" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="274" y="448" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(280 454) scale(0.6875)">
+          <rect x="286" y="696" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="286" y="696" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(292 702) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="334" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">STREAM node</text>
+          <text data-node-label="" x="346" y="730" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">STREAM node</text>
         </g>
 
         <g id="node-relay" data-node-id="relay" data-node-label="session relay" tabindex="0" role="button" aria-label="Focus session relay, 세션 서버 (예: Session)" aria-pressed="false" data-node-kind="messagebus" data-node-context="세션 서버 (예: Session)">
           <title>session relay · 세션 서버 (예: Session)</title>
-          <rect x="498" y="448" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="498" y="448" width="120" height="60" rx="6" class="c-messagebus" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(504 454) scale(0.6875)">
+          <rect x="522" y="696" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="522" y="696" width="120" height="60" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(528 702) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="558" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session relay</text>
+          <text data-node-label="" x="582" y="730" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session relay</text>
         </g>
 
         <g id="node-nodeh" data-node-id="nodeh" data-node-label="node handler" tabindex="0" role="button" aria-label="Focus node handler, 도메인 서버 (예: Play)" aria-pressed="false" data-node-kind="frontend" data-node-context="도메인 서버 (예: Play)">
           <title>node handler · 도메인 서버 (예: Play)</title>
-          <rect x="722" y="160" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="722" y="160" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(728 166) scale(0.6875)">
+          <rect x="758" y="160" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="758" y="160" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(764 166) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="782" y="194" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">node handler</text>
+          <text data-node-label="" x="818" y="194" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">node handler</text>
         </g>
 
         <g id="node-ispot" data-node-id="ispot" data-node-label="Instance Spot" tabindex="0" role="button" aria-label="Focus Instance Spot, 도메인 서버 (예: Play)" aria-pressed="false" data-node-kind="backend" data-node-context="도메인 서버 (예: Play)">
           <title>Instance Spot · 도메인 서버 (예: Play)</title>
-          <rect x="722" y="304" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="722" y="304" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(728 310) scale(0.6875)">
+          <rect x="758" y="294" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="758" y="294" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(764 300) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="782" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Instance Spot</text>
+          <text data-node-label="" x="818" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Instance Spot</text>
         </g>
 
         <g id="node-espot" data-node-id="espot" data-node-label="entry spot" tabindex="0" role="button" aria-label="Focus entry spot, 배정, 도메인 서버 (예: Play)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="배정" data-node-context="도메인 서버 (예: Play)">
           <title>entry spot · 배정 · 도메인 서버 (예: Play)</title>
-          <rect x="722" y="448" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="722" y="448" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(728 454) scale(0.6875)">
+          <rect x="758" y="428" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="758" y="428" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(764 434) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="782" y="476" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">entry spot</text>
-        <text data-detail="context" x="782" y="492" class="t-muted" font-size="9" text-anchor="middle">배정</text>
+          <text data-node-label="" data-detail-anchor="" x="818" y="456" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">entry spot</text>
+        <text data-detail="context" x="818" y="472" class="t-muted" font-size="9" text-anchor="middle">배정</text>
         </g>
 
         <g id="node-uspot" data-node-id="uspot" data-node-label="user spot" tabindex="0" role="button" aria-label="Focus user spot, actor, 도메인 서버 (예: Play)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="actor" data-node-context="도메인 서버 (예: Play)">
           <title>user spot · actor · 도메인 서버 (예: Play)</title>
-          <rect x="722" y="592" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="722" y="592" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(728 598) scale(0.6875)">
+          <rect x="758" y="562" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="758" y="562" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(764 568) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="782" y="620" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">user spot</text>
-        <text data-detail="context" x="782" y="636" class="t-muted" font-size="9" text-anchor="middle">actor</text>
-        </g>
-
-        <g id="node-store" data-node-id="store" data-node-label="Location store" tabindex="0" role="button" aria-label="Focus Location store, descriptor rows, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="descriptor rows" data-node-context="Architecture component">
-          <title>Location store · descriptor rows · Architecture component</title>
-          <rect x="50" y="592" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="592" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 598) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="620" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location store</text>
-        <text data-detail="context" x="110" y="636" class="t-muted" font-size="9" text-anchor="middle">descriptor rows</text>
+          <text data-node-label="" data-detail-anchor="" x="818" y="590" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">user spot</text>
+        <text data-detail="context" x="818" y="606" class="t-muted" font-size="9" text-anchor="middle">actor</text>
         </g>
 
         <!-- Connection labels -->
         <g data-detail="context" data-edge-from="client" data-edge-to="http" data-edge-label="1 HTTP 요청" data-edge-key="0">
-          <rect x="190.6" y="238.5" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="222" y="248.5" class="t-backend" font-size="8" text-anchor="middle">1 HTTP 요청</text>
+          <rect x="196.6" y="233.5" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="228" y="243.5" class="t-backend" font-size="8" text-anchor="middle">1 HTTP 요청</text>
         </g>
 
         <g data-detail="context" data-edge-from="apic" data-edge-to="nodeh" data-edge-label="2a ClientServer channel" data-edge-key="2">
-          <rect x="497.8" y="216.5" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="558" y="226.5" class="t-backend" font-size="8" text-anchor="middle">2a ClientServer channel</text>
+          <rect x="521.8" y="211.5" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="582" y="221.5" class="t-backend" font-size="8" text-anchor="middle">2a ClientServer channel</text>
         </g>
         <g data-detail="context" data-edge-from="apic" data-edge-to="ispot" data-edge-label="2b RouteMesh channel" data-edge-key="3">
-          <rect x="505" y="299" width="106" height="14" rx="3" class="c-mask"/>
-          <text x="558" y="309" class="t-backend" font-size="8" text-anchor="middle">2b RouteMesh channel</text>
+          <rect x="529" y="289" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="582" y="299" class="t-backend" font-size="8" text-anchor="middle">2b RouteMesh channel</text>
         </g>
-        <g data-detail="context" data-edge-from="client" data-edge-to="streamn" data-edge-label="3 STREAM 접속" data-edge-key="4">
-          <rect x="185.8" y="386" width="72.4" height="14" rx="3" class="c-mask"/>
-          <text x="222" y="396" class="t-backend" font-size="8" text-anchor="middle">3 STREAM 접속</text>
+        <g data-detail="context" data-edge-from="spotc" data-edge-to="espot" data-edge-label="2c id로 Spot 호출" data-edge-key="4">
+          <rect x="536.2" y="416" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="582" y="426" class="t-backend" font-size="8" text-anchor="middle">2c id로 Spot 호출</text>
         </g>
-        <g data-detail="context" data-edge-from="streamn" data-edge-to="relay" data-edge-label="relay" data-edge-key="5">
-          <rect x="429" y="458" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="446" y="468" class="t-muted" font-size="8" text-anchor="middle">relay</text>
+        <g data-detail="context" data-edge-from="actorc" data-edge-to="uspot" data-edge-label="2d id로 Actor 호출" data-edge-key="5">
+          <rect x="533.8" y="543" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="582" y="553" class="t-backend" font-size="8" text-anchor="middle">2d id로 Actor 호출</text>
         </g>
-        <g data-detail="context" data-edge-from="relay" data-edge-to="espot" data-edge-label="4 RouteMesh channel" data-edge-key="6">
-          <rect x="619.4" y="451" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="670" y="461" class="t-backend" font-size="8" text-anchor="middle">4 RouteMesh channel</text>
+        <g data-detail="context" data-edge-from="client" data-edge-to="streamn" data-edge-label="3 STREAM 접속" data-edge-key="6">
+          <rect x="191.8" y="505" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="228" y="515" class="t-backend" font-size="8" text-anchor="middle">3 STREAM 접속</text>
         </g>
-        <g data-detail="context" data-edge-from="relay" data-edge-to="uspot" data-edge-label="actor가 처리" data-edge-key="7">
-          <rect x="636.2" y="555.5" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="670" y="565.5" class="t-muted" font-size="8" text-anchor="middle">actor가 처리</text>
+        <g data-detail="context" data-edge-from="streamn" data-edge-to="relay" data-edge-label="relay" data-edge-key="7">
+          <rect x="447" y="706" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="464" y="716" class="t-muted" font-size="8" text-anchor="middle">relay</text>
         </g>
-        <g data-detail="context" data-edge-from="apic" data-edge-to="store" data-edge-label="주소 해석" data-edge-key="8">
-          <rect x="195.4" y="476.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="222" y="486.5" class="t-messagebus" font-size="8" text-anchor="middle">주소 해석</text>
+        <g data-detail="context" data-edge-from="relay" data-edge-to="uspot" data-edge-label="4 RouteMesh channel" data-edge-key="8">
+          <rect x="649.4" y="664.5" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="700" y="674.5" class="t-backend" font-size="8" text-anchor="middle">4 RouteMesh channel</text>
         </g>
-        <g data-detail="context" data-edge-from="streamn" data-edge-to="store" data-edge-label="등록" data-edge-key="9">
-          <rect x="207" y="537" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="222" y="547" class="t-messagebus" font-size="8" text-anchor="middle">등록</text>
+        <g data-detail="context" data-edge-from="apic" data-edge-to="store" data-edge-label="주소 해석" data-edge-key="9">
+          <rect x="201.4" y="456.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="228" y="466.5" class="t-messagebus" font-size="8" text-anchor="middle">주소 해석</text>
+        </g>
+        <g data-detail="context" data-edge-from="streamn" data-edge-to="store" data-edge-label="등록" data-edge-key="10">
+          <rect x="213" y="646" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="228" y="656" class="t-messagebus" font-size="8" text-anchor="middle">등록</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
         <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="API 서버 (예: Api)">
-          <rect data-graph-role="structural-frame-label-mask" x="248" y="140" width="107.2" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="252" y="153" class="t-cloud" font-size="9" font-weight="600">API 서버 (예: Api)</text>
+          <rect data-graph-role="structural-frame-label-mask" x="260" y="140" width="107.2" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="264" y="153" class="t-cloud" font-size="9" font-weight="600">API 서버 (예: Api)</text>
         </g>
 
         <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="세션 서버 (예: Session)">
-          <rect data-graph-role="structural-frame-label-mask" x="248" y="428" width="134.2" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="252" y="441" class="t-cloud" font-size="9" font-weight="600">세션 서버 (예: Session)</text>
+          <rect data-graph-role="structural-frame-label-mask" x="260" y="676" width="134.2" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="264" y="689" class="t-cloud" font-size="9" font-weight="600">세션 서버 (예: Session)</text>
         </g>
 
         <g data-graph-role="structural-frame-label" data-composition-frame-id="2" data-composition-frame-kind="region" data-composition-frame-label="도메인 서버 (예: Play)">
-          <rect data-graph-role="structural-frame-label-mask" x="696" y="140" width="128.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="700" y="153" class="t-cloud" font-size="9" font-weight="600">도메인 서버 (예: Play)</text>
+          <rect data-graph-role="structural-frame-label-mask" x="732" y="140" width="128.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="736" y="153" class="t-cloud" font-size="9" font-weight="600">도메인 서버 (예: Play)</text>
         </g>
 
         <!-- Legend -->
@@ -5539,22 +5569,23 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>구성</h3>
+          <h3>API 서버에서 나가는 길</h3>
         </div>
         <ul>
-          <li>&bull; API 서버: HTTP 요청을 받아 ClientServer channel로 node handler를 부르거나, RouteMesh channel로 Instance Spot에 요청한다</li>
-          <li>&bull; 세션 서버: STREAM node가 client 연결을 받아 session relay하고, RouteMesh channel로 spot의 actor에 전달한다</li>
-          <li>&bull; 도메인 서버: node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다</li>
+          <li>&bull; channel client — 이름으로 부른다. handler 하나가 처리하면 ClientServer channel, 상태 단위가 받아야 하면 RouteMesh channel</li>
+          <li>&bull; spot client — id로 Spot을 부른다</li>
+          <li>&bull; actor client — id로 Actor를 부른다</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>STREAM을 따로 두는 이유</h3>
+          <h3>세션 서버</h3>
         </div>
         <ul>
-          <li>&bull; STREAM node를 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다 — 연결 수와 상태 처리량이 따로 늘기 때문이다</li>
+          <li>&bull; STREAM node가 client 연결을 받아 session relay하고, RouteMesh channel로 spot의 actor에 전달한다</li>
+          <li>&bull; 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다 — 연결 수와 상태 처리량이 따로 늘기 때문이다</li>
         </ul>
       </div>
 
