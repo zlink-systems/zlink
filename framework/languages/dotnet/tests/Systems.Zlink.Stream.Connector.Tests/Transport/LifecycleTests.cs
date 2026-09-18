@@ -1598,6 +1598,133 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
     }
 
+    [Fact]
+    public async Task ImmediateCloseRunsDisconnectedHandlerWithoutWaitingForIt()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var server = ObserveClientCloseAsync(listener);
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+        });
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = connector.OnDisconnected(async (_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            await releaseHandler.Task;
+            handlerCompleted.TrySetResult();
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        // The close runs the disconnect handler but never waits for it to finish
+        // (stream-connector spec §7); a handler that has not returned must not hold
+        // the close open.
+        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(handlerStarted.Task.IsCompleted, "Close returned without running the disconnect handler.");
+        Assert.False(handlerCompleted.Task.IsCompleted);
+        releaseHandler.TrySetResult();
+        await handlerCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
+    }
+
+    [Fact]
+    public async Task ImmediateDisconnectedCallbackCanAwaitCloseFromInsideClose()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var server = ObserveClientCloseAsync(listener);
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+        });
+        var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackFailure = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = connector.OnDisconnected(async (_, _) =>
+        {
+            try
+            {
+                // The handler suspends first, so it resumes after the close worker has
+                // moved on; calling close from there must not wait on the close it runs
+                // under.
+                await Task.Yield();
+                await connector.Close.Async();
+                callbackCompleted.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                callbackFailure.TrySetResult(exception);
+            }
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAny(callbackCompleted.Task, callbackFailure.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var callbackException = callbackFailure.Task.IsCompleted ? await callbackFailure.Task : null;
+        Assert.True(
+            callbackCompleted.Task.IsCompleted,
+            callbackException is not null
+                ? $"Disconnected callback Close failed: {callbackException}"
+                : "Disconnected callback did not complete.");
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
+    }
+
+    [Fact]
+    public async Task ImmediateFailingDisconnectedHandlerDoesNotFaultCloseAfterItSuspends()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var server = ObserveClientCloseAsync(listener);
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+        });
+        var handlerThrew = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = connector.OnDisconnected(async (_, _) =>
+        {
+            await releaseHandler.Task;
+            handlerThrew.TrySetResult();
+            throw new InvalidOperationException("disconnect handler failed");
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        releaseHandler.TrySetResult();
+        await handlerThrew.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The abandoned notification must not leave an unobserved task exception behind.
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
+    }
+
     private static async Task ObserveClientCloseAsync(TcpListener listener)
     {
         using var tcp = await listener.AcceptTcpClientAsync();

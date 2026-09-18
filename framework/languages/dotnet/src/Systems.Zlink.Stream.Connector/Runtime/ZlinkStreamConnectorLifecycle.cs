@@ -197,10 +197,36 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
         await NotifyStateChangedAsync(change, CancellationToken.None).ConfigureAwait(false);
         if (snapshot.Connection is not null)
-            await callbacks.NotifyDisconnectedAsync(ZlinkStreamCloseReason.ClientClose, CancellationToken.None)
-                .ConfigureAwait(false);
+            StartDisconnectNotification(ZlinkStreamCloseReason.ClientClose);
 
         if (closeException is not null) ExceptionDispatchInfo.Capture(closeException).Throw();
+    }
+
+    /// <summary>
+    ///     Runs the registered disconnect handlers and returns without waiting for them to
+    ///     finish (stream-connector spec §7).
+    /// </summary>
+    /// <remarks>
+    ///     Making the call is what runs the handlers: under <c>Immediate</c> dispatch each
+    ///     handler runs inline up to its first suspension, and under <c>Manual</c> dispatch the
+    ///     whole notification completes synchronously by queueing them for the next pump, so
+    ///     that mode sees no change. Only a handler that suspends leaves a remainder behind,
+    ///     and that remainder is abandoned here: a handler that calls
+    ///     <see cref="CloseAsync" /> would otherwise wait on the very close task it is running
+    ///     under, and the two would wait on each other. A notification that did finish still
+    ///     surfaces its failure the way it always has; the abandoned remainder has its failure
+    ///     observed so a handler's exception never reaches the finalizer.
+    /// </remarks>
+    private void StartDisconnectNotification(ZlinkStreamCloseReason closeReason)
+    {
+        var notification = callbacks.NotifyDisconnectedAsync(closeReason, CancellationToken.None);
+        if (notification.IsCompleted)
+        {
+            notification.GetAwaiter().GetResult();
+            return;
+        }
+
+        ObserveBackgroundTask(notification.AsTask());
     }
 
     public void RecordInbound()
