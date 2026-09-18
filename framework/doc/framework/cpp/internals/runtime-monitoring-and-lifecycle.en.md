@@ -41,10 +41,9 @@ snapshot or interpret binding monitor events directly.
 ## 3. Structured peer events
 
 `zlink.runtime.mesh_node.peer_changed` is derived from peer-state changes in public
-snapshots. The C++ RuntimeMonitoring E2E service compares the public `observe()` result:
-it records `ConnectionReady` when a peer enters the ready set and `Disconnected` when
-it leaves. Each record includes the MeshName, Routing ID, snapshot sequence, and current
-topology state.
+snapshots. Comparing successive public `observe()` results records `ConnectionReady`
+when a peer enters the ready set and `Disconnected` when it leaves. Each record includes
+the MeshName, Routing ID, snapshot sequence, and current topology state.
 
 The record does not expose an internal descriptor generation. Crash replacement is
 verified by confirming that the old peer leaves the ready list after the owner lease
@@ -69,22 +68,19 @@ Normal shutdown can remove the descriptor and lease during owner cleanup, but a 
 termination cannot. A replacement claiming the same role and RID therefore receives
 `rejected_conflict` while the old owner lease remains valid.
 
-The C++ RuntimeMonitoring E2E runner does not start the replacement as soon as the peer
-becomes not-ready. It waits for the configured owner-lease TTL and fencing margin, then
-starts the replacement. A takeover bypass before expiry is not used because a stale
-owner could overwrite the current descriptor.
+A replacement must start after the configured owner-lease TTL and fencing margin have
+elapsed, not as soon as the peer becomes not-ready. A takeover bypass before expiry is
+not offered because a stale owner could overwrite the current descriptor.
 
 ## 6. Logging-provider isolation
 
 A Framework logging callback is an observation boundary. If a callback sink throws,
 the logger completes that sink invocation and continues dispatch and host lifecycle.
 Sinks are invoked independently, so one sink failure does not suppress another sink.
-The same rule applies to the throwing monitoring E2E profile.
 
 ## 7. Verification locations
 
 - binding monitor contract: `bindings/cpp/tests/contract/test_cpp_contract_monitor.cpp`
-- C++ RuntimeMonitoring E2E: `framework/languages/cpp/e2e/RuntimeMonitoring/run_e2e.sh`
 - public snapshot contract: `framework/languages/cpp/framework/include/zlink/framework/contracts/monitoring/route_mesh_runtime.hpp`
 - runtime projection: `framework/languages/cpp/framework/src/runtime/mesh/route_mesh_runtime_service.cpp`
 - monitor identity conversion: `framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp`

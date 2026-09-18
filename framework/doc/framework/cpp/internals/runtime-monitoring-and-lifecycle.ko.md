@@ -41,10 +41,10 @@ dispatch로 전파하지 않는다. 느린 observer는 전체 runtime을 막지 
 ## 3. Structured log의 peer event
 
 `zlink.runtime.mesh_node.peer_changed`는 public snapshot의 peer state 변화에서
-파생한다. C++ RuntimeMonitoring E2E service는 public `observe()` 결과를 비교해
-ready 집합에 새로 들어온 peer에는 `ConnectionReady`, 빠진 peer에는
-`Disconnected`를 기록한다. 각 record에는 MeshName, Routing ID, snapshot
-sequence와 현재 topology state가 포함된다.
+파생한다. 연속한 public `observe()` 결과를 비교해 ready 집합에 새로 들어온
+peer에는 `ConnectionReady`, 빠진 peer에는 `Disconnected`를 기록한다. 각
+record에는 MeshName, Routing ID, snapshot sequence와 현재 topology state가
+포함된다.
 
 이 기록은 내부 descriptor generation을 추가로 공개하지 않는다. Crash replacement
 검증은 owner lease 만료 뒤 이전 peer가 ready 목록에서 빠지고 새 process의 동일
@@ -69,23 +69,19 @@ field만 사용하며 native private storage나 reflection에 의존하지 않�
 그 작업을 수행하지 못한다. 따라서 replacement가 같은 role과 RID를 즉시 claim하면
 기존 owner lease가 유효한 동안 `rejected_conflict`를 받는다.
 
-C++ RuntimeMonitoring E2E runner는 peer가 not-ready가 된 뒤에도 replacement를
-바로 시작하지 않는다. 설정된 owner lease TTL과 fencing margin을 기다린 후
-replacement를 시작한다. 만료 전 claim을 허용하는 takeover 우회는 stale owner가
-현재 descriptor를 덮어쓸 수 있으므로 사용하지 않는다.
+Replacement는 peer가 not-ready가 된 시점이 아니라 설정된 owner lease TTL과
+fencing margin이 지난 뒤에 시작해야 한다. 만료 전 claim을 허용하는 takeover
+우회는 stale owner가 현재 descriptor를 덮어쓸 수 있으므로 제공하지 않는다.
 
 ## 6. Logging provider의 격리
 
 Framework logging callback은 관측 경계다. callback sink가 예외를 던져도 logger는
 해당 sink 호출을 끝내고 dispatch 및 host lifecycle을 계속 수행한다. 여러 sink는
 각각 독립적으로 호출되며 한 sink의 실패가 다른 sink의 호출을 중단하지 않는다.
-이 규칙은 monitoring callback을 검증하는 throwing E2E profile에서도 동일하게
-적용된다.
 
 ## 7. 검증 위치
 
 - binding monitor contract: `bindings/cpp/tests/contract/test_cpp_contract_monitor.cpp`
-- C++ RuntimeMonitoring E2E: `framework/languages/cpp/e2e/RuntimeMonitoring/run_e2e.sh`
 - public snapshot contract: `framework/languages/cpp/framework/include/zlink/framework/contracts/monitoring/route_mesh_runtime.hpp`
 - runtime projection: `framework/languages/cpp/framework/src/runtime/mesh/route_mesh_runtime_service.cpp`
 - monitor identity conversion: `framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp`
