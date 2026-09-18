@@ -30,6 +30,7 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
     this.expiryTimer = undefined;
   }
 
+  // --8<-- [start:doc-zw-observe-peers]
   private async observeReadiness(): Promise<void> {
     const initial = this.routeMeshRuntime.snapshot(ZoneWorldNames.zoneMesh);
     this.publish(this.nodes.applyLiveRoutingIds(this.liveRoutingIds(initial)));
@@ -49,6 +50,7 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
         .map((peer) => peer.nodeRid)
     );
   }
+  // --8<-- [end:doc-zw-observe-peers]
 
   private publish(nodes: readonly NodeView[]): void {
     for (const node of nodes) this.consoles.publish(node);

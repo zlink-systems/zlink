@@ -92,6 +92,7 @@ internal static class EnterWorld
         // admission cannot send a human-only notification to a bot with no session.
         actor.PrepareEntry(message.IsBot);
 
+        // --8<-- [start:doc-zw-entry-join]
         var zoneId = ZoneWorldSpec.ZoneOf(message.X, message.Y);
         actor.TrackDeferredJoin(
             new PlayerPosition(message.X, message.Y),
@@ -108,6 +109,7 @@ internal static class EnterWorld
                 InitialEntry: true,
                 FromZoneId: null))
             .Defer();
+        // --8<-- [end:doc-zw-entry-join]
 
         logger.LogInformation(
             "player entry scheduled. player={PlayerId}, zone={ZoneId}, bot={IsBot}",

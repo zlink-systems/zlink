@@ -91,6 +91,7 @@ internal sealed class BroadcastProbeSubscriber(
 /// reading the store on every move would be expensive, so the state arrives by fanout.
 /// </summary>
 [ZLinkHandlerGroup(HandlerGroups.ZoneBroadcast)]
+// --8<-- [start:doc-zw-maintenance-subscriber]
 internal sealed class NodeMaintenanceChangedSubscriber(
     NodeMaintenancePolicy maintenance,
     ILogger<NodeMaintenanceChangedSubscriber> logger)
@@ -110,3 +111,4 @@ internal sealed class NodeMaintenanceChangedSubscriber(
         return ValueTask.CompletedTask;
     }
 }
+// --8<-- [end:doc-zw-maintenance-subscriber]

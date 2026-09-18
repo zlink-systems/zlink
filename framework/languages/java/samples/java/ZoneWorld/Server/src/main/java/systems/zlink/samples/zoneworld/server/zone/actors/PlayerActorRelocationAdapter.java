@@ -11,6 +11,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 public final class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    // --8<-- [start:doc-zw-actor-capture]
     @Override
     public CompletionStage<byte[]> capture(PlayerActor actor, ZLinkRelocationCancellation cancellation) {
         try {
@@ -23,6 +24,7 @@ public final class PlayerActorRelocationAdapter implements ZLinkActorRelocationA
             return CompletableFuture.failedFuture(error);
         }
     }
+    // --8<-- [end:doc-zw-actor-capture]
 
     @Override
     public CompletionStage<Void> restore(

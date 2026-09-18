@@ -22,6 +22,7 @@ internal sealed class SocketEventHandler(
     ILogger<SocketEventHandler> logger)
     : BackgroundService
 {
+    // --8<-- [start:doc-zw-observe-peers]
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var previous = new HashSet<string>(StringComparer.Ordinal);
@@ -41,6 +42,7 @@ internal sealed class SocketEventHandler(
             previous = current;
         }
     }
+    // --8<-- [end:doc-zw-observe-peers]
 
     private async Task ApplyAsync(
         string rid,

@@ -18,6 +18,7 @@ internal sealed class WorldOperationsAdapter(
                 new WorldAnnounceEvent(announcementId, text))
             .Async(cancellationToken);
 
+    // --8<-- [start:doc-zw-ops-publish]
     public async ValueTask PublishMaintenanceChangeAsync(
         string nodeId,
         bool enabled,
@@ -28,4 +29,5 @@ internal sealed class WorldOperationsAdapter(
                 ZoneWorldNames.MaintenanceTopic,
                 new NodeMaintenanceChangedEvent(nodeId, enabled))
             .Async(cancellationToken);
+    // --8<-- [end:doc-zw-ops-publish]
 }

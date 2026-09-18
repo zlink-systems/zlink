@@ -52,6 +52,7 @@ class GameSession(
 
     private fun join(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): CompletionStage<Void> {
         val request = payload.decode(Messages.JoinWorldMsg::class.java)
+        // --8<-- [start:doc-zw-session-bind]
         return actors.getOrCreate(request.playerId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
             .inMesh(ZoneWorldNames.MESH)
             .request(ZLinkMessage.empty())
@@ -68,5 +69,6 @@ class GameSession(
                 sessionContext.actors().bindOrGet(actor)
                     .thenCompose { bound -> bound.relay(dispatch, payload) }
             }
+        // --8<-- [end:doc-zw-session-bind]
     }
 }

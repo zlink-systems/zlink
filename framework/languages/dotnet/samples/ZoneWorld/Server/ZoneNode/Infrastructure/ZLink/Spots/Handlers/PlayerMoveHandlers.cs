@@ -108,9 +108,11 @@ internal sealed class PlayerZoneStateDeliveryHandler(ILogger<PlayerZoneStateDeli
             ownView?.X,
             ownView?.Y,
             ownView?.ZoneId ?? "<missing>");
+        // --8<-- [start:doc-zw-state-push]
         await actor.Context.BoundSession
             .Send(new ZoneStateNotify(message.ZoneId, message.Tick, message.Players))
             .Async(cancellationToken);
+        // --8<-- [end:doc-zw-state-push]
         logger.LogInformation(
             "zone state delivery handler completed. player={PlayerId}, zone={ZoneId}",
             actor.ActorId,
@@ -255,6 +257,7 @@ internal sealed class PlayerMovement(
         int toY,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-zw-move]
         switch (moves.Decide(actor.Position, toX, toY))
         {
             case MoveDecision.Rejected rejected:
@@ -283,6 +286,7 @@ internal sealed class PlayerMovement(
                     cancellationToken);
                 return;
         }
+        // --8<-- [end:doc-zw-move]
     }
 
     /// <summary>
@@ -299,6 +303,7 @@ internal sealed class PlayerMovement(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // --8<-- [start:doc-zw-zone-change]
         actor.TrackDeferredJoin(to, purpose);
         actor.Context
             .JoinSpot(
@@ -312,6 +317,7 @@ internal sealed class PlayerMovement(
                     FromZoneId: actor.ZoneId,
                     CrashBoundaryProbe: crashBoundaryProbe))
             .Defer();
+        // --8<-- [end:doc-zw-zone-change]
 
         logger.LogInformation(
             "zone change scheduled. player={PlayerId}, zone={ZoneId}",

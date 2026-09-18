@@ -161,11 +161,14 @@ public final class PlayerActor implements ZLinkActor {
         completedJoins.forEach(this::rememberJoin);
     }
 
+    // --8<-- [start:doc-zw-state-push]
     public CompletionStage<Void> send(Object message) {
         if (isBot) return CompletableFuture.completedFuture(null);
         return context.boundSession().send(message).submit();
     }
+    // --8<-- [end:doc-zw-state-push]
 
+    // --8<-- [start:doc-zw-join-completed]
     @Override
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         ZLinkActorJoinOperationId operationId = completion instanceof ZLinkActorJoinCompletion.Accepted accepted
@@ -216,6 +219,7 @@ public final class PlayerActor implements ZLinkActor {
         reverseDirection();
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-zw-join-completed]
 
     private static String mapFailure(String kind) {
         return switch (kind) {

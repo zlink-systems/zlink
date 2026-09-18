@@ -66,6 +66,7 @@ struct node_state_t
 
 node_state_t *g_node_state = nullptr;
 
+// --8<-- [start:doc-zw-entry-join]
 inline void prepare_join (player_actor_t &actor, int x, int y, bool initial, bool crash = false)
 {
     actor.pending_join = true;
@@ -74,6 +75,7 @@ inline void prepare_join (player_actor_t &actor, int x, int y, bool initial, boo
     actor.pending_x = x;
     actor.pending_y = y;
     actor.pending_zone_id = zone_of (x, y);
+    // --8<-- [start:doc-zw-zone-change]
     actor.context ()
       .join_spot (actor.pending_zone_id,
                   enter_zone_req_t{actor.player_id, x, y, actor.is_bot, initial,
@@ -85,13 +87,16 @@ inline void prepare_join (player_actor_t &actor, int x, int y, bool initial, boo
       // its own deadline (same 30 s the java sample uses for the probe).
       .timeout (std::chrono::seconds (crash ? 30 : 15))
       .defer ();
+    // --8<-- [end:doc-zw-zone-change]
 }
+// --8<-- [end:doc-zw-entry-join]
 
 inline bool apply_move_authority (player_actor_t &actor, const move_msg_t &message)
 {
     // join_spot is deferred: a later timer/message turn can run before its
     // completion callback. Keep exactly one relocation attempt per Actor so a
     // stale duplicate cannot race the accepted target restore.
+    // --8<-- [start:doc-zw-move]
     if (const auto error = validate_move (actor.x, actor.y, message.x, message.y, false)) {
         if (actor.is_bot) {
             actor.dir_x = -actor.dir_x;
@@ -115,6 +120,7 @@ inline bool apply_move_authority (player_actor_t &actor, const move_msg_t &messa
     actor.x = message.x;
     actor.y = message.y;
     return true;
+    // --8<-- [end:doc-zw-move]
 }
 
 class zone_entry_spot_t final : public fw::entry_spot_t<player_actor_t>
@@ -257,9 +263,11 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
           .add_actor_request<&zone_spot_t::location_probe> (actor_location_probe_req_t::packet_name)
           .add_actor_send<&zone_spot_t::follow_probe_one_way> (
             message_follow_probe_msg_t::packet_name);
+        // --8<-- [start:doc-zw-border-subscribe]
         for (const auto &from : adjacent_zones (_context.spot_id ()))
             _context.handlers ().add_subscribe<&zone_spot_t::border> (
               border_topic (from, _context.spot_id ()));
+        // --8<-- [end:doc-zw-border-subscribe]
     }
 
     fw::task_t<void> on_initialize () override
@@ -291,6 +299,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                       << " player=" << actor_id << std::endl;
             std::this_thread::sleep_for (std::chrono::seconds (60));
         }
+        // --8<-- [start:doc-zw-admission]
         if (g_node_state->maintenance.load ()
             && (!enter.from_zone_id || *enter.from_zone_id != _context.spot_id ()))
             co_return fw::spot_actor_join_result_t::reject (
@@ -301,6 +310,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         }
         co_return fw::spot_actor_join_result_t::accept (
           enter_zone_res_t{_context.spot_id (), std::nullopt});
+        // --8<-- [end:doc-zw-admission]
     }
 
     fw::task_t<void> on_actor_joined (player_actor_t &actor) override
@@ -420,11 +430,13 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                         fw::message_context_t &,
                         const deliver_zone_state_msg_t &message)
     {
+        // --8<-- [start:doc-zw-state-push]
         if (!actor.is_bot)
             actor.context ()
               .bound_session ()
               .send (zone_state_notify_t{message.zone_id, message.tick, message.players})
               .async ();
+        // --8<-- [end:doc-zw-state-push]
     }
     void deliver_changed (player_actor_t &actor,
                           fw::message_context_t &,
@@ -498,6 +510,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             && !g_node_state->fault_injected.exchange (true))
             throw std::runtime_error ("ZoneWorld injected zone tick failure");
         sort_players (local);
+        // --8<-- [start:doc-zw-border-publish]
         for (const auto &to : adjacent_zones (_context.spot_id ())) {
             std::vector<player_view_t> border_players;
             std::copy_if (local.begin (), local.end (), std::back_inserter (border_players),
@@ -512,6 +525,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                 zone_border_event_t{_context.spot_id (), to, _tick, std::move (border_players)})
               .async ();
         }
+        // --8<-- [end:doc-zw-border-publish]
 
         std::map<std::string, player_view_t> merged;
         {
@@ -619,6 +633,7 @@ class diagnostics_handler_t
     }
 };
 
+// --8<-- [start:doc-zw-maintenance-subscriber]
 struct maintenance_fanout_handler_t
 {
     using event_type = node_maintenance_changed_event_t;
@@ -630,6 +645,7 @@ struct maintenance_fanout_handler_t
             g_node_state->maintenance.store (event.enabled);
     }
 };
+// --8<-- [end:doc-zw-maintenance-subscriber]
 
 class announce_fanout_handler_t
 {
@@ -942,6 +958,7 @@ int main (int argc, char **argv)
         options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
           .set_connection_string (configuration.redis_endpoint)
           .set_key_prefix (configuration.redis_key_prefix + "relocation:");
+        // --8<-- [start:doc-zw-node-register]
         auto mesh = options.add_route_mesh (names_t::mesh);
         mesh.set_automatic_routing_id_prefix ("zn");
         if (configuration.mesh_advertise_host)
@@ -965,6 +982,8 @@ int main (int argc, char **argv)
           .disable_relocation ()
           .add_actor_factory<player_actor_t, player_actor_factory_t> (names_t::player_actor)
           .preserve_state_with<player_relocation_adapter_t> ();
+        // --8<-- [end:doc-zw-node-register]
+        // --8<-- [start:doc-zw-fanout-subscribe]
         options.handlers ()
           .group ("zoneworld-broadcast")
           .add_publish<maintenance_fanout_handler_t> ()
@@ -972,6 +991,7 @@ int main (int argc, char **argv)
         options.add_fanout_channel (names_t::broadcast_channel)
           .enable_subscriber ()
           .use_handler_group ("zoneworld-broadcast");
+        // --8<-- [end:doc-zw-fanout-subscribe]
         options.http ().listen (configuration.bootstrap_http_endpoint).map_health ("/health");
     }
     if (!configuration.subscriber_only) {

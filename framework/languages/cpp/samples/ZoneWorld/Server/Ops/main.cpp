@@ -276,6 +276,7 @@ class ops_monitor_service_t final : public fw::hosted_service_t
     {
         _state = &services.get_required<ops_state_t> ();
         _notifications = &services.get_required<ops_notification_queue_t> ();
+        // --8<-- [start:doc-zw-observe-peers]
         auto &runtime = services.get_required<fw::route_mesh_runtime_t> ();
         _observation = runtime.observe (
           names_t::mesh, 64,
@@ -287,6 +288,7 @@ class ops_monitor_service_t final : public fw::hosted_service_t
         }
         catch (...) {
         }
+        // --8<-- [end:doc-zw-observe-peers]
         _running.store (true);
         _worker = std::thread ([this] {
             while (_running.load ()) {
@@ -401,10 +403,12 @@ class ops_session_t final : public fw::packet_stream_session_t
                                                               request.node_id, request.enabled})
                                        .timeout (std::chrono::seconds (10))
                                        .async<apply_node_maintenance_res_t> ();
+                // --8<-- [start:doc-zw-ops-publish]
                 co_await _publisher
                   .publish (names_t::broadcast_channel, names_t::maintenance_topic,
                             node_maintenance_changed_event_t{request.node_id, request.enabled})
                   .async ();
+                // --8<-- [end:doc-zw-ops-publish]
                 if (const auto changed = _state.set_maintenance (request.node_id, request.enabled))
                     co_await _consoles.publish (*changed);
                 stream
@@ -482,9 +486,11 @@ int main (int argc, char **argv)
     options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
       .set_connection_string (configuration.redis_endpoint)
       .set_key_prefix (configuration.redis_key_prefix + "relocation:");
+    // --8<-- [start:doc-zw-fanout-publisher]
     options.add_fanout_channel (names_t::broadcast_channel)
       .set_routing_id (zlink::routing_id_t::from ("zoneworld-ops-publisher"))
       .enable_publisher (configuration.broadcast_endpoint);
+    // --8<-- [end:doc-zw-fanout-publisher]
     auto mesh = options.add_route_mesh (names_t::mesh);
     mesh.set_automatic_routing_id_prefix ("ops").listen (configuration.mesh_endpoint);
     mesh.objects ().client ();

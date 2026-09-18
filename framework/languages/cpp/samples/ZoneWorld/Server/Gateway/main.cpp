@@ -115,6 +115,7 @@ class game_session_t final : public fw::packet_stream_session_t
                 throw fw::framework_exception_t (fw::framework_error_kind_t::protocol_error,
                                                  "JoinWorldReq must be the first game packet");
             const auto request = payload.parse_json<join_world_req_t> ();
+            // --8<-- [start:doc-zw-session-bind]
             auto &actors = stream.actors ();
             auto located = actors.get_or_create (names_t::player_actor, request.player_id);
             if (!located)
@@ -122,6 +123,7 @@ class game_session_t final : public fw::packet_stream_session_t
                                                  "player actor could not be located");
             auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
             _player_id = std::string (bound.actor_id ());
+            // --8<-- [end:doc-zw-session-bind]
         }
 
         auto actor = stream.actors ().find (*_player_id);

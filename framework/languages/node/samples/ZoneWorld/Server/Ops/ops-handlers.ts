@@ -137,10 +137,12 @@ class SetMaintenanceHandler {
         )
         .timeout(10_000)
         .submit<ApplyNodeMaintenanceRes>();
+      // --8<-- [start:doc-zw-ops-publish]
       await this.fanout.publish(
         ZoneWorldNames.broadcastChannel,
         new NodeMaintenanceChangedEvent(request.nodeId, request.enabled)
       ).submit();
+      // --8<-- [end:doc-zw-ops-publish]
       context.client.reply(new SetMaintenanceRes(applied.nodeId, applied.enabled, applied.zones)).submit();
     } catch (error) {
       console.error(

@@ -91,6 +91,7 @@ public final class GameSession implements ZLinkSession {
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         Messages.JoinWorldMsg request = payload.decode(Messages.JoinWorldMsg.class);
+        // --8<-- [start:doc-zw-session-bind]
         return actors.getOrCreate(request.playerId(), ZoneWorldNames.PLAYER_ACTOR_TYPE)
             .inMesh(ZoneWorldNames.MESH)
             .request(ZLinkMessage.empty())
@@ -108,5 +109,6 @@ public final class GameSession implements ZLinkSession {
                 return context.actors().bindOrGet(actorRef)
                     .thenCompose(actor -> actor.relay(dispatch, payload));
             });
+        // --8<-- [end:doc-zw-session-bind]
     }
 }

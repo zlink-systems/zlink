@@ -53,10 +53,12 @@ public sealed class ZoneSpot(
             return;
         }
 
+        // --8<-- [start:doc-zw-border-subscribe]
         foreach (var fromZoneId in World.AdjacentZones(ZoneId))
             Context.Handlers.AddSubscribe<ZoneBorderSubscriptionHandler>(
                 ZoneWorldNames.ZoneChannel,
                 ZoneWorldNames.BorderTopic(fromZoneId, ZoneId));
+        // --8<-- [end:doc-zw-border-subscribe]
     }
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
@@ -109,6 +111,7 @@ public sealed class ZoneSpot(
                 enter.PlayerId);
             await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
         }
+        // --8<-- [start:doc-zw-admission]
         if (maintenance.RejectsArrival(ZoneId, enter.FromZoneId))
         {
             logger.LogInformation(
@@ -122,6 +125,7 @@ public sealed class ZoneSpot(
 
         _pendingJoins[actorId] = enter;
         return ZLinkSpotActorJoinResult.Accept(new EnterZoneRes(ZoneId));
+        // --8<-- [end:doc-zw-admission]
     }
 
     public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
@@ -221,6 +225,7 @@ public sealed class ZoneSpot(
                 output.Notify.Players),
             cancellationToken);
 
+        // --8<-- [start:doc-zw-border-publish]
         foreach (var borderEvent in output.BorderEvents)
         {
             await Context.Outbound
@@ -230,6 +235,7 @@ public sealed class ZoneSpot(
                     borderEvent)
                 .Async(cancellationToken);
         }
+        // --8<-- [end:doc-zw-border-publish]
 
     }
 

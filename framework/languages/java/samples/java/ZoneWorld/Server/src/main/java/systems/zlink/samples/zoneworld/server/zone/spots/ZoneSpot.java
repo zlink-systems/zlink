@@ -70,6 +70,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 ZLinkSpotActorJoinResult.reject(
                     new Messages.EnterZoneRes(zone, "InvalidZone")));
         }
+        // --8<-- [start:doc-zw-admission]
         if (maintenance.rejectsArrival(topology.nodeId(), zone, join.fromZoneId())) {
             return CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.reject(
@@ -83,6 +84,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
         pendingJoins.put(actorId, join);
         return CompletableFuture.completedFuture(
             ZLinkSpotActorJoinResult.accept(new Messages.EnterZoneRes(zone, null)));
+        // --8<-- [end:doc-zw-admission]
     }
 
     @Override
@@ -184,6 +186,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     }
 
     public CompletionStage<Void> move(PlayerActor actor, int targetX, int targetY) {
+        // --8<-- [start:doc-zw-move]
         ZoneWorldSpec.MoveDecision decision = ZoneWorldSpec.validateMove(
             actor.x(), actor.y(), targetX, targetY);
         if (!decision.accepted()) {
@@ -204,7 +207,9 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
             return actor.send(new Messages.ZoneStateNotify(
                 context.spotId(), tick, statePlayers()));
         }
+        // --8<-- [end:doc-zw-move]
 
+        // --8<-- [start:doc-zw-zone-change]
         actor.prepareMove(targetX, targetY, targetZone);
         actor.context().joinSpot(
                 targetZone,
@@ -218,6 +223,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                     false))
             .timeout(Duration.ofSeconds(10))
             .defer();
+        // --8<-- [end:doc-zw-zone-change]
         System.out.println("zone transfer requested actor=" + actor.actorId()
             + " from=" + context.spotId() + " to=" + targetZone
             + " node=" + topology.nodeId());
@@ -296,6 +302,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     }
 
     private void publishBorders() {
+        // --8<-- [start:doc-zw-border-publish]
         for (String target : ZoneWorldSpec.adjacentZones(context.spotId())) {
             List<Messages.PlayerView> border = residents.values().stream()
                 .filter(actor -> ZoneWorldSpec.inBorderBand(
@@ -310,6 +317,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                     new Messages.ZoneBorderEvent(context.spotId(), target, tick, border))
                 .submit();
         }
+        // --8<-- [end:doc-zw-border-publish]
     }
 
     private record BorderSnapshot(long tick, List<Messages.PlayerView> players) {

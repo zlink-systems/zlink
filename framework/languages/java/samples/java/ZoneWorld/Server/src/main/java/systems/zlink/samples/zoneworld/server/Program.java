@@ -164,6 +164,7 @@ public final class Program {
                     .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL);
                 mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).client();
                 // --8<-- [end:doc-multi-channel-register]
+                // --8<-- [start:doc-zw-node-register]
                 mesh.objects().server()
                     .addEntrySpot(ZoneEntrySpot.class)
                     .addSpotFactory(
@@ -175,9 +176,12 @@ public final class Program {
                         PlayerActor.class,
                         PlayerActorFactory.class,
                         factory -> factory.preserveStateWith(PlayerActorRelocationAdapter.class));
+                // --8<-- [end:doc-zw-node-register]
+                // --8<-- [start:doc-zw-fanout-subscribe]
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
                     .enableSubscriber()
                     .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
+                // --8<-- [end:doc-zw-fanout-subscribe]
                 return;
             }
 
@@ -185,9 +189,11 @@ public final class Program {
                 .server()
                 .addHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP);
             mesh.objects().client();
+            // --8<-- [start:doc-zw-fanout-publisher]
             options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
                 .setRoutingIdPrefix("zoneworld-ops-broadcast")
                 .enablePublisher();
+            // --8<-- [end:doc-zw-fanout-publisher]
             options.addStreamNode(ZoneWorldNames.OPS_STREAM)
                 .bind(topology.streamEndpoint())
                 .enableActorDispatch()

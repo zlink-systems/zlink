@@ -93,6 +93,7 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
             RememberJoinOperation(operationId);
     }
 
+    // --8<-- [start:doc-zw-join-completed]
     public async ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
         CancellationToken cancellationToken)
@@ -140,6 +141,7 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
         RememberJoinOperation(operationId);
         if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
     }
+    // --8<-- [end:doc-zw-join-completed]
 
     private bool RememberJoinOperation(ZLinkActorJoinOperationId operationId)
     {

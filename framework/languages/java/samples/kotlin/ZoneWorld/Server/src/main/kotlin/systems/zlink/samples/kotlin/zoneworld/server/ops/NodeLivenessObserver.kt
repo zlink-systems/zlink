@@ -29,6 +29,7 @@ class NodeLivenessObserver(
         Thread(runnable, "zoneworld-report-expiry").apply { isDaemon = true }
     }
 
+    // --8<-- [start:doc-zw-observe-peers]
     override fun run(args: ApplicationArguments) {
         val publisher = runtime.observe(ZoneWorldNames.MESH, 32)
         observation = publisher
@@ -55,6 +56,7 @@ class NodeLivenessObserver(
         )
         expiry.scheduleAtFixedRate(registry::expireStaleReports, 1, 1, TimeUnit.SECONDS)
     }
+    // --8<-- [end:doc-zw-observe-peers]
 
     private fun readyRoutingIds(status: ZLinkMeshNodeSnapshot): Set<String> {
         val observed = linkedSetOf<String>()

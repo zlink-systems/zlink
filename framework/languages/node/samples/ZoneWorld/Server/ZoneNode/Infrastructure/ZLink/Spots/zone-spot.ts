@@ -82,6 +82,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
       console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`);
       return { accepted: false };
     }
+    // --8<-- [start:doc-zw-admission]
     if (this.nodeState.rejectsArrival()) {
       console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=maintenance`);
       return { accepted: false, reply: new EnterZoneRes(String(this.context.spotId), 'ZoneMaintenance') };
@@ -89,6 +90,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     console.log(`zone admission accepted zone=${String(this.context.spotId)} player=${actorId} initial=${enter.initialEntry}`);
     this.pendingJoins.set(actorId, enter);
     return { accepted: true };
+    // --8<-- [end:doc-zw-admission]
   }
 
   async onJoinedActor(actor: PlayerActor): Promise<void> {
@@ -172,6 +174,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     // The Zone Spot owns border synchronization. Admit those events before
     // client pushes so a slow bound session cannot delay state shared with an
     // adjacent Zone Spot.
+    // --8<-- [start:doc-zw-border-publish]
     for (const adjacent of adjacentZones(state.zoneId)) {
       await this.publisher.publish(
         ZoneWorldNames.zoneMesh,
@@ -180,6 +183,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
         new ZoneBorderEvent(state.zoneId, adjacent, tick, state.borderBandFor(adjacent))
       ).submit();
     }
+    // --8<-- [end:doc-zw-border-publish]
     await Promise.allSettled(
       [...this.actors.values()]
         .filter((actor) => !actor.isBot)
