@@ -44,19 +44,24 @@ public final class OrderWorkflowService {
         } else {
             saveProjection(request.orderId());
         }
+        // --8<-- [start:doc-sm-background-continue]
         spot.context().outbound().sendToSpot(
             spot.context().spotId(),
             new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
         return CompletableFuture.completedFuture(
             store.findProjection(request.orderId()));
+        // --8<-- [end:doc-sm-background-continue]
     }
 
     public Messages.OrderState continueOrderInSpot(OrderWorkflowSpot spot, String orderId) {
+        // --8<-- [start:doc-sm-replay]
         Messages.OrderState state = saveProjection(orderId);
         if (Messages.OrderStatuses.InventoryReserved.equals(state.status())) {
             System.out.println("shoppingmall-order replayed order=" + orderId
                 + " generation=" + spot.context().objectGeneration());
         }
+        // --8<-- [end:doc-sm-replay]
+        // --8<-- [start:doc-sm-next-step]
         if (Messages.OrderStatuses.Created.equals(state.status())) {
             state = reserveInventory(orderId, state);
         }
@@ -67,6 +72,7 @@ public final class OrderWorkflowService {
             state = confirm(orderId);
         }
         return state;
+        // --8<-- [end:doc-sm-next-step]
     }
 
     public Messages.OrderState prepareInventoryReservedInSpot(Messages.StartOrderWorkflowReq request) {
@@ -194,6 +200,7 @@ public final class OrderWorkflowService {
         return store.findProjection(orderId);
     }
 
+    // --8<-- [start:doc-sm-append]
     private void append(
         String orderId,
         long expectedVersion,
@@ -201,6 +208,7 @@ public final class OrderWorkflowService {
         store.appendEvents(orderId, expectedVersion, events);
         saveProjection(orderId);
     }
+    // --8<-- [end:doc-sm-append]
 
     private Messages.OrderState saveProjection(String orderId) {
         Messages.OrderState state = OrderProjection.fold(store.readEvents(orderId));

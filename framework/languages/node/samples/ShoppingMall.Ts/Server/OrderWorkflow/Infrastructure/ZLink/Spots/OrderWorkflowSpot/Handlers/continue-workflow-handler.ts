@@ -15,6 +15,7 @@ class ContinueWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflowSp
     @Inject(SHOPPINGMALL_ROLE) private readonly role: string
   ) {}
 
+  // --8<-- [start:doc-sm-close-terminal]
   async handle(spot: OrderWorkflowSpot, request: ContinueOrderWorkflowReq): Promise<ContinueOrderWorkflowRes> {
     const response = this.workflow.continue(request, this.role, BigInt(spot.context.objectGeneration));
     if (response.state.status === OrderStatuses.Confirmed || response.state.status === OrderStatuses.Failed) {
@@ -22,6 +23,7 @@ class ContinueWorkflowHandler implements ZLinkSpotRequestHandler<OrderWorkflowSp
     }
     return response;
   }
+  // --8<-- [end:doc-sm-close-terminal]
 }
 
 export { ContinueWorkflowHandler };

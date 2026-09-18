@@ -30,6 +30,7 @@ class commerce_api_handlers_t
      * 배경에서 진행한다(§9.3). 클라이언트는 GetOrderState 폴링으로 종료를 확인한다. */
     task_t<start_order_res_t> start_order (const start_order_req_t &request)
     {
+        // --8<-- [start:doc-sm-api-start]
         auto command = _store.update ([&] (nlohmann::json &state) {
             auto &mappings = state["idempotency"];
             if (!mappings.contains (request.idempotency_key)) {
@@ -62,11 +63,13 @@ class commerce_api_handlers_t
         });
 
         auto state = (co_await request_workflow<start_order_workflow_res_t> (command)).state;
+        // --8<-- [end:doc-sm-api-start]
         std::cerr << "shoppingmall api: start order=" << state.order_id
                   << " status=" << state.status << "\n";
         co_return start_order_res_t{state.order_id, state};
     }
 
+    // --8<-- [start:doc-sm-get-state]
     get_order_state_res_t get_order (const get_order_state_req_t &request)
     {
         return _store.read ([&] (const nlohmann::json &state) {
@@ -79,6 +82,7 @@ class commerce_api_handlers_t
               state["readModels"][request.order_id].get<order_state_t> ()};
         });
     }
+    // --8<-- [end:doc-sm-get-state]
 
     start_order_res_t create_pending (const pending_mapping_req_t &request)
     {
@@ -223,6 +227,7 @@ class commerce_api_handlers_t
                                      "Order '" + order_id + "' did not reach status " + status);
     }
 
+    // --8<-- [start:doc-sm-api-request]
     template <typename TReply, typename TRequest>
     task_t<TReply> request_workflow (const TRequest &request)
     {
@@ -231,6 +236,7 @@ class commerce_api_handlers_t
           .timeout (std::chrono::milliseconds (5000))
           .template async<TReply> ();
     }
+    // --8<-- [end:doc-sm-api-request]
 
     route_client_t &_routes;
     redis_state_store_t &_store;
@@ -313,12 +319,14 @@ int main (int argc, char **argv)
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
     /* 공통 sample spec §16: 서버 발견은 registry 프로세스 없이 공유 location store가 맡는다.
          * endpoint를 코드에 박지 않는다. */
+    // --8<-- [start:doc-sm-api-register]
     auto workflow = options.add_route_mesh (sample_names_t::order_workflow_channel);
     workflow
       .set_routing_id (
         zlink::routing_id_t::from ("shoppingmall-" + instance.instance_id + "-workflow"))
       .listen (instance.route_endpoint);
     workflow.objects ().client ();
+    // --8<-- [end:doc-sm-api-register]
     options.http ()
       .listen (instance.http_url)
       .map_health ("/health")

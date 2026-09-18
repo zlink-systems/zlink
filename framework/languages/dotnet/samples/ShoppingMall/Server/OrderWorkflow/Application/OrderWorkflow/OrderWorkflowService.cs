@@ -42,6 +42,7 @@ internal sealed class OrderWorkflowService(
             await RequireProjectionAsync(command.OrderId, cancellationToken));
     }
 
+    // --8<-- [start:doc-sm-background-continue]
     public async ValueTask<OrderState> StartAndContinueAsync(
         StartOrderWorkflowReq command,
         CancellationToken cancellationToken,
@@ -58,6 +59,7 @@ internal sealed class OrderWorkflowService(
                 TaskScheduler.Default);
         return state;
     }
+    // --8<-- [end:doc-sm-background-continue]
 
     private async Task ContinueWorkflowInBackgroundAsync(
         string orderId,
@@ -125,12 +127,15 @@ internal sealed class OrderWorkflowService(
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // --8<-- [start:doc-sm-replay]
             var stored = await events.ReadAsync(orderId, cancellationToken);
             var aggregate = OrderAggregate.Rehydrate(stored.Select(static item => item.Decode()));
             var current = await SaveProjectionFromEventsAsync(stored, cancellationToken);
 
             if (aggregate.IsTerminal || shouldStop(aggregate.Status)) return current;
+            // --8<-- [end:doc-sm-replay]
 
+            // --8<-- [start:doc-sm-next-step]
             var next = aggregate.Status switch
             {
                 OrderStatus.Created => await ReserveInventoryAsync(
@@ -162,9 +167,11 @@ internal sealed class OrderWorkflowService(
             if (next.Count == 0) return current;
 
             await AppendAndProjectAsync(orderId, stored.Count, next, cancellationToken);
+            // --8<-- [end:doc-sm-next-step]
         }
     }
 
+    // --8<-- [start:doc-sm-rebuild]
     public async ValueTask<OrderState> RebuildProjectionAsync(
         string orderId,
         CancellationToken cancellationToken)
@@ -178,6 +185,7 @@ internal sealed class OrderWorkflowService(
         await readModels.SaveAsync(state, cancellationToken);
         return OrderContractMapper.ToContract(state);
     }
+    // --8<-- [end:doc-sm-rebuild]
 
     private async ValueTask<IReadOnlyList<OrderDomainEvent>> AuthorizePaymentAsync(
         OrderAggregate aggregate,
@@ -247,6 +255,7 @@ internal sealed class OrderWorkflowService(
             NowUnixMs());
     }
 
+    // --8<-- [start:doc-sm-append]
     private async ValueTask AppendAndProjectAsync(
         string orderId,
         long expectedVersion,
@@ -261,6 +270,7 @@ internal sealed class OrderWorkflowService(
             await readModels.SaveAsync(current, cancellationToken);
         }
     }
+    // --8<-- [end:doc-sm-append]
 
     private async ValueTask<OrderProjectionState> RequireProjectionAsync(
         string orderId,

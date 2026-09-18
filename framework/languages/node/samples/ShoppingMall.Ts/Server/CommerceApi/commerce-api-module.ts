@@ -30,9 +30,11 @@ function createShoppingMallCommerceApiModule(role: string): Function {
             .messageFlow('normal');
           builder.addLocationStore(createShoppingMallLocationStore(config));
           shoppingMallLocationOptions(builder.configureLocations());
+          // --8<-- [start:doc-sm-api-register]
           builder.addRouteMesh(SampleNames.orderWorkflowSpotMesh)
             .listen('tcp://127.0.0.1:0')
             .objects().client();
+          // --8<-- [end:doc-sm-api-register]
           return builder.build();
         }
       })

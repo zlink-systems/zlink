@@ -15,6 +15,7 @@ internal sealed class StartOrderUseCase(
         StartOrderReq request,
         CancellationToken cancellationToken)
     {
+        // --8<-- [start:doc-sm-api-start]
         var existing = await commerce.FindIdempotencyAsync(request.IdempotencyKey, cancellationToken);
         if (existing is { Started: true })
         {
@@ -37,6 +38,7 @@ internal sealed class StartOrderUseCase(
             ? await workflows.StartAsync(command, cancellationToken)
             : await ReadOrStartAsync(mapping.OrderId, command, cancellationToken);
         return new StartOrderRes(state.OrderId, state);
+        // --8<-- [end:doc-sm-api-start]
 
         async ValueTask<OrderState> ReadOrStartAsync(
             string orderId,
@@ -111,6 +113,7 @@ internal sealed class PrepareInventoryReservedOrderUseCase(
     }
 }
 
+// --8<-- [start:doc-sm-get-state]
 internal sealed class GetOrderStateUseCase(
     IOrderReadModelStore readModels)
 {
@@ -123,3 +126,4 @@ internal sealed class GetOrderStateUseCase(
         return new GetOrderStateRes(OrderContractMapper.ToContract(state));
     }
 }
+// --8<-- [end:doc-sm-get-state]

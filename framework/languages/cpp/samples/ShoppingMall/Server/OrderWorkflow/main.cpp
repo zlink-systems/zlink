@@ -47,6 +47,7 @@ class order_workflow_spot_t : public instance_spot_t
     instance_spot_context_t &context () noexcept override { return _context; }
     const instance_spot_context_t &context () const noexcept override { return _context; }
 
+    // --8<-- [start:doc-sm-start-handler]
     void configure () override
     {
         _context.handlers ()
@@ -58,6 +59,7 @@ class order_workflow_spot_t : public instance_spot_t
           .add_handler<&order_workflow_spot_t::rebuild> (
             rebuild_order_projection_req_t::packet_name);
     }
+    // --8<-- [end:doc-sm-start-handler]
 
     task_t<void> on_initialize () override
     {
@@ -78,6 +80,7 @@ class order_workflow_spot_t : public instance_spot_t
 
     /* 공통 sample spec §9.3: 시작은 루프를 Created까지만 돌리고 즉시 응답하며, 나머지 단계를
      * 진행할 재개 호출을 기다리지 않고 예약한다. 결제 지연을 HTTP 응답에 묶지 않기 위해서다. */
+    // --8<-- [start:doc-sm-spot-start]
     start_order_workflow_res_t start (const start_order_workflow_req_t &request)
     {
         auto state = _store.update ([&] (nlohmann::json &json) {
@@ -91,6 +94,7 @@ class order_workflow_spot_t : public instance_spot_t
         }
         return {state};
     }
+    // --8<-- [end:doc-sm-spot-start]
 
     /* 재개는 다음 단계가 없을 때까지 같은 루프를 돌린다. 시작이 예약한 호출이든, 복구용 외부
      * 호출이든 코드는 같다. */
@@ -140,6 +144,7 @@ class order_workflow_spot_t : public instance_spot_t
         });
     }
 
+    // --8<-- [start:doc-sm-background-continue]
     void schedule_continue (const std::string &order_id)
     {
         (void) _continue_timer.cancel ();
@@ -147,6 +152,7 @@ class order_workflow_spot_t : public instance_spot_t
         _continue_timer = _context.add_timer<order_workflow_continue_timer_handler_t> (
           "order-workflow-continue", std::chrono::milliseconds (1));
     }
+    // --8<-- [end:doc-sm-background-continue]
 
     redis_state_store_t _store;
     instance_spot_context_t _context;
@@ -526,6 +532,7 @@ int main (int argc, char **argv)
       .set_key_prefix (topology.redis_key_prefix + "relocation:");
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
     const auto workflow_channel = sample_names_t::order_workflow_channel;
+    // --8<-- [start:doc-sm-workflow-register]
     auto workflow_route = options.add_route_mesh (workflow_channel);
     workflow_route
       .set_routing_id (
@@ -543,6 +550,7 @@ int main (int argc, char **argv)
       .set_relocation_coordination_mode (
         spot_relocation_coordination_mode_t::application_signaled)
       .recreate_on_relocation ();
+    // --8<-- [end:doc-sm-workflow-register]
     options.http ()
       .listen (instance.http_url)
       .map_health ("/health")

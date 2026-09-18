@@ -54,6 +54,7 @@ class OrderWorkflowApplication {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             configurer.addHandlersFromPackageOf(OrderWorkflowApplication::class.java)
+            // --8<-- [start:doc-sm-workflow-register]
             configurer.addRouteMesh(SampleNames.OrderWorkflowMesh)
                 .setRoutingId(RoutingId.from(role.instanceId))
                 .listen(role.channelEndpoint)
@@ -62,6 +63,7 @@ class OrderWorkflowApplication {
                     SampleNames.OrderWorkflowSpotType,
                     OrderWorkflowSpot::class.java,
                 ) { factory -> factory.recreateOnRelocation() }
+            // --8<-- [end:doc-sm-workflow-register]
         }
     }
 

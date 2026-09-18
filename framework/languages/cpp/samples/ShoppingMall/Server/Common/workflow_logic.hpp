@@ -36,6 +36,7 @@ inline std::vector<stored_order_event_t> read_event_stream (const nlohmann::json
     return stream;
 }
 
+// --8<-- [start:doc-sm-append]
 inline void append_event (nlohmann::json &state,
                           const std::string &order_id,
                           const std::string &event_type,
@@ -58,6 +59,7 @@ inline void append_event (nlohmann::json &state,
     event.created_at_unix_ms = now_unix_ms ();
     stream.push_back (event);
 }
+// --8<-- [end:doc-sm-append]
 
 /* ---------------------------------------------------------------------------
  * OrderAggregate — 상태는 이벤트를 접은 결과이고, 다음 단계도 그 접은 결과가 정한다.
@@ -159,6 +161,7 @@ inline order_state_t save_projection (nlohmann::json &state, const order_aggrega
     return projection;
 }
 
+// --8<-- [start:doc-sm-rebuild]
 inline order_state_t rebuild_projection (nlohmann::json &state, const std::string &order_id)
 {
     const auto stream = read_event_stream (state, order_id);
@@ -167,6 +170,7 @@ inline order_state_t rebuild_projection (nlohmann::json &state, const std::strin
     }
     return save_projection (state, fold (stream, order_id));
 }
+// --8<-- [end:doc-sm-rebuild]
 
 /* ---------------------------------------------------------------------------
  * 재고·결제 모듈 — 같은 id로 다시 부르면 최초 결과를 그대로 돌려주는 멱등 연산이다(§9.4).
@@ -310,6 +314,7 @@ inline bool advance_once (nlohmann::json &state,
         return false;
     }
 
+    // --8<-- [start:doc-sm-next-step]
     if (aggregate.status == order_status_t::created) {
         const auto reservation_id = reservation_id_for (order_id);
         const auto result = inventory_module_t::reserve (
@@ -366,6 +371,7 @@ inline bool advance_once (nlohmann::json &state,
                       aggregate.version);
         return true;
     }
+    // --8<-- [end:doc-sm-next-step]
 
     return false;
 }
@@ -414,6 +420,7 @@ inline order_state_t run_workflow (nlohmann::json &state,
     }
 
     for (int step = 0; step < max_steps; ++step) {
+        // --8<-- [start:doc-sm-replay]
         auto before = fold (read_event_stream (state, order_id), order_id);
         if (before.terminal ()) {
             break;
@@ -421,6 +428,7 @@ inline order_state_t run_workflow (nlohmann::json &state,
         if (before.exists () && stop_hook_reached (state, order_id, before.status)) {
             break;
         }
+        // --8<-- [end:doc-sm-replay]
         if (!advance_once (state, order_id, source_command_id, start_command)) {
             break;
         }

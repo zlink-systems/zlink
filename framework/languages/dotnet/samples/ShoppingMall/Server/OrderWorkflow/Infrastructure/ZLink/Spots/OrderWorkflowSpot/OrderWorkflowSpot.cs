@@ -33,6 +33,7 @@ internal sealed class OrderWorkflowSpot(
         return ValueTask.CompletedTask;
     }
 
+    // --8<-- [start:doc-sm-spot-start]
     public async ValueTask<StartOrderWorkflowRes> StartOrderWorkflowAsync(
         StartOrderWorkflowReq request,
         CancellationToken cancellationToken)
@@ -48,6 +49,7 @@ internal sealed class OrderWorkflowSpot(
         await CloseIfTerminalAsync(state, cancellationToken);
         return new StartOrderWorkflowRes(state);
     }
+    // --8<-- [end:doc-sm-spot-start]
 
     public async ValueTask<ContinueOrderWorkflowRes> ContinueOrderWorkflowAsync(
         ContinueOrderWorkflowReq request,
@@ -123,6 +125,7 @@ internal sealed class OrderWorkflowSpot(
         return new CloseOrderWorkflowForPlannedRelocationRes(true);
     }
 
+    // --8<-- [start:doc-sm-close-terminal]
     private async ValueTask CloseIfTerminalAsync(
         OrderState state,
         CancellationToken cancellationToken)
@@ -130,5 +133,6 @@ internal sealed class OrderWorkflowSpot(
         if (state.Status is OrderStatuses.Confirmed or OrderStatuses.Failed)
             await Context.CloseAsync(cancellationToken);
     }
+    // --8<-- [end:doc-sm-close-terminal]
 
 }

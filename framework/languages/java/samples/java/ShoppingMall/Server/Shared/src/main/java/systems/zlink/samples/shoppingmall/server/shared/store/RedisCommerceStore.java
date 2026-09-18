@@ -290,6 +290,7 @@ public final class RedisCommerceStore implements AutoCloseable {
         });
     }
 
+    // --8<-- [start:doc-sm-rebuild]
     public Messages.OrderState rebuildProjection(String orderId) {
         Messages.OrderState rebuilt = OrderProjection.fold(readEvents(orderId));
         if (rebuilt == null) {
@@ -298,6 +299,7 @@ public final class RedisCommerceStore implements AutoCloseable {
         saveProjection(rebuilt);
         return rebuilt;
     }
+    // --8<-- [end:doc-sm-rebuild]
 
     public static String eventId(String prefix, String orderId) {
         return prefix + "-" + orderId + "-" + UUID.randomUUID();

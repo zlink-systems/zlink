@@ -67,6 +67,7 @@ public static class OrderWorkflowServerHostFactory
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(OrderWorkflowServerHostFactory));
+            // --8<-- [start:doc-sm-workflow-register]
             var mesh = options.AddRouteMesh(SampleNames.MeshName)
                 .Listen(instance.MeshEndpoint)
                 .SetRoutingIdPrefix("order-workflow");
@@ -78,6 +79,7 @@ public static class OrderWorkflowServerHostFactory
                         .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
                         .RecreateOnRelocation());
             mesh.Channel(SampleNames.OrderProjectionChannel).Server();
+            // --8<-- [end:doc-sm-workflow-register]
             //  Peers are found through the Location Store. Adding a manual peer connection here
             //  switches the node to manual acquisition, which conflicts with the routing ID prefix
             //  this mesh uses ("can use a routing ID prefix only with automatic discovery").

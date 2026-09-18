@@ -46,6 +46,7 @@ internal sealed class ZLinkOrderWorkflowRouter(
         return response.State;
     }
 
+    // --8<-- [start:doc-sm-api-request]
     private IZLinkSpotRequestCall Request<TMessage>(
         string orderId,
         TMessage command) =>
@@ -54,4 +55,5 @@ internal sealed class ZLinkOrderWorkflowRouter(
             // orders use the authority already published for this SpotId.
             .InstanceSpot(SampleNames.OrderWorkflowSpotType)
             .InMesh(SampleNames.MeshName);
+    // --8<-- [end:doc-sm-api-request]
 }

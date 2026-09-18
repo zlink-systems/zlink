@@ -81,6 +81,7 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
     throw new Error(`Expected-version fence was not exercised by a second workflow instance for '${orderId}'.`);
   }
 
+  // --8<-- [start:doc-sm-api-request]
   private request<TResponse>(payload: object): Promise<TResponse> {
     const orderId = requireOrderId(payload);
     return this.spots
@@ -90,6 +91,7 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
       .timeout(SampleNames.requestTimeout)
       .submit<TResponse>();
   }
+  // --8<-- [end:doc-sm-api-request]
 
 }
 
