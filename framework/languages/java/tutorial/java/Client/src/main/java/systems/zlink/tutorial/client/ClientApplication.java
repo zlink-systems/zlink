@@ -51,7 +51,8 @@ public class ClientApplication {
 
             // --8<-- [start:channel-client-register]
             // This node opens an endpoint too. Both sides listen to become peers.
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("game")
+            ZLinkMeshNodeBuilder mesh = options
+                .addRouteMesh("game")
                 .listen("tcp://0.0.0.0:7502");
 
             // client() means this node exposes no handler for the channel; it only calls.
@@ -63,7 +64,9 @@ public class ClientApplication {
             // to that one node: the peer's descriptor has to advertise the endpoint
             // dialed here, which is why the server sets an advertise host.
             mesh.peerConnections()
-                .connect(RoutingId.from("game-server-1"), "tcp://127.0.0.1:7501");
+                .connect(
+                    RoutingId.from("game-server-1"),
+                    "tcp://127.0.0.1:7501");
             // --8<-- [end:channel-client-register]
 
             // --8<-- [start:clientserver-client-register]
@@ -118,11 +121,17 @@ class TutorialController {
 
     // --8<-- [start:channel-request-call]
     @GetMapping("/players/{playerId}/profile")
-    CompletionStage<Contracts.PlayerProfile> profile(@PathVariable String playerId) {
+    CompletionStage<Contracts.PlayerProfile>
+    profile(@PathVariable String playerId) {
         // The target is a channel name. Which node answers is decided at call time.
+        var profileReq =
+            new Contracts.GetPlayerProfile(
+                playerId);
         return route
-            .requestToChannel("profile", new Contracts.GetPlayerProfile(playerId))
-            .submit(Contracts.PlayerProfile.class);
+            .requestToChannel(
+                "profile", profileReq)
+            .submit(
+                Contracts.PlayerProfile.class);
     }
     // --8<-- [end:channel-request-call]
 

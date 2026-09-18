@@ -29,11 +29,14 @@ public final class ChangeNicknameHandler
         // failure is dropped rather than failing the rename.
         try {
             return player.context().boundSession()
-                .send(new Contracts.NicknameChanged(player.nickname()))
+                .send(
+                    new Contracts.NicknameChanged(
+                        player.nickname()))
                 .submit()
                 .exceptionally(error -> null);
         } catch (RuntimeException noConnection) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture
+                .completedFuture(null);
         }
         // --8<-- [end:actor-push]
     }

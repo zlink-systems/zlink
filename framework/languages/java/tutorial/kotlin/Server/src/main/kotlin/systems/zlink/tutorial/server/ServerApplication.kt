@@ -38,12 +38,16 @@ class ServerApplication {
         // Rooms are addressed by id, not by host, so their current location is
         // kept here. Every node reads and writes the same store under the same
         // prefix.
+        val locationOptions =
+            ZLinkRedisLocationOptions()
+            .setConnectionString(
+                "127.0.0.1:6379",
+            )
+            .setKeyPrefix(
+                "zlink-tutorial-kotlin:location:",
+            )
         options.addLocationStore(
-            ZLinkRedisLocationStore(
-                ZLinkRedisLocationOptions()
-                    .setConnectionString("127.0.0.1:6379")
-                    .setKeyPrefix("zlink-tutorial-kotlin:location:"),
-            ),
+            ZLinkRedisLocationStore(locationOptions),
         )
         // --8<-- [end:location-store]
 
@@ -87,7 +91,9 @@ class ServerApplication {
             // without this the node would advertise "tcp://0.0.0.0:7601" and the
             // peer would be rejected as an expected-route mismatch.
             .setAdvertiseHost("127.0.0.1")
-            .setRoutingId(RoutingId.from("game-server-1"))
+            .setRoutingId(
+                RoutingId.from("game-server-1"),
+            )
         // --8<-- [end:mesh-register]
 
         // --8<-- [start:channel-register]
@@ -143,7 +149,10 @@ class ServerApplication {
         // node that registers it is a candidate to host one. Exactly one
         // relocation policy is required; moving a live room to another node is a
         // separate topic.
-        objects.addSpotFactory<GameRoom>("game-room", GameRoom::class.java) { factory ->
+        objects.addSpotFactory<GameRoom>(
+            "game-room",
+            GameRoom::class.java,
+        ) { factory ->
             factory.disableRelocation()
         }
         // --8<-- [end:spot-register]
@@ -170,8 +179,12 @@ class ServerApplication {
             .bind("tcp://0.0.0.0:7621")
             .enableActorDispatch()
             .registerSession(GameSession::class.java)
-            .addSessionPacketHandler(PingHandler::class.java)
-            .addSessionPacketHandler(AuthenticateHandler::class.java)
+            .addSessionPacketHandler(
+                PingHandler::class.java,
+            )
+            .addSessionPacketHandler(
+                AuthenticateHandler::class.java,
+            )
         // --8<-- [end:stream-register]
     }
 }

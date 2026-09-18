@@ -43,85 +43,53 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 
 MeshNode 하나에 두 역할을 함께 추가한 모양은 이렇다.
 
+아래는 tutorial 소스 그대로다 — mesh 등록과 object role은 서버 쪽에서, channel의
+호출 전용(client) role은 클라이언트 쪽에서 가져왔으므로 mesh 이름과 channel 이름은
+`"orders"`·`"billing"`이 아니라 tutorial이 실제로 쓰는 `"game"`·`"profile"`이다.
+
 === "C#/.NET"
 
     ```csharp
-    // MeshNode 하나가 mesh "services"에 참여한다.
-    var mesh = options.AddRouteMesh("services")
-        // 다른 node가 접속할 자기 endpoint.
-        .Listen("tcp://0.0.0.0:7101");
-
-    // Object role — 이 node에 spot·actor를 배치한다.
-    mesh.Objects().Server();
-    // Channel role — "orders" 요청을 이 node가 처리한다.
-    mesh.Channel("orders").Server();
-    // 호출만 하는 channel은 Client.
-    mesh.Channel("billing").Client();
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:object-server"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-client-register"
     ```
 
 === "C++"
 
     ```cpp
-    // MeshNode 하나가 mesh "services"에 참여한다.
-    auto mesh = options.add_route_mesh ("services");
-    // 다른 node가 접속할 자기 endpoint.
-    mesh.listen ("tcp://0.0.0.0:7101");
-
-    // C++은 Object role을 별도 builder 대신 enum 하나로 지정한다.
-    // 이 node에 spot·actor를 배치한다.
-    mesh.set_object_role (object_role_t::server);
-    // Channel role — "orders" 요청을 이 node가 처리한다.
-    mesh.channel_name ("orders").server ();
-    // 호출만 하는 channel은 client다.
-    mesh.channel_name ("billing").client ();
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:object-server"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-client-register"
     ```
 
 === "Java"
 
     ```java
-    // MeshNode 하나가 mesh "services"에 참여한다.
-    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services");
-    // 다른 node가 접속할 자기 endpoint.
-    mesh.listen("tcp://0.0.0.0:7101");
-
-    // Object role — 이 node에 spot·actor를 배치한다.
-    mesh.objects().server();
-    // Channel role — "orders" 요청을 이 node가 처리한다.
-    mesh.channelName("orders").server();
-    // 호출만 하는 channel은 client다.
-    mesh.channelName("billing").client();
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:object-server"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-client-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // MeshNode 하나가 mesh "services"에 참여한다.
-    val mesh = options.addRouteMesh("services")
-    // 다른 node가 접속할 자기 endpoint.
-    mesh.listen("tcp://0.0.0.0:7101")
-
-    // Object role — 이 node에 spot·actor를 배치한다.
-    mesh.objects().server()
-    // Channel role — "orders" 요청을 이 node가 처리한다.
-    mesh.channelName("orders").server()
-    // 호출만 하는 channel은 client다.
-    mesh.channelName("billing").client()
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:object-server"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:channel-client-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // MeshNode 하나가 mesh "services"에 참여한다.
-    const mesh = builder.addRouteMesh('services');
-    // 다른 node가 접속할 자기 endpoint.
-    mesh.listen('tcp://0.0.0.0:7101');
-
-    // Object role — 이 node에 spot·actor를 배치한다.
-    mesh.objects().server();
-    // Channel role — "orders" 요청을 이 node가 처리한다.
-    mesh.channel('orders').server();
-    // 호출만 하는 channel은 client다.
-    mesh.channel('billing').client();
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:object-server"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-client-register"
     ```
 
 

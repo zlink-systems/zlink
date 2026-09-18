@@ -30,7 +30,8 @@ class ClientApplication {
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
-        val mesh = options.addRouteMesh("game").listen("tcp://0.0.0.0:7602")
+        val mesh = options.addRouteMesh("game")
+            .listen("tcp://0.0.0.0:7602")
 
         // client() means this node exposes no handler for the channel; it only calls.
         mesh.channelName("profile").client()

@@ -19,10 +19,12 @@ import systems.zlink.tutorial.shared.Contracts;
 // Every Java user Spot names the actor type it can admit. This room admits
 // none, so it names the base type and rejects every join. Actors are a later
 // chapter.
-public final class GameRoom implements ZLinkSpot<ZLinkActor> {
+public final class GameRoom
+        implements ZLinkSpot<ZLinkActor> {
 
     private final ZLinkSpotContext context;
-    private final List<String> chat = new ArrayList<>();
+    private final List<String> chat =
+        new ArrayList<>();
 
     private String title = "untitled";
 
@@ -32,8 +34,10 @@ public final class GameRoom implements ZLinkSpot<ZLinkActor> {
         // Handler classes are named here rather than scanned, the same way the
         // channel registrations name theirs. Each takes the target room as its
         // first argument.
-        context.handlers().addHandler(PostChatHandler.class);
-        context.handlers().addHandler(GetRoomStateHandler.class);
+        context.handlers().addHandler(
+            PostChatHandler.class);
+        context.handlers().addHandler(
+            GetRoomStateHandler.class);
         // --8<-- [end:spot-handlers]
     }
 
@@ -45,28 +49,44 @@ public final class GameRoom implements ZLinkSpot<ZLinkActor> {
     // Runs before the room accepts any message. Rejecting here means the create
     // call fails and no room exists. Omit this method to accept every request.
     @Override
-    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        title = request.decode(Contracts.OpenRoom.class).title();
-        return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
+    public
+    CompletionStage<ZLinkSpotCreateResponse>
+            onCreate(ZLinkMessage request) {
+        var body = request.decode(
+            Contracts.OpenRoom.class);
+        title = body.title();
+        var accepted =
+            ZLinkSpotCreateResponse.accept();
+        return CompletableFuture
+            .completedFuture(accepted);
     }
 
     // No actor ever joins this room, so the three membership callbacks below say
     // so and do nothing else.
     @Override
-    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+    public
+    CompletionStage<ZLinkSpotActorJoinResult>
+    onActorJoin(
         String actorId,
         ZLinkMessage request) {
-        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
+        var rejected =
+            ZLinkSpotActorJoinResult.reject();
+        return CompletableFuture
+            .completedFuture(rejected);
     }
 
     @Override
-    public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
-        return CompletableFuture.completedFuture(null);
+    public CompletionStage<Void>
+            onJoinedActor(ZLinkActor actor) {
+        return CompletableFuture
+            .completedFuture(null);
     }
 
     @Override
-    public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
-        return CompletableFuture.completedFuture(null);
+    public CompletionStage<Void>
+            onLeaveActor(ZLinkActor actor) {
+        return CompletableFuture
+            .completedFuture(null);
     }
 
     void append(String line) {
@@ -74,7 +94,8 @@ public final class GameRoom implements ZLinkSpot<ZLinkActor> {
     }
 
     Contracts.RoomState state() {
-        return new Contracts.RoomState(title, List.copyOf(chat));
+        return new Contracts.RoomState(
+            title, List.copyOf(chat));
     }
 }
 // --8<-- [end:spot-class]

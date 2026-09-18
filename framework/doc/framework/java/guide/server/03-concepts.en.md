@@ -65,18 +65,15 @@ doesn't know — and doesn't need to know — which node was selected.
 
 Here's what it looks like to configure both roles on one MeshNode.
 
-```java
-// One MeshNode joins the mesh "services".
-ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services");
-// Its own endpoint for other nodes to connect to.
-mesh.listen("tcp://0.0.0.0:7101");
+The blocks below are the tutorial source as-is — mesh registration and the Object role come
+from the server side, and the channel's call-only (client) role comes from the client side, so
+the mesh and channel names are the tutorial's own `"game"`/`"profile"`, not `"orders"`/`"billing"`.
 
-// Object role — this node places spots/actors.
-mesh.objects().server();
-// Channel role — this node handles "orders" requests.
-mesh.channelName("orders").server();
-// A call-only channel is client.
-mesh.channelName("billing").client();
+```java
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:object-server"
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+--8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-client-register"
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

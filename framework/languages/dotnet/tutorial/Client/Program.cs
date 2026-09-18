@@ -27,7 +27,8 @@ builder.Services.AddZLinkFramework(options =>
 
     // --8<-- [start:channel-client-register]
     // This node opens an endpoint too. Both sides listen to become peers.
-    var mesh = options.AddRouteMesh("game").Listen("tcp://0.0.0.0:7202");
+    var mesh = options.AddRouteMesh("game")
+        .Listen("tcp://0.0.0.0:7202");
 
     // Client() means this node exposes no handler for the channel; it only calls.
     mesh.Channel("profile").Client();
@@ -37,7 +38,9 @@ builder.Services.AddZLinkFramework(options =>
     // call never names a node. Naming the expected routing id is optional: it
     // fences the connection to one node, and the handshake rejects a peer that
     // answers with a different id.
-    mesh.PeerConnections.Connect(RoutingId.From("game-server-1"), "tcp://127.0.0.1:7201");
+    mesh.PeerConnections.Connect(
+        RoutingId.From("game-server-1"),
+        "tcp://127.0.0.1:7201");
     // --8<-- [end:channel-client-register]
 
     // --8<-- [start:clientserver-client-register]
@@ -69,15 +72,20 @@ var app = builder.Build();
 app.UseZLinkErrorResponse();
 
 // --8<-- [start:channel-request-call]
-app.MapGet("/players/{playerId}/profile", async (
+app.MapGet(
+    "/players/{playerId}/profile",
+    async (
     string playerId,
     IZLinkRouteClient route,
     CancellationToken cancellationToken) =>
 {
     // The target is a channel name. Which node answers is decided at call time.
     var profile = await route
-        .RequestToChannel("profile", new GetPlayerProfile(playerId))
-        .Async<PlayerProfile>(cancellationToken);
+        .RequestToChannel(
+            "profile",
+            new GetPlayerProfile(playerId))
+        .Async<PlayerProfile>(
+            cancellationToken);
 
     return Results.Ok(profile);
 });

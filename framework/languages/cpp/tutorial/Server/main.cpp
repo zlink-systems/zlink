@@ -26,9 +26,12 @@ int main (int argc, char **argv)
         // Rooms are addressed by id, not by host, so their current location is
         // kept here. Every node reads and writes the same store under the same
         // prefix.
-        options.add_location_store<fw::redis::redis_location_store_t> ()
+        options
+          .add_location_store<
+            fw::redis::redis_location_store_t> ()
           .set_connection_string ("127.0.0.1:6379")
-          .set_key_prefix ("zlink-tutorial-cpp:location:");
+          .set_key_prefix (
+            "zlink-tutorial-cpp:location:");
         // --8<-- [end:location-store]
 
         // --8<-- [start:relocation-store]
@@ -49,9 +52,11 @@ int main (int argc, char **argv)
         // Both sides must name the mesh identically, or they never see each other
         // as peers. The routing id names this node; without it the Framework
         // assigns a generated one, which a caller cannot type into a URL.
+        zlink::routing_id_t routing_id =
+          zlink::routing_id_t::from ("game-server-1");
         auto mesh = options.add_route_mesh ("game")
                       .listen ("tcp://0.0.0.0:7401")
-                      .set_routing_id (zlink::routing_id_t::from ("game-server-1"))
+                      .set_routing_id (routing_id)
                       // A wildcard bind host leaves peers with no address to dial
                       // back, so the address to publish is given here.
                       .set_advertise_host ("127.0.0.1");
@@ -62,9 +67,13 @@ int main (int argc, char **argv)
         // sitting in the same binary but left out stays unreachable.
         mesh.channel ("profile")
           .server ()
-          .add_request_handler<get_player_profile_handler_t, get_player_profile_t,
-                               player_profile_t> ()
-          .add_send_handler<record_login_handler_t, record_login_t> ();
+          .add_request_handler<
+            get_player_profile_handler_t,
+            get_player_profile_t,
+            player_profile_t> ()
+          .add_send_handler<
+            record_login_handler_t,
+            record_login_t> ();
         // --8<-- [end:channel-register]
 
         // --8<-- [start:node-direct-register]
@@ -90,7 +99,10 @@ int main (int argc, char **argv)
         // then maps that group. Without a Location Store the subscriber is told
         // the publisher's endpoint outright; connect(...) is what makes this
         // subscriber manual, so enable_subscriber() must not be added next to it.
-        options.handlers ().group ("broadcast").add_publish<maintenance_notice_subscriber_t> ();
+        options.handlers ()
+          .group ("broadcast")
+          .add_publish<
+            maintenance_notice_subscriber_t> ();
 
         options.add_fanout_channel ("broadcast")
           .connect ("tcp://127.0.0.1:7412")
@@ -109,7 +121,9 @@ int main (int argc, char **argv)
         // node that registers it is a candidate to host one. Exactly one
         // relocation policy is required; moving a live room to another node is a
         // separate topic.
-        objects.add_spot_factory<game_room_t> ("game-room").disable_relocation ();
+        objects
+          .add_spot_factory<game_room_t> ("game-room")
+          .disable_relocation ();
         // --8<-- [end:spot-register]
 
         // --8<-- [start:actor-register]

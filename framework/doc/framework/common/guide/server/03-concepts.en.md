@@ -47,85 +47,53 @@ doesn't know — and doesn't need to know — which node was selected.
 
 Here's what it looks like to configure both roles on one MeshNode.
 
+The blocks below are the tutorial source as-is — mesh registration and the Object role come
+from the server side, and the channel's call-only (client) role comes from the client side, so
+the mesh and channel names are the tutorial's own `"game"`/`"profile"`, not `"orders"`/`"billing"`.
+
 === "C#/.NET"
 
     ```csharp
-    // One MeshNode joins the mesh "services".
-    var mesh = options.AddRouteMesh("services")
-        // Its own endpoint for other nodes to connect to.
-        .Listen("tcp://0.0.0.0:7101");
-
-    // Object role — this node places spots/actors.
-    mesh.Objects().Server();
-    // Channel role — this node handles "orders" requests.
-    mesh.Channel("orders").Server();
-    // A call-only channel is Client.
-    mesh.Channel("billing").Client();
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:object-server"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-client-register"
     ```
 
 === "C++"
 
     ```cpp
-    // One MeshNode joins the mesh "services".
-    auto mesh = options.add_route_mesh ("services");
-    // Its own endpoint for other nodes to connect to.
-    mesh.listen ("tcp://0.0.0.0:7101");
-
-    // C++ sets the Object role with one enum instead of a separate builder.
-    // This node places spots/actors.
-    mesh.set_object_role (object_role_t::server);
-    // Channel role — this node handles "orders" requests.
-    mesh.channel_name ("orders").server ();
-    // A call-only channel is client.
-    mesh.channel_name ("billing").client ();
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:object-server"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-client-register"
     ```
 
 === "Java"
 
     ```java
-    // One MeshNode joins the mesh "services".
-    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services");
-    // Its own endpoint for other nodes to connect to.
-    mesh.listen("tcp://0.0.0.0:7101");
-
-    // Object role — this node places spots/actors.
-    mesh.objects().server();
-    // Channel role — this node handles "orders" requests.
-    mesh.channelName("orders").server();
-    // A call-only channel is client.
-    mesh.channelName("billing").client();
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:object-server"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-client-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // One MeshNode joins the mesh "services".
-    val mesh = options.addRouteMesh("services")
-    // Its own endpoint for other nodes to connect to.
-    mesh.listen("tcp://0.0.0.0:7101")
-
-    // Object role — this node places spots/actors.
-    mesh.objects().server()
-    // Channel role — this node handles "orders" requests.
-    mesh.channelName("orders").server()
-    // A call-only channel is client.
-    mesh.channelName("billing").client()
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:object-server"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:channel-client-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // One MeshNode joins the mesh "services".
-    const mesh = builder.addRouteMesh('services');
-    // Its own endpoint for other nodes to connect to.
-    mesh.listen('tcp://0.0.0.0:7101');
-
-    // Object role — this node places spots/actors.
-    mesh.objects().server();
-    // Channel role — this node handles "orders" requests.
-    mesh.channel('orders').server();
-    // A call-only channel is client.
-    mesh.channel('billing').client();
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:object-server"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-client-register"
     ```
 
 
