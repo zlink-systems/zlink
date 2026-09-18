@@ -10,7 +10,7 @@ title: "오류 처리 · C++"
 # 오류 처리
 
 <!-- framework-adapter-nav:start -->
-[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 08 — E2E 클라이언트](08-e2e-client.ko.md)
+[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: E2E 클라이언트](08-e2e-client.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

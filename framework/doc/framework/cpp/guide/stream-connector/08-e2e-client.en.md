@@ -1,4 +1,4 @@
-# 08 — E2E Client
+# E2E Client
 
 [← Error Handling](07-error-handling.en.md) | [Table Of Contents](INDEX.en.md) | [Next: Engine Adapters →](09-engine-adapters.en.md)
 

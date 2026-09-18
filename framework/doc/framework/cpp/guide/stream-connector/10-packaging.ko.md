@@ -1,4 +1,4 @@
-# 10 — 패키징
+# 패키징
 
 [← 엔진 어댑터](09-engine-adapters.ko.md) | [목차](INDEX.ko.md) | [다음: 성능 테스트 →](11-performance.ko.md)
 

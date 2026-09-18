@@ -1,4 +1,4 @@
-# 11 — Performance Testing
+# Performance Testing
 
 [← Packaging](10-packaging.en.md) | [Table Of Contents](INDEX.en.md)
 

@@ -126,157 +126,27 @@ plugins:
           # 남는다. 반대로 nav를 한국어로 적으면 영어 화면에서 한국어가 남는다 —
           # 실제로 그렇게 갈라져서 영어 전환이 반쪽만 되고 있었다.
           nav_translations:
-            # 최상위 구획. `Samples`는 샘플 고르기와 공통 시나리오 목록을 한데 묶는다.
-            Home: 홈
-            Channel messaging: Channel 메시징
-            Spot: Spot
-            Actor: Actor
-            STREAM: STREAM
-            Session and Actor: Session과 Actor 연결
-            How channels work: Channel 동작 원리
-            Handlers and message processing: Handler와 메시지 처리
+            # **1차 메뉴만 한글로 낸다.** 하위 항목까지 번역하면 한글과 영어가
+            # 섞여 어느 쪽이 원래 이름인지 알기 어렵다. 문서 제목은 영어 그대로
+            # 두는 편이 찾기 쉽다.
+            #
+            # **영문 발음을 한글로 옮긴 것은 영문을 쓴다.** `레퍼런스`·`스펙`·
+            # `테스트`·`샘플`은 한국어 낱말이 아니라 영어를 소리대로 적은 것이다.
+            #
+            # 여기 없는 라벨은 한국어 화면에서도 영어로 남는다.
+
+            # 최상위
             Install: 설치
-            Quickstart: 퀵스타트
-            Samples: 샘플
-            Sample scenario contract: 샘플 시나리오 계약
-            Picking a sample: 샘플 고르기
-            Guide: 가이드
-            Reference: 레퍼런스
-            Spec: 스펙
-            Internals: 내부 구조
-            Overview: 개요
-            API Reference: API 레퍼런스
 
-            # Samples 최상위 구획. 샘플 이름은 고유명사라 번역하지 않는다 —
-            # 번역표에 없는 라벨은 그대로 남으므로 여기 적을 것도 없다.
-            "Event sourcing": 이벤트 소싱
-
-            # Framework 언어별 서버 가이드. 5개 언어가 같은 라벨을 공유한다.
-            # 구획 이름은 doc/plan/guide-rewrite.ko.md의 목차가 정한다.
-            Guide home: 가이드 홈
-            Contents: 목차
+            # 언어 안 구획
             Getting started: 시작
             Feature guide: 기능별 가이드
             How it works: 동작 원리
             Operations: 운영
-            Tests: 테스트
 
-            # 시작
-            Where ZLink fits: ZLink를 어디에 쓰나
-            Core concepts: 핵심 개념
-            Install and first run: 설치와 첫 실행
-
-            # 기능별 가이드
-            Location: Location
-            Monitoring: 모니터링
-
-            # 동작 원리
-            The execution model: 실행 모델
-            Backpressure: Backpressure
-            Activation and lifetime: 활성화와 수명
-            Actor membership: Actor membership
-            Timers and workers: Timer와 worker
-            Relocation: Relocation
-            How session binding works: Session 묶음의 동작 원리
-            How STREAM works: STREAM의 동작 원리
-
-            # 운영 · 샘플 · 레퍼런스
-            Operations and lifecycle: 운영과 lifecycle
-            Options: 옵션
-            Picking a sample: 샘플 고르기
-            E2E testing: E2E 테스트
-            Key type index: 주요 타입 사용 색인
-
-            # ZLink host — C++에만 있는 host 구성 요소
-            DI container: DI 컨테이너
-            Configuration: 구성
-            HTTP hosting: HTTP 호스팅
-            Execution and configuration model: 실행·구성 모델
-
-            "7. Actor and Spot": "7. Actor와 Spot"
-            "8. Session and Actor binding": "8. Session과 Actor binding"
-            "9. STREAM": "9. STREAM"
-            "10. Location": "10. Location"
-            "11. Monitoring": "11. Monitoring"
-
-            # Framework 공통 스펙.
+            # 공통 스펙
             Common spec: 공통 스펙
-            Conventions and glossary: 작성 기준과 공통 용어
-            Public contract governance: 공개 계약 관리
-            Messaging glossary: 메시징 용어집
-            Foundation contracts: 기반 계약
-            Framework overview: Framework 개요
-            Interaction model: 상호작용 모델
-            Message model: 메시지 모델
-            Async execution policy: 비동기 실행 정책
-            Channel and network: Channel과 network
-            Channel messaging: Channel 메시징
-            Object messaging: Object 메시징
-            Spot model: Spot 모델
-            Spot messaging: Spot 메시징
-            Actor model: Actor 모델
-            Spot and Actor membership: Spot과 Actor membership
-            Spot address messaging: Spot 주소 메시징
-            STREAM and session: STREAM과 session
-            STREAM server session: STREAM 서버 session
-            Location Store and relocation: Location Store와 relocation
-            Observability and shutdown: 관측과 종료
-            Runtime status and diagnostics: Runtime 상태와 운영 진단
-            Complete Actor and Spot relocation flow: Actor와 Spot relocation 전체 흐름
-            Failure handling and failover: 장애 대응과 failover
-            Framework error model: Framework 오류 모델
-            Core Byte HWM And Application Job Flow: Core byte HWM과 Application job flow
-            Complete Host relocation flow: Host relocation 전체 흐름
-            Implementation gap record: Framework 구현 차이 기록
-
-            # Framework 내부 구조. 숫자 접두사가 키를 유일하게 만든다 — 가이드의
-            # "8. Session and Actor binding"과 아래 "9."는 다른 항목이다.
-            Internals overview: 내부 구조 개요
-            "1. Layer boundary and identifier": "1. 계층 경계와 식별자"
-            "2. Spot and Actor execution serialization": "2. Spot·Actor 실행 직렬화"
-            "3. Application and infrastructure isolation": "3. application과 infrastructure 실행 분리"
-            "4. Operation completion": "4. operation 완료 확정"
-            "5. Message continuity during a move": "5. 이동 중 message 연속성"
-            "6. Target selection and route cache": "6. target 선택과 route cache"
-            "7. Receive and dispatch loop": "7. 수신과 dispatch 루프"
-            "8. Object kind and activation": "8. 객체 종류와 활성화"
-            "9. Session and Actor connection": "9. Session과 Actor 연결"
-            "10. Liveness and status publication": "10. Liveness와 상태 공개"
-            "11. Payload ownership and copy": "11. Payload 소유권과 복사"
-            "12. Service wire protocol": "12. Service wire protocol"
-            "13. Relocation handoff state transitions": "13. Relocation handoff 상태 전이"
-
-            # Core 가이드 · 스펙 · 내부 구조.
-            Transports: 트랜스포트
-            TLS Security: TLS 보안
-            Monitoring: 모니터링
-            Routing ID: 라우팅 ID
-            Performance: 성능
-            Thread Safety: 스레드 안전성
-            Socket Options: 소켓 옵션
-            Context: 컨텍스트
-            Message: 메시지
-            Events: 이벤트
-            Polling: 폴링
-            Errors: 에러
-            Operations: 운영
-            Utilities: 유틸리티
-            Architecture: 아키텍처
-            Threading Model: 스레딩 모델
-            Design Decisions: 설계 결정
-            POSD Module Structure: POSD 모듈 구조
-            Stream Socket: 스트림 소켓
-            Protocol ZMP: ZMP 프로토콜
-            Protocol Raw: Raw 프로토콜
-            I/O Thread: I/O 스레드
-            Result Enums: 결과 Enum
-            Sockets: 소켓
-            Protocol: 프로토콜
-            Systems: 시스템
-            Runtime Boundary: 런타임 경계
-            Connection Memory: 연결 메모리
-            Auto HWM: 자동 HWM
-            Source Layout: 소스 레이아웃
+            Sample scenario contract: 샘플 시나리오 계약
 
 # 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
 # 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
@@ -647,18 +517,18 @@ nav:
           - 06. Stream session: node/reference/06-stream-session.md
           - 07. Location authority: node/reference/07-location-authority.md
           - 08. Observability diagnostics: node/reference/08-observability-diagnostics.md
-  - Samples:
-      - Bingo: common/sample/bingo/README.md
-      - TicTacToe: common/sample/tictactoe/README.md
-      - SupportChat: common/sample/supportchat/README.md
-      - DeliveryDispatch: common/sample/deliverydispatch/README.md
-      - ShoppingMall: common/sample/event/shoppingmall.md
-      - GameQuest: common/sample/event/gamequest.md
-      - ZoneWorld: common/sample/zoneworld/README.md
-      - Event sourcing: common/sample/event/README.md
   - Spec:
       - Common spec: common/README.md
-      - Sample scenario contract: common/sample/README.md
+      - Sample scenario contract:
+          - Overview: common/sample/README.md
+          - Bingo: common/sample/bingo/README.md
+          - TicTacToe: common/sample/tictactoe/README.md
+          - SupportChat: common/sample/supportchat/README.md
+          - DeliveryDispatch: common/sample/deliverydispatch/README.md
+          - ShoppingMall: common/sample/event/shoppingmall.md
+          - GameQuest: common/sample/event/gamequest.md
+          - ZoneWorld: common/sample/zoneworld/README.md
+          - Event sourcing: common/sample/event/README.md
       - Server spec: common/spec/server/README.md
       - Foundation:
           - Foundation overview: common/spec/server/00-foundation/README.md

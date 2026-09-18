@@ -1,4 +1,4 @@
-# 09 — 엔진 어댑터
+# 엔진 어댑터
 
 [← E2E 클라이언트](08-e2e-client.ko.md) | [목차](INDEX.ko.md) | [다음: 패키징 →](10-packaging.ko.md)
 
