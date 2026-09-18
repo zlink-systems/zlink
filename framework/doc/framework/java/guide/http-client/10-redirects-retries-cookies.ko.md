@@ -14,7 +14,7 @@
 - 메서드 rewrite: `303`, 또는 `301`/`302` + `POST` → `GET`으로 바꾸고 본문을 제거한다.
 - **`Authorization` 보존 규칙**: same-origin(scheme+host+port 동일) redirect에서는
   `Authorization`을 보존하고 cross-origin으로는 제거한다.
-- `max` 횟수를 넘기면 예외로 실패한다.
+- `max` 횟수를 넘기면 `INTERNAL_FAILURE`로 실패한다.
 - 지원 location: 절대(`http(s)://...`)와 path-absolute(`/...`).
 - redirect 루프는 `CompletionStage` 체인으로 합성되어 hop 사이에 스레드를 점유하지 않는다.
 

@@ -7,7 +7,7 @@
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation(project(":zlink-http-client"))
+    implementation("systems.zlink:zlink-http-client:0.16.0")
 }
 ```
 
@@ -41,14 +41,15 @@ HttpResponse<CreateGameRes> res = ZLinkHttpClient.create("https://game-api.examp
     .toCompletableFuture().join();
 ```
 
-## blocking 한 줄(테스트/CLI)
+## body만 받기
 
 ```java
-Leaderboard board = ZLinkHttpClient.create("http://127.0.0.1:18080")
+CompletionStage<Leaderboard> board = ZLinkHttpClient.create("http://127.0.0.1:18080")
     .get("/leaderboard").fetch(Leaderboard.class);
 ```
 
-`fetch(Type)`는 결과를 기다려 typed body를 돌려주고 실패를 예외로 던진다. handler
-스레드에서는 사용하지 않는다([7장](07-async.ko.md)).
+`fetch(Type)`는 `CompletionStage<T>`로 디코드된 body만 전달한다. 실패는 stage의 예외 완료로
+보고된다. 테스트·CLI에서는 `.toCompletableFuture().join()`으로 값을 꺼내고, handler
+스레드에서는 `thenCompose`로 합성한다([7장](07-async.ko.md)).
 
 [다음: Client 구성 →](03-client-configuration.ko.md)

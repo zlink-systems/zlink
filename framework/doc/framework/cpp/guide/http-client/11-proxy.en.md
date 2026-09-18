@@ -46,8 +46,8 @@ auto client = zlink::http_client::client_t::create ("https://api.partner-game.ex
 ```
 
 If a 407 is received with no authentication configured, that response is returned as-is (no
-automatic retry). If `CONNECT` is rejected, it closes with `request_failed`
-("proxy CONNECT failed with status 407").
+automatic retry). If `CONNECT` is rejected, it closes with `internal_failure`
+("HTTP proxy CONNECT failed with status 407").
 
 ## Relationship With The Connection Pool
 

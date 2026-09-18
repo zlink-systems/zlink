@@ -39,5 +39,5 @@ var game = await ZLinkHttpClient.Create("https://game-api.example.internal")
 - How failures are reported → [13. Error Handling](13-error-handling.en.md)
 
 The formal contract and regression test axes are owned by the spec document
-[dotnet-http-client.ko.md](../../../common/spec/http-client/languages/dotnet/dotnet-http-client.en.md).
+[dotnet-http-client.en.md](../../../common/spec/http-client/languages/dotnet/dotnet-http-client.en.md).
 This guide covers usage.

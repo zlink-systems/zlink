@@ -38,7 +38,7 @@ auto client = zlink::http_client::client_t::create ("https://game-api.example.in
 | `compression()` | gzip/deflate response decoding ([Chapter 12](12-compression.en.md)) | off |
 
 An invalid value (empty base_url, `ftp://` scheme, timeout of 0 or below, 0-byte response body cap,
-empty header name, etc.) is thrown immediately as `request_protocol_error` from `build()` or the
+empty header name, etc.) is thrown immediately as `protocol_error` from `build()` or the
 corresponding setter — it doesn't pass silently.
 
 A header added via `default_header` is applied as-is even if the redirect target changes. Don't put

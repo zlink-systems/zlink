@@ -2,7 +2,7 @@
 
 # 7. 비동기
 
-`submitRaw()` / `submit<T>()` / `download(sink)`는 모두 `Promise`를 돌려준다. Node에서는
+`submitRaw()` / `async<T>()` / `download(sink)`는 모두 `Promise`를 돌려준다. Node에서는
 `async`/`await`가 코루틴 역할을 한다.
 
 ## non-blocking 보장
@@ -15,10 +15,10 @@ worker scheduler가 필요 없다.
 async function notifyMatchResult(client: ZLinkHttpClient, result: MatchResult): Promise<void> {
   const response = await client.post(`/matches/${result.matchId}/result`)
     .body(result)
-    .submit<AckRes>();
+    .async<AckRes>();
 
   if (!response.body.accepted) {
-    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.RequestFailed, 'match result was not accepted');
+    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.InternalFailure, 'match result was not accepted');
   }
 }
 ```

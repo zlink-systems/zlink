@@ -17,16 +17,16 @@ Response header names are lowercase.
 
 ## Typed JSON Response
 
-`submit<T>()` decodes the response as JSON and returns an `HttpResponse<T>`.
+`async<T>()` decodes the response as JSON and returns an `HttpResponse<T>`.
 
 ```ts
-const response = await client.get('/players/7281').submit<PlayerProfile>();
+const response = await client.get('/players/7281').async<PlayerProfile>();
 const profile = response.body;     // the decoded object
 const raw = response.rawBody;      // the original response text
 ```
 
-- If status is **400 or above**, it throws `ZLinkFrameworkException(requestFailed)`.
-- A body JSON decode failure is reported as `ZLinkFrameworkException(payloadDecodeFailed)`.
+- If status is **400 or above**, it throws `ZLinkFrameworkException(InternalFailure)`.
+- A body JSON decode failure is reported as `ZLinkFrameworkException(ProtocolError)`.
 - JSON parsing applies prototype-pollution (`__proto__`/`constructor`/`prototype`) defenses.
 
 ## Status Handling Summary
@@ -34,8 +34,8 @@ const raw = response.rawBody;      // the original response text
 | Path | 4xx/5xx |
 |------|---------|
 | `submitRaw()` | returns the status as-is (no exception) |
-| `submit<T>()` | `requestFailed` exception |
-| `fetch<T>()` | validates the same as `submit<T>()`, returning only the decoded body as `Promise<T>` |
+| `async<T>()` | `InternalFailure` exception |
+| `fetch<T>()` | validates the same as `async<T>()`, returning only the decoded body as `Promise<T>` |
 
 ```ts
 const profile = await client.get('/players/7281').fetch<PlayerProfile>();

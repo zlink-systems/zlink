@@ -36,8 +36,10 @@ services.AddZLinkHttpClient("player-api", http => http
 ```
 
 handler는 같은 이름의 `ZLinkHttpServerClient`를 주입받는다. 정적 팩토리로 만든
-`ZLinkHttpClient`는 client-side 코드용이므로 one-way `Async()`를 제공하지 않는다.
-두 client 모두 HTTP request builder에 `Yield`를 제공하지 않는다.
+`ZLinkHttpClient`는 client-side 코드용이므로 one-way `Async()`를 제공하지 않고
+`ZLinkHttpRequestBuilder`에 `Yield`도 두지 않는다. `ZLinkHttpServerClient`가 돌려주는
+`ZLinkHttpServerRequestBuilder`는 one-way `Async()`와 shared Spot gate를 반납하는
+`Yield<T>()`를 추가로 제공한다.
 
 ## client 재사용과 connection pool
 

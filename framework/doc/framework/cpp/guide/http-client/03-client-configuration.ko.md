@@ -39,7 +39,7 @@ auto client = zlink::http_client::client_t::create ("https://game-api.example.in
 
 잘못된 값(빈 base_url, `ftp://` scheme, 0 이하 timeout, 0 bytes 응답 body 상한,
 빈 헤더 이름 등)은
-`build()` 또는 해당 setter에서 `request_protocol_error`로 즉시 던진다 —
+`build()` 또는 해당 setter에서 `protocol_error`로 즉시 던진다 —
 조용히 넘어가지 않는다.
 
 `default_header`로 넣은 헤더는 redirect 대상이 바뀌어도 그대로 적용된다. 비밀 값은

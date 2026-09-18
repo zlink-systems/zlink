@@ -23,6 +23,6 @@ reason is to align the semantics with the zlink contract:
 - `DownloadAsync(sink)` streaming chunks are **not decoded** (delivered as received).
 
 If the body is corrupted, it's reported as `ProtocolError`; if the decoded size exceeds the limit,
-as `CapacityExceeded`.
+as `Rejected`.
 
 [Next: Error Handling →](13-error-handling.en.md)

@@ -38,7 +38,8 @@ JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
 - `submitRaw()` / `submit(Type)` / `download(sink)`는 `CompletionStage`를 돌려준다.
   `java.net.http`의 NIO selector 기반 비동기 I/O로 네트워크 대기 중 호출 스레드는
   점유되지 않는다.
-- `fetch(Type)`는 blocking 접근으로 테스트·CLI 전용이다.
+- `fetch(Type)`도 `CompletionStage`를 돌려준다. status와 header가 필요 없는 호출에
+  디코드된 body만 전달한다.
 
 자세한 규칙은 [7. 비동기](07-async.ko.md)에서 다룬다.
 

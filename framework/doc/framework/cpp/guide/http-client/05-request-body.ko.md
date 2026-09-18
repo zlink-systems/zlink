@@ -3,7 +3,7 @@
 # 5. Request Body
 
 body 소스는 다섯 가지다. **한 request에 하나만** 사용할 수 있고 둘 이상 섞으면
-`request_protocol_error`("single body source")로 거부된다.
+`protocol_error`("single body source")로 거부된다.
 
 | 소스 | 메서드 | Content-Type |
 |------|--------|--------------|

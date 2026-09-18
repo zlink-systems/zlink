@@ -84,7 +84,7 @@ auto settlement =
 ## OpenSSL 없는 빌드
 
 OpenSSL이 없는 빌드에서 `https://` 요청은
-`request_protocol_error`("HTTPS support requires OpenSSL")로 닫힌다.
+`protocol_error`("HTTPS support requires OpenSSL")로 닫힌다.
 `http://`는 영향 없다.
 
 [다음: Redirect · Retry · Cookie →](10-redirects-retries-cookies.ko.md)

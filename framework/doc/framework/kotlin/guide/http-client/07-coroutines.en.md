@@ -15,7 +15,8 @@ waiting for a response. The redirect loop and retry loop also don't occupy a thr
 suspend fun notifyMatchResult(client: ZLinkHttpClient, result: MatchResult) {
     val ack = client.post("/matches/${result.matchId}/result").body(result).await<AckRes>()
     if (!ack.body().accepted) {
-        throw ZLinkFrameworkException("match result was not accepted")
+        throw ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted")
     }
 }
 ```
@@ -42,15 +43,19 @@ dispatcher (native asynchronous I/O).
 val results = (1..20).map { async { client.get("/r").awaitRaw() } }.awaitAll()
 ```
 
-## Resume Dispatcher
+## The Resuming Thread
 
-`await()` resumes on the calling coroutine's `CoroutineDispatcher`. To change the resume location,
-wrap it with `withContext(dispatcher) { ... }`.
+The suspend extension bridges the `CompletionStage` without naming a dispatcher. A continuation
+therefore resumes on a **transport executor thread** (`zlink-http-client`), not on the calling
+coroutine's dispatcher. To put the work that follows on a particular dispatcher, wrap that work in
+`withContext(dispatcher) { ... }`.
 
 ```kotlin
-val report = withContext(Dispatchers.IO) {
-    client.get("/reports/summary").fetch<Report>()
-}
+val report = client.get("/reports/summary").fetch<Report>()
+val rendered = withContext(Dispatchers.Default) { render(report) }
 ```
+
+Cancelling the coroutine does not cancel an HTTP operation that was already submitted. Cancellation
+ends the caller's wait only; the retry and the body read carry on.
 
 [Next: Streaming →](08-streaming.en.md)

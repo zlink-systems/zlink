@@ -15,7 +15,8 @@ park되지 않는다.** redirect 루프·retry 루프도 hop 사이에 스레드
 suspend fun notifyMatchResult(client: ZLinkHttpClient, result: MatchResult) {
     val ack = client.post("/matches/${result.matchId}/result").body(result).await<AckRes>()
     if (!ack.body().accepted) {
-        throw ZLinkFrameworkException("match result was not accepted")
+        throw ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted")
     }
 }
 ```
@@ -42,15 +43,19 @@ framework handler·actor·spot 코드는 suspend 함수 안에서 `await`/`fetch
 val results = (1..20).map { async { client.get("/r").awaitRaw() } }.awaitAll()
 ```
 
-## resume dispatcher
+## 재개 스레드
 
-`await()`는 호출한 coroutine의 `CoroutineDispatcher`에서 재개된다. 재개 위치를 바꾸려면
+suspend 확장은 dispatcher를 지정하지 않고 `CompletionStage`에 continuation을 연결한다. 따라서 continuation은
+호출한 coroutine의 dispatcher가 아니라 **transport executor 스레드**(`zlink-http-client`)에서
+재개된다. 이어지는 계산을 특정 dispatcher에 두려면 그 계산을
 `withContext(dispatcher) { ... }`로 감싼다.
 
 ```kotlin
-val report = withContext(Dispatchers.IO) {
-    client.get("/reports/summary").fetch<Report>()
-}
+val report = client.get("/reports/summary").fetch<Report>()
+val rendered = withContext(Dispatchers.Default) { render(report) }
 ```
+
+coroutine을 취소해도 이미 제출된 HTTP operation은 취소되지 않는다. 취소는 호출자의 대기만
+끝내고, retry와 body 읽기는 그대로 진행된다.
 
 [다음: Streaming →](08-streaming.ko.md)

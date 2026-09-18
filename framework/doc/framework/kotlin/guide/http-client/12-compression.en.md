@@ -20,7 +20,7 @@ val report = zlinkHttpClient("https://api.internal") {
 - Enforces `maxResponseBodySize` against the **decoded size**.
 - `awaitDownload(sink)` streaming chunks are **not decoded** (delivered as received).
 
-If the body is corrupted, it's reported as a decode-failure exception; if the decoded size exceeds
-the limit, as a request-failure exception.
+If the body is corrupted, it's reported as `PROTOCOL_ERROR`; if the decoded size exceeds the
+limit, as `INTERNAL_FAILURE`.
 
 [Next: Error Handling →](13-error-handling.en.md)

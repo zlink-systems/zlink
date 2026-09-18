@@ -15,7 +15,7 @@ redirect loop.
 - **`Authorization` preservation rule**: `Authorization` is preserved on a same-origin redirect
   (identical scheme+host+port) and removed cross-origin. .NET's native auto-redirect doesn't
   preserve `Authorization` even same-origin, which is why the wrapper loop is needed.
-- Exceeding the `max` count fails with `InternalFailure`.
+- Exceeding the `max` count fails with `ProtocolError`.
 - Supported locations: absolute (`http(s)://...`) and path-absolute (`/...`). Other relative paths
   are not supported.
 

@@ -39,20 +39,20 @@ JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
 
 ## 실행 모델
 
-요청 실행은 client 설정에 따라 두 가지로 나뉜다.
+요청 실행은 coroutine 기반이다.
 
-- 기본 client는 기존처럼 `submit_raw()`/`submit<T>()` 호출 중 HTTP 교환을 동기로
-  실행한다. 이 동작은 기존 blocking 코드와 테스트를 깨지 않기 위한 기본값이다.
-- `.coroutines()`를 명시한 client는 `submit_raw()`/`submit<T>()` 호출 시 HTTP 작업을
-  내부 scheduler에 등록하고 `task_t`를 돌려준다. `co_await`는 응답이 준비될 때까지
-  호출 스레드를 점유하지 않고 suspend된다.
+- `submit_raw()`/`submit<T>()`는 HTTP 작업을 내부 scheduler에 등록하고 `task_t`를
+  돌려준다. coroutine 실행은 client builder의 기본값이며 따로 켤 필요가 없다.
+- `co_await`는 응답이 준비될 때까지 호출 스레드를 점유하지 않고 suspend된다.
+- `.coroutines(...)` 오버로드는 HTTP 작업을 실행할 scheduler와 continuation을 다시
+  실행할 scheduler를 직접 지정할 때 사용한다.
 
 이 모델의 실용적 결론 하나만 기억하면 된다:
 
 > framework runtime/handler 스레드 안에서는 `submit<T>()`를 `co_await`하고,
 > `.result()`/`fetch<T>()` 같은 blocking 접근은 테스트·client 시나리오처럼 blocking이
-> 허용되는 곳에서만 사용한다. handler 안에서 HTTP 대기 중 스레드를 비우려면 client를
-> `.coroutines()` 또는 server가 제공한 resume scheduler로 구성한다.
+> 허용되는 곳에서만 사용한다. continuation을 특정 실행 줄에서 이어받아야 하면
+> `.coroutines(resume)`로 server가 제공한 resume scheduler를 지정한다.
 
 자세한 규칙은 [7. 비동기와 코루틴](07-async-coroutines.ko.md)에서 다룬다.
 

@@ -4,8 +4,8 @@
 
 `AsyncRaw()` / `Async<T>()` / `DownloadAsync(sink)` return a `ValueTask<T>`. For a server call that
 doesn't need the response result, use the argument-less `Async()`. It returns no normal completion
-value or transport status, delivering only a pre-start failure as an asynchronous error. The HTTP
-request builder has no `Yield<T>()` that gives back the Spot turn.
+value or transport status, delivering only a pre-start failure as an asynchronous error. A
+standalone client's `ZLinkHttpRequestBuilder` has no `Yield<T>()` that gives back the Spot turn.
 
 ## Non-Blocking Guarantee
 

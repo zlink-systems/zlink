@@ -10,11 +10,11 @@
 저수준 위에 fluent builder를 두어 그 복잡성을 감추고 framework의 에러·코덱 모델과 맞춘다.
 
 ```ts
-const profile = await client.get('/players/7281').submit<PlayerProfile>();
+const profile = await client.get('/players/7281').async<PlayerProfile>();
 ```
 
 JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
-(`body(dto)` / `submit<T>()`)는 그 위에 더해진 편의 계층이다.
+(`body(dto)` / `async<T>()`)는 그 위에 더해진 편의 계층이다.
 
 ## 설계 원칙
 
@@ -33,7 +33,7 @@ auto-decompress·cookie를 하지 않아 래퍼가 의미론을 통제할 수 �
 
 ## 실행 모델
 
-- `submitRaw()` / `submit<T>()` / `download(sink)`는 `Promise`를 돌려준다. `await`하는
+- `submitRaw()` / `async<T>()` / `download(sink)`는 `Promise`를 돌려준다. `await`하는
   동안 HTTP I/O는 libuv event loop의 비동기 소켓에서 처리되고 **event loop 스레드는
   점유되지 않는다.**
 - Node에는 동기 blocking HTTP 접근이 없다(blocking 경로 없음).

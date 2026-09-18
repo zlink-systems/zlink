@@ -25,11 +25,11 @@ auto game = client.get ("/games/latest").fetch<game_t> ();
 | `307`, `308` | method와 body 모두 보존 |
 
 - Location은 절대 URL(`https://other-host/...`)과 절대 경로(`/games/42`)를
-  지원한다. 상대 경로(`../x`)는 지원하지 않으며 `request_failed`로 닫힌다.
+  지원한다. 상대 경로(`../x`)는 지원하지 않으며 `internal_failure`로 닫힌다.
 - 절대 URL이 최초 요청과 다른 origin을 가리키면 `Authorization` 헤더를 다시 보내지
   않는다. 같은 origin 안의 redirect에는 인증 헤더를 유지한다. 다른 이름의 비밀 헤더는
   일반 헤더와 구분할 수 없으므로 `default_header`나 요청 단위 `header`에 넣지 않는다.
-- 한도(`follow_redirects(max)`)를 넘으면 `request_failed`
+- 한도(`follow_redirects(max)`)를 넘으면 `internal_failure`
   ("exceeded the redirect limit")로 닫힌다.
 - 끈 상태(기본)에서는 3xx 응답이 그대로 반환되므로 직접 분기할 수 있다.
 

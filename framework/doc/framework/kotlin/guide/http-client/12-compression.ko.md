@@ -20,7 +20,7 @@ val report = zlinkHttpClient("https://api.internal") {
 - **decoded 크기**를 `maxResponseBodySize`로 강제한다.
 - `awaitDownload(sink)` streaming chunk는 **해제하지 않는다**(받은 그대로 전달).
 
-본문이 손상됐으면 decode 실패 예외, decoded 크기가 한도를 넘으면 request 실패 예외로
+본문이 손상됐으면 `PROTOCOL_ERROR`, decoded 크기가 한도를 넘으면 `INTERNAL_FAILURE`로
 보고된다.
 
 [다음: 에러 처리 →](13-error-handling.ko.md)

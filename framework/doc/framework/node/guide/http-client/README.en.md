@@ -1,11 +1,5 @@
 # ZLink HTTP Client For Node — User Guide
 
-> **⚠️ This guide is not current.** The only guide that has finished review and upkeep right now is
-> the [`.NET` guide](../../../dotnet/README.en.md). This document reflects an earlier state, and
-> **once the `.NET` guide is finished, this document will be deleted and rewritten based on it.**
->
-> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/server/README.en.md).**
-
 `@zlink-systems/http-client` is a general-purpose HTTP client for sending HTTP requests from Node. It
 is used with a zlink-style fluent builder, and the public surface does not expose undici types.
 
@@ -15,7 +9,7 @@ import { ZLinkHttpClient } from '@zlink-systems/http-client';
 const game = await ZLinkHttpClient.create('https://game-api.example.internal')
   .post('/games')
   .body({ name: 'ranked-match-0611' })
-  .submit<CreateGameRes>();
+  .async<CreateGameRes>();
 ```
 
 ## Table Of Contents
@@ -27,7 +21,7 @@ const game = await ZLinkHttpClient.create('https://game-api.example.internal')
 | 3 | [Client Configuration](03-client-configuration.en.md) | Builder options, client reuse, undici mapping |
 | 4 | [Making Requests](04-making-requests.en.md) | HTTP methods, query parameters, headers, request timeout |
 | 5 | [Request Body](05-request-body.en.md) | JSON, raw, form, multipart, streaming upload |
-| 6 | [Handling Responses](06-handling-responses.en.md) | Response structure, `submit`, status handling |
+| 6 | [Handling Responses](06-handling-responses.en.md) | Response structure, `async`, status handling |
 | 7 | [Async](07-async.en.md) | `Promise`, `await`, non-blocking guarantee |
 | 8 | [Streaming](08-streaming.en.md) | `download(sink)` download, chunked upload |
 | 9 | [Authentication And TLS](09-authentication-tls.en.md) | Basic/Bearer, HTTPS verification, mTLS |

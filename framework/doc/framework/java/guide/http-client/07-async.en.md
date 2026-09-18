@@ -19,7 +19,8 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
         .submit(AckRes.class)
         .thenAccept(response -> {
             if (!response.body().accepted()) {
-                throw new ZLinkFrameworkException("match result was not accepted");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted");
             }
         });
 }
@@ -37,8 +38,8 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
 | Call Site | Recommended |
 |-----------|------|
 | framework handler / actor / spot code | `submit(Type).thenCompose(...)` |
-| test code | `fetch(Type)` or `.toCompletableFuture().join()` |
-| client scenario/CLI/batch | `fetch(Type)` |
+| test code | `fetch(Type).toCompletableFuture().join()` |
+| client scenario/CLI/batch | `fetch(Type).toCompletableFuture().join()` |
 
 ## Continuation Resume Location
 
@@ -46,13 +47,13 @@ In Java, the continuation resume location is controlled through `CompletableFutu
 `*Async(fn, executor)` combinators. To resume a continuation on a specific executor, pass the
 executor to `thenApplyAsync`/`thenComposeAsync`.
 
-## Blocking: fetch(Type)
+## fetch(Type), The Body-Only Terminator
 
-`fetch(Type)` stops the calling thread until the result arrives, returning the typed body and
-throwing failures as an exception. It's for test/CLI use only.
+`fetch(Type)` is asynchronous too. It hands over only the decoded body as a `CompletionStage<T>`,
+and a failure is reported as an exceptional completion of the stage.
 
 ```java
-Leaderboard board = client.get("/leaderboard").fetch(Leaderboard.class);
+CompletionStage<Leaderboard> board = client.get("/leaderboard").fetch(Leaderboard.class);
 ```
 
 [Next: Streaming →](08-streaming.en.md)

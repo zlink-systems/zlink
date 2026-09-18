@@ -44,7 +44,7 @@ auto client = zlink::http_client::client_t::create ("https://api.partner-game.ex
 ```
 
 인증 없이 407을 받으면 그 응답이 그대로 반환된다(자동 재시도 없음). `CONNECT`가
-거부되면 `request_failed`("proxy CONNECT failed with status 407")로 닫힌다.
+거부되면 `internal_failure`("HTTP proxy CONNECT failed with status 407")로 닫힌다.
 
 ## connection pool과의 관계
 

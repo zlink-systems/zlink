@@ -30,14 +30,15 @@ String raw = response.rawBody();            // the original response text
   exceptionally).
 - A body JSON decode failure is also reported as `ZLinkFrameworkException`.
 
-## Blocking Unwrapping
+## Taking Just The Body
 
 ```java
-PlayerProfile profile = client.get("/players/7281").fetch(PlayerProfile.class);
+CompletionStage<PlayerProfile> profile = client.get("/players/7281").fetch(PlayerProfile.class);
 ```
 
-`fetch(Type)` directly returns the typed body and throws failures as an exception. It's for
-test/CLI use only.
+`fetch(Type)` validates and decodes exactly as `submit(Type)` does, then strips the
+`HttpResponse<T>` and hands over the body alone. Use `submit(Type)` only when you also need the
+status or the headers.
 
 ## Status Handling Summary
 

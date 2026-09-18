@@ -37,7 +37,7 @@ The implementation uses Boost.Beast's built-in zlib, so there's no external zlib
 - **Not applied to `download(sink)`** — streaming download delivers raw bytes as-is
   ([8. Streaming](08-streaming.en.md)). For a compressed large file, the caller receives it and
   decodes it.
-- A corrupted compressed body closes with `payload_decode_failed`
+- A corrupted compressed body closes with `protocol_error`
   ([13. Error Handling](13-error-handling.en.md)).
 
 [Next: Error Handling →](13-error-handling.en.md)

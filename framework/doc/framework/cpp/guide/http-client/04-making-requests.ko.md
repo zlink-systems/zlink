@@ -26,7 +26,7 @@ if (head && head.value ().status == 200) {
 }
 ```
 
-path는 반드시 `/`로 시작해야 하며 아니면 `request_protocol_error`로 던진다.
+path는 반드시 `/`로 시작해야 하며 아니면 `protocol_error`로 던진다.
 
 ## Query 파라미터
 
@@ -79,7 +79,7 @@ auto ready = client.get ("/ready")
                .result ();
 ```
 
-timeout 초과는 `framework_error_kind_t::timeout`(retriable)으로 보고된다 —
+timeout 초과는 `framework_error_kind_t::deadline_exceeded`(retriable)으로 보고된다 —
 [13. 에러 처리](13-error-handling.ko.md).
 
 [다음: Request Body →](05-request-body.ko.md)

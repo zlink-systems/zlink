@@ -1,11 +1,5 @@
 # ZLink HTTP Client For Node — 사용자 가이드
 
-> **⚠️ 이 가이드는 최신이 아니다.** 현재 리뷰·정비가 끝난 가이드는
-> [`.NET` 가이드](../../../dotnet/README.ko.md) 하나뿐이다. 이 문서는 그 이전 상태이며,
-> **`.NET` 가이드가 완성되면 이 문서를 삭제하고 그것을 기준으로 다시 사용한다.**
->
-> **계약을 확인할 때는 이 문서를 믿지 말고 [spec 트리](../../../common/spec/server/README.ko.md)를 본다.**
-
 `@zlink-systems/http-client`는 Node에서 HTTP request를 보내기 위한 범용 HTTP client다.
 zlink 스타일 fluent builder로 사용하며 공개 표면은 undici 타입을 노출하지 않는다.
 
@@ -15,7 +9,7 @@ import { ZLinkHttpClient } from '@zlink-systems/http-client';
 const game = await ZLinkHttpClient.create('https://game-api.example.internal')
   .post('/games')
   .body({ name: 'ranked-match-0611' })
-  .submit<CreateGameRes>();
+  .async<CreateGameRes>();
 ```
 
 ## 목차
@@ -27,7 +21,7 @@ const game = await ZLinkHttpClient.create('https://game-api.example.internal')
 | 3 | [Client 구성](03-client-configuration.ko.md) | builder 옵션, client 재사용, undici 매핑 |
 | 4 | [Request 만들기](04-making-requests.ko.md) | HTTP 메서드, query 파라미터, 헤더, request timeout |
 | 5 | [Request Body](05-request-body.ko.md) | JSON, raw, form, multipart, streaming 업로드 |
-| 6 | [Response 다루기](06-handling-responses.ko.md) | 응답 구조, `submit`, status 처리 |
+| 6 | [Response 다루기](06-handling-responses.ko.md) | 응답 구조, `async`, status 처리 |
 | 7 | [비동기](07-async.ko.md) | `Promise`, `await`, non-blocking 보장 |
 | 8 | [Streaming](08-streaming.ko.md) | `download(sink)` 다운로드, chunked 업로드 |
 | 9 | [인증과 TLS](09-authentication-tls.ko.md) | Basic/Bearer, HTTPS 검증, mTLS |

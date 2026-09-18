@@ -3,7 +3,7 @@
 # 5. Request Body
 
 body 소스는 **상호 배타**다. `body`, `bodyStream`, `form`, `multipart` 중 하나만 사용할 수
-있고 둘 이상 지정하면 예외로 실패한다.
+있고 둘 이상 지정하면 `PROTOCOL_ERROR`로 실패한다.
 
 ## typed JSON
 

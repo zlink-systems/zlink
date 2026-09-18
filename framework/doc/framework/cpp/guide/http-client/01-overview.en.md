@@ -40,21 +40,20 @@ It's not a JSON-only client. It's a general-purpose HTTP client, and the typed J
 
 ## Execution Model
 
-Request execution splits into two, depending on the client's configuration.
+Request execution is coroutine-based.
 
-- By default, the client synchronously executes the HTTP exchange during the `submit_raw()`/
-  `submit<T>()` call, as before. This behavior is the default so existing blocking code and tests
-  don't break.
-- A client with `.coroutines()` specified registers the HTTP work with an internal scheduler on
-  `submit_raw()`/`submit<T>()` and returns a `task_t`. `co_await` suspends without occupying the
-  calling thread until the response is ready.
+- `submit_raw()`/`submit<T>()` register the HTTP work with an internal scheduler and return a
+  `task_t`. Coroutine execution is the client builder's default and needs no opt-in.
+- `co_await` suspends without occupying the calling thread until the response is ready.
+- The `.coroutines(...)` overloads are for naming the scheduler that runs the HTTP work and the
+  scheduler that resumes the continuation.
 
 There's one practical takeaway to remember from this model:
 
 > Inside a framework runtime/handler thread, `co_await` `submit<T>()`, and use blocking accesses
-> like `.result()`/`fetch<T>()` only where blocking is allowed, such as tests or client scenarios. To
-> free up the thread while waiting on HTTP inside a handler, configure the client with
-> `.coroutines()` or the server-provided resume scheduler.
+> like `.result()`/`fetch<T>()` only where blocking is allowed, such as tests or client scenarios. If
+> a continuation has to resume on a particular execution line, name the server-provided resume
+> scheduler with `.coroutines(resume)`.
 
 The detailed rules are covered in [7. Async And Coroutines](07-async-coroutines.en.md).
 

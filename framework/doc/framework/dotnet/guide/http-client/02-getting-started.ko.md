@@ -9,7 +9,7 @@ HTTP client가 사용하는 framework contract package만 함께 설치된다.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Zlink.HttpClient" Version="0.10.0" />
+  <PackageReference Include="Zlink.HttpClient" Version="0.16.0" />
 </ItemGroup>
 ```
 

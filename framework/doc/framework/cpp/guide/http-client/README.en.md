@@ -1,11 +1,5 @@
 # ZLink HTTP Client For C++ — User Guide
 
-> **⚠️ This guide is not current.** The only guide that has finished review and upkeep right now is
-> the [`.NET` guide](../../../dotnet/README.en.md). This document reflects an earlier state, and
-> **once the `.NET` guide is finished, this document will be deleted and rewritten based on it.**
->
-> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/server/README.en.md).**
-
 `zlink::http_client` is a general-purpose HTTP client for sending HTTP requests from C++. It is used
 with a zlink-style fluent builder, and the public header does not expose Boost.Beast/Asio/OpenSSL
 types.

@@ -45,7 +45,7 @@ const auto &profile = response.body;             // ③ the DTO
 
 ## How Status Codes Are Handled
 
-`submit<T>()` **treats 4xx/5xx as a failure** — the `result_t` closes as `request_failed`
+`submit<T>()` **treats 4xx/5xx as a failure** — the `result_t` closes as `internal_failure`
 ("HTTP request failed with status 404"), and `value()` can't be accessed. That's because the typed
 path is meant for "receiving a successful response as a DTO."
 
@@ -68,7 +68,7 @@ switch (raw.value ().status) {
 ## DTO Decoding
 
 If a `from_json` ADL function exists, `submit<T>`/`fetch<T>` decodes the response body into that
-type. A decode failure is reported as `payload_decode_failed`.
+type. A decode failure is reported as `protocol_error`.
 
 ```cpp
 struct create_game_http_res_t

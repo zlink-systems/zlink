@@ -3,12 +3,12 @@
 # 5. Request Body
 
 Body sources are **mutually exclusive**. You can use only one of `body`, `bodyStream`, `form`, or
-`multipart` — specifying two or more fails with `requestProtocolError`.
+`multipart` — specifying two or more fails with `ProtocolError`.
 
 ## Typed JSON
 
 ```ts
-await client.post('/games').body({ name: 'ranked-match-0611' }).submit<CreateGameRes>();
+await client.post('/games').body({ name: 'ranked-match-0611' }).async<CreateGameRes>();
 ```
 
 `body(value)` (1 argument) JSON-serializes the value and sets `content-type: application/json`.

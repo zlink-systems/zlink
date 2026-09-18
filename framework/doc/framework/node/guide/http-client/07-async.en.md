@@ -2,7 +2,7 @@
 
 # 7. Async
 
-`submitRaw()` / `submit<T>()` / `download(sink)` all return a `Promise`. In Node, `async`/`await`
+`submitRaw()` / `async<T>()` / `download(sink)` all return a `Promise`. In Node, `async`/`await`
 plays the role of a coroutine.
 
 ## Non-Blocking Guarantee
@@ -15,10 +15,10 @@ separate worker scheduler is needed.
 async function notifyMatchResult(client: ZLinkHttpClient, result: MatchResult): Promise<void> {
   const response = await client.post(`/matches/${result.matchId}/result`)
     .body(result)
-    .submit<AckRes>();
+    .async<AckRes>();
 
   if (!response.body.accepted) {
-    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.RequestFailed, 'match result was not accepted');
+    throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.InternalFailure, 'match result was not accepted');
   }
 }
 ```

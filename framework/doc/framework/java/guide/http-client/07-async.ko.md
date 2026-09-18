@@ -19,7 +19,8 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
         .submit(AckRes.class)
         .thenAccept(response -> {
             if (!response.body().accepted()) {
-                throw new ZLinkFrameworkException("match result was not accepted");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "match result was not accepted");
             }
         });
 }
@@ -37,21 +38,21 @@ public CompletionStage<Void> notifyMatchResult(ZLinkHttpClient client, MatchResu
 | 호출 위치 | 권장 |
 |-----------|------|
 | framework handler / actor / spot 코드 | `submit(Type).thenCompose(...)` |
-| 테스트 코드 | `fetch(Type)` 또는 `.toCompletableFuture().join()` |
-| client 시나리오·CLI·배치 | `fetch(Type)` |
+| 테스트 코드 | `fetch(Type).toCompletableFuture().join()` |
+| client 시나리오·CLI·배치 | `fetch(Type).toCompletableFuture().join()` |
 
 ## continuation 재개 위치
 
 Java에서는 `CompletableFuture`의 `*Async(fn, executor)` 조합으로 continuation 재개 위치를 제어한다. continuation을 특정 executor에서 재개하려면 `thenApplyAsync`/`thenComposeAsync`에
 executor를 넘긴다.
 
-## blocking: fetch(Type)
+## body만 받는 fetch(Type)
 
-`fetch(Type)`는 결과가 올 때까지 호출 스레드를 멈추고 typed body를 돌려주며 실패를 예외로
-던진다. 테스트·CLI 전용이다.
+`fetch(Type)`도 비동기다. `CompletionStage<T>`로 디코드된 body만 전달하며 실패는 stage의
+예외 완료로 보고된다.
 
 ```java
-Leaderboard board = client.get("/leaderboard").fetch(Leaderboard.class);
+CompletionStage<Leaderboard> board = client.get("/leaderboard").fetch(Leaderboard.class);
 ```
 
 [다음: Streaming →](08-streaming.ko.md)
