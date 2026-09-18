@@ -59,6 +59,7 @@ jobs:
       core_version: ${{ steps.resolve.outputs.core_version }}
       core_abi_soversion: ${{ steps.resolve.outputs.core_abi_soversion }}
       core_tag: ${{ steps.resolve.outputs.core_tag }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v5
 
@@ -135,12 +136,22 @@ jobs:
           fi
           CORE_TAG="core/v${CORE_VERSION}"
 
+          # 'all'+create_release=true is rejected above, so at most one
+          # language's release-* job runs with create_release=true per run,
+          # and `declared` (set once per matching language in the loop above)
+          # still holds that single language's version here.
+          RELEASE_TAG=""
+          if [ "${CREATE_RELEASE}" = "true" ]; then
+            RELEASE_TAG="${TARGET}/v${declared}"
+          fi
+
           echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
           echo "create_release=${CREATE_RELEASE}" >> "$GITHUB_OUTPUT"
           echo "publish_registry=${PUBLISH_REGISTRY}" >> "$GITHUB_OUTPUT"
           echo "core_version=${CORE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "core_abi_soversion=${CORE_ABI_SOVERSION}" >> "$GITHUB_OUTPUT"
           echo "core_tag=${CORE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Validate exact Core release
         env:
@@ -712,6 +723,42 @@ jobs:
           tag_name: rust/v${{ needs.resolve.outputs.rust_version }}
           name: rust binding v${{ needs.resolve.outputs.rust_version }}
           files: dist/rust/zlink-rust-${{ needs.resolve.outputs.rust_version }}.tar.gz
+
+  # `all`+create_release=true is rejected in resolve, so at most one of the
+  # six release-* jobs above actually creates a release per run; whichever it
+  # is, `resolve.outputs.release_tag` names it. releases/latest/download/...
+  # is repo-wide (#639), so a binding release must carry the same eight
+  # tutorial/samples zips framework-release.yml and build.yml attach, or it
+  # can become "latest" and 404 the download links until the next framework
+  # release. Only python/go/rust currently have no public release in
+  # practice (doc/building/release-pipeline.ko.md §1), but the `if` here does
+  # not special-case that — it just follows create_release like every
+  # release-* job already does.
+  release-assets:
+    name: Attach tutorial/samples zip assets (${{ needs.resolve.outputs.release_tag }})
+    needs:
+      - resolve
+      - release-node
+      - release-go
+      - release-python
+      - release-java
+      - release-cpp
+      - release-rust
+    if: >-
+      !cancelled() &&
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.release_tag != '' &&
+      contains(fromJSON('["success","skipped"]'), needs.release-node.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-go.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-python.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-java.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-cpp.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release-rust.result)
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      tag: ${{ needs.resolve.outputs.release_tag }}
 
   sync-recipes:
     name: Sync vcpkg/Conan recipes (cpp binding)
