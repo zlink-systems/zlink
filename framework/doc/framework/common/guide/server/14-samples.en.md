@@ -264,8 +264,6 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
     # Run one sample
     framework/languages/dotnet/samples/Bingo/run_sample.sh
 
-    # Run several in sequence (omit the arguments to run all)
-    framework/languages/dotnet/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "C++"
@@ -274,27 +272,19 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
     # Run one sample
     framework/languages/cpp/samples/Bingo/run_sample.sh
 
-    # Run several in sequence (omit the arguments to run all)
-    framework/languages/cpp/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "Java"
 
     ```bash
-    # One runner handles both the java and kotlin samples.
+    # The java and kotlin samples sit under one sample root, split by language directory.
     framework/languages/java/samples/java/TicTacToe/run_sample.sh
-
-    # Run several in sequence (omit the arguments to run all)
-    ZLINK_SAMPLE_LANGUAGES=java \
-      framework/languages/java/samples/run_samples.sh TicTacToe Bingo
     ```
 
 === "Kotlin"
 
     ```bash
-    # Kotlin samples use the same runner as Java, selecting the language only.
-    ZLINK_SAMPLE_LANGUAGES=kotlin \
-      framework/languages/java/samples/run_samples.sh TicTacToe Bingo
+    framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
     ```
 
 === "Node/TypeScript"
@@ -303,13 +293,12 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
     # Run one sample
     framework/languages/node/samples/Bingo.Ts/run_sample.sh
 
-    # Run several in sequence (omit the arguments to run all)
-    framework/languages/node/samples/run_samples.sh TicTacToe Bingo
     ```
 
-The common sample target includes ZoneWorld and its browser UI. Every language's
-`run_samples.sh` runs all seven server samples, including ZoneWorld.
-To run only ZoneWorld, invoke `ZoneWorld/run_sample.sh` from that language's sample root.
+Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its
+browser UI work the same way: invoke `ZoneWorld/run_sample.sh` from that language's sample
+root. Why no runner walks several samples is settled by
+[the common sample](../../../common/sample/README.en.md).
 
 ## 10. Related Documents
 

@@ -279,13 +279,12 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
 # Run one sample
 framework/languages/dotnet/samples/Bingo/run_sample.sh
 
-# Run several in sequence (omit the arguments to run all)
-framework/languages/dotnet/samples/run_samples.sh TicTacToe Bingo
 ```
 
-The common sample target includes ZoneWorld and its browser UI. Every language's
-`run_samples.sh` runs all seven server samples, including ZoneWorld.
-To run only ZoneWorld, invoke `ZoneWorld/run_sample.sh` from that language's sample root.
+Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its
+browser UI work the same way: invoke `ZoneWorld/run_sample.sh` from that language's sample
+root. Why no runner walks several samples is settled by
+[the common sample](../../../common/sample/README.en.md).
 
 ## 10. Related Documents
 

@@ -297,9 +297,7 @@ The run script is responsible for **starting the server, running the client, and
 up afterward.**
 
 ```bash
-# The kotlin sample uses the same runner as java and just picks the language.
-ZLINK_SAMPLE_LANGUAGES=kotlin \
-  framework/languages/java/samples/run_samples.sh TicTacToe
+  framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
 
 # Inside the runner it's the same procedure as java -- installDist -> start_server -> wait_port -> client.
 ```
