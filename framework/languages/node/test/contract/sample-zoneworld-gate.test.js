@@ -15,9 +15,12 @@ test('ZoneWorld Node sample contains the language server and headless scenario c
   assert.ok(fs.existsSync(path.join(nodeRoot, 'samples/ZoneWorld/Server/ZoneNode/main.ts')));
   assert.ok(fs.existsSync(path.join(nodeRoot, 'samples/ZoneWorld/Server/Ops/main.ts')));
   assert.ok(fs.existsSync(path.join(nodeRoot, 'samples/ZoneWorld/Client/main.ts')));
+  //  ZoneWorld is driven by its own runner on both platforms; the aggregate
+  //  samples/run_samples.{sh,ps1} that used to list it are gone (#405, e106104ffe).
+  //  That the npm sample gate still walks ZoneWorld is asserted once, in
+  //  sample-regression.test.js, rather than restated here.
   assert.ok(fs.existsSync(path.join(nodeRoot, 'samples/ZoneWorld/run_sample.ps1')));
-  assert.match(read('samples/run_samples.sh'), /ZoneWorld/);
-  assert.match(read('samples/run_samples.ps1'), /ZoneWorld/);
+  assert.ok(fs.existsSync(path.join(nodeRoot, 'samples/ZoneWorld/run_sample.sh')));
 });
 
 test('ZoneWorld roles use one physical MeshNode with automatic logical handlers', () => {
