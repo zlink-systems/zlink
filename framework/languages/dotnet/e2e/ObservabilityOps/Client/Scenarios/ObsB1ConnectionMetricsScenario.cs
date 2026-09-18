@@ -67,7 +67,7 @@ internal static class ObsB1ConnectionMetricsScenario
         await proxy.WaitForConnectionAsync();
         var sawReconnect = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectingStateSeen = 0;
-        reconnecting.ConnectionStateChanged += (change, _) =>
+        _ = reconnecting.OnConnectionStateChanged((change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Reconnecting)
                 Volatile.Write(ref reconnectingStateSeen, 1);
@@ -75,7 +75,7 @@ internal static class ObsB1ConnectionMetricsScenario
                      && Volatile.Read(ref reconnectingStateSeen) != 0)
                 sawReconnect.TrySetResult();
             return ValueTask.CompletedTask;
-        };
+        });
         proxy.DropConnection();
         await proxy.WaitForConnectionAsync();
         await sawReconnect.Task.WaitAsync(TimeSpan.FromSeconds(10));

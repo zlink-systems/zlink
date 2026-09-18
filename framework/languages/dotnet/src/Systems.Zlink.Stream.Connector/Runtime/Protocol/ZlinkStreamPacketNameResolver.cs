@@ -7,11 +7,23 @@ internal sealed class ZlinkStreamPacketNameResolver : IZlinkStreamPacketNameReso
 {
     private static readonly ConcurrentDictionary<Type, string> Cache = new();
 
+    /// <summary>
+    ///     Resolves the packet name of <paramref name="payloadType" />: the name on its
+    ///     <see cref="ZlinkStreamPacketNameAttribute" /> when there is one, otherwise the
+    ///     simple type name (stream-connector spec §5).
+    /// </summary>
+    /// <remarks>
+    ///     The lookup honours inheritance because
+    ///     <see cref="ZlinkStreamPacketNameAttribute" /> declares itself inherited. Reading
+    ///     it with <c>inherit: false</c> contradicted that declaration: a derived payload
+    ///     type fell back to its own type name while the attribute said it carried the base
+    ///     type's packet name.
+    /// </remarks>
     public string Resolve(Type payloadType)
     {
         ArgumentNullException.ThrowIfNull(payloadType);
         return Cache.GetOrAdd(payloadType, static type =>
-            type.GetCustomAttribute<ZlinkStreamPacketNameAttribute>(false)?.Name
+            type.GetCustomAttribute<ZlinkStreamPacketNameAttribute>(true)?.Name
             ?? type.Name);
     }
 }

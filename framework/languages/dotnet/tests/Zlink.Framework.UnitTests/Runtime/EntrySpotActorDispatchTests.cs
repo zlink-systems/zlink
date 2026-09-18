@@ -5814,9 +5814,10 @@ public sealed partial class EntrySpotActorDispatchTests
             var boundPush = Assert.Single(node.BoundSessionReplies);
             var header = DecodeFrameHeader(Assert.Single(boundPush.Parts));
             Assert.Equal(root.FlowId, header.FlowId);
-            Assert.Equal(
-                (ZlinkStreamFlowOrigin)(byte)root.Origin,
-                header.FlowOrigin);
+            // The connector enum uses ordinals 0..3 while ZLinkFlowOrigin carries the wire
+            // values 1..4, so the two are compared by name, not by numeric cast.
+            Assert.Equal(ZlinkStreamFlowOrigin.Lifecycle, header.FlowOrigin);
+            Assert.Equal(ZLinkFlowOrigin.Lifecycle, root.Origin);
         }
         finally
         {

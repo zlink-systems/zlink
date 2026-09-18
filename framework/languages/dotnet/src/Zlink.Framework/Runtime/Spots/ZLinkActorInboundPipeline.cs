@@ -301,7 +301,7 @@ internal sealed class ZLinkActorInboundPipeline(
         using var flow = ZLinkFlowContext.Enter(
             frame.Header.FlowId,
             frame.Header.FlowOrigin is { } streamOrigin
-                ? (ZLinkFlowOrigin)(byte)streamOrigin
+                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
                 : null,
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);

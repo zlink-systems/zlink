@@ -24,11 +24,11 @@ internal static class SmD13HeartbeatRequestScenario
             },
             DispatchMode = ZlinkStreamDispatchMode.Immediate,
         });
-        stream.Disconnected += (message, _) =>
+        _ = stream.OnDisconnected((message, _) =>
         {
             disconnected.TrySetResult(message);
             return ValueTask.CompletedTask;
-        };
+        });
         await stream.Connect.Async();
         await stream.Request(new AuthReq("actor-sm-d13", "heartbeat"))
             .PacketName("AuthReq").Async<AuthRes>();

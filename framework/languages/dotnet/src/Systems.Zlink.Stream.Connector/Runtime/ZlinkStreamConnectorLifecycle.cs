@@ -8,9 +8,16 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     ZlinkStreamPendingRequests pending,
     ZlinkStreamTaskRunner taskRunner,
     ZlinkStreamConnectorCallbacks callbacks,
-    Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport)
+    Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport,
+    Action<long> onConnectionEstablished)
     : IDisposable
 {
+    /// <summary>
+    ///     Lower bound of the reconnect jitter window: the loop waits between this share of
+    ///     the base delay and the full base delay (stream-connector spec §6).
+    /// </summary>
+    internal const double ReconnectJitterFloor = 0.5;
+
     private readonly CancellationTokenSource _closeCts = new();
     private readonly object _gate = new();
     private readonly ZlinkStreamHeartbeatMonitor _heartbeat = new(options.Heartbeat);
@@ -139,6 +146,9 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 var startActiveConnect = _startActiveConnect;
                 _activeConnectTask = null;
                 _startActiveConnect = null;
+                // Closing an established connection is itself a close reason, and the
+                // read surface must show it after the fact (stream-connector spec §6.2).
+                if (snapshot.Connection is not null) _lastCloseReason = ZlinkStreamCloseReason.ClientClose;
                 var change = SetStateLocked(ZlinkStreamConnectionState.Closed, null);
 
                 startClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -249,28 +259,26 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         var reconnect = options.Reconnect;
         if (!reconnect.Enabled) return;
 
-        var delay = reconnect.InitialDelay <= reconnect.MaxDelay
+        var baseDelay = reconnect.InitialDelay <= reconnect.MaxDelay
             ? reconnect.InitialDelay
             : reconnect.MaxDelay;
         var attempt = 0;
         ZlinkStreamError? lastError = null;
-        var transport = ZlinkStreamRuntimeMetrics.TransportLabel(options);
 
         try
         {
             while (!_closeCts.IsCancellationRequested)
             {
-                await Task.Delay(delay, _closeCts.Token).ConfigureAwait(false);
+                // Clients that all dropped together must not all come back at the same
+                // instant, so the wait is a random point in the lower half of the base
+                // delay's range (stream-connector spec §6).
+                await Task.Delay(ApplyReconnectJitter(baseDelay), _closeCts.Token).ConfigureAwait(false);
                 attempt++;
 
                 try
                 {
                     var connection = await OpenConnectionAsync(_closeCts.Token).ConfigureAwait(false);
                     await AttachConnectionAsync(connection, _closeCts.Token).ConfigureAwait(false);
-                    ZlinkStreamRuntimeMetrics.RecordReconnect(
-                        transport,
-                        "connected",
-                        "transport_closed");
                     return;
                 }
                 catch (Exception ex) when (!_closeCts.IsCancellationRequested)
@@ -278,29 +286,28 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                     lastError = ex is ZlinkStreamException streamException
                         ? streamException.Error
                         : MapConnectException(ex, _closeCts.Token);
-                    ZlinkStreamRuntimeMetrics.RecordReconnect(
-                        transport,
-                        "failed",
-                        ReconnectFailureReason(lastError));
                     await callbacks.PublishErrorAsync(lastError, CancellationToken.None)
                         .ConfigureAwait(false);
 
                     if (reconnect.MaxAttempts is { } maxAttempts && attempt >= maxAttempts)
                     {
+                        // The attempts are spent: the state settles at Disconnected and
+                        // the registered disconnect handlers run (spec §6). A configuration
+                        // with unlimited attempts never reaches this point.
                         await TransitionToDisconnectedAsync(lastError, CancellationToken.None).ConfigureAwait(false);
+                        await callbacks.NotifyDisconnectedAsync(
+                                LastCloseReason ?? MapCloseReason(lastError),
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
                         throw new ZlinkStreamException(lastError);
                     }
 
-                    delay = NextReconnectDelay(delay, reconnect);
+                    baseDelay = NextReconnectDelay(baseDelay, reconnect);
                 }
             }
         }
         catch (OperationCanceledException) when (_closeCts.IsCancellationRequested)
         {
-            ZlinkStreamRuntimeMetrics.RecordReconnect(
-                transport,
-                "shutdown",
-                "requested");
         }
         catch (ObjectDisposedException) when (_closeCts.IsCancellationRequested)
         {
@@ -309,14 +316,6 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             // closed that transport; the background reconnect is complete.
         }
     }
-
-    private static string ReconnectFailureReason(ZlinkStreamError error) =>
-        error.Code switch
-        {
-            ZlinkStreamErrorCode.ConnectTimeout => "timeout",
-            ZlinkStreamErrorCode.TlsValidationFailed => "tls_failed",
-            _ => "connect_failed"
-        };
 
     private async ValueTask<IZlinkStreamConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
@@ -341,9 +340,15 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     private async ValueTask AttachConnectionAsync(IZlinkStreamConnection connection,
         CancellationToken cancellationToken)
     {
-        var runReceiveLoop = _runReceiveLoop
+        // _runReceiveLoop is assigned under the gate, so it is read under the gate too.
+        Func<CancellationToken, Task> runReceiveLoop;
+        lock (_gate)
+        {
+            runReceiveLoop = _runReceiveLoop
                              ?? throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ConfigurationError,
                                  "Receive loop is not configured.");
+        }
+
         var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(_closeCts.Token);
         _heartbeat.RecordSessionStart();
 
@@ -380,6 +385,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         oldSnapshot.SessionCts?.Dispose();
         await NotifyStateChangedAsync(change, cancellationToken).ConfigureAwait(false);
 
+        long establishedGeneration;
         lock (_gate)
         {
             if (!ReferenceEquals(_connection, connection) || !ReferenceEquals(_sessionCts, sessionCts))
@@ -390,7 +396,28 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 return;
             }
 
-            _connectionGeneration++;
+            establishedGeneration = ++_connectionGeneration;
+        }
+
+        // An established connection is the baseline for the receive queue, so every
+        // reconnect starts the counters at zero and drops what the previous connection
+        // left unconsumed (spec §10). It runs before the receive loop starts, so no
+        // arrival of this connection is lost, and outside this gate, because it takes the
+        // receive queue's own lock: holding both here is the order a waiter whose
+        // predicate reads State takes them in reverse. The generation makes a call from a
+        // superseded attach a no-op.
+        onConnectionEstablished(establishedGeneration);
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_connection, connection) || !ReferenceEquals(_sessionCts, sessionCts))
+            {
+                if (_state == ZlinkStreamConnectionState.Closed)
+                    throw new ObjectDisposedException(nameof(ZlinkStreamConnector), "Connector is closed.");
+
+                return;
+            }
+
             _receiveTask = taskRunner.Run(
                 _ => new ValueTask(RunReceiveLoopGuardedAsync(runReceiveLoop, sessionCts.Token)));
             _heartbeatTask = options.Heartbeat.Enabled
@@ -433,8 +460,15 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
     {
         using var work = EnterWorker(ZlinkStreamLifecycleWorkKind.Heartbeat);
+        // _sendHeartbeatPing is assigned under the gate, so it is read under the gate too.
+        Func<CancellationToken, ValueTask>? sendHeartbeatPing;
+        lock (_gate)
+        {
+            sendHeartbeatPing = _sendHeartbeatPing;
+        }
+
         await _heartbeat.RunAsync(
-                _sendHeartbeatPing,
+                sendHeartbeatPing,
                 HandleTransportErrorAsync,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -528,6 +562,10 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         {
             if (_state == ZlinkStreamConnectionState.Closed) return;
 
+            // A first connect that never reached Connected still leaves a reason behind,
+            // so callers can tell how the attempt ended (stream-connector spec §6.2).
+            // ConnectTimeout and TlsValidationFailed map to TransportError there.
+            _lastCloseReason = MapCloseReason(error);
             change = SetStateLocked(ZlinkStreamConnectionState.Disconnected, error);
         }
 
@@ -671,12 +709,40 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         };
     }
 
+    /// <summary>
+    ///     Advances the base delay by one backoff step, stopping at the maximum delay.
+    /// </summary>
+    /// <remarks>
+    ///     The base delay is the deterministic part of the schedule. What the loop actually
+    ///     waits is <see cref="ApplyReconnectJitter" /> of this value.
+    /// </remarks>
     private static TimeSpan NextReconnectDelay(TimeSpan current, ZlinkStreamReconnectOptions options)
     {
         var nextMilliseconds = current.TotalMilliseconds * options.BackoffFactor;
         if (nextMilliseconds >= options.MaxDelay.TotalMilliseconds) return options.MaxDelay;
 
         return TimeSpan.FromMilliseconds(nextMilliseconds);
+    }
+
+    /// <summary>
+    ///     Picks the wait before one reconnect attempt: a value between 50% and 100% of
+    ///     <paramref name="baseDelay" /> (stream-connector spec §6).
+    /// </summary>
+    private static TimeSpan ApplyReconnectJitter(TimeSpan baseDelay) =>
+        ScaleReconnectDelay(baseDelay, Random.Shared.NextDouble());
+
+    /// <summary>
+    ///     Pure jitter arithmetic, separated from the random source so a test can drive it
+    ///     with a chosen sample instead of a real draw.
+    /// </summary>
+    /// <param name="baseDelay">Deterministic backoff delay for this attempt.</param>
+    /// <param name="sample">A value in [0, 1).</param>
+    internal static TimeSpan ScaleReconnectDelay(TimeSpan baseDelay, double sample)
+    {
+        if (baseDelay <= TimeSpan.Zero) return TimeSpan.Zero;
+
+        var factor = ReconnectJitterFloor + ((1.0 - ReconnectJitterFloor) * sample);
+        return TimeSpan.FromTicks((long)(baseDelay.Ticks * factor));
     }
 
     private static ZlinkStreamError GetPendingDisconnectError(ZlinkStreamError cause)

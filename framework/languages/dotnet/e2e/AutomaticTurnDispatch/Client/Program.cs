@@ -28,25 +28,25 @@ await using var client =
         Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
         DispatchMode = ZlinkStreamDispatchMode.Immediate,
     });
-client.ErrorReceived += (error, _) =>
+_ = client.OnErrorReceived((error, _) =>
 {
     Console.Error.WriteLine(
         $"automatic-turn-dispatch connector error code={error.Code} message={error.Message}");
     return ValueTask.CompletedTask;
-};
-client.ConnectionStateChanged += (change, _) =>
+});
+_ = client.OnConnectionStateChanged((change, _) =>
 {
     Console.Error.WriteLine(
         $"automatic-turn-dispatch connector state previous={change.Previous} current={change.Current}"
         + $" error={change.Error?.Code}:{change.Error?.Message}");
     return ValueTask.CompletedTask;
-};
-client.Disconnected += (disconnected, _) =>
+});
+_ = client.OnDisconnected((disconnected, _) =>
 {
     Console.Error.WriteLine(
         $"automatic-turn-dispatch connector disconnected reason={disconnected.CloseReason}");
     return ValueTask.CompletedTask;
-};
+});
 await client.Connect.Async();
 
 var context = new ExecutionTurnScenarioContext(client, playA, playB);

@@ -33,6 +33,7 @@
 
     <ItemGroup>
         <Compile Include="Contracts/PublicApiTests.cs"/>
+        <Compile Include="Contracts/SpecAlignmentTests.cs"/>
         <Compile Include="GlobalUsings.cs"/>
         <Compile Include="Protocol/ErrorAndModeTests.cs"/>
         <Compile Include="Protocol/HeaderCodecTests.cs"/>
@@ -40,6 +41,7 @@
         <Compile Include="Transport/DiagnosticsLevelLiveTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
+        <Compile Include="Transport/ReceiveQueueConcurrencyTests.cs"/>
         <Compile Include="Transport/RuntimeMetricsTests.cs"/>
         <Compile Include="Transport/TestHelperTests.cs"/>
         <Compile Include="Transport/TransportTests.cs"/>

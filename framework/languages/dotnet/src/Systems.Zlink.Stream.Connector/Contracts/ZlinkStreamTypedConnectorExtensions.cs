@@ -98,7 +98,13 @@ public static class ZlinkStreamTypedConnectorExtensions
         return connector.On(name, (message, cancellationToken) =>
         {
             var payload = DecodePayload<TPayload>(connector.Options.PayloadCodec, message.Payload);
-            return handler(new ZlinkStreamMessage<TPayload>(message.Name, message.Metadata, payload),
+            return handler(
+                new ZlinkStreamMessage<TPayload>(
+                    message.Name,
+                    message.Metadata,
+                    payload,
+                    message.FlowId,
+                    message.FlowOrigin),
                 cancellationToken);
         });
     }
@@ -228,13 +234,17 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
         return messages.Select(Decode).ToArray();
     }
 
+    // The typed projection keeps the flow pair the frame carried; decoding the payload
+    // must not drop it (stream-connector spec §5.5).
     private ZlinkStreamMessage<TPayload> Decode(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
     {
         return new ZlinkStreamMessage<TPayload>(
             message.Name,
             message.Metadata,
-            ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload));
+            ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
+            message.FlowId,
+            message.FlowOrigin);
     }
 }
 
@@ -258,10 +268,7 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
     public ZlinkStreamTypedWaitBuilder<TPayload> Where(Func<ZlinkStreamMessage<TPayload>, bool> predicate)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        _inner.Where(message => predicate(new ZlinkStreamMessage<TPayload>(
-            message.Name,
-            message.Metadata,
-            ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload))));
+        _inner.Where(message => predicate(Decode(message)));
         return this;
     }
 
@@ -269,10 +276,19 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
         CancellationToken cancellationToken = default)
     {
         var message = await _inner.Async(cancellationToken).ConfigureAwait(false);
+        return Decode(message);
+    }
+
+    // The typed projection keeps the flow pair the frame carried (spec §5.5).
+    private ZlinkStreamMessage<TPayload> Decode(
+        ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
+    {
         return new ZlinkStreamMessage<TPayload>(
             message.Name,
             message.Metadata,
-            ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload));
+            ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
+            message.FlowId,
+            message.FlowOrigin);
     }
 }
 

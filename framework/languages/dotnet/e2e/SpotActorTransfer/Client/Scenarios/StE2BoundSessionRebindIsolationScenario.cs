@@ -26,7 +26,7 @@ internal static class StE2BoundSessionRebindIsolationScenario
         var closedBeforeGuidance = 0;
         var closed = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        oldSession.Disconnected += (message, _) =>
+        _ = oldSession.OnDisconnected((message, _) =>
         {
             // Check the wait task itself at the lifecycle boundary. A flag set
             // by the awaiting continuation can run after Disconnected even
@@ -35,7 +35,7 @@ internal static class StE2BoundSessionRebindIsolationScenario
                 Interlocked.Exchange(ref closedBeforeGuidance, 1);
             closed.TrySetResult(message);
             return ValueTask.CompletedTask;
-        };
+        });
         var beforeTransferPush = oldSession.WaitFor<BoundPushNotify>()
             .Where(message => message.Payload.Marker == "before-rebind-transfer")
             .Timeout(TimeSpan.FromSeconds(10))

@@ -142,17 +142,17 @@ public sealed partial class StreamConnectorTests
         var order = new List<string>();
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ConnectionStateChanged += (change, _) =>
+        _ = connector.OnConnectionStateChanged((change, _) =>
         {
             lock (order) order.Add($"state:{change.Current}");
             return ValueTask.CompletedTask;
-        };
-        connector.Disconnected += (closed, _) =>
+        });
+        _ = connector.OnDisconnected((closed, _) =>
         {
             lock (order) order.Add($"disconnected:{closed.CloseReason}");
             disconnected.TrySetResult(closed);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async();
         var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -180,13 +180,13 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ConnectionStateChanged += async (change, _) =>
+        _ = connector.OnConnectionStateChanged(async (change, _) =>
         {
             if (change.Current != ZlinkStreamConnectionState.Connected) return;
 
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
             await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
@@ -230,11 +230,11 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.Disconnected += async (_, _) =>
+        _ = connector.OnDisconnected(async (_, _) =>
         {
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         var connect = connector.Connect.Async().AsTask();
         await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -267,13 +267,13 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += async (error, _) =>
+        _ = connector.OnErrorReceived(async (error, _) =>
         {
             if (error.Code != ZlinkStreamErrorCode.FrameDecodeFailed) return;
 
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -309,11 +309,11 @@ public sealed partial class StreamConnectorTests
             }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += async (_, _) =>
+        _ = connector.OnErrorReceived(async (_, _) =>
         {
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
@@ -375,13 +375,13 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += async (error, _) =>
+        _ = connector.OnErrorReceived(async (error, _) =>
         {
             if (error.Code != ZlinkStreamErrorCode.RemoteError) return;
 
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -410,13 +410,13 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += async (error, _) =>
+        _ = connector.OnErrorReceived(async (error, _) =>
         {
             if (error.Code != ZlinkStreamErrorCode.UserCallbackFailed) return;
 
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
         using var subscription = connector.On("throw-from-handler", (_, _) =>
             throw new InvalidOperationException("expected callback failure"));
 
@@ -612,11 +612,11 @@ public sealed partial class StreamConnectorTests
         var workerBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.Disconnected += (closed, _) =>
+        _ = connector.OnDisconnected((closed, _) =>
         {
             disconnected.TrySetResult(closed);
             return ValueTask.CompletedTask;
-        };
+        });
         using var subscription = connector.On("block-canceled-close", async (_, _) =>
         {
             workerBlocked.TrySetResult();
@@ -736,26 +736,29 @@ public sealed partial class StreamConnectorTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var errorRejected = new TaskCompletionSource<InvalidOperationException>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ConnectionStateChanged += async (change, _) =>
+        _ = connector.OnConnectionStateChanged(async (change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Connecting)
                 await CaptureDisposeRejectionAsync(stateRejected);
-        };
+        });
         using var subscription = connector.On("manual-dispose", async (_, _) =>
             await CaptureDisposeRejectionAsync(typedRejected));
-        connector.ErrorReceived += async (error, _) =>
+        _ = connector.OnErrorReceived(async (error, _) =>
         {
             if (error.Code == ZlinkStreamErrorCode.RemoteError)
                 await CaptureDisposeRejectionAsync(errorRejected);
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await framesWritten.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await WaitUntilAsync(
             () => connector.PendingDispatchCount >= 4,
             TimeSpan.FromSeconds(5));
-        Assert.Equal(0, connector.ReceivedCount("manual-dispose"));
+        // The packet is counted on arrival, before the manual pump runs: ReceivedCount is
+        // independent of the dispatch mode (stream-connector spec §10).
+        Assert.Equal(1, connector.ReceivedCount("manual-dispose"));
         await connector.Dispatch.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, connector.ReceivedCount("manual-dispose"));
 
         foreach (var rejection in new[] { stateRejected.Task, typedRejected.Task, errorRejected.Task })
         {
@@ -859,7 +862,7 @@ public sealed partial class StreamConnectorTests
         var closedEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var disconnectedSelfClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new List<string>();
-        connector.ConnectionStateChanged += async (change, _) =>
+        _ = connector.OnConnectionStateChanged(async (change, _) =>
         {
             if (change.Current != ZlinkStreamConnectionState.Closed) return;
 
@@ -867,13 +870,13 @@ public sealed partial class StreamConnectorTests
             closedEntered.TrySetResult();
             await releaseTerminal.Task;
             await connector.Close.Async();
-        };
-        connector.Disconnected += async (_, _) =>
+        });
+        _ = connector.OnDisconnected(async (_, _) =>
         {
             lock (order) order.Add("disconnected");
             await connector.Close.Async();
             disconnectedSelfClose.TrySetResult();
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         var firstClose = connector.Close.Async().AsTask();
@@ -1116,7 +1119,8 @@ public sealed partial class StreamConnectorTests
 
                 reconnectStarted.TrySetResult();
                 return ValueTask.FromResult<IZlinkStreamConnection>(secondConnection);
-            });
+            },
+            _ => { });
         var states = new List<ZlinkStreamConnectionState>();
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1181,7 +1185,8 @@ public sealed partial class StreamConnectorTests
             pending,
             taskRunner,
             callbacks,
-            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection));
+            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
+            _ => { });
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackFailures = new List<ZlinkStreamError>();
@@ -1259,7 +1264,8 @@ public sealed partial class StreamConnectorTests
             taskRunner,
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(
-                Interlocked.Increment(ref connectCount) == 1 ? firstConnection : secondConnection));
+                Interlocked.Increment(ref connectCount) == 1 ? firstConnection : secondConnection),
+            _ => { });
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1321,7 +1327,8 @@ public sealed partial class StreamConnectorTests
             new ZlinkStreamPendingRequests(),
             taskRunner,
             callbacks,
-            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection));
+            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
+            _ => { });
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1379,7 +1386,7 @@ public sealed partial class StreamConnectorTests
         var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new List<string>();
-        connector.ConnectionStateChanged += async (change, _) =>
+        _ = connector.OnConnectionStateChanged(async (change, _) =>
         {
             if (change.Current != ZlinkStreamConnectionState.Connected) return;
 
@@ -1388,8 +1395,8 @@ public sealed partial class StreamConnectorTests
             await releaseFirst.Task;
             await connector.Close.Async();
             lock (order) order.Add("first-exit");
-        };
-        connector.ConnectionStateChanged += (change, _) =>
+        });
+        _ = connector.OnConnectionStateChanged((change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Connected)
             {
@@ -1398,7 +1405,7 @@ public sealed partial class StreamConnectorTests
             }
 
             return ValueTask.CompletedTask;
-        };
+        });
 
         var connect = connector.Connect.Async().AsTask();
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1435,14 +1442,14 @@ public sealed partial class StreamConnectorTests
         var order = new List<string>();
         var secondStateSubscriber = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reported = new TaskCompletionSource<ZlinkStreamError>(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ErrorReceived += async (error, _) =>
+        _ = connector.OnErrorReceived(async (error, _) =>
         {
             if (error.Code != ZlinkStreamErrorCode.UserCallbackFailed) return;
             lock (order) order.Add("error-first");
             await Task.Yield();
             throw new InvalidOperationException("secondary error handler failure");
-        };
-        connector.ErrorReceived += (error, _) =>
+        });
+        _ = connector.OnErrorReceived((error, _) =>
         {
             if (error.Code == ZlinkStreamErrorCode.UserCallbackFailed)
             {
@@ -1451,8 +1458,8 @@ public sealed partial class StreamConnectorTests
             }
 
             return ValueTask.CompletedTask;
-        };
-        connector.ConnectionStateChanged += (change, _) =>
+        });
+        _ = connector.OnConnectionStateChanged((change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Connecting)
             {
@@ -1461,8 +1468,8 @@ public sealed partial class StreamConnectorTests
             }
 
             return ValueTask.CompletedTask;
-        };
-        connector.ConnectionStateChanged += (change, _) =>
+        });
+        _ = connector.OnConnectionStateChanged((change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Connecting)
             {
@@ -1471,7 +1478,7 @@ public sealed partial class StreamConnectorTests
             }
 
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await secondStateSubscriber.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1502,13 +1509,13 @@ public sealed partial class StreamConnectorTests
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
         });
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ConnectionStateChanged += async (change, _) =>
+        _ = connector.OnConnectionStateChanged(async (change, _) =>
         {
             if (change.Current != ZlinkStreamConnectionState.Connected) return;
 
             await connector.Close.Async();
             callbackCompleted.TrySetResult();
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await connector.Dispatch.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -1551,7 +1558,7 @@ public sealed partial class StreamConnectorTests
         var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackFailure = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         var reportedErrors = new List<ZlinkStreamError>();
-        connector.Disconnected += async (_, _) =>
+        _ = connector.OnDisconnected(async (_, _) =>
         {
             try
             {
@@ -1563,12 +1570,12 @@ public sealed partial class StreamConnectorTests
                 callbackFailure.TrySetResult(exception);
                 throw;
             }
-        };
-        connector.ErrorReceived += (error, _) =>
+        });
+        _ = connector.OnErrorReceived((error, _) =>
         {
             lock (reportedErrors) reportedErrors.Add(error);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1861,7 +1868,8 @@ public sealed partial class StreamConnectorTests
             pending,
             taskRunner,
             callbacks,
-            OpenTransportAsync);
+            OpenTransportAsync,
+            _ => { });
 
         await lifecycle.ConnectAsync(
             token => Task.Delay(Timeout.InfiniteTimeSpan, token),
@@ -1926,12 +1934,12 @@ public sealed partial class StreamConnectorTests
             }
         });
         var reconnecting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.ConnectionStateChanged += (change, _) =>
+        _ = connector.OnConnectionStateChanged((change, _) =>
         {
             if (change.Current == ZlinkStreamConnectionState.Reconnecting) reconnecting.TrySetResult();
 
             return ValueTask.CompletedTask;
-        };
+        });
 
         await connector.Connect.Async();
         await reconnecting.Task.WaitAsync(TimeSpan.FromSeconds(5));

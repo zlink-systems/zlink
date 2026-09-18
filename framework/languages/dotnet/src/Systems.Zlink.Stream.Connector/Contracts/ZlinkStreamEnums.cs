@@ -77,6 +77,22 @@ public enum ZlinkStreamConnectionState
     Closed
 }
 
+/// <summary>
+///     Origin of the flow a received message belongs to (stream-connector .NET spec §11).
+/// </summary>
+/// <remarks>
+///     The <c>flow_origin</c> wire values are 1..4 while these ordinals are 0..3. The
+///     header codec converts between the two explicitly; never cast this enum to an
+///     integer to obtain a wire value.
+/// </remarks>
+public enum ZlinkStreamFlowOrigin
+{
+    Inbound,
+    Timer,
+    Application,
+    Lifecycle
+}
+
 public enum ZlinkStreamCloseReason
 {
     ClientClose = 0,

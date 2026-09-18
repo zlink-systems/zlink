@@ -12,10 +12,28 @@ public sealed record ZlinkStreamMessage(
     ZlinkStreamMetadata Metadata,
     object? Payload);
 
+/// <summary>
+///     A received stream message: payload, packet name, metadata and the flow pair the
+///     frame carried (stream-connector spec §5.5, .NET spec §11).
+/// </summary>
+/// <param name="Name">Packet name the frame carried.</param>
+/// <param name="Metadata">Metadata key-value pairs the frame carried.</param>
+/// <param name="Payload">Decoded payload.</param>
+/// <param name="FlowId">
+///     Flow identifier the frame carried, or <see langword="null" /> when the connector's
+///     diagnostics level is <see cref="ZlinkStreamDiagnosticsLevel.Off" /> or the frame
+///     carried no flow pair.
+/// </param>
+/// <param name="FlowOrigin">
+///     Origin of <paramref name="FlowId" />, or <see langword="null" /> under the same
+///     conditions.
+/// </param>
 public sealed record ZlinkStreamMessage<TPayload>(
     string Name,
     ZlinkStreamMetadata Metadata,
-    TPayload Payload);
+    TPayload Payload,
+    string? FlowId = null,
+    ZlinkStreamFlowOrigin? FlowOrigin = null);
 
 public sealed record ZlinkStreamError(
     ZlinkStreamErrorCode Code,

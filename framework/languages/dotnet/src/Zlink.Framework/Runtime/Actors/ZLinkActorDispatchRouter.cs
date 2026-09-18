@@ -90,7 +90,7 @@ internal sealed class ZLinkActorDispatchRouter(
     {
         using var flow = ZLinkFlowContext.Enter(
             header.FlowId,
-            header.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
+            header.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         var shouldPrune = false;
@@ -150,7 +150,7 @@ internal sealed class ZLinkActorDispatchRouter(
     {
         using var flow = ZLinkFlowContext.Enter(
             header.FlowId,
-            header.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
+            header.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         return await state.ExecuteDispatchAsync(

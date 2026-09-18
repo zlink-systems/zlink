@@ -26,11 +26,11 @@ internal static class ObsC4ForcedSessionDrainScenario
             reconnectEnabled: false,
             configure: candidate =>
             {
-                candidate.Disconnected += (closed, _) =>
+                _ = candidate.OnDisconnected((closed, _) =>
                 {
                     disconnected.TrySetResult(closed.CloseReason);
                     return ValueTask.CompletedTask;
-                };
+                });
             });
         await connector.Request(new AuthenticateReq(actorId))
             .Async<AuthenticateRes>();

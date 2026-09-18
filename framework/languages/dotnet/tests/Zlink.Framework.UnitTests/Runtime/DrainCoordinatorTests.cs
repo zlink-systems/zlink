@@ -1467,11 +1467,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false }
             });
-        connector.Disconnected += (closed, _) =>
+        _ = connector.OnDisconnected((closed, _) =>
         {
             disconnected.TrySetResult(closed.CloseReason);
             return ValueTask.CompletedTask;
-        };
+        });
         await connector.Connect.Async();
         await connector.Send(new DrainProbeMessage("connected"))
             .PacketName("drain.probe")
@@ -1599,11 +1599,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false }
             });
-        connector.Disconnected += (closed, _) =>
+        _ = connector.OnDisconnected((closed, _) =>
         {
             disconnected.TrySetResult(closed.CloseReason);
             return ValueTask.CompletedTask;
-        };
+        });
 
         await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
             await connector.Connect.Async());

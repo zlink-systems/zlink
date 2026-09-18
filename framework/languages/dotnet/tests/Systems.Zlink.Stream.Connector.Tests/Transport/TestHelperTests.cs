@@ -47,7 +47,10 @@ public sealed partial class StreamConnectorTests
             .Async().AsTask();
         sendUnexpected.SetResult();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => unexpected);
+        // A wait surface reports its violations as ValidationFailed carried by
+        // ZlinkStreamException (stream-connector spec §10.1, §9.2).
+        var arrived = await Assert.ThrowsAsync<ZlinkStreamException>(() => unexpected);
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, arrived.Error.Code);
         await server;
     }
 
@@ -110,7 +113,8 @@ public sealed partial class StreamConnectorTests
             .Async().AsTask();
         sendOutOfOrder.SetResult();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => outOfOrder);
+        var violation = await Assert.ThrowsAsync<ZlinkStreamException>(() => outOfOrder);
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, violation.Error.Code);
         await server;
     }
 

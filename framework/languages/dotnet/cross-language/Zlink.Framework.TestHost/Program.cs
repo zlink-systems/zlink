@@ -1048,11 +1048,11 @@ internal sealed class StreamClientStartupRequestHostedService(
             Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
             RequestTimeout = TimeSpan.FromSeconds(5)
         });
-        _connector.Disconnected += (disconnected, _) =>
+        _ = _connector.OnDisconnected((disconnected, _) =>
         {
             sink.Append($"stream-disconnected|{disconnected.CloseReason}");
             return ValueTask.CompletedTask;
-        };
+        });
         await _connector.Connect.Async(cancellationToken);
         var pending = _connector
             .Request(new ZlinkStreamEncodedPayload(

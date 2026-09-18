@@ -244,27 +244,21 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamErrorCode.RemoteError,
                 "missing callback result"));
 
-        public event Func<ZlinkStreamError, CancellationToken, ValueTask>? ErrorReceived
-        {
-            add { }
-            remove { }
-        }
+        public IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler) =>
+            new NoopRegistration();
 
-        public event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>? Disconnected
-        {
-            add { }
-            remove { }
-        }
+        public IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler) =>
+            new NoopRegistration();
 
-        public event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>? ConnectionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public IDisposable OnConnectionStateChanged(
+            Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler) =>
+            new NoopRegistration();
 
         public bool IsConnected => true;
 
         public ZlinkStreamConnectionState State => ZlinkStreamConnectionState.Connected;
+
+        public ZlinkStreamCloseReason? CloseReason => null;
 
         public ZlinkStreamConnectorOptions Options { get; }
 
@@ -272,16 +266,16 @@ public sealed partial class StreamConnectorTests
 
         public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
         {
-            SetDiagnosticsLevelAsync(level).GetAwaiter().GetResult();
-        }
-
-        public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
-        {
             if (!System.Enum.IsDefined(level))
                 throw new ZlinkStreamException(
                     new ZlinkStreamError(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid."));
 
             Options.SetDiagnosticsLevelLive(level);
+        }
+
+        public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
+        {
+            SetDiagnosticsLevel(level);
             return Task.CompletedTask;
         }
 
@@ -543,6 +537,13 @@ public sealed partial class StreamConnectorTests
             {
                 return ValueTask.CompletedTask;
             }
+        }
+    }
+
+    private sealed class NoopRegistration : IDisposable
+    {
+        public void Dispose()
+        {
         }
     }
 
