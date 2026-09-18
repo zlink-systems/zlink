@@ -6,11 +6,11 @@
  * The checks scan the public headers and runtime sources textually so the
  * build keeps compiling while target signatures are still missing. */
 
+#include "../support/read_text_file.hpp"
+
 #include <array>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -21,13 +21,7 @@
 namespace
 {
 
-std::string read_file (const std::filesystem::path &path)
-{
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    return buffer.str ();
-}
+using zlink::framework::tests::read_text_file;
 
 bool tree_contains (const std::filesystem::path &root, const std::string &needle)
 {
@@ -42,7 +36,7 @@ bool tree_contains (const std::filesystem::path &root, const std::string &needle
         if (ext != ".hpp" && ext != ".h" && ext != ".cpp") {
             continue;
         }
-        if (read_file (entry.path ()).find (needle) != std::string::npos) {
+        if (read_text_file (entry.path ()).find (needle) != std::string::npos) {
             return true;
         }
     }
@@ -61,7 +55,7 @@ std::string read_source_tree (const std::filesystem::path &root)
         }
         const auto ext = entry.path ().extension ();
         if (ext == ".hpp" || ext == ".h" || ext == ".cpp") {
-            source += read_file (entry.path ());
+            source += read_text_file (entry.path ());
             source.push_back ('\n');
         }
     }
@@ -97,40 +91,40 @@ int main ()
         }
     }
 
-    const auto cmake = read_file (root / "CMakeLists.txt");
+    const auto cmake = read_text_file (root / "CMakeLists.txt");
     const auto redis_hpp =
-      read_file (root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
-    const auto spot_runtime = read_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
+      read_text_file (root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
+    const auto spot_runtime = read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
     const auto spot_runtime_header =
-      read_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
+      read_text_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
     const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
     const auto actor_serial_executor =
-      read_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
+      read_text_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
     const auto spot_route_packets =
-      read_file (root / "framework/src/runtime/spots/spot_route_packets.cpp");
+      read_text_file (root / "framework/src/runtime/spots/spot_route_packets.cpp");
     const auto spot_route_packets_hpp =
-      read_file (root / "framework/src/runtime/spots/spot_route_packets.hpp");
+      read_text_file (root / "framework/src/runtime/spots/spot_route_packets.hpp");
     const auto spot_route_dispatcher =
-      read_file (root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
+      read_text_file (root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
     const auto stream_host =
-      read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
-    const auto call_hpp = read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
+      read_text_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
+    const auto call_hpp = read_text_file (include_root / "zlink/framework/contracts/channels/call.hpp");
     const auto mesh_node_hpp =
-      read_file (include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
     const auto stream_runtime =
-      read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
+      read_text_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
     const auto stream_runtime_header =
-      read_file (root / "framework/src/runtime/streams/stream_runtime.hpp");
+      read_text_file (root / "framework/src/runtime/streams/stream_runtime.hpp");
     const auto stream_runtime_surface = stream_runtime + stream_runtime_header;
     const auto session_serial_executor =
-      read_file (root / "framework/src/runtime/streams/session_serial_executor.hpp");
+      read_text_file (root / "framework/src/runtime/streams/session_serial_executor.hpp");
     const auto serial_execution_queue =
-      read_file (root / "framework/src/runtime/execution/serial_execution_queue.hpp");
-    const auto call_id = read_file (root / "framework/src/runtime/operations/call_id.hpp");
+      read_text_file (root / "framework/src/runtime/execution/serial_execution_queue.hpp");
+    const auto call_id = read_text_file (root / "framework/src/runtime/operations/call_id.hpp");
     const auto call_facade_runtime =
-      read_file (root / "framework/src/runtime/messaging/call_facade_runtime.cpp");
+      read_text_file (root / "framework/src/runtime/messaging/call_facade_runtime.cpp");
     const auto logical_multicast_runtime =
-      read_file (root / "framework/src/runtime/messaging/logical_multicast_runtime.cpp");
+      read_text_file (root / "framework/src/runtime/messaging/logical_multicast_runtime.cpp");
     const auto m6a_sources_begin =
       cmake.find ("set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES");
     const auto m6a_sources_end =
@@ -142,111 +136,111 @@ int main ()
         ? std::string{}
         : cmake.substr (m6a_sources_begin, m6a_sources_end - m6a_sources_begin);
     const auto failure_origin_wire =
-      read_file (root / "framework/src/runtime/messaging/failure_origin_wire.hpp");
+      read_text_file (root / "framework/src/runtime/messaging/failure_origin_wire.hpp");
     const auto flow_context =
-      read_file (root / "framework/src/runtime/diagnostics/flow_context.hpp");
+      read_text_file (root / "framework/src/runtime/diagnostics/flow_context.hpp");
     const auto message_flow_tracer =
-      read_file (root / "framework/src/runtime/diagnostics/message_flow_tracer.hpp");
+      read_text_file (root / "framework/src/runtime/diagnostics/message_flow_tracer.hpp");
     const auto diagnostic_event_sink =
-      read_file (root / "framework/src/runtime/diagnostics/diagnostic_event_sink.hpp");
+      read_text_file (root / "framework/src/runtime/diagnostics/diagnostic_event_sink.hpp");
     const auto dispatch_error_reporter =
-      read_file (root / "framework/src/runtime/diagnostics/dispatch_error_reporter.hpp");
+      read_text_file (root / "framework/src/runtime/diagnostics/dispatch_error_reporter.hpp");
     const auto channel_reply_writer =
-      read_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
+      read_text_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect =
-      read_file (root / "framework/src/runtime/locations/location_auto_connect_host_service.hpp");
+      read_text_file (root / "framework/src/runtime/locations/location_auto_connect_host_service.hpp");
     const auto client_server_location_runtime =
-      read_file (root / "framework/src/runtime/client_server/client_server_location_runtime.cpp");
+      read_text_file (root / "framework/src/runtime/client_server/client_server_location_runtime.cpp");
     const auto store_location_resolvers =
-      read_file (root / "framework/src/runtime/locations/store_location_resolvers.hpp");
+      read_text_file (root / "framework/src/runtime/locations/store_location_resolvers.hpp");
     const auto authority_key_codec =
-      read_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
+      read_text_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
     const auto in_memory_location_store =
-      read_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
     const auto provider_location_repository =
-      read_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
     const auto public_store_adapters =
-      read_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
+      read_text_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =
-      read_file (root / "framework/src/runtime/actors/actor_client.cpp");
+      read_text_file (root / "framework/src/runtime/actors/actor_client.cpp");
     const auto relocation_id_generator =
-      read_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
+      read_text_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
-      read_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
-    const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
-    const auto dispatch_events = read_file (
+      read_text_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
+    const auto app_runtime = read_text_file (root / "framework/src/runtime/host/app.cpp");
+    const auto dispatch_events = read_text_file (
       root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =
-      read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
-    const auto actor_transfer_coordinator = read_file (
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
+    const auto actor_transfer_coordinator = read_text_file (
       root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
-      read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
-    const auto framework_message = read_file (
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+    const auto framework_message = read_text_file (
       include_root / "zlink/framework/contracts/messaging/message.hpp");
-    const auto serializer_header = read_file (
+    const auto serializer_header = read_text_file (
       include_root / "zlink/framework/contracts/codecs/serializer.hpp");
-    const auto framework_json_header = read_file (
+    const auto framework_json_header = read_text_file (
       include_root / "zlink/framework/codecs/json.hpp");
     const auto raw_fanout_owner =
-      read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
+      read_text_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
-      read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
-    const auto service_topology_registry = read_file (
+      read_text_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
+    const auto service_topology_registry = read_text_file (
       root / "framework/src/runtime/mesh/service_topology_registry.hpp");
     const auto service_wire_codec =
-      read_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
+      read_text_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
     const auto service_wire_codec_header =
-      read_file (root / "framework/src/runtime/protocol/service_wire_codec.hpp");
-    const auto generated_service_wire_constants = read_file (
+      read_text_file (root / "framework/src/runtime/protocol/service_wire_codec.hpp");
+    const auto generated_service_wire_constants = read_text_file (
       root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
     const auto public_host_runtime =
-      read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
-    const auto raw_stateful_dispatch = read_file (
+      read_text_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
+    const auto raw_stateful_dispatch = read_text_file (
       root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
     const auto monitoring_unit =
-      read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
+      read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
-      read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp");
+      read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp");
     const auto actor_gateway_runtime =
-      read_file (root / "framework/src/runtime/actors/actor_gateway_runtime.cpp");
+      read_text_file (root / "framework/src/runtime/actors/actor_gateway_runtime.cpp");
     const auto message_flow_unit =
-      read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp");
+      read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp");
     const auto channel_outbound_exchange =
-      read_file (root / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
+      read_text_file (root / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
     gate_t gate;
 
-    const auto actor_hpp = read_file (include_root / "zlink/framework/contracts/actors/actor.hpp");
+    const auto actor_hpp = read_text_file (include_root / "zlink/framework/contracts/actors/actor.hpp");
     const auto channel_hpp =
-      read_file (include_root / "zlink/framework/contracts/channels/channel.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/channels/channel.hpp");
     const auto zlink_builder_hpp =
-      read_file (include_root / "zlink/framework/contracts/configuration/zlink_builder.hpp");
-    const auto spot_hpp = read_file (include_root / "zlink/framework/contracts/spots/spot.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/configuration/zlink_builder.hpp");
+    const auto spot_hpp = read_text_file (include_root / "zlink/framework/contracts/spots/spot.hpp");
     const auto app_hpp =
-      read_file (include_root / "zlink/framework/contracts/configuration/app.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/configuration/app.hpp");
     const auto services_hpp =
-      read_file (include_root / "zlink/framework/contracts/configuration/services.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/configuration/services.hpp");
     const auto framework_options_hpp =
-      read_file (include_root / "zlink/framework/contracts/configuration/framework_options.hpp");
-    const auto framework_options_validation_hpp = read_file (
+      read_text_file (include_root / "zlink/framework/contracts/configuration/framework_options.hpp");
+    const auto framework_options_validation_hpp = read_text_file (
       include_root
       / "zlink/framework/contracts/configuration/detail/framework_options_validation.hpp");
     const auto execution_hpp =
-      read_file (include_root / "zlink/framework/contracts/dispatch/execution.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/dispatch/execution.hpp");
     const auto stream_hpp =
-      read_file (include_root / "zlink/framework/contracts/streams/stream.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/streams/stream.hpp");
     const auto rows_hpp =
-      read_file (include_root / "zlink/framework/contracts/locations/rows.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/locations/rows.hpp");
     const auto location_diagnostics_hpp =
-      read_file (include_root / "zlink/framework/contracts/locations/diagnostics.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/locations/diagnostics.hpp");
     const auto location_runtime_query_hpp =
-      read_file (include_root / "zlink/framework/contracts/locations/runtime_query.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/locations/runtime_query.hpp");
     const auto location_records_hpp =
-      read_file (root / "framework/src/runtime/locations/location_records.hpp");
+      read_text_file (root / "framework/src/runtime/locations/location_records.hpp");
     const auto error_hpp =
-      read_file (include_root / "zlink/framework/contracts/errors/error.hpp");
+      read_text_file (include_root / "zlink/framework/contracts/errors/error.hpp");
     const auto messaging_test =
-      read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp");
+      read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp");
 
     /* IMP-CP-02/39/40 — the session-scoped manager owns stream binding and
      * token-checked disconnect cleanup; application code never sees the
@@ -785,7 +779,7 @@ int main ()
       "E2E-CP-53",
       "target does not exclusively own the Accepted OperationId or the finalizer restages the source prefix");
     const auto actor_client_runtime =
-      read_file (root / "framework/src/runtime/actors/actor_client.cpp");
+      read_text_file (root / "framework/src/runtime/actors/actor_client.cpp");
     const auto send_begin = actor_client_runtime.find (
       "task_t<void> send_erased (actor_id_t actor_id");
     const auto send_end = actor_client_runtime.find (
@@ -1561,7 +1555,7 @@ int main ()
       root
       / "../../doc/framework/common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md";
     const auto connector_contract = std::filesystem::exists (connector_contract_path)
-                                      ? read_file (connector_contract_path)
+                                      ? read_text_file (connector_contract_path)
                                       : std::string{};
     gate.require (!connector_contract.empty (), "TH-CP-01",
                   "C++ stream connector language contract is missing");

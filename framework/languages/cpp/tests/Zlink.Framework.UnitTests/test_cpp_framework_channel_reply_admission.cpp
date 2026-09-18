@@ -2,6 +2,7 @@
 
 #include <zlink/framework.hpp>
 
+#include "../support/read_text_file.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_host_service.hpp"
@@ -24,7 +25,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -34,13 +34,7 @@ namespace
 {
 using namespace std::chrono_literals;
 
-std::string read_file (const std::filesystem::path &path)
-{
-    std::ifstream input (path);
-    std::ostringstream contents;
-    contents << input.rdbuf ();
-    return contents.str ();
-}
+using zlink::framework::tests::read_text_file;
 
 std::size_t count_text (std::string_view value, std::string_view needle)
 {
@@ -57,7 +51,7 @@ TEST (ChannelHostReplyAdmissionContract,
       OwnsOneBindingSubmitTerminalWithoutFrameworkRetry)
 {
     const std::filesystem::path root = ZLINK_FRAMEWORK_CPP_SOURCE_DIR;
-    const std::string source = read_file (
+    const std::string source = read_text_file (
       root / "framework/src/runtime/channels/channel_host_service.cpp");
     const auto owner = source.find (
       "void reply (completed_reply_t completed)");

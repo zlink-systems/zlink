@@ -21,15 +21,15 @@
 #include "../../samples/ShoppingMall/Shared/Contracts/messages.hpp"
 #include "../../samples/SupportChat/Shared/Contracts/messages.hpp"
 
+#include "../support/read_text_file.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,13 +37,7 @@
 namespace
 {
 
-std::string read_file (const std::filesystem::path &path)
-{
-    std::ifstream input (path);
-    std::ostringstream output;
-    output << input.rdbuf ();
-    return output.str ();
-}
+using zlink::framework::tests::read_text_file;
 
 std::filesystem::path cpp_language_root ()
 {
@@ -175,7 +169,7 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     const auto join_reply = joined.reply->decode<bingo_room_join_res_t> ();
     EXPECT_EQ (join_reply.state ().players_size (), 1);
 
-    const auto room_source = read_file (
+    const auto room_source = read_text_file (
       cpp_language_root ()
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     EXPECT_NE (room_source.find ("add_actor_request<&bingo_room_spot_t::submit_card>"),
@@ -187,7 +181,7 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     EXPECT_NE (room_source.find ("add_subscribe<&bingo_room_spot_t::on_reward_acquired>"),
                std::string::npos);
 
-    const auto entry_source = read_file (
+    const auto entry_source = read_text_file (
       cpp_language_root ()
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp");
     EXPECT_NE (entry_source.find ("add_actor_request<&bingo_entry_spot_t::match_bingo>"),
@@ -212,11 +206,11 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
 TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
 {
     const auto root = cpp_language_root () / "samples/Bingo";
-    const auto scenario = read_file (root / "Client/bingo_client_scenario.hpp");
-    const auto contracts = read_file (root / "Shared/Contracts/bingo_messages.proto");
+    const auto scenario = read_text_file (root / "Client/bingo_client_scenario.hpp");
+    const auto contracts = read_text_file (root / "Shared/Contracts/bingo_messages.proto");
     const auto room =
-      read_file (root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
-    const auto runner = read_file (root / "run_sample.sh");
+      read_text_file (root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
+    const auto runner = read_text_file (root / "run_sample.sh");
 
     EXPECT_NE (scenario.find ("client1_joined.state ().players ()"), std::string::npos)
       << "SMP-CP-34 step 5 must validate the player records carried by the join push";
@@ -244,7 +238,7 @@ TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
 TEST (CppFrameworkSampleParity, BingoWireOmitsTransportIdentityNotification)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/Bingo/Shared/Contracts/bingo_messages.proto");
+      read_text_file (cpp_language_root () / "samples/Bingo/Shared/Contracts/bingo_messages.proto");
     EXPECT_EQ (contracts.find ("BingoActorEntrySpotNotify"), std::string::npos)
       << "Bingo wire must not expose the framework-internal target node routing id";
 }
@@ -266,9 +260,9 @@ TEST (CppFrameworkSampleParity, BingoRoomGameCopyOwnsItsPlayerState)
 
 TEST (CppFrameworkSampleParity, BingoMatchmakingUsesInstanceSpotAndRedisReservation)
 {
-    const auto api = read_file (cpp_language_root ()
+    const auto api = read_text_file (cpp_language_root ()
                                 / "samples/Bingo/Server/Api/Handlers/match_bingo_handler.hpp");
-    const auto store = read_file (cpp_language_root ()
+    const auto store = read_text_file (cpp_language_root ()
                                   / "samples/Bingo/Server/Matchmaking/Infrastructure/Redis/"
                                     "redis_bingo_match_reservation_store.hpp");
 
@@ -282,7 +276,7 @@ TEST (CppFrameworkSampleParity, BingoMatchmakingUsesInstanceSpotAndRedisReservat
 TEST (CppFrameworkSampleParity, BingoRewardSubscriptionDoesNotDriveRoomCleanup)
 {
     const auto handler =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
                    "bingo_reward_acquired_event_handler.hpp");
 
@@ -293,7 +287,7 @@ TEST (CppFrameworkSampleParity, BingoRewardSubscriptionDoesNotDriveRoomCleanup)
 TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
 {
     const auto room =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/"
                    "bingo_room_spot.hpp");
 
@@ -306,7 +300,7 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
 TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
 {
     const auto handler =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
                    "bingo_room_draw_timer_handler.hpp");
 
@@ -329,8 +323,8 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
 {
     const auto root = cpp_language_root ();
     const auto bingo_domain =
-      read_file (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_room_game.hpp");
-    const auto bingo_spot = read_file (
+      read_text_file (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_room_game.hpp");
+    const auto bingo_spot = read_text_file (
       root
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     EXPECT_NE (bingo_domain.find ("bingo_room_join_result_t"), std::string::npos);
@@ -339,8 +333,8 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
     EXPECT_EQ (bingo_spot.find ("state.players.size () == 2"), std::string::npos);
 
     const auto conversation =
-      read_file (root / "samples/SupportChat/Server/Support/Domain/SupportChat/conversation.hpp");
-    const auto support = read_file (root / "samples/SupportChat/Server/Support/main.cpp");
+      read_text_file (root / "samples/SupportChat/Server/Support/Domain/SupportChat/conversation.hpp");
+    const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
     EXPECT_NE (conversation.find ("advance_time"), std::string::npos);
     EXPECT_NE (conversation.find ("_close_deadline_unix_ms"), std::string::npos);
     EXPECT_NE (support.find ("_conversation->advance_time (now_unix_ms ())"), std::string::npos);
@@ -351,10 +345,10 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
 TEST (CppFrameworkSampleParity, SupportChatServingPathUsesAgentAssignmentApplicationService)
 {
     const auto root = cpp_language_root ();
-    const auto assignment = read_file (root
+    const auto assignment = read_text_file (root
                                        / "samples/SupportChat/Server/Support/Application/"
                                          "ConversationAssignment/agent_assignment_service.hpp");
-    const auto support = read_file (root / "samples/SupportChat/Server/Support/main.cpp");
+    const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
 
     EXPECT_NE (assignment.find ("assign_for_conversation"), std::string::npos);
     EXPECT_NE (assignment.find ("release_conversation"), std::string::npos);
@@ -366,9 +360,9 @@ TEST (CppFrameworkSampleParity, SupportChatServingPathUsesAgentAssignmentApplica
 TEST (CppFrameworkSampleParity, SupportChatSessionRelaysOpenConversationUnchanged)
 {
     const auto root = cpp_language_root ();
-    const auto messages = read_file (root / "samples/SupportChat/Shared/Contracts/messages.hpp");
-    const auto session = read_file (root / "samples/SupportChat/Server/Session/main.cpp");
-    const auto support = read_file (root / "samples/SupportChat/Server/Support/main.cpp");
+    const auto messages = read_text_file (root / "samples/SupportChat/Shared/Contracts/messages.hpp");
+    const auto session = read_text_file (root / "samples/SupportChat/Server/Session/main.cpp");
+    const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
 
     EXPECT_EQ (session.find ("open_conversation_api_req_t"), std::string::npos);
     EXPECT_EQ (session.find ("open_conversation_req_t{opened.subject"), std::string::npos);
@@ -396,7 +390,7 @@ TEST (CppFrameworkSampleParity, SupportChatJoinFailureUsesOnlyCommonFields)
     EXPECT_EQ (wire.at ("error"), "Unavailable");
     EXPECT_FALSE (wire.contains ("isRetriable"));
 
-    const auto common_doc = read_file (
+    const auto common_doc = read_text_file (
       repository_root () / "framework/doc/framework/common/sample/supportchat/README.ko.md");
     const auto declaration_start = common_doc.find ("message JoinConversationFailedNotify");
     const auto declaration_end = common_doc.find ("message SendChatMessageReq", declaration_start);
@@ -424,7 +418,7 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
     EXPECT_STREQ (player_win_milestone_event_t::packet_name, "PlayerWinMilestoneEvent");
 
     const auto contracts =
-      read_file (cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
     EXPECT_EQ (contracts.find ("GameEndedNotify"), std::string::npos)
       << "the terminal state must use GameStateNotify instead of an extra client push";
     EXPECT_EQ (contracts.find ("actor_location_t"), std::string::npos)
@@ -461,7 +455,7 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
     EXPECT_EQ (first_move.board, "X........");
     EXPECT_EQ (first_move.next_turn, tictactoe_marks_t::o);
 
-    const auto game_source = read_file (cpp_language_root ()
+    const auto game_source = read_text_file (cpp_language_root ()
                                         / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
                                           "Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
     EXPECT_NE (game_source.find ("add_actor_request<&tictactoe_game_spot_t::place_mark>"),
@@ -469,7 +463,7 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
     EXPECT_NE (game_source.find ("add_actor_send<&tictactoe_game_spot_t::leave_game>"),
                std::string::npos);
 
-    const auto entry_source = read_file (cpp_language_root ()
+    const auto entry_source = read_text_file (cpp_language_root ()
                                          / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
                                            "Spots/EntrySpot/tictactoe_entry_spot.hpp");
     EXPECT_NE (entry_source.find ("add_actor_send<&tictactoe_entry_spot_t::join_game>"),
@@ -483,7 +477,7 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
 
 TEST (CppFrameworkSampleParity, TicTacToeRegistersDeferredRoomJoin)
 {
-    const auto handler = read_file (cpp_language_root ()
+    const auto handler = read_text_file (cpp_language_root ()
                                     / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
                                       "EntrySpot/Handlers/play_actor_join_game_handler.hpp");
     EXPECT_NE (handler.find (".defer ()"), std::string::npos)
@@ -496,7 +490,7 @@ TEST (CppFrameworkSampleParity, TicTacToeRegistersDeferredRoomJoin)
 
 TEST (CppFrameworkSampleParity, TicTacToeUsesFrameworkOwnedSpotLocationResolution)
 {
-    const auto host_factory = read_file (
+    const auto host_factory = read_text_file (
       cpp_language_root () / "samples/TicTacToe/Server/Play/play_server_host_factory.hpp");
 
     EXPECT_EQ (host_factory.find ("add_spot_resolver"), std::string::npos)
@@ -506,11 +500,11 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesFrameworkOwnedSpotLocationResolutio
 
 TEST (CppFrameworkSampleParity, DocumentedSampleRolesDoNotBuildProbeProcesses)
 {
-    const auto cmake = read_file (cpp_language_root () / "CMakeLists.txt");
+    const auto cmake = read_text_file (cpp_language_root () / "CMakeLists.txt");
     const auto support_runner =
-      read_file (cpp_language_root () / "samples/SupportChat/run_sample.sh");
+      read_text_file (cpp_language_root () / "samples/SupportChat/run_sample.sh");
     const auto delivery_runner =
-      read_file (cpp_language_root () / "samples/DeliveryDispatch/run_sample.sh");
+      read_text_file (cpp_language_root () / "samples/DeliveryDispatch/run_sample.sh");
 
     EXPECT_EQ (cmake.find ("supportchat_probe"), std::string::npos);
     EXPECT_EQ (cmake.find ("deliverydispatch_probe"), std::string::npos);
@@ -604,7 +598,7 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchUsesDotNetSampleStatusSurface)
       "delivery-1", "customer-2", delivery_status_t::assigned, "courier-1", 1721001600000LL});
     EXPECT_EQ (changed_wire.at ("customerId"), "customer-2");
 
-    const auto common_doc = read_file (
+    const auto common_doc = read_text_file (
       repository_root () / "framework/doc/framework/common/sample/deliverydispatch/README.ko.md");
     for (const auto *message :
          {"CreateDeliveryReq", "CreateDeliveryRes", "SubscribeDeliveryReq", "SubscribeDeliveryRes",
@@ -624,9 +618,9 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchUsesDotNetSampleStatusSurface)
     }
 
     const auto shared_contract =
-      read_file (cpp_language_root () / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
     const auto tracking_handler =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
     EXPECT_EQ (tracking_handler.find ("sample_names_t::customer_id"), std::string::npos)
       << "Tracking must route each status update with DeliveryStatusChangedReq.customerId";
@@ -656,7 +650,7 @@ TEST (CppFrameworkSampleParity, GameQuestUsesFlatOneWayGameplayMessage)
       << "GameplayMsg must not wrap a private gameplay envelope";
 
     const auto contracts =
-      read_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
     EXPECT_EQ (contracts.find ("ApplyGameplayEventReq"), std::string::npos)
       << "entry-to-owner gameplay is the one-way GameplayMsg, not a parallel request";
     EXPECT_NE (contracts.find ("lastSourceEventId"), std::string::npos);
@@ -684,7 +678,7 @@ TEST (CppFrameworkSampleParity, GameQuestActionsMatchCommonRequestAndSendSemanti
     EXPECT_EQ (enter_wire, expected_enter_wire);
 
     const auto contracts =
-      read_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
     for (const auto *extra : {"CollectItemRes", "EnterAreaRes", "CompleteMissionReq",
                               "CompleteMissionRes", "UnlockFeatureReq", "UnlockFeatureRes"}) {
         EXPECT_EQ (contracts.find (extra), std::string::npos)
@@ -692,7 +686,7 @@ TEST (CppFrameworkSampleParity, GameQuestActionsMatchCommonRequestAndSendSemanti
     }
 
     const auto scenario =
-      read_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
+      read_text_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
     EXPECT_NE (scenario.find ("api_a.send (collect_item_req_t"), std::string::npos);
     EXPECT_NE (scenario.find ("api_b.send (collect_item_req_t"), std::string::npos);
     EXPECT_NE (scenario.find ("alice_b.send (enter_area_req_t"), std::string::npos);
@@ -703,7 +697,7 @@ TEST (CppFrameworkSampleParity, GameQuestActionsMatchCommonRequestAndSendSemanti
 TEST (CppFrameworkSampleParity, GameQuestDoesNotExposeUnusedOrEvidenceMessagesAsCommonApi)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/GameQuest/Shared/Contracts/messages.hpp");
 
     EXPECT_EQ (contracts.find ("NotifyQuestProgressReq"), std::string::npos)
       << "unused notification request must not remain in the shared sample contract";
@@ -718,7 +712,7 @@ TEST (CppFrameworkSampleParity, GameQuestDoesNotExposeUnusedOrEvidenceMessagesAs
 TEST (CppFrameworkSampleParity, GameQuestProgressChecksRejectOvercount)
 {
     const auto scenario =
-      read_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
+      read_text_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
     EXPECT_EQ (scenario.find ("progress.current_count >= current_count"), std::string::npos)
       << "GameQuest idempotency checks must reject duplicated progress";
     EXPECT_NE (scenario.find ("progress.current_count == current_count"), std::string::npos)
@@ -727,9 +721,9 @@ TEST (CppFrameworkSampleParity, GameQuestProgressChecksRejectOvercount)
 
 TEST (CppFrameworkSampleParity, BingoAndGameQuestStartAfterObservedReadiness)
 {
-    const auto bingo_runner = read_file (cpp_language_root () / "samples/Bingo/run_sample.sh");
+    const auto bingo_runner = read_text_file (cpp_language_root () / "samples/Bingo/run_sample.sh");
     const auto gamequest_runner =
-      read_file (cpp_language_root () / "samples/GameQuest/run_sample.sh");
+      read_text_file (cpp_language_root () / "samples/GameQuest/run_sample.sh");
     EXPECT_EQ (bingo_runner.find ("BINGO_STARTUP_SETTLE_SECONDS"), std::string::npos)
       << "Bingo must start its client immediately after endpoint readiness";
     EXPECT_EQ (gamequest_runner.find ("GAMEQUEST_CPP_STARTUP_SETTLE_SECONDS"), std::string::npos)
@@ -739,15 +733,15 @@ TEST (CppFrameworkSampleParity, BingoAndGameQuestStartAfterObservedReadiness)
 TEST (CppFrameworkSampleParity, ShoppingMallStartsAfterWorkflowPeerReadiness)
 {
     const auto api =
-      read_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
-    const auto runner = read_file (cpp_language_root () / "samples/ShoppingMall/run_sample.sh");
+      read_text_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
+    const auto runner = read_text_file (cpp_language_root () / "samples/ShoppingMall/run_sample.sh");
 
     //  Sample spec section 10.1 forbids proving readiness with a runner-sent request: the old
     //  /ready?targetRid= probe and its wait_route_ready helper were removed. Readiness is now a
     //  passive, sample-owned row the CommerceApi emits once it can route to a workflow node.
     EXPECT_EQ (api.find ("route_ready_http_handler_t"), std::string::npos)
       << "ShoppingMall CommerceApi must not expose a synthetic readiness probe endpoint";
-    const auto readiness = read_file (
+    const auto readiness = read_text_file (
       cpp_language_root () / "samples/ShoppingMall/Server/Configuration/sample_readiness.hpp");
     EXPECT_NE (readiness.find ("shoppingmall-ready kind=object-route"), std::string::npos)
       << "ShoppingMall must emit the object-route readiness row from a passive observation";
@@ -762,7 +756,7 @@ TEST (CppFrameworkSampleParity, ShoppingMallStartsAfterWorkflowPeerReadiness)
 TEST (CppFrameworkSampleParity, TicTacToeDisconnectRemovesMilestoneObserver)
 {
     const auto entry =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/"
                    "tictactoe_entry_spot.hpp");
     const auto disconnect = entry.find ("task_t<void> on_disconnect_actor");
@@ -779,10 +773,10 @@ TEST (CppFrameworkSampleParity, TicTacToeOwnsTurnTimeoutLifecycle)
 {
     const auto root = cpp_language_root () / "samples/TicTacToe/Server/Play";
     const auto spot =
-      read_file (root / "Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
-    const auto match = read_file (root / "Domain/TicTacToe/tictactoe_match.hpp");
+      read_text_file (root / "Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
+    const auto match = read_text_file (root / "Domain/TicTacToe/tictactoe_match.hpp");
     const auto messages =
-      read_file (cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
 
     EXPECT_NE (spot.find ("add_timer<tictactoe_game_timer_handler_t>"), std::string::npos)
       << "game spot must register the turn timeout timer";
@@ -795,7 +789,7 @@ TEST (CppFrameworkSampleParity, TicTacToeOwnsTurnTimeoutLifecycle)
 TEST (CppFrameworkSampleParity, TicTacToeSpotComposesItsDomainMatch)
 {
     const auto spot =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/"
                    "tictactoe_game_spot.hpp");
 
@@ -812,7 +806,7 @@ TEST (CppFrameworkSampleParity, TicTacToeSpotComposesItsDomainMatch)
 TEST (CppFrameworkSampleParity, TicTacToeNotificationPublisherDeliversToRoomActors)
 {
     const auto publisher =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
                    "TicTacToeGameSpot/Notifications/game_notification_publisher.hpp");
 
@@ -830,8 +824,8 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchTrackingHasNoDeadSpotModel)
     EXPECT_FALSE (std::filesystem::exists (tracking / "Spots"))
       << "Tracking is a channel server and evidence store, not a spot node";
 
-    const auto main = read_file (tracking / "main.cpp");
-    const auto handlers = read_file (tracking / "Handlers/tracking_handlers.hpp");
+    const auto main = read_text_file (tracking / "main.cpp");
+    const auto handlers = read_text_file (tracking / "Handlers/tracking_handlers.hpp");
     EXPECT_NE (main.find ("add_route_mesh"), std::string::npos)
       << "Tracking still needs mesh participation for outbound customer actor delivery";
     EXPECT_EQ (handlers.find ("delivery_spot_directory_t"), std::string::npos)
@@ -841,7 +835,7 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchTrackingHasNoDeadSpotModel)
 TEST (CppFrameworkSampleParity, DeliveryDispatchTrackingUsesActorDirectory)
 {
     const auto handler =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
 
     EXPECT_NE (handler.find ("actor_directory_t"), std::string::npos)
@@ -857,9 +851,9 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchTrackingUsesActorDirectory)
 TEST (CppFrameworkSampleParity, ShoppingMallOwnerSchedulesItsContinuation)
 {
     const auto owner =
-      read_file (cpp_language_root () / "samples/ShoppingMall/Server/OrderWorkflow/main.cpp");
+      read_text_file (cpp_language_root () / "samples/ShoppingMall/Server/OrderWorkflow/main.cpp");
     const auto edge =
-      read_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
+      read_text_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
 
     EXPECT_NE (owner.find ("schedule_continue"), std::string::npos)
       << "OrderWorkflow owner must schedule its continuation after creating the order";
@@ -870,8 +864,8 @@ TEST (CppFrameworkSampleParity, ShoppingMallOwnerSchedulesItsContinuation)
 TEST (CppFrameworkSampleParity, ShoppingMallClientFlowLivesInScenario)
 {
     const auto root = cpp_language_root () / "samples/ShoppingMall/Client";
-    const auto scenario = read_file (root / "shoppingmall_client_scenario.hpp");
-    const auto main = read_file (root / "main.cpp");
+    const auto scenario = read_text_file (root / "shoppingmall_client_scenario.hpp");
+    const auto main = read_text_file (root / "main.cpp");
 
     EXPECT_NE (scenario.find ("class shoppingmall_client_scenario_t"), std::string::npos)
       << "ShoppingMall must expose a named client scenario";
@@ -891,7 +885,7 @@ TEST (CppFrameworkSampleParity, SampleRoomJoinHandlersUseDeferredTerminal)
           "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/"
           "play_actor_join_game_handler.hpp"}) {
         const auto path = cpp_language_root () / relative;
-        const auto handler = read_file (path);
+        const auto handler = read_text_file (path);
         EXPECT_NE (handler.find (".defer ()"), std::string::npos)
           << path << " must register the deferred actor join terminal";
         EXPECT_EQ (handler.find ("actor_join_accepted_t"), std::string::npos)
@@ -910,7 +904,7 @@ TEST (CppFrameworkSampleParity, SampleHostsUseFrameworkOptionsSurface)
       "add_zlink_framework ([",  "channel.enable_server", "channel.enable_client"};
 
     for (const auto &path : sample_source_files ()) {
-        const auto content = read_file (path);
+        const auto content = read_text_file (path);
         for (const auto &pattern : banned_patterns) {
             EXPECT_EQ (content.find (pattern), std::string::npos)
               << path << " contains low-level framework configuration pattern " << pattern;
@@ -934,7 +928,7 @@ TEST (CppFrameworkSampleParity, NonTicTacToeServersUseLocationDiscovery)
             if (!has_suffix (path, ".cpp") && !has_suffix (path, ".hpp")) {
                 continue;
             }
-            const auto source = read_file (path);
+            const auto source = read_text_file (path);
             registers_location_store =
               registers_location_store || source.find ("add_location_store<") != std::string::npos;
             EXPECT_EQ (source.find (".connect ("), std::string::npos)
@@ -1031,7 +1025,7 @@ TEST (CppFrameworkSampleParity, ClientSamplesDoNotCallServerHandlersDirectly)
         if (relative_path.find ("/Client/") == std::string::npos) {
             continue;
         }
-        const auto content = read_file (path);
+        const auto content = read_text_file (path);
         for (const auto &pattern : banned_client_patterns) {
             EXPECT_EQ (content.find (pattern), std::string::npos)
               << path << " makes the client depend on server handler internals via " << pattern;
@@ -1049,7 +1043,7 @@ TEST (CppFrameworkSampleParity, JsonFieldAccessStaysInsideDtoSerializers)
         if (relative_path.find ("/Shared/Contracts/") != std::string::npos) {
             continue;
         }
-        const auto content = read_file (path);
+        const auto content = read_text_file (path);
         for (const auto &pattern : banned_json_patterns) {
             EXPECT_EQ (content.find (pattern), std::string::npos)
               << path << " reads JSON fields outside DTO serializer hooks via " << pattern;
@@ -1085,8 +1079,8 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
         "sample_cpp_framework_deliverydispatch_client"}}};
 
     for (const auto &sample : cases) {
-        const auto readme = read_file (cpp_root / sample.readme_path);
-        const auto cmake = read_file (cpp_root / sample.cmake_path);
+        const auto readme = read_text_file (cpp_root / sample.readme_path);
+        const auto cmake = read_text_file (cpp_root / sample.cmake_path);
         for (const auto &target : sample.public_targets) {
             EXPECT_NE (cmake.find (target), std::string::npos)
               << target << " is missing from " << sample.cmake_path;
@@ -1105,12 +1099,12 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
           << sample.readme_path << " does not document current runner scope";
     }
 
-    const auto tictactoe_readme = read_file (cpp_root / "samples/TicTacToe/README.ko.md");
+    const auto tictactoe_readme = read_text_file (cpp_root / "samples/TicTacToe/README.ko.md");
     EXPECT_NE (tictactoe_readme.find ("HTTP `POST /games`"), std::string::npos);
     EXPECT_NE (tictactoe_readme.find ("`zlink::http_client`"), std::string::npos);
     EXPECT_NE (tictactoe_readme.find ("`POST /games`를 호출"), std::string::npos);
 
-    const auto top_level_readme = read_file (cpp_root / "samples/README.ko.md");
+    const auto top_level_readme = read_text_file (cpp_root / "samples/README.ko.md");
     EXPECT_NE (top_level_readme.find ("client self-check"), std::string::npos)
       << "C++ sample overview must describe full self-check scope";
     EXPECT_NE (top_level_readme.find ("samples/TicTacToe/run_sample.sh"), std::string::npos)
@@ -1121,7 +1115,7 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
                std::string::npos)
       << "C++ sample overview must describe DeliveryDispatch runner availability";
 
-    const auto tictactoe_runner = read_file (cpp_root / "samples/TicTacToe/run_sample.sh");
+    const auto tictactoe_runner = read_text_file (cpp_root / "samples/TicTacToe/run_sample.sh");
     EXPECT_NE (tictactoe_runner.find ("full client/server self-check completed"), std::string::npos)
       << "TicTacToe runner must report the public client/server self-check";
     EXPECT_NE (tictactoe_runner.find ("observer-win-milestone=verified"), std::string::npos)
@@ -1131,7 +1125,7 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
     EXPECT_EQ (tictactoe_runner.find ("full e2e completed"), std::string::npos)
       << "TicTacToe runner should name the specific client/server self-check, not a broad e2e";
 
-    const auto bingo_runner = read_file (cpp_root / "samples/Bingo/run_sample.sh");
+    const auto bingo_runner = read_text_file (cpp_root / "samples/Bingo/run_sample.sh");
     EXPECT_EQ (bingo_runner.find ("full e2e completed"), std::string::npos)
       << "Bingo runner must not claim full e2e completion";
     EXPECT_NE (bingo_runner.find ("full client/server self-check completed"), std::string::npos)
@@ -1148,12 +1142,12 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
     }
 
     const auto tictactoe_client =
-      read_file (cpp_root / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
+      read_text_file (cpp_root / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
     EXPECT_NE (tictactoe_client.find ("use_default_codec (zlink::stream_connector::codec_t::json)"),
                std::string::npos)
       << "TicTacToe typed stream requests must use the framework JSON connector path";
 
-    const auto deliverydispatch_client = read_file (
+    const auto deliverydispatch_client = read_text_file (
       cpp_root / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
     EXPECT_NE (
       deliverydispatch_client.find ("use_default_codec (zlink::stream_connector::codec_t::json)"),
@@ -1161,7 +1155,7 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
       << "DeliveryDispatch typed stream requests must use the framework JSON connector path";
 
     const auto deliverydispatch_runner =
-      read_file (cpp_root / "samples/DeliveryDispatch/run_sample.sh");
+      read_text_file (cpp_root / "samples/DeliveryDispatch/run_sample.sh");
     EXPECT_NE (deliverydispatch_runner.find ("deliverydispatch-reassignment=completed"),
                std::string::npos)
       << "DeliveryDispatch runner must verify timeout reassignment";
@@ -1174,11 +1168,11 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
       << "DeliveryDispatch sample runner must not report e2e completion wording";
 
     const auto courier_actor_node =
-      read_file (cpp_root / "samples/DeliveryDispatch/Server/CourierActorNode/main.cpp");
+      read_text_file (cpp_root / "samples/DeliveryDispatch/Server/CourierActorNode/main.cpp");
     const auto courier_session =
-      read_file (cpp_root / "samples/DeliveryDispatch/Server/CourierSession/main.cpp");
+      read_text_file (cpp_root / "samples/DeliveryDispatch/Server/CourierSession/main.cpp");
     const auto delivery_contracts =
-      read_file (cpp_root / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_root / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
     /* 공통 sample spec §6/§7.2: actor 생성·위치 조회·direct send는 Framework가
      * 담당한다. Entry Spot route packet과 client-visible ActorRef를 만들지 않는다. */
     EXPECT_NE (courier_session.find ("actors.get_or_create"), std::string::npos)
@@ -1203,7 +1197,7 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
          "channel";
 
     const auto dispatch =
-      read_file (cpp_root / "samples/DeliveryDispatch/Server/Dispatch/main.cpp");
+      read_text_file (cpp_root / "samples/DeliveryDispatch/Server/Dispatch/main.cpp");
     EXPECT_NE (dispatch.find ("class dispatch_state_t"), std::string::npos)
       << "DeliveryDispatch Dispatch must record the offer state instead of awaiting the decision";
     EXPECT_NE (dispatch.find ("class dispatch_worker_t"), std::string::npos)
@@ -1218,9 +1212,9 @@ TEST (CppFrameworkSampleParity, CommonSampleSpecsSeparateDisconnectFromExplicitD
 {
     const auto root = repository_root ();
     const auto bingo = collapse_whitespace (
-      read_file (root / "framework/doc/framework/common/sample/bingo/README.ko.md"));
+      read_text_file (root / "framework/doc/framework/common/sample/bingo/README.ko.md"));
     const auto tictactoe = collapse_whitespace (
-      read_file (root / "framework/doc/framework/common/sample/tictactoe/README.ko.md"));
+      read_text_file (root / "framework/doc/framework/common/sample/tictactoe/README.ko.md"));
 
     EXPECT_NE (bingo.find ("Disconnect는 Actor를 destroy하거나 room membership을 바꾸지 "
                            "않는다."),
@@ -1252,12 +1246,12 @@ TEST (CppFrameworkSampleParity, CommonSampleSpecsSeparateDisconnectFromExplicitD
 TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
 {
     const auto bingo_root = cpp_language_root () / "samples/Bingo";
-    const auto readme = read_file (bingo_root / "README.ko.md");
-    const auto inventory = read_file (bingo_root / "sample-porting-inventory.ko.md");
-    const auto contracts = read_file (bingo_root / "Shared/Contracts/messages.hpp");
-    const auto domain = read_file (bingo_root / "Server/Play/Domain/Bingo/bingo_state.hpp");
-    const auto session = read_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
-    const auto client = read_file (bingo_root / "Client/main.cpp");
+    const auto readme = read_text_file (bingo_root / "README.ko.md");
+    const auto inventory = read_text_file (bingo_root / "sample-porting-inventory.ko.md");
+    const auto contracts = read_text_file (bingo_root / "Shared/Contracts/messages.hpp");
+    const auto domain = read_text_file (bingo_root / "Server/Play/Domain/Bingo/bingo_state.hpp");
+    const auto session = read_text_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
+    const auto client = read_text_file (bingo_root / "Client/main.cpp");
 
     EXPECT_NE (readme.find ("Protobuf codec extension"), std::string::npos)
       << "Bingo README must describe the Protobuf codec path";
@@ -1282,10 +1276,10 @@ TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
 TEST (CppFrameworkSampleParity, TicTacToeInventoryAndRunnersMatchCommonRedisContract)
 {
     const auto tictactoe_root = cpp_language_root () / "samples/TicTacToe";
-    const auto inventory = read_file (tictactoe_root / "sample-porting-inventory.ko.md");
-    const auto shell_runner = read_file (tictactoe_root / "run_sample.sh");
-    const auto powershell_runner = read_file (tictactoe_root / "run_sample.ps1");
-    const auto readme = read_file (tictactoe_root / "README.ko.md");
+    const auto inventory = read_text_file (tictactoe_root / "sample-porting-inventory.ko.md");
+    const auto shell_runner = read_text_file (tictactoe_root / "run_sample.sh");
+    const auto powershell_runner = read_text_file (tictactoe_root / "run_sample.ps1");
+    const auto readme = read_text_file (tictactoe_root / "README.ko.md");
 
     EXPECT_NE (inventory.find (".NET: Client/TicTacToeClientScenario.cs"), std::string::npos)
       << "TicTacToe inventory must map the .NET client scenario";
@@ -1322,7 +1316,7 @@ TEST (CppFrameworkSampleParity, TicTacToeInventoryAndRunnersMatchCommonRedisCont
 TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
 {
     const auto client =
-      read_file (cpp_language_root () / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
+      read_text_file (cpp_language_root () / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
 
     EXPECT_NE (client.find ("room.play_nodes.size () == room.play_endpoints.size ()"),
                std::string::npos);
@@ -1353,9 +1347,9 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
 TEST (CppFrameworkSampleParity, TicTacToeRunnerReleasesClientAfterLeaveLifecycleEvidence)
 {
     const auto root = cpp_language_root () / "samples/TicTacToe";
-    const auto client = read_file (root / "Client/tictactoe_client_scenario.hpp");
-    const auto shell_runner = read_file (root / "run_sample.sh");
-    const auto powershell_runner = read_file (root / "run_sample.ps1");
+    const auto client = read_text_file (root / "Client/tictactoe_client_scenario.hpp");
+    const auto shell_runner = read_text_file (root / "run_sample.sh");
+    const auto powershell_runner = read_text_file (root / "run_sample.ps1");
 
     const auto host_leave =
       client.find ("reconnected_client.send (reconnected_leave_request).submit ();");
@@ -1407,7 +1401,7 @@ TEST (CppFrameworkSampleParity, TicTacToeRunnerReleasesClientAfterLeaveLifecycle
 TEST (CppFrameworkSampleParity, DeliveryDispatchClientGateChecksStatusArrivalOrder)
 {
     const auto client =
-      read_file (cpp_language_root ()
+      read_text_file (cpp_language_root ()
                  / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
 
     EXPECT_NE (client.find ("wait_for_sequence<delivery_status_notify_t>"), std::string::npos);
@@ -1426,7 +1420,7 @@ TEST (CppFrameworkSampleParity, CoroutineSampleWaitsDoNotBlockConnectorDelivery)
     const auto cpp_root = cpp_language_root ();
     for (const auto *path : {"samples/Bingo/Client/bingo_client_scenario.hpp",
                              "samples/TicTacToe/Client/tictactoe_client_scenario.hpp"}) {
-        const auto client = read_file (cpp_root / path);
+        const auto client = read_text_file (cpp_root / path);
         EXPECT_EQ (client.find (".to_future ("), std::string::npos)
           << path << " must keep connector waits as awaitable tasks";
         EXPECT_EQ (client.find (".get ()"), std::string::npos)
@@ -1438,7 +1432,7 @@ TEST (CppFrameworkSampleParity, SampleActorDestroyFlowStaysInEntrySpot)
 {
     const auto cpp_root = cpp_language_root ();
     const auto stream_host =
-      read_file (cpp_root / "framework/src/runtime/streams/stream_host_service.cpp");
+      read_text_file (cpp_root / "framework/src/runtime/streams/stream_host_service.cpp");
     EXPECT_NE (stream_host.find ("session_actor_manager_access_t::disconnect"), std::string::npos)
       << "framework stream host must detach session actor bindings on disconnect";
     struct sample_lifecycle_case_t
@@ -1468,15 +1462,15 @@ TEST (CppFrameworkSampleParity, SampleActorDestroyFlowStaysInEntrySpot)
        "samples/TicTacToe/README.ko.md", "samples/TicTacToe/run_sample.sh"}};
 
     for (const auto &sample : cases) {
-        const auto entry = read_file (cpp_root / sample.entry_spot_path);
-        auto user = read_file (cpp_root / sample.user_spot_path);
+        const auto entry = read_text_file (cpp_root / sample.entry_spot_path);
+        auto user = read_text_file (cpp_root / sample.user_spot_path);
         if (!sample.user_handler_path.empty ()) {
-            user += read_file (cpp_root / sample.user_handler_path);
+            user += read_text_file (cpp_root / sample.user_handler_path);
         }
-        const auto actor = read_file (cpp_root / sample.actor_path);
-        const auto session = read_file (cpp_root / sample.session_path);
-        const auto readme = read_file (cpp_root / sample.readme_path);
-        const auto runner = read_file (cpp_root / sample.runner_path);
+        const auto actor = read_text_file (cpp_root / sample.actor_path);
+        const auto session = read_text_file (cpp_root / sample.session_path);
+        const auto readme = read_text_file (cpp_root / sample.readme_path);
+        const auto runner = read_text_file (cpp_root / sample.runner_path);
 
         EXPECT_NE (entry.find ("on_create_actor"), std::string::npos)
           << sample.entry_spot_path << " must show actor creation callback";
@@ -1567,14 +1561,14 @@ TEST (CppFrameworkSampleParity, SampleActorDestroyFlowStaysInEntrySpot)
 TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActorGatewayRelay)
 {
     const auto tictactoe_root = cpp_language_root () / "samples/TicTacToe";
-    const auto api_factory = read_file (tictactoe_root / "Server/Api/api_server_host_factory.hpp");
-    const auto client = read_file (tictactoe_root / "Client/tictactoe_client_scenario.hpp");
-    const auto client_main = read_file (tictactoe_root / "Client/main.cpp");
+    const auto api_factory = read_text_file (tictactoe_root / "Server/Api/api_server_host_factory.hpp");
+    const auto client = read_text_file (tictactoe_root / "Client/tictactoe_client_scenario.hpp");
+    const auto client_main = read_text_file (tictactoe_root / "Client/main.cpp");
     const auto create_game_handler =
-      read_file (tictactoe_root / "Server/Api/Handlers/create_game_http_handler.hpp");
+      read_text_file (tictactoe_root / "Server/Api/Handlers/create_game_http_handler.hpp");
     const auto play_factory =
-      read_file (tictactoe_root / "Server/Play/play_server_host_factory.hpp");
-    const auto game_spot = read_file (
+      read_text_file (tictactoe_root / "Server/Play/play_server_host_factory.hpp");
+    const auto game_spot = read_text_file (
       tictactoe_root
       / "Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
 
@@ -1681,14 +1675,14 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
 TEST (CppFrameworkSampleParity, BingoHostsUseRouteMeshCapabilities)
 {
     const auto bingo_root = cpp_language_root () / "samples/Bingo";
-    const auto api_framework = read_file (bingo_root / "Server/Api/api_server_framework.hpp");
-    const auto play_factory = read_file (bingo_root / "Server/Play/play_server_host_factory.hpp");
+    const auto api_framework = read_text_file (bingo_root / "Server/Api/api_server_framework.hpp");
+    const auto play_factory = read_text_file (bingo_root / "Server/Play/play_server_host_factory.hpp");
     const auto session_factory =
-      read_file (bingo_root / "Server/Session/session_server_host_factory.hpp");
-    const auto session = read_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
-    const auto contracts = read_file (bingo_root / "Shared/Contracts/messages.hpp");
-    const auto client = read_file (bingo_root / "Client/bingo_client_scenario.hpp");
-    const auto client_main = read_file (bingo_root / "Client/main.cpp");
+      read_text_file (bingo_root / "Server/Session/session_server_host_factory.hpp");
+    const auto session = read_text_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
+    const auto contracts = read_text_file (bingo_root / "Shared/Contracts/messages.hpp");
+    const auto client = read_text_file (bingo_root / "Client/bingo_client_scenario.hpp");
+    const auto client_main = read_text_file (bingo_root / "Client/main.cpp");
 
     EXPECT_NE (play_factory.find ("options.add_route_mesh"), std::string::npos);
     EXPECT_NE (session_factory.find ("options.add_route_mesh"), std::string::npos);
@@ -1731,7 +1725,7 @@ TEST (CppFrameworkSampleParity, SampleRunnersDoNotEnableInternalAutoConnectTraci
 {
     const auto samples = cpp_language_root () / "samples";
     for (const auto *name : {"Bingo", "DeliveryDispatch", "GameQuest"}) {
-        const auto runner = read_file (samples / name / "run_sample.sh");
+        const auto runner = read_text_file (samples / name / "run_sample.sh");
         EXPECT_EQ (runner.find ("ZLINK_CPP_AUTO_CONNECT_TRACE"), std::string::npos)
           << name << " runner must not configure framework internals through the environment";
         EXPECT_EQ (runner.find ("zlink auto-connect"), std::string::npos)
@@ -1741,7 +1735,7 @@ TEST (CppFrameworkSampleParity, SampleRunnersDoNotEnableInternalAutoConnectTraci
 
 TEST (CppFrameworkSampleParity, TicTacToeRunnerRetriesOnlyConcretePortCollisions)
 {
-    const auto runner = read_file (cpp_language_root () / "samples/TicTacToe/run_sample.sh");
+    const auto runner = read_text_file (cpp_language_root () / "samples/TicTacToe/run_sample.sh");
 
     const auto wait_port_begin = runner.find ("wait_port() {");
     const auto wait_grep_begin = runner.find ("wait_grep() {");
@@ -1766,7 +1760,7 @@ TEST (CppFrameworkSampleParity, SampleRunnersBuildBeforeStartingRedis)
 {
     const auto samples = cpp_language_root () / "samples";
     for (const auto *name : {"SupportChat", "ShoppingMall", "GameQuest", "DeliveryDispatch"}) {
-        const auto runner = read_file (samples / name / "run_sample.sh");
+        const auto runner = read_text_file (samples / name / "run_sample.sh");
         const auto build = runner.find ("cmake --build");
         const auto redis = runner.find ("zlink_redis_start_scoped_assign");
         ASSERT_NE (build, std::string::npos) << name << " runner must build its sample targets";
@@ -1777,7 +1771,7 @@ TEST (CppFrameworkSampleParity, SampleRunnersBuildBeforeStartingRedis)
 
 TEST (CppFrameworkSampleParity, SupportChatReleaseGateUsesThePublicClient)
 {
-    const auto runner = read_file (cpp_language_root () / "samples/SupportChat/run_sample.sh");
+    const auto runner = read_text_file (cpp_language_root () / "samples/SupportChat/run_sample.sh");
 
     EXPECT_NE (runner.find ("sample_cpp_framework_supportchat_client\" --stream-endpoint"),
                std::string::npos)
@@ -1791,7 +1785,7 @@ TEST (CppFrameworkSampleParity, SupportChatReleaseGateUsesThePublicClient)
 
 TEST (CppFrameworkSampleParity, SupportChatPushWaitsStayTyped)
 {
-    const auto scenario = read_file (
+    const auto scenario = read_text_file (
       cpp_language_root () / "samples/SupportChat/Client/supportchat_client_scenario.hpp");
 
     EXPECT_EQ (scenario.find ("wait_for<zlink::stream_connector::packet_t>"), std::string::npos)
@@ -1808,9 +1802,9 @@ TEST (CppFrameworkSampleParity, SupportChatPushWaitsStayTyped)
 TEST (CppFrameworkSampleParity, SupportChatConversationJoinCarriesParticipantIdentity)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
     const auto support =
-      read_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
     EXPECT_NE (contracts.find ("std::string participant_id;"), std::string::npos);
     EXPECT_NE (contracts.find ("std::string role;"), std::string::npos);
     EXPECT_NE (contracts.find ("std::string display_name;"), std::string::npos);
@@ -1823,12 +1817,12 @@ TEST (CppFrameworkSampleParity, SupportChatConversationJoinCarriesParticipantIde
 TEST (CppFrameworkSampleParity, SupportChatConversationJoinIsDeferred)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
     const auto support =
-      read_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
     const auto session =
-      read_file (cpp_language_root () / "samples/SupportChat/Server/Session/main.cpp");
-    const auto scenario = read_file (
+      read_text_file (cpp_language_root () / "samples/SupportChat/Server/Session/main.cpp");
+    const auto scenario = read_text_file (
       cpp_language_root () / "samples/SupportChat/Client/supportchat_client_scenario.hpp");
 
     EXPECT_NE (contracts.find ("bool scheduled{false};"), std::string::npos);
@@ -1849,9 +1843,9 @@ TEST (CppFrameworkSampleParity, SupportChatConversationJoinIsDeferred)
 TEST (CppFrameworkSampleParity, SupportChatUsesLocalActorLocationDto)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Shared/Contracts/messages.hpp");
     const auto support =
-      read_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
+      read_text_file (cpp_language_root () / "samples/SupportChat/Server/Support/main.cpp");
     EXPECT_EQ (contracts.find ("actor_ref_snapshot_t"), std::string::npos);
     EXPECT_NE (contracts.find ("actor_location_t actor;"), std::string::npos);
     EXPECT_NE (support.find ("actor_location_t::from (actor->actor)"), std::string::npos);
@@ -1891,7 +1885,7 @@ TEST (CppFrameworkSampleParity, TicTacToeStatePreservesNullableWireFields)
 TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
 {
     const auto contracts =
-      read_file (cpp_language_root () / "samples/ShoppingMall/Shared/Contracts/messages.hpp");
+      read_text_file (cpp_language_root () / "samples/ShoppingMall/Shared/Contracts/messages.hpp");
     EXPECT_EQ (contracts.find ("double amount"), std::string::npos);
 
     const nlohmann::json wire = {{"orderId", "order-null-amount"},
@@ -1914,7 +1908,7 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
         EXPECT_TRUE (projected.at (nullable_field).is_null ()) << nullable_field;
     }
 
-    const auto common_doc = read_file (
+    const auto common_doc = read_text_file (
       repository_root () / "framework/doc/framework/common/sample/event/shoppingmall.ko.md");
     const auto declaration_start = common_doc.find ("message OrderState");
     const auto declaration_end = common_doc.find ("```", declaration_start + 1);
@@ -1937,7 +1931,7 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
 
 TEST (CppFrameworkSampleParity, ChannelSendBackpressureUsesIndependentDefault)
 {
-    const auto source = read_file (
+    const auto source = read_text_file (
       cpp_language_root () / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
     const auto submit_send = source.find ("channel_outbound_exchange_t::submit_send");
     ASSERT_NE (submit_send, std::string::npos);
@@ -1961,7 +1955,7 @@ TEST (CppFrameworkSampleParity, TypedHttpBodyOnlyCallsUseFetch)
       "GameQuest/Client/gamequest_client_scenario.hpp"};
 
     for (const auto &relative : client_scenarios) {
-        const auto source = read_file (cpp_language_root () / "samples" / relative);
+        const auto source = read_text_file (cpp_language_root () / "samples" / relative);
         EXPECT_NE (source.find (".fetch<"), std::string::npos)
           << relative.generic_string ()
           << " must receive a body-only typed HTTP response with fetch<T>()";
@@ -1989,7 +1983,7 @@ TEST (CppFrameworkSampleParity, SamplesDoNotHandRollCodecs)
 
     for (const auto &file : sample_source_files ()) {
         const auto relative = relative_sample_path (file);
-        const auto content = read_file (file);
+        const auto content = read_text_file (file);
         for (const auto &pattern : banned_patterns) {
             if (content.find (pattern) != std::string::npos) {
                 violations.push_back (relative + ":" + pattern);
@@ -2012,7 +2006,7 @@ TEST (CppFrameworkSampleParity, SamplesDoNotHandRollCodecs)
 TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
 {
     const auto sample_root = cpp_language_root () / "samples";
-    const auto sample_helper = read_file (sample_root / "redis-common.sh");
+    const auto sample_helper = read_text_file (sample_root / "redis-common.sh");
     EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_REDIS_PORT_MIN=20000"), std::string::npos);
     EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_REDIS_PORT_MAX=20099"), std::string::npos);
     EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_APP_PORT_MIN=20100"), std::string::npos);
@@ -2024,7 +2018,7 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
     EXPECT_NE (sample_helper.find ("zlink_redis_is_bind_conflict"), std::string::npos);
     EXPECT_EQ (sample_helper.find ("127.0.0.1::6379"), std::string::npos);
 
-    const auto powershell_helper = read_file (sample_root / "redis-common.ps1");
+    const auto powershell_helper = read_text_file (sample_root / "redis-common.ps1");
     EXPECT_NE (powershell_helper.find ("ExclusiveAddressUse = $true"), std::string::npos);
     EXPECT_NE (powershell_helper.find ("Invoke-ZlinkSampleDockerCommand"), std::string::npos);
     EXPECT_NE (powershell_helper.find ("WaitForExit($TimeoutSeconds * 1000)"), std::string::npos);
@@ -2040,15 +2034,15 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
       {"TicTacToe/run_sample.sh", "zlink_sample_allocate_ports"},
       {"ZoneWorld/run_sample.sh", "zlink_sample_allocate_ports"}};
     for (const auto &[relative, allocator] : shell_runners) {
-        const auto runner = read_file (sample_root / relative);
+        const auto runner = read_text_file (sample_root / relative);
         EXPECT_NE (runner.find ("redis-common.sh"), std::string::npos) << relative;
         EXPECT_NE (runner.find (allocator), std::string::npos) << relative;
         EXPECT_EQ (runner.find ("127.0.0.1::6379"), std::string::npos) << relative;
         EXPECT_EQ (runner.find ("docker rm -fv"), std::string::npos) << relative;
     }
 
-    const auto bingo_ps = read_file (sample_root / "Bingo/run_sample.ps1");
-    const auto tictactoe_ps = read_file (sample_root / "TicTacToe/run_sample.ps1");
+    const auto bingo_ps = read_text_file (sample_root / "Bingo/run_sample.ps1");
+    const auto tictactoe_ps = read_text_file (sample_root / "TicTacToe/run_sample.ps1");
     EXPECT_NE (bingo_ps.find ("Get-ZlinkSamplePorts -Count $Count -Paired"), std::string::npos);
     EXPECT_NE (tictactoe_ps.find ("Get-ZlinkSamplePorts -Count $Count"), std::string::npos);
     EXPECT_EQ (bingo_ps.find ("TcpListener]::new"), std::string::npos);
@@ -2059,7 +2053,7 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
 TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
 {
     const auto sample_root = cpp_language_root () / "samples/ZoneWorld";
-    const auto manifest = read_file (sample_root / "sample-manifest.env");
+    const auto manifest = read_text_file (sample_root / "sample-manifest.env");
     for (const char *required :
          {"ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5",
           "ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8", "ZW-C1 ZW-C2 ZW-C3 ZW-C4",
@@ -2068,7 +2062,7 @@ TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
         EXPECT_NE (manifest.find (required), std::string::npos) << required;
     }
 
-    const auto shell_runner = read_file (sample_root / "run_sample.sh");
+    const auto shell_runner = read_text_file (sample_root / "run_sample.sh");
     for (const char *required :
          {"sample-manifest.env", "record_verdict", "all_passed=true",
           "[[ \"$verdict\" == PASS ]] || all_passed=false", "if [[ \"$all_passed\" == true ]]",
@@ -2079,7 +2073,7 @@ TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
         EXPECT_NE (shell_runner.find (required), std::string::npos) << required;
     }
 
-    const auto powershell_runner = read_file (sample_root / "run_sample.ps1");
+    const auto powershell_runner = read_text_file (sample_root / "run_sample.ps1");
     for (const char *required :
          {"sample-manifest.env", "Record-Verdict", "$allPassed = $true",
           "if ($verdict -ne \"PASS\") { $allPassed = $false }", "if (-not $allPassed)",
