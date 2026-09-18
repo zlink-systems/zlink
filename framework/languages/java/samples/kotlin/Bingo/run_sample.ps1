@@ -80,7 +80,7 @@ function Start-AppRole {
     param([string]$Project, [string]$Name, [string]$Config, [string]$LogName)
     $logPath = Join-Path $LogDir $LogName
     $errorLogPath = Join-Path $LogDir ($LogName + ".err.log")
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) -WorkingDirectory $SampleDir -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath
     $Processes.Add($process)
 }
 

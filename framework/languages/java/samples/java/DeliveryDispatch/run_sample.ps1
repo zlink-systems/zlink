@@ -50,9 +50,9 @@ function Get-AppBin {
 
 function Start-AppRole {
     param([string]$Project, [string]$Name, [string]$Config, [string]$LogName)
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
-        -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) `
-        -RedirectStandardError (Join-Path $LogDir ($LogName + ".err.log")) -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
+        -WorkingDirectory $SampleDir -RedirectStandardOutput (Join-Path $LogDir $LogName) `
+        -RedirectStandardError (Join-Path $LogDir ($LogName + ".err.log"))
     $Processes.Add($process)
 }
 

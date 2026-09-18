@@ -104,10 +104,9 @@ function Start-ManagedProcess {
         }
     }
     $argumentLine = ($Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " "
-    $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
-            -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $outputPath `
-            -RedirectStandardError $errorPath -PassThru
-    [void]$process.Handle
+    $process = Start-ZlinkSampleProcess -FilePath $Executable -ArgumentList $argumentLine `
+            -WorkingDirectory $SampleDir -RedirectStandardOutput $outputPath `
+            -RedirectStandardError $errorPath
     $Processes.Add($process)
     return $process
 }
@@ -368,11 +367,10 @@ function Assert-Phase {
 function Invoke-IsolatedChild {
     param([string]$Name, [string[]]$Arguments)
     $powerShell = Get-ZlinkSampleSelfShellPath
-    $child = Start-Process -FilePath $powerShell -ArgumentList ((@(
+    $child = Start-ZlinkSampleProcess -FilePath $powerShell -ArgumentList ((@(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath
     ) + $Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " ") `
-        -WorkingDirectory $SampleDir -NoNewWindow -PassThru
-    [void]$child.Handle
+        -WorkingDirectory $SampleDir
     try {
         $child.WaitForExit()
         $childExitCode = $child.ExitCode

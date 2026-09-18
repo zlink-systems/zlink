@@ -400,6 +400,39 @@ final class SampleReleaseGateContractTest {
         }
     }
 
+    //  #628: Windows PowerShell 5.1 returns a Process object from `Start-Process -PassThru` that
+    //  never opened the OS handle, so `$process.ExitCode` reads back as $null once the child
+    //  exits. A TicTacToe client that finished the whole scenario was then judged a failure,
+    //  because `$null -ne 0`. Start-ZlinkSampleProcess reads Handle while the child is alive and
+    //  owns that rule for every sample child process, so no runner starts one any other way.
+    @Test
+    void powerShellSampleRunnersStartChildProcessesThroughTheSharedHelper() throws IOException {
+        String helper = readSource(samplesRoot().resolve("redis-common.ps1"));
+        assertTrue(helper.contains("function Start-ZlinkSampleProcess"),
+            "redis-common.ps1 must own the shared sample child process starter");
+        assertTrue(Pattern.compile("(?s)function Start-ZlinkSampleProcess\\b.*?\\[void\\]\\$process\\.Handle")
+                .matcher(helper).find(),
+            "Start-ZlinkSampleProcess must read the OS handle so the child exit code stays readable");
+
+        List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .distinct()
+            .sorted()
+            .toList();
+        for (String language : REQUIRED_LANGUAGES) {
+            for (String sample : samples) {
+                Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.ps1");
+                if (!Files.isRegularFile(runnerPath)) {
+                    continue;
+                }
+                String runner = readSource(runnerPath);
+                assertFalse(runner.contains("Start-Process"),
+                    language + "/" + sample
+                        + " PowerShell runner must start child processes with Start-ZlinkSampleProcess,"
+                        + " because a bare Start-Process loses the child exit code on Windows PowerShell 5.1");
+            }
+        }
+    }
+
     @Test
     void bashSampleBuildsUseOneSharedGradleLock() throws IOException {
         Path commonRunner = samplesRoot().resolve("runner-common.sh");
