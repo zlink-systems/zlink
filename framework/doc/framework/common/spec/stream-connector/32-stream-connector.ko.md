@@ -659,16 +659,24 @@ connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 AP
 
 | 표면 | 계약 | 실패 |
 |------|------|------|
-| `waitFor<T>(name)` | 그 packet이 올 때까지 대기. `.where(predicate)`·`.timeout(t)`로 좁힌다. 기본 timeout은 §6.1의 `wait timeout`(5초) | timeout 내 미도착이면 **오류로 실패한다**(§10은 이 표면이 큐를 소비한다고 규정) |
-| `expectNone<T>(name)` | `.within(window)` 동안 그 packet이 **오지 않는지** 확인한다(negative). `waitFor`의 대칭 | window 안에 도착하면 **오류로 실패한다** |
-| `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — 같은 이름의 push가 **주어진 술어 순서대로** 도착하는지 확인하고 **message 목록**을 돌려준다 | 순서가 어긋나거나 timeout이면 **오류로 실패한다.** "N개가 도착했다"가 아니라 **"순서대로 도착했다"** 를 검증하는 것이 이 표면의 존재 이유다 |
+| `waitFor<T>(이름 또는 타입)` | 그 packet이 올 때까지 대기. `.where(predicate)`·`.timeout(t)`로 좁힌다. 기본 timeout은 §6.1의 `wait timeout`(5초) | timeout 내 미도착이면 **오류로 실패한다**(§10은 이 표면이 큐를 소비한다고 규정) |
+| `expectNone<T>(이름 또는 타입)` | `.within(window)` 동안 그 packet이 **오지 않는지** 확인한다(negative). `waitFor`의 대칭 | window 안에 도착하면 **오류로 실패한다** |
+| `waitForSequence<T>(이름 또는 타입)` | `.expect(p1).expect(p2)….timeout(t)` — 같은 이름의 push가 **주어진 술어 순서대로** 도착하는지 확인하고 **message 목록**을 돌려준다 | 순서가 어긋나거나 timeout이면 **오류로 실패한다.** "N개가 도착했다"가 아니라 **"순서대로 도착했다"** 를 검증하는 것이 이 표면의 존재 이유다 |
 
 - **술어와 반환은 payload가 아니라 message를 다룬다.** payload만 주면 술어가 metadata와
   packet 이름을 보지 못한다. `T`는 message가 담은 payload의 타입이다.
 - **관측 조건이 어긋난 실패는 `ValidationFailed`다** — timeout 안에 오지 않음, 오지 않아야 할
-  것이 도착함, 순서가 어긋남. **연결이 끝나 대기를 이어갈 수 없으면 `Disconnected`다.**
+  것이 도착함, 순서가 어긋남. **`RequestTimeout`은 이 표면의 코드가 아니다** — 그것은 §9가
+  정한 대로 request의 reply를 기다리다 시간이 초과한 경우다. 두 표면이 같은 "시간이 지났다"를
+  다른 코드로 내는 것은, 호출자가 "관측이 어긋났다"와 "요청이 응답을 받지 못했다"를 구분해야
+  하기 때문이다. **연결이 끝나 대기를 이어갈 수 없으면 `Disconnected`다.**
   connector를 닫거나 연결이 끊겨 대기 중이던 호출이 풀리는 경우가 여기 해당하며, 그것은 조건이
-  어긋난 것이 아니라 관측할 자리가 사라진 것이다. 전달 수단은 §9.2가 정한다 — 예외를 끈 빌드는
+  어긋난 것이 아니라 관측할 자리가 사라진 것이다.
+
+    **푸는 시점은 연결이 끝난 때이지 다음 연결이 성립한 때가 아니다.** 재연결이 꺼져 있거나
+    시도를 다 써서 다음 연결이 오지 않으면, 다음 연결을 기준으로 삼는 구현에서는 대기가 자기
+    timeout까지 매달렸다가 `ValidationFailed`로 끝난다. 호출자는 그것을 "관측이 어긋났다"로
+    읽지만 실제로는 연결이 없어진 것이다. 전달 수단은 §9.2가 정한다 — 예외를 끈 빌드는
   값으로, 나머지는 코드를 담은 예외로 받는다.
 
 - **status 대기는 별도 표면을 두지 않는다.** status는 payload의 한 필드이므로

@@ -791,18 +791,29 @@ builder chaining.
   predicate. `T` is the type of the payload the message carries.
 - **A failure of the observed condition is `ValidationFailed`** — not
   arriving within the timeout, arriving when it should not have,
-  arriving out of order. **Where the connection has ended and the wait
+  arriving out of order. **`RequestTimeout` is not a code of this
+  surface** — that one is for a request whose reply did not arrive in
+  time, as §9 defines. The two surfaces report the same "time passed"
+  under different codes because the caller has to tell "the observation
+  did not hold" from "the request got no reply". **Where the connection has ended and the wait
   cannot continue, it is `Disconnected`.** That covers a call left
   waiting when the connector is closed or the connection drops: the
-  condition did not fail, the place to observe it went away. How either
+  condition did not fail, the place to observe it went away.
+
+    **The release happens when the connection ends, not when the next
+    one is established.** Where reconnect is off or the attempts have
+    run out, no next connection arrives; an implementation keyed to that
+    moment leaves the wait hanging until its own timeout and then ends
+    it as `ValidationFailed`. The caller reads that as a failed
+    observation when the connection is simply gone. How either
   reaches the caller is settled by §9.2 — as a value where exceptions
   are disabled, as an exception carrying the code everywhere else.
 
 | Surface | Contract | Failure |
 |------|------|------|
-| `waitFor<T>(name)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Fails with an error** if it doesn't arrive within the timeout (§10 specifies this surface consumes the queue) |
-| `expectNone<T>(name)` | Confirms that packet **doesn't arrive** during `.within(window)` (negative). The symmetric of `waitFor` | **Fails with an error** if it arrives within the window |
-| `waitForSequence<T>(name)` | `.expect(p1).expect(p2)….timeout(t)` — confirms a push of the same name arrives **in the given predicate order** and returns the message list | **Fails with an error** if the order is wrong or it times out. This surface exists to verify **"arrived in order"**, not "N arrived" |
+| `waitFor<T>(name or type)` | Waits until that packet arrives. Narrowed with `.where(predicate)`/`.timeout(t)`. The default timeout is §6.1's `wait timeout` (5 seconds) | **Fails with an error** if it doesn't arrive within the timeout (§10 specifies this surface consumes the queue) |
+| `expectNone<T>(name or type)` | Confirms that packet **doesn't arrive** during `.within(window)` (negative). The symmetric of `waitFor` | **Fails with an error** if it arrives within the window |
+| `waitForSequence<T>(name or type)` | `.expect(p1).expect(p2)….timeout(t)` — confirms a push of the same name arrives **in the given predicate order** and returns the message list | **Fails with an error** if the order is wrong or it times out. This surface exists to verify **"arrived in order"**, not "N arrived" |
 
 - **A status wait doesn't have a separate surface.** Since status is a
   field of the payload, it's expressed as
