@@ -157,7 +157,9 @@ final class ConnectorDispatchTest {
         queue.awaitMessage("Push", ignored -> true, cancelled);
 
         assertEquals(0, queued.payload().payload().size());
-        assertEquals(0, queue.receivedCount("Push"));
+        //  The message did arrive, so spec 32 10 keeps it counted even
+        //  though the cancelled waiter could not take it.
+        assertEquals(1, queue.receivedCount("Push"));
     }
 
     @Test
@@ -172,6 +174,7 @@ final class ConnectorDispatchTest {
 
         assertTrue(waiter.isCompletedExceptionally());
         assertEquals(0, queue.size());
+        //  Nothing ever arrived on this queue, so the count is still 0.
         assertEquals(0, queue.receivedCount("Push"));
     }
 
@@ -213,7 +216,9 @@ final class ConnectorDispatchTest {
                 } finally {
                     message.payload().payload().close();
                 }
-                assertEquals(0, connector.receivedCount("Late"));
+                //  The wait surface consumed the message; spec 32 10
+                //  keeps the arrival counted.
+                assertEquals(1, connector.receivedCount("Late"));
             } finally {
                 ConnectorTestAwait.await(connector.close());
             }

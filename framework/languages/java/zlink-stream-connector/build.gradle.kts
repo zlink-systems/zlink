@@ -19,6 +19,5 @@ dependencies {
     api("io.netty:netty-handler:4.1.100.Final")
     api("io.netty:netty-transport:4.1.100.Final")
     implementation("org.lz4:lz4-java:1.8.0")
-    implementation("io.micrometer:micrometer-core:1.15.8")
     testImplementation(project(":zlink-framework-core"))
 }

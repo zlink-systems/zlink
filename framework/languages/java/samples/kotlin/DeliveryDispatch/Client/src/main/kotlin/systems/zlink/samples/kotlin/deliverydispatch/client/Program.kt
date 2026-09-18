@@ -329,7 +329,6 @@ class DeliveryDispatchClientScenario {
                 Duration.ofSeconds(5),
                 64 * 1024,
                 64 * 1024,
-                Int.MAX_VALUE,
                 true,
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(5),

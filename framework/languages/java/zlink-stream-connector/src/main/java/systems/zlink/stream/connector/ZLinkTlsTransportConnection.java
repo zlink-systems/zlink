@@ -141,7 +141,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         Channel current = channel;
         if (current == null || !current.isActive()) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("tls transport is not connected"));
+                ZLinkStreamException.disconnected("tls transport is not connected"));
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
         current.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(write -> {

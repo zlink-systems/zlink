@@ -211,6 +211,55 @@ class ZLinkStateLaneTest {
         lane.closeAndJoin()
     }
 
+    @Test
+    fun `a run racing close and join never leaves its caller suspended`() = runBlocking {
+        repeat(RACE_ROUNDS) {
+            val lane = ZLinkStateLane()
+            val ran = AtomicInteger()
+            val refused = AtomicBoolean(false)
+
+            withTimeout(RACE_TIMEOUT_MILLIS) {
+                coroutineScope {
+                    launch(Dispatchers.Default) {
+                        try {
+                            lane.run { ran.incrementAndGet() }
+                        } catch (_: IllegalStateException) {
+                            // A refusal is a valid outcome of the race. An indefinite wait is not:
+                            // it would be the drain of a cancelled scope that never resumes the
+                            // caller, and the timeout above is what fails the test for it.
+                            refused.set(true)
+                        }
+                    }
+                    launch(Dispatchers.Default) { lane.closeAndJoin() }
+                }
+            }
+
+            assertEquals(if (refused.get()) 0 else 1, ran.get())
+        }
+    }
+
+    @Test
+    fun `a try post that reports acceptance runs even when close and join races it`() =
+        runBlocking {
+            repeat(RACE_ROUNDS) {
+                val lane = ZLinkStateLane()
+                val ran = AtomicInteger()
+                val accepted = AtomicBoolean(false)
+
+                withTimeout(RACE_TIMEOUT_MILLIS) {
+                    coroutineScope {
+                        launch(Dispatchers.Default) {
+                            accepted.set(lane.tryPost { ran.incrementAndGet() })
+                        }
+                        launch(Dispatchers.Default) { lane.closeAndJoin() }
+                    }
+                }
+
+                // Accepting work is a promise to run it, so true must never mean dropped.
+                assertEquals(if (accepted.get()) 1 else 0, ran.get())
+            }
+        }
+
     private suspend fun failureFrom(block: suspend () -> Unit): Throwable {
         try {
             block()
@@ -218,5 +267,10 @@ class ZLinkStateLaneTest {
             return error
         }
         error("Expected the operation to fail.")
+    }
+
+    private companion object {
+        const val RACE_ROUNDS = 300
+        const val RACE_TIMEOUT_MILLIS = 10_000L
     }
 }

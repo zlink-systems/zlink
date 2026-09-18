@@ -20,6 +20,9 @@ final class ZLinkStreamDispatchQueue {
     private final Map<String, Integer> receivedCounts = new HashMap<>();
     private final List<Waiter> waiters = new ArrayList<>();
     private final Consumer<ZLinkStreamError> publishError;
+    //  Guarded by queue. A long has no atomic non-volatile read (JLS 17.7),
+    //  so reading it outside the monitor could observe a torn value - the
+    //  very thing this counter exists to rule out.
     private long version;
 
     ZLinkStreamDispatchQueue() {
@@ -58,11 +61,24 @@ final class ZLinkStreamDispatchQueue {
         }
     }
 
+    /**
+     * Records one received packet and routes it.
+     *
+     * <p>Spec 32 10: {@code receivedCount(name)} counts what arrived. It is
+     * counted here, once, at arrival - before a waiter, an immediate
+     * dispatch or a queued dispatch can take the message - so the value does
+     * not depend on who consumes it or on the dispatch mode.
+     */
     void addMessage(
         ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
         Supplier<CompletionStage<Void>> dispatch,
         BooleanSupplier dispatchable,
         boolean runImmediately) {
+        if (message.packetName() != null) {
+            synchronized (queue) {
+                receivedCounts.merge(message.packetName(), 1, Integer::sum);
+            }
+        }
         while (true) {
             long observedVersion;
             List<Waiter> candidates;
@@ -117,7 +133,6 @@ final class ZLinkStreamDispatchQueue {
                 if (!immediate) {
                     queue.add(new QueuedDispatch(
                         message.packetName(), message, dispatch, dispatchable));
-                    receivedCounts.merge(message.packetName(), 1, Integer::sum);
                     version++;
                 }
             }
@@ -199,7 +214,6 @@ final class ZLinkStreamDispatchQueue {
             queued = List.copyOf(queue);
             pending = List.copyOf(waiters);
             queue.clear();
-            receivedCounts.clear();
             waiters.clear();
             version++;
         }
@@ -208,7 +222,52 @@ final class ZLinkStreamDispatchQueue {
             .filter(Objects::nonNull)
             .forEach(ZLinkStreamDispatchQueue::closeMessage);
         pending.forEach(waiter -> waiter.result().completeExceptionally(
-            new IllegalStateException("stream dispatch queue was closed")));
+            ZLinkStreamException.disconnected("stream dispatch queue was closed")));
+    }
+
+    /**
+     * Restarts the received counters and drops what the previous connection
+     * left unconsumed.
+     *
+     * <p>Spec 32 10 puts the reference point at the moment a connection is
+     * established, so a reconnect counts from 0 again, and it clears the
+     * messages of the previous connection with the count. Keeping them would
+     * leave the two describing different connections and let {@code waitFor}
+     * hand back a packet from before the drop.
+     *
+     * <p>Only received messages are dropped. Queued callbacks - a state
+     * change, an error, a disconnect - belong to the connector surface, not
+     * to the receive message queue, and are still owed to the application.
+     *
+     * <p>{@code replacesAnEarlierConnection} says whether a connection ended
+     * before this one. A wait that cannot continue because its connection
+     * ended is {@code Disconnected} (spec 32 10.1); a wait registered before
+     * the first connection has no ended connection behind it.
+     */
+    void resetForNewConnection(boolean replacesAnEarlierConnection) {
+        List<QueuedDispatch> abandoned;
+        List<Waiter> pending = List.of();
+        synchronized (queue) {
+            receivedCounts.clear();
+            abandoned = queue.stream()
+                .filter(item -> item.message() != null)
+                .toList();
+            if (!abandoned.isEmpty()) {
+                queue.removeIf(item -> item.message() != null);
+                version++;
+            }
+            if (replacesAnEarlierConnection && !waiters.isEmpty()) {
+                pending = List.copyOf(waiters);
+                waiters.clear();
+                version++;
+            }
+        }
+        abandoned.stream()
+            .map(QueuedDispatch::message)
+            .forEach(ZLinkStreamDispatchQueue::closeMessage);
+        pending.forEach(waiter -> waiter.result().completeExceptionally(
+            ZLinkStreamException.disconnected(
+                "the connection that the wait observed has ended")));
     }
 
     int receivedCount(String packetName) {
@@ -236,15 +295,14 @@ final class ZLinkStreamDispatchQueue {
                 if (!dispatchable) {
                     continue;
                 }
+                boolean versionChanged;
                 synchronized (queue) {
-                    if (version != observedVersion) {
-                        break;
-                    }
-                    if (removeQueuedLocked(candidate)) {
+                    versionChanged = version != observedVersion;
+                    if (!versionChanged && removeQueuedLocked(candidate)) {
                         next = candidate;
                     }
                 }
-                if (next != null || observedVersion != version) {
+                if (versionChanged || next != null) {
                     break;
                 }
             }
@@ -299,24 +357,14 @@ final class ZLinkStreamDispatchQueue {
         for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext();) {
             if (iterator.next() == candidate) {
                 iterator.remove();
-                decrementReceivedCount(candidate.packetName());
+                //  Spec 32 10: consuming does not lower the count. A
+                //  scenario that registers an `on` handler and dispatches
+                //  must still be able to assert how many arrived.
                 version++;
                 return true;
             }
         }
         return false;
-    }
-
-    private void decrementReceivedCount(String packetName) {
-        if (packetName == null) {
-            return;
-        }
-        int next = receivedCounts.getOrDefault(packetName, 0) - 1;
-        if (next <= 0) {
-            receivedCounts.remove(packetName);
-        } else {
-            receivedCounts.put(packetName, next);
-        }
     }
 
     private static void closeMessage(

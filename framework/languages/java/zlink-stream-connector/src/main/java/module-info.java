@@ -8,7 +8,6 @@ module zlink.stream.connector {
     requires transitive io.netty.handler;
     requires transitive io.netty.transport;
     requires org.lz4.java;
-    requires micrometer.core;
     requires java.net.http;
     requires java.logging;
 

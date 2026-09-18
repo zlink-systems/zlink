@@ -15,6 +15,10 @@ public enum ZLinkFlowOrigin {
         this.wireValue = wireValue;
     }
 
+    int wireValue() {
+        return wireValue;
+    }
+
     static ZLinkFlowOrigin fromWireValue(int wireValue) {
         for (ZLinkFlowOrigin origin : values()) {
             if (origin.wireValue == wireValue) {

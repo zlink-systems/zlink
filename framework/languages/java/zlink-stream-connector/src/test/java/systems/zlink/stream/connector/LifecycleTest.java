@@ -182,7 +182,12 @@ final class LifecycleTest {
             ConnectorTestAwait.await(connector.close());
 
             CompletionException error = assertThrows(CompletionException.class, reconnect::join);
-            assertTrue(error.getCause() instanceof IllegalStateException);
+            //  Common connector spec 32 9.2: connecting a closed connector
+            //  fails with a code the caller can read.
+            assertTrue(error.getCause() instanceof ZLinkStreamException);
+            assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) error.getCause()).errorCode());
             assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
         } finally {
             ConnectorTestAwait.await(connector.close());
@@ -219,7 +224,14 @@ final class LifecycleTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof TimeoutException);
+            //  Spec 32 9.2: the caller reads the code, and 9 makes a reply
+            //  that never arrives RequestTimeout. The TimeoutException that
+            //  used to be thrown on its own is kept as the cause.
+            assertTrue(ex.getCause() instanceof ZLinkStreamException);
+            assertEquals(
+                ZLinkStreamErrorCode.REQUEST_TIMEOUT,
+                ((ZLinkStreamException) ex.getCause()).errorCode());
+            assertTrue(ex.getCause().getCause() instanceof TimeoutException);
             assertEquals(0, connector.pendingDispatchCount());
             } finally {
                 ConnectorTestAwait.await(connector.close());
@@ -300,8 +312,15 @@ final class LifecycleTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof TimeoutException);
+            //  Spec 32 9: the heartbeat timeout drops the transport, so
+            //  the operations in flight fail as Disconnected with the
+            //  heartbeat timeout as the cause.
+            assertTrue(ex.getCause() instanceof ZLinkStreamException);
+            assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) ex.getCause()).errorCode());
             assertTrue(ex.getCause().getMessage().contains("Heartbeat"));
+            assertTrue(ex.getCause().getCause() instanceof TimeoutException);
             } finally {
                 ConnectorTestAwait.await(connector.close());
             }
@@ -325,8 +344,10 @@ final class LifecycleTest {
             Duration.ofMillis(20),
             2.0);
 
-        assertThrows(IllegalArgumentException.class, () ->
-            ZLinkStreamConnectorFactory.create(options));
+        assertEquals(
+            ZLinkStreamErrorCode.VALIDATION_FAILED,
+            assertThrows(ZLinkStreamException.class, () ->
+                ZLinkStreamConnectorFactory.create(options)).errorCode());
     }
 
     private static ZLinkStreamEncodedPayload payload(String packetName, String body) {

@@ -17,7 +17,7 @@ final class ZLinkStreamConnectorPayloadCodec {
             DefaultZLinkStreamConnector.validatePacketName(payload.packetName()),
             Message.from(payload.payload()),
             Map.copyOf(payload.metadata()),
-            Objects.requireNonNull(payload.codec(), "codec"));
+            requireCodec(payload.codec()));
     }
 
     byte[] encode(ZLinkStreamEncodedPayload payload, boolean compress) {
@@ -28,9 +28,24 @@ final class ZLinkStreamConnectorPayloadCodec {
         }
         ZLinkStreamCompressionCodec codec = configuration.transport().compressionCodec();
         if (codec == null) {
-            throw new IllegalStateException("compression codec is not configured");
+            //  Common connector spec §8: with compression None a send that
+            //  asks to compress fails. §9 files that under CompressionFailed
+            //  because only this one send operation fails.
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.COMPRESSION_FAILED,
+                "compression codec is not configured");
         }
-        byte[] compressed = codec.compress(body);
+        byte[] compressed;
+        try {
+            compressed = codec.compress(body);
+        } catch (ZLinkStreamException alreadyCoded) {
+            throw alreadyCoded;
+        } catch (RuntimeException failure) {
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.COMPRESSION_FAILED,
+                "stream payload compression failed",
+                failure);
+        }
         requireWithinSendLimit(compressed);
         return compressed;
     }
@@ -41,11 +56,28 @@ final class ZLinkStreamConnectorPayloadCodec {
         }
         ZLinkStreamCompressionCodec codec = configuration.transport().compressionCodec();
         if (codec == null) {
-            throw new IllegalStateException("compression codec is not configured");
+            //  Common connector spec §8: with compression None an inbound
+            //  frame that carries the compressed flag is rejected as
+            //  DecompressionFailed.
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                "compression codec is not configured");
         }
-        byte[] decoded = codec.decompress(payload, configuration.limits().receivePayload());
+        byte[] decoded;
+        try {
+            decoded = codec.decompress(payload, configuration.limits().receivePayload());
+        } catch (ZLinkStreamException alreadyCoded) {
+            throw alreadyCoded;
+        } catch (RuntimeException failure) {
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                "stream payload decompression failed",
+                failure);
+        }
         if (decoded.length > configuration.limits().receivePayload()) {
-            throw new IllegalStateException("decompressed stream payload exceeds maximum stream payload size");
+            throw ZLinkStreamException.of(
+                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                "decompressed stream payload exceeds maximum stream payload size");
         }
         return decoded;
     }
@@ -69,6 +101,13 @@ final class ZLinkStreamConnectorPayloadCodec {
         };
     }
 
+    private static ZLinkStreamCodec requireCodec(ZLinkStreamCodec codec) {
+        if (codec == null) {
+            throw ZLinkStreamException.validationFailed("payload codec is required");
+        }
+        return codec;
+    }
+
     private static byte[] drainPayload(ZLinkStreamEncodedPayload payload) {
         try {
             return payload.payload().toByteArray();
@@ -79,7 +118,10 @@ final class ZLinkStreamConnectorPayloadCodec {
 
     private void requireWithinSendLimit(byte[] payload) {
         if (payload.length > configuration.limits().sendPayload()) {
-            throw new IllegalArgumentException("payload exceeds max payload size");
+            //  Common connector spec §9: exceeding the send payload limit is
+            //  pre-send validation, so it is ValidationFailed, not
+            //  FrameTooLarge (which is the receive-side limit).
+            throw ZLinkStreamException.validationFailed("payload exceeds max payload size");
         }
     }
 }

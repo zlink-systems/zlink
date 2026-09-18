@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.messaging.Message;
@@ -47,8 +49,20 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
     private final ZLinkStreamConnectionLifecycle lifecycle;
 
-    private CompletableFuture<Void> sendChain = CompletableFuture.completedFuture(null);
-    private volatile ZLinkStreamCloseReason closeReason = ZLinkStreamCloseReason.TRANSPORT_ERROR;
+    private final ZLinkStreamSendChain sendChain = new ZLinkStreamSendChain();
+    //  Common connector spec 32 6.2. `lastCloseReason` is the read surface:
+    //  it starts empty, is filled the first time a connection ends (a failed
+    //  first connect included) and is never cleared by a later reconnect, so
+    //  code that missed the disconnect event still reads the last reason.
+    //  `stagedCloseReason` holds the reason a specific ending already knows
+    //  (client close, heartbeat timeout, a server `session-closing`) until
+    //  the disconnect is published; anything else ends as TRANSPORT_ERROR.
+    private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason =
+        new AtomicReference<>();
+    //  Three threads stage a reason (heartbeat, receive, application) and
+    //  two consume it, so the read-and-clear has to be one step.
+    private final AtomicReference<ZLinkStreamCloseReason> stagedCloseReason =
+        new AtomicReference<>();
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
@@ -71,8 +85,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             receiveDispatcher,
             this::publishError,
             this::notifyDisconnected,
-            reason -> closeReason = reason,
-            this::sendControl);
+            this::stageCloseReason,
+            this::recordConnectAttemptFailure,
+            this::sendControl,
+            sendChain::reset);
     }
 
     @Override
@@ -91,14 +107,27 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     @Override
+    public Optional<ZLinkStreamCloseReason> closeReason() {
+        return Optional.ofNullable(lastCloseReason.get());
+    }
+
+    @Override
     public ZLinkStreamDiagnosticsLevel diagnosticsLevel() {
         return configuration.diagnosticsLevel();
     }
 
     @Override
-    public CompletableFuture<Void> setDiagnosticsLevelAsync(
-        ZLinkStreamDiagnosticsLevel level) {
+    public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
+        //  Common connector spec 32 13: the synchronous surface changes the
+        //  value without waiting, so calling it from inside a dispatch
+        //  callback cannot wait on its own completion.
         configuration.diagnosticsLevel(level);
+    }
+
+    @Override
+    public CompletionStage<Void> setDiagnosticsLevelAsync(
+        ZLinkStreamDiagnosticsLevel level) {
+        setDiagnosticsLevel(level);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -124,7 +153,11 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> closeInternal() {
-        closeReason = ZLinkStreamCloseReason.CLIENT_CLOSE;
+        //  A connector that never left CREATED was never connected, so
+        //  closing it is not an ending that 6.2 records.
+        if (state() != ZLinkStreamConnectionState.CREATED) {
+            stagedCloseReason.set(ZLinkStreamCloseReason.CLIENT_CLOSE);
+        }
         try {
             return lifecycle.close().whenComplete((ignored, failure) -> timeouts.shutdown());
         } catch (RuntimeException error) {
@@ -264,11 +297,24 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private CompletionStage<Void> sendFrame(
         ZLinkStreamWireProtocol.Header header,
         byte[] payload) {
-        byte[] encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
-        byte[] frame = ZLinkStreamWireProtocol.encodeFrame(
-            encodedHeader,
-            payload,
-            configuration.limits().sendPayload());
+        //  The wire codec is internal and reports structural problems with
+        //  plain exceptions. This is the connector boundary, so a rejection
+        //  the caller can act on (metadata limits, correlation id, send
+        //  payload limit) leaves here as ValidationFailed (spec 32 9, 9.2).
+        byte[] encodedHeader;
+        byte[] frame;
+        try {
+            encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
+            frame = ZLinkStreamWireProtocol.encodeFrame(
+                encodedHeader,
+                payload,
+                configuration.limits().sendPayload());
+        } catch (ZLinkStreamException alreadyCoded) {
+            throw alreadyCoded;
+        } catch (IllegalArgumentException | IllegalStateException invalid) {
+            throw ZLinkStreamException.validationFailed(
+                "outbound stream frame is invalid: " + invalid.getMessage(), invalid);
+        }
         trace("connector write-start endpoint=" + configuration.endpoint()
             + " kind=" + header.kind()
             + " name=" + header.name()
@@ -277,22 +323,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             + " correlation=" + header.correlationId()
             + " flow=" + header.flowId()
             + " origin=" + flowOriginName(header.flowOrigin()));
-        CompletableFuture<Void> previous;
-        CompletableFuture<Void> publication = new CompletableFuture<>();
-        synchronized (this) {
-            previous = sendChain;
-            //  Publish the new tail before a completed previous tail starts
-            //  writeFrame inline and synchronously submits another frame.
-            sendChain = publication;
-        }
-        previous.thenCompose(ignored -> writeFrame(frame))
-            .whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    publication.complete(null);
-                } else {
-                    publication.completeExceptionally(failure);
-                }
-            });
+        CompletableFuture<Void> publication = sendChain.enqueue(() -> writeFrame(frame));
         return publication.whenComplete((ignored, ex) -> {
             if (ex == null) {
                 trace("connector write-complete endpoint=" + configuration.endpoint()
@@ -341,29 +372,54 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     private void ensureConnected() {
         if (!isConnected()) {
-            throw new IllegalStateException("connector is not connected");
+            throw ZLinkStreamException.disconnected("connector is not connected");
         }
     }
 
     private void notifyDisconnected() {
-        ZLinkStreamDisconnected event = new ZLinkStreamDisconnected(closeReason);
-        for (ZLinkStreamDisconnectedHandler handler : List.copyOf(disconnectedHandlers)) {
+        ZLinkStreamCloseReason reason = takeCloseReason();
+        ZLinkStreamDisconnected event = new ZLinkStreamDisconnected(reason);
+        //  disconnectedHandlers is a CopyOnWriteArrayList: its iterator is
+        //  already the snapshot a callback that registers or removes a
+        //  handler needs, so copying it again only allocates.
+        for (ZLinkStreamDisconnectedHandler handler : disconnectedHandlers) {
             if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
                 invokeUserCallback(() -> handler.handle(event));
             } else {
                 dispatchQueue.addAsync(() -> invokeUserCallback(() -> handler.handle(event)));
             }
         }
-        closeReason = ZLinkStreamCloseReason.TRANSPORT_ERROR;
+    }
+
+    private void stageCloseReason(ZLinkStreamCloseReason reason) {
+        stagedCloseReason.set(reason);
+    }
+
+    /**
+     * Records why a connect attempt failed even though no connection had
+     * been established, so spec 32 6.2's "a failed first connect also leaves
+     * a reason" holds. Spec 32 9's impact table maps ConnectTimeout and
+     * TlsValidationFailed to TransportError.
+     */
+    private void recordConnectAttemptFailure() {
+        takeCloseReason();
+    }
+
+    private ZLinkStreamCloseReason takeCloseReason() {
+        ZLinkStreamCloseReason staged = stagedCloseReason.getAndSet(null);
+        ZLinkStreamCloseReason reason =
+            staged == null ? ZLinkStreamCloseReason.TRANSPORT_ERROR : staged;
+        lastCloseReason.set(reason);
+        return reason;
     }
 
     private void onSessionClosing(ZLinkStreamCloseReason reason) {
-        closeReason = reason;
+        stageCloseReason(reason);
         lifecycle.serverClosing();
     }
 
     private void publishError(ZLinkStreamError error) {
-        for (ZLinkStreamErrorHandler handler : List.copyOf(errorHandlers)) {
+        for (ZLinkStreamErrorHandler handler : errorHandlers) {
             dispatchErrorCallback(handler, error, true);
         }
     }
@@ -415,7 +471,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         Throwable failure) {
         LOGGER.log(Level.WARNING, "STREAM connector error callback failed", failure);
         ZLinkStreamError callbackError = userCallbackFailed(failure);
-        for (ZLinkStreamErrorHandler handler : List.copyOf(errorHandlers)) {
+        for (ZLinkStreamErrorHandler handler : errorHandlers) {
             if (handler != failedHandler) {
                 dispatchErrorCallback(handler, callbackError, false);
             }
@@ -442,18 +498,22 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         if (endpoint.getPort() > 0) {
             return endpoint.getPort();
         }
-        throw new IllegalArgumentException("endpoint port is required");
+        throw ZLinkStreamException.configurationError("endpoint port is required");
     }
 
     private static String requirePacketName(String packetName) {
+        //  Pre-send validation, so spec 32 9 makes every rejection here
+        //  ValidationFailed and 9.2 requires it to carry that code.
         if (packetName == null || packetName.isBlank()) {
-            throw new IllegalArgumentException("packetName is required");
+            throw ZLinkStreamException.validationFailed("packetName is required");
         }
         if (packetName.startsWith(RESERVED_PACKET_NAME_PREFIX)) {
-            throw new IllegalArgumentException("packetName uses a reserved zlink prefix");
+            throw ZLinkStreamException.validationFailed(
+                "packetName uses a reserved zlink prefix");
         }
         if (packetName.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
-            throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
+            throw ZLinkStreamException.validationFailed(
+                "packetName must not exceed 255 UTF-8 bytes");
         }
         return packetName;
     }

@@ -145,22 +145,31 @@ final class ConnectorCodecContractTest {
     }
 
     private static ZLinkStreamConnectorOptions options(URI endpoint) {
+        //  `createDefault`에서 시작해 이 테스트가 다르게 쓰는 값만 바꾼다. 위치 인자를
+        //  전부 나열하면 record 구성이 늘 때마다 이 자리가 깨진다.
+        ZLinkStreamConnectorOptions defaults = ZLinkStreamConnectorOptions.createDefault(endpoint);
         return new ZLinkStreamConnectorOptions(
-            endpoint,
-            ZLinkStreamDispatchMode.MANUAL,
+            defaults.endpoint(),
+            defaults.dispatchMode(),
+            Duration.ofSeconds(1),
             Duration.ofSeconds(1),
             1,
             Duration.ofSeconds(1),
-            64 * 1024,
-            true,
-            Duration.ofSeconds(1),
-            Duration.ofSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
-            false,
-            ZLinkStreamCompression.LZ4);
+            defaults.maxSendPayloadSize(),
+            defaults.maxReceivePayloadSize(),
+            defaults.heartbeatEnabled(),
+            defaults.heartbeatInterval(),
+            defaults.heartbeatTimeout(),
+            defaults.reconnectEnabled(),
+            defaults.reconnectInitialDelay(),
+            defaults.reconnectMaxDelay(),
+            defaults.reconnectBackoffFactor(),
+            defaults.skipServerCertificateValidation(),
+            defaults.compression(),
+            defaults.compressionCodec(),
+            defaults.nameResolver(),
+            defaults.typedCodec(),
+            defaults.diagnosticsLevel());
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {

@@ -57,7 +57,11 @@ public record ZLinkStreamConnectorOptions(
             compression = ZLinkStreamCompression.LZ4;
         }
         if (compression == ZLinkStreamCompression.NONE && compressionCodec != null) {
-            throw new IllegalArgumentException("compressionCodec cannot be set when compression is none");
+            //  Common connector spec §6.3 names this as a disagreement
+            //  between two options, so the code is CONFIGURATION_ERROR and
+            //  §9.2 requires it to travel in an exception that carries it.
+            throw ZLinkStreamException.configurationError(
+                "compressionCodec cannot be set when compression is none");
         }
         if (compression == ZLinkStreamCompression.LZ4 && compressionCodec == null) {
             compressionCodec = ZLinkStreamCompressionCodecs.lz4();

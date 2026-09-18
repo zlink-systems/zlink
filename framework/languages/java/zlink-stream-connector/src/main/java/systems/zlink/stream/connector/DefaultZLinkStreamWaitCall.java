@@ -58,7 +58,7 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
         Objects.requireNonNull(payloadType, "payloadType");
         Objects.requireNonNull(predicate, "predicate");
         if (codec == null) {
-            throw new IllegalStateException(
+            throw ZLinkStreamException.configurationError(
                 "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         return where(message -> predicate.test(decodeMessage(message, payloadType)));
@@ -67,9 +67,11 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
     @Override
     public CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> submit() {
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
-            return concrete.awaitMessage(name, predicate)
-                .toCompletableFuture()
-                .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return ZLinkStreamWaitFailure.asValidationFailure(
+                concrete.awaitMessage(name, predicate)
+                    .toCompletableFuture()
+                    .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS),
+                "No '" + name + "' message arrived within " + timeout + ".");
         }
         CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result =
             new CompletableFuture<>();
@@ -90,14 +92,16 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
             return CompletableFuture.completedFuture(null);
         });
         result.whenComplete((ignored, error) -> closeQuietly(subscription[0]));
-        return result.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        return ZLinkStreamWaitFailure.asValidationFailure(
+            result.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS),
+            "No '" + name + "' message arrived within " + timeout + ".");
     }
 
     @Override
     public <TPayload> CompletionStage<ZLinkStreamMessage<TPayload>> submit(Class<TPayload> payloadType) {
         Objects.requireNonNull(payloadType, "payloadType");
         if (codec == null) {
-            throw new IllegalStateException(
+            throw ZLinkStreamException.configurationError(
                 "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> source = submit();
