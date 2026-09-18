@@ -46,7 +46,7 @@ cleanup() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
-  rm -rf "$RUN_DIR"
+  zlink_sample_close_run_dir "$RUN_DIR" "$status" "ShoppingMall"
   return "$status"
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT

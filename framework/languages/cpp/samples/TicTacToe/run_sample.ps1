@@ -177,11 +177,7 @@ function Cleanup([int]$Status) {
     if ($Status -ne 0) {
         Print-Logs
     }
-    if ($env:TICTACTOE_CPP_KEEP_RUN_DIR -eq "1") {
-        Write-Host "runDir=$LogDir"
-    } else {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $LogDir
-    }
+    Close-ZlinkSampleRunDir -RunDir $LogDir -Status $Status -Label "TicTacToe"
     return $Status
 }
 

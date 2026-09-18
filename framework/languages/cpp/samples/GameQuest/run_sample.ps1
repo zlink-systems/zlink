@@ -143,7 +143,7 @@ function Remove-TrackedProcess([System.Diagnostics.Process]$Process) {
     [void]$Processes.Remove($Process)
 }
 
-function Cleanup {
+function Cleanup([int]$Status) {
     foreach ($process in @($Processes)) {
         try {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }
@@ -152,7 +152,7 @@ function Cleanup {
         }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    Close-ZlinkSampleRunDir -RunDir $RunDir -Status $Status -Label "GameQuest"
 }
 
 $Succeeded = $false
@@ -244,7 +244,7 @@ try {
     Wait-ExactLineCount "replacement handler absence" @((Role-Logs "mission-a") + (Role-Logs "mission-b")) "gamequest-owner replacement-handler-invoked player=player-owner-failure" 0
     $Succeeded = $true
 } finally {
-    Cleanup
+    Cleanup $(if ($Succeeded) { 0 } else { 1 })
 }
 
 if (-not $Succeeded) { exit 1 }

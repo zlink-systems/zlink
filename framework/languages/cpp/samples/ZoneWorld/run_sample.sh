@@ -63,11 +63,7 @@ cleanup() {
   for pid in "${PIDS[@]}"; do kill -9 "$pid" >/dev/null 2>&1 || true; done
   for pid in "${PIDS[@]}"; do wait "$pid" >/dev/null 2>&1 || true; done
   [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
-  if [[ "$code" -ne 0 ]]; then
-    echo "ZoneWorld run directory preserved: $RUN_DIR" >&2
-  else
-    rm -rf "$RUN_DIR"
-  fi
+  zlink_sample_close_run_dir "$RUN_DIR" "$code" "ZoneWorld"
   exit "$code"
 }
 trap cleanup EXIT INT TERM

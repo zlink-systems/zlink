@@ -78,6 +78,7 @@ function Cleanup([int]$Status) {
         Remove-ZlinkSampleRedis $RedisContainer
     }
     Print-Logs $Status
+    Close-ZlinkSampleRunDir -RunDir $LogDir -Status $Status -Label "Bingo"
     return $Status
 }
 

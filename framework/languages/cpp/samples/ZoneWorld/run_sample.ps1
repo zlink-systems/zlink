@@ -618,9 +618,5 @@ try {
         }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if ($Status -eq 0 -and $env:ZLINK_CPP_KEEP_RUN_DIR -ne "1") {
-        if (Test-Path -LiteralPath $RunDir) { Remove-Item -Recurse -Force -LiteralPath $RunDir }
-    } else {
-        Write-Host "ZoneWorld runDir=$RunDir"
-    }
+    Close-ZlinkSampleRunDir -RunDir $RunDir -Status $Status -Label "ZoneWorld"
 }
