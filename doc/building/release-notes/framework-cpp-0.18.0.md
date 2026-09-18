@@ -29,6 +29,7 @@ The stream connector public surface changes. Removing the capability differences
 
 ## Fixes
 
+- On Windows, the ZoneWorld `ZW-B8` fault proxy could not find a Python install that is off PATH, or picked the Store alias stub that runs nothing. The runner now checks PATH, the `py` launcher and the standard install roots in turn, and accepts only an interpreter that actually reports Python 3. (#642)
 - Fixed the reservation record carrying application request bytes in the authority payload slot, which blocked remote Actor creation into other languages. (#549)
 - Contract tests read files leaving newline handling to each platform's CRT, so the same assertion behaved differently on a CRLF checkout and an LF checkout. Two of them were negative assertions that passed while checking nothing. Normalization now happens in one place. (#581)
 - Fixed Windows C++ sample executables failing to find the Core `zlink.dll`, which kept them from reaching readiness. The build tree now stages the Core runtime alongside them. The rule for keeping a failed sample's role logs was also unified into one place, so failures now leave evidence behind. (#591)

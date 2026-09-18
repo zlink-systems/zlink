@@ -22,6 +22,7 @@ The stream connector public surface changes.
 
 ## Fixes
 
+- On Windows, the ZoneWorld `ZW-B8` fault proxy could not find a Python install that is off PATH, or picked the Store alias stub that runs nothing. The runner now checks PATH, the `py` launcher and the standard install roots in turn, and accepts only an interpreter that actually reports Python 3. (#642)
 - Fixed a ZoneNode stopped by a crash failing to reclaim its previous zone objects when restarted under the same NodeId, so it never reached ready. (#555)
 - Fixed a cancellation escaping the zone Spot rejoin path after a node restart and aborting the process. (#542)
 - Fixed runtime descriptor mutations not waking the loop, which deferred publication. The four setters now pass through a single choke point. (#516)

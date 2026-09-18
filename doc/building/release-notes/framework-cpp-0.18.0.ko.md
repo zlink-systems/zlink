@@ -29,6 +29,7 @@ Stream connector의 공개 표면이 바뀝니다. 다섯 언어의 기능 차�
 
 ## 수정
 
+- Windows에서 ZoneWorld `ZW-B8`의 fault proxy가 PATH 밖의 Python 설치를 찾지 못하거나 실행되지 않는 Store alias stub을 잡던 것을 고쳤습니다. PATH·`py` 런처·표준 설치 위치를 차례로 살펴 실제로 동작하는 Python 3만 후보로 인정합니다. (#642)
 - 예약 record의 authority payload 자리에 응용 요청 바이트를 넣어 다른 언어로의 원격 Actor 생성이 막히던 것을 고쳤습니다. (#549)
 - 계약 시험이 파일을 읽을 때 줄바꿈을 각 플랫폼의 CRT에 맡겨, CRLF 체크아웃과 LF 체크아웃에서 결과가 달랐습니다. 그중 둘은 음성 단언이라 검사를 멈춘 채 통과하고 있었습니다. 읽는 자리 한 곳에서 정규화하도록 바꿨습니다. (#581)
 - Windows에서 C++ 샘플 실행 파일이 Core `zlink.dll`을 찾지 못해 readiness에 이르지 못하던 것을 고쳤습니다. 빌드 트리에 Core runtime을 함께 배치합니다. 실패한 샘플의 역할 로그를 지우던 규칙도 하나로 모아, 실패 시 증거가 남습니다. (#591)

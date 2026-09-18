@@ -22,6 +22,7 @@ Stream connector의 공개 표면이 바뀝니다.
 
 ## 수정
 
+- Windows에서 ZoneWorld `ZW-B8`의 fault proxy가 PATH 밖의 Python 설치를 찾지 못하거나 실행되지 않는 Store alias stub을 잡던 것을 고쳤습니다. PATH·`py` 런처·표준 설치 위치를 차례로 살펴 실제로 동작하는 Python 3만 후보로 인정합니다. (#642)
 - crash로 멈춘 ZoneNode를 같은 NodeId로 다시 시작할 때 이전 zone object를 되찾지 못해 ready에 이르지 못하던 것을 고쳤습니다. (#555)
 - 노드 재시작 후 zone Spot 재합류 경로에서 취소가 그대로 빠져나와 프로세스가 중단되던 것을 고쳤습니다. (#542)
 - runtime descriptor의 변경이 loop를 깨우지 않아 게시가 미뤄지던 것을 고쳤습니다. 네 setter가 하나의 통로를 지나도록 모았습니다. (#516)
