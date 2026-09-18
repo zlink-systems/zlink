@@ -151,10 +151,16 @@ test('stream connector send and request enforce payload limit before transport w
   });
   await sendInstance.connect();
 
-  await assert.rejects(() => sendInstance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new TextEncoder().encode('bb')
-  }).packetName('h').submit());
+  await assert.rejects(
+    () => sendInstance.send({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: new TextEncoder().encode('bb')
+    }).packetName('h').submit(),
+    // stream-connector 32 §4.7/§9: a send-limit violation fails before the
+    // transport write as ValidationFailed. FrameTooLarge names the receive
+    // bound only and must never appear on the send path.
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
   assert.equal(sendTransportFactory.connection.frames.length, 0);
 
   const requestTransportFactory = new MemoryTransportFactory();
@@ -170,10 +176,29 @@ test('stream connector send and request enforce payload limit before transport w
       codec: connector.ZlinkStreamCodec.Raw,
       payload: new TextEncoder().encode('bb')
     }).packetName('h').timeout(1000).submitEncoded(),
-    (error) => error.error?.code === connector.ZlinkStreamErrorCode.FrameTooLarge
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
   );
   assert.equal(requestTransportFactory.connection.frames.length, 0);
   assert.equal(requestInstance.pendingDispatchCount, 0);
+});
+
+test('stream frame codec reports validationFailed over the send limit and succeeds at the limit', () => {
+  // stream-connector 32 §9: ValidationFailed covers "송신 payload 한도 초과"
+  // (send payload over limit); FrameTooLarge names the receive bound only.
+  // §4.7 line 228 requires this to fail before the transport write.
+  const header = new Uint8Array([0x01]);
+  const maxSendPayloadSize = 4;
+
+  const overLimitPayload = new Uint8Array(maxSendPayloadSize + 1);
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamFrameCodec.encode(header, overLimitPayload, maxSendPayloadSize),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
+
+  const atLimitPayload = new Uint8Array(maxSendPayloadSize);
+  assert.doesNotThrow(
+    () => protocolCodecs.ZlinkStreamFrameCodec.encode(header, atLimitPayload, maxSendPayloadSize)
+  );
 });
 
 test('stream connector default compression uses LZ4 before transport write', async () => {

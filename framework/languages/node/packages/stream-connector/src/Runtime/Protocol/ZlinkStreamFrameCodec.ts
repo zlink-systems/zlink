@@ -52,6 +52,6 @@ export function splitZlinkStreamFrames(chunk: Uint8Array): readonly Uint8Array[]
 
 function validatePayload(payloadLength: number, maxPayloadSize: number): void {
   if (payloadLength > maxPayloadSize) {
-    throw connectorError(ZlinkStreamErrorCode.FrameTooLarge, 'Payload exceeds MaxSendPayloadSize.');
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Payload exceeds MaxSendPayloadSize.');
   }
 }
