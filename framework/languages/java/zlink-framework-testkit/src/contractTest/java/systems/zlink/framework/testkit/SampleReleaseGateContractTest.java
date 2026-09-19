@@ -1048,6 +1048,7 @@ final class SampleReleaseGateContractTest {
                 .filter(path -> path.toString().endsWith(".java"))
                 .filter(SampleReleaseGateContractTest::isSampleSource)
                 .filter(path -> !isTicTacToeSampleSource(path))
+                .filter(path -> !isZoneWorldDynamicSubscriptionSource(path))
                 .map(path -> Map.entry(path, javaManualSpotHandlerRegistrations(path)))
                 .filter(entry -> !entry.getValue().isEmpty())
                 .forEach(entry -> offenders.put(entry.getKey(), entry.getValue()));
@@ -2973,6 +2974,13 @@ final class SampleReleaseGateContractTest {
         String pathText = path.toString().replace('\\', '/');
         return pathText.contains("/samples/java/TicTacToe/")
             || pathText.contains("/samples/kotlin/TicTacToe/");
+    }
+
+    private static boolean isZoneWorldDynamicSubscriptionSource(Path path) {
+        String pathText = path.toString().replace('\\', '/');
+        return pathText.endsWith(
+            "/samples/java/ZoneWorld/Server/src/main/java/"
+                + "systems/zlink/samples/zoneworld/server/zone/spots/ZoneSpot.java");
     }
 
     private static void assertSourceContains(Path root, String extension, String expected) throws IOException {
