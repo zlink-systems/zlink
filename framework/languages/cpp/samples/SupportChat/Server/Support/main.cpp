@@ -554,7 +554,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         if (state.customer_actor_id != excluded_participant_id) {
             co_await send_to_actor (state.customer_actor_id, message, packet_name);
         }
-        if (state.agent_actor_id && *state.agent_actor_id != excluded_participant_id) {
+        if (state.agent_actor_id && !state.agent_actor_id->empty ()
+            && *state.agent_actor_id != excluded_participant_id) {
             co_await send_to_actor (*state.agent_actor_id, message, packet_name);
         }
         co_return;
