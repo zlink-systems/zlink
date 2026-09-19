@@ -100,8 +100,8 @@ for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile && br
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
 Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardError server.log
 Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardError client.log
-foreach ($i in 1..60) { $profile = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
-$profile
+foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
+$answer
 ```
 
 PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의
@@ -165,11 +165,11 @@ echo "tutorial-stream=ok"
 ```
 
 ```powershell title="windows"
-if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw "tutorial-http failed" }
-"tutorial-http=ok"
+if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw 'tutorial-http failed' }
+Write-Output 'tutorial-http=ok'
 & .\build\Release\tutorial_stream_client.exe
-if ($LASTEXITCODE -ne 0) { throw "tutorial-stream failed" }
-"tutorial-stream=ok"
+if ($LASTEXITCODE -ne 0) { throw 'tutorial-stream failed' }
+Write-Output 'tutorial-stream=ok'
 ```
 
 [단계별 확인](#단계별-확인)에 열 단계의 요청과 기대 출력이 전부 있다.

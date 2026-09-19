@@ -133,8 +133,8 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
-if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw "TicTacToe failed: $($lines[-1])" }
-$lines[-1]
+if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
+Write-Output $lines[-1]
 ```
 
 실패한 실행은 역할별 stdout·stderr 로그가 든 run 디렉터리를 남기고 그 경로를
