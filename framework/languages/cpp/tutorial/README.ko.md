@@ -608,7 +608,7 @@ upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
 
-이 출력은 framework 0.19.0(#711 포함) 기준이다. 0.18.2 배포판에서는 6단계가 503으로
+이 출력은 framework 0.18.3 이상(#711 포함) 기준이다. 0.18.2 이전 배포판에서는 6단계가 503으로
 멈춘다. C++ HTTP host는 gzip 및 chunked 응답을 제공하지 않으므로 6단계는 평문 응답을
 확인하고 9단계는 버퍼링된 chunk 하나를 받는다.
 

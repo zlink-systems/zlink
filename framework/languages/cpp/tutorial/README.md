@@ -448,7 +448,7 @@ upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
 
-This output is based on framework 0.19.0 (including #711). The released 0.18.2 build stops at
+This output is based on framework 0.18.3 or later (including #711). Releases before 0.18.3 stop at
 step 6 with a 503 response. The C++ HTTP host does not provide gzip or chunked responses, so step
 6 checks the plain response and step 9 receives one buffered chunk.
 
