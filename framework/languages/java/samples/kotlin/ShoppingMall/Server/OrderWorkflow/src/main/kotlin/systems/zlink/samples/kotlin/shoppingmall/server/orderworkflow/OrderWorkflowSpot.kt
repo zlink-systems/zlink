@@ -23,10 +23,13 @@ class OrderWorkflowSpot(
 
     // --8<-- [start:doc-sm-close-terminal]
     fun closeIfTerminal(state: OrderState): CompletionStage<Void?> =
-        if (state.status == OrderStatuses.Confirmed || state.status == OrderStatuses.Failed) {
+        if (isTerminal(state)) {
             instanceContext.close().thenApply { null }
         } else {
             java.util.concurrent.CompletableFuture.completedFuture(null)
         }
     // --8<-- [end:doc-sm-close-terminal]
+
+    fun isTerminal(state: OrderState): Boolean =
+        state.status == OrderStatuses.Confirmed || state.status == OrderStatuses.Failed
 }

@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
+import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneSpot;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
@@ -35,35 +36,43 @@ public final class BorderSubscriptionHandlers {
     }
 
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
-    public static final class NorthWestToNorthEast {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class NorthWestToNorthEast
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
-    public static final class NorthWestToSouthWest {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class NorthWestToSouthWest
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
-    public static final class NorthEastToNorthWest {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class NorthEastToNorthWest
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
-    public static final class NorthEastToSouthEast {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class NorthEastToSouthEast
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
-    public static final class SouthWestToNorthWest {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class SouthWestToNorthWest
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
-    public static final class SouthWestToSouthEast {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class SouthWestToSouthEast
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
-    public static final class SouthEastToNorthEast {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class SouthEastToNorthEast
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
     @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
-    public static final class SouthEastToSouthWest {
-        public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
+    public static final class SouthEastToSouthWest
+        implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        @Override public CompletionStage<Void> handle(ZoneSpot spot, Messages.ZoneBorderEvent event) { return apply(spot, event); }
     }
 }

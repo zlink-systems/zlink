@@ -21,7 +21,9 @@ class StartOrderWorkflowHandler(
         spot.requireOrder(request.orderId)
         val state = workflow.start(request)
         println("shoppingmall-order started order=${request.orderId} spot=${spot.context().spotId()}")
-        continuations.enqueue(request.orderId)
+        if (!spot.isTerminal(state)) {
+            continuations.enqueue(request.orderId)
+        }
         return spot.closeIfTerminal(state)
             .thenApply { StartOrderWorkflowRes(state) }
         // --8<-- [end:doc-sm-spot-start]

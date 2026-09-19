@@ -45,11 +45,13 @@ public final class OrderWorkflowService {
             saveProjection(request.orderId());
         }
         // --8<-- [start:doc-sm-background-continue]
-        spot.context().outbound().sendToSpot(
-            spot.context().spotId(),
-            new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
-        return CompletableFuture.completedFuture(
-            store.findProjection(request.orderId()));
+        Messages.OrderState state = store.findProjection(request.orderId());
+        if (!spot.isTerminal(state)) {
+            spot.context().outbound().sendToSpot(
+                spot.context().spotId(),
+                new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
+        }
+        return CompletableFuture.completedFuture(state);
         // --8<-- [end:doc-sm-background-continue]
     }
 
