@@ -1,6 +1,6 @@
 # Java Tutorial — Channel Messaging And Spot
 
-Full walkthrough (all 11 stages, Java ↔ .NET surface differences, and the
+Full walkthrough (all 12 stages, Java ↔ .NET surface differences, and the
 `--8<--` snippet markers the guide reads) is in
 [`README.ko.md`](./README.ko.md). This file only covers the six sections the
 release CI job runs verbatim: prerequisites, download and install, build,

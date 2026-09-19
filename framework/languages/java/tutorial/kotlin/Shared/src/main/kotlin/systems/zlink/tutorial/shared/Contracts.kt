@@ -36,6 +36,13 @@ class GetRoomState
 data class RoomState(val title: String, val chat: List<String>)
 // --8<-- [end:spot-contracts]
 
+// --8<-- [start:instance-spot-contracts]
+// A match queue has no create call, so nothing here corresponds to OpenRoom.
+data class JoinMatchQueue(val playerId: String)
+
+data class MatchQueueStatus(val waiting: Int)
+// --8<-- [end:instance-spot-contracts]
+
 // --8<-- [start:actor-contracts]
 // Reaches the player's create callback rather than a handler.
 data class CreatePlayer(val nickname: String)

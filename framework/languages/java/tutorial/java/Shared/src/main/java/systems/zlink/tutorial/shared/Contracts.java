@@ -55,6 +55,15 @@ public final class Contracts {
     }
     // --8<-- [end:spot-contracts]
 
+    // --8<-- [start:instance-spot-contracts]
+    // A match queue has no create call, so nothing here corresponds to OpenRoom.
+    public record JoinMatchQueue(String playerId) {
+    }
+
+    public record MatchQueueStatus(int waiting) {
+    }
+    // --8<-- [end:instance-spot-contracts]
+
     // --8<-- [start:actor-contracts]
     // Reaches the player's create callback rather than a handler.
     public record CreatePlayer(String nickname) {

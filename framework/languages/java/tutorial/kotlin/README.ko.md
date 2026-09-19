@@ -150,7 +150,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 | 프로젝트 | 역할 |
 |---|---|
 | `Shared` | 두 쪽이 함께 쓰는 message 계약 |
-| `Server` | channel handler와 filter를 실행하고 Spot 하나를 호스팅한다. 운영 endpoint 하나만 HTTP로 연다 |
+| `Server` | channel handler와 filter를 실행하고 Spot 둘(방과 큐)을 호스팅한다. 운영 endpoint 하나만 HTTP로 연다 |
 | `Client` | HTTP를 받아 mesh로 호출한다 |
 | `StreamClient` | mesh 밖의 client. framework가 아니라 connector 하나만 의존한다 |
 
@@ -434,7 +434,33 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
   않으므로 기반 타입 `ZLinkActor`를 적고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 그
   타입 인자가 없다.
 
-### 9. Actor — id로 부르는 플레이어
+### 9. Instance Spot — 첫 메시지가 만드는 큐
+
+만드는 호출이 없다. 그 id로 첫 메시지가 도착하면 Framework가 만들고 같은 메시지를 처리한다.
+
+```bash
+curl -X POST http://127.0.0.1:5380/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5380/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+큐는 넣은 것을 계속 들고 있다. 같은 id로 또 호출하면 숫자가 이어진다. 처음부터 다시 보려면
+다른 id를 쓴다.
+
+Kotlin 쪽에서 알아 둘 것은 다음과 같다.
+
+- **Instance Spot의 Kotlin 기반은 `ZLinkSuspendingInstanceSpot`이다.** 방의
+  `ZLinkSuspendingSpot`에 대응하며, actor 타입 인자도 create·join callback도 없다. handler는
+  방과 같은 `ZLinkSuspendingSpotRequestHandler`를 쓰고, 등록도 같은 `addHandler<H>()`다.
+- **부르는 쪽은 `requestToSpot(...)`에 `.instanceSpot("match-queue").inMesh("game")`을 더한다.**
+  아직 없는 큐를 어느 mesh에 어떤 stable type으로 만들지 이 두 호출이 정한다. 방을 부를 때와
+  같이 Java 표면을 `await()`로 기다린다.
+
+### 10. Actor — id로 부르는 플레이어
 
 방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
 다시 만들면 있던 것을 돌려준다.
@@ -465,7 +491,7 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
 - **Actor를 만들고 부르는 쪽은 Java 표면이다.** `ZLinkActorManager`·`ZLinkActorClient`에는
   `kotlin()` wrapper가 없어 `kotlinx.coroutines.future.await`로 기다린다.
 
-### 10. Location — 위치 조회
+### 11. Location — 위치 조회
 
 Spot과 Actor는 id로만 불렀고, 어디에 있는지는 Framework가 찾았다. 그 기록을 직접 읽는
 호출이다.
@@ -484,7 +510,7 @@ HTTP/1.1 404
 조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
 대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
 
-### 11. STREAM과 Session-Actor 연결
+### 12. STREAM과 Session-Actor 연결
 
 외부 client가 TCP로 붙는다. framework가 아니라 connector만 의존한다.
 
@@ -563,7 +589,7 @@ mesh.channelName("profile").server().addHandlerGroup(HandlerGroups.PROFILE)
 
 `boundSession()`에 묶인 연결이 없으면 이 binding은 **동기적으로 예외를 던진다.**
 .NET·C++·Node에서 같은 호출은 아무 일도 하지 않고 끝난다. 그래서 `ChangeNicknameHandler`가
-`runCatching`으로 그 실패를 잡는다 — 잡지 않으면 STREAM 없이 rename만 하는 9단계 호출이
+`runCatching`으로 그 실패를 잡는다 — 잡지 않으면 STREAM 없이 rename만 하는 10단계 호출이
 handler 예외로 끝난다.
 
 ### 64비트 정수는 문자열로 간다
@@ -611,6 +637,10 @@ framework-json codec(`ZLinkFrameworkJsonProfile`)은 `Long`을 십진 JSON 문�
 | `location-store-client` · `spot-client-register` | `Client/.../ClientApplication.kt` |
 | `spot-create-call` · `spot-message-call` | `Client/.../RoomEndpoints.kt` |
 | `spot-send-call` · `spot-request-call` | `Client/.../RoomEndpoints.kt`. `spot-message-call` 안에 나뉘어 있다 |
+| `instance-spot-contracts` | `Shared/.../Contracts.kt` |
+| `instance-spot-class` · `instance-spot-handler` | `Server/.../spots/MatchQueue.kt` |
+| `instance-spot-register` | `Server/.../ServerApplication.kt` |
+| `instance-spot-call` | `Client/.../MatchQueueEndpoints.kt` |
 | `location-find` | `Client/.../LocationEndpoints.kt` |
 | `actor-contracts` | `Shared/.../Contracts.kt` |
 | `actor-class` · `actor-factory` | `Server/.../actors/Player.kt` |

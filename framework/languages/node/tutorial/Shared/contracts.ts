@@ -60,6 +60,17 @@ export interface RoomState {
 }
 // --8<-- [end:spot-contracts]
 
+// --8<-- [start:instance-spot-contracts]
+// A match queue has no create call, so nothing here corresponds to OpenRoom.
+export class JoinMatchQueue {
+  constructor(readonly playerId: string) {}
+}
+
+export interface MatchQueueStatus {
+  readonly waiting: number;
+}
+// --8<-- [end:instance-spot-contracts]
+
 // --8<-- [start:actor-contracts]
 // Reaches the player's create callback rather than a handler.
 export class CreatePlayer {
@@ -133,6 +144,7 @@ export const PacketNames = {
   getNodeStatus: 'GetNodeStatus',
   postChat: 'PostChat',
   getRoomState: 'GetRoomState',
+  joinMatchQueue: 'JoinMatchQueue',
   changeNickname: 'ChangeNickname',
   getPlayer: 'GetPlayer',
   ping: 'Ping',
@@ -150,6 +162,8 @@ export const TutorialNames = {
   serverRoutingId: 'game-server-1',
   // The stable type a caller names when opening a room.
   gameRoomType: 'game-room',
+  // The stable type a caller names when addressing a match queue.
+  matchQueueType: 'match-queue',
   // The stable type a caller names when creating a player.
   playerActorType: 'player',
   // The stream node external clients connect to.
