@@ -695,12 +695,10 @@ jobs:
               kill -TERM -- "-${pgid}" 2>/dev/null || true
             done < .readme-step.pgids
           fi
-          if [ -f redis.container ]; then
-            redis_name="$(cat redis.container)"
-            case "${redis_name}" in
-              zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
-            esac
-          fi
+          # The C++ README run block names its container zlink-tutorial-redis
+          # (README convention shared with the windows block); the runner is
+          # ephemeral, so remove that fixed name here.
+          docker rm -f zlink-tutorial-redis 2>/dev/null || true
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-cpp
