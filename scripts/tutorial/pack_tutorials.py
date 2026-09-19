@@ -39,6 +39,25 @@ LANGUAGES = ("cpp", "dotnet", "java", "node")
 #  묶는 절. 저장소 경로와 zip 이름의 가운데 토막이다.
 SECTIONS = ("tutorial", "samples")
 
+#  저장소 안에서만 의미가 있고 zip 밖에서는 쓰이지 않거나 오히려 방해가 되는 파일.
+#  (section, lang, git ls-tree 기준 subtree 상대 경로) 튜플이며, 항목마다 근거를 남긴다.
+#  #655에서 언어별 worker가 보고한 목록이다 — 새 항목은 여기 추가하고 이유를 적는다.
+EXCLUDED_ENTRIES: tuple[tuple[str, str, str], ...] = (
+    # 저장소 CI가 로컬에서만 돌리는 준비 script. zip 밖에서는 참조할 대상이 없어
+    # 그대로 두면 독자가 실행 가능한 진입점으로 착각한다.
+    ("tutorial", "dotnet", "ci-steps.local.sh"),
+    # 저장소에서 실행해 본 흔적이 남은 로그 파일. 빌드 산출물이 아니라 실수로 커밋된 것.
+    ("tutorial", "dotnet", "run.out"),
+    # 저장소 전용 Python 해석기 탐색 회귀 test. zip 독자는 이 test가 지키는 저장소 배치를
+    # 갖지 않으므로 실행할 수도, 실행해서도 안 된다.
+    ("samples", "cpp", "PythonResolution.Tests.ps1"),
+    ("samples", "dotnet", "PythonResolution.Tests.ps1"),
+    ("samples", "java", "PythonResolution.Tests.ps1"),
+    # 저장소 전용 self-shell 경로 해석 회귀 test. 위와 같은 이유.
+    ("samples", "cpp", "SelfShellResolution.Tests.ps1"),
+    ("samples", "java", "SelfShellResolution.Tests.ps1"),
+)
+
 #  Windows 전용 script는 CRLF여야 한다. `.gitattributes`가 정한 것과 같다.
 CRLF_SUFFIXES = (".bat", ".cmd", ".ps1")
 
@@ -77,6 +96,10 @@ def executable(name: str) -> bool:
     return p.name in EXECUTABLE_NAMES or p.suffix in EXECUTABLE_SUFFIXES
 
 
+def excluded(section: str, lang: str, name: str) -> bool:
+    return (section, lang, name) in EXCLUDED_ENTRIES
+
+
 def pack(lang: str, section: str, ref: str,
          out_dir: pathlib.Path) -> tuple[int, int] | None:
     src = "framework/languages/%s/%s" % (lang, section)
@@ -99,6 +122,8 @@ def pack(lang: str, section: str, ref: str,
             zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as dest:
         for item in source.infolist():
             if item.is_dir():
+                continue
+            if excluded(section, lang, item.filename):
                 continue
             data = normalize(item.filename, source.read(item))
             info = zipfile.ZipInfo(prefix + item.filename, date_time=item.date_time)
