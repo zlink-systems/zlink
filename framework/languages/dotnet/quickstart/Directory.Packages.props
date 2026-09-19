@@ -7,9 +7,9 @@
   <ItemGroup>
     <!-- 계약과 runtime. Zlink(binding)는 여기서 고정하지 않고
          Zlink.Framework의 전이 의존에 맡긴다. -->
-    <PackageVersion Include="Zlink.Framework" Version="0.18.1" />
+    <PackageVersion Include="Zlink.Framework" Version="0.18.2" />
     <!-- DI·hosted service 등록(AddZLinkFramework). -->
-    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.18.1" />
+    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.18.2" />
   </ItemGroup>
 
 </Project>

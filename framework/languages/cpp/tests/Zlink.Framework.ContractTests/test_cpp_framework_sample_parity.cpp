@@ -553,6 +553,23 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
       read_text_file (samples / "ShoppingMall/Server/OrderWorkflow/main.cpp");
     EXPECT_NE (shoppingmall.find (".recreate_on_relocation ()"), std::string::npos);
     EXPECT_NE (shoppingmall.find ("co_await _context.close ()"), std::string::npos);
+
+    const auto zoneworld =
+      read_text_file (samples / "ZoneWorld/Server/ZoneNode/main.cpp");
+    const auto zoneworld_relocation = read_text_file (
+      samples / "ZoneWorld/Server/ZoneNode/player_actor_relocation_adapter.hpp");
+    EXPECT_NE (zoneworld.find (
+                 ".add_handler<&zone_spot_t::update_position> "
+                 "(update_position_msg_t::packet_name)"),
+               std::string::npos);
+    EXPECT_NE (zoneworld.find ("send_to_spot (_context.spot_id ()"),
+               std::string::npos);
+    EXPECT_NE (zoneworld.find ("update_position_msg_t{"), std::string::npos);
+    EXPECT_NE (zoneworld_relocation.find (
+                 "completed_join_operations.contains (operation)"),
+               std::string::npos);
+    EXPECT_NE (zoneworld_relocation.find ("remember_join_operation (operation)"),
+               std::string::npos);
 }
 
 TEST (CppFrameworkSampleParity, DocumentedSampleRolesDoNotBuildProbeProcesses)

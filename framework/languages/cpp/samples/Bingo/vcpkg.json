@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-bingo",
-  "version-string": "0.18.1",
+  "version-string": "0.18.2",
   "dependencies": [
     "zlink",
     "zlink-framework"

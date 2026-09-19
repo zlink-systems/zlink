@@ -102,19 +102,18 @@ jobs:
             throw "Core release prefix was not created: $corePrefix"
           }
 
-          $nativeDlls = @(
-            @(
-              (Join-Path $corePrefix "bin\zlink.dll"),
-              (Join-Path $corePrefix "lib\zlink.dll")
-            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-          )
-          if ($nativeDlls.Count -ne 1) {
-            throw "Expected exactly one zlink.dll in bin or lib under $corePrefix"
+          # zlink.dll needs the OpenSSL and MSVC runtime DLLs the Core archive ships
+          # beside it; the package carries all of bin/*.dll (as the Node prebuild does).
+          $coreBin = Join-Path $corePrefix "bin"
+          if (-not (Test-Path -LiteralPath (Join-Path $coreBin "zlink.dll") -PathType Leaf)) {
+            throw "Core release is missing bin\zlink.dll under $corePrefix"
           }
-
           $nativeRoot = Join-Path $env:RUNNER_TEMP "dotnet-win-x64-native"
           New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
-          Copy-Item -LiteralPath $nativeDlls[0] -Destination (Join-Path $nativeRoot "zlink.dll")
+          Get-ChildItem -LiteralPath $coreBin -Filter *.dll -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $nativeRoot $_.Name)
+            Write-Host "native: $($_.Name) ($($_.Length) bytes)"
+          }
 
       - uses: actions/upload-artifact@v6
         with:
@@ -199,6 +198,8 @@ jobs:
             -p:ZLinkCoreProvenancePath="${{ steps.dotnet-core.outputs.prefix }}/share/zlink/core-package-provenance.json"
           unzip -l "dist/dotnet/Zlink.${{ needs.resolve-dotnet-binding.outputs.version }}.nupkg" \
             | grep -F 'runtimes/win-x64/native/zlink.dll'
+          unzip -l "dist/dotnet/Zlink.${{ needs.resolve-dotnet-binding.outputs.version }}.nupkg" \
+            | grep -F 'runtimes/win-x64/native/libcrypto-3-x64.dll'
 
       - uses: actions/upload-artifact@v6
         with:
