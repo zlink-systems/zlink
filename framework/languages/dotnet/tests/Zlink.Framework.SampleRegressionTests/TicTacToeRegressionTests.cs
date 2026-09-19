@@ -116,15 +116,15 @@ public sealed partial class RegressionTests
         Assert.Contains("string ApiChannelListenEndpoint", settings, StringComparison.Ordinal);
         Assert.Contains("IReadOnlyList<string> ApiChannelPeerEndpoints", settings, StringComparison.Ordinal);
         Assert.Contains(
-            "\"PeerMeshEndpoints\": [\"${PLAY_A_MESH_ENDPOINT}\", \"${PLAY_B_MESH_ENDPOINT}\"]",
+            "\"PeerMeshEndpoints\":[\"${PLAY_A_MESH_ENDPOINT}\",\"${PLAY_B_MESH_ENDPOINT}\"]",
             shellRunner,
             StringComparison.Ordinal);
         Assert.Contains(
-            "play(\"play-a\", \"${PLAY_A_MESH_ENDPOINT}\", [], \"${PLAY_A_ENDPOINT}\", [\"${API_A_CHANNEL_ENDPOINT}\", \"${API_B_CHANNEL_ENDPOINT}\"])",
+            "\"InstanceName\":\"play-a\",\"MeshEndpoint\":\"${PLAY_A_MESH_ENDPOINT}\",\"PeerMeshEndpoints\":[]",
             shellRunner,
             StringComparison.Ordinal);
         Assert.Contains(
-            "play(\"play-b\", \"${PLAY_B_MESH_ENDPOINT}\", [\"${PLAY_A_MESH_ENDPOINT}\"], \"${PLAY_B_ENDPOINT}\", [\"${API_A_CHANNEL_ENDPOINT}\", \"${API_B_CHANNEL_ENDPOINT}\"])",
+            "\"InstanceName\":\"play-b\",\"MeshEndpoint\":\"${PLAY_B_MESH_ENDPOINT}\",\"PeerMeshEndpoints\":[\"${PLAY_A_MESH_ENDPOINT}\"]",
             shellRunner,
             StringComparison.Ordinal);
         Assert.Contains("API_A_CHANNEL_ENDPOINT=\"tcp://127.0.0.1:${PORTS[8]}\"", shellRunner,
@@ -270,7 +270,7 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("${TICTACTOE_LOG_DIR:-", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("rm -f \"${TICTACTOE_LOG_DIR}\"/*.log", shellRunner, StringComparison.Ordinal);
         Assert.Contains("TICTACTOE_REDIS_KEY_PREFIX", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("\"RedisKeyPrefix\": \"${TICTACTOE_REDIS_KEY_PREFIX}\"", shellRunner,
+        Assert.Contains("\"RedisKeyPrefix\":\"${TICTACTOE_REDIS_KEY_PREFIX}\"", shellRunner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("intentionally derived here, not read", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("sleep 2", shellRunner, StringComparison.Ordinal);

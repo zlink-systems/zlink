@@ -109,38 +109,37 @@ REDIS_CONTAINER="zlink-bingo-dotnet-redis-${RUN_ID}"
 zlink_redis_start_scoped_assign REDIS_CONTAINER BINGO_REDIS_ENDPOINT "zlink-bingo-dotnet-redis" redis:7.2-alpine
 wait_port redis "tcp://${BINGO_REDIS_ENDPOINT}"
 
-python3 - "${API_A_CONFIG_FILE}" "${API_B_CONFIG_FILE}" "${PLAY_A_CONFIG_FILE}" "${PLAY_B_CONFIG_FILE}" "${SESSION_A_CONFIG_FILE}" "${SESSION_B_CONFIG_FILE}" "${MATCHMAKING_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
-import json
-import sys
-
-common = {
+write_server_config() {
+  local path="$1" node_name="$2" mesh_endpoint="$3" matchmaking_endpoint="${4:-}" stream_endpoint="${5:-}"
+  cat >"$path" <<EOF
+{
+  "Sample": {
     "LogDirectory": "${BINGO_LOG_DIR}",
     "RedisEndpoint": "${BINGO_REDIS_ENDPOINT}",
     "RedisKeyPrefix": "${BINGO_REDIS_KEY_PREFIX}",
+    "NodeName": "$node_name",
+    "MeshEndpoint": "$mesh_endpoint"$(if [[ -n "$matchmaking_endpoint" ]]; then printf ',\n    "MatchmakingMeshEndpoint": "%s"' "$matchmaking_endpoint"; fi)$(if [[ -n "$stream_endpoint" ]]; then printf ',\n    "StreamEndpoint": "%s"' "$stream_endpoint"; fi)
+  }
 }
-roles = [
-    {**common, "NodeName": "a", "MeshEndpoint": "${BINGO_API_A_MESH_ENDPOINT}",
-     "MatchmakingMeshEndpoint": "${BINGO_API_A_MATCHMAKING_ENDPOINT}"},
-    {**common, "NodeName": "b", "MeshEndpoint": "${BINGO_API_B_MESH_ENDPOINT}",
-     "MatchmakingMeshEndpoint": "${BINGO_API_B_MATCHMAKING_ENDPOINT}"},
-    {**common, "NodeName": "a", "MeshEndpoint": "${BINGO_PLAY_A_MESH_ENDPOINT}"},
-    {**common, "NodeName": "b", "MeshEndpoint": "${BINGO_PLAY_B_MESH_ENDPOINT}"},
-    {**common, "NodeName": "a", "MeshEndpoint": "${BINGO_SESSION_A_MESH_ENDPOINT}",
-     "StreamEndpoint": "${BINGO_SESSION_A_STREAM_ENDPOINT}"},
-    {**common, "NodeName": "b", "MeshEndpoint": "${BINGO_SESSION_B_MESH_ENDPOINT}",
-     "StreamEndpoint": "${BINGO_SESSION_B_STREAM_ENDPOINT}"},
-    {**common, "NodeName": "matchmaking", "MeshEndpoint": "${BINGO_MATCHMAKING_MESH_ENDPOINT}"},
-]
-for path, role in zip(sys.argv[1:-1], roles):
-    with open(path, "w", encoding="utf-8") as output:
-        json.dump({"Sample": role}, output, indent=2)
-with open(sys.argv[-1], "w", encoding="utf-8") as output:
-    json.dump({"Client": {
-        "LogDirectory": "${BINGO_LOG_DIR}",
-        "SessionAStreamEndpoint": "${BINGO_SESSION_A_STREAM_ENDPOINT}",
-        "SessionBStreamEndpoint": "${BINGO_SESSION_B_STREAM_ENDPOINT}",
-    }}, output, indent=2)
-PY
+EOF
+}
+
+write_server_config "$API_A_CONFIG_FILE" a "$BINGO_API_A_MESH_ENDPOINT" "$BINGO_API_A_MATCHMAKING_ENDPOINT"
+write_server_config "$API_B_CONFIG_FILE" b "$BINGO_API_B_MESH_ENDPOINT" "$BINGO_API_B_MATCHMAKING_ENDPOINT"
+write_server_config "$PLAY_A_CONFIG_FILE" a "$BINGO_PLAY_A_MESH_ENDPOINT"
+write_server_config "$PLAY_B_CONFIG_FILE" b "$BINGO_PLAY_B_MESH_ENDPOINT"
+write_server_config "$SESSION_A_CONFIG_FILE" a "$BINGO_SESSION_A_MESH_ENDPOINT" "" "$BINGO_SESSION_A_STREAM_ENDPOINT"
+write_server_config "$SESSION_B_CONFIG_FILE" b "$BINGO_SESSION_B_MESH_ENDPOINT" "" "$BINGO_SESSION_B_STREAM_ENDPOINT"
+write_server_config "$MATCHMAKING_CONFIG_FILE" matchmaking "$BINGO_MATCHMAKING_MESH_ENDPOINT"
+cat >"$CLIENT_CONFIG_FILE" <<EOF
+{
+  "Client": {
+    "LogDirectory": "${BINGO_LOG_DIR}",
+    "SessionAStreamEndpoint": "${BINGO_SESSION_A_STREAM_ENDPOINT}",
+    "SessionBStreamEndpoint": "${BINGO_SESSION_B_STREAM_ENDPOINT}"
+  }
+}
+EOF
 
 start_server() {
   local name="$1"

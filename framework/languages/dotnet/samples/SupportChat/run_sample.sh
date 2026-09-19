@@ -123,40 +123,18 @@ SUPPORT_CONFIG_FILE="${RUN_DIR}/appsettings.support.json"
 API_CONFIG_FILE="${RUN_DIR}/appsettings.api.json"
 SESSION_CONFIG_FILE="${RUN_DIR}/appsettings.session.json"
 CLIENT_CONFIG_FILE="${RUN_DIR}/appsettings.client.json"
-python3 - "${SUPPORT_CONFIG_FILE}" "${API_CONFIG_FILE}" "${SESSION_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
-import json
-import sys
-
-settings = {
-    "LogDirectory": "${SUPPORTCHAT_LOG_DIR}",
-    "RedisEndpoint": "${SUPPORTCHAT_REDIS_ENDPOINT}",
-    "RedisKeyPrefix": "${SUPPORTCHAT_REDIS_KEY_PREFIX}",
-    "StreamEndpoint": "${SUPPORTCHAT_STREAM_ENDPOINT}",
-}
-server_settings = {
-    "LogDirectory": settings["LogDirectory"],
-    "RedisEndpoint": settings["RedisEndpoint"],
-    "RedisKeyPrefix": settings["RedisKeyPrefix"],
-}
-with open(sys.argv[1], "w", encoding="utf-8") as output:
-    json.dump({"Sample": {**server_settings,
-        "MeshEndpoint": "${SUPPORTCHAT_SUPPORT_MESH_ENDPOINT}",
-    }}, output, indent=2)
-with open(sys.argv[2], "w", encoding="utf-8") as output:
-    json.dump({"Sample": {**server_settings,
-        "MeshEndpoint": "${SUPPORTCHAT_API_MESH_ENDPOINT}",
-    }}, output, indent=2)
-with open(sys.argv[3], "w", encoding="utf-8") as output:
-    json.dump({"Sample": {**server_settings,
-        "MeshEndpoint": "${SUPPORTCHAT_SESSION_MESH_ENDPOINT}",
-        "StreamEndpoint": settings["StreamEndpoint"],
-    }}, output, indent=2)
-with open(sys.argv[4], "w", encoding="utf-8") as output:
-    json.dump({"Client": {
-        "LogDirectory": "${SUPPORTCHAT_LOG_DIR}",
-        "StreamEndpoint": "${SUPPORTCHAT_STREAM_ENDPOINT}",
-    }}, output, indent=2)
-PY
+cat >"$SUPPORT_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SUPPORTCHAT_LOG_DIR}","RedisEndpoint":"${SUPPORTCHAT_REDIS_ENDPOINT}","RedisKeyPrefix":"${SUPPORTCHAT_REDIS_KEY_PREFIX}","MeshEndpoint":"${SUPPORTCHAT_SUPPORT_MESH_ENDPOINT}"}}
+EOF
+cat >"$API_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SUPPORTCHAT_LOG_DIR}","RedisEndpoint":"${SUPPORTCHAT_REDIS_ENDPOINT}","RedisKeyPrefix":"${SUPPORTCHAT_REDIS_KEY_PREFIX}","MeshEndpoint":"${SUPPORTCHAT_API_MESH_ENDPOINT}"}}
+EOF
+cat >"$SESSION_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SUPPORTCHAT_LOG_DIR}","RedisEndpoint":"${SUPPORTCHAT_REDIS_ENDPOINT}","RedisKeyPrefix":"${SUPPORTCHAT_REDIS_KEY_PREFIX}","MeshEndpoint":"${SUPPORTCHAT_SESSION_MESH_ENDPOINT}","StreamEndpoint":"${SUPPORTCHAT_STREAM_ENDPOINT}"}}
+EOF
+cat >"$CLIENT_CONFIG_FILE" <<EOF
+{"Client":{"LogDirectory":"${SUPPORTCHAT_LOG_DIR}","StreamEndpoint":"${SUPPORTCHAT_STREAM_ENDPOINT}"}}
+EOF
 
 dotnet build "${SCRIPT_DIR}/SupportChat.csproj" --maxcpucount:1
 

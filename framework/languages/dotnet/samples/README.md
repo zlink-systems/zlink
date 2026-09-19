@@ -6,9 +6,8 @@ processes and executable client scenarios. Their domain flows and
 verification rules follow the
 [common sample scenarios](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md).
 
-This file only needs the .NET SDK, Docker, and (for six of the seven samples)
-Python 3 -- no repository checkout. The Korean canonical version is
-[README.ko.md](README.ko.md).
+This file only needs the .NET SDK and Docker -- no repository checkout. The
+Korean canonical version is [README.ko.md](README.ko.md).
 
 ## Prerequisites
 
@@ -20,14 +19,6 @@ Python 3 -- no repository checkout. The Korean canonical version is
   separately, and no container is left behind after a run finishes.
 - **PowerShell** for the `.ps1` runners: Windows PowerShell 5.1 (built into
   Windows) or PowerShell 7 both work.
-- **Python 3**, on PATH (or discoverable through the `py` launcher on
-  Windows) -- needed only for some samples, on some platforms:
-  - On Linux/WSL, `run_sample.sh` for Bingo, GameQuest, ShoppingMall,
-    SupportChat, TicTacToe, and ZoneWorld needs it to generate role
-    configuration files; DeliveryDispatch does not need Python at all.
-  - On Windows, only ZoneWorld needs Python (`run_sample.ps1`'s ZW-B8
-    fault-injection proxy, part of its default `all` scenario run); the
-    other six `.ps1` runners never invoke Python.
 - ZoneWorld's `-BrowserSmoke`/`--browser-smoke` flag additionally needs
   Node.js and npm, and only works from a full repository checkout (see
   [ZoneWorld](ZoneWorld)); it is off by default and not required for the
@@ -135,10 +126,6 @@ processes and Redis container either way.
   a new random set of ports each time.
 - **`dotnet` reports no compatible SDK** -- install the .NET 8.0 SDK; a newer
   major SDK alone is not enough unless it still carries an `8.0.x` runtime.
-- **Python 3 is required** (Linux/WSL, or ZoneWorld on Windows) -- see
-  Prerequisites above; install Python 3 and make sure `python3` (Linux/WSL)
-  or `python`/`py -3` (Windows) resolves to a real interpreter, not a Windows
-  Store alias stub.
 - A sample container or process left behind after a crashed run -- every
   container this zip creates is named `zlink-<sample>-dotnet-redis-*`; remove
   it with `docker rm -f` if a run was interrupted (Ctrl-C, killed shell)

@@ -6,8 +6,8 @@
 [공용 sample 시나리오](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)를
 따른다.
 
-이 문서는 .NET SDK, Docker, 그리고 (7개 중 6개 샘플에서) Python 3만 있으면 되고
-저장소 checkout이 필요 없다. 영어 대응 문서는 [README.md](README.md)다.
+이 문서는 .NET SDK와 Docker만 있으면 되고 저장소 checkout이 필요 없다. 영어 대응 문서는
+[README.md](README.md)다.
 
 ## 전제 조건
 
@@ -19,14 +19,6 @@
   설치할 필요가 없고, 실행이 끝나면 컨테이너도 남지 않는다.
 - **PowerShell** — `.ps1` 러너는 Windows에 기본 내장된 Windows PowerShell 5.1과
   PowerShell 7 모두에서 동작한다.
-- **Python 3**(PATH에 있거나 Windows에서는 `py` launcher로 찾을 수 있어야 한다) —
-  일부 샘플·플랫폼에서만 필요하다.
-  - Linux·WSL에서는 Bingo·GameQuest·ShoppingMall·SupportChat·TicTacToe·ZoneWorld의
-    `run_sample.sh`가 역할 설정 파일을 만드는 데 Python이 필요하다.
-    DeliveryDispatch는 Python이 전혀 필요 없다.
-  - Windows에서는 ZoneWorld만 Python이 필요하다(`run_sample.ps1`의 ZW-B8 장애
-    주입 proxy이며, 기본 `all` 시나리오 실행에 포함된다). 나머지 6개 `.ps1`
-    러너는 Python을 전혀 부르지 않는다.
 - ZoneWorld의 `-BrowserSmoke`/`--browser-smoke` 플래그는 추가로 Node.js와 npm이
   필요하고 저장소 전체 checkout에서만 동작한다([ZoneWorld](ZoneWorld) 참고).
   기본값이 꺼짐이고 아래 7개 샘플 확인에는 필요 없다.
@@ -126,9 +118,6 @@ Redis 컨테이너를 정리한다.
   닫거나 그냥 다시 실행한다 — 러너는 실행마다 새로 무작위 포트 조합을 고른다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 SDK를 설치한다. 더 최신
   major SDK만으로는 그것이 `8.0.x` 런타임을 함께 담고 있지 않으면 부족하다.
-- **Python 3이 필요하다**(Linux·WSL, 또는 Windows의 ZoneWorld) — 위 전제 조건을
-  보고 Python 3을 설치한다. `python3`(Linux·WSL) 또는 `python`/`py -3`(Windows)이
-  Windows 스토어의 alias stub이 아니라 실제 interpreter로 풀리는지 확인한다.
 - 실행이 중간에 끊겨(Ctrl-C, 셸 강제 종료) 자기 정리가 돌지 못한 컨테이너나
   process가 남았다면 — 이 zip이 만드는 컨테이너는 모두
   `zlink-<샘플>-dotnet-redis-*`로 이름 붙는다. `docker rm -f`로 지운다.

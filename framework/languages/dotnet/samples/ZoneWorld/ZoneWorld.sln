@@ -28,6 +28,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZoneWorld.Server.ZoneNode",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZoneWorld.Shared", "Shared\ZoneWorld.Shared.csproj", "{841C8D93-C1E2-4122-A433-CF0669CF6DD1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SessionRouteBlockProxy", "Support\SessionRouteBlockProxy\SessionRouteBlockProxy.csproj", "{B339D396-B83B-4EAA-9514-4E0A9F07A23B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -58,6 +60,10 @@ Global
 		{841C8D93-C1E2-4122-A433-CF0669CF6DD1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{841C8D93-C1E2-4122-A433-CF0669CF6DD1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{841C8D93-C1E2-4122-A433-CF0669CF6DD1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B339D396-B83B-4EAA-9514-4E0A9F07A23B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B339D396-B83B-4EAA-9514-4E0A9F07A23B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B339D396-B83B-4EAA-9514-4E0A9F07A23B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B339D396-B83B-4EAA-9514-4E0A9F07A23B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{3CD40B65-444C-441B-9B8D-CD04917B9DA8} = {1FA1463B-9F2A-4BFF-A1CE-C87FA9BE56B6}

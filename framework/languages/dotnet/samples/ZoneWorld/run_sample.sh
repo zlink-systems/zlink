@@ -109,64 +109,32 @@ GATEWAY_ENDPOINT="ws://127.0.0.1:${PORTS[6]}"
 OPS_ENDPOINT="ws://127.0.0.1:${PORTS[4]}"
 BROWSER_PREVIEW_PORT="${PORTS[8]}"
 
-python3 - "$CONFIG_DIR" "$REDIS_ENDPOINT" "$RUN_ID" "$LOG_DIR" "$B8_CHILD" "${PORTS[@]}" <<'PY'
-import json
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-redis = sys.argv[2]
-run_id = sys.argv[3]
-log_dir = sys.argv[4]
-b8_child = sys.argv[5] == "1"
-ports = [int(port) for port in sys.argv[6:]]
-shared = {
-    "redisEndpoint": redis,
-    "redisKeyPrefix": f"zoneworld-{run_id}:",
-    "logDirectory": log_dir,
+if [[ "$B8_CHILD" == "1" ]]; then
+  B8_MESH_HOST=127.0.0.2
+  B8_ADVERTISE_HOST='"127.0.0.1"'
+else
+  B8_MESH_HOST=127.0.0.1
+  B8_ADVERTISE_HOST=null
+fi
+write_zone_node_config() {
+  local name="$1" mesh_host="$2" mesh_port="$3" advertise_host="$4" fault_tick_zone="$5" disable_bots="$6" subscriber_only="$7" allow_empty_zone_set="${8:-false}"
+  cat >"$CONFIG_DIR/$name.json" <<EOF
+{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"zoneNode":{"nodeId":"${name%-replacement}","meshEndpoint":"tcp://${mesh_host}:${mesh_port}","meshAdvertiseHost":${advertise_host},"faultTickZone":${fault_tick_zone},"disableBots":${disable_bots},"subscriberOnly":${subscriber_only},"allowEmptyZoneSet":${allow_empty_zone_set}}}
+EOF
 }
 
-def write(name, role, value):
-    (root / f"{name}.json").write_text(json.dumps({"shared": shared, role: value}), encoding="utf-8")
-
-for index in (1, 2, 3):
-    write(f"zone-node-{index}", "zoneNode", {
-        "nodeId": f"zone-node-{index}",
-        "meshEndpoint": f"tcp://{'127.0.0.2' if b8_child and index < 3 else '127.0.0.1'}:{ports[index - 1]}",
-        "meshAdvertiseHost": "127.0.0.1" if b8_child and index < 3 else None,
-        "faultTickZone": "zone-nw" if index in (1, 2) else None,
-        "disableBots": False,
-        "subscriberOnly": index == 3,
-    })
-
-# 다시 띄운 ZoneNode는 zone을 되찾지 않는다(README "ZoneNode를 멈추고 다시 띄우는 시나리오의
-# 고정값", §7.5). Ready owner 장애는 자동 replacement가 아니므로 이전 incarnation이 소유하던
-# zone object는 그대로 남는다. 멈춘 방식이 정상 종료든 급정지든 재기동은 zone 0개로 ready가
-# 되는 replacement 구성 하나만 쓴다. replacement는 같은 NodeId를 유지하되 자기 replacement
-# endpoint로 새 RID를 게시한다 — Framework가 process 실행마다 새 prefix 기반 RID를 준다.
-for index, replacement_port in ((1, ports[9]), (2, ports[3])):
-    write(f"zone-node-{index}-replacement", "zoneNode", {
-        "nodeId": f"zone-node-{index}",
-        "meshEndpoint": f"tcp://127.0.0.1:{replacement_port}",
-        "faultTickZone": None,
-        # A replacement spawns no bots. The bots of a crashed node's zones are Actors its
-        # process owned, and those stay registered to the dead incarnation exactly as the zones
-        # do, so a replacement that tried to spawn them would fail on a dead owner lease.
-        "disableBots": True,
-        "subscriberOnly": False,
-        "allowEmptyZoneSet": True,
-    })
-
-write("ops", "ops", {
-    "streamEndpoint": f"ws://127.0.0.1:{ports[4]}",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[5]}",
-})
-write("gateway", "gateway", {
-    "streamEndpoint": f"ws://127.0.0.1:{ports[6]}",
-    "meshEndpoint": f"tcp://{'127.0.0.2' if b8_child else '127.0.0.1'}:{ports[7]}",
-    "meshAdvertiseHost": "127.0.0.1" if b8_child else None,
-})
-PY
+write_zone_node_config zone-node-1 "$B8_MESH_HOST" "${PORTS[0]}" "$B8_ADVERTISE_HOST" '"zone-nw"' false false
+write_zone_node_config zone-node-2 "$B8_MESH_HOST" "${PORTS[1]}" "$B8_ADVERTISE_HOST" '"zone-nw"' false false
+write_zone_node_config zone-node-3 127.0.0.1 "${PORTS[2]}" null null false true
+# Replacement nodes retain the application node id, but deliberately start with no zones.
+write_zone_node_config zone-node-1-replacement 127.0.0.1 "${PORTS[9]}" null null true false true
+write_zone_node_config zone-node-2-replacement 127.0.0.1 "${PORTS[3]}" null null true false true
+cat >"$CONFIG_DIR/ops.json" <<EOF
+{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"ops":{"streamEndpoint":"ws://127.0.0.1:${PORTS[4]}","meshEndpoint":"tcp://127.0.0.1:${PORTS[5]}"}}
+EOF
+cat >"$CONFIG_DIR/gateway.json" <<EOF
+{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"gateway":{"streamEndpoint":"ws://127.0.0.1:${PORTS[6]}","meshEndpoint":"tcp://${B8_MESH_HOST}:${PORTS[7]}","meshAdvertiseHost":${B8_ADVERTISE_HOST}}}
+EOF
 
 declare -A NODE_PID
 
@@ -273,23 +241,11 @@ start_zone_node() {
 
 client_config() {
   local scenarios="$1" path="$CONFIG_DIR/client.json"
-  python3 - "$CONFIG_DIR/ops.json" "$path" "$scenarios" "$GATEWAY_ENDPOINT" "$OPS_ENDPOINT" \
-    "$TRACE_STREAM" "$RUN_DIR/b8-block-command-44" <<'PY'
-import json
-import pathlib
-import sys
-
-source = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-source.pop("ops")
-source["client"] = {
-    "gatewayEndpoint": sys.argv[4],
-    "opsEndpoint": sys.argv[5],
-    "scenarios": sys.argv[3],
-    "streamTrace": sys.argv[6] == "1",
-    "faultArmFile": sys.argv[7],
-}
-pathlib.Path(sys.argv[2]).write_text(json.dumps(source), encoding="utf-8")
-PY
+  local stream_trace=false
+  [[ "$TRACE_STREAM" == "1" ]] && stream_trace=true
+  cat >"$path" <<EOF
+{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"client":{"gatewayEndpoint":"${GATEWAY_ENDPOINT}","opsEndpoint":"${OPS_ENDPOINT}","scenarios":"${scenarios}","streamTrace":${stream_trace},"faultArmFile":"${RUN_DIR}/b8-block-command-44"}}
+EOF
   printf '%s\n' "$path"
 }
 
@@ -453,11 +409,13 @@ echo "==> zone nodes"
 # ZW-G2 starts the second application identity first. Each process receives an independent
 # prefix-based RID, while the application NodeId remains unchanged.
 if [[ "$B8_CHILD" == "1" ]]; then
+  dotnet build "$ROOT_DIR/Support/SessionRouteBlockProxy/SessionRouteBlockProxy.csproj" --maxcpucount:1 -v q --nologo >/dev/null
+  PROXY_BIN="$ROOT_DIR/Support/SessionRouteBlockProxy/bin/Debug/net8.0/SessionRouteBlockProxy"
   for proxy_name in zone-node-1 zone-node-2; do
     proxy_index="${proxy_name##*-}"
     proxy_port="${PORTS[$((proxy_index - 1))]}"
     start "session-route-proxy-$proxy_name" \
-      python3 "$ROOT_DIR/Support/session_route_block_proxy.py" \
+      "$PROXY_BIN" \
       --listen-host 127.0.0.1 --listen-port "$proxy_port" \
       --target-host 127.0.0.2 --target-port "$proxy_port" \
       --arm-file "$RUN_DIR/b8-block-command-44"
@@ -536,7 +494,7 @@ wait_for_log zone-node-3 "topology=ready"
 echo "==> gateway"
 if [[ "$B8_CHILD" == "1" ]]; then
   start session-route-proxy-gateway \
-    python3 "$ROOT_DIR/Support/session_route_block_proxy.py" \
+    "$PROXY_BIN" \
     --listen-host 127.0.0.1 --listen-port "${PORTS[7]}" \
     --target-host 127.0.0.2 --target-port "${PORTS[7]}" \
     --arm-file "$RUN_DIR/b8-block-command-44"
@@ -653,27 +611,12 @@ if [[ "$BROWSER_SMOKE" == "1" ]]; then
   browser_marker="$RUN_DIR/browser-lifecycle-armed"
   browser_config="$RUN_DIR/playwright.live.config.mjs"
   (cd "$browser_client" && npm exec vite build -- --outDir "$browser_dist")
-  python3 - "$browser_dist/config.json" "$GATEWAY_ENDPOINT" "$OPS_ENDPOINT" \
-    "$browser_config" "$browser_client/tests/live" "$BROWSER_PREVIEW_PORT" "$browser_marker" <<'PY'
-import json
-import pathlib
-import sys
-
-config_path, gateway, ops, playwright_path, test_dir, port, marker = sys.argv[1:]
-pathlib.Path(config_path).write_text(
-    json.dumps({"gateway": gateway, "ops": ops}), encoding="utf-8")
-pathlib.Path(playwright_path).write_text(
-    "export default " + json.dumps({
-        "testDir": test_dir,
-        "timeout": 45_000,
-        "workers": 1,
-        "use": {"baseURL": f"http://127.0.0.1:{port}", "headless": True},
-        "metadata": {
-            "lifecycleMarker": marker,
-            "lifecycleNodeId": "zone-node-2",
-        },
-    }), encoding="utf-8")
-PY
+  cat >"$browser_dist/config.json" <<EOF
+{"gateway":"${GATEWAY_ENDPOINT}","ops":"${OPS_ENDPOINT}"}
+EOF
+  cat >"$browser_config" <<EOF
+export default {testDir: "${browser_client}/tests/live", timeout: 45000, workers: 1, use: {baseURL: "http://127.0.0.1:${BROWSER_PREVIEW_PORT}", headless: true}, metadata: {lifecycleMarker: "${browser_marker}", lifecycleNodeId: "zone-node-2"}};
+EOF
   (cd "$browser_client" && npm exec vite preview -- \
     --host 127.0.0.1 --port "$BROWSER_PREVIEW_PORT" --outDir "$browser_dist" \
     >"$LOG_DIR/browser-preview.stdout.log" 2>"$LOG_DIR/browser-preview.stderr.log") &

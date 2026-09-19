@@ -467,7 +467,8 @@ try {
     $ZoneNodeProject = Join-Path $ScriptDir "Server/ZoneNode/ZoneWorld.Server.ZoneNode.csproj"
     $GatewayProject = Join-Path $ScriptDir "Server/Gateway/ZoneWorld.Server.Gateway.csproj"
     $ClientProject = Join-Path $ScriptDir "Client/ZoneWorld.Client.csproj"
-    foreach ($project in @($OpsProject, $ZoneNodeProject, $GatewayProject, $ClientProject)) {
+    $ProxyProject = Join-Path $ScriptDir "Support/SessionRouteBlockProxy/SessionRouteBlockProxy.csproj"
+    foreach ($project in @($OpsProject, $ZoneNodeProject, $GatewayProject, $ClientProject, $ProxyProject)) {
         Invoke-SampleDotnetBuild $project
     }
 
@@ -532,19 +533,17 @@ try {
     Wait-ZoneWorldLog "ops" "Application started."
 
     if ($B8Child) {
-        $python = Get-ZlinkSamplePythonCommand
         foreach ($proxy in @(
             @{ Name = "session-route-proxy-zone-node-1"; Port = $ports[0] },
             @{ Name = "session-route-proxy-zone-node-2"; Port = $ports[1] },
             @{ Name = "session-route-proxy-gateway"; Port = $ports[7] }
         )) {
-            $arguments = @($python.Arguments) + @(
-                (Join-Path $ScriptDir "Support/session_route_block_proxy.py"),
+            $arguments = @(
                 "--listen-host", "127.0.0.1", "--listen-port", "$($proxy.Port)",
                 "--target-host", "127.0.0.2", "--target-port", "$($proxy.Port)",
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44")
             )
-            Start-SampleProcess $proxy.Name $python.Path $LogDir -Arguments $arguments | Out-Null
+            Start-SampleDotnetAssembly -Name $proxy.Name -Project $ProxyProject -LogDirectory $LogDir -Arguments $arguments | Out-Null
             Wait-ZoneWorldLog $proxy.Name "proxy-ready"
         }
     }
