@@ -2,12 +2,12 @@
 
 import { Readable } from 'node:stream';
 import { request, type Dispatcher } from 'undici';
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { BodyChunkProvider, DownloadSink, ZLinkHttpMethod } from '../types';
 import type { HttpClientOptions } from './options';
 import { CookieJar } from './cookie-jar';
 import { isRedirectStatus, makeTarget, resolveLocation, rewriteForRedirect } from './redirect-policy';
 import { ResponseBodyReader } from './response-body-reader';
+import { redirectLimitExceeded } from './http-client-errors';
 import { httpClientUserAgent } from './version';
 
 export interface HttpRequestSpec {
@@ -80,7 +80,7 @@ export class RequestPerformer {
       if (this.options.followRedirects > 0 && isRedirectStatus(status) && location !== undefined && location.length > 0) {
         if (redirectsLeft === 0) {
           await drain(response.body);
-          throw requestError('HTTP request exceeded the redirect limit');
+          throw redirectLimitExceeded();
         }
         redirectsLeft--;
         ({ method, body } = rewriteForRedirect(status, method, body));
@@ -199,8 +199,4 @@ async function drain(stream: Readable): Promise<void> {
   for await (const _chunk of stream) {
     // discard
   }
-}
-
-function requestError(message: string): ZLinkFrameworkException {
-  return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, message);
 }

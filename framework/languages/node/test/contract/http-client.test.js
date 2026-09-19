@@ -563,8 +563,31 @@ test('redirect limit exceeded throws', async () => {
   try {
     await assert.rejects(
       () => client.get('/loop').submitRaw(),
-      (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Unavailable,
+      (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.ProtocolError,
     );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('redirect location format errors are ProtocolError and are not retried', async () => {
+  let requests = 0;
+  const server = await startServer((req, res) => {
+    requests += 1;
+    res.statusCode = 302;
+    res.setHeader('location', req.url === '/malformed' ? 'http://[' : 'relative-target');
+    res.end();
+  });
+  const client = ZLinkHttpClient.create(server.baseUrl).followRedirects(2).retry(3).build();
+  try {
+    for (const target of ['/malformed', '/unsupported']) {
+      await assert.rejects(
+        () => client.get(target).submitRaw(),
+        (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.ProtocolError,
+      );
+    }
+    assert.equal(requests, 2);
   } finally {
     await client.close();
     await server.close();
@@ -740,7 +763,41 @@ test('max response body size is enforced', async () => {
   try {
     await assert.rejects(
       () => client.get('/big').submitRaw(),
-      (e) => e instanceof ZLinkFrameworkException,
+      (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Rejected,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('streaming download max response body size is rejected', async () => {
+  const server = await startServer((req, res) => {
+    res.setHeader('content-type', 'text/plain');
+    res.end('x'.repeat(4096));
+  });
+  const client = ZLinkHttpClient.create(server.baseUrl).maxResponseBodySize(1024).build();
+  try {
+    await assert.rejects(
+      () => client.get('/big').download(() => {}),
+      (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Rejected,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('compressed decoded response body size is rejected', async () => {
+  const server = await startServer((req, res) => {
+    res.setHeader('content-encoding', 'gzip');
+    res.end(zlib.gzipSync('x'.repeat(4096)));
+  });
+  const client = ZLinkHttpClient.create(server.baseUrl).maxResponseBodySize(1024).compression().build();
+  try {
+    await assert.rejects(
+      () => client.get('/big').submitRaw(),
+      (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Rejected,
     );
   } finally {
     await client.close();
@@ -769,12 +826,14 @@ test('non-blocking concurrency does not serialize requests', async () => {
 });
 
 test('validation rejects invalid configuration', () => {
-  assert.throws(() => ZLinkHttpClient.create().build());
-  assert.throws(() => ZLinkHttpClient.create('ftp://x').build());
-  assert.throws(() => ZLinkHttpClient.create('http://h').timeout(0));
-  assert.throws(() => ZLinkHttpClient.create('http://h').proxy('https://p').build());
-  assert.throws(() => ZLinkHttpClient.create('http://h').followRedirects(0));
-  assert.throws(() => ZLinkHttpClient.create('http://h').retry(0));
+  const isProtocolError = (e) =>
+    e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.ProtocolError;
+  assert.throws(() => ZLinkHttpClient.create().build(), isProtocolError);
+  assert.throws(() => ZLinkHttpClient.create('ftp://x').build(), isProtocolError);
+  assert.throws(() => ZLinkHttpClient.create('http://h').timeout(0), isProtocolError);
+  assert.throws(() => ZLinkHttpClient.create('http://h').proxy('https://p').build(), isProtocolError);
+  assert.throws(() => ZLinkHttpClient.create('http://h').followRedirects(0), isProtocolError);
+  assert.throws(() => ZLinkHttpClient.create('http://h').retry(0), isProtocolError);
 });
 
 test('validation rejects bad request configuration', async () => {
