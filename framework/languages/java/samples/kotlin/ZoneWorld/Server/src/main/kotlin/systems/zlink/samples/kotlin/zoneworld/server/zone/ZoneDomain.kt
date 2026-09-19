@@ -47,6 +47,7 @@ import systems.zlink.samples.kotlin.zoneworld.server.configuration.SampleTopolog
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldNames
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
+import systems.zlink.samples.kotlin.zoneworld.dynamic.BorderSubscriptionHandlers
 class PlayerActor(
     val actorId: String,
     private val actorContext: ZLinkActorContext,
@@ -583,7 +584,6 @@ class ProbeHandlers {
 }
 
 // --8<-- [start:doc-zw-border-subscribe]
-@ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 class BorderSubscriptionHandlers {
     companion object {
         fun forRoute(fromZoneId: String, toZoneId: String): Class<*> = when (
@@ -606,35 +606,27 @@ class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
     class NorthWestToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
     class NorthWestToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
     class NorthEastToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
     class NorthEastToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
     class SouthWestToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
     class SouthWestToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
     class SouthEastToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
     class SouthEastToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }

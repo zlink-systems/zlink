@@ -18,7 +18,7 @@ import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
-import systems.zlink.samples.zoneworld.server.zone.handlers.BorderSubscriptionHandlers;
+import systems.zlink.samples.zoneworld.dynamic.BorderSubscriptionHandlers;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;

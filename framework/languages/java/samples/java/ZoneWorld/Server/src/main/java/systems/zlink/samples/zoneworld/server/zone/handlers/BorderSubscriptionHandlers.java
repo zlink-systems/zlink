@@ -1,14 +1,12 @@
-package systems.zlink.samples.zoneworld.server.zone.handlers;
+package systems.zlink.samples.zoneworld.dynamic;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneSpot;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
-@ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 public final class BorderSubscriptionHandlers {
     private BorderSubscriptionHandlers() {
     }
