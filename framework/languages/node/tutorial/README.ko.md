@@ -73,21 +73,17 @@ docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis
 sleep 1
 npm run server > server.log 2>&1 &
 echo $! > server.pid
-sleep 3
 npm run client > client.log 2>&1 &
 echo $! > client.pid
-sleep 3
 ```
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
 Start-Sleep -Seconds 1
 $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-$serverProc.Id | Out-File server.pid
-Start-Sleep -Seconds 3
+Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
-$clientProc.Id | Out-File client.pid
-Start-Sleep -Seconds 3
+Set-Content -Path client.pid -Value $clientProc.Id
 ```
 
 전체 기능은 아래 "단계"에서 하나씩 확인한다.
@@ -105,22 +101,45 @@ server admin listening on http://127.0.0.1:5481
 client listening on http://127.0.0.1:5480
 ```
 
-확인 호출을 넣고, 끝나면 두 프로세스와 Redis container를 정리한다.
+기동에는 최대 45초까지 걸릴 수 있다(`/mnt/d` 같은 WSL 9p mount 위라면 특히 — 아래
+「문제 해결」 참고). 그래서 확인 호출을 고정된 대기 대신 최대 60초 재시도 loop로
+넣는다. 성공 여부와 무관하게 항상 두 프로세스와 Redis container를 정리하고, 확인이
+끝내 실패했을 때만 0이 아닌 상태로 끝낸다.
 
 ```bash title="linux"
-curl -sf http://127.0.0.1:5480/players/p1/profile
+ready=""
+for _ in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:5480/players/p1/profile > response.json 2>/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[ -n "$ready" ] && cat response.json
 kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
 docker rm -f zlink-tutorial-node-redis
+[ -n "$ready" ]
 ```
 
 ```powershell title="windows"
-Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile
-Stop-Process -Id (Get-Content client.pid) -Force -ErrorAction SilentlyContinue
-Stop-Process -Id (Get-Content server.pid) -Force -ErrorAction SilentlyContinue
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        $response = Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile -ErrorAction Stop
+        $ready = $true
+        break
+    } catch {
+        Start-Sleep -Seconds 1
+    }
+}
+if ($ready) { $response | ConvertTo-Json -Compress }
+taskkill /F /T /PID $(Get-Content client.pid) 2>$null
+taskkill /F /T /PID $(Get-Content server.pid) 2>$null
 docker rm -f zlink-tutorial-node-redis
+if (-not $ready) { exit 1 }
 ```
 
-호출은 아래 값을 돌려준다.
+성공하면 아래 값을 돌려준다.
 
 ```json
 {"playerId":"p1","nickname":"rookie","level":1}

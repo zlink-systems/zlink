@@ -42,7 +42,7 @@ if ($repositoryMode) {
 } else {
     #  Standalone samples package: there is no repository framework build to run first: each
     #  sample resolves @zlink-systems/* from the registry at its pinned version once
-    #  `npm install` has run (see samples/README.en.md).
+    #  `npm install` has run (see samples/README.md).
     Write-Output "Standalone samples package: skipping the repository framework build."
 }
 

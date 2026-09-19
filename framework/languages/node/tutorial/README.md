@@ -74,21 +74,17 @@ docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis
 sleep 1
 npm run server > server.log 2>&1 &
 echo $! > server.pid
-sleep 3
 npm run client > client.log 2>&1 &
 echo $! > client.pid
-sleep 3
 ```
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
 Start-Sleep -Seconds 1
 $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-$serverProc.Id | Out-File server.pid
-Start-Sleep -Seconds 3
+Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
-$clientProc.Id | Out-File client.pid
-Start-Sleep -Seconds 3
+Set-Content -Path client.pid -Value $clientProc.Id
 ```
 
 The full feature set is confirmed one step at a time below, under "Steps".
@@ -106,22 +102,45 @@ server admin listening on http://127.0.0.1:5481
 client listening on http://127.0.0.1:5480
 ```
 
-Send a confirming call, then stop both processes and remove the Redis container.
+Startup can take up to 45 seconds (especially on a WSL 9p mount like `/mnt/d` — see
+"Troubleshooting" below), so the confirming call retries for up to 60 seconds instead of a
+fixed wait. It always cleans up both processes and the Redis container regardless of outcome,
+and only exits non-zero when the check never succeeded.
 
 ```bash title="linux"
-curl -sf http://127.0.0.1:5480/players/p1/profile
+ready=""
+for _ in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:5480/players/p1/profile > response.json 2>/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[ -n "$ready" ] && cat response.json
 kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
 docker rm -f zlink-tutorial-node-redis
+[ -n "$ready" ]
 ```
 
 ```powershell title="windows"
-Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile
-Stop-Process -Id (Get-Content client.pid) -Force -ErrorAction SilentlyContinue
-Stop-Process -Id (Get-Content server.pid) -Force -ErrorAction SilentlyContinue
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        $response = Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile -ErrorAction Stop
+        $ready = $true
+        break
+    } catch {
+        Start-Sleep -Seconds 1
+    }
+}
+if ($ready) { $response | ConvertTo-Json -Compress }
+taskkill /F /T /PID $(Get-Content client.pid) 2>$null
+taskkill /F /T /PID $(Get-Content server.pid) 2>$null
 docker rm -f zlink-tutorial-node-redis
+if (-not $ready) { exit 1 }
 ```
 
-The call returns:
+On success it returns:
 
 ```json
 {"playerId":"p1","nickname":"rookie","level":1}
