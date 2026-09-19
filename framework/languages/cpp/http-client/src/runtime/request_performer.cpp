@@ -74,9 +74,7 @@ finish_response (raw_http_response_t response,
                  std::chrono::milliseconds timeout)
 {
     if (std::chrono::steady_clock::now () - started_at > timeout) {
-        return zlink::framework::detail::boundary_failure<raw_http_response_t> (
-          zlink::framework::detail::boundary_error_t::timed_out,
-          "HTTP request exceeded timeout");
+        return request_timeout_error ("HTTP request exceeded timeout");
     }
     return zlink::framework::result_t<raw_http_response_t>::success (std::move (response));
 }
@@ -122,7 +120,7 @@ class request_performer_t
             if (_options.follow_redirects > 0 && is_redirect_status (status)
                 && !location.empty ()) {
                 if (redirects_left == 0) {
-                    throw request_error ("HTTP request exceeded the redirect limit");
+                    throw request_protocol_error ("HTTP request exceeded the redirect limit");
                 }
                 --redirects_left;
                 if (status == 303
@@ -258,7 +256,7 @@ class request_performer_t
                 }
             }
         }
-        throw request_error ("HTTP connection retry exhausted");
+        throw request_unavailable_error ("HTTP connection retry exhausted");
     }
 
     exchange_outcome_t run_exchange (pooled_connection_t &connection,
@@ -280,7 +278,7 @@ class request_performer_t
                                     body, body_provider);
         }
 #endif
-        throw request_error ("HTTP connection is not open");
+        throw request_internal_failure_error ("HTTP connection is not open");
     }
 
     template <typename TStream>
@@ -416,17 +414,11 @@ zlink::framework::result_t<raw_http_response_t> perform_once (const http_client_
     catch (const boost::system::system_error &ex) {
         if (ex.code () == boost::beast::error::timeout
             || ex.code () == boost::asio::error::timed_out) {
-            return zlink::framework::detail::boundary_failure<raw_http_response_t> (
-              zlink::framework::detail::boundary_error_t::timed_out, ex.what ());
+            return request_timeout_error (ex.what ());
         }
         if (ex.code () == boost::beast::http::error::body_limit) {
-            return zlink::framework::result_t<raw_http_response_t>::failure (
-              zlink::framework::framework_error_kind_t::rejected,
-              ex.what ());
-        }
-        const std::string_view category (ex.code ().category ().name ());
-        if (category.find ("ssl") != std::string_view::npos) {
-            return map_unexpected_exception (ex);
+            return zlink::framework::detail::result_access_t::failure<raw_http_response_t> (
+              response_body_limit_error (ex.what ()));
         }
         return map_transport_exception (ex);
     }

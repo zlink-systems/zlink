@@ -40,8 +40,8 @@ void open_proxy_tunnel (const http_client_options_t &options,
     parser.skip (true);
     http::read (stream, buffer, parser);
     if (parser.get ().result () != http::status::ok) {
-        throw request_error ("HTTP proxy CONNECT failed with status "
-                             + std::to_string (parser.get ().result_int ()));
+        throw request_unavailable_error ("HTTP proxy CONNECT failed with status "
+                                         + std::to_string (parser.get ().result_int ()));
     }
 }
 
@@ -97,9 +97,7 @@ open_connection (const http_client_options_t &options,
     stream.handshake (asio::ssl::stream_base::client);
     return connection;
 #else
-    throw zlink::framework::framework_exception_t (
-      zlink::framework::framework_error_kind_t::protocol_error,
-      "HTTPS support requires OpenSSL");
+    throw request_protocol_error ("HTTPS support requires OpenSSL");
 #endif
 }
 

@@ -13,8 +13,7 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.httpclient.internal.HttpClientErrors;
 import systems.zlink.httpclient.internal.HttpClientText;
 import systems.zlink.httpclient.internal.HttpRequestSpec;
 
@@ -57,7 +56,7 @@ public final class ZLinkHttpRequestBuilder {
 
     private static void validatePath(String path) {
         if (path.isEmpty() || path.charAt(0) != '/') {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP request path must start with /");
+            throw HttpClientErrors.protocol("HTTP request path must start with /");
         }
     }
 
@@ -83,7 +82,7 @@ public final class ZLinkHttpRequestBuilder {
         try {
             this.body = MAPPER.writeValueAsString(value);
         } catch (Exception cause) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP request body could not be serialized", cause);
+            throw HttpClientErrors.protocol("HTTP request body could not be serialized", cause);
         }
         headers.putIfAbsent("content-type", "application/json");
         return this;
@@ -92,7 +91,7 @@ public final class ZLinkHttpRequestBuilder {
     /** Sets a raw body with an explicit content type. */
     public ZLinkHttpRequestBuilder body(String content, String contentType) {
         if (content == null) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP request raw body content is required");
+            throw HttpClientErrors.protocol("HTTP request raw body content is required");
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.body = content;
@@ -106,7 +105,7 @@ public final class ZLinkHttpRequestBuilder {
      */
     public ZLinkHttpRequestBuilder bodyStream(Supplier<byte[]> provider, String contentType) {
         if (provider == null) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP request body stream provider is required");
+            throw HttpClientErrors.protocol("HTTP request body stream provider is required");
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.bodyProvider = provider;
@@ -145,7 +144,7 @@ public final class ZLinkHttpRequestBuilder {
      */
     public CompletionStage<RawHttpResponse> download(Consumer<byte[]> sink) {
         if (sink == null) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP request download sink is required");
+            throw HttpClientErrors.protocol("HTTP request download sink is required");
         }
         return execute(sink);
     }
@@ -184,7 +183,7 @@ public final class ZLinkHttpRequestBuilder {
         Class<T> type) {
         return operation.thenApply(raw -> {
             if (raw.status() >= 400) {
-                throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "HTTP request failed with status " + raw.status());
+                throw HttpClientErrors.internalFailure("HTTP request failed with status " + raw.status());
             }
             if (raw.body().isEmpty()) {
                 return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
@@ -193,7 +192,7 @@ public final class ZLinkHttpRequestBuilder {
                 T body = MAPPER.readValue(raw.body(), type);
                 return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
             } catch (Exception cause) {
-                throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP response body decode failed", cause);
+                throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
             }
         });
     }
@@ -240,9 +239,7 @@ public final class ZLinkHttpRequestBuilder {
 
         synchronized ZLinkHttpClient acquire() {
             if (owned && acquired) {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "A one-shot HTTP request can only be submitted once");
+                throw HttpClientErrors.protocol("A one-shot HTTP request can only be submitted once");
             }
             acquired = true;
             if (client == null) {

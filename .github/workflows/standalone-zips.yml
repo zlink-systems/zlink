@@ -232,6 +232,14 @@ jobs:
         working-directory: zlink-tutorial-dotnet
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-dotnet
+        run: |
+          for f in server.log server.err.log client.log client.err.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
+
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-dotnet
@@ -447,6 +455,14 @@ jobs:
         working-directory: zlink-tutorial-node
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-node
+        run: |
+          for f in server.log server.err.log client.log client.err.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
+
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-node
@@ -530,6 +546,14 @@ jobs:
       - name: Tutorial verify (README's own 검증/linux block)
         working-directory: zlink-tutorial-java
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-java
+        run: |
+          for f in server.log server.err.log client.log client.err.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
 
       - name: Stop tutorial processes and Redis
         if: always()
@@ -745,6 +769,14 @@ jobs:
       - name: Tutorial verify (README's own 검증/linux block)
         working-directory: zlink-tutorial-cpp
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-cpp
+        run: |
+          for f in server.log server.err.log client.log client.err.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
 
       - name: Stop tutorial processes and Redis
         if: always()

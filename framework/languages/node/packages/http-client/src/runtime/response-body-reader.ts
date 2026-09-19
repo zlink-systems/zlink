@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 import type { Readable } from 'node:stream';
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { DownloadSink } from '../types';
 import type { HttpClientOptions } from './options';
 import { gunzip, inflateDeflate } from './compression';
+import { responseBodySizeExceeded } from './http-client-errors';
 
 /**
  * Reads and decodes undici response bodies for the wrapper: buffered read with the configured size
@@ -20,7 +20,7 @@ export class ResponseBodyReader {
       const buffer = chunk as Buffer;
       total += buffer.length;
       if (total > this.options.maxResponseBodySize) {
-        throw exceededBodySize();
+        throw responseBodySizeExceeded();
       }
       sink(new Uint8Array(buffer));
     }
@@ -33,7 +33,7 @@ export class ResponseBodyReader {
       const buffer = chunk as Buffer;
       total += buffer.length;
       if (total > this.options.maxResponseBodySize) {
-        throw exceededBodySize();
+        throw responseBodySizeExceeded();
       }
       chunks.push(buffer);
     }
@@ -90,11 +90,4 @@ function stripEncodingHeaders(headers: Record<string, string>): Record<string, s
     }
   }
   return copy;
-}
-
-function exceededBodySize(): ZLinkFrameworkException {
-  return new ZLinkFrameworkException(
-    ZLinkFrameworkErrorKind.Unavailable,
-    'HTTP response exceeded the maximum body size',
-  );
 }
