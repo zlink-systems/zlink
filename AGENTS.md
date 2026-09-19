@@ -181,6 +181,11 @@ sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 �
 - 수정 중에는 관련 test만 실행한다. 전체 test, E2E, sample과 benchmark는 사용자 요청 또는
   최종 검증 필요성이 있을 때 한 번 실행한다.
 - 첫 실제 실패에서 원인을 분리한다. unrelated failure를 임의로 고치거나 expectation을 낮추지 않는다.
+- **CI는 마지막에 한 번이다.** 로컬에서 확인할 수 있는 것(빌드, unit·contract test, 스크립트 검사,
+  workflow 문법, README 절차 실행)은 전부 로컬에서 끝내고, CI에는 로컬로 대체할 수 없는 검증(배포
+  자산 기반 빌드, 다른 OS·러너)만 맡긴다. 결함 하나를 고치고 push해 CI 결과로 다음 결함을 찾는 방식은
+  쓰지 않는다 — CI 실패 로그에서 모든 job·step의 원인을 한 번에 모으고, 로컬에서 재현·수정·확인한 뒤
+  한 번 push한다(cpp tutorial CI 한 회가 25분이다).
 - Core를 바꾸고 Framework에서 검증할 때는 local Core library와 binding package가 실제로 갱신됐는지
   먼저 확인한다. 세부 절차는 `scripts/local-package/README.ko.md`를 따른다.
 - 완료 보고에는 결과, 변경 파일, 실행한 test와 남은 실패만 적는다. 진행 이력을 반복하지 않는다.
