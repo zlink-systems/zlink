@@ -1,7 +1,8 @@
 # ZLink Framework .NET 샘플
 
-.NET 샘플은 공개된 11.0.0 framework 계약을 여러 server 역할 process와 실행 가능한
-client 시나리오로 보인다. 도메인 흐름과 검증 규칙은
+.NET 샘플은 `Directory.Packages.props`가 고정한 버전의 배포 패키지 `Zlink.Framework`를
+여러 server 역할 process와 실행 가능한 client 시나리오로 보인다. 도메인 흐름과
+검증 규칙은
 [공용 sample 시나리오](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)를
 따른다.
 
@@ -19,13 +20,10 @@ client 시나리오로 보인다. 도메인 흐름과 검증 규칙은
 - **PowerShell** — `.ps1` 러너는 Windows에 기본 내장된 Windows PowerShell 5.1과
   PowerShell 7 모두에서 동작한다.
 - **Python 3**(PATH에 있거나 Windows에서는 `py` launcher로 찾을 수 있어야 한다) —
-  단, 일부 샘플·플랫폼에서만 필요하다.
+  일부 샘플·플랫폼에서만 필요하다.
   - Linux·WSL에서는 Bingo·GameQuest·ShoppingMall·SupportChat·TicTacToe·ZoneWorld의
-    `run_sample.sh`가 아직 역할 설정 파일을 Python heredoc으로 만든다.
-    DeliveryDispatch는 Python이 전혀 필요 없다. 이 zip이 저장소 전용 Python
-    helper에 조용히 의존하던 문제(#655)를 없애는 과정에서 포트 선택기와
-    ShoppingMall·DeliveryDispatch의 나머지 Python 사용은 이미 제거했고, 남은 설정
-    파일 작성 heredoc은 후속 작업으로 남겨 두었다.
+    `run_sample.sh`가 역할 설정 파일을 만드는 데 Python이 필요하다.
+    DeliveryDispatch는 Python이 전혀 필요 없다.
   - Windows에서는 ZoneWorld만 Python이 필요하다(`run_sample.ps1`의 ZW-B8 장애
     주입 proxy이며, 기본 `all` 시나리오 실행에 포함된다). 나머지 6개 `.ps1`
     러너는 Python을 전혀 부르지 않는다.

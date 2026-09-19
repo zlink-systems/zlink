@@ -1,7 +1,8 @@
 # ZLink Framework .NET Samples
 
-.NET samples demonstrate the public 11.0.0 framework contract through separate
-server-role processes and executable client scenarios. Their domain flows and
+.NET samples demonstrate the published `Zlink.Framework` packages, at the
+version pinned in `Directory.Packages.props`, through separate server-role
+processes and executable client scenarios. Their domain flows and
 verification rules follow the
 [common sample scenarios](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md).
 
@@ -20,15 +21,10 @@ Python 3 -- no repository checkout. The Korean canonical version is
 - **PowerShell** for the `.ps1` runners: Windows PowerShell 5.1 (built into
   Windows) or PowerShell 7 both work.
 - **Python 3**, on PATH (or discoverable through the `py` launcher on
-  Windows) -- but only for some samples, on some platforms:
+  Windows) -- needed only for some samples, on some platforms:
   - On Linux/WSL, `run_sample.sh` for Bingo, GameQuest, ShoppingMall,
-    SupportChat, TicTacToe, and ZoneWorld still generates its role
-    configuration files with a Python heredoc; DeliveryDispatch does not
-    need Python at all. This is leftover from removing the repository-only
-    Python helpers this zip used to silently depend on (#655) -- the port
-    picker and the rest of ShoppingMall and DeliveryDispatch's own Python
-    use were removed already, and the remaining config-writer heredocs are
-    tracked for a follow-up.
+    SupportChat, TicTacToe, and ZoneWorld needs it to generate role
+    configuration files; DeliveryDispatch does not need Python at all.
   - On Windows, only ZoneWorld needs Python (`run_sample.ps1`'s ZW-B8
     fault-injection proxy, part of its default `all` scenario run); the
     other six `.ps1` runners never invoke Python.
