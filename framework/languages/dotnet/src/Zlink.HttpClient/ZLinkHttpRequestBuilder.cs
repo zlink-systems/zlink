@@ -9,7 +9,7 @@ namespace Zlink.HttpClient;
 /// <summary>
 ///     Fluent builder for a single request. Mirrors the C++ <c>request_builder_t</c>. Submission
 ///     returns a <see cref="ValueTask{T}" />; no thread is parked while the request is in flight. The
-///     <c>Async</c> keeps a server Spot turn. Server-only terminators are provided by
+///     <c>Async&lt;T&gt;</c> keeps a server Spot turn. Server-only terminators are provided by
 ///     <see cref="ZLinkHttpServerRequestBuilder" />.
 /// </summary>
 public class ZLinkHttpRequestBuilder
@@ -263,20 +263,6 @@ public class ZLinkHttpRequestBuilder
                    $"HTTP {operation} can only run inside a framework execution turn.");
     }
 
-    protected async Task ObserveSubmissionAsync(
-        IZLinkHttpExecutionTurn turn,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            _ = await AsyncRaw(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            turn.ReportError(exception);
-        }
-    }
-
     private async Task CompleteCallbackAsync<T>(
         ValueTask<HttpResponse<T>> pending,
         ZLinkHttpCallback<T> callback)
@@ -498,16 +484,6 @@ public sealed class ZLinkHttpServerRequestBuilder : ZLinkHttpRequestBuilder
     {
         base.MultipartFile(name, filename, content, contentType);
         return this;
-    }
-
-    /// <summary>
-    ///     Starts a one-way server request. Transport and response failures are reported through the
-    ///     framework runtime error boundary.
-    /// </summary>
-    public ValueTask Async(CancellationToken cancellationToken = default)
-    {
-        var turn = RequireExecutionTurn("Async");
-        return new ValueTask(ObserveSubmissionAsync(turn, cancellationToken));
     }
 
     /// <summary>

@@ -864,7 +864,7 @@ public sealed class HttpClientContractTests
     }
 
     [Fact]
-    public void Standalone_and_server_request_surfaces_expose_only_valid_terminators()
+    public void Server_request_surface_has_no_non_generic_async_terminator()
     {
         Assert.Null(typeof(ZLinkHttpRequestBuilder).GetMethod("Yield"));
         Assert.Null(typeof(ZLinkHttpRequestBuilder).GetMethod("Submit"));
@@ -872,11 +872,10 @@ public sealed class HttpClientContractTests
         //  gate with Yield where the framework allows it; the standalone client
         //  has no gate to return.
         Assert.NotNull(typeof(ZLinkHttpServerRequestBuilder).GetMethod("Yield"));
-        Assert.Contains(
+        Assert.DoesNotContain(
             typeof(ZLinkHttpServerRequestBuilder).GetMethods(),
             method => method.Name == "Async"
-                && !method.IsGenericMethod
-                && method.ReturnType == typeof(ValueTask));
+                && !method.IsGenericMethod);
         Assert.Null(typeof(ZLinkHttpServerRequestBuilder).GetMethod("Submit"));
     }
 
