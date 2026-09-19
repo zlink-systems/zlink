@@ -134,9 +134,9 @@ jobs:
           grep -q 'dispatch done' server.log || fail "filter did not run after the handler"
 
           # Weight is the one value a running node can change.
-          weight=$(curl -sf -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=0")
+          weight=$(curl -sf -u ops:tutorial-admin -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=0")
           echo "${weight}" | grep -q '"weight":0' || fail "weight change: ${weight}"
-          curl -sf -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=100" > /dev/null
+          curl -sf -u ops:tutorial-admin -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=100" > /dev/null
 
           # ClientServer channel — the caller's connection decides who answers.
           ticket=$(curl -sf -X POST http://127.0.0.1:5080/players/p1/tickets)
@@ -319,7 +319,7 @@ jobs:
 
             http_output=$("${http_client_bin}") || fail "HttpClient failed"
             echo "${http_output}"
-            [ "$(printf '%s\n' "${http_output}" | wc -l)" -eq 11 ] || fail "HttpClient did not print 11 lines"
+            [ "$(printf '%s\n' "${http_output}" | wc -l)" -eq 10 ] || fail "HttpClient did not print 10 lines"
             echo "${http_output}" | grep -q '^first request: p1 rookie$' || fail "first request"
             echo "${http_output}" | grep -q '^request shaping: status 200 weight 2$' || fail "request shaping"
             echo "${http_output}" | grep -q '^response kinds: typed 200 raw application/json fetch anonymous$' || fail "response kinds"
@@ -549,7 +549,7 @@ jobs:
             'http://127.0.0.1:5181/admin/channels/profile/weight?value=100' > /dev/null
           output=$(./build/tutorial_http_client)
           printf '%s\n' "${output}"
-          test "$(printf '%s\n' "${output}" | wc -l)" -eq 11
+          test "$(printf '%s\n' "${output}" | wc -l)" -eq 10
           printf '%s\n' "${output}" | grep -q '^first request: p1 rookie$'
           printf '%s\n' "${output}" | grep -q '^basic auth: without 401 with 200$'
           ./build/tutorial_stream_client > stream.log
