@@ -7,7 +7,6 @@ import java.util.function.Consumer;
 public final class ZLinkHttpServerClient implements AutoCloseable {
     private final ZLinkHttpClient client;
     private final ZLinkHttpExecutionTurn executionTurn;
-    private final Consumer<Throwable> errorObserver;
 
     public ZLinkHttpServerClient(
         ZLinkHttpClient client,
@@ -15,7 +14,7 @@ public final class ZLinkHttpServerClient implements AutoCloseable {
         Consumer<Throwable> errorObserver) {
         this.client = Objects.requireNonNull(client, "client");
         this.executionTurn = Objects.requireNonNull(executionTurn, "executionTurn");
-        this.errorObserver = Objects.requireNonNull(errorObserver, "errorObserver");
+        Objects.requireNonNull(errorObserver, "errorObserver");
     }
 
     public static ZLinkHttpServerClient create(ZLinkHttpClient client) {
@@ -32,7 +31,7 @@ public final class ZLinkHttpServerClient implements AutoCloseable {
     public ZLinkHttpServerRequestBuilder options(String path) { return request(client.options(path)); }
 
     private ZLinkHttpServerRequestBuilder request(ZLinkHttpRequestBuilder request) {
-        return new ZLinkHttpServerRequestBuilder(request, executionTurn, errorObserver);
+        return new ZLinkHttpServerRequestBuilder(request, executionTurn);
     }
 
     @Override

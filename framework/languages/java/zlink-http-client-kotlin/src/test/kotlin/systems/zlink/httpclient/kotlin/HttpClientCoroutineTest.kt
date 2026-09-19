@@ -66,6 +66,7 @@ class HttpClientCoroutineTest {
                     "systems.zlink.httpclient.ZLinkHttpServerRequestBuilder"
         })
         assertTrue(methods.none { it.name == "yieldAwait" })
+        assertTrue(methods.none { it.name == "awaitOneWay" })
     }
 
     @Test
@@ -175,9 +176,8 @@ class HttpClientCoroutineTest {
         TestServer { exchange -> respond(exchange, 200, """{"id":7,"name":"Aria"}""") }.use { server ->
             ZLinkHttpClient.create(server.baseUrl).buildServer(turn).use { client ->
                 assertEquals(7, client.get("/p").await<Player>().body().id)
-            assertEquals(7, client.get("/p").yield<Player>().body().id)
-                client.post("/p").await()
-                assertEquals(2, asyncCalls.get())
+                assertEquals(7, client.get("/p").yield<Player>().body().id)
+                assertEquals(1, asyncCalls.get())
                 assertEquals(1, yieldCalls.get())
             }
         }
