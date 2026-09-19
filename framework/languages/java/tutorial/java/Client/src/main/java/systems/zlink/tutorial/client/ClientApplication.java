@@ -219,6 +219,26 @@ class TutorialController {
     // --8<-- [end:spot-request-call]
     // --8<-- [end:spot-message-call]
 
+    // --8<-- [start:instance-spot-call]
+    @PostMapping("/match-queues/{mode}")
+    CompletionStage<Contracts.MatchQueueStatus>
+    joinMatchQueue(
+        @PathVariable String mode,
+        @RequestBody
+        Contracts.JoinMatchQueue request) {
+        // No create call: the first message for
+        // this id brings the queue into being and
+        // is then handled by it.
+        return route
+            .requestToSpot(mode, request)
+            .instanceSpot("match-queue")
+            .inMesh("game")
+            .timeout(Duration.ofSeconds(3))
+            .submit(
+                Contracts.MatchQueueStatus.class);
+    }
+    // --8<-- [end:instance-spot-call]
+
     // --8<-- [start:location-find]
     // find answers from the Location Store alone: it reports where the object is,
     // and only while it is ready to receive. Nothing is sent to the object.

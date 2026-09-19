@@ -235,9 +235,14 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
 애초에 동시에 두 요청이 같은 상태를 만질 수 없다.
 
-**코드로 보면.** 락 획득·해제가 있던 자리에 Instance Spot 호출 한 줄이 남는다 —
-호출 모양은 [Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. 길드 자체는
-아직 실행 가능한 기준 샘플이 없다 — 실제로 쓰이는 같은 API 표면은 GameQuest의
+**코드로 보면.** 락 획득·해제가 있던 자리에 Instance Spot 호출 하나가 남는다. 아래는
+tutorial의 대기열 호출이다 — 길드 id 자리에 큐 id가 있을 뿐, 호출 모양은 같다. 사전 락도,
+사전 생성도 없다([06](21-spot.ko.md)).
+
+C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
+`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+
+길드 자체는 아직 실행 가능한 기준 샘플이 없다 — 실제로 쓰이는 같은 API 표면은 GameQuest의
 `PlayerQuestSpot` 등록·호출 방식에서 볼 수 있다.
 
 ### 2.3 기존 웹 서비스의 실시간 기능 추가
@@ -287,9 +292,14 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 한 줄로 줄어든다 — 모양은
-[Instance Spot](21-spot.ko.md) 절의 tutorial 코드와 같다. sticky 라우팅이 있던 자리는
-actor의 bound session push로 줄어든다 — 아래는 tutorial의 실제 코드다.
+**코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 하나로 줄어든다 — 아래는
+tutorial의 실제 코드다([06](21-spot.ko.md)).
+
+C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
+`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+
+sticky 라우팅이 있던 자리는 actor의 bound session push로 줄어든다 — 이것도 tutorial의
+실제 코드다.
 
 ```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/spots/lobby_spot.hpp:actor-push"
@@ -377,9 +387,12 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 경우다. 순서와 정합성이 목적의 전부였다면, owner routing이 그 목적을 파이프라인 없이
 직접 달성한다.
 
-**코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다 — 같은 id로
-오는 요청을 하나의 Spot이 직렬로 받는 모양은 [Instance Spot](21-spot.ko.md) 절의
-tutorial 코드와 같다.
+**코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다 — 같은 id로 오는
+요청을 하나의 Spot이 직렬로 받는다. 아래는 tutorial의 대기열 handler다. 주문 id 자리에 큐
+id가 있을 뿐, partition도 offset도 분산 락도 없이 Spot 상태를 그대로 만진다([06](21-spot.ko.md)).
+
+C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
+`framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`를 읽는다.
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
 없이 HTTP API + 주문 workflow만으로 구성된 이 상황의 기준 샘플이다. 주문 상태

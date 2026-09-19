@@ -148,7 +148,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 | Subproject | 역할 |
 |---|---|
 | `java/Shared` | 두 process가 함께 쓰는 message 계약 |
-| `java/Server` | channel handler, node 직접 handler, fanout subscriber, filter, runtime weight endpoint, Spot 하나 |
+| `java/Server` | channel handler, node 직접 handler, fanout subscriber, filter, runtime weight endpoint, Spot 둘(방과 큐) |
 | `java/Client` | HTTP를 받아 mesh·ClientServer·fanout으로 호출한다 |
 | `java/StreamClient` | mesh 밖의 client. framework가 아니라 connector 하나만 의존한다 |
 
@@ -400,7 +400,33 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
   기반 타입 `ZLinkActor`를 적고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 그 타입 인자가
   없다.
 
-### 9. Actor — id로 부르는 플레이어
+### 9. Instance Spot — 첫 메시지가 만드는 큐
+
+만드는 호출이 없다. 그 id로 첫 메시지가 도착하면 Framework가 만들고 같은 메시지를 처리한다.
+
+```bash
+curl -X POST http://127.0.0.1:5280/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5280/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+큐는 넣은 것을 계속 들고 있다. 같은 id로 또 호출하면 숫자가 이어진다. 처음부터 다시 보려면
+다른 id를 쓴다.
+
+Java 쪽에서 알아 둘 것은 다음과 같다.
+
+- **Instance Spot은 `ZLinkInstanceSpot`을 구현하고 actor 타입을 이름 짓지 않는다.** 방과 달리
+  create·join callback이 없다. handler 등록은 `context.handlers().addPacket(...)`이다 — 방의
+  `addHandler(...)`와 이름만 다르고 자리는 같다.
+- **부르는 쪽은 `requestToSpot(...)`에 `.instanceSpot("match-queue").inMesh("game")`을 더한다.**
+  아직 없는 큐를 어느 mesh에 어떤 stable type으로 만들지 이 두 호출이 정한다. 방을 부를 때는
+  id만으로 충분했다.
+
+### 10. Actor — id로 부르는 플레이어
 
 방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
 다시 만들면 있던 것을 돌려준다.
@@ -430,7 +456,7 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 - **handler는 Spot과 Actor를 함께 받는다.** actor id로 보낸 메시지는 그 Actor가 지금 속한
   Spot 안에서 실행된다.
 
-### 10. Location — 위치 조회
+### 11. Location — 위치 조회
 
 Spot과 Actor는 id로만 불렀고, 어디에 있는지는 Framework가 찾았다. 그 기록을 직접 읽는
 호출이다.
@@ -449,7 +475,7 @@ HTTP/1.1 404
 조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
 대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
 
-### 11. STREAM과 Session-Actor 연결
+### 12. STREAM과 Session-Actor 연결
 
 외부 client가 TCP로 붙는다. framework가 아니라 connector만 의존한다.
 
@@ -487,6 +513,7 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 | filter | `InvokeAsync(ctx, next, ct)`에서 `await next()` | `<T> invoke(ctx, ZLinkHandlerFilterNext<T>)`. stage를 돌려주므로 `await` 뒤 코드를 `whenComplete`로 붙인다 |
 | handler 의존성 | 생성자로 `ILogger<T>` 주입 | handler instance를 Framework가 Spring으로 만든다. logger는 bean이 아니므로 static `LoggerFactory`를 쓴다 |
 | node 직접 handler | `IZLinkRouteRequestHandler`, `ZLinkRouteMessageContext`(class) | `ZLinkRouteRequestHandler`, `ZLinkRouteMessageContext`(interface) |
+| Instance Spot handler 등록 | assembly 자동 스캔 | Spot 생성자에서 `context.handlers().addPacket(H.class)`. 방의 `addHandler`와 자리는 같고 이름만 다르다 |
 | Server process | `WebApplication`이 살아 있게 한다 | weight endpoint 때문에 web starter를 쓰므로 embedded Tomcat이 같은 일을 한다. `setKeepAlive`는 쓰지 않는다 |
 | runtime weight 접근 | endpoint 인자로 `IZLinkRouteMeshRuntimeOptions`를 받고 `mesh.Channel(c).Weight = v` | 같은 이름의 bean을 생성자로 주입하고 `mesh.channel(c).weight(v)`. 읽는 쪽은 `weight()`다. property가 아니라 이름이 같은 method 둘이다 |
 | weight endpoint 입력 | minimal API가 `int value`를 query string에서 찾는다 | `@RequestParam int value`로 적는다 |
@@ -508,7 +535,7 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 - **묶인 연결이 없을 때의 push.** `boundSession()`에 묶인 연결이 없으면 이 binding은
   **동기적으로 예외를 던진다.** .NET·C++·Node에서 같은 호출은 아무 일도 하지 않고 끝난다.
   그래서 `ChangeNickname` handler가 그 실패를 잡아 버린다 — 잡지 않으면 STREAM 없이 rename만
-  하는 8단계 호출이 handler 예외로 끝난다.
+  하는 10단계 호출이 handler 예외로 끝난다.
 
 ## 문서가 읽는 마커
 
@@ -535,6 +562,11 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 | `location-store-client` · `spot-client-register` | `Client/.../ClientApplication.java` |
 | `spot-create-call` · `spot-message-call` | `Client/.../ClientApplication.java` |
 | `spot-send-call` · `spot-request-call` | `Client/.../ClientApplication.java`. `spot-message-call` 안에 나뉘어 있다 |
+| `instance-spot-contracts` | `Shared/.../Contracts.java` |
+| `instance-spot-class` | `Server/.../spots/MatchQueue.java` |
+| `instance-spot-handler` | `Server/.../spots/JoinMatchQueueHandler.java` |
+| `instance-spot-register` | `Server/.../ServerApplication.java` |
+| `instance-spot-call` | `Client/.../ClientApplication.java` |
 | `clientserver-register` | `Server/.../ServerApplication.java` |
 | `fanout-subscribe` | `Server/.../ServerApplication.java` |
 | `channel-client-register` | `Client/.../ClientApplication.java` |

@@ -31,12 +31,14 @@ import {
   GetPlayerProfile,
   GetRoomState,
   IssueSessionTicket,
+  JoinMatchQueue,
   MaintenanceNotice,
   OpenRoom,
   PostChat,
   RecordLogin,
   TutorialNames,
   type NodeStatus,
+  type MatchQueueStatus,
   type PlayerInfo,
   type PlayerProfile,
   type RoomState,
@@ -254,6 +256,25 @@ function registerRoutes(
   });
   // --8<-- [end:spot-request-call]
   // --8<-- [end:spot-message-call]
+
+  // --8<-- [start:instance-spot-call]
+  map('POST', /^\/match-queues\/([^/]+)$/, async ([mode], body) => {
+    const request = JSON.parse(body) as { playerId: string };
+
+    // No create call: the first message for
+    // this id brings the queue into being and
+    // is then handled by it.
+    const status = await spots
+      .requestToSpot(
+        mode, new JoinMatchQueue(request.playerId))
+      .instanceSpot(TutorialNames.matchQueueType)
+      .inMesh(TutorialNames.mesh)
+      .timeout(3000)
+      .submit<MatchQueueStatus>();
+
+    return ok(status);
+  });
+  // --8<-- [end:instance-spot-call]
 
   // --8<-- [start:location-find]
   // find answers from the Location Store alone: it reports where the object is,

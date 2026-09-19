@@ -354,10 +354,41 @@ request is only processed once the first finishes — it's not that another requ
 for as long as the lock is held; two requests simply can never touch the same state at the
 same time in the first place.
 
-**As code.** Where lock acquire/release used to sit, one Instance Spot call remains — its
-shape matches the tutorial code in [Instance Spot](21-spot.en.md). The guild scenario
-itself has no runnable reference sample yet — the same API surface in real use can be seen
-in GameQuest's `PlayerQuestSpot` registration/call approach.
+**As code.** Where lock acquire/release used to sit, one Instance Spot call remains. Below
+is the tutorial's match-queue call — a queue id stands where the guild id would, and the
+call has the same shape. No lock beforehand, no creation beforehand ([06](21-spot.en.md)).
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:instance-spot-call"
+    ```
+
+=== "C++"
+
+    The C++ tutorial gains its match queue in a follow-up. This tab then reads
+    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:instance-spot-call"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/MatchQueueEndpoints.kt:instance-spot-call"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:instance-spot-call"
+    ```
+
+The guild scenario itself has no runnable reference sample yet — the same API surface in
+real use can be seen in GameQuest's `PlayerQuestSpot` registration/call approach.
 
 ### 2.3 Adding Real-Time Features to an Existing Web Service
 
@@ -413,10 +444,40 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** Where the distributed lock used to sit, one Instance Spot call remains — its
-shape matches the tutorial code in [Instance Spot](21-spot.en.md). Where sticky routing
-used to sit, an actor's bound-session push remains — the blocks below are the tutorial's
-real code.
+**As code.** Where the distributed lock used to sit, one Instance Spot call remains — the
+blocks below are the tutorial's real code ([06](21-spot.en.md)).
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:instance-spot-call"
+    ```
+
+=== "C++"
+
+    The C++ tutorial gains its match queue in a follow-up. This tab then reads
+    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:instance-spot-call"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/MatchQueueEndpoints.kt:instance-spot-call"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:instance-spot-call"
+    ```
+
+Where sticky routing used to sit, an actor's bound-session push remains — this too is the
+tutorial's real code.
 
 === "C#/.NET"
 
@@ -541,8 +602,39 @@ consistency were the entire goal, owner routing achieves that goal directly, wit
 pipeline.
 
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead
-— a single Spot receiving every request for the same id, serially, is the same pattern shown
-in the tutorial code under [Instance Spot](21-spot.en.md).
+— a single Spot receives every request for the same id, serially. Below is the tutorial's
+match-queue handler. A queue id stands where the order id would, and the handler touches the
+Spot's state directly, with no partition, no offset and no distributed lock
+([06](21-spot.en.md)).
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Spots/MatchQueue.cs:instance-spot-handler"
+    ```
+
+=== "C++"
+
+    The C++ tutorial gains its match queue in a follow-up. This tab then reads
+    `framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`.
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/spots/JoinMatchQueueHandler.java:instance-spot-handler"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/spots/MatchQueue.kt:instance-spot-handler"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/Server/Spots/match-queue.ts:instance-spot-handler"
+    ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
 the reference sample for this exact situation, built with no real-time push at all, just an

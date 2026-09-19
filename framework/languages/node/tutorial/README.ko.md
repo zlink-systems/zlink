@@ -59,7 +59,7 @@ npm run build
 ```
 
 `StreamClient`는 자기 `package.json`을 가진 별도 프로젝트다. connector가 ESM으로만 배포되고
-tutorial 본체는 CommonJS이므로 한 tsconfig로 묶지 않는다 — 빌드도 따로 한다(아래 "10. STREAM과
+tutorial 본체는 CommonJS이므로 한 tsconfig로 묶지 않는다 — 빌드도 따로 한다(아래 "11. STREAM과
 Session-Actor 연결" 참고).
 
 ## 실행
@@ -182,6 +182,7 @@ if (-not $ready) { exit 1 }
 | `Server/Channel/` | channel·ClientServer·Fanout handler |
 | `Server/Ops/` | node 직접 호출 handler |
 | `Server/Spots/game-room.ts` | id로 불리는 Spot 하나와 그 handler 둘 |
+| `Server/Spots/match-queue.ts` | 첫 메시지가 만드는 Instance Spot 하나와 그 handler 하나 |
 | `Server/Dispatch/` | 모든 handler를 감싸는 filter |
 | `Client/main.ts` | HTTP를 받아 mesh·ClientServer·Fanout으로 호출한다 |
 | `Client/zlink-error-response.ts` | Framework 예외의 error kind를 HTTP 상태코드와 본문으로 옮긴다 |
@@ -331,7 +332,33 @@ Node 쪽에서 알아 둘 것은 다음과 같다.
 - **Node user Spot은 admit할 actor 타입을 언제나 이름 짓는다.** 이 방은 actor를 받지 않으므로
   기본 타입을 쓰고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 그 타입 인자가 없다.
 
-### 8. Actor — id로 부르는 플레이어
+### 8. Instance Spot — 첫 메시지가 만드는 큐
+
+만드는 호출이 없다. 그 id로 첫 메시지가 도착하면 Framework가 만들고 같은 메시지를 처리한다.
+
+```bash
+curl -X POST http://127.0.0.1:5480/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5480/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+큐는 넣은 것을 계속 들고 있다. 같은 id로 또 호출하면 숫자가 이어진다. 처음부터 다시 보려면
+다른 id를 쓴다.
+
+Node 쪽에서 알아 둘 것은 다음과 같다.
+
+- **Instance Spot은 `ZLinkInstanceSpot`을 구현하고 actor 타입을 이름 짓지 않는다.** 방과 달리
+  create·join callback이 없다. handler는 방과 같은 `zlinkSpotPacketHandler` decorator로 큐
+  타입과 packet 이름을 적고, Spot과 handler 모두 module의 `providers`에 올린다.
+- **부르는 쪽은 `requestToSpot(...)`에 `.instanceSpot(...).inMesh(...)`를 더한다.** 아직 없는
+  큐를 어느 mesh에 어떤 stable type으로 만들지 이 두 호출이 정한다. 방을 부를 때는 id만으로
+  충분했다.
+
+### 9. Actor — id로 부르는 플레이어
 
 방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
 다시 만들면 있던 것을 돌려준다.
@@ -359,7 +386,7 @@ Node 쪽에서 알아 둘 것은 다음과 같다.
 - **handler는 Spot과 Actor를 함께 받는다.** actor id로 보낸 메시지는 그 Actor가 지금 속한
   Spot 안에서 실행된다.
 
-### 9. Location — 위치 조회
+### 10. Location — 위치 조회
 
 Spot과 Actor는 id로만 불렀고, 어디에 있는지는 Framework가 찾았다. 그 기록을 직접 읽는
 호출이다.
@@ -378,7 +405,7 @@ curl -i http://127.0.0.1:5480/locations/players/ghost
 조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
 대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
 
-### 10. STREAM과 Session-Actor 연결
+### 11. STREAM과 Session-Actor 연결
 
 외부 client가 붙는다. framework가 아니라 connector만 참조한다.
 
@@ -591,6 +618,10 @@ weight가 0인 동안 1번은 `errno 0`으로, 2번은 `One-way send route is no
 | `location-store-client` · `spot-client-register` | `Client/main.ts` |
 | `spot-create-call` · `spot-message-call` | `Client/main.ts` |
 | `spot-send-call` · `spot-request-call` | `Client/main.ts`. `spot-message-call` 안에 나뉘어 있다 |
+| `instance-spot-contracts` | `Shared/contracts.ts` |
+| `instance-spot-class` · `instance-spot-handler` | `Server/Spots/match-queue.ts` |
+| `instance-spot-register` | `Server/main.ts` |
+| `instance-spot-call` | `Client/main.ts` |
 | `location-find` | `Client/main.ts` |
 | `actor-contracts` | `Shared/contracts.ts` |
 | `actor-class` · `actor-factory` · `actor-handlers` | `Server/Actors/player.ts` |

@@ -61,7 +61,7 @@ npm run build
 
 `StreamClient` is a separate project with its own `package.json`. The connector ships as ESM
 only while the tutorial itself is CommonJS, so they are not built under one tsconfig — it is
-built separately (see "10. STREAM and the Session-Actor Link" below).
+built separately (see "11. STREAM and the Session-Actor Link" below).
 
 ## Run
 
@@ -183,6 +183,7 @@ responses for each step are under "Steps" and "Actual output" below.
 | `Server/Channel/` | Channel, ClientServer and Fanout handlers |
 | `Server/Ops/` | Node-direct call handlers |
 | `Server/Spots/game-room.ts` | One id-addressed Spot and its two handlers |
+| `Server/Spots/match-queue.ts` | One Instance Spot the first message creates, and its one handler |
 | `Server/Dispatch/` | The filter that wraps every handler |
 | `Client/main.ts` | Takes HTTP and calls out over mesh, ClientServer and Fanout |
 | `Client/zlink-error-response.ts` | Maps a Framework exception's error kind to an HTTP status and body |
@@ -337,7 +338,35 @@ Things worth knowing on the Node side:
 - **A Node user Spot always names the actor type it admits.** This room admits no actors, so it
   uses the default type and rejects every join. .NET's `IZLinkSpot` has no such type argument.
 
-### 8. Actor — a player addressed by id
+### 8. Instance Spot — a queue the first message creates
+
+There is no create call. When the first message for an id arrives, the Framework creates the
+queue and then handles that same message with it.
+
+```bash
+curl -X POST http://127.0.0.1:5480/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5480/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+The queue keeps what was put into it. Calling the same id again continues the count; use a
+different id to start over.
+
+Things worth knowing on the Node side:
+
+- **An Instance Spot implements `ZLinkInstanceSpot` and names no actor type.** Unlike a room it
+  has no create or join callback. Handlers use the same `zlinkSpotPacketHandler` decorator as the
+  room's, naming the queue type and the packet, and both the Spot and its handler go into the
+  module's `providers`.
+- **The caller adds `.instanceSpot(...).inMesh(...)` to `requestToSpot(...)`.** Those two calls
+  decide in which mesh, and as which stable type, a queue that does not exist yet is created.
+  Calling a room needed only the id.
+
+### 9. Actor — a player addressed by id
 
 Where a room is a place several people share, an Actor is one entity. Its id is **chosen by the
 caller**, and creating it again with the same id returns the existing one.
@@ -365,7 +394,7 @@ Things worth knowing on the Node side:
 - **Handlers receive both the Spot and the Actor.** A message sent to an actor id runs inside
   whichever Spot that Actor currently belongs to.
 
-### 9. Location — looking up placement
+### 10. Location — looking up placement
 
 Spot and Actor were both addressed only by id, and the Framework found where they were. This call
 reads that record directly.
@@ -385,7 +414,7 @@ The lookup only reads the Location Store and sends nothing to the target. Only a
 receive messages right now answers, so a value being created or in the middle of relocating comes
 back empty.
 
-### 10. STREAM and the Session-Actor link
+### 11. STREAM and the Session-Actor link
 
 An external client attaches. It references the connector only, not the framework.
 
@@ -598,6 +627,10 @@ marked by `--8<--` markers in the source. Marker names match the .NET tutorial.
 | `location-store-client` / `spot-client-register` | `Client/main.ts` |
 | `spot-create-call` / `spot-message-call` | `Client/main.ts` |
 | `spot-send-call` / `spot-request-call` | `Client/main.ts`, split inside `spot-message-call` |
+| `instance-spot-contracts` | `Shared/contracts.ts` |
+| `instance-spot-class` / `instance-spot-handler` | `Server/Spots/match-queue.ts` |
+| `instance-spot-register` | `Server/main.ts` |
+| `instance-spot-call` | `Client/main.ts` |
 | `location-find` | `Client/main.ts` |
 | `actor-contracts` | `Shared/contracts.ts` |
 | `actor-class` / `actor-factory` / `actor-handlers` | `Server/Actors/player.ts` |
