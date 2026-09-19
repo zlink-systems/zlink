@@ -264,12 +264,14 @@ class ZoneSpot(
     private data class BorderSnapshot(val tick: Long, val players: List<Messages.PlayerView>)
 
     override fun configure() {
-        // The topic encodes both endpoints, so each Zone Spot subscribes only to its incoming
-        // borders instead of accepting every border and filtering the payload afterwards.
-        ZoneWorldSpec.adjacentZones(context.spotId()).forEach { fromZoneId ->
-            context.handlers().addHandler(
-                BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()),
-            )
+        // Every Zone Spot observes the shared border view. The topic selects a route; the
+        // payload is applied as-is rather than being filtered by its destination zone.
+        ZoneWorldSpec.zones().forEach { fromZoneId ->
+            ZoneWorldSpec.adjacentZones(fromZoneId).forEach { toZoneId ->
+                context.handlers().addHandler(
+                    BorderSubscriptionHandlers.forRoute(fromZoneId, toZoneId),
+                )
+            }
         }
     }
 
