@@ -270,7 +270,6 @@ client_builder_t &client_builder_t::compression ()
 
 client_builder_t &client_builder_t::coroutines ()
 {
-    _coroutines = true;
     _execute_scheduler.reset ();
     _resume_scheduler.reset ();
     return *this;
@@ -284,7 +283,6 @@ client_builder_t::coroutines (std::shared_ptr<coroutine_resume_scheduler_t> resu
           zlink::framework::framework_error_kind_t::protocol_error,
           "HTTP client coroutine resume scheduler is required");
     }
-    _coroutines = true;
     _execute_scheduler.reset ();
     _resume_scheduler = std::move (resume_scheduler);
     return *this;
@@ -299,7 +297,6 @@ client_builder_t::coroutines (std::shared_ptr<coroutine_execute_scheduler_t> exe
           zlink::framework::framework_error_kind_t::protocol_error,
           "HTTP client coroutine execute and resume schedulers are required");
     }
-    _coroutines = true;
     _execute_scheduler = std::move (execute_scheduler);
     _resume_scheduler = std::move (resume_scheduler);
     return *this;
@@ -311,13 +308,11 @@ client_t client_builder_t::build () const
     require_positive_timeout (_timeout);
     auto execute_scheduler = _execute_scheduler;
     auto resume_scheduler = _resume_scheduler;
-    if (_coroutines) {
-        if (!execute_scheduler) {
-            execute_scheduler = detail::default_coroutine_execute_scheduler ();
-        }
-        if (!resume_scheduler) {
-            resume_scheduler = detail::default_coroutine_resume_scheduler ();
-        }
+    if (!execute_scheduler) {
+        execute_scheduler = detail::default_coroutine_execute_scheduler ();
+    }
+    if (!resume_scheduler) {
+        resume_scheduler = detail::default_coroutine_resume_scheduler ();
     }
     detail::http_client_options_t options{.base_url = _base_url,
                                           .timeout = _timeout,
@@ -331,7 +326,6 @@ client_t client_builder_t::build () const
                                           .proxy = _proxy,
                                           .proxy_authorization = _proxy_authorization,
                                           .compression = _compression,
-                                          .coroutines = _coroutines,
                                           .execute_scheduler = std::move (execute_scheduler),
                                           .resume_scheduler = std::move (resume_scheduler)};
     try {
@@ -351,9 +345,7 @@ client_builder_t::build_server (std::shared_ptr<execution_turn_t> execution_turn
           zlink::framework::framework_error_kind_t::protocol_error,
           "HTTP server client execution turn is required");
     }
-    auto builder = *this;
-    builder.coroutines ();
-    return server_client_t (builder.build (), std::move (execution_turn));
+    return server_client_t (build (), std::move (execution_turn));
 }
 
 request_builder_t client_builder_t::get (std::string path) const
@@ -567,13 +559,21 @@ request_builder_t::dispatch_request (detail::http_request_t request) const
           zlink::framework::detail::boundary_failure<raw_http_response_t> (zlink::framework::detail::boundary_error_t::closed, "HTTP client is not initialized"));
     }
 
-    if (_client._runtime->uses_coroutines ()) {
-        return _client._runtime->submit (std::move (request));
-    }
-    return zlink::framework::task_t<raw_http_response_t> (_client._runtime->execute (request));
+    return _client._runtime->submit (std::move (request));
 }
 
-zlink::framework::task_t<raw_http_response_t> request_builder_t::submit_raw () const
+zlink::framework::result_t<raw_http_response_t> request_builder_t::submit_raw () const
+{
+    zlink::framework::detail::ensure_blocking_submit_allowed ();
+    if (!_client._runtime) {
+        return zlink::framework::result_t<raw_http_response_t>::failure (
+          zlink::framework::framework_error_kind_t::invalid_operation,
+          "HTTP client is not initialized");
+    }
+    return _client._runtime->execute (make_request (nullptr));
+}
+
+zlink::framework::task_t<raw_http_response_t> request_builder_t::async_raw () const
 {
     return dispatch_request (make_request (nullptr));
 }

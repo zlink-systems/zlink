@@ -105,11 +105,6 @@ http_client_runtime_t::submit (http_request_t request) const
     return task;
 }
 
-bool http_client_runtime_t::uses_coroutines () const
-{
-    return _options.coroutines;
-}
-
 zlink::framework::detail::task_scheduler_t http_client_runtime_t::completion_scheduler () const
 {
     auto resume_scheduler = _options.resume_scheduler;

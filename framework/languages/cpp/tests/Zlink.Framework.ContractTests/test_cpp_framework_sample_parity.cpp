@@ -1709,8 +1709,8 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_NE (client.find ("zlink::http_client::client_t::create (options.api_http_endpoint)"),
                std::string::npos);
     EXPECT_NE (client.find (".post (\"/games\")"), std::string::npos);
-    EXPECT_NE (client.find (".fetch<create_game_http_res_t> ()"), std::string::npos);
-    EXPECT_EQ (client.find (".submit<create_game_http_res_t>"), std::string::npos);
+    EXPECT_NE (client.find (".submit<create_game_http_res_t> ().value ().body"), std::string::npos);
+    EXPECT_EQ (client.find (".fetch<create_game_http_res_t> ()"), std::string::npos);
     EXPECT_EQ (client.find (".json ()"), std::string::npos);
     EXPECT_EQ (client.find ("create_room (options)"), std::string::npos);
     EXPECT_EQ (client.find ("static create_game_http_res_t create_room"), std::string::npos);
@@ -2016,7 +2016,7 @@ TEST (CppFrameworkSampleParity, ChannelSendBackpressureUsesIndependentDefault)
       << "one-way send must not reuse request/reply timeout policy";
 }
 
-TEST (CppFrameworkSampleParity, TypedHttpBodyOnlyCallsUseFetch)
+TEST (CppFrameworkSampleParity, ClientScenariosUseBlockingHttpSubmit)
 {
     const std::vector<std::filesystem::path> client_scenarios{
       "TicTacToe/Client/tictactoe_client_scenario.hpp",
@@ -2026,15 +2026,12 @@ TEST (CppFrameworkSampleParity, TypedHttpBodyOnlyCallsUseFetch)
 
     for (const auto &relative : client_scenarios) {
         const auto source = read_text_file (cpp_language_root () / "samples" / relative);
-        EXPECT_NE (source.find (".fetch<"), std::string::npos)
+        EXPECT_NE (source.find (".submit<"), std::string::npos)
           << relative.generic_string ()
-          << " must receive a body-only typed HTTP response with fetch<T>()";
-        EXPECT_EQ (source.find (".submit<"), std::string::npos)
+          << " must complete HTTP requests synchronously";
+        EXPECT_EQ (source.find (".fetch<"), std::string::npos)
           << relative.generic_string ()
-          << " must not keep the typed HTTP response envelope when it only uses the DTO";
-        EXPECT_EQ (source.find (".template submit<"), std::string::npos)
-          << relative.generic_string ()
-          << " must not keep the typed HTTP response envelope when it only uses the DTO";
+          << " must not use the asynchronous body-only terminator";
     }
 }
 

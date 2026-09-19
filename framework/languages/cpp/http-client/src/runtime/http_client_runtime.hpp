@@ -32,7 +32,6 @@ struct http_client_options_t
     std::optional<std::string> proxy;
     std::optional<std::string> proxy_authorization;
     bool compression = false;
-    bool coroutines = false;
     std::shared_ptr<coroutine_execute_scheduler_t> execute_scheduler;
     std::shared_ptr<coroutine_resume_scheduler_t> resume_scheduler;
 };
@@ -58,7 +57,6 @@ class http_client_runtime_t : public std::enable_shared_from_this<http_client_ru
 
     zlink::framework::result_t<raw_http_response_t> execute (const http_request_t &request) const;
     zlink::framework::task_t<raw_http_response_t> submit (http_request_t request) const;
-    bool uses_coroutines () const;
     zlink::framework::detail::task_scheduler_t completion_scheduler () const;
 
   private:

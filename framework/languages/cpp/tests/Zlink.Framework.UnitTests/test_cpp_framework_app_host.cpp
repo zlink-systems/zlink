@@ -763,7 +763,7 @@ bool wait_for_ready (const zlink::http_client::client_t &client,
                      std::string *last_error = nullptr)
 {
     for (int attempt = 0; attempt < 100; ++attempt) {
-        auto result = client.get ("/ready").submit<health_http_reply_t> ().result ();
+        auto result = client.get ("/ready").submit<health_http_reply_t> ();
         if (result.has_value () && result.value ().body.readiness == "healthy") {
             return true;
         }
@@ -783,7 +783,7 @@ bool wait_for_ready (const zlink::http_client::client_t &client,
 bool wait_for_raw_status (const zlink::http_client::client_t &client, std::string path, int status)
 {
     for (int attempt = 0; attempt < 100; ++attempt) {
-        auto result = client.get (path).submit_raw ().result ();
+        auto result = client.get (path).submit_raw ();
         if (result.has_value () && result.value ().status == status) {
             return true;
         }
@@ -1015,145 +1015,118 @@ int main (int test_argc, char **test_argv)
     const auto post_result = http_client.post ("/games")
                                .header ("X-Correlation-Id", "corr-post")
                                .body (create_game_http_handler_t::request_type{.name = "post"})
-                               .submit<create_game_http_handler_t::reply_type> ()
-                               .result ();
+                               .submit<create_game_http_handler_t::reply_type> ();
     const auto nested_result = http_client.post ("/nested-app")
                                  .body (create_game_http_handler_t::request_type{.name = "app"})
-                                 .submit<create_game_http_handler_t::reply_type> ()
-                                 .result ();
+                                 .submit<create_game_http_handler_t::reply_type> ();
     const auto post_after_nested_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "after-nested"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto get_result = http_client.get ("/games/1?filter=active")
-                              .submit<create_game_http_handler_t::reply_type> ()
-                              .result ();
+                              .submit<create_game_http_handler_t::reply_type> ();
     const auto number_get_result =
-      http_client.get ("/numbers/41?page=2").submit<number_http_handler_t::reply_type> ().result ();
+      http_client.get ("/numbers/41?page=2").submit<number_http_handler_t::reply_type> ();
     const auto response_object_result =
       http_client.get ("/response-games/9?filter=direct&name=object")
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto response_context_result =
       http_client.get ("/response-context-games/10?filter=context&name=object")
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto request_task_result =
       http_client.get ("/request-task-games/13?filter=request&name=task")
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto raw_result = http_client.post ("/raw/42?mode=echo")
                               .header ("content-type", "text/plain")
                               .body (std::string ("raw body"))
-                              .submit_raw ()
-                              .result ();
+                              .submit_raw ();
     const auto raw_async_result = http_client.post ("/raw-async/43?mode=echo")
                                     .header ("content-type", "text/plain")
                                     .body (std::string ("raw body"))
-                                    .submit_raw ()
-                                    .result ();
+                                    .submit_raw ();
     const auto secure_get_result = http_client.get ("/secure-games/7")
                                      .header ("authorization", "Bearer test-token")
-                                     .submit<create_game_http_handler_t::reply_type> ()
-                                     .result ();
+                                     .submit<create_game_http_handler_t::reply_type> ();
     const auto unauthorized_get_result =
-      http_client.get ("/secure-games/7").submit_raw ().result ();
+      http_client.get ("/secure-games/7").submit_raw ();
     const auto put_result = http_client.put ("/games/1")
                               .body (create_game_http_handler_t::request_type{
                                 .id = "body-id", .name = "put", .filter = "body-filter"})
-                              .submit<create_game_http_handler_t::reply_type> ()
-                              .result ();
+                              .submit<create_game_http_handler_t::reply_type> ();
     const auto query_overrides_body_result =
       http_client.put ("/games/1?filter=query-filter")
         .body (create_game_http_handler_t::request_type{
           .id = "body-id", .name = "put", .filter = "body-filter"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto delete_result =
-      http_client.delete_ ("/games/1").submit<create_game_http_handler_t::reply_type> ().result ();
+      http_client.delete_ ("/games/1").submit<create_game_http_handler_t::reply_type> ();
     const auto method_mismatch_result =
       http_client.post ("/games/1")
         .body (create_game_http_handler_t::request_type{.name = "wrong-method"})
-        .submit_raw ()
-        .result ();
-    const auto missing_route_result = http_client.get ("/missing-route").submit_raw ().result ();
+        .submit_raw ();
+    const auto missing_route_result = http_client.get ("/missing-route").submit_raw ();
     const auto invalid_json_shape_result = http_client.post ("/games")
                                              .header ("X-Correlation-Id", "corr-invalid-json")
                                              .body (std::string ("not-an-object"))
-                                             .submit_raw ()
-                                             .result ();
+                                             .submit_raw ();
     const auto route_parse_failure_result =
-      http_client.get ("/numbers/not-a-number?page=2").submit_raw ().result ();
+      http_client.get ("/numbers/not-a-number?page=2").submit_raw ();
     const auto query_parse_failure_result =
-      http_client.get ("/numbers/41?page=bad").submit_raw ().result ();
+      http_client.get ("/numbers/41?page=bad").submit_raw ();
     const auto missing_required_field_result = http_client.post ("/games")
                                                  .body (create_game_http_handler_t::request_type{})
-                                                 .submit_raw ()
-                                                 .result ();
+                                                 .submit_raw ();
     const auto dto_validation_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "invalid"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto unsupported_content_type_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "plain"})
         .header ("content-type", "text/plain")
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto system_method_mismatch_result =
       http_client.post ("/ready")
         .body (create_game_http_handler_t::request_type{.name = "wrong-method"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto timeout_mapping_result =
       http_client.post ("/games")
         .header ("X-Correlation-Id", "corr-timeout")
         .body (create_game_http_handler_t::request_type{.name = "timeout"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto shutdown_mapping_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "shutdown"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto protocol_mapping_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "protocol"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto failed_mapping_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "failed"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto async_post_result =
       http_client.post ("/async-games")
         .header ("X-Correlation-Id", "corr-async")
         .body (create_game_http_handler_t::request_type{.name = "async"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto async_timeout_mapping_result =
       http_client.post ("/async-games")
         .body (create_game_http_handler_t::request_type{.name = "async-timeout"})
-        .submit_raw ()
-        .result ();
+        .submit_raw ();
     const auto injected_post_result =
       http_client.post ("/injected-games")
         .body (create_game_http_handler_t::request_type{.name = "handler"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto injected_second_post_result =
       http_client.post ("/injected-games")
         .body (create_game_http_handler_t::request_type{.name = "handler"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     const auto short_circuit_result = http_client.get ("/games/blocked")
-                                        .submit<create_game_http_handler_t::reply_type> ()
-                                        .result ();
-    const auto health_result = http_client.get ("/health").submit<health_http_reply_t> ().result ();
-    const auto liveness_result = http_client.get ("/live").submit<health_http_reply_t> ().result ();
+                                        .submit<create_game_http_handler_t::reply_type> ();
+    const auto health_result = http_client.get ("/health").submit<health_http_reply_t> ();
+    const auto liveness_result = http_client.get ("/live").submit<health_http_reply_t> ();
     const bool keep_alive_ok = http_keep_alive_round_trip (http_endpoint);
     trace.phase = "main app stop";
     app.stop ();
@@ -1759,8 +1732,7 @@ int main (int test_argc, char **test_argv)
     const auto secure_post_result =
       secure_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "secure"})
-        .submit<create_game_http_handler_t::reply_type> ()
-        .result ();
+        .submit<create_game_http_handler_t::reply_type> ();
     secure_host.stop ();
     secure_thread.join ();
     if (secure_exit_code != 0 || !secure_post_result

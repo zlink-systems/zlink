@@ -18,6 +18,7 @@
 namespace zlink::samples::deliverydispatch
 {
 
+// This CLI scenario completes each HTTP request before advancing its workflow state.
 class delivery_dispatch_client_scenario_t
 {
   public:
@@ -143,7 +144,7 @@ class delivery_dispatch_client_scenario_t
             return http.post ("/deliveries")
               .body (create_delivery_req_t{
                 delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-              .fetch<create_delivery_res_t> ();
+              .submit<create_delivery_res_t> ().value ().body;
         });
         const auto courier_offer = offer.get ().payload;
         send_decision (courier, courier_offer.delivery_id, courier_offer.courier_id, true);
@@ -207,7 +208,7 @@ class delivery_dispatch_client_scenario_t
             return http.post ("/deliveries")
               .body (create_delivery_req_t{
                 delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-              .fetch<create_delivery_res_t> ();
+              .submit<create_delivery_res_t> ().value ().body;
         });
         (void) first_offer.get ();
         const auto accepted_offer = second_offer.get ().payload;
@@ -270,7 +271,7 @@ class delivery_dispatch_client_scenario_t
             return http.post ("/deliveries")
               .body (create_delivery_req_t{
                 delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-              .fetch<create_delivery_res_t> ();
+              .submit<create_delivery_res_t> ().value ().body;
         });
         const auto rejected_a = first_offer.get ().payload;
         send_decision (courier_a, rejected_a.delivery_id, rejected_a.courier_id, false);
@@ -288,7 +289,7 @@ class delivery_dispatch_client_scenario_t
     {
         auto assertion = http.post ("/self-check/assert")
                            .body (server_assertion_req_t{"delivery-success", "delivery-reassign"})
-                           .fetch<server_assertion_res_t> ();
+                           .submit<server_assertion_res_t> ().value ().body;
         ensure (assertion.passed, "server evidence assertion failed");
         std::cout << "deliverydispatch-server-evidence=completed\n";
     }

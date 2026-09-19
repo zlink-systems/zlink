@@ -22,6 +22,7 @@
 namespace zlink::samples::tictactoe
 {
 
+// This CLI scenario completes each HTTP request before advancing its workflow state.
 class tictactoe_client_scenario_t
 {
   public:
@@ -46,7 +47,7 @@ class tictactoe_client_scenario_t
                           .post ("/games")
                           .timeout (std::chrono::seconds (45))
                           .body (create_game_request)
-                          .fetch<create_game_http_res_t> ();
+                          .submit<create_game_http_res_t> ().value ().body;
             if (room.play_endpoints.size () < 2) {
                 throw std::runtime_error ("API must return at least two Play endpoints.");
             }
