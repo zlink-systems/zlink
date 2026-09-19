@@ -91,9 +91,10 @@ if rg -n 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shar
 fi
 
 echo "==> build"
-(cd ../../.. && zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
+zlink_sample_build_framework_jars_if_available ../../.. \
+  --no-daemon --no-parallel --max-workers=1 \
   :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar \
-  :zlink-framework-locations-redis:jar :zlink-framework-kotlin:jar :zlink-stream-connector:jar --quiet)
+  :zlink-framework-locations-redis:jar :zlink-framework-kotlin:jar :zlink-stream-connector:jar --quiet
 gradle_run :Server:installDist :Client:installDist >/dev/null
 SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 
@@ -167,7 +168,7 @@ start_zone() {
 if [[ "$B8_CHILD" == 1 ]]; then
   for spec in "zone-node-1:$mesh1" "zone-node-2:$mesh2" "gateway:$gateway_mesh"; do
     name=${spec%%:*}; port=${spec##*:}
-    start "proxy-$name" python3 "$ROOT_DIR/../../java/ZoneWorld/Support/session_route_block_proxy.py" \
+    start "proxy-$name" java "$ROOT_DIR/../../java/ZoneWorld/Support/SessionRouteBlockProxy.java" \
       --listen-host 127.0.0.1 --listen-port "$port" --target-host 127.0.0.2 --target-port "$port" \
       --arm-file "$RUN_DIR/b8-block-command-44"
     wait_log "proxy-$name" proxy-ready

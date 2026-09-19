@@ -186,10 +186,7 @@ try {
     $ownerUnavailableConfig = Write-ClientConfig "owner-unavailable-client" "owner-unavailable" $releaseFile
 
     $gradle = if ($IsWindows) { Join-Path $SampleDir "../../gradlew.bat" } else { Join-Path $SampleDir "../../gradlew" }
-    Push-Location "$SampleDir/../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -Arguments @("--no-daemon", ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar", ":zlink-framework-locations-redis:jar", ":zlink-stream-connector:jar", "--quiet")
-    } finally { Pop-Location }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "$SampleDir/../../.." -GradleExecutable $gradle -Arguments @("--no-daemon", ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar", ":zlink-framework-locations-redis:jar", ":zlink-stream-connector:jar", "--quiet")
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
 
     Start-Role "mission-a" "Server/QuestMission" "QuestMission" $missionAConfig | Out-Null

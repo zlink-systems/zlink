@@ -36,15 +36,18 @@ for settings in ApiSettings PlaySettings; do
   fi
 done
 
+# Optional monorepo dev-loop convenience: use a freshly built local Core
+# .so instead of the one bundled in the published binding jar, when this
+# checkout actually has the repository root six levels up (a standalone zip
+# does not, so this whole block is a no-op there -- ZLINK_LIBRARY_PATH stays
+# unset and the jar's own bundled native loads instead, same as the tutorial).
 repo_root="$(cd ../../../../../.. && pwd)"
-core_version="$(awk -F= '/^LIBZLINK_VERSION=/{ print $2; exit }' "${repo_root}/VERSION")"
-if [[ -z "${core_version}" ]]; then
-  echo "Unable to resolve LIBZLINK_VERSION from ${repo_root}/VERSION" >&2
-  exit 1
-fi
-core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/${core_version}/lib/libzlink.so"
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${core_lib}"
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${repo_root}/VERSION" ]]; then
+  core_version="$(awk -F= '/^LIBZLINK_VERSION=/{ print $2; exit }' "${repo_root}/VERSION")"
+  core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/${core_version}/lib/libzlink.so"
+  if [[ -n "${core_version}" && -f "${core_lib}" ]]; then
+    export ZLINK_LIBRARY_PATH="${core_lib}"
+  fi
 fi
 
 pids=()

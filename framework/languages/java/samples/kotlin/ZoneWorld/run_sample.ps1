@@ -424,29 +424,25 @@ try {
         -Message "fixed placement/routing id found in Kotlin ZoneWorld"
 
     Write-Host "==> build"
-    Push-Location "../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $RootGradle -Arguments @(
-            "--no-daemon", "--no-parallel", "--max-workers=1",
-            ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar",
-            ":zlink-framework-locations-redis:jar", ":zlink-framework-kotlin:jar", ":zlink-stream-connector:jar", "--quiet")
-    } finally { Pop-Location }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "../../.." -GradleExecutable $RootGradle -Arguments @(
+        "--no-daemon", "--no-parallel", "--max-workers=1",
+        ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar",
+        ":zlink-framework-locations-redis:jar", ":zlink-framework-kotlin:jar", ":zlink-stream-connector:jar", "--quiet")
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
         "--no-daemon", "--no-parallel", "--max-workers=1", ":Server:installDist", ":Client:installDist", "--quiet")
 
     if ($B8Child) {
-        $python = Get-ZlinkSamplePythonCommand
+        $javaExe = Join-Path $env:JAVA_HOME "bin/java.exe"
         foreach ($proxy in @(
             @{ Name = "proxy-zone-node-1"; Port = $Mesh1 },
             @{ Name = "proxy-zone-node-2"; Port = $Mesh2 },
             @{ Name = "proxy-gateway"; Port = $GatewayMesh })) {
-            $arguments = @($python.Arguments)
-            $arguments += @(
-                (Join-Path $SampleDir "../../java/ZoneWorld/Support/session_route_block_proxy.py"),
+            $arguments = @(
+                (Join-Path $SampleDir "../../java/ZoneWorld/Support/SessionRouteBlockProxy.java"),
                 "--listen-host", "127.0.0.1", "--listen-port", "$($proxy.Port)",
                 "--target-host", "127.0.0.2", "--target-port", "$($proxy.Port)",
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44"))
-            Start-Role $proxy.Name $python.Path $arguments | Out-Null
+            Start-Role $proxy.Name $javaExe $arguments | Out-Null
             if (-not (Wait-Log $proxy.Name "proxy-ready")) { throw "$($proxy.Name) did not become ready" }
         }
     }

@@ -48,9 +48,6 @@ Invoke-GradleBuild -ProjectDirectory $JavaRoot -Tasks @("assemble")
 $SamplesRoot = Join-Path $JavaRoot "samples"
 Invoke-GradleBuild -ProjectDirectory $SamplesRoot -Tasks @("installDist")
 
-. (Join-Path $SamplesRoot "redis-common.ps1")
-Optimize-ZlinkSampleWindowsLaunchers -Root $SamplesRoot
-
 if ($RunTests) {
     Invoke-GradleBuild -ProjectDirectory $JavaRoot -Tasks @("check")
 }

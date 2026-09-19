@@ -94,13 +94,11 @@ EOF
 chmod 0600 "$mission_a_config" "$mission_b_config" "$api_a_config" "$api_b_config" "$client_config"
 
 cd "$ROOT_DIR"
-(
-  cd ../../..
-  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
-    :zlink-framework-core:jar :zlink-framework-kotlin:jar \
-    :zlink-framework-spring-boot-starter:jar :zlink-framework-locations-redis:jar \
-    :zlink-stream-connector:jar --quiet
-)
+zlink_sample_build_framework_jars_if_available ../../.. \
+  --no-daemon --no-parallel --max-workers=1 \
+  :zlink-framework-core:jar :zlink-framework-kotlin:jar \
+  :zlink-framework-spring-boot-starter:jar :zlink-framework-locations-redis:jar \
+  :zlink-stream-connector:jar --quiet
 gradle_run :Server:GameApi:installDist :Server:QuestMission:installDist :Client:installDist >"$BUILD_LOG" 2>&1
 
 start_role() {

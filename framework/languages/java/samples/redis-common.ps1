@@ -25,29 +25,6 @@ function ConvertTo-ZlinkSampleProcessArgument {
     return '"' + [regex]::Replace($Value, '(\\*)"', '$1$1\"') + '"'
 }
 
-function Optimize-ZlinkSampleWindowsLaunchers {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    if (-not $IsWindows) {
-        return
-    }
-    Get-ChildItem -Path $Root -Filter "*.bat" -Recurse -File |
-        Where-Object { $_.FullName -match '[\\/]build[\\/]install[\\/][^\\/]+[\\/]bin[\\/]' } |
-        ForEach-Object {
-            $content = [System.IO.File]::ReadAllText($_.FullName)
-            $optimized = [regex]::Replace(
-                $content,
-                '(?m)^set CLASSPATH=.*$',
-                'set CLASSPATH=%APP_HOME%\lib\*')
-            if ($optimized -ne $content) {
-                [System.IO.File]::WriteAllText(
-                    $_.FullName,
-                    $optimized,
-                    [System.Text.UTF8Encoding]::new($false))
-            }
-        }
-}
-
 function Set-ZlinkSampleJavaRuntime {
     param([Parameter(Mandatory = $true)][string]$SamplesRoot)
 
@@ -398,14 +375,37 @@ function Invoke-ZlinkSampleGradleBuild {
         if ($gradleExitCode -ne 0) {
             throw "Gradle build failed: $($Arguments -join ' ')"
         }
-        if ($Arguments -match ':installDist$') {
-            Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
-        }
     } finally {
         if ($temporarySettingsPath) {
             Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
         }
         $lockStream.Dispose()
+    }
+}
+
+function Invoke-ZlinkSampleFrameworkJarBuild {
+    <#
+        Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
+        checkout actually has the framework source above the sample ($FrameworkRoot is
+        "../../.." from a sample directory). A standalone zip has no such root --
+        zlink.samples.packageMode already resolves these same jars from Maven Central
+        for the sample's own build (verified: the sample's own installDist succeeds
+        without this step when the framework root is absent), so skipping it there is
+        not a loss, just a no-op.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FrameworkRoot,
+        [Parameter(Mandatory = $true)][string]$GradleExecutable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    if (-not (Test-Path (Join-Path $FrameworkRoot "settings.gradle.kts") -PathType Leaf)) {
+        return
+    }
+    Push-Location $FrameworkRoot
+    try {
+        Invoke-ZlinkSampleGradleBuild -GradleExecutable $GradleExecutable -Arguments $Arguments
+    } finally {
+        Pop-Location
     }
 }
 
@@ -617,76 +617,6 @@ function Assert-ZlinkSampleSourcePolicy {
         $offenders | ForEach-Object { [Console]::Error.WriteLine($_) }
         throw $Message
     }
-}
-
-function Get-ZlinkSamplePythonCommand {
-    <#
-        Resolves a working Python 3 interpreter for ZoneWorld's ZW-B8 fault proxy
-        (used by the Java and Kotlin runners, which dot-source this shared file).
-
-        A bare PATH lookup is not enough on Windows, for three separate reasons:
-        - The python.org installer leaves "Add python.exe to PATH" unchecked by default,
-          so a perfectly good per-user install is invisible to Get-Command.
-        - The `py` launcher is installed to a directory of its own, and needs "-3" to
-          select an interpreter rather than reading a shebang.
-        - Windows 11 ships App Execution Alias stubs named python.exe/python3.exe under
-          %LOCALAPPDATA%\Microsoft\WindowsApps, on PATH by default. They resolve, they
-          launch, and then they refuse to run anything (exit 9009) and send the user to
-          the Store. Finding an executable therefore does not mean finding Python.
-
-        So candidates are gathered in preference order -- PATH, then the `py` launcher,
-        then the standard per-user and machine install roots, newest version first --
-        and each one only counts once it has actually reported a Python 3 version.
-    #>
-    $candidates = [System.Collections.Generic.List[object]]::new()
-    $addCandidate = {
-        param([string]$Path, [string[]]$Arguments)
-        if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            $candidates.Add([pscustomobject]@{ Path = $Path; Arguments = $Arguments })
-        }
-    }
-
-    foreach ($name in @("python3", "python")) {
-        foreach ($command in @(Get-Command $name -CommandType Application -ErrorAction SilentlyContinue)) {
-            & $addCandidate $command.Source @()
-        }
-    }
-    foreach ($command in @(Get-Command "py" -CommandType Application -ErrorAction SilentlyContinue)) {
-        & $addCandidate $command.Source @("-3")
-    }
-
-    if ($IsWindows) {
-        foreach ($launcher in @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
-            (Join-Path $env:WINDIR "py.exe"))) {
-            & $addCandidate $launcher @("-3")
-        }
-        foreach ($root in @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Python"),
-            $env:ProgramFiles,
-            ${env:ProgramFiles(x86)})) {
-            if ([string]::IsNullOrWhiteSpace($root)) { continue }
-            Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
-                Sort-Object -Property @{ Expression = { [int]($_.Name -replace '\D', '') } } -Descending |
-                ForEach-Object { & $addCandidate (Join-Path $_.FullName "python.exe") @() }
-        }
-    }
-
-    foreach ($candidate in $candidates) {
-        $version = $null
-        try {
-            $version = (& $candidate.Path @(@($candidate.Arguments) + @("--version")) 2>&1 | Out-String)
-        } catch {
-            continue
-        }
-        if ($LASTEXITCODE -eq 0 -and $version -match "Python 3\.") {
-            return $candidate
-        }
-    }
-
-    throw ("Python 3 is required for the ZW-B8 fault proxy, and none was found on PATH, " +
-        "through the py launcher, or under the standard install directories. " +
-        "Install it from python.org or add an existing install to PATH.")
 }
 
 function Get-ZlinkSampleSelfShellPath {

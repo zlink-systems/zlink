@@ -1,9 +1,144 @@
 # ZLink Java And Kotlin Samples
 
-This directory contains Java and Kotlin samples for the public 0.10.0 framework
-contract. Java samples are under `java/`, Kotlin samples are under `kotlin/`,
-and both languages implement the same seven sample scenarios defined by the
+This directory contains Java and Kotlin samples for the published
+`zlink-framework-*` package version (see `gradle/zlink-sample-dependencies.settings.gradle.kts`'s
+`zlink.frameworkVersion` default). Java samples are under `java/`, Kotlin
+samples are under `kotlin/`, and both languages implement the same seven
+sample scenarios defined by the
 [common sample documents](../../../doc/framework/common/sample/README.ko.md).
+
+한국어: [`README.ko.md`](./README.ko.md)
+
+## Prerequisites
+
+- **JDK 25.** Gradle toolchain is pinned to 25
+  (`gradle/zlink-jvm-baseline.settings.gradle.kts`). No Gradle toolchain
+  auto-download resolver (such as
+  `org.gradle.toolchains.foojay-resolver-convention`) is configured; the run
+  scripts locate an existing JDK 25 themselves (`JAVA_HOME`, `PATH`,
+  `~/.gradle/jdks`, and other common install locations - see
+  `gradle/zlink-jvm-runtime.sh` / `Set-ZlinkSampleJavaRuntime` in
+  `redis-common.ps1`) and fail with one message naming the missing version if
+  none match. Install [Temurin 25](https://adoptium.net/) yourself and point
+  `JAVA_HOME` at it, or a plain `installDist`/`build` (outside the run
+  scripts) fails immediately with `No matching toolchain found`.
+- **Docker Desktop.** Each sample run script starts and removes its own
+  Redis container (`redis-common.ps1` / `runner-common.sh`); Docker must be
+  running first.
+
+No Python is required. The Linux port-reservation helper
+(`runner-common.sh`'s `zlink_sample_reserve_ports_in_range`) and the Windows
+ZoneWorld ZW-B8 fault proxy (`ZoneWorld/Support/SessionRouteBlockProxy.java`)
+both run as JDK single-file source programs (`java <file>.java ...`), so the
+JDK 25 above is the only runtime either one needs.
+
+## Download and install
+
+No repository checkout. The directory this zip extracts to
+(`zlink-samples-java/`) is everything you need; it builds against the
+published `zlink-framework-*` packages from Maven Central (version: see
+`zlink.frameworkVersion`'s default in
+`gradle/zlink-sample-dependencies.settings.gradle.kts`). There is nothing
+separate to download or install: the Gradle wrapper fetches Gradle, and
+Gradle fetches the packages above.
+
+All commands below run from inside that directory.
+
+## Build
+
+The run scripts (see "Run" below) build as part of running, so a separate
+build step isn't required. To check the IDE-importable Gradle build without
+running any scenario:
+
+```bash title="linux"
+./gradlew projects
+./gradlew buildAllSamples
+```
+
+```powershell title="windows"
+.\gradlew.bat projects
+.\gradlew.bat buildAllSamples
+```
+
+## Run
+
+Every sample root owns a `run_sample.sh` and a `run_sample.ps1`, and one
+invocation runs one sample end to end. The
+[common sample document](../../../doc/framework/common/sample/README.ko.md)
+owns this rule in its "The Sample Run Script And Redis Isolation Standard"
+section. Redis needs no separate setup: each script starts and removes its
+own container (see "Prerequisites" — Docker is the only requirement).
+
+Linux/WSL:
+
+```bash title="linux"
+./java/Bingo/run_sample.sh
+./java/DeliveryDispatch/run_sample.sh
+./java/GameQuest/run_sample.sh
+./java/ShoppingMall/run_sample.sh
+./java/SupportChat/run_sample.sh
+./java/TicTacToe/run_sample.sh
+./java/ZoneWorld/run_sample.sh
+./kotlin/Bingo/run_sample.sh
+./kotlin/DeliveryDispatch/run_sample.sh
+./kotlin/GameQuest/run_sample.sh
+./kotlin/ShoppingMall/run_sample.sh
+./kotlin/SupportChat/run_sample.sh
+./kotlin/TicTacToe/run_sample.sh
+./kotlin/ZoneWorld/run_sample.sh
+```
+
+Windows:
+
+```powershell title="windows"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\GameQuest\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\ShoppingMall\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\SupportChat\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\TicTacToe\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\ZoneWorld\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\Bingo\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\DeliveryDispatch\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\GameQuest\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\ShoppingMall\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\SupportChat\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\TicTacToe\run_sample.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\ZoneWorld\run_sample.ps1
+```
+
+## Verify
+
+Each sample runner starts role-specific Spring processes, waits for readiness,
+runs the probe or client scenario, and removes the processes and Redis
+container it created. Application role code starts only its own role. After the
+probe completes, the runner allows up to 90 seconds to observe the runtime's
+30-second drain deadline and its bounded owner/resource cleanup before using
+SIGKILL. A Framework process that reached `ZLINK_FRAMEWORK_READY` must also
+write `ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE`; a missing
+marker, a non-`STOPPED/NONE` result, a force kill, or cleanup failure makes the
+sample fail. Exit code `0` with no further output beyond the run's own logs is
+success.
+
+## Troubleshooting
+
+- **`No matching toolchain found`.** No JDK 25 on this machine. Follow the
+  Temurin 25 install steps in Prerequisites.
+- **`Connection refused` (Docker).** Docker Desktop isn't running. Start it
+  and run again.
+- **`No bindable ... Redis host port remained` or a sample port conflict.**
+  Two samples of the same language are running at once, or a previous run
+  didn't clean up. Each language uses its own port range (see
+  `zlink_sample_configure_port_pool` in `gradle/zlink-jvm-runtime.sh`), so
+  don't run two same-language samples concurrently.
+- **`UnsupportedClassVersionError`.** `JAVA_HOME` at run time is older than
+  JDK 25. The runner tries to find and set JDK 25 itself (see
+  Prerequisites); if that search fails, install JDK 25 and point
+  `JAVA_HOME` at it.
+- **No `입력 파일이 너무 깁니다` / "input line is too long" regardless of
+  extraction depth.** `installDist`'s launcher scripts use a `lib`
+  directory wildcard for the classpath instead of listing every jar, so
+  they never hit Windows cmd.exe's 8191-character line limit.
 
 ## Samples
 
@@ -78,66 +213,3 @@ client-only settings stay under `client/configuration`.
 Bingo uses Protobuf payloads. The other samples use the framework's typed JSON
 serialization path. Sample handlers and clients do not register a codec for
 each message type.
-
-## Running Samples
-
-Every sample root owns a `run_sample.sh` and a `run_sample.ps1`, and one
-invocation runs one sample. The
-[common sample document](../../../doc/framework/common/sample/README.ko.md)
-owns this rule in its "The Sample Run Script And Redis Isolation Standard"
-section; what follows is only the command for this language.
-
-From this directory, on Linux or WSL:
-
-```bash
-./java/Bingo/run_sample.sh
-```
-
-On Windows:
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
-```
-
-Kotlin uses the same sample names under `kotlin/`:
-
-```bash
-./kotlin/Bingo/run_sample.sh
-```
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\Bingo\run_sample.ps1
-```
-
-Each language has seven samples, so checking one language takes seven
-invocations and checking both Java and Kotlin takes fourteen. Substitute
-`Bingo`, `DeliveryDispatch`, `GameQuest`, `ShoppingMall`, `SupportChat`,
-`TicTacToe`, and `ZoneWorld` in turn, one at a time.
-
-Each sample runner starts role-specific Spring processes, waits for readiness,
-runs the probe or client scenario, and removes the processes and Redis
-container it created. Application role code starts only its own role. After the
-probe completes, the runner allows up to 90 seconds to observe the runtime's
-30-second drain deadline and its bounded owner/resource cleanup before using
-SIGKILL. A Framework process that reached `ZLINK_FRAMEWORK_READY` must also
-write `ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE`; a missing
-marker, a non-`STOPPED/NONE` result, a force kill, or cleanup failure makes the
-sample fail.
-
-Framework hosts bind endpoint, Redis, routing ID, timeout, and logging values
-from role-specific Spring configuration files. Application code does not read
-these values directly from environment variables or JVM system properties.
-
-Check the IDE-importable Gradle build without running scenarios:
-
-```bash
-./gradlew projects
-./gradlew buildAllSamples
-```
-
-From `framework/languages/java`, use the included build name:
-
-```bash
-./gradlew :zlink-framework-java-samples:projects
-./gradlew :zlink-framework-java-samples:buildAllSamples
-```

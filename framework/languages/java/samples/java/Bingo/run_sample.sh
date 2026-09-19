@@ -92,16 +92,14 @@ cleanup_sample() {
 trap cleanup_sample EXIT
 
 build_framework_jars() {
-  (
-    cd ../../..
-    zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
-      :zlink-framework-core:jar \
-      :zlink-framework-spring-boot-starter:jar \
-      :zlink-framework-locations-redis:jar \
-      :zlink-framework-codec-protobuf:jar \
-      :zlink-stream-connector:jar \
-      --quiet
-  )
+  zlink_sample_build_framework_jars_if_available ../../.. \
+    --no-daemon --no-parallel --max-workers=1 \
+    :zlink-framework-core:jar \
+    :zlink-framework-spring-boot-starter:jar \
+    :zlink-framework-locations-redis:jar \
+    :zlink-framework-codec-protobuf:jar \
+    :zlink-stream-connector:jar \
+    --quiet
 }
 
 read -r api_a_channel api_a_mesh session_a_router play_a_router session_a_stream api_b_channel api_b_mesh session_b_router play_b_router session_b_stream api_a_matchmaking api_b_matchmaking matchmaking_router \
