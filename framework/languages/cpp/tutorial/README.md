@@ -18,25 +18,29 @@ archives published on GitHub Releases plus vcpkg; the zlink repository is never 
 
 ## Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Download and install](#2-download-and-install)
-3. [Build](#3-build)
-4. [Run](#4-run)
-5. [Verify](#5-verify)
-6. [Troubleshooting](#6-troubleshooting)
-7. [Project layout](#7-project-layout)
-8. [Step by step](#8-step-by-step)
-9. [How the documentation reads this code](#9-how-the-documentation-reads-this-code)
-10. [Differences from the .NET tutorial](#10-differences-from-the-net-tutorial)
+- [Prerequisites](#prerequisites)
+- [Download and install](#download-and-install)
+- [Build](#build)
+- [Run](#run)
+- [Verify](#verify)
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+- [Step by step](#step-by-step)
+- [How the documentation reads this code](#how-the-documentation-reads-this-code)
+- [Differences from the .NET tutorial](#differences-from-the-net-tutorial)
 
-## 1. Prerequisites
+The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (bash) and
+`title="windows"` (PowerShell). Each block runs as is from the unpacked directory, and the
+release CI runs the same blocks verbatim.
+
+## Prerequisites
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg`, `./bootstrap-vcpkg.sh`, then set `VCPKG_ROOT` |
+| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` and `./bootstrap-vcpkg.sh`; set `VCPKG_ROOT` unless it lives at `$HOME/vcpkg` |
 | Docker Desktop | runs one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 
 Nothing else is needed: no zlink repository, no Python, no Node.js, no distribution Boost.
@@ -47,102 +51,76 @@ minutes** and several GB of disk. Later installs finish in minutes from vcpkg's 
 The third-party versions are pinned with a vcpkg `builtin-baseline`. A clone older than that
 commit needs `git -C $VCPKG_ROOT pull`.
 
-## 2. Download and install
+## Download and install
 
 Download
 [`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
 and unpack it. Every command below runs inside the unpacked `zlink-tutorial-cpp/`.
 
-One script, `bootstrap.cmake`, does the whole install. It downloads three GitHub Release
-assets -- this platform's Core prebuilt (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`)
-and the framework source (`framework-cpp/v0.18.0`) -- builds the binding and the framework into
-`.zlink/install/`, and configures this project into `build/`. Only the framework version is
-written in the script; the Core and binding versions and the third-party list come from the
-framework archive.
+One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
+block. It downloads three GitHub Release assets -- this platform's Core prebuilt
+(`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source
+(`framework-cpp/v0.18.0`) -- builds the binding and the framework into `.zlink/install/`, and
+configures this project into `build/`. Only the framework version is written in the script; the
+Core and binding versions and the third-party list come from the framework archive. From the
+second run on it reuses what it downloaded and built.
 
-Windows PowerShell:
+Parallelism defaults to the logical core count; lower it as `cmake -DZLINK_JOBS=4 -P
+bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
-```powershell
+## Build
+
+```bash title="linux"
+export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
-```
-
-Linux / WSL bash:
-
-```bash
-export VCPKG_ROOT=$HOME/vcpkg
-cmake -P bootstrap.cmake
-```
-
-`VCPKG_ROOT` is where vcpkg was cloned. Parallelism defaults to the logical core count;
-lower it with `-DZLINK_JOBS=4` placed before `-P`. To start over, delete `.zlink/` and `build/`.
-
-## 3. Build
-
-Windows PowerShell:
-
-```powershell
-cmake --build build --config Release --parallel
-```
-
-Linux / WSL bash:
-
-```bash
 cmake --build build --parallel
+```
+
+```powershell title="windows"
+cmake -P bootstrap.cmake
+cmake --build build --config Release --parallel
 ```
 
 Three executables come out -- under `build\Release\` on Windows, `build/` on Linux. On Windows
 the Core `zlink.dll` and the third-party DLLs are copied next to the executables (Windows has
 no RPATH; the loader only looks beside the image).
 
-## 4. Run
+## Run
 
 Redis must be at `127.0.0.1:6379`; the Spot, Actor and Location steps use it as the Location
-Store. Start one with Docker (same on both platforms).
+Store. The block below starts Redis with Docker, then the Server and the Client, and confirms
+with the first request that the two processes are connected over the mesh. Handler and filter
+logs go to **stderr**.
 
-```bash
+```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+./build/tutorial_server > server.log 2>&1 &
+./build/tutorial_client > client.log 2>&1 &
+sleep 3
+curl http://127.0.0.1:5180/players/p1/profile
 ```
 
-Start the Server first, then the Client. Handler and filter logs go to **stderr**.
-
-Windows PowerShell:
-
-```powershell
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe
-```
-
-Linux / WSL bash:
-
-```bash
-./build/tutorial_server &
-./build/tutorial_client &
-```
-
-The first request confirms the two processes are connected over the mesh. In PowerShell `curl`
-is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double quotes of a JSON body
-as `\"`.
-
-```powershell
+```powershell title="windows"
+docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardError server.log
+Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardError client.log
+Start-Sleep -Seconds 3
 curl.exe http://127.0.0.1:5180/players/p1/profile
+```
+
+In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double
+quotes of a JSON body as `\"`. The request that opens a room, for example:
+
+```powershell
 curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{\"title\":\"lobby\"}'
 ```
 
 ```bash
-curl http://127.0.0.1:5180/players/p1/profile
 curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
 The external client of the STREAM step is the third executable. Run it while the Server is up;
-it completes its own check and exits.
-
-```powershell
-.\build\Release\tutorial_stream_client.exe
-```
-
-```bash
-./build/tutorial_stream_client
-```
+it completes its own check and exits -- the [Verify](#verify) block runs it.
 
 Cleanup stops the two processes and the Redis container.
 
@@ -152,7 +130,7 @@ docker stop zlink-tutorial-redis
 ```
 
 ```bash
-kill %1 %2
+pkill -f build/tutorial_server; pkill -f build/tutorial_client
 docker stop zlink-tutorial-redis
 ```
 
@@ -168,19 +146,35 @@ The ports differ from the .NET tutorial so both can run on one machine.
 | Fanout publisher | 7412 |
 | Server stream node | 7421 |
 
-## 5. Verify
+## Verify
 
 | Step | Evidence of success |
 |---|---|
 | `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
 | Build | the three executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client` exist |
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
-| Spot (Redis) | `curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'` prints a room id string (`"9e78fd70-..."`) |
-| STREAM | `tutorial_stream_client` prints the four lines `connected: true` ... `pushed: speedy` and exits |
+| Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |
+| STREAM | `tutorial_stream_client` prints the four lines `connected: true` ... `pushed: speedy` and exits with 0 |
 
-[Step by step](#8-step-by-step) lists the request and expected output of all ten steps.
+The block below checks this against the processes the [Run](#run) block started: the first
+request's answer and the STREAM client's exit code.
 
-## 6. Troubleshooting
+```bash title="linux"
+curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"' && echo "tutorial-http=ok"
+./build/tutorial_stream_client && echo "tutorial-stream=ok"
+```
+
+```powershell title="windows"
+if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw "tutorial-http failed" }
+"tutorial-http=ok"
+& .\build\Release\tutorial_stream_client.exe
+if ($LASTEXITCODE -ne 0) { throw "tutorial-stream failed" }
+"tutorial-stream=ok"
+```
+
+[Step by step](#step-by-step) lists the request and expected output of all ten steps.
+
+## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -197,7 +191,7 @@ The ports differ from the .NET tutorial so both can run on one machine.
 | `bind: Address already in use` / `Only one usage of each socket address` | Another process holds a port from the table above. Check for a `tutorial_server` or `tutorial_client` left from an earlier run |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | The Client is not up yet, or died. Read the Client's stderr |
 
-## 7. Project layout
+## Project layout
 
 | Project | Role |
 |---|---|
@@ -210,7 +204,7 @@ The ports differ from the .NET tutorial so both can run on one machine.
 `CMakeLists.txt` builds the three executables from one `find_package(zlink_framework CONFIG
 REQUIRED)`. To reuse it in your own project, pass `.zlink/install` in `CMAKE_PREFIX_PATH`.
 
-## 8. Step by step
+## Step by step
 
 Each feature can be read on its own; a step works without the ones before it. The outputs
 below were all captured from real runs. The Korean README explains each step in depth; this
@@ -402,7 +396,7 @@ sent on its own. In C++ every packet arrives through one `on_packet`, `reply_pac
 requests only (pushes use `bound_session().send(...)`), and the connector is opened with manual
 dispatch so a push arriving before `wait` is queued rather than dropped.
 
-## 9. How the documentation reads this code
+## How the documentation reads this code
 
 The documentation does not copy code; it reads regions of these files, delimited by `--8<--`
 markers in the source:
@@ -458,7 +452,7 @@ the page together. Marker names match the .NET tutorial.
 | `stream-register` | `Server/main.cpp` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
 
-## 10. Differences from the .NET tutorial
+## Differences from the .NET tutorial
 
 Places where the meaning changed in the port; renamings alone (`AddRouteMesh` ->
 `add_route_mesh`) are not listed.

@@ -15,23 +15,27 @@ container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프�
 
 ## 차례
 
-1. [전제 조건](#1-전제-조건)
-2. [내려받기와 설치](#2-내려받기와-설치)
-3. [빌드](#3-빌드)
-4. [실행](#4-실행)
-5. [검증](#5-검증)
-6. [문제 해결](#6-문제-해결)
-7. [샘플 목록](#7-샘플-목록)
-8. [설정과 계약 배치](#8-설정과-계약-배치)
+- [전제 조건](#전제-조건)
+- [내려받기와 설치](#내려받기와-설치)
+- [빌드](#빌드)
+- [실행](#실행)
+- [검증](#검증)
+- [문제 해결](#문제-해결)
+- [샘플 목록](#샘플-목록)
+- [설정과 계약 배치](#설정과-계약-배치)
 
-## 1. 전제 조건
+`빌드`·`실행`·`검증` 절의 명령 블록은 `title="linux"`(bash)와 `title="windows"`(PowerShell)로
+표시되어 있다. 각 블록은 압축을 푼 디렉터리에서 그대로 실행되며, 릴리스 CI가 같은 블록을
+그대로 돌린다.
+
+## 전제 조건
 
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| vcpkg | Visual Studio가 함께 설치하는 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT`를 지정한다 | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`, 그리고 `VCPKG_ROOT`를 지정한다 |
+| vcpkg | Visual Studio가 함께 설치하는 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT`를 지정한다 | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`. 위치가 `$HOME/vcpkg`가 아니면 `VCPKG_ROOT`를 지정한다 |
 | Docker Desktop | runner가 샘플마다 Redis container를 하나 띄운다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 | `curl` | Windows 10 이상에 들어 있다 | 배포판 패키지 |
 
@@ -41,72 +45,46 @@ ZW-B8 장애 proxy까지 C++로 샘플과 함께 빌드된다. 세 번째 파티
 끝난다. vcpkg는 `builtin-baseline`으로 세 번째 파티 버전을 고정하므로 clone이 그 커밋보다
 오래됐으면 `git -C $VCPKG_ROOT pull`로 갱신한다.
 
-## 2. 내려받기와 설치
+## 내려받기와 설치
 
 [`zlink-samples-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)을
 받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-samples-cpp/` 안에서 실행한다.
 
-`bootstrap.cmake` 하나가 설치를 끝낸다. GitHub Release에서 세 아카이브 — 이 플랫폼의 Core
-prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`)
-— 를 받아 binding과 framework를 빌드해 `.zlink/install/`에 설치하고, 샘플 일곱 개를 한
-프로젝트로 `build/`에 구성한다.
+설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. GitHub Release에서 세
+아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework
+소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를 빌드해 `.zlink/install/`에
+설치하고, 샘플 일곱 개를 한 프로젝트로 `build/`에 구성한다. 두 번째 실행부터는 받은 것과
+지은 것을 그대로 쓴다.
 
-Windows PowerShell:
+병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
+두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
 
-```powershell
+## 빌드
+
+```bash title="linux"
+export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
-```
-
-Linux · WSL bash:
-
-```bash
-export VCPKG_ROOT=$HOME/vcpkg
-cmake -P bootstrap.cmake
-```
-
-병렬도는 논리 코어 수가 기본이며 `-DZLINK_JOBS=4`처럼 `-P` 앞에 두어 줄인다. 다시 처음부터
-하려면 `.zlink/`와 `build/`를 지운다.
-
-## 3. 빌드
-
-Windows PowerShell:
-
-```powershell
-cmake --build build --config Release --parallel
-```
-
-Linux · WSL bash:
-
-```bash
 cmake --build build --parallel
+```
+
+```powershell title="windows"
+cmake -P bootstrap.cmake
+cmake --build build --config Release --parallel
 ```
 
 역할별 실행 파일 28개와 ZoneWorld proxy가 나온다 — Windows는 `build\Release\`, Linux는
 `build/` 아래다. Windows에서는 Core `zlink.dll`과 세 번째 파티 DLL이 실행 파일 옆에 함께
 복사된다. Linux runner는 실행 전에 자기 샘플의 target을 다시 빌드하므로 한 샘플만 볼 때는
-이 단계를 건너뛰어도 된다.
+`cmake --build`를 건너뛰어도 된다.
 
-## 4. 실행
+## 실행
 
 샘플마다 `run_sample.ps1`과 `run_sample.sh`가 있고, 한 번의 호출은 샘플 하나를 실행한다.
 **Runner가 Redis를 Docker container로 직접 띄우고**(`redis:7-alpine`, `127.0.0.1`의
-20000–20099 중 빈 port) 끝날 때 지운다. 미리 띄울 것은 없다.
+20000–20099 중 빈 port) 끝날 때 지운다. 미리 띄울 것은 없다. 아래 블록은 일곱을 차례로
+실행한다.
 
-Windows PowerShell:
-
-```powershell
-.\Bingo\run_sample.ps1
-.\DeliveryDispatch\run_sample.ps1
-.\GameQuest\run_sample.ps1
-.\ShoppingMall\run_sample.ps1
-.\SupportChat\run_sample.ps1
-.\TicTacToe\run_sample.ps1
-.\ZoneWorld\run_sample.ps1
-```
-
-Linux · WSL bash:
-
-```bash
+```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
 ./GameQuest/run_sample.sh
@@ -116,13 +94,23 @@ Linux · WSL bash:
 ./ZoneWorld/run_sample.sh
 ```
 
+```powershell title="windows"
+.\Bingo\run_sample.ps1
+.\DeliveryDispatch\run_sample.ps1
+.\GameQuest\run_sample.ps1
+.\ShoppingMall\run_sample.ps1
+.\SupportChat\run_sample.ps1
+.\TicTacToe\run_sample.ps1
+.\ZoneWorld\run_sample.ps1
+```
+
 한 번에 하나씩 실행한다. Runner는 build, 역할별 설정 파일 생성, 서버 시작, readiness 확인,
 client self-check와 정리를 순서대로 수행한다. 애플리케이션 port는 `127.0.0.1`의 20100–21999
 안에서 실행마다 새로 고른다.
 
 `ZLINK_CPP_BUILD_DIR`을 지정하면 `build/` 대신 그 빌드 트리의 실행 파일을 쓴다.
 
-## 5. 검증
+## 검증
 
 Runner의 마지막 줄이 아래 표의 표식이고 종료 코드가 0이면 그 샘플은 통과다. 표식 앞에는
 client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍힌다.
@@ -137,12 +125,24 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 | TicTacToe | `tictactoe-placement=completed` |
 | ZoneWorld | `zoneworld=completed` |
 
+아래 블록은 TicTacToe 하나로 이를 확인한다.
+
+```bash title="linux"
+./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+```
+
+```powershell title="windows"
+$lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
+if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw "TicTacToe failed: $($lines[-1])" }
+$lines[-1]
+```
+
 실패한 실행은 역할별 stdout·stderr 로그가 든 run 디렉터리를 남기고 그 경로를
 `<샘플> run directory preserved: …`로 알린다. Linux runner는 framework 자체 테스트 단계를
 `framework tests: skipped (package tree; no framework test targets)`로 표시한다 — 그 테스트는
 저장소 트리에만 있다.
 
-## 6. 문제 해결
+## 문제 해결
 
 | 증상 | 원인과 조치 |
 |---|---|
@@ -158,7 +158,7 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 | `Timed out waiting for <역할> at tcp://127.0.0.1:<port>` | 그 역할이 뜨지 못했다. 보존된 run 디렉터리의 `<역할>.trace.log`(또는 `<역할>.log`)를 본다 |
 | Windows에서 `run_sample.ps1 cannot be loaded because running scripts is disabled` | 실행 정책이다. `powershell -ExecutionPolicy Bypass -File .\TicTacToe\run_sample.ps1`로 실행한다 |
 
-## 7. 샘플 목록
+## 샘플 목록
 
 | 샘플 | 보여 주는 기능 | 연결 구성 | payload codec |
 |---|---|---|---|
@@ -183,7 +183,7 @@ framework 자체 테스트도 함께 돈다.
 select-one, Spot, Actor와 Logical Multicast는 같은 MeshNode를 사용한다. 전 수신자에게
 전달하는 classic fanout은 별도 PUB/SUB channel이다.
 
-## 8. 설정과 계약 배치
+## 설정과 계약 배치
 
 서버 역할은 설정 파일 경로를 받고, `app.config()`가 읽은 값을 typed configuration에 bind한 뒤
 framework builder에 전달한다. Endpoint, Redis, routing ID, timeout과 로그 경로를 application

@@ -25,8 +25,8 @@
 #                            `cmake --build build --config Release`
 #
 # Options (pass as -D<name>=<value> before -P):
-#     VCPKG_ROOT   vcpkg checkout (default: $VCPKG_ROOT, then the copy bundled
-#                  with Visual Studio 2022 on Windows)
+#     VCPKG_ROOT   vcpkg checkout (default: $VCPKG_ROOT, $VCPKG_INSTALLATION_ROOT,
+#                  then the copy bundled with Visual Studio 2022 on Windows)
 #     ZLINK_JOBS   parallel compile jobs (default: logical cores)
 #     ZLINK_ROOT   where .zlink/ goes (default: beside this file)
 cmake_minimum_required(VERSION 3.24)
@@ -71,6 +71,10 @@ endif()
 # --- vcpkg ---------------------------------------------------------------------
 if(NOT VCPKG_ROOT)
   set(VCPKG_ROOT "$ENV{VCPKG_ROOT}")
+endif()
+if(NOT VCPKG_ROOT)
+  # GitHub Actions runner images name their vcpkg this way.
+  set(VCPKG_ROOT "$ENV{VCPKG_INSTALLATION_ROOT}")
 endif()
 if(NOT VCPKG_ROOT AND CMAKE_HOST_WIN32)
   file(GLOB _zlink_vs_vcpkg

@@ -17,23 +17,27 @@ archives published on GitHub Releases, vcpkg, and Docker for Redis.
 
 ## Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Download and install](#2-download-and-install)
-3. [Build](#3-build)
-4. [Run](#4-run)
-5. [Verify](#5-verify)
-6. [Troubleshooting](#6-troubleshooting)
-7. [Sample list](#7-sample-list)
-8. [Configuration and contract layout](#8-configuration-and-contract-layout)
+- [Prerequisites](#prerequisites)
+- [Download and install](#download-and-install)
+- [Build](#build)
+- [Run](#run)
+- [Verify](#verify)
+- [Troubleshooting](#troubleshooting)
+- [Sample list](#sample-list)
+- [Configuration and contract layout](#configuration-and-contract-layout)
 
-## 1. Prerequisites
+The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (bash) and
+`title="windows"` (PowerShell). Each block runs as is from the unpacked directory, and the
+release CI runs the same blocks verbatim.
+
+## Prerequisites
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg`, `./bootstrap-vcpkg.sh`, then set `VCPKG_ROOT` |
+| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` and `./bootstrap-vcpkg.sh`; set `VCPKG_ROOT` unless it lives at `$HOME/vcpkg` |
 | Docker Desktop | each runner starts one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 | `curl` | included since Windows 10 | distribution package |
 
@@ -43,73 +47,48 @@ proxy is C++ built with the sample. vcpkg builds the third-party libraries from 
 binary cache. The third-party versions are pinned with a vcpkg `builtin-baseline`; a clone
 older than that commit needs `git -C $VCPKG_ROOT pull`.
 
-## 2. Download and install
+## Download and install
 
 Download
 [`zlink-samples-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)
 and unpack it. Every command below runs inside the unpacked `zlink-samples-cpp/`.
 
-One script, `bootstrap.cmake`, does the whole install. It downloads three GitHub Release
-assets -- this platform's Core prebuilt (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`)
-and the framework source (`framework-cpp/v0.18.0`) -- builds the binding and the framework into
-`.zlink/install/`, and configures the seven samples as one project into `build/`.
+One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
+block. It downloads three GitHub Release assets -- this platform's Core prebuilt
+(`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source
+(`framework-cpp/v0.18.0`) -- builds the binding and the framework into `.zlink/install/`, and
+configures the seven samples as one project into `build/`. From the second run on it reuses
+what it downloaded and built.
 
-Windows PowerShell:
+Parallelism defaults to the logical core count; lower it as `cmake -DZLINK_JOBS=4 -P
+bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
-```powershell
+## Build
+
+```bash title="linux"
+export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
-```
-
-Linux / WSL bash:
-
-```bash
-export VCPKG_ROOT=$HOME/vcpkg
-cmake -P bootstrap.cmake
-```
-
-Parallelism defaults to the logical core count; lower it with `-DZLINK_JOBS=4` placed before
-`-P`. To start over, delete `.zlink/` and `build/`.
-
-## 3. Build
-
-Windows PowerShell:
-
-```powershell
-cmake --build build --config Release --parallel
-```
-
-Linux / WSL bash:
-
-```bash
 cmake --build build --parallel
+```
+
+```powershell title="windows"
+cmake -P bootstrap.cmake
+cmake --build build --config Release --parallel
 ```
 
 28 role executables and the ZoneWorld proxy come out -- under `build\Release\` on Windows,
 `build/` on Linux. On Windows the Core `zlink.dll` and the third-party DLLs are copied next to
-the executables. The Linux runners rebuild their own sample's targets before running, so this
-step can be skipped when only one sample is of interest.
+the executables. The Linux runners rebuild their own sample's targets before running, so
+`cmake --build` can be skipped when only one sample is of interest.
 
-## 4. Run
+## Run
 
 Every sample has a `run_sample.ps1` and a `run_sample.sh`; one invocation runs one sample.
 **The runner starts Redis itself as a Docker container** (`redis:7-alpine`, a free port in
 20000-20099 on `127.0.0.1`) and removes it at the end. Nothing has to be started beforehand.
+The block below runs the seven in turn.
 
-Windows PowerShell:
-
-```powershell
-.\Bingo\run_sample.ps1
-.\DeliveryDispatch\run_sample.ps1
-.\GameQuest\run_sample.ps1
-.\ShoppingMall\run_sample.ps1
-.\SupportChat\run_sample.ps1
-.\TicTacToe\run_sample.ps1
-.\ZoneWorld\run_sample.ps1
-```
-
-Linux / WSL bash:
-
-```bash
+```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
 ./GameQuest/run_sample.sh
@@ -119,13 +98,23 @@ Linux / WSL bash:
 ./ZoneWorld/run_sample.sh
 ```
 
+```powershell title="windows"
+.\Bingo\run_sample.ps1
+.\DeliveryDispatch\run_sample.ps1
+.\GameQuest\run_sample.ps1
+.\ShoppingMall\run_sample.ps1
+.\SupportChat\run_sample.ps1
+.\TicTacToe\run_sample.ps1
+.\ZoneWorld\run_sample.ps1
+```
+
 Run them one at a time. A runner performs build, per-role configuration files, server start,
 readiness checks, the client self-check and cleanup, in that order. Application ports are
 chosen per run from 20100-21999 on `127.0.0.1`.
 
 Set `ZLINK_CPP_BUILD_DIR` to use the executables of another build tree instead of `build/`.
 
-## 5. Verify
+## Verify
 
 A sample passes when the runner's last line is the marker below and its exit code is 0. The
 items the client self-check confirmed precede it as `<sample>-...=verified` lines.
@@ -140,12 +129,24 @@ items the client self-check confirmed precede it as `<sample>-...=verified` line
 | TicTacToe | `tictactoe-placement=completed` |
 | ZoneWorld | `zoneworld=completed` |
 
+The block below checks this with TicTacToe alone.
+
+```bash title="linux"
+./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+```
+
+```powershell title="windows"
+$lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
+if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw "TicTacToe failed: $($lines[-1])" }
+$lines[-1]
+```
+
 A failed run keeps its run directory with the per-role stdout/stderr logs and prints its path as
 `<sample> run directory preserved: ...`. The Linux runners report the framework's own test stage
 as `framework tests: skipped (package tree; no framework test targets)` -- those tests exist
 only in the repository tree.
 
-## 6. Troubleshooting
+## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -161,7 +162,7 @@ only in the repository tree.
 | `Timed out waiting for <role> at tcp://127.0.0.1:<port>` | That role did not come up. Read `<role>.trace.log` (or `<role>.log`) in the preserved run directory |
 | On Windows, `run_sample.ps1 cannot be loaded because running scripts is disabled` | Execution policy. Run `powershell -ExecutionPolicy Bypass -File .\TicTacToe\run_sample.ps1` |
 
-## 7. Sample list
+## Sample list
 
 | Sample | What it shows | Connection layout | Payload codec |
 |---|---|---|---|
@@ -186,7 +187,7 @@ MeshNode joins; it opens no extra ROUTER endpoint. Node direct, ChannelName sele
 Actor and Logical Multicast share that MeshNode. Classic fanout to every receiver is a separate
 PUB/SUB channel.
 
-## 8. Configuration and contract layout
+## Configuration and contract layout
 
 A server role takes a configuration file path, binds what `app.config()` read into typed
 configuration and hands it to the framework builder. Endpoints, Redis, routing ids, timeouts

@@ -153,7 +153,7 @@ zlink_redis_start_scoped() {
       create_status=$?
     fi
     container_id="$(printf '%s\n' "${create_output}" \
-      | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+      | grep -E -m 1 '^[0-9a-f]{12,64}$' || true)"
     if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
       zlink_redis_remove_attempt "${container_id}" "${name}"
       if zlink_redis_is_bind_conflict "${create_output}"; then

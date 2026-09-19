@@ -18,25 +18,29 @@ Actor, Location, STREAM을 담는다.
 
 ## 차례
 
-1. [전제 조건](#1-전제-조건)
-2. [내려받기와 설치](#2-내려받기와-설치)
-3. [빌드](#3-빌드)
-4. [실행](#4-실행)
-5. [검증](#5-검증)
-6. [문제 해결](#6-문제-해결)
-7. [프로젝트 구성](#7-프로젝트-구성)
-8. [단계별 확인](#8-단계별-확인)
-9. [문서가 읽는 방식](#9-문서가-읽는-방식)
-10. [.NET tutorial과 달라진 지점](#10-net-tutorial과-달라진-지점)
+- [전제 조건](#전제-조건)
+- [내려받기와 설치](#내려받기와-설치)
+- [빌드](#빌드)
+- [실행](#실행)
+- [검증](#검증)
+- [문제 해결](#문제-해결)
+- [프로젝트 구성](#프로젝트-구성)
+- [단계별 확인](#단계별-확인)
+- [문서가 읽는 방식](#문서가-읽는-방식)
+- [.NET tutorial과 달라진 지점](#net-tutorial과-달라진-지점)
 
-## 1. 전제 조건
+`빌드`·`실행`·`검증` 절의 명령 블록은 `title="linux"`(bash)와 `title="windows"`(PowerShell)로
+표시되어 있다. 각 블록은 압축을 푼 디렉터리에서 그대로 실행되며, 릴리스 CI가 같은 블록을
+그대로 돌린다.
+
+## 전제 조건
 
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| vcpkg | Visual Studio가 함께 설치하는 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT`를 지정한다 | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`, 그리고 `VCPKG_ROOT`를 지정한다 |
+| vcpkg | Visual Studio가 함께 설치하는 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT`를 지정한다 | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`. 위치가 `$HOME/vcpkg`가 아니면 `VCPKG_ROOT`를 지정한다 |
 | Docker Desktop | Redis 하나를 컨테이너로 띄운다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 
 이 밖에는 아무것도 필요 없다. zlink 저장소, Python, Node.js, 시스템 패키지의 Boost는 쓰지
@@ -47,99 +51,73 @@ redis-plus-plus)는 vcpkg가 소스에서 빌드하므로 **첫 설치는 20분 
 vcpkg는 `builtin-baseline`으로 세 번째 파티 버전을 고정한다. clone이 그 커밋보다 오래됐으면
 `git -C $VCPKG_ROOT pull`로 갱신한다.
 
-## 2. 내려받기와 설치
+## 내려받기와 설치
 
 [`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)을
 받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-tutorial-cpp/` 안에서 실행한다.
 
-`bootstrap.cmake` 하나가 설치를 끝낸다. 이 스크립트는 GitHub Release에서 세 아카이브 —
-이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework
-소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를 빌드해 `.zlink/install/`에
-설치하고, 이 프로젝트를 `build/`에 구성한다. framework 버전만 스크립트에 적혀 있고,
-Core·binding 버전과 세 번째 파티 목록은 framework 아카이브가 정한다.
+설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. 이 스크립트는 GitHub
+Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding
+소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를
+빌드해 `.zlink/install/`에 설치하고, 이 프로젝트를 `build/`에 구성한다. framework 버전만
+스크립트에 적혀 있고, Core·binding 버전과 세 번째 파티 목록은 framework 아카이브가 정한다.
+두 번째 실행부터는 받은 것과 지은 것을 그대로 쓴다.
 
-Windows PowerShell:
+병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
+두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
 
-```powershell
+## 빌드
+
+```bash title="linux"
+export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
-```
-
-Linux · WSL bash:
-
-```bash
-export VCPKG_ROOT=$HOME/vcpkg
-cmake -P bootstrap.cmake
-```
-
-`VCPKG_ROOT`는 vcpkg를 clone한 위치다. 병렬도는 논리 코어 수가 기본이며 `-DZLINK_JOBS=4`처럼
-`-P` 앞에 두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
-
-## 3. 빌드
-
-Windows PowerShell:
-
-```powershell
-cmake --build build --config Release --parallel
-```
-
-Linux · WSL bash:
-
-```bash
 cmake --build build --parallel
+```
+
+```powershell title="windows"
+cmake -P bootstrap.cmake
+cmake --build build --config Release --parallel
 ```
 
 실행 파일 셋이 나온다 — Windows는 `build\Release\`, Linux는 `build/` 아래다. Windows에서는
 Core `zlink.dll`과 세 번째 파티 DLL이 실행 파일 옆에 함께 복사된다(Windows에는 RPATH가
 없어 loader가 실행 파일 옆만 본다).
 
-## 4. 실행
+## 실행
 
 Redis가 `127.0.0.1:6379`에 있어야 한다. Spot·Actor·Location 단계가 Location Store로 쓴다.
-Docker로 하나 띄운다(두 플랫폼 공통).
+아래 블록은 Redis를 Docker로 띄우고 Server, Client를 차례로 띄운 뒤 첫 요청으로 두 process가
+mesh로 연결됐는지 확인한다. handler와 filter의 로그는 **stderr**로 나간다.
 
-```bash
+```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+./build/tutorial_server > server.log 2>&1 &
+./build/tutorial_client > client.log 2>&1 &
+sleep 3
+curl http://127.0.0.1:5180/players/p1/profile
 ```
 
-Server를 먼저, Client를 다음에 띄운다. handler와 filter의 로그는 **stderr**로 나간다.
-
-Windows PowerShell:
-
-```powershell
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe
-```
-
-Linux · WSL bash:
-
-```bash
-./build/tutorial_server &
-./build/tutorial_client &
-```
-
-첫 요청으로 두 process가 mesh로 연결됐는지 확인한다. PowerShell의 `curl`은
-`Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의 큰따옴표는 `\"`로 escape한다.
-
-```powershell
+```powershell title="windows"
+docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardError server.log
+Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardError client.log
+Start-Sleep -Seconds 3
 curl.exe http://127.0.0.1:5180/players/p1/profile
+```
+
+PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의
+큰따옴표는 `\"`로 escape한다. 예를 들어 방을 여는 요청은 다음과 같다.
+
+```powershell
 curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{\"title\":\"lobby\"}'
 ```
 
 ```bash
-curl http://127.0.0.1:5180/players/p1/profile
 curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
 STREAM 단계의 외부 client는 세 번째 실행 파일이다. Server가 떠 있는 상태에서 실행하면
-자기 검증을 마치고 종료한다.
-
-```powershell
-.\build\Release\tutorial_stream_client.exe
-```
-
-```bash
-./build/tutorial_stream_client
-```
+자기 검증을 마치고 종료한다 — [검증](#검증) 블록이 실행한다.
 
 정리는 process 둘과 Redis 컨테이너를 내리는 것이다.
 
@@ -149,7 +127,7 @@ docker stop zlink-tutorial-redis
 ```
 
 ```bash
-kill %1 %2
+pkill -f build/tutorial_server; pkill -f build/tutorial_client
 docker stop zlink-tutorial-redis
 ```
 
@@ -166,19 +144,35 @@ docker stop zlink-tutorial-redis
 | Fanout publisher | 7412 |
 | Server stream node | 7421 |
 
-## 5. 검증
+## 검증
 
 | 단계 | 성공의 증거 |
 |---|---|
 | `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap done. Next: cmake --build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
 | 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client` 세 실행 파일이 있다 |
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
-| Spot (Redis) | `curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'`가 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
-| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy` 네 줄을 찍고 종료한다 |
+| Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
+| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy` 네 줄을 찍고 0으로 종료한다 |
 
-[단계별 확인](#8-단계별-확인)에 열 단계의 요청과 기대 출력이 전부 있다.
+아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
+이를 확인한다.
 
-## 6. 문제 해결
+```bash title="linux"
+curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"' && echo "tutorial-http=ok"
+./build/tutorial_stream_client && echo "tutorial-stream=ok"
+```
+
+```powershell title="windows"
+if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw "tutorial-http failed" }
+"tutorial-http=ok"
+& .\build\Release\tutorial_stream_client.exe
+if ($LASTEXITCODE -ne 0) { throw "tutorial-stream failed" }
+"tutorial-stream=ok"
+```
+
+[단계별 확인](#단계별-확인)에 열 단계의 요청과 기대 출력이 전부 있다.
+
+## 문제 해결
 
 | 증상 | 원인과 조치 |
 |---|---|
@@ -195,7 +189,7 @@ docker stop zlink-tutorial-redis
 | `bind: Address already in use` / `Only one usage of each socket address` | 위 표의 port를 다른 process가 쓴다. 이전 실행의 `tutorial_server`·`tutorial_client`가 남아 있는지 확인한다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | Client가 아직 뜨지 않았거나 죽었다. Client의 stderr를 본다 |
 
-## 7. 프로젝트 구성
+## 프로젝트 구성
 
 | 프로젝트 | 역할 |
 |---|---|
@@ -208,7 +202,7 @@ docker stop zlink-tutorial-redis
 `CMakeLists.txt`는 `find_package(zlink_framework CONFIG REQUIRED)` 하나로 세 실행 파일을
 만든다. 자기 프로젝트에 옮길 때는 `CMAKE_PREFIX_PATH`에 `.zlink/install`을 주면 된다.
 
-## 8. 단계별 확인
+## 단계별 확인
 
 각 기능은 따로 읽어도 된다. 앞 단계를 하지 않아도 그다음 단계가 동작한다.
 아래 출력은 모두 실제로 찍어 본 것이다.
@@ -563,7 +557,7 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 - **connector는 manual dispatch로 열었다.** 그래야 wait를 걸기 전에 도착한 push가 버려지지
   않고 큐에 남는다.
 
-## 9. 문서가 읽는 방식
+## 문서가 읽는 방식
 
 문서는 코드를 손으로 옮겨 적지 않고 이 파일들에서 구간을 읽는다. 구간은 소스의
 `--8<--` 마커가 정한다.
@@ -626,7 +620,7 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `stream-register` | `Server/main.cpp` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
 
-## 10. .NET tutorial과 달라진 지점
+## .NET tutorial과 달라진 지점
 
 같은 장면을 옮기면서 뜻이 바뀐 자리다. 이름만 다른 것(`AddRouteMesh` →
 `add_route_mesh` 등)은 적지 않는다.
@@ -647,4 +641,4 @@ Spot 단계가 더한 마커는 아래와 같다.
 | runtime weight의 접근자 | property. `mesh.Channel(c).Weight = value` | getter·setter 한 쌍. `mesh.channel(c).weight(value)`로 쓰고 `weight()`로 읽는다 |
 | runtime weight의 `value` | `int value` 인자로 선언하면 query string이 묶인다 | model binding이 없다. `request.query_values`에서 손으로 꺼내고, 없는 경우도 handler가 답해야 한다 |
 | Server의 HTTP | 원래 `WebApplication`이라 HTTP가 이미 있다 | Server가 HTTP를 열지 않았다. 이 endpoint 때문에 `options.http().listen("http://127.0.0.1:5181")`을 처음 추가했다 |
-| 아직 옮기지 않은 장 | User Spot, Instance Spot, Actor, STREAM·Session-Actor, 모니터링 | 없다 |
+| 아직 옮기지 않은 장 | User Spot, Instance Spot, 모니터링 | 없다 |
