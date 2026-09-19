@@ -126,7 +126,7 @@ hop_target_t resolve_location (const hop_target_t &current, const std::string &l
         return {
           .scheme = current.scheme, .host = current.host, .port = current.port, .target = location};
     }
-    throw request_error ("HTTP redirect location is not supported: " + location);
+    throw request_protocol_error ("HTTP redirect location is not supported: " + location);
 }
 
 } // namespace zlink::http_client::detail
