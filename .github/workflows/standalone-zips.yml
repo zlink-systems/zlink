@@ -73,6 +73,11 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
+          # In a called workflow github.event_name is the caller's event (push for a
+          # tag, release, …), never "workflow_call" — so the call input decides first.
+          if [ -n "${CALL_TAG}" ]; then
+            EVENT_NAME=workflow_call
+          fi
           case "${EVENT_NAME}" in
             workflow_dispatch)
               ref="${DISPATCH_REF}"
