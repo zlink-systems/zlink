@@ -10,6 +10,7 @@ type PlayerTransferState = {
   dirX: number;
   dirY: number;
   pendingJoin: ReturnType<PlayerActor['pendingJoin']>;
+  processedJoinOperations: ReturnType<PlayerActor['captureProcessedJoinOperations']>;
 };
 
 class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
@@ -22,7 +23,8 @@ class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<Player
       isBot: actor.isBot,
       dirX: actor.dirX,
       dirY: actor.dirY,
-      pendingJoin: actor.pendingJoin()
+      pendingJoin: actor.pendingJoin(),
+      processedJoinOperations: actor.captureProcessedJoinOperations()
     } satisfies PlayerTransferState));
   }
   // --8<-- [end:doc-zw-actor-capture]
@@ -35,6 +37,7 @@ class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<Player
     actor.isBot = state.isBot;
     actor.dirX = state.dirX;
     actor.dirY = state.dirY;
+    actor.restoreProcessedJoinOperations(state.processedJoinOperations);
     actor.restorePendingJoin(state.pendingJoin);
   }
 }

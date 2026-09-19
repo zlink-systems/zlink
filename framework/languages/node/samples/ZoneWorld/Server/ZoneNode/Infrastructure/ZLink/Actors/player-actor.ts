@@ -20,6 +20,8 @@ import type { ZoneId } from '../../../../../Shared/spec';
 
 type PendingJoinKind = 'world' | 'move' | 'bot';
 
+const processedJoinOperationRetention = 256;
+
 class PlayerActor implements ZLinkActor {
   readonly context!: ZLinkActorContext;
 
@@ -34,6 +36,8 @@ class PlayerActor implements ZLinkActor {
   ) {}
 
   private pendingJoinKind: PendingJoinKind | null = null;
+  private readonly processedJoinOperations = new Set<string>();
+  private readonly processedJoinOperationOrder: string[] = [];
 
   get hasPendingJoin(): boolean {
     return this.pendingJoinKind !== null;
@@ -58,6 +62,14 @@ class PlayerActor implements ZLinkActor {
     this.pendingJoinKind = null;
   }
 
+  captureProcessedJoinOperations(): readonly string[] {
+    return [...this.processedJoinOperationOrder];
+  }
+
+  restoreProcessedJoinOperations(operationIds: readonly string[]): void {
+    for (const operationId of operationIds) this.rememberJoinOperation(operationId);
+  }
+
   push(payload: unknown): void {
     if (this.isBot) return;
     const packetName = typeof payload === 'object' && payload !== null
@@ -74,6 +86,8 @@ class PlayerActor implements ZLinkActor {
 
   // --8<-- [start:doc-zw-join-completed]
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
+    const operationId = `${completion.operationId.high}:${completion.operationId.low}`;
+    if (this.processedJoinOperations.has(operationId)) return;
     const kind = 'kind' in completion ? completion.kind : 'none';
     console.log(
       `actor join completed actor=${this.actorId} status=${completion.status}`
@@ -83,11 +97,13 @@ class PlayerActor implements ZLinkActor {
     this.completePendingJoin();
     if (completion.status === 'accepted') {
       if (pending === 'world') await this.sendJoinResult(null);
+      this.rememberJoinOperation(operationId);
       return;
     }
     if (pending === 'bot') {
       this.dirX *= -1;
       this.dirY *= -1;
+      this.rememberJoinOperation(operationId);
       return;
     }
     let reason = 'ZoneMaintenance';
@@ -98,11 +114,23 @@ class PlayerActor implements ZLinkActor {
     }
     if (pending === 'world') {
       await this.sendJoinResult(reason);
+      this.rememberJoinOperation(operationId);
       return;
     }
     this.push(new MoveRejectedNotify(reason as never, this.x, this.y));
+    this.rememberJoinOperation(operationId);
   }
   // --8<-- [end:doc-zw-join-completed]
+
+  private rememberJoinOperation(operationId: string): void {
+    if (this.processedJoinOperations.has(operationId)) return;
+    this.processedJoinOperations.add(operationId);
+    this.processedJoinOperationOrder.push(operationId);
+    if (this.processedJoinOperationOrder.length > processedJoinOperationRetention) {
+      const expired = this.processedJoinOperationOrder.shift();
+      if (expired !== undefined) this.processedJoinOperations.delete(expired);
+    }
+  }
 
   async sendJoinResult(error: string | null): Promise<void> {
     await this.context.boundSession
