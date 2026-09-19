@@ -32,6 +32,10 @@ const topologySamples = [
 test('node samples define required runners and keep scenario contracts in common documents', () => {
   const missing = [];
   const samplesReadme = path.join(samplesRoot, 'README.ko.md');
+  const samplesReadmeEn = path.join(samplesRoot, 'README.md');
+  if (!fs.existsSync(samplesReadmeEn)) {
+    missing.push('samples/README.md');
+  }
   if (!fs.existsSync(samplesReadme)) {
     missing.push('samples/README.ko.md');
   } else {
@@ -39,9 +43,11 @@ test('node samples define required runners and keep scenario contracts in common
     for (const requiredText of [
       '../../../doc/framework/common/sample/README.ko.md',
       'npm run browser:install',
+      // Zip-root-relative: this README also ships as the zlink-samples-node.zip
+      // root README, where there is no repo-relative `samples/` prefix (#655).
       // One invocation runs one sample (#405, #585); the aggregate runner is gone.
-      './samples/Bingo.Ts/run_sample.sh',
-      './samples/Bingo.Ts/run_sample.ps1',
+      './Bingo.Ts/run_sample.sh',
+      './Bingo.Ts/run_sample.ps1',
       'Bingo.Ts/Client/bingo-client-scenario.ts'
     ]) {
       if (!readme.includes(requiredText)) {

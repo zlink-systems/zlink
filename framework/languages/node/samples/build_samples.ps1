@@ -10,6 +10,15 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $nodeRoot = Split-Path -Parent $scriptDir
+
+#  Positive, existence-checked marker for "this is the repository", not directory shape: a
+#  standalone samples package (zlink-samples-node.zip) keeps the same samples/<Sample> layout,
+#  so shape alone cannot tell the two apart (#655). Only the repository's node workspace root
+#  carries this package.json with this name.
+$nodeWorkspaceManifestPath = Join-Path $nodeRoot "package.json"
+$repositoryMode = (Test-Path -LiteralPath $nodeWorkspaceManifestPath -PathType Leaf) `
+    -and ((Get-Content -LiteralPath $nodeWorkspaceManifestPath -Raw | ConvertFrom-Json).name -eq "@zlink-systems/node-framework-workspace")
+
 $defaultSamples = @(
     "TicTacToe.Ts",
     "Bingo.Ts",
@@ -21,13 +30,20 @@ $defaultSamples = @(
 )
 $selectedSamples = if ($null -eq $Samples -or $Samples.Count -eq 0) { $defaultSamples } else { $Samples }
 
-if (-not $SkipFrameworkBuild) {
-    $buildArguments = @{ SkipSamples = $true }
-    if (-not [string]::IsNullOrWhiteSpace($LocalPackageRoot)) {
-        $buildArguments.LocalPackageRoot = $LocalPackageRoot
+if ($repositoryMode) {
+    if (-not $SkipFrameworkBuild) {
+        $buildArguments = @{ SkipSamples = $true }
+        if (-not [string]::IsNullOrWhiteSpace($LocalPackageRoot)) {
+            $buildArguments.LocalPackageRoot = $LocalPackageRoot
+        }
+        & (Join-Path $nodeRoot "build-windows.ps1") @buildArguments
+        if (-not $?) { throw "Node Framework Windows build failed." }
     }
-    & (Join-Path $nodeRoot "build-windows.ps1") @buildArguments
-    if (-not $?) { throw "Node Framework Windows build failed." }
+} else {
+    #  Standalone samples package: there is no repository framework build to run first: each
+    #  sample resolves @zlink-systems/* from the registry at its pinned version once
+    #  `npm install` has run (see samples/README.md).
+    Write-Output "Standalone samples package: skipping the repository framework build."
 }
 
 foreach ($sample in $selectedSamples) {
@@ -47,26 +63,34 @@ foreach ($sample in $selectedSamples) {
 }
 
 if ($selectedSamples -contains "ZoneWorld") {
-    $sharedBrowserRoot = Join-Path $nodeRoot "../shared_sample/zoneworld/client"
-    Write-Output "sample ZoneWorld shared browser build start"
-    Push-Location $sharedBrowserRoot
-    try {
-        & npm.cmd ci --ignore-scripts --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & npm.cmd run build
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
+    if ($repositoryMode) {
+        $sharedBrowserRoot = Join-Path $nodeRoot "../shared_sample/zoneworld/client"
+        Write-Output "sample ZoneWorld shared browser build start"
+        Push-Location $sharedBrowserRoot
         try {
-            $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $sharedBrowserRoot ".cache/ms-playwright"
-            & node.exe (Join-Path $sharedBrowserRoot "node_modules/playwright/cli.js") install chromium
+            & npm.cmd ci --ignore-scripts --no-audit --no-fund
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & npm.cmd run build
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
+            try {
+                $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $sharedBrowserRoot ".cache/ms-playwright"
+                & node.exe (Join-Path $sharedBrowserRoot "node_modules/playwright/cli.js") install chromium
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            } finally {
+                $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath
+            }
         } finally {
-            $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath
+            Pop-Location
         }
-    } finally {
-        Pop-Location
+        Write-Output "sample ZoneWorld shared browser build completed"
+    } else {
+        #  Outside the repository, ZoneWorld's browser UI is the self-contained
+        #  ZoneWorld/Browser directory: it is built from ZoneWorld's own node_modules the
+        #  first time the sample runs (Runner/sample-runner.mjs), not pre-built here. It only
+        #  needs its own Chromium install.
+        Write-Output "Standalone samples package: ZoneWorld's browser UI (ZoneWorld/Browser) builds automatically when the sample runs. Run 'npm run browser:install' inside ZoneWorld to install Chromium first."
     }
-    Write-Output "sample ZoneWorld shared browser build completed"
 }
 
 Write-Output "Node sample Windows builds passed."

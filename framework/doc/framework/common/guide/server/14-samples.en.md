@@ -333,6 +333,9 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
 === "Node/TypeScript"
 
     ```bash
+    # Once per sample, install its dependencies first
+    cd framework/languages/node/samples/Bingo.Ts && npm install && cd -
+
     # Run one sample
     framework/languages/node/samples/Bingo.Ts/run_sample.sh
 

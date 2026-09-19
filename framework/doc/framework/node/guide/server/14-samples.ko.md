@@ -272,6 +272,9 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 띄우고 끝나면 정리하므로 `docker`만 있으면 된다.
 
 ```bash
+# 처음 한 번, 샘플마다 dependency를 설치한다
+cd framework/languages/node/samples/Bingo.Ts && npm install && cd -
+
 # 샘플 하나 실행
 framework/languages/node/samples/Bingo.Ts/run_sample.sh
 
