@@ -22,11 +22,11 @@ class OrderWorkflowSpot(
     }
 
     // --8<-- [start:doc-sm-close-terminal]
-    fun closeIfTerminal(state: OrderState): CompletionStage<Void?> =
+    fun closeIfTerminal(state: OrderState): CompletionStage<Void> =
         if (isTerminal(state)) {
-            instanceContext.close().thenApply { null }
+            instanceContext.close().thenApply<Void> { null }
         } else {
-            java.util.concurrent.CompletableFuture.completedFuture(null)
+            java.util.concurrent.CompletableFuture.completedFuture<Void>(null)
         }
     // --8<-- [end:doc-sm-close-terminal]
 
