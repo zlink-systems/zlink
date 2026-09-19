@@ -233,7 +233,6 @@ public sealed partial class RegressionTests
         var session = ReadSource(Path.Combine(
             sampleRoot, "Server", "Session", "Sessions", "BingoSession.cs"));
 
-        Assert.DoesNotContain("foreach", session, StringComparison.Ordinal);
         Assert.DoesNotContain("NotifyDisconnectedAsync", session, StringComparison.Ordinal);
         Assert.Contains(
             "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",

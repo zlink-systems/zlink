@@ -18,12 +18,15 @@ internal sealed class BingoSession(
     // --8<-- [start:doc-bingo-session-disconnect]
     public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
     {
-        // Framework cleanup owns disconnect notification; this callback only records
-        // the sample lifecycle evidence without submitting another notification.
-        var actor = Context.Actors.Bound.FirstOrDefault();
-        logger.LogInformation(
-            "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
-            actor?.ActorId ?? "-");
+        // Framework cleanup owns the disconnect notification (spec 7.5): this callback
+        // only records the sample lifecycle evidence, one line per bound Actor, and
+        // submits nothing.
+        foreach (var actor in Context.Actors.Bound)
+        {
+            logger.LogInformation(
+                "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
+                actor.ActorId);
+        }
         return ValueTask.CompletedTask;
     }
     // --8<-- [end:doc-bingo-session-disconnect]
