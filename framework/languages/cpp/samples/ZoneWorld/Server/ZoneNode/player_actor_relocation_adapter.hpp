@@ -5,7 +5,9 @@
 
 #include <zlink/framework.hpp>
 
+#include <deque>
 #include <iostream>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -58,6 +60,13 @@ class player_actor_t final : public fw::actor_t
       const fw::actor_join_completion_t &completion) override
     {
         // --8<-- [start:doc-zw-join-completed]
+        const auto operation = std::visit (
+          [] (const auto &value) {
+              return std::pair{value.operation_id_high, value.operation_id_low};
+          },
+          completion);
+        if (completed_join_operations.contains (operation))
+            co_return;
         if (std::holds_alternative<fw::actor_join_accepted_t> (completion)) {
             std::cerr << "zoneworld-join-accepted player="
                       << player_id << " zone=" << zone_id
@@ -123,6 +132,7 @@ class player_actor_t final : public fw::actor_t
             pending_join = false;
             pending_crash_probe = false;
         }
+        remember_join_operation (operation);
         // --8<-- [end:doc-zw-join-completed]
         co_return;
     }
@@ -141,8 +151,23 @@ class player_actor_t final : public fw::actor_t
     int pending_x = 25;
     int pending_y = 25;
     std::string pending_zone_id = "zone-nw";
+    std::set<std::pair<std::uint64_t, std::uint64_t>> completed_join_operations;
+    std::deque<std::pair<std::uint64_t, std::uint64_t>> completed_join_operation_order;
 
   private:
+    static constexpr std::size_t completed_join_operation_retention = 256;
+
+    void remember_join_operation (const std::pair<std::uint64_t, std::uint64_t> &operation)
+    {
+        if (!completed_join_operations.emplace (operation).second)
+            return;
+        completed_join_operation_order.push_back (operation);
+        while (completed_join_operation_order.size () > completed_join_operation_retention) {
+            completed_join_operations.erase (completed_join_operation_order.front ());
+            completed_join_operation_order.pop_front ();
+        }
+    }
+
     fw::actor_context_t _context;
 };
 
@@ -174,12 +199,14 @@ struct player_state_t
     int pending_x = 25;
     int pending_y = 25;
     std::string pending_zone_id = "zone-nw";
+    std::deque<std::pair<std::uint64_t, std::uint64_t>> completed_join_operation_order;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (
   player_state_t, x, y, zone_id, is_bot, dir_x, dir_y,
   initial_entry, pending_join, pending_initial_entry,
-  pending_crash_probe, pending_x, pending_y, pending_zone_id)
+  pending_crash_probe, pending_x, pending_y, pending_zone_id,
+  completed_join_operation_order)
 
 class player_relocation_adapter_t final
     : public fw::actor_relocation_adapter_t<player_actor_t>
@@ -195,7 +222,8 @@ class player_relocation_adapter_t final
             actor.x, actor.y, actor.zone_id, actor.is_bot,
             actor.dir_x, actor.dir_y, actor.initial_entry, actor.pending_join,
             actor.pending_initial_entry, actor.pending_crash_probe,
-            actor.pending_x, actor.pending_y, actor.pending_zone_id});
+            actor.pending_x, actor.pending_y, actor.pending_zone_id,
+            actor.completed_join_operation_order});
         co_return std::vector<std::byte> (
           message.bytes ().begin (), message.bytes ().end ());
     }
@@ -223,6 +251,11 @@ class player_relocation_adapter_t final
         actor.pending_x = restored.pending_x;
         actor.pending_y = restored.pending_y;
         actor.pending_zone_id = restored.pending_zone_id;
+        actor.completed_join_operation_order =
+          std::move (restored.completed_join_operation_order);
+        actor.completed_join_operations = {
+          actor.completed_join_operation_order.begin (),
+          actor.completed_join_operation_order.end ()};
         co_return;
     }
 };

@@ -27,11 +27,15 @@
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
     </ItemGroup>
+    <!-- zlink.dll links OpenSSL (libcrypto/libssl) and the MSVC runtime, which the Core
+         Windows archive ships next to it in bin/. LoadLibrary resolves those from the loaded
+         DLL's own directory, so every bin/*.dll travels with zlink.dll — the same set the
+         Node prebuild carries under prebuilds/win32-x64. -->
     <ItemGroup Condition="'$(ZLinkWindowsX64NativeRoot)' != ''">
-        <None Include="$(ZLinkWindowsX64NativeRoot)\zlink.dll">
+        <None Include="$(ZLinkWindowsX64NativeRoot)\*.dll">
             <Pack>true</Pack>
-            <PackagePath>runtimes\win-x64\native\zlink.dll</PackagePath>
-            <Link>runtimes\win-x64\native\zlink.dll</Link>
+            <PackagePath>runtimes\win-x64\native\%(Filename)%(Extension)</PackagePath>
+            <Link>runtimes\win-x64\native\%(Filename)%(Extension)</Link>
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
     </ItemGroup>

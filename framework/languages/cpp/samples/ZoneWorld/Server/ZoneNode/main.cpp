@@ -259,6 +259,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
           .add_actor_send<&zone_spot_t::deliver_announce> (
             deliver_world_announce_msg_t::packet_name)
           .add_handler<&zone_spot_t::announce> (deliver_announce_msg_t::packet_name)
+          .add_handler<&zone_spot_t::update_position> (update_position_msg_t::packet_name)
           .add_actor_request<&zone_spot_t::follow_probe> (message_follow_probe_req_t::packet_name)
           .add_actor_request<&zone_spot_t::location_probe> (actor_location_probe_req_t::packet_name)
           .add_actor_send<&zone_spot_t::follow_probe_one_way> (
@@ -371,23 +372,43 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         co_return;
     }
 
-    void move (player_actor_t &actor, fw::message_context_t &, const move_msg_t &message)
+    fw::task_t<void> move (player_actor_t &actor,
+                           fw::message_context_t &,
+                           const move_msg_t &message)
     {
         if (!apply_move_authority (actor, message))
-            return;
-        std::lock_guard lock (_mutex);
-        _players[actor.player_id] = {actor.player_id, actor.x, actor.y, actor.zone_id,
-                                     actor.is_bot};
+            co_return;
+        co_await _context
+          .send_to_spot (_context.spot_id (),
+                         update_position_msg_t{actor.player_id, actor.x, actor.y, actor.is_bot})
+          .async ();
+        co_return;
     }
 
-    void bot_tick (player_actor_t &actor, fw::message_context_t &, const bot_tick_msg_t &)
+    fw::task_t<void> bot_tick (player_actor_t &actor,
+                               fw::message_context_t &,
+                               const bot_tick_msg_t &)
     {
         if (!actor.is_bot)
-            return;
+            co_return;
         if (apply_move_authority (actor, move_msg_t{actor.x + actor.dir_x * spec_t::bot_step,
                                                     actor.y + actor.dir_y * spec_t::bot_step})) {
-            std::lock_guard lock (_mutex);
-            _players[actor.player_id] = {actor.player_id, actor.x, actor.y, actor.zone_id, true};
+            co_await _context
+              .send_to_spot (_context.spot_id (),
+                             update_position_msg_t{actor.player_id, actor.x, actor.y, actor.is_bot})
+              .async ();
+        }
+        co_return;
+    }
+
+    void update_position (const update_position_msg_t &message)
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _players.find (message.player_id);
+        if (found != _players.end ()) {
+            found->second.x = message.x;
+            found->second.y = message.y;
+            found->second.is_bot = message.is_bot;
         }
     }
 

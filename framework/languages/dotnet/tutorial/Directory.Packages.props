@@ -8,11 +8,11 @@
     <!-- 배포된 패키지를 그대로 쓴다. 독자가 이 디렉터리를 복사해 나가도 저장소 없이
          빌드된다. 버전은 sync-version.py가 framework/languages/dotnet/VERSION에
          맞춰 갱신한다. -->
-    <PackageVersion Include="Zlink.Framework" Version="0.18.1" />
-    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.18.1" />
-    <PackageVersion Include="Zlink.Framework.Locations.Redis" Version="0.18.1" />
-    <PackageVersion Include="Zlink.Stream.Connector" Version="0.18.1" />
-    <PackageVersion Include="Zlink.HttpClient" Version="0.18.1" />
+    <PackageVersion Include="Zlink.Framework" Version="0.18.2" />
+    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.18.2" />
+    <PackageVersion Include="Zlink.Framework.Locations.Redis" Version="0.18.2" />
+    <PackageVersion Include="Zlink.Stream.Connector" Version="0.18.2" />
+    <PackageVersion Include="Zlink.HttpClient" Version="0.18.2" />
   </ItemGroup>
 
   <!-- Zlink(binding)는 여기서 고정하지 않는다. Zlink.Framework의 .nuspec이 필요한
