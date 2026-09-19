@@ -35,11 +35,7 @@ class bingo_session_t final : public packet_stream_session_t
     task_t<void> on_disconnected (stream_t &) override
     {
         if (_bound_actor_id) {
-            const auto actor_id = *_bound_actor_id;
-            if (auto actor = _actors.find (actor_id)) {
-                co_await actor->notify_disconnected ();
-            }
-            std::cout << "bingo-lifecycle session-disconnect actor=" << actor_id
+            std::cout << "bingo-lifecycle session-disconnect actor=" << *_bound_actor_id
                       << " destroy=false" << std::endl;
             _bound_actor_id.reset ();
         }

@@ -522,6 +522,35 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesFrameworkOwnedSpotLocationResolutio
          "application spot resolver";
 }
 
+TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
+{
+    const auto samples = cpp_language_root () / "samples";
+    const auto bingo_host =
+      read_text_file (samples / "Bingo/Server/Session/session_server_host_factory.hpp");
+    const auto bingo_session =
+      read_text_file (samples / "Bingo/Server/Session/Sessions/bingo_session.hpp");
+    EXPECT_NE (bingo_host.find ("set_automatic_routing_id_prefix (\"bingo-session\")"),
+               std::string::npos);
+    EXPECT_EQ (bingo_host.find (".set_routing_id ("), std::string::npos);
+    EXPECT_EQ (bingo_session.find ("notify_disconnected"), std::string::npos);
+    EXPECT_NE (bingo_session.find ("bingo-lifecycle session-disconnect actor="),
+               std::string::npos);
+
+    const auto tictactoe_host =
+      read_text_file (samples / "TicTacToe/Server/Play/play_server_host_factory.hpp");
+    EXPECT_NE (tictactoe_host.find (".enable_actor_dispatch ()"), std::string::npos);
+
+    const auto support = read_text_file (samples / "SupportChat/Server/Support/main.cpp");
+    EXPECT_NE (support.find ("add_forwarded_metadata_key (conversation_id_metadata_key)"),
+               std::string::npos);
+    EXPECT_NE (support.find ("on_disconnect_actor (support_user_actor_t &actor)"),
+               std::string::npos);
+    EXPECT_NE (support.find ("set_agent_available (actor.actor_id, actor.display_name, false)"),
+               std::string::npos);
+    EXPECT_NE (support.find ("broadcast_except ("), std::string::npos);
+
+}
+
 TEST (CppFrameworkSampleParity, DocumentedSampleRolesDoNotBuildProbeProcesses)
 {
     const auto cmake = read_text_file (cpp_language_root () / "CMakeLists.txt");

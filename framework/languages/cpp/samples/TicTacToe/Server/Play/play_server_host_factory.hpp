@@ -72,6 +72,7 @@ class play_server_host_factory_t
           .preserve_state_with<player_actor_relocation_adapter_t> ();
         options.add_stream_node (sample_names_t::stream_name)
           .bind (topology.selected_stream_endpoint ())
+          .enable_actor_dispatch ()
           .register_session<play_session_t> ();
         // --8<-- [end:doc-ttt-play-register]
         app.add_hosted_service (std::make_unique<play_route_readiness_service_t> (

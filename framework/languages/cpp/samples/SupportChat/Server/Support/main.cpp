@@ -466,11 +466,10 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         if (sent.state.status != previous.status) {
             report_status (sent.state);
         }
-        if (auto peer = peer_for (actor.participant_id)) {
-            co_await send_to_actor (
-              *peer, chat_message_notify_t{sent.state.conversation_id, sent.message, sent.state},
-              chat_message_notify_t::packet_name);
-        }
+        co_await broadcast_except (
+          actor.participant_id,
+          chat_message_notify_t{sent.state.conversation_id, sent.message, sent.state},
+          chat_message_notify_t::packet_name);
         co_return sent;
     }
     // --8<-- [end:doc-sc-message-push]
@@ -544,6 +543,22 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         // --8<-- [end:doc-sc-roster-push]
         co_return join_conversation_res_t{false, joined.state};
+    }
+
+    template <typename TMessage>
+    task_t<void> broadcast_except (const std::string &excluded_participant_id,
+                                   const TMessage &message,
+                                   const char *packet_name)
+    {
+        const auto state = require_conversation ().snapshot ();
+        if (state.customer_actor_id != excluded_participant_id) {
+            co_await send_to_actor (state.customer_actor_id, message, packet_name);
+        }
+        if (state.agent_actor_id && !state.agent_actor_id->empty ()
+            && *state.agent_actor_id != excluded_participant_id) {
+            co_await send_to_actor (*state.agent_actor_id, message, packet_name);
+        }
+        co_return;
     }
 
     std::optional<std::string> peer_for (const std::string &participant_id) const
@@ -694,6 +709,15 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     }
 
     task_t<void> on_leave_actor (support_user_actor_t &) override { co_return; }
+
+    task_t<void> on_disconnect_actor (support_user_actor_t &actor) override
+    {
+        if (actor.role == role_t::agent) {
+            (void) _runtime.set_agent_available (actor.actor_id, actor.display_name, false);
+            std::cerr << "supportchat support: agent-disconnected actor=" << actor.actor_id << "\n";
+        }
+        co_return;
+    }
 
     // --8<-- [start:doc-sc-set-available]
     set_agent_available_res_t set_available (support_user_actor_t &actor,
@@ -879,6 +903,7 @@ int main (int argc, char **argv)
     app.logging ().use_file (configuration.flow_log_path ());
     auto &options = app.add_zlink_framework ();
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.metadata ().add_forwarded_metadata_key (conversation_id_metadata_key);
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "location:");
