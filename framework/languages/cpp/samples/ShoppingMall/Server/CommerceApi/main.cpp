@@ -30,8 +30,19 @@ class commerce_api_handlers_t
      * 배경에서 진행한다(§9.3). 클라이언트는 GetOrderState 폴링으로 종료를 확인한다. */
     task_t<start_order_res_t> start_order (const start_order_req_t &request)
     {
+        struct start_plan_t
+        {
+            start_order_workflow_req_t command;
+            bool already_started = false;
+        };
+        struct projection_lookup_t
+        {
+            bool found = false;
+            order_state_t state;
+        };
+
         // --8<-- [start:doc-sm-api-start]
-        auto command = _store.update ([&] (nlohmann::json &state) {
+        auto plan = _store.update ([&] (nlohmann::json &state) {
             auto &mappings = state["idempotency"];
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
@@ -43,6 +54,8 @@ class commerce_api_handlers_t
             }
             const auto order_id =
               mappings[request.idempotency_key].value ("orderId", std::string{});
+            const auto already_started =
+              mappings[request.idempotency_key].value ("started", false);
 
             /* 장바구니는 CommerceStateStore의 시드에서 읽어 검증한다 — 금액 범위나 cart id
              * 문자열 비교로 성공·실패를 흉내내지 않는다. */
@@ -51,18 +64,39 @@ class commerce_api_handlers_t
             }
             const auto cart = state["carts"][request.cart_id].get<cart_seed_t> ();
             mappings[request.idempotency_key]["started"] = true;
-            return start_order_workflow_req_t{order_id,
-                                              request.cart_id,
-                                              request.shipping_address_id,
-                                              request.payment_method_id,
-                                              request.idempotency_key,
-                                              "start:" + request.idempotency_key,
-                                              cart.lines,
-                                              cart.amount,
-                                              cart.currency};
+            return start_plan_t{
+              start_order_workflow_req_t{order_id,
+                                         request.cart_id,
+                                         request.shipping_address_id,
+                                         request.payment_method_id,
+                                         request.idempotency_key,
+                                         "start:" + request.idempotency_key,
+                                         cart.lines,
+                                         cart.amount,
+                                         cart.currency},
+              already_started};
         });
 
-        auto state = (co_await request_workflow<start_order_workflow_res_t> (command)).state;
+        /* 공통 sample spec §6.1: "이미 확정된 idempotency mapping을 재사용하는 경우에는
+         * 현재 조회 모델을 반환할 수 있다." */
+        if (plan.already_started) {
+            for (int attempt = 0; attempt < 20; ++attempt) {
+                const auto projection = _store.read ([&] (const nlohmann::json &state) {
+                    if (!state["readModels"].contains (plan.command.order_id)) {
+                        return projection_lookup_t{};
+                    }
+                    return projection_lookup_t{
+                      true,
+                      state["readModels"][plan.command.order_id].get<order_state_t> ()};
+                });
+                if (projection.found) {
+                    co_return start_order_res_t{projection.state.order_id, projection.state};
+                }
+                std::this_thread::sleep_for (std::chrono::milliseconds (10));
+            }
+        }
+
+        auto state = (co_await request_workflow<start_order_workflow_res_t> (plan.command)).state;
         // --8<-- [end:doc-sm-api-start]
         std::cerr << "shoppingmall api: start order=" << state.order_id
                   << " status=" << state.status << "\n";
