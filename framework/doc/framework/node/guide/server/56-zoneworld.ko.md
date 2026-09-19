@@ -22,7 +22,7 @@ title: "ZoneWorld 따라 읽기 · Node/TypeScript"
 
     ZoneWorld 샘플을 편집기에 열고, player가 월드에 입장해 zone 경계를 넘어 다른 node로 옮겨지는
     경로와, 운영 콘솔의 공지·점검이 모든 node에 도달하는 경로를 코드에서 따라갈 수 있다. 이 장의
-    코드는 `framework/languages/<언어>/samples/ZoneWorld`에서 그대로 실행된다.
+    코드는 `framework/languages/node/samples/ZoneWorld.Ts`에서 그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축)가 이 샘플이 무엇을
 보여 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의

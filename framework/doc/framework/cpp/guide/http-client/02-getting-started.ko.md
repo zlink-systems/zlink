@@ -51,6 +51,8 @@ client는 base URL과 기본 옵션을 담는 builder를 완성해 만든다. re
 
 ## 3. 실행 결과
 
+아래 출력은 tutorial(`framework/languages/cpp/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 HttpClient를 실행한 결과이며, 주소는 Client의 HTTP 표면이다.
+
 ```text
 # (#714 수정 뒤 채운다)
 ```

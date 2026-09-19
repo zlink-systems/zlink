@@ -21,7 +21,7 @@ title: "Actor · C#/.NET"
 !!! info "이 장을 읽고 나면"
 
     개체 하나를 id로 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 `framework/languages/dotnet/tutorial`에서 그대로 실행된다.
 
 [Spot](21-spot.ko.md)이 방·queue처럼 **여럿이 함께 사용하는 자리**를 다뤘다면, Actor는 플레이어
 하나, 세션 하나처럼 **개체 단위 상태**를 맡는다. 둘 다 id로 호출하고 한 번에 하나씩 처리하는
@@ -147,6 +147,8 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 
 ## 4. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/dotnet/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p7 \
   -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
@@ -182,7 +184,7 @@ curl http://127.0.0.1:5080/players/p7
 - 여럿이 함께 사용하는 자리 — [Spot](21-spot.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - 이동과 membership — [Actor membership](35-actor-membership.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

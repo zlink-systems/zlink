@@ -200,6 +200,34 @@ def strip_tabs(text: str, label: str) -> str:
     return "\n".join(out)
 
 
+#  공통 산문의 `framework/languages/<언어>/…` 자리 표시를 그 언어의 실제 디렉터리로 바꾼다.
+#  java·kotlin은 같은 languages/java 아래 tutorial/<lang>·samples/<lang>으로 나뉘고, node 샘플은
+#  `<이름>.Ts` 디렉터리다. 표시를 그대로 두면 생성판 독자가 없는 경로를 읽는다.
+LANGUAGE_PATHS = {
+    "dotnet": ("framework/languages/dotnet/tutorial", "framework/languages/dotnet/samples/{name}"),
+    "cpp": ("framework/languages/cpp/tutorial", "framework/languages/cpp/samples/{name}"),
+    "java": ("framework/languages/java/tutorial/java", "framework/languages/java/samples/java/{name}"),
+    "kotlin": ("framework/languages/java/tutorial/kotlin", "framework/languages/java/samples/kotlin/{name}"),
+    "node": ("framework/languages/node/tutorial", "framework/languages/node/samples/{name}.Ts"),
+}
+PLACEHOLDER_RE = re.compile(
+    r"framework/languages/<(?:언어|language|lang)>/(tutorial|samples)(?:/([A-Za-z0-9_.-]+))?")
+
+
+def resolve_language_paths(text: str, lang_dir: str) -> str:
+    tutorial, samples = LANGUAGE_PATHS[lang_dir]
+
+    def repl(m: re.Match) -> str:
+        kind, name = m.group(1), m.group(2)
+        if kind == "tutorial":
+            return tutorial + (f"/{name}" if name else "")
+        if name is None:
+            return samples.rsplit("/", 1)[0]
+        return samples.format(name=name)
+
+    return PLACEHOLDER_RE.sub(repl, text)
+
+
 def link_chapter_refs(text: str, available: dict[str, str], suffix: str) -> str:
     """`` `11. Monitoring` 장/chapter `` → 실제 링크."""
     def repl(m: re.Match) -> str:
@@ -327,6 +355,7 @@ def generate_locale(suffix: str, check_only: bool,
             body = strip_tabs(src.read_text(encoding="utf-8"), label)
             body = NAV_RE.sub("", body)
             body, _ = surface_terms.translate(body, label)
+            body = resolve_language_paths(body, lang_dir)
             body = link_chapter_refs(body, available, suffix)
             body = redirect_missing(body, lang_dir, suffix, section)
             content = (s["front_matter"].format(

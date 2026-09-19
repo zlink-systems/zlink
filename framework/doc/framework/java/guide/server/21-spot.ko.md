@@ -21,7 +21,7 @@ title: "Spot · Java"
 !!! info "이 장을 읽고 나면"
 
     id로 호출하는 상태 객체를 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 `framework/languages/java/tutorial/java`에서 그대로 실행된다.
 
 [Channel 메시징](20-channel-messaging.ko.md)의 호출은 이름을 맡은 node 중 하나가 받았다.
 받을 대상이 정해져 있으면 그 경로를 사용할 수 없다. **Spot은 id로 찾는 상태 객체**이고, 자기
@@ -144,6 +144,8 @@ stable type을 지정해 만든다. 응답으로 오는 id가 그 뒤 모든 호
 
 ## 5. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/java/tutorial/java`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'
@@ -173,7 +175,7 @@ id는 Framework가 만든다. 두 번째 호출은 응답을 기다리지 않고
 - id로 호출하는 또 다른 단위 — [Actor](22-actor.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - Location Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#6-연결과-discovery)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — `framework/languages/java/tutorial/java`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

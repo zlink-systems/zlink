@@ -21,7 +21,7 @@ title: "설치와 첫 연결 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     connector package를 프로젝트에 추가하고, 서버에 연결해 첫 packet을 주고받을 수 있다.
-    이 장의 연결 코드는 `framework/languages/<언어>/tutorial/StreamClient`에서 그대로 실행된다.
+    이 장의 연결 코드는 `framework/languages/java/tutorial/kotlin/StreamClient`에서 그대로 실행된다.
 
 connector는 서버 framework와 별도로 배포되므로, client project는 connector package 하나만
 참조한다. 이 장은 설치부터 첫 응답까지를 한 번에 따라 한다. 옵션 전체와 기본값은
@@ -53,6 +53,8 @@ connector는 endpoint와 timeout을 담은 option으로 만든다. 연결이 끝
     한다.
 
 ## 3. 실행 결과
+
+아래 명령은 tutorial(`framework/languages/java/tutorial/kotlin`)의 Server를 그 README의 「실행」 절대로 띄운 상태에서 StreamClient를 실행한다. StreamClient는 Server의 stream endpoint에 연결한다.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj

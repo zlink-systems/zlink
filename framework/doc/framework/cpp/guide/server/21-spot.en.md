@@ -22,7 +22,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/2
 
     You can create a stateful object addressed by id, send messages to it, and
     receive answers. The code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial`.
+    `framework/languages/cpp/tutorial`.
 
 In [Channel Messaging](20-channel-messaging.en.md) a call was received by one of the nodes
 serving the name. That path does not work when the recipient is already decided. **A Spot is a
@@ -149,6 +149,8 @@ When you need an answer, send a request. The target may be moving, so give a tim
 
 ## 5. What You See When You Run It
 
+The commands below run against the tutorial (`framework/languages/cpp/tutorial`) with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'
@@ -179,7 +181,7 @@ The differences between the kinds and the full lifecycle are covered by [Spot](2
 - The other unit addressed by id — [Actor](22-actor.en.md)
 - The path that calls by name — [Channel Messaging](20-channel-messaging.en.md)
 - What the Location Store records — [How Channels Work](30-channel-patterns.en.md#6-connection-and-discovery)
-- A running version of this chapter's code — `framework/languages/<language>/tutorial`
+- A running version of this chapter's code — `framework/languages/cpp/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

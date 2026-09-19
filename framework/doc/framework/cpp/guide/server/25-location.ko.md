@@ -21,7 +21,7 @@ title: "Location · C++"
 !!! info "이 장을 읽고 나면"
 
     id만 가지고 그 Spot·Actor가 지금 어느 node에 있는지 물어볼 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 `framework/languages/cpp/tutorial`에서 그대로 실행된다.
 
 [Spot](21-spot.ko.md)과 [Actor](22-actor.ko.md)는 id로만 호출했다. 그것이 지금 어느 node에
 있는지는 Framework가 찾는다. 그 기록을 보관하는 곳이 **Location Store**다. 이 장은
@@ -65,6 +65,8 @@ Spot은 spot manager에, Actor는 actor manager에 조회한다. 둘 다 id 하�
 
 ## 4. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/cpp/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'
@@ -102,7 +104,7 @@ curl http://127.0.0.1:5080/locations/players/ghost
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#61-location-store--누가-어디-있는지-적어-두는-곳)
 - 운영 조회 — [운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — `framework/languages/cpp/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

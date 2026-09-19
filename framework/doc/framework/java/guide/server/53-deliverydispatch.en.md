@@ -23,7 +23,7 @@ View in another language — [C++](../../../cpp/guide/server/53-deliverydispatch
     You can open the DeliveryDispatch sample in an editor and follow the code from a delivery
     request accepted over HTTP, through the offer to a courier and the reassignment on no answer, to
     the status pushed to the customer. The code in this chapter runs as it stands in
-    `framework/languages/<language>/samples/DeliveryDispatch`.
+    `framework/languages/java/samples/java/DeliveryDispatch`.
 
 [Picking a Sample](14-samples.en.md#5-deliverydispatch--building-a-dispatch-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where

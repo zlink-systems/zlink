@@ -21,7 +21,7 @@ title: "Bingo 따라 읽기 · Java"
 !!! info "이 장을 읽고 나면"
 
     Bingo 샘플을 편집기에 열고, client의 인증부터 게임 종료까지 메시지가 어느 서버의 어느
-    코드를 지나는지 따라갈 수 있다. 이 장의 코드는 `framework/languages/<언어>/samples/Bingo`에서
+    코드를 지나는지 따라갈 수 있다. 이 장의 코드는 `framework/languages/java/samples/java/Bingo`에서
     그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#3-bingo--온라인-게임-서버-구축)가 이 샘플이 무엇을 보여 주는지

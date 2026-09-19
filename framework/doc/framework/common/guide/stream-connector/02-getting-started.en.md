@@ -98,6 +98,8 @@ until the server's answer arrives and then returns the answer payload.
 
 ## 3. What You See
 
+The command below runs the tutorial (`framework/languages/<language>/tutorial`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True

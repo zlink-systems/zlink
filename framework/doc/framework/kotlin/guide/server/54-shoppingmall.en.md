@@ -23,7 +23,7 @@ View in another language — [C++](../../../cpp/guide/server/54-shoppingmall.en.
     You can open the ShoppingMall sample in an editor and follow the code from an order accepted over
     HTTP, through inventory reservation → payment authorization → confirmation inside the owner Spot,
     and through compensation when a step fails. The code in this chapter runs as it stands in
-    `framework/languages/<language>/samples/ShoppingMall`.
+    `framework/languages/java/samples/kotlin/ShoppingMall`.
 
 [Picking a Sample](14-samples.en.md#6-shoppingmall--building-an-order-processing-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and

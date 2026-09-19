@@ -50,6 +50,8 @@ The code creates a client with a three-second default timeout, sends a profile G
 
 ## 3. Result
 
+The output below comes from the tutorial (`framework/languages/dotnet/tutorial`) HttpClient with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+
 ```text
 first request: p1 rookie
 ```
