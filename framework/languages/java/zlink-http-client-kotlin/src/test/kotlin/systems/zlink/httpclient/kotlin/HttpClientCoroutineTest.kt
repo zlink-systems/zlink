@@ -6,8 +6,11 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.lang.reflect.Modifier
+import java.time.Duration
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.CompletionStage
@@ -23,6 +26,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.httpclient.ZLinkHttpExecutionTurn
 import systems.zlink.httpclient.ZLinkHttpClient
 import java.util.concurrent.CompletableFuture
@@ -190,6 +195,36 @@ class HttpClientCoroutineTest {
                 val response = client.get("/r").awaitRaw()
                 assertEquals(200, response.status())
             }
+        }
+    }
+
+    @Test
+    fun `suspend timeout preserves deadline exceeded kind`() {
+        TestServer { exchange ->
+            Thread.sleep(500)
+            respond(exchange, 200, "{}")
+        }.use { server ->
+            zlinkHttpClient(server.baseUrl) {
+                timeout(Duration.ofMillis(80))
+            }.use { client ->
+                val failure = Assertions.assertThrows(ZLinkFrameworkException::class.java) {
+                    runBlocking { client.get("/slow").awaitRaw() }
+                }
+                assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind())
+            }
+        }
+    }
+
+    @Test
+    fun `suspend connection refusal preserves unavailable kind`() {
+        val port = ServerSocket(0, 0, InetAddress.getLoopbackAddress()).use { it.localPort }
+        zlinkHttpClient("http://127.0.0.1:$port") {
+            timeout(Duration.ofSeconds(1))
+        }.use { client ->
+            val failure = Assertions.assertThrows(ZLinkFrameworkException::class.java) {
+                runBlocking { client.get("/unavailable").awaitRaw() }
+            }
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind())
         }
     }
 

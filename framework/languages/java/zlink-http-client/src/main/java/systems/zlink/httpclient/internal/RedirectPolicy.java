@@ -2,8 +2,6 @@
 package systems.zlink.httpclient.internal;
 
 import java.net.URI;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.httpclient.ZLinkHttpMethod;
 
 /**
@@ -59,16 +57,21 @@ final class RedirectPolicy {
     }
 
     static URI resolveLocation(URI current, String location) {
-        if (location.startsWith("http://") || location.startsWith("https://")) {
-            return URI.create(location);
+        try {
+            if (location.startsWith("http://") || location.startsWith("https://")) {
+                return URI.create(location);
+            }
+            if (location.startsWith("//")) {
+                // Protocol-relative location: inherit the current scheme.
+                return URI.create(current.getScheme() + ":" + location);
+            }
+            if (location.startsWith("/")) {
+                return URI.create(originOf(current) + location);
+            }
+        } catch (IllegalArgumentException cause) {
+            throw HttpClientErrors.protocol(
+                "HTTP redirect location is not supported: " + location, cause);
         }
-        if (location.startsWith("//")) {
-            // Protocol-relative location: inherit the current scheme.
-            return URI.create(current.getScheme() + ":" + location);
-        }
-        if (location.startsWith("/")) {
-            return URI.create(originOf(current) + location);
-        }
-        throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "HTTP redirect location is not supported: " + location);
+        throw HttpClientErrors.protocol("HTTP redirect location is not supported: " + location);
     }
 }

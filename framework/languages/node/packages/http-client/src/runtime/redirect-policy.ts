@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { ZLinkHttpMethod } from '../types';
+import { redirectFormatError } from './http-client-errors';
 
 /**
  * Stateless redirect and target-URL rules for the wrapper-owned redirect loop. Isolates the redirect
@@ -50,15 +50,7 @@ export function resolveLocation(current: URL, location: string): URL {
       return new URL(current.origin + location);
     }
   } catch {
-    // A malformed Location is a redirect-protocol error, not a transport failure: throw a
-    // non-retriable framework exception so retry does not resend the original request.
-    throw new ZLinkFrameworkException(
-      ZLinkFrameworkErrorKind.Unavailable,
-      `HTTP redirect location is malformed: ${location}`,
-    );
+    throw redirectFormatError(`HTTP redirect location is malformed: ${location}`);
   }
-  throw new ZLinkFrameworkException(
-    ZLinkFrameworkErrorKind.Unavailable,
-    `HTTP redirect location is not supported: ${location}`,
-  );
+  throw redirectFormatError(`HTTP redirect location is not supported: ${location}`);
 }

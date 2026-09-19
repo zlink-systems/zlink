@@ -18,8 +18,6 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
  * Builds an {@link SSLContext} from PEM files for the wrapper. A trust certificate is added as a
@@ -48,7 +46,7 @@ public final class TlsSupport {
                 null);
             return context;
         } catch (Exception cause) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client TLS configuration failed", cause);
+            throw HttpClientErrors.protocol("HTTP client TLS configuration failed", cause);
         }
     }
 
@@ -72,7 +70,7 @@ public final class TlsSupport {
                 return x509;
             }
         }
-        throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "No X509 trust manager available");
+        throw HttpClientErrors.protocol("No X509 trust manager available");
     }
 
     /** Trusts a certificate if either the JVM default store or the custom certificate accepts it. */

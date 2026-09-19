@@ -5,8 +5,7 @@ import java.util.Locale;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.httpclient.internal.HttpClientErrors;
 import systems.zlink.httpclient.internal.HttpClientOptions;
 import systems.zlink.httpclient.internal.HttpClientRuntime;
 import systems.zlink.httpclient.internal.HttpClientText;
@@ -58,7 +57,7 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder maxResponseBodySize(long bytes) {
         if (bytes <= 0) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client max response body size must be greater than zero");
+            throw HttpClientErrors.protocol("HTTP client max response body size must be greater than zero");
         }
         this.maxResponseBodySize = bytes;
         return this;
@@ -83,7 +82,7 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder followRedirects(int maxRedirects) {
         if (maxRedirects <= 0) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client follow_redirects must be greater than zero");
+            throw HttpClientErrors.protocol("HTTP client follow_redirects must be greater than zero");
         }
         this.followRedirects = maxRedirects;
         return this;
@@ -91,7 +90,7 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder retry(int attempts) {
         if (attempts <= 0) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client retry attempts must be greater than zero");
+            throw HttpClientErrors.protocol("HTTP client retry attempts must be greater than zero");
         }
         this.retryAttempts = attempts;
         return this;
@@ -105,7 +104,7 @@ public final class ZLinkHttpClientBuilder {
     public ZLinkHttpClientBuilder proxy(String url) {
         HttpClientText.requireNonBlank(url, "HTTP client proxy url is required");
         if (!url.startsWith("http://")) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client proxy url must start with http://");
+            throw HttpClientErrors.protocol("HTTP client proxy url must start with http://");
         }
         this.proxy = url;
         return this;
@@ -128,7 +127,7 @@ public final class ZLinkHttpClientBuilder {
         HttpClientText.requirePositiveTimeout(timeout);
         String lower = baseUrl.toLowerCase(Locale.ROOT);
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
-            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client base_url must start with http:// or https://");
+            throw HttpClientErrors.protocol("HTTP client base_url must start with http:// or https://");
         }
 
         HttpClientOptions options = new HttpClientOptions(

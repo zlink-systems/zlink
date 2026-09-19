@@ -2,6 +2,7 @@
 
 #include "runtime/compression.hpp"
 
+#include "runtime/runtime_errors.hpp"
 #include "runtime/text.hpp"
 
 #include <boost/beast/zlib/error.hpp>
@@ -16,9 +17,7 @@ namespace beast = boost::beast;
 
 [[noreturn]] void fail_decode ()
 {
-    throw zlink::framework::framework_exception_t (
-      zlink::framework::framework_error_kind_t::protocol_error,
-      "HTTP response compressed body is malformed");
+    throw request_protocol_error ("HTTP response compressed body is malformed");
 }
 
 std::string inflate_raw (const unsigned char *data, std::size_t size, std::size_t decoded_limit)
@@ -41,8 +40,7 @@ std::string inflate_raw (const unsigned char *data, std::size_t size, std::size_
         inflater.write (zs, beast::zlib::Flush::sync, ec);
         decoded.append (chunk, sizeof chunk - zs.avail_out);
         if (decoded.size () > decoded_limit) {
-            throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::rejected,
+            throw response_body_limit_error (
               "HTTP response compressed body exceeds max_response_body_size");
         }
         if (ec == beast::zlib::error::end_of_stream) {

@@ -3,6 +3,7 @@
 import { gunzip as gunzipCallback, inflate as inflateCallback, inflateRaw as inflateRawCallback } from 'node:zlib';
 import { promisify } from 'node:util';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
+import { responseBodySizeExceeded } from './http-client-errors';
 
 const gunzipAsync = promisify(gunzipCallback);
 const inflateAsync = promisify(inflateCallback);
@@ -13,8 +14,8 @@ const inflateRawAsync = promisify(inflateRawCallback);
  * are decoded, the decoded size is bounded by the configured body limit (enforced by zlib's
  * `maxOutputLength` so a malicious response cannot allocate past the limit before the check), and the
  * caller removes the `Content-Encoding` header afterwards. undici's `request` does not auto-decompress,
- * so streaming downloads are never transparently decoded. A malformed body raises `payloadDecodeFailed`;
- * exceeding the limit raises `requestFailed`. Decoding runs on zlib's async worker pool — the
+ * so streaming downloads are never transparently decoded. A malformed body raises `ProtocolError`;
+ * exceeding the limit raises `Rejected`. Decoding runs on zlib's async worker pool — the
  * synchronous variants would block the event loop for the whole decode of a large body.
  */
 export function gunzip(input: Buffer, maxBytes: number): Promise<Buffer> {
@@ -38,10 +39,7 @@ async function decode(run: () => Promise<Buffer>): Promise<Buffer> {
   } catch (cause) {
     // zlib rejects with a RangeError (ERR_BUFFER_TOO_LARGE) when output exceeds maxOutputLength.
     if (cause instanceof RangeError) {
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'HTTP response compressed body exceeds maxResponseBodySize',
-      );
+      throw responseBodySizeExceeded('HTTP response compressed body exceeds maxResponseBodySize');
     }
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
