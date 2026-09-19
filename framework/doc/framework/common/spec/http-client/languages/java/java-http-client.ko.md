@@ -43,9 +43,9 @@ JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder �
   `multipartFile`, `submitRaw`, `download(Consumer<byte[]>)`, `submit(Class<T>)`,
   `fetch(Class<T>)`, callback. `fetch(Class<T>)`는 status와 header를 제외하고 decoded body를
   `CompletionStage<T>`로 직접 반환한다.
-- `ZLinkHttpServerRequestBuilder` — standalone 표면과 one-way
-  `CompletionStage<Void> submit()`을 제공한다. One-way 완료에는 전송 결과나 admission status가
-  없으며, 완료 값을 동기로 꺼내는 method도 없다.
+- `ZLinkHttpServerRequestBuilder` — standalone 표면에 `CompletionStage<HttpResponse<T>> yield(Class<T>)`를
+  추가한다. 동작 의미는 [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)와 server
+  실행 계약을 따른다.
 - `ZLinkHttpExecutionTurn` — framework가 현재 Spot 실행 turn의 유지·반납을 연결하는 주입점이다.
 - `RawHttpResponse`(record) { `status`, `headers`, `body` }.
 - `HttpResponse<T>`(record) { `status`, `headers`, `body`, `rawBody` }.
@@ -57,8 +57,7 @@ JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder �
   비동기 I/O로 네트워크 대기 중 호출 스레드는 점유되지 않는다. redirect/retry 루프도
   `CompletionStage` 체인으로 합성된다.
 - 서버 request의 응답을 기다리는 `submit`은 현재 Spot turn을 유지하고 callback은 새 turn으로 실행 queue에
-  들어간다. HTTP request builder에는 `yield`가 없다. Shared Spot gate를 반납하려면
-  `runIoWorker(...)` 안에서 `submit`을 호출하고 Worker call의 `yield()`로 기다린다.
+  들어간다.
 - handler 경로는 `CompletionStage` 합성만 사용하고 `.get()`/`.join()`은 금지한다.
 - continuation 재개 위치는 `CompletableFuture.*Async(fn, executor)` 조합으로 지정.
 

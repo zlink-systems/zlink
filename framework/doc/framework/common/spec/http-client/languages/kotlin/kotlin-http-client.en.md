@@ -51,11 +51,9 @@ The DSL and extension are top-level functions of the
 - `suspend ZLinkHttpRequestBuilder.awaitDownload(sink: (ByteArray) -> Unit): RawHttpResponse`
 - `suspend ZLinkHttpServerRequestBuilder.await(type)` / `await<T>()` — keeps the
   current Spot turn.
-- `suspend ZLinkHttpServerRequestBuilder.await(): Unit` — only delivers async
-  completion and failure of a one-way submission. Doesn't return the
-  transport result or admission status.
-- `suspend inline ZLinkHttpServerRequestBuilder.yield<T>()` — returns the
-  current Spot turn while waiting for the HTTP response.
+- `suspend inline ZLinkHttpServerRequestBuilder.yield<T>()` — its behavior follows
+  [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators) and the server
+  execution contract.
 
 Request configuration (`get/post/put/delete/patch/head/options`,
 `header`, `query`, `timeout`, `body`, `bodyStream`, `form`, `multipart`,
@@ -73,11 +71,7 @@ Request configuration (`get/post/put/delete/patch/head/options`,
   directly inside a suspend function. `runBlocking` is test/CLI-only.
 - The continuation resumes on the calling coroutine's dispatcher. The
   resume location is changed with `withContext`.
-- The server-only `await` keeps the Java server client's execution
-  turn, and `yield<T>()` returns the current turn while waiting for the
-  response. The HTTP request builder doesn't provide `yield`. To
-  return the shared Spot gate, call `await` inside `runIoWorker(...)`
-  and wait with the Worker call's `yield()`.
+- The server-only `await` keeps the Java server client's execution turn.
 
 ## 5. Transport Semantics
 

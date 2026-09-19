@@ -10,7 +10,7 @@
 
 `@zlink-systems/http-client`는 Node에서 HTTP request를 보내기 위한 별도 client-side
 산출물이다. JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder 스타일로
-undici의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`async<T>()`)는 그 위에
+undici의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`submit<T>()`)는 그 위에
 더해진 편의 계층이다.
 
 이 산출물의 Framework dependency는 `@zlink-systems/framework`다. 공용 오류·codec 계약의
@@ -36,13 +36,12 @@ undici의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`a
   `followRedirects`, `retry`, `cookies`, `proxy`, `proxyBasicAuth`, `compression`,
   `build`, 그리고 단발 verb shortcut.
 - `ZLinkHttpRequestBuilder` — `header`, `query`, `timeout`, `body`(JSON/raw 오버로드),
-  `bodyStream`, `form`, `multipart`, `multipartFile`, `submitRaw`, `download`, `async<T>`,
-  `fetch<T>`(`Promise<T>`, body만 반환).
-- `ZLinkHttpServerRequestBuilder` — standalone 표면과 one-way
-  `submit(): Promise<void>`를 제공한다. One-way 완료에는 전송 결과나 admission status가 없다.
-  Node HTTP Client의 typed response terminal은 `async<T>(): Promise<HttpResponse<T>>`를 유지한다.
-  TypeScript의 generic type은 runtime에서 제거되므로 no-argument `submit<T>()`와 one-way
-  `submit()`을 같은 상속 계층에 선언하면 두 operation을 구분할 수 없기 때문이다.
+  `bodyStream`, `form`, `multipart`, `multipartFile`, 종결자 `submit<T>()`(typed response),
+  `submit<T>(callback)`, `submitRaw()`, `fetch<T>()`(`Promise<T>`, body만 반환), `download(sink)`.
+  이름의 근거는 [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)다.
+- `ZLinkHttpServerRequestBuilder` — standalone 표면에 `yield<T>(): Promise<HttpResponse<T>>`를 더한다.
+  동작 의미는 [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)와 server 실행
+  계약을 따른다.
 - `RawHttpResponse` { `status`, `headers`, `body` }.
 - `HttpResponse<T>` { `status`, `headers`, `body`, `rawBody` }.
 - `ZLinkHttpMethod`, `BodyChunkProvider`(`() => Uint8Array | null`), `DownloadSink`.

@@ -16,7 +16,7 @@
 sending an HTTP request in Node. It's not a JSON-only client — it's a
 general-purpose HTTP client that absorbs undici's low-level
 configuration in zlink fluent builder style. The typed JSON path
-(`body(dto)`/`async<T>()`) is a convenience layer laid on top of it.
+(`body(dto)`/`submit<T>()`) is a convenience layer laid on top of it.
 
 This deliverable's Framework dependency is `@zlink-systems/framework`.
 [01 Scope And Architecture §1.3](../../01-scope-and-architecture.en.md#13-relationship-with-framework--one-way-dependency) owns the direction of dependency on the common error/codec contracts.
@@ -44,16 +44,14 @@ The public surface doesn't expose an undici `Dispatcher`/`Agent`/
   `build`, and a one-shot verb shortcut.
 - `ZLinkHttpRequestBuilder` — `header`, `query`, `timeout`,
   `body` (JSON/raw overload), `bodyStream`, `form`, `multipart`,
-  `multipartFile`, `submitRaw`, `download`, `async<T>`,
-  `fetch<T>` (`Promise<T>`, returns only the body).
-- `ZLinkHttpServerRequestBuilder` — provides the standalone surface and
-  one-way `submit(): Promise<void>`. One-way completion carries no
-  transport result or admission status. Node HTTP Client's typed
-  response terminal keeps `async<T>(): Promise<HttpResponse<T>>`. This
-  is because TypeScript's generic type is erased at runtime, so
-  declaring a no-argument `submit<T>()` and one-way `submit()` in the
-  same inheritance hierarchy would make the two operations
-  indistinguishable.
+  `multipartFile`, and the terminators `submit<T>()` (typed response),
+  `submit<T>(callback)`, `submitRaw()`, `fetch<T>()` (`Promise<T>`, returns
+  only the body), `download(sink)`. The names come from
+  [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators).
+- `ZLinkHttpServerRequestBuilder` — adds `yield<T>(): Promise<HttpResponse<T>>` to the
+  standalone surface. Its behavior follows
+  [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators) and the
+  server execution contract.
 - `RawHttpResponse` { `status`, `headers`, `body` }.
 - `HttpResponse<T>` { `status`, `headers`, `body`, `rawBody` }.
 - `ZLinkHttpMethod`, `BodyChunkProvider` (`() => Uint8Array | null`),

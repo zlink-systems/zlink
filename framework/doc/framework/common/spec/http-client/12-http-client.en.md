@@ -11,11 +11,10 @@
 > auth/TLS/proxy, compression, error mapping, regression) is each
 > owned by [01-11](README.en.md) in the same folder.
 >
-> The exact per-language type and signature is owned by
-> [`languages/<lang>/`](README.en.md).
-> [language-interfaces](language-interfaces.en.md) is a
-> **non-normative cross-reference table** viewing the five languages
-> side by side — it doesn't fix a contract.
+> The per-language names of the common concepts are owned by
+> [language-interfaces](language-interfaces.en.md); the exact parameter and
+> return types of those names are owned by [`languages/<lang>/`](README.en.md),
+> which project that table.
 
 ## 1. Identity — A Framework Companion Client
 
@@ -49,8 +48,8 @@ client.post("/games")               // operation
       .query("region", "kr")
       .body(createGameReq)
       .timeout(3s)
-      .submit<CreateGameRes>()      // C++/Java's response completion terminator
-                                    // Node uses async<CreateGameRes>()
+      .submit<CreateGameRes>()      // response completion terminator — the Java/Node name.
+                                    // Per-language names: Language interfaces §1.4
 ```
 
 - 7 verbs: `get` / `post` / `put` / `delete` / `patch` / `head` /
@@ -64,22 +63,17 @@ The builder's detailed contract (path format, percent-encoding,
 per-body-source retry availability, etc.) is owned by
 [03 Request Builder](03-request-builder.en.md).
 
-## 3. Execution Terminator — One-Way And Response Completion (+ Callback)
+## 3. Execution Terminator — Response Completion (+ Callback)
 
-The HTTP client's completion surface is one-way submission, response
-completion, and callback. The exact name is `.NET`'s `Async`, Kotlin
-wrapper's `await`, Java/C++'s `submit`. Node uses `submitRaw` for raw
-response, `async` for typed response and callback, and `submit` for
-one-way. TypeScript inheritance signature constraints are owned by each
-language's exact interface. `Yield`, which returns the shared Spot
-gate, is only provided to a server request and Worker call, and isn't
-included in the HTTP request builder
-([04 §1.1](../server/01-execution/README.en.md)).
+The HTTP client's completion surface is response completion, callback, and
+the DI server builder's `Yield`. Terminator names, response shapes and the
+absence of one-way are owned by
+[Language interfaces §1.4](language-interfaces.en.md#14-terminators).
 
 | Execution Mode | What It Waits For | Spot Execution Queue |
 |---|---|---|
-| **one-way submission** | Waits until the HTTP request is submitted at the transport boundary | Keeps the current turn. No normal completion value |
 | **response completion** | Waits until the HTTP response arrives | Keeps the current turn |
+| **`Yield`** (DI server builder) | Waits until the HTTP response arrives | Gate return and resume follow [Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names) |
 
 **Callback is a separate completion path** for a caller that doesn't
 use an awaitable (a CLI, an event-loop-based client). The HTTP client
@@ -93,48 +87,42 @@ terminator instead of a callback.
 
 ### 3.1 How To Return The Spot Gate While Waiting For External HTTP
 
-An HTTP client call itself doesn't return the shared Spot gate. If
-another Spot work item must proceed while waiting for an external API
-during Actor entry/exit, run the HTTP client's response completion
-terminator in an I/O Worker and wait with the Worker call's `Yield`.
-
-```csharp
-var profile = await Context
-    .RunIoWorker(async workerCancellation =>
-        await http.Get($"/players/{id}").Fetch<Profile>(workerCancellation))
-    .Yield(ct);
-```
-
-The HTTP request builder doesn't provide a `Yield` terminal. Gate
-return and reacquisition is owned by the server runtime's Worker call,
-so the HTTP package doesn't judge the Spot execution context.
+The execution contexts that have `Yield` are owned by
+[Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names);
+the two usage forms — the DI server builder's `Yield`, and an I/O Worker
+with the Worker `Yield` — and their examples are owned by
+[05 §5.2](05-execution-model.en.md#52-external-http-wait-and-the-spot-execution-queue).
+The HTTP package does not judge the Spot execution context. Framework injects
+the current execution turn at DI registration, and the DI server builder's
+`Yield` returns that turn ([turn seam](#32-the-turn-seam--a-single-injection-point)).
 
 ### 3.2 The Turn Seam — A Single Injection Point
 
-**The HTTP client knows framework's error kind and codec, but not the
-Spot's turn.** The only thing that knows the turn is a single
-**injected execution scheduler**.
+**The HTTP client depends on the framework error kinds and codec and holds no
+Spot turn information.** Framework connects the current turn to the single
+**execution scheduler** it injects at DI registration.
 
 - The HTTP client puts an **execution scheduler injection point** as a
   public contract. The scheduler decides where to resume completion.
 - **Framework injects the callback completion scheduler at DI
   registration.** The callback enters as a new turn of the original
   Spot execution queue.
-- Neither DI nor standalone use exposes `Yield` on the HTTP request
-  builder. Only the per-language response completion terminator and
-  callback are used.
+- The DI server builder's `Yield` returns the injected turn and resumes in a
+  new turn on the same execution line.
 
 The C++ HTTP client expresses the same scheduler seam with
 `coroutines(resume_scheduler)` and `framework_resume_scheduler_t`.
 
-### 3.3 Doesn't Put A Blocking Terminator
+### 3.3 A Runtime Execution Context Rejects Blocking Terminator Calls
 
-**Doesn't build a public terminator that synchronously unwraps the
-completion value**
-([04 §2](../server/01-execution/README.en.md)). A blocking alternative
-terminator of the same meaning is a contract violation. If a
-synchronous wait is needed in a test or CLI, the caller wraps it
-directly with a language idiom (`GetAwaiter().GetResult()`,
+**Whether a language provides a public terminator that synchronously unwraps
+the completion value, and under what name, is owned by
+[Language interfaces §1.4](language-interfaces.en.md#14-terminators).** Calling a
+blocking terminator in a runtime execution context fails immediately with
+`InvalidOperation`, per
+[Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names).
+In a language without a blocking terminator, a test or CLI that must wait
+synchronously wraps the call with a language idiom (`GetAwaiter().GetResult()`,
 `runBlocking`, `.join()`).
 
 ## 4. Server Surface And Registration
@@ -155,7 +143,7 @@ inside a handler — it loses the connection pool and turn seam.
 | Surface | Who Uses It | Terminator |
 |------|-----------|------------|
 | Static factory | CLI · client scenario | response completion / callback |
-| **DI-injected client** | **Spot handler · server code** | one-way / response completion / callback |
+| **DI-injected client** | **Spot handler · server code** | response completion / callback / `Yield` |
 
 ## 5. Codec
 
@@ -189,10 +177,10 @@ Detailed mapping is owned by [09 Error Model](09-error-model.en.md).
 
 | Item | Verification |
 |---|---|
-| Terminator axis | Has one-way and response completion and callback completion paths, and **doesn't have** a blocking-unwrap terminator or an HTTP `Yield` |
+| Terminator axis | Each language's public terminators match the table in [Language interfaces §1.4](language-interfaces.en.md#14-terminators) exactly — no name outside the table, no name from the table missing |
 | Turn preservation | While a Spot handler waits for response completion, another callback of the same Spot doesn't start |
-| Turn return | Only returns the shared Spot gate when HTTP response completion runs inside `RunIoWorker` and waits with the Worker `Yield` |
-| Surface limit | Neither DI nor standalone use exposes `Yield` on the HTTP request builder |
+| Turn return | Only the server builder's `Yield` and `RunIoWorker` + Worker `Yield` return the shared Spot gate; response completion does not |
+| Surface limit | The standalone HTTP request builder has no `Yield`, and the C++ blocking terminators fail with `InvalidOperation` in a runtime execution context |
 | Registration | The server surface is obtained only through DI injection, and a client isn't built with a static factory inside a handler |
 | Error kind | There's no HTTP-client-dedicated kind — only framework common kind is used |
 | builder | Mixing body sources fails with `ProtocolError` |

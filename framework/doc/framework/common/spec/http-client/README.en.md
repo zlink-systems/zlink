@@ -19,19 +19,19 @@ verify.
 
 | Ch. | Document | Content |
 | --- | --- | --- |
-| **12** | [**HTTP Client (Framework Contract)**](12-http-client.en.md) | **Canonical** — identity, fluent builder, terminator (`submit`/`async`/`yield` + callback), turn seam, DI server surface |
+| **12** | [**HTTP Client (Framework Contract)**](12-http-client.en.md) | **Canonical** — identity, fluent builder, terminator (response completion · callback · `Yield`), turn seam, DI server surface |
 | 1 | [Scope And Architecture](01-scope-and-architecture.en.md) | Identity, deliverable boundary, relationship with framework |
 | 2 | [Client Builder Contract](02-client-builder.en.md) | The whole builder option set and **default value table** |
 | 3 | [Request Contract](03-request-builder.en.md) | HTTP method, header/query, the 5 body sources, and exclusion rules |
 | 4 | [Response Contract](04-response-model.en.md) | raw/typed/download/fetch, the status ≥ 400 policy |
-| 5 | [Execution Model](05-execution-model.en.md) | Async contract, the no-blocking rule, client lifetime |
+| 5 | [Execution Model](05-execution-model.en.md) | Async contract, runtime rejection of blocking terminators, client lifetime |
 | 6 | [Redirect · Retry · Cookie](06-redirect-retry-cookie.en.md) | Rewrite rule table, retry contract, cookie subset |
 | 7 | [Auth · TLS · Proxy](07-auth-tls-proxy.en.md) | Basic/Bearer, PEM trust/mTLS, CONNECT tunnel |
 | 8 | [Compression](08-compression.en.md) | gzip/deflate transparent decompression semantics |
 | 9 | [Error Model](09-error-model.en.md) | The common error kind set, per-language mapping and implementation gap |
 | 10 | [Revision Candidates](10-revision-candidates.en.md) | **Not a contract** — items under review before promotion (R1-R14) |
 | 11 | [Regression Test Contract](11-regression-tests.en.md) | Common contract case matrix, gate, coverage gap |
-| — | [Per-Language Interface Cross-Reference](language-interfaces.en.md) | **Non-normative** — a cross-reference table viewing the five languages' surfaces side by side. Doesn't fix a contract |
+| — | [Per-Language Interface Definitions](language-interfaces.en.md) | Owns the **per-language names** of the common concepts (terminators in §1.4). The exact parameter and return types are owned by `languages/<lang>/`, which project this table |
 
 ## Per-Language Public API
 

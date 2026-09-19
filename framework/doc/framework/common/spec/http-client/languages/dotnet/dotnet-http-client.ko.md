@@ -58,12 +58,9 @@ HTTP client package는 Stream Connector runtime이나 compression package에 의
   `Body(content, contentType)`, `BodyStream`, `Form`, `Multipart`, `MultipartFile`,
   `AsyncRaw`, `DownloadAsync`, `Async<T>`, decoded body를 직접 반환하는
   `Fetch<T>`와 callback overload를 제공한다.
-- `ZLinkHttpServerRequestBuilder` — standalone 표면을 포함하고 one-way
-  `ValueTask Async(CancellationToken cancellationToken = default)`를 추가한다. 반환된
-  `ValueTask`는 비동기 완료와 실패만 전달하며 전송 결과나 admission status를 포함하지 않는다.
-  Shared Spot gate를 반납하고 새 turn에서 이어받는
-  `ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)`도
-  추가한다. gate 반납이 허용되는 `SpotWide` User Spot과 Instance Spot에서만 사용한다.
+- `ZLinkHttpServerRequestBuilder` — standalone 표면에
+  `ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)`를 추가한다. 동작
+  의미는 [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)와 server 실행 계약을 따른다.
 - `IZLinkHttpExecutionScheduler` / `IZLinkHttpExecutionTurn` — DI 통합이 현재 Spot turn을
   캡처하고 callback 완료를 원래 실행 줄의 새 turn에 배치하는 공개 주입점이다.
 - `RawHttpResponse` { `Status`, `Headers`, `Body` }.
@@ -89,8 +86,6 @@ public delegate void ZLinkHttpCallback<T>(
 public ValueTask<T> Fetch<T>(
     CancellationToken cancellationToken = default);
 ```
-- HTTP request builder에는 `Yield<T>`를 제공하지 않는다. Shared Spot gate를 반납하려면
-  `RunIoWorker(...)` 안에서 `Async<T>`를 호출하고 Worker call의 `Yield`로 기다린다.
 - callback overload는 awaitable을 반환하지 않는다. 완료 callback은 요청을 만든 Spot turn의
   실행 줄에 새 turn으로 배치한다. standalone client에서는 비동기 완료 문맥에서 직접 호출한다.
 - 완료 값을 동기로 꺼내는 blocking terminator는 제공하지 않는다.

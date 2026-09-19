@@ -9,22 +9,17 @@
 > document defines the non-blocking basis of HTTP transport and the
 > cancellation and timeout boundary.
 
-## 5.1 The Two Execution Modes And Callback
+## 5.1 Execution Modes And Callback
 
-The HTTP client provides one-way submission and response completion.
-The exact terminator name is `.NET`'s `Async`, Kotlin wrapper's
-`await`, Java/C++'s `submit`. Node distinguishes raw response
-`submitRaw`, typed response/callback `async`, and one-way `submit`.
-`Yield`, which returns the shared Spot gate, is provided to the server
-HTTP request builder, server request, and Worker call running in an
-execution context where returning the gate is allowed — namely,
-`SpotWide` User Spot and Instance Spot. A standalone client has no gate
-to return, so it isn't provided.
-
-| Execution Mode | What It Waits For | [Spot](../server/00-foundation/02-glossary.en.md#spot) Execution Queue |
-| --- | --- | --- |
-| **one-way submission** | Waits until the HTTP request is submitted at the transport boundary | Keeps the current turn. No normal completion value |
-| **response completion** | Waits until the HTTP response arrives | Keeps the current turn |
+The HTTP terminator surface follows
+[Language interfaces §1.4](language-interfaces.en.md#14-terminators), and the
+completion meaning of each execution mode (response completion, `Yield`) is
+owned by [12 §3](12-http-client.en.md#3-execution-terminator--response-completion--callback).
+The eligible contexts and gate-return meaning of `Yield` are decided by the
+framework's
+[Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names),
+and the two forms used by HTTP are explained in
+[§5.2](#52-external-http-wait-and-the-spot-execution-queue).
 
 **Callback is a separate completion path.** Used by a caller that
 doesn't use an awaitable, and the completion callback enters as a
@@ -36,17 +31,11 @@ occupy the caller's thread/event loop while waiting on the network.
 
 | Language | Async Return Type | Non-Blocking Basis |
 | --- | --- | --- |
-| cpp | `task_t<T>` (`co_await`) | Offloaded to the execute scheduler when `.coroutines()` is active |
+| cpp | `task_t<T>` (`co_await`) | Offloaded to the execute scheduler (the default one, or the one injected with `.coroutines(...)`) |
 | dotnet | `ValueTask<T>` | `SocketsHttpHandler` epoll/IOCP |
 | java | `CompletionStage<T>` | `java.net.http` NIO selector |
 | kotlin | `suspend` function | java runtime + `CompletionStage.await()` bridge |
 | node | `Promise<T>` | undici libuv |
-
-**The terminator name follows framework convention.** `.NET` uses
-`Async(...)`, Kotlin wrapper uses `await(...)`, Java/C++ use
-`submit(...)`. Node's HTTP typed response and callback keep `async(...)`
-to avoid a TypeScript inheritance signature conflict, and raw response
-uses `submitRaw()` ([04 §2](../server/01-execution/README.en.md)).
 
 ## 5.2 External HTTP Wait And The Spot Execution Queue
 
@@ -83,11 +72,9 @@ Spot turn integration and completion scheduler injection follow
 
 - The HTTP client puts an **execution scheduler injection point** as a
   public contract. The scheduler decides where to resume completion.
-- **The framework wires in a callback completion scheduler at DI
+- **The framework injects the callback completion scheduler at DI
   registration.** The callback enters as a new turn of the Spot
   execution queue.
-- **A standalone-use HTTP request builder doesn't expose `Yield`.**
-  There's no Spot gate to return.
 
 cpp's `coroutines(resume_scheduler)` / `framework_resume_scheduler_t`
 is the precedent for this seam.
@@ -103,11 +90,10 @@ cpp default scheduler uses a single thread shared for execute/resume,
 so requests are serialized, and blocking-waiting for a different task
 on the same scheduler from a resumed continuation can deadlock.
 
-## 5.4 Server Runtime Doesn't Put A Blocking Terminator
+## 5.4 A Runtime Execution Context Rejects Blocking Terminator Calls
 
-`.NET`, Java, Kotlin, and Node's `Fetch` family directly return the
-decoded body but complete asynchronously. Don't wait occupying the
-current thread just because the name is `Fetch`.
+The `Fetch` family directly returns the decoded body but completes
+asynchronously in all five languages. The name `Fetch` does not permit a wait that occupies the current thread.
 
 - Prohibited: an API that waits for an async result on the current
   thread, such as `.result()`, `.join()`, `.get()`.
@@ -116,8 +102,11 @@ current thread just because the name is `Fetch`.
   `runBlocking`, `.join()`).
 - Composition uses `co_await` / `await` / `thenCompose` / suspend.
 
-C++'s `fetch<T>()` is a separate convenience API for a blocking client
-scenario. It isn't used in a Framework server handler.
+The C++ blocking terminators (named in
+[Language interfaces §1.4](language-interfaces.en.md#14-terminators)) are for CLI and
+client scenarios only. In a runtime execution context they fail immediately with
+`InvalidOperation`, per
+[Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names).
 
 ## 5.5 Server Surface And Client Lifetime
 
@@ -128,7 +117,7 @@ inside a handler — it loses the connection pool and turn seam.
 | Surface | Who Uses It | Terminator |
 |------|-----------|------------|
 | Static factory | CLI · client scenario | response completion / callback |
-| **DI-injected client** | **Spot handler · server code** | one-way / response completion / callback |
+| **DI-injected client** | **Spot handler · server code** | response completion / callback / `Yield` |
 
 - Build one client per service and reuse it (pool/keep-alive benefit).
 - The builder verb shorthand (one-shot) is a **convenience path** that

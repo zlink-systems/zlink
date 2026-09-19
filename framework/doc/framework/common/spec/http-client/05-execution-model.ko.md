@@ -8,19 +8,13 @@
 > §5.1은 호출 형태를 이해하기 위한 요약이다. 이 문서는 §5.2부터 HTTP 전송의
 > non-blocking 근거, cancellation과 timeout 경계를 정의한다.
 
-## 5.1 두 실행 방식과 callback
+## 5.1 실행 방식과 callback
 
-HTTP client는 one-way submission과 response completion을 제공한다. 정확한 terminator 이름은
-.NET `Async`, Kotlin wrapper `await`, Java·C++ `submit`이다. Node는 raw response `submitRaw`,
-typed response·callback `async`와 one-way `submit`을 구분한다. Shared Spot gate를 반납하는
-`Yield`는 gate 반납이 허용되는 실행 문맥, 곧 `SpotWide` User Spot과 Instance Spot에서 실행하는
-서버 HTTP request builder, 서버 request와 Worker call에 제공한다. Standalone client에는 반납할
-gate가 없으므로 제공하지 않는다.
-
-| 실행 방식 | 무엇을 기다리나 | [Spot](../server/00-foundation/02-glossary.ko.md#spot) 실행 줄 |
-| --- | --- | --- |
-| **one-way submission** | HTTP 요청이 전송 경계에 제출될 때까지 기다린다 | 현재 turn을 유지한다. 정상 완료 값은 없다 |
-| **response completion** | HTTP response가 도착할 때까지 기다린다 | 현재 turn을 유지한다 |
+HTTP 종결자 표면은 [언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator)를 따르고,
+실행 방식별 완료 의미(response completion·`Yield`)는 [12 §3](12-http-client.ko.md#3-실행-terminator--response-completion--callback)이
+소유한다. `Yield`의 적격 문맥과 gate 반납 의미는 framework
+[Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)가
+정하며, HTTP에서 사용하는 두 형태는 [§5.2](#52-외부-http-대기와-spot-실행-줄)가 설명한다.
 
 **Callback은 별도 완료 경로다.** Awaitable을 사용하지 않는 호출자가 사용하며, 완료 callback은
 Spot 실행 줄의 **새 turn**으로 들어간다
@@ -31,16 +25,11 @@ Spot 실행 줄의 **새 turn**으로 들어간다
 
 | 언어 | 비동기 반환형 | non-blocking 근거 |
 | --- | --- | --- |
-| cpp | `task_t<T>` (`co_await`) | `.coroutines()` 활성 시 execute scheduler로 오프로드 |
+| cpp | `task_t<T>` (`co_await`) | execute scheduler(기본 또는 `.coroutines(...)`로 주입)로 오프로드 |
 | dotnet | `ValueTask<T>` | `SocketsHttpHandler` epoll/IOCP |
 | java | `CompletionStage<T>` | `java.net.http` NIO selector |
 | kotlin | `suspend` 함수 | java 런타임 + `CompletionStage.await()` 브리지 |
 | node | `Promise<T>` | undici libuv |
-
-**Terminator 이름은 framework 관용을 따른다.** .NET은 `Async(...)`, Kotlin wrapper는
-`await(...)`, Java·C++는 `submit(...)`을 사용한다. Node HTTP typed response와 callback은 TypeScript
-상속 signature 충돌을 피하기 위해 `async(...)`를 유지하고 raw response는 `submitRaw()`를 사용한다
-([04 §2](../server/01-execution/README.ko.md)).
 
 ## 5.2 외부 HTTP 대기와 Spot 실행 줄
 
@@ -74,9 +63,8 @@ Spot turn 연결과 completion scheduler 주입은
 
 - HTTP client는 **execution scheduler 주입점**을 공개 계약으로 둔다. scheduler가 completion을
   어디서 재개할지 정한다.
-- **Framework가 DI 등록 시 callback completion scheduler를 꽂는다.** Callback은 Spot 실행 줄의 새
+- **Framework는 DI 등록 시 callback completion scheduler를 주입한다.** Callback은 Spot 실행 줄의 새
   turn으로 들어간다.
-- **단독 사용 HTTP request builder에는 `Yield`를 노출하지 않는다.** 반납할 Spot gate가 없다.
 
 cpp의 `coroutines(resume_scheduler)` / `framework_resume_scheduler_t`가 이 seam의 선례다.
 
@@ -88,18 +76,20 @@ cpp의 `coroutines(resume_scheduler)` / `framework_resume_scheduler_t`가 이 se
 요청이 직렬화되며, 재개된 continuation에서 같은 스케줄러의 다른 task를 blocking 대기하면 데드락이
 가능하다.
 
-## 5.4 server runtime에는 blocking terminator를 두지 않는다
+## 5.4 runtime 실행 문맥은 blocking terminator 호출을 거부한다
 
-`.NET`, Java, Kotlin과 Node의 `Fetch` 계열은 decoded body를 직접 반환하지만
-비동기로 완료된다. 이름이 `Fetch`라는 이유로 현재 thread를 점유하며 기다리면 안 된다.
+`Fetch` 계열은 decoded body를 직접 반환하지만 다섯 언어 모두 비동기로 완료된다. 이름이
+`Fetch`라는 이름은 현재 thread를 점유하는 대기를 허용하지 않는다.
 
 - 금지 대상: `.result()`, `.join()`, `.get()`처럼 비동기 결과를 현재 thread에서 기다리는 API.
 - 테스트나 CLI에서 동기로 기다려야 하면 **호출자가** 언어 관용으로 감싼다
   (`GetAwaiter().GetResult()`, `runBlocking`, `.join()`).
 - 합성은 `co_await` / `await` / `thenCompose` / suspend로 한다.
 
-C++ `fetch<T>()`는 blocking client 시나리오를 위한 별도 편의 API다. Framework server
-handler에서는 사용하지 않는다.
+C++ blocking 종결자(이름은 [언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator))는 CLI·client
+시나리오 전용이다. runtime 실행 문맥에서는
+[Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)에 따라
+`InvalidOperation`으로 즉시 실패한다.
 
 ## 5.5 서버 표면과 client 수명
 
@@ -109,7 +99,7 @@ handler에서는 사용하지 않는다.
 | 표면 | 누가 쓰나 | terminator |
 |------|-----------|------------|
 | 정적 팩토리 | CLI · client 시나리오 | response completion / callback |
-| **DI 주입 client** | **Spot handler · 서버 코드** | one-way / response completion / callback |
+| **DI 주입 client** | **Spot handler · 서버 코드** | response completion / callback / `Yield` |
 
 - client는 서비스당 하나를 만들어 재사용한다(pool/keep-alive 이득).
 - builder verb 단축(one-shot)은 제출 시 client를 lazy build하고 완료 후 닫는 **편의 경로**다.

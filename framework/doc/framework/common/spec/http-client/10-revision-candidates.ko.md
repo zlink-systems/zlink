@@ -7,10 +7,10 @@
 
 | ID | 제목 | 동기 | 결정할 것 |
 | --- | --- | --- | --- |
-| R1 | typed 실패 시 에러 바디 노출 | `submit<T>()`가 status ≥ 400에서 응답 body를 버려 API 에러 페이로드를 읽으려면 `submitRaw()` 우회가 필요 — 실무 함정 | 실패 값에 status+headers+raw body를 싣는 형태(예외 필드 vs 실패 봉투), 5개 언어 표현 |
+| R1 | typed 실패 시 에러 바디 노출 | typed response terminator가 status ≥ 400에서 응답 body를 버려 API 에러 페이로드를 읽으려면 raw response terminator 우회가 필요 — 실무 함정 | 실패 값에 status+headers+raw body를 싣는 형태(예외 필드 vs 실패 봉투), 5개 언어 표현 |
 | R3′ | retry 총 데드라인 옵션 | (R3의 백오프+지터는 2026-07-12 승격·구현 완료 — 6장 §6.2) 재시도 전체를 아우르는 총 데드라인은 여전히 계약에 없음(cpp만 두 경로 모두 총 예산 강제 — 언어 편차) | 총 데드라인 옵션(예: `totalTimeout`) 도입 여부, cpp 편차와의 통일 방향 |
 | R4 | multipart 바이너리 파일 | `multipartFile` content가 문자열이라 바이너리 업로드 불가 | 바이트 인자 오버로드 추가 vs 파일 경로 인자, 5개 언어 시그니처 |
-| R5 | kotlin coroutine 심화 | 취소가 하부 요청에 전파되지 않고, 스트리밍이 콜백 sink뿐(`Flow` 부재), java blocking `fetch`와 kotlin suspend `fetch` 동명이의 | `suspendCancellableCoroutine` 전파 범위, `Flow<ByteArray>` 다운로드 추가 여부, `fetch` 명칭 정리 |
+| R5 | kotlin coroutine 심화 | 취소가 하부 요청에 전파되지 않고, 스트리밍이 콜백 sink뿐(`Flow` 부재) | `suspendCancellableCoroutine` 전파 범위, `Flow<ByteArray>` 다운로드 추가 여부 |
 | R7 | one-shot verb 경로 재검토 | one-shot이 요청마다 전송 스택을 생성/파괴(dotnet은 핸들러 재생성 → 소켓 고갈 위험). client/builder verb 7종 중복도 이 경로 때문 | 유지+경고 문서화 vs 내부 공유 전송 재사용 vs 제거 |
 | R8 | cpp 진짜 async I/O 전환 | 현행은 동기 Beast를 스레드풀로 오프로드(sync-over-threadpool) — 워커가 요청 기간 내내 점유되고 기본 스케줄러는 직렬화 | Beast async 교환 전환 범위/일정(대형), 단기 완화(스레드 수·스케줄러 분리)와의 관계 |
 | R9 | 요청 취소 표면 통일 | dotnet만 `CancellationToken`을 받고 cpp/java/node는 in-flight 요청을 취소할 수단이 없음(timeout이 유일한 경계). kotlin 취소 미전파(R5)와 같은 뿌리 | 언어 관용 취소 수단(node `AbortSignal`, java future cancel, cpp 취소 토큰) 노출 범위, 취소 시 에러 kind |

@@ -47,42 +47,44 @@ differ in casing conversion.
 | Streaming upload | `body_stream(provider, ct)` — `std::function<std::optional<std::string>()>` | `BodyStream(Func<byte[]?>, ct)` | `bodyStream(Supplier<byte[]>, ct)` / kotlin `() -> ByteArray?` | `bodyStream(provider, ct)` — `() => Uint8Array \| null` |
 | form / multipart | `form` / `multipart` / `multipart_file` | `Form` / `Multipart` / `MultipartFile` | `form` / `multipart` / `multipartFile` | `form` / `multipart` / `multipartFile` |
 
-### 1.4 Messaging Call Terminator (Target Contract)
+### 1.4 Terminators
 
-**The HTTP request builder is a Messaging call builder.** The async
-completion terminator uses `.NET`'s `Async`, Kotlin wrapper's `await`,
-Java/C++'s `submit`. Node uses `submitRaw` for raw response, `async`
-for typed response and callback, and `submit` for one-way.
-A callback completion path is also provided together for a caller
-that doesn't use an awaitable
-([12 HTTP Client](12-http-client.en.md)). Below is the **target
-contract**. The gap with the current implementation and fix evidence is
-owned by each language's audit/execution ledger.
+Three layers share the terminator rules.
 
-| Concept | cpp | dotnet | java | kotlin | node |
-| --- | --- | --- | --- | --- | --- |
-| **Async completion** (raw) | `submit_raw()` → `task_t<raw_http_response_t>` | `AsyncRaw(ct?)` → `ValueTask<RawHttpResponse>` | `submitRaw()` → `CompletionStage<RawHttpResponse>` | `awaitRaw()` (suspend) | `submitRaw()` → `Promise<RawHttpResponse>` |
-| **Async completion** (typed response) | `submit<T>()` → `task_t<http_response_t<T>>` | `Async<T>(ct?)` | `submit(Class<T>)` | `await(type)` / `await<T>()` (reified) | `async<T>()` |
-| **Async completion** (typed body) | `fetch<T>()` | `Fetch<T>(ct?)` → `ValueTask<T>` | `fetch(Class<T>)` | `fetch<T>()` (suspend) | `fetch<T>()` → `Promise<T>` |
-| **Async completion** (download) | `download(sink)` | `DownloadAsync(sink, ct?)` | `download(Consumer<byte[]>)` | `awaitDownload(sink)` | `download(sink)` |
-| **one-way** | `submit()` → `task_t<void>` | `Async(ct?)` → `ValueTask` | `submit()` → `CompletionStage<Void>` | `await()` → `Unit` (suspend) | `submit()` → `Promise<void>` |
-| **callback** | `submit<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | (replaced by suspend) | `async<T>(callback)` |
-| **gate-returning completion** (server builder only) | `yield<T>()` | `Yield<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `yield(Class<T>)` | `yield<T>()` (suspend) | `yield<T>()` → `Promise<HttpResponse<T>>` |
-| Blocking unwrap | **not provided** | **not provided** | **not provided** | **not provided** | **not provided** |
+1. **Per-language stems and `Yield`.** The binding policy
+   [async-coroutine-policy §6](../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#6-per-language-terminal-interfaces)
+   names the binding's per-language async stem (`.NET` `Async`, C++ `async`, Java/Node `submit`) and
+   blocking stem (`.NET` `Submit`, C++ `submit`, Java/Node `submit_sync`). The framework's
+   [Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names)
+   projects them onto the framework surface and decides the Kotlin wrapper `await`, the gate-returning
+   terminal `Yield`, the absence of a Node blocking terminal, and the rejection of blocking calls in a
+   runtime execution context (`InvalidOperation`).
+2. **Response-shape mapping.** The table in this section owns the **names and common execution form**
+   of the HTTP terminators. HTTP maps the stems above onto response shapes (typed, raw, body only,
+   download, callback); the `Raw` suffix and the `fetch` and `download` names are HTTP's own.
+3. **Per-language signatures.** The exact interfaces under `languages/<lang>/` project this table onto
+   that language's precise parameter and return types. They do not decide names again.
 
-- The HTTP request builder doesn't provide `Yield`/`yield`. An
-  application that must return the Spot shared turn puts the HTTP call
-  in `RunIoWorker(...)` and uses the Worker call's `Yield`.
-- The one-way completion value doesn't include the transport result or
-  admission status. The return type only carries async completion and
-  failure.
-- `.NET`'s async terminator is `Async`, Kotlin wrapper's is `await`,
-  C++/Java's is `submit`. Node uses `submitRaw` for raw response,
-  `async` for typed response and callback, and `submit` for one-way.
-- The `fetch` family directly returns the decoded body to a caller
-  that doesn't need status/header. It completes asynchronously in
-  every language except C++. C++'s `fetch<T>()` is used only in a
-  blocking client scenario.
+HTTP has no request without a response, so there is no one-way terminator. This sentence is the only
+normative statement of that absence — other documents refer to this section. A call that does not need
+the response value leaves the raw terminator's result unused.
+
+| Response shape | Rule | cpp | dotnet | java | kotlin | node |
+| --- | --- | --- | --- | --- | --- | --- |
+| typed response `HttpResponse<T>` | async stem, generic | `async<T>()` → `task_t<http_response_t<T>>` | `Async<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `submit(Class<T>)` → `CompletionStage<HttpResponse<T>>` | `await(type)` / `await<T>()` (suspend) | `submit<T>()` → `Promise<HttpResponse<T>>` |
+| raw response | async stem + `Raw` | `async_raw()` → `task_t<raw_http_response_t>` | `AsyncRaw(ct?)` → `ValueTask<RawHttpResponse>` | `submitRaw()` → `CompletionStage<RawHttpResponse>` | `awaitRaw()` (suspend) | `submitRaw()` → `Promise<RawHttpResponse>` |
+| decoded body `T` only | `fetch` — async in every language | `fetch<T>()` → `task_t<T>` | `Fetch<T>(ct?)` → `ValueTask<T>` | `fetch(Class<T>)` → `CompletionStage<T>` | `fetch<T>()` (suspend) | `fetch<T>()` → `Promise<T>` |
+| streaming download | `download` | `download(sink)` → `task_t<raw_http_response_t>` | `DownloadAsync(sink, ct?)` | `download(Consumer<byte[]>)` | `awaitDownload(sink)` | `download(sink)` |
+| callback completion | async stem + callback argument | `async<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | (replaced by suspend) | `submit<T>(callback)` |
+| gate return (DI server builder only) | `Yield` | `yield<T>()` | `Yield<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `yield(Class<T>)` | `yield<T>()` (suspend) | `yield<T>()` → `Promise<HttpResponse<T>>` |
+| blocking (CLI and client scenarios only) | blocking stem | `submit_raw()` → `result_t<raw_http_response_t>`, `submit<T>()` → `result_t<http_response_t<T>>` | not provided | not provided | not provided | not provided |
+
+- The execution contexts that have `Yield` and the meaning of returning the gate are owned by
+  [Submit and completion §2](../server/01-execution/01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names);
+  the two usage forms — the DI server builder's `Yield` and an I/O Worker with the Worker `Yield` — are
+  owned by [05 §5.2](05-execution-model.en.md#52-external-http-wait-and-the-spot-execution-queue).
+- `fetch<T>()` is asynchronous in C++ as well — the same name never carries a different execution
+  meaning per language.
 
 ### 1.5 Response/Auxiliary Type
 
