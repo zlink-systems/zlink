@@ -121,23 +121,23 @@ chmod 0600 "$mission_a_config" "$mission_b_config" "$api_a_config" "$api_b_confi
   "$client_config" "$rehydrate_client_config" "$owner_unavailable_client_config"
 
 cd "$ROOT_DIR"
-if rg -n 'markRehydrated|recordRehydrated|owner-rehydrates' Server; then
+if grep -rEn 'markRehydrated|recordRehydrated|owner-rehydrates' Server; then
   echo "fake rehydrate evidence must not remain in GameQuest server code" >&2
   exit 1
 fi
 grep -q 'addRouteMesh' Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/Program.java
 grep -q 'addInstanceSpotFactory' Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/Program.java
-rg -q 'class PlayerQuestSpot' Server/QuestMission/src/main/java
-if rg -n 'public synchronized' \
+grep -rEq 'class PlayerQuestSpot' Server/QuestMission/src/main/java
+if grep -rEn 'public synchronized' \
   Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/store/QuestStore.java; then
   echo "player owners must not share one QuestStore monitor" >&2
   exit 1
 fi
-if rg -n '\.enableClient\([^)]' Server; then
+if grep -rEn '\.enableClient\([^)]' Server; then
   echo "GameQuest channels must use location-store auto discovery" >&2
   exit 1
 fi
-if rg -n '^기준:.*dotnet' sample-porting-inventory.ko.md; then
+if grep -rEn '^기준:.*dotnet' sample-porting-inventory.ko.md; then
   echo "GameQuest inventory must use the common sample contract as its authority" >&2
   exit 1
 fi

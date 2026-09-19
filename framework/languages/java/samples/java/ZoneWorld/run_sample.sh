@@ -87,7 +87,7 @@ write_server_config "$CONFIG_DIR/zone-node-2-replacement.properties" zone zone-n
 write_server_config "$CONFIG_DIR/ops.properties" ops ops "$ops_mesh" "$ops_stream"
 write_server_config "$CONFIG_DIR/gateway.properties" gateway gateway "$gateway_mesh" "$gateway_stream"
 
-if rg -n 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shared --glob '*.java'; then
+if grep -rEn 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shared --include='*.java'; then
   echo "fixed placement/routing id found in Java ZoneWorld" >&2; exit 1
 fi
 

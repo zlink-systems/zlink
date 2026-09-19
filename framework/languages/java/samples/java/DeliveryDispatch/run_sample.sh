@@ -8,43 +8,43 @@ zlink_sample_configure_port_pool java
 readonly DELIVERYDISPATCH_WAIT_ATTEMPTS=300
 readonly DELIVERYDISPATCH_WAIT_INTERVAL_SECONDS=0.1
 
-if rg -n 'System\.(getProperty|getenv)' Server Client --glob '*.java'; then
+if grep -rEn 'System\.(getProperty|getenv)' Server Client --include='*.java'; then
   echo "DeliveryDispatch application code must use sample config files" >&2
   exit 1
 fi
-if rg -n 'java\.util\.Properties|SampleTopology\.[A-Z]|SampleTopology\.configure' \
-    Server --glob '*.java'; then
+if grep -rEn 'java\.util\.Properties|SampleTopology\.[A-Z]|SampleTopology\.configure' \
+    Server --include='*.java'; then
   echo "DeliveryDispatch server config must use typed Spring binding" >&2
   exit 1
 fi
-if ! rg -q '@ConfigurationProperties\("sample"\)' \
-    Server/Configuration/src/main/java --glob 'SampleTopology.java' || \
-    ! rg -q 'SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME' \
-    Server/Configuration/src/main/java --glob 'SampleApplication.java'; then
+if ! grep -rEq '@ConfigurationProperties\("sample"\)' \
+    Server/Configuration/src/main/java --include='SampleTopology.java' || \
+    ! grep -rEq 'SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME' \
+    Server/Configuration/src/main/java --include='SampleApplication.java'; then
   echo "DeliveryDispatch must isolate Spring config from environment and JVM providers" >&2
   exit 1
 fi
-if rg -n -U '\.enableClient\(\s*[^)\s]|\.connect(?:Router|PeerPub)\(' Server --glob '*.java'; then
+if grep -rEn '\.enableClient\([[:space:]]*[^)[:space:]]|\.connect(?:Router|PeerPub)\(' Server --include='*.java'; then
   echo "DeliveryDispatch server code must use location-store automatic connections" >&2
   exit 1
 fi
-if ! rg -q 'waitForSequence\(Messages\.DeliveryStatusNotify\.class\)' \
-    Client/src/main/java --glob 'DeliveryDispatchClientScenario.java'; then
+if ! grep -rEq 'waitForSequence\(Messages\.DeliveryStatusNotify\.class\)' \
+    Client/src/main/java --include='DeliveryDispatchClientScenario.java'; then
   echo "DeliveryDispatch client must use the connector sequence helper" >&2
   exit 1
 fi
-if ! rg -q 'expectNone\(Messages\.OfferDeliveryNotify\.class\)' \
-    Client/src/main/java --glob 'DeliveryDispatchClientScenario.java'; then
+if ! grep -rEq 'expectNone\(Messages\.OfferDeliveryNotify\.class\)' \
+    Client/src/main/java --include='DeliveryDispatchClientScenario.java'; then
   echo "DeliveryDispatch must verify that the other courier receives no offer" >&2
   exit 1
 fi
-if ! rg -q 'ZLinkStreamAssert\.ensure\(' \
-    Client/src/main/java --glob 'DeliveryDispatchClientScenario.java'; then
+if ! grep -rEq 'ZLinkStreamAssert\.ensure\(' \
+    Client/src/main/java --include='DeliveryDispatchClientScenario.java'; then
   echo "DeliveryDispatch must use the connector assertion utility" >&2
   exit 1
 fi
-if rg -n 'assertStatusOrder|observedStatuses|waitStatuses\(' \
-    Client/src/main/java --glob 'DeliveryDispatchClientScenario.java'; then
+if grep -rEn 'assertStatusOrder|observedStatuses|waitStatuses\(' \
+    Client/src/main/java --include='DeliveryDispatchClientScenario.java'; then
   echo "DeliveryDispatch client must not rebuild the connector sequence helper locally" >&2
   exit 1
 fi

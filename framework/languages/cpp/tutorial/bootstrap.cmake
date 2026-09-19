@@ -109,7 +109,9 @@ else()
   if(_zlink_ninja)
     set(ZLINK_GENERATOR -G Ninja)
   else()
-    set(ZLINK_GENERATOR "")
+    # Do not leave this to CMake's default: a runner can advertise Ninja as
+    # its default generator without having the executable installed.
+    set(ZLINK_GENERATOR -G "Unix Makefiles")
   endif()
   set(ZLINK_COMPILER_FLAGS "-DCMAKE_BUILD_TYPE=${ZLINK_CONFIG}")
   set(ZLINK_BUILD_CONFIG "")
@@ -156,6 +158,24 @@ function(zlink_run)
   endif()
 endfunction()
 
+function(zlink_require_vcpkg_baseline baseline)
+  execute_process(
+    COMMAND git -C "${VCPKG_ROOT}" cat-file -e "${baseline}:versions/baseline.json"
+    RESULT_VARIABLE _zlink_baseline_status
+    OUTPUT_QUIET ERROR_QUIET)
+  if(NOT _zlink_baseline_status EQUAL 0)
+    message(STATUS "fetching vcpkg baseline ${baseline}")
+    zlink_run(git -C "${VCPKG_ROOT}" fetch --depth=1 origin "${baseline}")
+    execute_process(
+      COMMAND git -C "${VCPKG_ROOT}" cat-file -e "${baseline}:versions/baseline.json"
+      RESULT_VARIABLE _zlink_baseline_status
+      OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _zlink_baseline_status EQUAL 0)
+      zlink_fail("vcpkg does not contain baseline ${baseline} after fetching it")
+    endif()
+  endif()
+endfunction()
+
 # Configure, build and install one CMake source tree.
 function(zlink_build name source install)
   set(build "${ZLINK_ROOT}/build/${name}")
@@ -190,8 +210,8 @@ message(STATUS "framework ${ZLINK_FRAMEWORK_CPP_VERSION} "
 # from one vcpkg tree filled from the framework's manifest. The manifest gets
 # a builtin-baseline: the vcpkg bundled with Visual Studio refuses to resolve
 # ports without one, and it pins the third-party versions the framework
-# release was verified with. A vcpkg clone older than the baseline needs a
-# `git pull` first.
+# release was verified with. Runner-image vcpkg checkouts can be shallow, so
+# make the pinned commit available before CMake invokes the toolchain.
 file(READ "${ZLINK_FRAMEWORK_SRC}/vcpkg.json" _zlink_manifest)
 string(JSON _zlink_has_baseline ERROR_VARIABLE _zlink_no_baseline
   GET "${_zlink_manifest}" builtin-baseline)
@@ -199,6 +219,8 @@ if(_zlink_no_baseline)
   string(JSON _zlink_manifest SET "${_zlink_manifest}"
     builtin-baseline "\"${ZLINK_VCPKG_BASELINE}\"")
 endif()
+string(JSON _zlink_manifest_baseline GET "${_zlink_manifest}" builtin-baseline)
+zlink_require_vcpkg_baseline("${_zlink_manifest_baseline}")
 set(ZLINK_MANIFEST_DIR "${ZLINK_ROOT}/manifest")
 file(WRITE "${ZLINK_MANIFEST_DIR}/vcpkg.json" "${_zlink_manifest}\n")
 set(ZLINK_VCPKG_ARGS

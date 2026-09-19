@@ -32,7 +32,13 @@
 tutorial이다. 저장소를 clone할 필요가 없다. quickstart와 같이 npm registry의 패키지만
 참조한다.
 
-```bash
+```bash title="linux"
+cd zlink-tutorial-node
+npm install
+```
+
+```powershell title="windows"
+Set-Location zlink-tutorial-node
 npm install
 ```
 

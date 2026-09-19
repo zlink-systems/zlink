@@ -41,6 +41,14 @@
 실행한다(저장소 checkout이면 같은 명령을 `framework/languages/dotnet/samples`에서
 실행한다).
 
+```bash title="linux"
+cd zlink-samples-dotnet
+```
+
+```powershell title="windows"
+Set-Location zlink-samples-dotnet
+```
+
 ## 빌드
 
 `run_sample.sh`/`run_sample.ps1` 각각이 실행 전에 그 샘플을 스스로 빌드하므로

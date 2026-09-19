@@ -7,11 +7,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool java
 
-if rg -n 'System\.(getProperty|getenv)' Server Client --glob '*.java'; then
+if grep -rEn 'System\.(getProperty|getenv)' Server Client --include='*.java'; then
   echo "Bingo application code must use sample config files" >&2
   exit 1
 fi
-if rg -n -U '\.enableClient\(\s*[^)\s]|\.connect(?:Router|PeerPub)\(' Server --glob '*.java'; then
+if grep -rEn '\.enableClient\([[:space:]]*[^)[:space:]]|\.connect(?:Router|PeerPub)\(' Server --include='*.java'; then
   echo "Bingo server code must use location-store automatic connections" >&2
   exit 1
 fi

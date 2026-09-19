@@ -3,38 +3,38 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-if rg -n 'customer-1' \
-    Server/Tracking/src/main/kotlin --glob 'DeliveryStatusChangedHandler.kt'; then
+if grep -rEn 'customer-1' \
+    Server/Tracking/src/main/kotlin --include='DeliveryStatusChangedHandler.kt'; then
   echo "Tracking must route status by DeliveryStatusChangedReq.customerId" >&2
   exit 1
 fi
-if ! rg -q 'customerId = request.customerId' \
-    Server/Tracking/src/main/kotlin --glob 'DeliveryStatusChangedHandler.kt'; then
+if ! grep -rEq 'customerId = request.customerId' \
+    Server/Tracking/src/main/kotlin --include='DeliveryStatusChangedHandler.kt'; then
   echo "Tracking must preserve the delivery customer id" >&2
   exit 1
 fi
-if ! rg -q 'waitForSequence<DeliveryStatusNotify>' \
-    Client/src/main/kotlin --glob 'Program.kt'; then
+if ! grep -rEq 'waitForSequence<DeliveryStatusNotify>' \
+    Client/src/main/kotlin --include='Program.kt'; then
   echo "Client must assert notification arrival order with the connector helper" >&2
   exit 1
 fi
-if ! rg -q 'expectNone<OfferDeliveryNotify>' \
-    Client/src/main/kotlin --glob 'Program.kt'; then
+if ! grep -rEq 'expectNone<OfferDeliveryNotify>' \
+    Client/src/main/kotlin --include='Program.kt'; then
   echo "Client must verify that the other courier receives no offer" >&2
   exit 1
 fi
-if ! rg -q 'ZLinkKotlinStreamAssert\.ensure\(' \
-    Client/src/main/kotlin --glob 'Program.kt'; then
+if ! grep -rEq 'ZLinkKotlinStreamAssert\.ensure\(' \
+    Client/src/main/kotlin --include='Program.kt'; then
   echo "Client must use the connector assertion utility" >&2
   exit 1
 fi
-if rg -n 'StatusWaits|arrivals|waitStatus\(|waitStatuses\(' \
-    Client/src/main/kotlin --glob 'Program.kt'; then
+if grep -rEn 'StatusWaits|arrivals|waitStatus\(|waitStatuses\(' \
+    Client/src/main/kotlin --include='Program.kt'; then
   echo "Client must not rebuild the connector sequence helper locally" >&2
   exit 1
 fi
-if rg -n 'runScaffold|waitNotifications|readNotifications|--stream-runtime' \
-    Client/src/main/kotlin --glob '*.kt'; then
+if grep -rEn 'runScaffold|waitNotifications|readNotifications|--stream-runtime' \
+    Client/src/main/kotlin --include='*.kt'; then
   echo "DeliveryDispatch client must use the stream connector path only" >&2
   exit 1
 fi
@@ -46,7 +46,7 @@ coroutine_hosts=(
   Server/Tracking/src/main/kotlin
 )
 for host in "${coroutine_hosts[@]}"; do
-  if ! rg -q 'useCoroutineHandlers\(Dispatchers\.Default\)' "${host}" --glob '*.kt'; then
+  if ! grep -rEq 'useCoroutineHandlers\(Dispatchers\.Default\)' "${host}" --include='*.kt'; then
     echo "DeliveryDispatch framework host must configure coroutine handlers: ${host}" >&2
     exit 1
   fi

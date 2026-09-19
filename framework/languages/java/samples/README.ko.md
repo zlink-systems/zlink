@@ -30,6 +30,14 @@ program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 참고). 별도로 내려받거나 설치할 것은 없다 — Gradle wrapper가 Gradle을, Gradle이 위 패키지를
 받는다.
 
+```bash title="linux"
+cd zlink-samples-java
+```
+
+```powershell title="windows"
+Set-Location zlink-samples-java
+```
+
 ## 빌드
 
 실행 script(아래 "실행")가 빌드까지 함께 하므로 따로 빌드할 필요는 없다. IDE 연동이나

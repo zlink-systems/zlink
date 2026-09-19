@@ -32,7 +32,13 @@ This directory is already the download — unzip `zlink-tutorial-node.zip` and i
 into this tutorial. There is no repository to clone. Like quickstart, it references only npm
 registry packages.
 
-```bash
+```bash title="linux"
+cd zlink-tutorial-node
+npm install
+```
+
+```powershell title="windows"
+Set-Location zlink-tutorial-node
 npm install
 ```
 

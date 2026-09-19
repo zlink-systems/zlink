@@ -7,15 +7,15 @@ zlink_sample_configure_port_pool kotlin
 cd "${SCRIPT_DIR}"
 
 client_source="Client/src/main/kotlin/systems/zlink/samples/kotlin/supportchat/client/SupportChatClientScenario.kt"
-if ! rg -q 'expectNone<(TypingChangedNotify|ConversationClosedNotify)>' "${client_source}"; then
+if ! grep -rEq 'expectNone<(TypingChangedNotify|ConversationClosedNotify)>' "${client_source}"; then
   echo "SupportChat negative push checks must use connector expectNone." >&2
   exit 1
 fi
-if rg -n 'fun ([^ (]+ )?(expectFailure|expectTimeout|expectNoPush|awaitPush)\(' "${client_source}"; then
+if grep -rEn 'fun ([^ (]+ )?(expectFailure|expectTimeout|expectNoPush|awaitPush)\(' "${client_source}"; then
   echo "SupportChat must not rebuild connector test helpers locally." >&2
   exit 1
 fi
-if rg -n 'CompletableFuture<JoinConversationRes>|awaitJoin' Server; then
+if grep -rEn 'CompletableFuture<JoinConversationRes>|awaitJoin' Server; then
   echo "SupportChat handlers must return after scheduling a deferred actor Spot join." >&2
   exit 1
 fi

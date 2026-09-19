@@ -44,8 +44,14 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 `@zlink-systems/*`를 그 샘플이 고정한 버전으로 npm registry에서 받는다. workspace가 아니므로
 샘플마다 따로 설치한다.
 
-```bash
-cd Bingo.Ts
+```bash title="linux"
+cd zlink-samples-node/Bingo.Ts
+npm install
+npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
+```
+
+```powershell title="windows"
+Set-Location zlink-samples-node/Bingo.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
