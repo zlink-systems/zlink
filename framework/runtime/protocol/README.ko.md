@@ -43,9 +43,9 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `generated/`: C++·.NET·JVM·Node.js runtime이 복사하지 않고 사용하는 생성 상수
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
 
-Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 39개 command, 155개 type,
+Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 155개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
-contract amendment fixture 1개와 231가지 invalid mutation이 실제로
+contract amendment fixture 1개와 252가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline
