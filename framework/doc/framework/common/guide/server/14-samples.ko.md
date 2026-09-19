@@ -293,9 +293,6 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
     ./Bingo/run_sample.sh
     ```
 
-    Windows PowerShell은 `cmake --build build --config Release --parallel` 뒤
-    `.Bingoun_sample.ps1`이다. Runner는 Redis를 Docker container로 직접 띄운다. 전제
-    조건과 문제 해결은 zip 안의 `README.ko.md`에 있다.
 
 === "Java"
 

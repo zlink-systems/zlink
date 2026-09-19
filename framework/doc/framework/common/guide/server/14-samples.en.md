@@ -322,9 +322,6 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
     ./Bingo/run_sample.sh
     ```
 
-    On Windows PowerShell it is `cmake --build build --config Release --parallel` followed by
-    `.Bingoun_sample.ps1`. The runner starts Redis itself as a Docker container. The
-    prerequisites and troubleshooting are in the `README.md` inside the archive.
 
 === "Java"
 

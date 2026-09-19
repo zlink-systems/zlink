@@ -299,9 +299,6 @@ One runner per sample directory brings up several servers together with a client
 and runs verification too. For a sample that needs a location store, the runner brings up
 its own Redis container and cleans it up when done, so all you need is `docker`.
 
-un_sample.ps1`. The runner starts Redis itself as a Docker container. The
-    prerequisites and troubleshooting are in the `README.md` inside the archive.
-
 ```bash
 # Once per sample, install its dependencies first
 cd framework/languages/node/samples/Bingo.Ts && npm install && cd -
