@@ -530,19 +530,16 @@ public sealed partial class RegressionTests
                 sampleRoot,
                 sample,
                 "run_sample.sh"));
+            // The application port range and its scan used to be a `random.randint(22100,
+            // 23999)`/`sock.bind` Python heredoc duplicated in every runner (#655's Python
+            // removal); zlink_sample_pick_ports in redis-common.sh is now the one owner of
+            // that range, so each runner only names how many ports it needs.
             Assert.Single(
                 Regex.Matches(
                     shellRunner,
-                    @"random\.randint\(22100, 23999\)").Cast<Match>());
-            Assert.Single(
-                Regex.Matches(
-                    shellRunner,
-                    Regex.Escape(
-                        "sock.bind((\"127.0.0.1\", port))")).Cast<Match>());
-            Assert.DoesNotContain(
-                "sock.bind((\"127.0.0.1\", 0))",
-                shellRunner,
-                StringComparison.Ordinal);
+                    @"zlink_sample_pick_ports \d+").Cast<Match>());
+            Assert.DoesNotContain("22100", shellRunner, StringComparison.Ordinal);
+            Assert.DoesNotContain("23999", shellRunner, StringComparison.Ordinal);
             Assert.Contains("redis-common.sh", shellRunner,
                 StringComparison.Ordinal);
             Assert.Contains("zlink_redis_start_scoped_assign", shellRunner,
@@ -561,6 +558,11 @@ public sealed partial class RegressionTests
             Assert.Contains("Start-SampleRedisContainer", powershellRunner,
                 StringComparison.Ordinal);
         }
+
+        var redisCommon = ReadSource(Path.Combine(sampleRoot, "redis-common.sh"));
+        Assert.Contains("zlink_sample_pick_ports() {", redisCommon, StringComparison.Ordinal);
+        Assert.Contains("min_port=22100", redisCommon, StringComparison.Ordinal);
+        Assert.Contains("max_port=23999", redisCommon, StringComparison.Ordinal);
 
         var powershellHelper = ReadSource(Path.Combine(
             sampleRoot,
@@ -596,7 +598,9 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("local redis_max_port=22099", shellRedisHelper,
             StringComparison.Ordinal);
-        Assert.Contains("sock.bind((\"127.0.0.1\", int(sys.argv[1])))",
+        Assert.Contains("zlink_redis_port_is_available() {", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("exec 3<>\"/dev/tcp/127.0.0.1/${port}\"",
             shellRedisHelper,
             StringComparison.Ordinal);
         Assert.Contains("-p \"127.0.0.1:${port}:6379\"", shellRedisHelper,

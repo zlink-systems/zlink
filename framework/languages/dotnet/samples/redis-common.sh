@@ -116,16 +116,62 @@ zlink_sample_copy_evidence() {
 }
 
 zlink_redis_port_is_available() {
-  python3 - "$1" <<'PY'
-import socket
-import sys
+  local port="$1"
+  # Connect probe: bash cannot bind a socket to hold a reservation, but neither did the
+  # bind-test this replaced -- it closed its socket immediately after the check, so both
+  # versions leave the same gap up to actual use. A successful connect means something is
+  # listening (port taken); a refused connect means free. This misses a port that is bound
+  # but not yet listening, or lingering in TIME_WAIT without SO_REUSEADDR -- rarer than the
+  # ordinary "something else is using it" case this exists to catch, and the docker/dotnet
+  # bind that follows still fails loudly (and the caller moves on) on a real collision.
+  if { exec 3<>"/dev/tcp/127.0.0.1/${port}"; } 2>/dev/null; then
+    exec 3<&- 3>&- 2>/dev/null
+    return 1
+  fi
+  return 0
+}
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    try:
-        sock.bind(("127.0.0.1", int(sys.argv[1])))
-    except OSError:
-        raise SystemExit(1)
-PY
+# Reserves `count` distinct free ports in the samples' shared ephemeral range for one run's
+# role endpoints. Same best-effort guarantee as zlink_redis_port_is_available above -- ports
+# are checked one at a time and not held, where the Python version this replaced held all of
+# a batch's sockets open until every port in it was found. Prints them space-separated.
+zlink_sample_pick_ports() {
+  local count="$1"
+  local min_port=22100
+  local max_port=23999
+  local -A chosen=()
+  local picked=()
+  local port attempt
+  for ((attempt = 0; attempt < 20000 && ${#picked[@]} < count; attempt++)); do
+    port=$((min_port + RANDOM % (max_port - min_port + 1)))
+    [[ -n "${chosen[$port]:-}" ]] && continue
+    zlink_redis_port_is_available "$port" || continue
+    chosen[$port]=1
+    picked+=("$port")
+  done
+  if [[ "${#picked[@]}" -ne "$count" ]]; then
+    echo "Could not find ${count} free ports in ${min_port}-${max_port}." >&2
+    return 1
+  fi
+  printf '%s\n' "${picked[*]}"
+}
+
+# Reads one scalar field out of a JSON document: quoted strings come back unquoted, and
+# null/true/false/numbers come back as their literal token text (a null is the string "null",
+# not empty -- callers that need Python's `or ""`/`or None` fallback do that themselves). This
+# is a text search, not a parser: every caller passes a document this same sample's own typed
+# JSON serializer produced, for a field name that appears once in it, never third-party or
+# adversarial JSON. Returns non-zero and prints nothing if the field is absent.
+zlink_json_field() {
+  local json="$1" field="$2" match
+  match="$(printf '%s' "${json}" | grep -oE "\"${field}\"[[:space:]]*:[[:space:]]*(\"([^\"\\\\]|\\\\.)*\"|null|true|false|-?[0-9]+(\.[0-9]+)?)" | head -1)" || return 1
+  [[ -n "${match}" ]] || return 1
+  match="${match#*:}"
+  while [[ "${match}" == [[:space:]]* ]]; do match="${match# }"; done
+  if [[ "${match}" == \"*\" ]]; then
+    match="${match:1:-1}"
+  fi
+  printf '%s' "${match}"
 }
 
 zlink_redis_is_bind_conflict() {
@@ -190,7 +236,10 @@ zlink_redis_start_scoped() {
       create_status=$?
     fi
 
-    container_id="$(printf '%s\n' "${create_output}" | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+    # grep -E, not awk: stock Ubuntu's /usr/bin/awk is mawk, which has no interval
+    # expressions ({12,64}) and always fails to match here, so this always came back
+    # empty on plain Ubuntu (WSL ships gawk, which does support them, and masked it).
+    container_id="$(printf '%s\n' "${create_output}" | grep -E '^[0-9a-f]{12,64}$' | head -n1)"
     if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
       zlink_redis_remove_attempt "${container_id}" "${name}"
       if zlink_redis_is_bind_conflict "${create_output}"; then

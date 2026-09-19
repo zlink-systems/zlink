@@ -31,31 +31,7 @@ cleanup() {
 }
 trap zlink_sample_exit_trap EXIT
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-chosen = set()
-try:
-    while len(sockets) < 9:
-        port = random.randint(22100, 23999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_sample_pick_ports 9)"
 
 REDIS_KEY_PREFIX="deliverydispatch:dotnet:${RANDOM}:$$:"
 DISPATCH_HTTP="http://127.0.0.1:${PORTS[0]}"
@@ -141,9 +117,15 @@ wait_port redis "tcp://${REDIS_ENDPOINT}"
 # Each role gets one configuration file holding the values it needs. The runner picks this run's
 # ports, but it hands them over in a file rather than through the environment
 # (framework/doc/framework/common/sample-e2e-configuration-policy.ko.md 2.2, 7).
+# Writes one role's configuration file for this run -- the runner decides ports, Redis
+# endpoint and directories, and hands them to the application in a file, never through the
+# environment (framework/doc/framework/common/sample-e2e-configuration-policy.ko.md 2.2, 6, 7).
+# The file is readable only by the user who ran it. This used to shell out to
+# write_role_config.py; the schema below matches that script's `document` exactly.
 write_role_config() {
   local role="$1"
   local mesh_endpoint=""
+  local output="${CONFIG_DIR}/${role}.json"
   case "${role}" in
     dispatch) mesh_endpoint="${DISPATCH_MESH}" ;;
     tracking) mesh_endpoint="${TRACKING_MESH}" ;;
@@ -153,17 +135,44 @@ write_role_config() {
     courier-node-2) mesh_endpoint="${COURIER_NODE2_MESH}" ;;
     client) mesh_endpoint="unused" ;;
   esac
-  python3 "${SCRIPT_DIR}/write_role_config.py" \
-    --output "${CONFIG_DIR}/${role}.json" \
-    --role "${role}" \
-    --log-dir "${SAMPLE_LOG_DIR}" \
-    --work-dir "${WORK_DIR}" \
-    --redis-endpoint "${REDIS_ENDPOINT}" \
-    --redis-key-prefix "${REDIS_KEY_PREFIX}" \
-    --dispatch-http "${DISPATCH_HTTP}" \
-    --mesh-endpoint "${mesh_endpoint}" \
-    --customer-stream "${CUSTOMER_STREAM}" \
-    --courier-stream "${COURIER_STREAM}"
+  if [[ "${role}" == "client" ]]; then
+    cat >"${output}" <<JSON
+{
+  "client": {
+    "logDirectory": "${SAMPLE_LOG_DIR}",
+    "dispatchHttpUrl": "${DISPATCH_HTTP}",
+    "customerStreamEndpoint": "${CUSTOMER_STREAM}",
+    "courierStreamEndpoint": "${COURIER_STREAM}",
+    "workDirectory": "${WORK_DIR}"
+  }
+}
+JSON
+  else
+    local role_topology=""
+    case "${role}" in
+      dispatch) role_topology="    \"dispatchHttpUrl\": \"${DISPATCH_HTTP}\"" ;;
+      customer-gateway) role_topology="    \"customerStreamEndpoint\": \"${CUSTOMER_STREAM}\"" ;;
+      courier-session) role_topology="    \"courierStreamEndpoint\": \"${COURIER_STREAM}\"" ;;
+      tracking | courier-node-1 | courier-node-2) role_topology="" ;;
+    esac
+    cat >"${output}" <<JSON
+{
+  "sample": {
+    "role": {
+      "name": "${role}",
+      "logDir": "${SAMPLE_LOG_DIR}",
+      "workDir": "${WORK_DIR}"
+    },
+    "topology": {
+      "redisEndpoint": "${REDIS_ENDPOINT}",
+      "redisKeyPrefix": "${REDIS_KEY_PREFIX}",
+      "meshEndpoint": "${mesh_endpoint}"$([[ -n "${role_topology}" ]] && printf ',\n%s' "${role_topology}")
+    }
+  }
+}
+JSON
+  fi
+  chmod 600 "${output}"
 }
 
 write_role_config tracking

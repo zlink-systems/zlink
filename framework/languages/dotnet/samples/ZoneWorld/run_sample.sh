@@ -103,31 +103,7 @@ dotnet build "$ROOT_DIR/Server/ZoneNode/ZoneWorld.Server.ZoneNode.csproj" --maxc
 dotnet build "$ROOT_DIR/Server/Gateway/ZoneWorld.Server.Gateway.csproj" --maxcpucount:1 -v q --nologo >/dev/null
 dotnet build "$ROOT_DIR/Client/ZoneWorld.Client.csproj" --maxcpucount:1 -v q --nologo >/dev/null
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-chosen = set()
-try:
-    while len(sockets) < 10:
-        port = random.randint(22100, 23999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_sample_pick_ports 10)"
 
 GATEWAY_ENDPOINT="ws://127.0.0.1:${PORTS[6]}"
 OPS_ENDPOINT="ws://127.0.0.1:${PORTS[4]}"

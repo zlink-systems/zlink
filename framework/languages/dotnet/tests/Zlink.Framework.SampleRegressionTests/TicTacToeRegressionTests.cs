@@ -147,7 +147,7 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("$apiBChannelEndpoint = \"tcp://127.0.0.1:$($ports[9])\"", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("while len(sockets) < 10", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("zlink_sample_pick_ports 10", shellRunner, StringComparison.Ordinal);
         Assert.Contains("$ports = New-SamplePorts -Count 10 -BasePort 0", powershellRunner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("SpotPubSubEndpoint", settings + shellRunner + powershellRunner,
