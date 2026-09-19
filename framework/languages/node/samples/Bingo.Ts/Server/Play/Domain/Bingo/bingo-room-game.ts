@@ -1,6 +1,6 @@
 import { BingoGame } from './bingo-game';
 import type { BingoGame as BingoGameType } from './bingo-game';
-import type { BingoCard } from './bingo-card';
+import { BingoCard } from './bingo-card';
 
 enum BingoRoomStatus {
   WaitingForPlayers = 'WaitingForPlayers',
