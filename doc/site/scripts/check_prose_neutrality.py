@@ -57,6 +57,9 @@ ALLOWED = {
     #  비동기 실행 정책 spec이 소유하는 terminal 이름. 다섯 언어의 표기 차이를
     #  설명하는 것이 산문의 일이라 이름 자체가 본문에 나온다.
     "Async", "submit", "Submit", "Yield", "yield", "await",
+    #  HTTP client 08장의 종결자 대응표가 다섯 언어 이름을 한 표에 나란히 적는다(스펙
+    #  language-interfaces §1.4의 투영). 표 자체가 다섯 언어 공통이라 치환 대상이 아니다.
+    "DownloadAsync",
     #  spec이 정의한 계기·wire 이름이라 언어 무관이다.
     "zlink",
     #  "Spring과 NestJS 위에도 똑같이 올라간다"처럼 **다른 언어를 예로 드는** 문장에
