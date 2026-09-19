@@ -249,6 +249,13 @@ FRAMEWORK_SCALAR_FIELDS = (
         required=False,
     ),
     FrameworkField(
+        "framework/languages/dotnet/tutorial/Directory.Packages.props",
+        "dotnet",
+        "tutorial PackageVersion Zlink.HttpClient",
+        rf'(<PackageVersion Include="Zlink\.HttpClient" Version=")(?P<version>{SEMVER})(" />)',
+        required=False,
+    ),
+    FrameworkField(
         "framework/languages/node/tutorial/package.json",
         "node",
         "tutorial @zlink-systems/nestjs",
@@ -274,6 +281,13 @@ FRAMEWORK_SCALAR_FIELDS = (
         "node",
         "tutorial StreamClient @zlink-systems/stream-connector",
         rf'("@zlink-systems/stream-connector": "\^?)(?P<version>{SEMVER})(")',
+        required=False,
+    ),
+    FrameworkField(
+        "framework/languages/node/tutorial/HttpClient/package.json",
+        "node",
+        "tutorial HttpClient @zlink-systems/http-client",
+        rf'("@zlink-systems/http-client": "\^?)(?P<version>{SEMVER})(")',
         required=False,
     ),
     FrameworkField(
