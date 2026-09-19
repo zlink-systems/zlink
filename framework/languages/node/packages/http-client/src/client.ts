@@ -9,7 +9,7 @@ import type { ZLinkHttpExecutionScheduler } from './types';
 
 /**
  * ZLink-style fluent HTTP client. Wraps undici behind a builder so transport types never leak into
- * application code. A general HTTP client; the typed-JSON path (`body(dto)` / `async<T>()`) is a
+ * application code. A general HTTP client; the typed-JSON path (`body(dto)` / `submit<T>()`) is a
  * convenience layer on top. Mirrors the C++ `zlink::http_client::client_t`.
  */
 export class ZLinkHttpClient {

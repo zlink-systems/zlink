@@ -48,6 +48,11 @@ mTLS 제시 · proxy 평문/CONNECT/인증(언어별 가능 범위).
 **실행 모델**: 20개 동시 요청이 직렬화되지 않음(non-blocking 증명) ·
 one-shot 경로 동작 · (cpp) 커스텀 execute/resume scheduler.
 
+**실행 표면**: 각 언어의 종결자 이름·반환형이 [언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator)와
+일치하고 표 밖의 종결자(one-way 포함)가 없음 · standalone builder에 `Yield` 없음 · DI server builder
+`Yield`가 gate를 반납함 · (cpp) blocking 종결자가 runtime 실행 문맥에서 `InvalidOperation`으로 실패 ·
+(cpp) `fetch<T>()`가 비동기로 완료.
+
 ## 11.3 게이트
 
 - 커버리지: java/kotlin JaCoCo LINE ≥ 0.80, node 내장 coverage 게이트 80%.

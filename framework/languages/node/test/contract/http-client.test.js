@@ -18,7 +18,7 @@ const frameworkIntegration = require('../../packages/framework/dist/nest-integra
 const TLS_DIR = path.join(__dirname, '..', 'fixtures', 'tls');
 const tlsPath = (name) => path.join(TLS_DIR, name);
 
-test('standalone HTTP request exposes async response terminators but no server terminators', async () => {
+test('standalone HTTP request exposes typed response terminators but no server-only yield', async () => {
   const server = await startServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ ok: true }));
@@ -26,10 +26,9 @@ test('standalone HTTP request exposes async response terminators but no server t
   const client = ZLinkHttpClient.create(server.baseUrl).build();
   try {
     const call = client.get('/terminators');
-    assert.equal(typeof call.async, 'function');
+    assert.equal(typeof call.submit, 'function');
     assert.equal(typeof call.fetch, 'function');
     assert.equal(typeof call.submitRaw, 'function');
-    assert.equal(typeof call.submit, 'undefined');
     assert.equal(typeof call.yield, 'undefined');
   } finally {
     await client.close();
@@ -37,23 +36,7 @@ test('standalone HTTP request exposes async response terminators but no server t
   }
 });
 
-test('server HTTP one-way submit returns Promise<void>', async () => {
-  const server = await startServer((_req, res) => {
-    res.end();
-  });
-  const scheduler = frameworkIntegration.createIntegrationHttpExecutionScheduler({});
-  const client = ZLinkHttpClient.create(server.baseUrl).executionScheduler(scheduler).build();
-  try {
-    const submission = client.post('/one-way').submit();
-    assert.equal(submission instanceof Promise, true);
-    assert.equal(await submission, undefined);
-  } finally {
-    await client.close();
-    await server.close();
-  }
-});
-
-test('HTTP async retains a Spot turn while yield releases and resumes it', async () => {
+test('HTTP submit retains a Spot turn while yield releases and resumes it', async () => {
   const releases = [];
   const server = await startServer(async (_req, res) => {
     await new Promise((resolve) => releases.push(resolve));
@@ -70,7 +53,7 @@ test('HTTP async retains a Spot turn while yield releases and resumes it', async
     const retainedEvents = [];
     const retained = serial.execute(async () => {
       retainedEvents.push('handler:start');
-      await client.get('/retained').async();
+      await client.get('/retained').submit();
       retainedEvents.push('handler:reply');
     });
     const retainedNext = serial.execute(() => retainedEvents.push('next'));
@@ -115,7 +98,7 @@ test('HTTP callback completion is posted as a new Spot turn', async () => {
   try {
     const busy = serial.execute(async () => {
       events.push('handler:start');
-      client.get('/callback').async((error, response) => {
+      client.get('/callback').submit((error, response) => {
         assert.equal(error, undefined);
         assert.equal(response.body.ok, true);
         events.push('callback');
@@ -228,14 +211,14 @@ test('HEAD returns status with empty body', async () => {
   }
 });
 
-test('typed async returns null for successful empty body responses', async () => {
+test('typed submit returns null for successful empty body responses', async () => {
   const server = await startServer((req, res) => {
     res.statusCode = 204;
     res.end();
   });
   const client = ZLinkHttpClient.create(server.baseUrl).build();
   try {
-    const r = await client.get('/empty').async();
+    const r = await client.get('/empty').submit();
     assert.equal(r.status, 204);
     assert.equal(r.body, null);
     assert.equal(r.rawBody, '');
@@ -430,7 +413,7 @@ test('typed HTTP status >= 400 is InternalFailure and raw status is preserved', 
   try {
     for (const status of [400, 404, 500, 599]) {
       await assert.rejects(
-        () => client.get(`/${status}`).async(),
+        () => client.get(`/${status}`).submit(),
         (e) => e instanceof ZLinkFrameworkException
           && e.kind === ZLinkFrameworkErrorKind.InternalFailure
           && e.message.includes(String(status)),
@@ -440,7 +423,7 @@ test('typed HTTP status >= 400 is InternalFailure and raw status is preserved', 
       assert.deepEqual(JSON.parse(raw.body), { error: 'status failure' });
     }
     assert.equal(requests, 8);
-    const belowBoundary = await client.get('/399').async();
+    const belowBoundary = await client.get('/399').submit();
     assert.equal(belowBoundary.status, 399);
     assert.deepEqual(belowBoundary.body, { error: 'status failure' });
     assert.equal(requests, 9);
@@ -460,7 +443,7 @@ test('typed HTTP transport connection failure stays Unavailable', async () => {
   const client = ZLinkHttpClient.create(server.baseUrl).build();
   try {
     await assert.rejects(
-      () => client.get('/connection-failure').async(),
+      () => client.get('/connection-failure').submit(),
       (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Unavailable,
     );
     assert.equal(connections, 1);
@@ -477,7 +460,7 @@ test('malformed JSON throws payloadDecodeFailed', async () => {
   const client = ZLinkHttpClient.create(server.baseUrl).build();
   try {
     await assert.rejects(
-      () => client.get('/x').async(),
+      () => client.get('/x').submit(),
       (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.ProtocolError,
     );
   } finally {
@@ -500,7 +483,7 @@ test('follows redirect and rewrites POST to GET on 303', async () => {
   });
   const client = ZLinkHttpClient.create(server.baseUrl).followRedirects(3).build();
   try {
-    const r = await client.post('/start').body({ name: 'x' }).async();
+    const r = await client.post('/start').body({ name: 'x' }).submit();
     assert.equal(finalMethod, 'GET');
     assert.equal(r.body.id, 'game-1');
   } finally {
@@ -659,7 +642,7 @@ for (const encoding of ['gzip', 'deflate']) {
     });
     const client = ZLinkHttpClient.create(server.baseUrl).compression().build();
     try {
-      const r = await client.get('/data').async();
+      const r = await client.get('/data').submit();
       assert.equal(r.body.id, 42);
       assert.equal(r.headers['content-encoding'], undefined);
     } finally {

@@ -27,7 +27,7 @@
 an HTTP request in C++. It's not a JSON-only client — it's a
 general-purpose HTTP client that absorbs the complexity of low-level
 types and configuration in zlink's call object and fluent builder
-style. The typed JSON path (`body(dto)`/`submit<T>()`/`fetch<T>()`) is
+style. The typed JSON path (`body(dto)`/`async<T>()`/`fetch<T>()`) is
 a convenience layer laid on top of it.
 
 `zlink::http_client` uses the `zlink::framework` target as a public dependency.
@@ -76,11 +76,17 @@ The currently implemented public deliverable is below.
   `body_stream(provider, content_type)`,
   `form(name, value)` (x-www-form-urlencoded), `multipart(...)`/
   `multipart_file(...)`
-- `submit<T>()`, `submit_raw()`, blocking `fetch<T>()` (directly returns
-  the typed body, throws on failure)
-- The server request builder's one-way `submit()` returns
-  `task_t<void>`. This task only delivers async completion and
-  failure, not the transport result or admission status.
+- Terminators — the names follow
+  [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators).
+  Async: `async<T>()` → `task_t<http_response_t<T>>`, `async_raw()` →
+  `task_t<raw_http_response_t>`, `fetch<T>()` → `task_t<T>` (directly returns
+  the typed body, throws on failure), `async<T>(callback)`.
+  Blocking (CLI and client scenarios only): `submit<T>()` →
+  `result_t<http_response_t<T>>`, `submit_raw()` → `result_t<raw_http_response_t>`.
+  In a runtime execution context they fail immediately with `invalid_operation`.
+- The server request builder adds `yield<T>()` to the standalone surface. Its
+  behavior follows [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators)
+  and the server execution contract.
 - `download(sink)`: streams the response body in chunks with no
   buffering
 - Connection keep-alive pool: reuses a connection of the same origin
@@ -100,10 +106,10 @@ auto client = zlink::http_client::client_t::create()
 auto created = co_await client
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
-  .submit<create_game_http_res_t>();
+  .async<create_game_http_res_t>();
 ```
 
-Internally, typed submit doesn't wait for the raw submit result with
+Internally, typed `async<T>()` doesn't wait for the raw result with
 `.result()` — it awaits `task_t` completion. This rule is to keep the
 sample handler from blocking the runtime thread when it uses the HTTP
 client.
@@ -120,8 +126,7 @@ auto created = zlink::http_client::client_t::create()
   .base_url(topology.api_http_endpoint)
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
-  .submit<create_game_http_res_t>()
-  .result();
+  .submit<create_game_http_res_t>();   // blocking — CLI and client scenarios only
 ```
 
 This shortcut is safe even if the builder is a temporary object. Since
@@ -129,23 +134,25 @@ This shortcut is safe even if the builder is a temporary object. Since
 on-demand-built client and its runtime are kept alive until the
 request finishes.
 
-`submit<T>()`'s result is `result_t<http_response_t<T>>`. That is, it
-reaches the typed DTO through `.value().body`, passing through a
-success/failure wrapper and the HTTP envelope
-(`status`/`headers`/`body`). When only the typed body is immediately
-needed, use `fetch<T>()`. `fetch<T>()` unwraps the result and envelope
-to directly return the DTO, and throws an exception on failure.
+The blocking `submit<T>()` returns `result_t<http_response_t<T>>` — the typed
+DTO is reached through `.value().body`, past the success/failure wrapper and
+the HTTP envelope (`status`/`headers`/`body`). `co_await async<T>()` returns
+`http_response_t<T>` directly and delivers failure as an exception. When only
+the typed body is needed, `co_await fetch<T>()` returns the DTO directly and
+throws on failure.
 
 ```cpp
-auto created = zlink::http_client::client_t::create(topology.api_http_endpoint)
+auto created = co_await zlink::http_client::client_t::create(topology.api_http_endpoint)
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
   .fetch<create_game_http_res_t>();   // create_game_http_res_t (throws on failure)
 ```
 
-`fetch<T>()` waits for the result blocking. So use it where blocking is
-allowed, such as in tests and client scenarios. Runtime/handler code
-`co_await`s `submit<T>()` to avoid blocking the runtime thread.
+`fetch<T>()` completes asynchronously, as in the other four languages. Tests
+and client scenarios that must wait blocking use `submit<T>()` and
+`submit_raw()`; runtime/handler code `co_await`s `async<T>()` so the runtime
+thread is never blocked. Calling a blocking terminator in a runtime execution
+context fails immediately with `invalid_operation`.
 
 The general HTTP client capability supports the scope below.
 
@@ -154,7 +161,7 @@ The general HTTP client capability supports the scope below.
 - Request body: typed JSON DTO, raw (arbitrary content-type), chunked
   streaming (`body_stream`), form-urlencoded, multipart/form-data
   (only one body source is allowed per request)
-- Response: raw (`submit_raw`), typed JSON (`submit<T>`/`fetch<T>`),
+- Response: raw (`async_raw`/`submit_raw`), typed JSON (`async<T>`/`submit<T>`/`fetch<T>`),
   streaming (`download(sink)`)
 - Timeout (client default + per-request override), default header,
   request header
@@ -166,8 +173,9 @@ The general HTTP client capability supports the scope below.
   automatically retries once with a fresh connection. A `body_stream`
   request always uses a fresh connection since the provider can't
   rewind.
-- Coroutine scheduler: a client with no configuration keeps the
-  existing blocking submit meaning. Specifying `.coroutines()`
+- Coroutine scheduler: `async_*`, `fetch` and `download` run on the execute
+  scheduler regardless of configuration; a client with no configuration uses
+  the default scheduler. Specifying `.coroutines()`
   registers the HTTP work on the internal scheduler, and injecting a
   custom scheduler separates the HTTP execution location from the
   continuation resume location.
@@ -228,7 +236,7 @@ A typed JSON request/response is written with the flow below.
 
 | Operation | C++ Flow |
 |------|----------|
-| JSON request + typed response | `client.post(path).body(dto).submit<TReply>()` |
+| JSON request + typed response | `co_await client.post(path).body(dto).async<TReply>()` |
 | Response JSON decode | Response decode based on `message_t::parse_json<T>()` |
 
 ## 5. HTTPS And TLS
@@ -247,11 +255,12 @@ verification isn't implicitly turned off.
 
 ## 6. Coroutine Execution Contract
 
-`submit_raw()` and `submit<T>()` return `zlink::framework::task_t`. A
-client with no coroutine configuration keeps the existing blocking
-submit meaning. It synchronously runs the HTTP work during the call,
-and if the caller calls `.result()` on the returned task, the current
-thread waits until the result arrives.
+`async_raw()`, `async<T>()`, `fetch<T>()` and `download(sink)` return
+`zlink::framework::task_t` and register the HTTP work on the execute scheduler —
+the default one without `.coroutines(...)`, the injected one with it.
+`.coroutines(...)` replaces only the execute and resume schedulers; it does not
+change whether a terminator is asynchronous. The blocking `submit_raw()` and `submit<T>()` finish the work on the calling
+thread regardless of scheduler configuration and return a `result_t`.
 
 A client with `.coroutines()` specified registers the HTTP work on the
 HTTP client's internal scheduler. This scheduler doesn't expose a
@@ -279,9 +288,9 @@ auto client = zlink::http_client::client_t::create("https://matchmaking.internal
 If the caller must decide both the HTTP work execution location and the
 resume location, use `.coroutines(execute_scheduler, resume_scheduler)`.
 
-| Client Configuration | `submit<T>()` Execution Meaning |
+| Client Configuration | `async<T>()` Execution Meaning |
 |-------------|-------------------------|
-| No coroutine configuration | Runs the HTTP work synchronously during the call |
+| No coroutine configuration | The default execute scheduler handles the HTTP work and the resume |
 | `.coroutines()` | The internal scheduler handles both the HTTP work and resume |
 | `.coroutines(resume)` | The internal scheduler runs the HTTP work, and the custom scheduler resumes |
 | `.coroutines(execute, resume)` | Custom schedulers handle both the HTTP work and resume |
@@ -291,8 +300,8 @@ resume location, use `.coroutines(execute_scheduler, resume_scheduler)`.
 continuation. If the scheduler argument is `nullptr`, it fails with
 `invalid_operation`.
 
-Calling `submit_raw()` or `submit<T>()` on a client with coroutine
-configuration has the request builder copy request state — method,
+Calling `async_raw()` or `async<T>()`, with or without `.coroutines(...)`
+configuration, has the request builder copy request state — method,
 path, headers, body provider, timeout — by value, and then register the
 work with the scheduler. Even if the temporary builder and client
 object disappear, the registered work must complete with its own
@@ -303,9 +312,9 @@ scheduler queue. If the deadline has passed before the worker starts
 the HTTP work, it doesn't start the HTTP exchange and completes the
 task with a timeout failure.
 
-`submit<T>()` performs typed JSON decode after the raw HTTP work
+`async<T>()` performs typed JSON decode after the raw HTTP work
 finishes. On a coroutine client, decode and the caller continuation
-follow the resume scheduler policy. `submit<T>(callback)` also runs the
+follow the resume scheduler policy. `async<T>(callback)` also runs the
 callback at the location the resume scheduler decides, if coroutine
 configuration is present. Even if an exception occurs in the callback,
 it doesn't change the already-completed task result.
@@ -335,8 +344,9 @@ The minimal test covers the axes below.
   Beast/Asio/OpenSSL types aren't exposed in the public header
 - JSON request/response: sends a typed DTO request as JSON and reads
   the reply DTO
-- Coroutine submit: `co_await submit<T>()` returns the typed response
-  and doesn't blocking-wait for the internal raw submit
+- Coroutine terminator: `co_await async<T>()` returns the typed response
+  and doesn't blocking-wait for the internal raw work; the blocking
+  `submit<T>()` fails with `invalid_operation` in a runtime execution context
 - Coroutine scheduler: verifies `.coroutines()` default scheduler,
   custom resume scheduler, custom execute/resume scheduler, framework
   queue adapter, scheduler registration failure, queue timeout
@@ -346,7 +356,7 @@ The minimal test covers the axes below.
 - build-omission shortcut: a request sent with `post(...)`, etc. with
   no `build()`, even from a temporary builder, completes with no
   use-after-free
-- Typed body fetch: `fetch<T>()` directly returns the typed DTO and
+- Typed body fetch: `co_await fetch<T>()` directly returns the typed DTO and
   throws a failure status as an exception
 - Method coverage: `PATCH`, `OPTIONS` are delivered, and `HEAD`
   receives status/header with no body

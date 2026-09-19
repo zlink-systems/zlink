@@ -237,7 +237,7 @@ test('ZLinkHttpClientModule registers named server clients through Nest DI', asy
   });
   try {
     const client = app.get(profilesToken);
-    const response = await client.get('/profile').async();
+    const response = await client.get('/profile').submit();
     assert.equal(response.body.source, 'profiles');
     assert.equal(typeof client.get('/profile').yield, 'function');
   } finally {

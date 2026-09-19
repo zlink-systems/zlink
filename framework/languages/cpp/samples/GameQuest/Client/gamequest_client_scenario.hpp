@@ -19,6 +19,7 @@
 namespace zlink::samples::gamequest
 {
 
+// This CLI scenario completes each HTTP request before advancing its workflow state.
 class gamequest_client_scenario_t
 {
   public:
@@ -454,7 +455,7 @@ class gamequest_client_scenario_t
                            .build ()
                            .post ("/self-check/assert")
                            .body (server_assertion_req_t{})
-                           .fetch<server_assertion_res_t> ();
+                           .submit<server_assertion_res_t> ().value ().body;
         ensure (assertion.passed, "server assertion failed");
     }
 

@@ -57,12 +57,6 @@ suspend fun ZLinkHttpRequestBuilder.awaitDownload(sink: (ByteArray) -> Unit): Ra
 suspend fun <T> ZLinkHttpServerRequestBuilder.await(type: Class<T>): HttpResponse<T> =
     submit(type).awaitWithoutCancellingOperation()
 
-/** Awaits completion of a one-way server request without exposing a response value. */
-@JvmName("awaitOneWay")
-suspend fun ZLinkHttpServerRequestBuilder.await() {
-    submit().awaitWithoutCancellingOperation()
-}
-
 @JacocoGenerated
 suspend inline fun <reified T> ZLinkHttpServerRequestBuilder.await(): HttpResponse<T> =
     await(T::class.java)

@@ -4,7 +4,7 @@
 #include <zlink/http_client/contracts/coroutines.hpp>
 #include <zlink/http_client/contracts/types.hpp>
 #include <zlink/framework/codecs/json.hpp>
-#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/channels/call.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -135,7 +135,6 @@ class client_builder_t
     std::optional<std::string> _proxy;
     std::optional<std::string> _proxy_authorization;
     bool _compression = false;
-    bool _coroutines = true;
     std::shared_ptr<coroutine_execute_scheduler_t> _execute_scheduler;
     std::shared_ptr<coroutine_resume_scheduler_t> _resume_scheduler;
 };
@@ -173,7 +172,9 @@ class request_builder_t
                                        std::string content,
                                        std::string content_type);
 
-    zlink::framework::task_t<raw_http_response_t> submit_raw () const;
+    zlink::framework::result_t<raw_http_response_t> submit_raw () const;
+
+    zlink::framework::task_t<raw_http_response_t> async_raw () const;
 
     // Streams the response body to `sink` chunk by chunk instead of buffering
     // it; the returned response carries status and headers with an empty body.
@@ -181,9 +182,9 @@ class request_builder_t
     zlink::framework::task_t<raw_http_response_t>
     download (std::function<void (std::string_view)> sink) const;
 
-    template <typename T> zlink::framework::task_t<http_response_t<T>> submit () const
+    template <typename T> zlink::framework::task_t<http_response_t<T>> async () const
     {
-        auto raw_task = submit_raw ();
+        auto raw_task = async_raw ();
         raw_http_response_t raw;
         try {
             raw = co_await raw_task;
@@ -193,42 +194,30 @@ class request_builder_t
               error.kind (), error.what ());
         }
 
-        if (raw.status >= 400) {
-            std::ostringstream message;
-            message << "HTTP request failed with status " << raw.status;
-            if (!raw.body.empty ()) {
-                constexpr std::size_t max_error_body = 512;
-                message << ": " << raw.body.substr (0, max_error_body);
-                if (raw.body.size () > max_error_body)
-                    message << "...";
-            }
-            co_return zlink::framework::result_t<http_response_t<T>>::failure (
-              zlink::framework::framework_error_kind_t::internal_failure, message.str ());
-        }
-
-        try {
-            http_response_t<T> response{
-              .status = raw.status,
-              .headers = raw.headers,
-              .body = zlink::message_t::from (raw.body).template parse_json<T> (),
-              .raw_body = raw.body};
-            co_return response;
-        }
-        catch (const std::exception &ex) {
-            co_return zlink::framework::result_t<http_response_t<T>>::failure (
-              zlink::framework::framework_error_kind_t::protocol_error, ex.what ());
-        }
+        co_return decode<T> (raw);
     }
 
-    template <typename T> T fetch () const
+    template <typename T> zlink::framework::result_t<http_response_t<T>> submit () const
     {
-        auto response = submit<T> ().result ().value ();
-        return std::move (response.body);
+        auto raw = submit_raw ();
+        if (!raw) {
+            const auto *error = raw.error ();
+            return zlink::framework::result_t<http_response_t<T>>::failure (
+              error ? error->kind () : zlink::framework::framework_error_kind_t::internal_failure,
+              error ? error->what () : "HTTP request failed without an error");
+        }
+        return decode<T> (raw.value ());
     }
 
-    template <typename T, typename TCallback> void submit (TCallback &&callback) const
+    template <typename T> zlink::framework::task_t<T> fetch () const
     {
-        auto task = submit<T> ();
+        auto response = co_await async<T> ();
+        co_return std::move (response.body);
+    }
+
+    template <typename T, typename TCallback> void async (TCallback &&callback) const
+    {
+        auto task = async<T> ();
         zlink::framework::detail::observe_task_completion (task,
                                                            std::forward<TCallback> (callback));
     }
@@ -247,6 +236,36 @@ class request_builder_t
     resolve_body_and_headers () const;
     detail::http_request_t make_request (std::function<void (std::string_view)> sink) const;
     zlink::framework::task_t<raw_http_response_t> dispatch_request (detail::http_request_t request) const;
+
+    template <typename T>
+    static zlink::framework::result_t<http_response_t<T>> decode (const raw_http_response_t &raw)
+    {
+        if (raw.status >= 400) {
+            std::ostringstream message;
+            message << "HTTP request failed with status " << raw.status;
+            if (!raw.body.empty ()) {
+                constexpr std::size_t max_error_body = 512;
+                message << ": " << raw.body.substr (0, max_error_body);
+                if (raw.body.size () > max_error_body)
+                    message << "...";
+            }
+            return zlink::framework::result_t<http_response_t<T>>::failure (
+              zlink::framework::framework_error_kind_t::internal_failure, message.str ());
+        }
+
+        try {
+            return zlink::framework::result_t<http_response_t<T>>::success (
+              http_response_t<T>{
+                .status = raw.status,
+                .headers = raw.headers,
+                .body = zlink::message_t::from (raw.body).template parse_json<T> (),
+                .raw_body = raw.body});
+        }
+        catch (const std::exception &ex) {
+            return zlink::framework::result_t<http_response_t<T>>::failure (
+              zlink::framework::framework_error_kind_t::protocol_error, ex.what ());
+        }
+    }
 
     client_t _client;
     http_method_t _method;
@@ -323,25 +342,25 @@ class server_request_builder_t : public request_builder_t
         return *this;
     }
 
-    zlink::framework::task_t<void> submit () const
+    template <typename T> zlink::framework::task_t<http_response_t<T>> yield () const
     {
-        (void) co_await schedule_raw (false);
-        co_return;
+        return schedule<T> (true);
     }
 
-    template <typename T> zlink::framework::task_t<http_response_t<T>> submit () const
+    template <typename T> zlink::framework::task_t<http_response_t<T>> async () const
     {
         return schedule<T> (false);
     }
 
-    zlink::framework::task_t<raw_http_response_t> submit_raw () const
+    template <typename T> zlink::framework::task_t<T> fetch () const
     {
-        return schedule_raw (false);
+        auto response = co_await async<T> ();
+        co_return std::move (response.body);
     }
 
-    template <typename T> zlink::framework::task_t<http_response_t<T>> yield () const
+    zlink::framework::task_t<raw_http_response_t> async_raw () const
     {
-        return schedule<T> (true);
+        return schedule_raw (false);
     }
 
     zlink::framework::task_t<raw_http_response_t> yield_raw () const
@@ -349,9 +368,9 @@ class server_request_builder_t : public request_builder_t
         return schedule_raw (true);
     }
 
-    template <typename T, typename TCallback> void submit (TCallback &&callback) const
+    template <typename T, typename TCallback> void async (TCallback &&callback) const
     {
-        auto task = request_builder_t::submit<T> ();
+        auto task = request_builder_t::async<T> ();
         auto scheduler = _execution_turn->callback_scheduler ();
         if (scheduler) {
             task = zlink::framework::detail::reschedule_task (std::move (task),
@@ -365,7 +384,7 @@ class server_request_builder_t : public request_builder_t
     template <typename T>
     zlink::framework::task_t<http_response_t<T>> schedule (bool release_turn) const
     {
-        auto task = request_builder_t::submit<T> ();
+        auto task = request_builder_t::async<T> ();
         auto scheduler = _execution_turn->prepare (release_turn);
         if (!scheduler) {
             return task;
@@ -376,7 +395,7 @@ class server_request_builder_t : public request_builder_t
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
     {
-        auto task = request_builder_t::submit_raw ();
+        auto task = request_builder_t::async_raw ();
         auto scheduler = _execution_turn->prepare (release_turn);
         if (!scheduler) {
             return task;

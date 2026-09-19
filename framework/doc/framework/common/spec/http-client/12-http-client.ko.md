@@ -9,9 +9,8 @@
 > 상세 계약(builder, 응답, redirect·retry·cookie, 인증·TLS·proxy, 압축, 오류 매핑, 회귀)은
 > 같은 폴더의 [01~11](README.ko.md)이 각각 소유한다.
 >
-> 언어별 정확한 타입과 signature는 [`languages/<lang>/`](README.ko.md)이 소유한다.
-> [language-interfaces](language-interfaces.ko.md)는 다섯 언어를 나란히 놓고 보는
-> **비규범 대조표**다 — 계약을 고정하지 않는다.
+> 공통 개념의 언어별 이름은 [language-interfaces](language-interfaces.ko.md)가 소유하고,
+> 그 이름의 정확한 parameter·return type은 [`languages/<lang>/`](README.ko.md)이 투영해 소유한다.
 
 ## 1. 정체성 — framework 동반 client
 
@@ -42,8 +41,8 @@ client.post("/games")               // operation
       .query("region", "kr")
       .body(createGameReq)
       .timeout(3s)
-      .submit<CreateGameRes>()      // C++·Java의 response completion terminator
-                                    // Node는 async<CreateGameRes>() 사용
+      .submit<CreateGameRes>()      // response completion terminator — Java·Node 이름.
+                                    // 언어별 이름은 언어별 인터페이스 §1.4
 ```
 
 - verb 7종: `get` / `post` / `put` / `delete` / `patch` / `head` / `options`.
@@ -53,19 +52,16 @@ client.post("/games")               // operation
 builder의 세부 계약(path 형식, percent-encoding, body 소스별 retry 가능 여부 등)은
 [03 Request builder](03-request-builder.ko.md)가 소유한다.
 
-## 3. 실행 terminator — one-way와 response completion (+ callback)
+## 3. 실행 terminator — response completion (+ callback)
 
-HTTP client의 완료 표면은 one-way submission, response completion과 callback이다. 정확한 이름은
-.NET `Async`, Kotlin wrapper `await`, Java·C++ `submit`이다. Node는 raw response에 `submitRaw`,
-typed response와 callback에 `async`, one-way에 `submit`을 사용한다. TypeScript 상속 signature
-제약은 언어별 exact interface가 소유한다. Shared Spot gate를 반납하는
-`Yield`는 서버 request와 Worker call에만 제공하며 HTTP request builder에는 포함하지 않는다
-([04 §1.1](../server/01-execution/README.ko.md)).
+HTTP client의 완료 표면은 response completion, callback, 그리고 DI server builder의 `Yield`다. 종결자의
+이름·응답 형태·one-way의 부재는 [언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator)가
+소유한다.
 
 | 실행 방식 | 무엇을 기다리나 | Spot 실행 줄 |
 |---|---|---|
-| **one-way submission** | HTTP 요청이 전송 경계에 제출될 때까지 기다린다 | 현재 turn을 유지한다. 정상 완료 값은 없다 |
 | **response completion** | HTTP response가 도착할 때까지 기다린다 | 현재 turn을 유지한다 |
+| **`Yield`** (DI server builder) | HTTP response가 도착할 때까지 기다린다 | gate 반납과 재개의 의미는 [Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)를 따른다 |
 
 **Callback은 awaitable을 사용하지 않는 호출자**(CLI,
 이벤트 루프 기반 client)를 위한 **별도 완료 경로**다. HTTP client는 그 경로도 함께 제공한다.
@@ -76,40 +72,33 @@ Spot 실행 문맥에서 callback을 사용하면 호출은 기다리지 않고 
 
 ### 3.1 외부 HTTP를 기다리면서 Spot gate를 반납하는 방법
 
-HTTP client call 자체는 shared Spot gate를 반납하지 않는다. Actor 입·퇴장 중 외부 API를 기다리면서
-다른 Spot 작업을 진행해야 하면 I/O Worker에서 HTTP client의 response completion terminator를
-실행하고 Worker call의 `Yield`로 기다린다.
-
-```csharp
-var profile = await Context
-    .RunIoWorker(async workerCancellation =>
-        await http.Get($"/players/{id}").Fetch<Profile>(workerCancellation))
-    .Yield(ct);
-```
-
-HTTP request builder에는 `Yield` terminal을 제공하지 않는다. Gate 반납과 재획득은 서버 runtime의
-Worker call이 소유하므로 HTTP package가 Spot execution context를 판정하지 않는다.
+`Yield`가 있는 실행 문맥은 [Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)가,
+DI server builder의 `Yield`와 I/O Worker + Worker `Yield`의 두 사용 형태와 예제는
+[05 §5.2](05-execution-model.ko.md#52-외부-http-대기와-spot-실행-줄)가 소유한다. HTTP package는 Spot
+execution context를 판정하지 않는다. Framework는 DI 시 현재 execution turn을 주입하고, DI server builder의
+`Yield`는 그 turn을 반납한다([turn seam](#32-turn-seam--주입점-하나)).
 
 ### 3.2 turn seam — 주입점 하나
 
-**HTTP client는 framework의 오류 kind와 codec은 알지만, Spot의 turn은 모른다.** turn을 아는 것은
-**주입된 execution scheduler** 하나뿐이다.
+**HTTP client는 framework error kind와 codec에 의존하며 Spot turn 정보를 보유하지 않는다.** Framework는
+DI 시 주입한 **execution scheduler** 하나에 현재 turn을 연결한다.
 
 - HTTP client는 **execution scheduler 주입점**을 공개 계약으로 둔다. scheduler는 completion을
   어디서 재개할지 정한다.
 - **Framework는 DI 등록 시 callback completion scheduler를 주입한다.** Callback은 원래 Spot 실행 줄의
   새 turn으로 들어간다.
-- DI와 단독 사용 모두 HTTP request builder에 `Yield`를 노출하지 않는다. 언어별 response
-  completion terminator와 callback만 사용한다.
+- DI server builder의 `Yield`는 주입된 turn을 반납하고 같은 실행 줄의 새 turn에서 재개한다.
 
 C++ HTTP client는 같은 scheduler seam을 `coroutines(resume_scheduler)`와
 `framework_resume_scheduler_t`로 표현한다.
 
-### 3.3 blocking terminator를 두지 않는다
+### 3.3 runtime 실행 문맥은 blocking terminator 호출을 거부한다
 
-**완료 값을 동기로 언래핑하는 public terminator를 만들지 않는다**([04 §2](../server/01-execution/README.ko.md)).
-같은 의미의 blocking 대안 terminator는 계약 위반이다. 테스트나 CLI에서 동기로 기다려야 하면
-호출자가 언어 관용(`GetAwaiter().GetResult()`, `runBlocking`, `.join()`)으로 직접 감싼다.
+**완료 값을 동기로 언래핑하는 public 종결자의 언어별 제공 여부와 이름은
+[언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator)가 소유한다.** runtime 실행 문맥에서
+blocking 종결자를 호출하면 [Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)에
+따라 `InvalidOperation`으로 즉시 실패한다. blocking 종결자가 없는 언어에서 테스트나 CLI가 동기로 기다려야
+하면 호출자가 언어 관용(`GetAwaiter().GetResult()`, `runBlocking`, `.join()`)으로 직접 감싼다.
 
 ## 4. 서버 표면과 등록
 
@@ -125,7 +114,7 @@ handler 안에서 client를 만들지 않는다 — 연결 pool과 turn seam을 
 | 표면 | 누가 쓰나 | terminator |
 |------|-----------|------------|
 | 정적 팩토리 | CLI · client 시나리오 | response completion / callback |
-| **DI 주입 client** | **Spot handler · 서버 코드** | one-way / response completion / callback |
+| **DI 주입 client** | **Spot handler · 서버 코드** | response completion / callback / `Yield` |
 
 ## 5. Codec
 
@@ -155,10 +144,10 @@ typed body의 encode/decode는 그 registry가 담당한다. raw body API는 reg
 
 | 항목 | 검증 |
 |---|---|
-| terminator 축 | one-way와 response completion 및 callback 완료 경로가 있고, blocking 언래핑 terminator와 HTTP `Yield`가 **없다** |
+| terminator 축 | 언어별 공개 표면의 종결자가 [언어별 인터페이스 §1.4](language-interfaces.ko.md#14-종결자-terminator) 표와 정확히 같다 — 표에 없는 이름이 없고, 표의 이름이 빠지지 않았다 |
 | turn 유지 | Spot handler가 response completion을 기다리는 동안 같은 Spot의 다른 callback이 시작하지 않는다 |
-| turn 반납 | HTTP response completion을 `RunIoWorker` 안에서 실행하고 Worker `Yield`로 기다릴 때만 shared Spot gate를 반납한다 |
-| 표면 제한 | DI와 단독 사용 모두 HTTP request builder에 `Yield`를 노출하지 않는다 |
+| turn 반납 | server builder의 `Yield`와 `RunIoWorker` + Worker `Yield`만 shared Spot gate를 반납한다. response completion은 반납하지 않는다 |
+| 표면 제한 | standalone HTTP request builder에는 `Yield`가 없고, C++ blocking 종결자는 runtime 실행 문맥에서 `InvalidOperation`으로 실패한다 |
 | 등록 | 서버 표면이 DI 주입으로만 얻어지고, handler 안에서 정적 팩토리로 client를 만들지 않는다 |
 | 오류 kind | HTTP client 전용 kind가 없고 framework 공용 kind만 사용한다 |
 | builder | body 소스를 섞으면 `ProtocolError`로 실패한다 |

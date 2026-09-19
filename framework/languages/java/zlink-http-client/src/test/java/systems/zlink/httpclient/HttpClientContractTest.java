@@ -66,6 +66,8 @@ final class HttpClientContractTest {
         assertEquals(ZLinkHttpServerClient.class,
             ZLinkHttpClientBuilder.class.getMethod(
                 "buildServer", ZLinkHttpExecutionTurn.class).getReturnType());
+        assertThrows(NoSuchMethodException.class,
+            () -> ZLinkHttpServerRequestBuilder.class.getMethod("submit"));
         AtomicInteger asyncCalls = new AtomicInteger();
         AtomicInteger yieldCalls = new AtomicInteger();
         ZLinkHttpExecutionTurn turn = new ZLinkHttpExecutionTurn() {
@@ -90,8 +92,7 @@ final class HttpClientContractTest {
                 .toCompletableFuture().join().body().id());
             assertEquals(7, serverClient.get("/p").yield(Player.class)
                 .toCompletableFuture().join().body().id());
-            serverClient.post("/p").submit().toCompletableFuture().join();
-            assertEquals(2, asyncCalls.get());
+            assertEquals(1, asyncCalls.get());
             assertEquals(1, yieldCalls.get());
         } finally {
             server.closeable().close();

@@ -65,6 +65,6 @@ client.post("/games")
       .query("region", "kr")
       .body(create_game_req)     // typed JSON
       .timeout(3s)
-      .submit<create_game_res>() // C++/Java's typed response terminator
-                                 // Node uses async<create_game_res>()
+      .submit<create_game_res>() // typed response terminator — the Java/Node spelling.
+                                 // Per-language names: Language interfaces §1.4
 ```
