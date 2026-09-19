@@ -39,15 +39,38 @@ English: [`README.md`](./README.md)
 
 ## 실행
 
-언어별로 나뉜다. Server를 먼저 실행하는 것은 둘 다 같다.
+언어별로 나뉜다. Server를 먼저 실행하는 것은 둘 다 같다. 아래는 Java를 한 터미널에서
+백그라운드로 띄우는 형태다(Kotlin은 경로의 `java`를 `kotlin`으로 바꾼다). 터미널 두 개로
+나누어 전면 실행하는 방법은 각 언어 README에 있다.
 
 - Java: [`java/README.ko.md`](./java/README.ko.md#실행)
 - Kotlin: [`kotlin/README.ko.md`](./kotlin/README.ko.md#실행)
 
+```bash title="linux"
+./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
+./java/Client/build/install/Client/bin/Client > client.log 2>&1 &
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev/null && break; sleep 1; done
+```
+
+```powershell title="windows"
+Start-Process -FilePath (Resolve-Path '.\java\Server\build\install\Server\bin\Server.bat') -WindowStyle Hidden -RedirectStandardOutput server.log -RedirectStandardError server.err.log
+Start-Process -FilePath (Resolve-Path '.\java\Client\build\install\Client\bin\Client.bat') -WindowStyle Hidden -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
+```
+
 ## 검증
 
 두 process가 서로를 받아들이면 각 언어 README의 "검증"에 있는 `PEER_READY` 로그 줄이
-찍히고, 그 뒤의 curl 호출이 `200`을 낸다.
+찍히고, 아래 호출이 `200`과 함께 profile을 돌려준다.
+
+```bash title="linux"
+curl -sf http://127.0.0.1:5280/players/p1/profile | grep -q '"playerId":"p1"'
+```
+
+```powershell title="windows"
+$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
+if ($profile.playerId -ne 'p1') { throw "unexpected profile: $($profile | ConvertTo-Json -Compress)" }
+```
 
 ## 문제 해결
 

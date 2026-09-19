@@ -66,7 +66,7 @@ for _ in $(seq 1 50); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
   sleep 0.2
 done
-curl -sf http://127.0.0.1:5080/players/p1/profile | tee tutorial-verify.log
+curl -sf http://127.0.0.1:5080/players/p1/profile
 ```
 
 ```powershell title="windows"
@@ -80,24 +80,22 @@ for ($i = 0; $i -lt 50; $i++) {
   try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 1 | Out-Null; break }
   catch { Start-Sleep -Milliseconds 200 }
 }
-Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress | Tee-Object -FilePath tutorial-verify.log
+Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress
 ```
 
 ## 검증
 
-`tutorial-verify.log`에 `"playerId":"p1"`이 있으면 Server와 Client가 서로 연결된
-것이다("실행" 절이 부른 것과 같은 요청이 낸 응답이다). 확인이 끝나면 두 process를
-내린다.
+`/players/p1/profile` 응답에 `"playerId":"p1"`이 있으면 Server와 Client가 서로 연결된
+것이다("실행" 절이 부른 것과 같은 요청이다). 확인이 끝나면 두 process를 내린다.
 
 ```bash title="linux"
-grep -q '"playerId":"p1"' tutorial-verify.log
+curl -sf http://127.0.0.1:5080/players/p1/profile | grep -q '"playerId":"p1"'
 kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null || true
 ```
 
 ```powershell title="windows"
-if (-not (Select-String -Path tutorial-verify.log -Pattern '"playerId":"p1"' -Quiet)) {
-  throw "tutorial verify failed: $(Get-Content tutorial-verify.log -Raw)"
-}
+$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/players/p1/profile'
+if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
 Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
 ```
 
