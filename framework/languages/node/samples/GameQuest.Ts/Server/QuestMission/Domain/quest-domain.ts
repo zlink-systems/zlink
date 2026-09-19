@@ -1,9 +1,17 @@
 import { QuestIds, QuestStatuses } from '../../../Shared/Contracts/messages';
 import type {
   GameplayEventEnvelope,
+  GetGameplaySnapshotRes,
   QuestProgress,
   StoredQuestEvent
 } from '../../../Shared/Contracts/messages';
+
+// The First Hunt quest tracks one target monster/area combination. QuestDomain is the
+// sole owner of this fact: the live gameplay path (`decide`) and the snapshot
+// reconciliation path (`reconcileFirstHunt`) both read it from here instead of each
+// keeping their own copy of the target.
+const firstHuntTarget = { monsterId: 'wolf', areaId: 'forest' } as const;
+const firstHuntTargetKey = `${firstHuntTarget.monsterId}:${firstHuntTarget.areaId}`;
 
 type QuestState = {
   currentCount: number;
@@ -102,7 +110,7 @@ const QuestDomain = {
   decide(event: GameplayEventEnvelope, aggregate: PlayerQuestAggregate): QuestDecision {
     if (aggregate.hasSourceEvent(event.eventId)) return emptyDecision();
     const decisions: QuestDecision[] = [];
-    if (event.type === 'MonsterKilled' && event.payload.value === 'wolf:forest') {
+    if (event.type === 'MonsterKilled' && event.payload.value === firstHuntTargetKey) {
       decisions.push(counterDecision(event, aggregate, QuestIds.FirstHunt, event.payload.count, 3));
     }
     if (event.type === 'ItemCollected' && event.payload.value === 'healing-herb') {
@@ -124,9 +132,14 @@ const QuestDomain = {
 
   reconcileFirstHunt(
     playerId: string,
-    factCount: number,
+    snapshot: GetGameplaySnapshotRes,
     aggregate: PlayerQuestAggregate
   ): QuestDecision {
+    // --8<-- [start:doc-gq-sync-fact]
+    const factCount = snapshot.killCounts.find(
+      (entry) => entry.monsterId === firstHuntTarget.monsterId && entry.areaId === firstHuntTarget.areaId
+    )?.count ?? 0;
+    // --8<-- [end:doc-gq-sync-fact]
     const current = aggregate.quest(QuestIds.FirstHunt);
     if (factCount <= 0 || (current?.currentCount ?? 0) === factCount) return emptyDecision();
     const now = Date.now();

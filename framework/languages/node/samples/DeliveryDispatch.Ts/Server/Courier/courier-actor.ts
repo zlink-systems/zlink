@@ -38,7 +38,13 @@ class CourierActor implements ZLinkActor {
   async decide(decision: CourierDecisionMsg): Promise<void> {
     const attempt = this.offers.get(decision.deliveryId);
     if (attempt === undefined) {
-      throw new Error(`Courier actor '${this.actorId}' has no active offer for '${decision.deliveryId}'.`);
+      // Contract README §7.2: a decision that no longer matches a live offer is a
+      // stale/unrecognized decision and is discarded without status effect, not an
+      // error. Mirrors the .NET reference (CourierDecisionActorHandler): log and return.
+      console.log(
+        `deliverydispatch-courier decision-unknown-offer delivery=${decision.deliveryId} courier=${this.actorId}`
+      );
+      return;
     }
     await this.channels.sendToChannel(
       SampleNames.dispatchChannel,

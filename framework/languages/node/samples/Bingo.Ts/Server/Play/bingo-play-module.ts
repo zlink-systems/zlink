@@ -1,10 +1,11 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
+import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
 import { BingoEntrySpot } from './Infrastructure/ZLink/Spots/EntrySpot/bingo-entry-spot';
 import { BingoRoomSpot } from './Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot';
+import { BingoRoomRelocationAdapter } from './Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-relocation-adapter';
 import { SampleNames } from '../Configuration/sample-names';
 import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
@@ -56,7 +57,8 @@ function createBingoPlayModule() {
             BingoRoomSpot,
             (factory) => factory
               .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
-              .disableRelocation()
+              .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
+              .preserveStateWith(BingoRoomRelocationAdapter)
           );
           // --8<-- [end:doc-execution-mode]
           objectServer.addActorFactory(
@@ -75,6 +77,7 @@ function createBingoPlayModule() {
     providers: [
       PlayerActorFactory,
       PlayerActorRelocationAdapter,
+      BingoRoomRelocationAdapter,
       BingoEntrySpot,
       RoomRouterReadinessHandler
     ]

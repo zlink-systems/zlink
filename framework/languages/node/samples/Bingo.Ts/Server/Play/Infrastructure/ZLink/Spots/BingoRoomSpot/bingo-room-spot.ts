@@ -101,6 +101,10 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     this.drawTimer = undefined;
   }
 
+  async onRelocationReadyCompleted(): Promise<void> {
+    console.error(`bingo-relocation-ready completed spot=${this.context.spotId}`);
+  }
+
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     try {
       const joinRequest = request.decode(BingoRoomJoinReq);
@@ -175,7 +179,13 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         SampleNames.apiChannel,
         new GetPlayerRecordReq({ actorId })
       )
-      .submit<GetPlayerRecordRes>();
+      .yield<GetPlayerRecordRes>();
+    // Yield starts a new Spot turn. Do not use the admission state that was
+    // observed before the external API call if the room finished or the Actor
+    // left while that call was pending.
+    if (!this.playerIds.has(actorId) || this.snapshot().status === BingoRoomStatus.Finished) {
+      return;
+    }
     this.game.setPlayerRecord(actorId, record.wins, record.losses);
     console.error(`bingo-record fetched actor=${actorId} wins=${record.wins} losses=${record.losses}`);
     const state = this.snapshot();
@@ -243,6 +253,9 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       );
       await this.publishReward(state);
       await this.leaveFinishedActors();
+      // §7.6: the completed round is the safe application boundary. This is
+      // deliberately the final Framework operation in this turn.
+      this.context.relocationReady().defer();
     }
     return state;
   }
@@ -299,6 +312,33 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
   snapshot(): BingoRoomSnapshot {
     return this.game.snapshot();
+  }
+
+  captureRelocationState(): {
+    readonly settings: BingoRoomRuntimeSettings;
+    readonly snapshot: BingoRoomSnapshot;
+    readonly cleanupStarted: boolean;
+    readonly playerIds: readonly string[];
+    readonly observerActors: readonly string[];
+  } {
+    return {
+      settings: this.settings,
+      snapshot: this.snapshot(),
+      cleanupStarted: this.cleanupStarted,
+      playerIds: [...this.playerIds],
+      observerActors: [...this.observerActors]
+    };
+  }
+
+  restoreRelocationState(state: ReturnType<BingoRoomSpot['captureRelocationState']>): void {
+    this.roomId = this.context.spotId;
+    this.settings = state.settings;
+    this.game = BingoRoomGame.restore(this.roomId, state.settings, state.snapshot);
+    this.cleanupStarted = state.cleanupStarted;
+    this.playerIds.clear();
+    state.playerIds.forEach((actorId) => this.playerIds.add(actorId));
+    this.observerActors.clear();
+    state.observerActors.forEach((actorId) => this.observerActors.add(actorId));
   }
 
   private playerActors(): string[] {

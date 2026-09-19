@@ -54,9 +54,11 @@ class QuestEventProcessor {
 
   syncProgress(request: SyncQuestProgressReq, aggregate: PlayerQuestAggregate): QuestProcessingResult & SyncQuestProgressRes {
     // --8<-- [start:doc-gq-sync]
+    // Contract §7.3: read the GameplayStateStore snapshot as the authoritative fact
+    // and let QuestDomain (the single owner of the First Hunt target) compare it
+    // against the current fold.
     const snapshot = this.gameplay.readGameplaySnapshot(request.playerId);
-    const firstHunt = snapshot.killCounts.find((entry) => entry.monsterId === 'wolf' && entry.areaId === 'forest')?.count ?? 0;
-    const decision = QuestDomain.reconcileFirstHunt(request.playerId, firstHunt, aggregate);
+    const decision = QuestDomain.reconcileFirstHunt(request.playerId, snapshot, aggregate);
     const result = this.commit(request.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
     if (decision.events.some((event) => event.type === 'QuestReconciled')) {
       console.error(`gamequest-mission reconciled player=${request.playerId} quest=${QuestIds.FirstHunt}`);

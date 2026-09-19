@@ -53,7 +53,7 @@ class BingoRoomGame {
   readonly roomId: string;
   readonly players: BingoPlayerSeat[];
   private readonly settings: BingoRoomSettings;
-  private readonly game: BingoGameType;
+  private game: BingoGameType;
   private status: BingoRoomStatus;
 
   constructor(roomId: string, settings: BingoRoomSettings) {
@@ -65,6 +65,27 @@ class BingoRoomGame {
     this.status = BingoRoomStatus.WaitingForPlayers;
     this.players = [];
     this.game = new BingoGame(this.settings.drawDeck);
+  }
+
+  static restore(roomId: string, settings: BingoRoomSettings, snapshot: BingoRoomSnapshot): BingoRoomGame {
+    const room = new BingoRoomGame(roomId, settings);
+    room.status = snapshot.status;
+    room.game = BingoGame.restore(settings.drawDeck, snapshot.drawnNumbers, snapshot.winners);
+    for (const restored of snapshot.players) {
+      const card = restored.card.length === 0 ? null : new BingoCard(restored.card);
+      if (card !== null) {
+        for (const number of snapshot.drawnNumbers) card.mark(number);
+      }
+      room.players.push({
+        actor: { actorId: restored.actorId, displayName: restored.displayName },
+        seat: restored.seat,
+        card,
+        isHost: restored.isHost,
+        wins: restored.wins,
+        losses: restored.losses
+      });
+    }
+    return room;
   }
 
   join(actor: BingoActor): { joined: boolean; player: BingoPlayerSeat; started: boolean } {

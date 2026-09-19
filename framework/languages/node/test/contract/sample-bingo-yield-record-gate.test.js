@@ -20,6 +20,9 @@ test('Bingo retrieves and reports player records through yielded API requests', 
   );
   assert.match(room, /requestToChannel\(\s*SampleNames\.apiChannel,\s*new GetPlayerRecordReq/);
   assert.match(room, /requestToChannel\(SampleNames\.apiChannel, new ReportBingoResultReq/);
+  assert.match(room, /new GetPlayerRecordReq\(\{ actorId \}\)[\s\S]*?\.yield<GetPlayerRecordRes>\(\)/);
+  assert.doesNotMatch(room, /new GetPlayerRecordReq\(\{ actorId \}\)[\s\S]*?\.submit<GetPlayerRecordRes>\(\)/);
+  assert.match(room, /!this\.playerIds\.has\(actorId\) \|\| this\.snapshot\(\)\.status === BingoRoomStatus\.Finished/);
   assert.match(room, /bingo-record fetched/);
   assert.match(room, /bingo-record reported/);
 
