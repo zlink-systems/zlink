@@ -5,6 +5,7 @@ import type { HttpClientOptions } from './options';
 import type { HttpRequestSpec, RawResult } from './request-performer';
 import { isRedirectStatus, makeTarget, resolveLocation, rewriteForRedirect } from './redirect-policy';
 import { RetryPolicy } from './retry-policy';
+import { redirectLimitExceeded, responseBodySizeExceeded } from './http-client-errors';
 
 /** Browser transport for the same public client surface used by the Node runtime. */
 export class HttpClientRuntime {
@@ -45,7 +46,7 @@ export class HttpClientRuntime {
       if (this.options.followRedirects > 0 && isRedirectStatus(response.status) && location !== null) {
         if (redirectsLeft === 0) {
           await response.body?.cancel();
-          throw requestError('HTTP request exceeded the redirect limit');
+          throw redirectLimitExceeded();
         }
         redirectsLeft--;
         ({ method, body } = rewriteForRedirect(response.status, method, body));
@@ -62,7 +63,7 @@ export class HttpClientRuntime {
       }
       const text = await response.text();
       if (new TextEncoder().encode(text).length > this.options.maxResponseBodySize) {
-        throw requestError('HTTP response exceeded the maximum body size');
+        throw responseBodySizeExceeded();
       }
       return { status: response.status, headers: headersResult, body: text };
     }
@@ -115,7 +116,7 @@ async function streamResponse(
     total += result.value.length;
     if (total > maximumSize) {
       await reader.cancel();
-      throw requestError('HTTP response exceeded the maximum body size');
+      throw responseBodySizeExceeded();
     }
     sink(result.value);
   }
@@ -136,8 +137,4 @@ function applyHeaders(
     const lower = name.toLowerCase();
     if (keepAuthorization || lower !== 'authorization') target[lower] = value;
   }
-}
-
-function requestError(message: string): ZLinkFrameworkException {
-  return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, message);
 }
