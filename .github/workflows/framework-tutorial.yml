@@ -78,7 +78,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run every documented step
@@ -232,7 +232,7 @@ jobs:
       - name: Build Java and Kotlin tutorials against the published packages
         working-directory: framework/languages/java/tutorial
         run: >-
-          ./gradlew --no-daemon build
+          bash ./gradlew --no-daemon build
           :java:Server:installDist :java:Client:installDist
           :java:StreamClient:installDist :java:HttpClient:installDist
           :kotlin:Server:installDist :kotlin:Client:installDist
@@ -249,7 +249,7 @@ jobs:
                 echo "::error::snippet marker not found in sources: ${marker}"
                 exit 1
               }
-            done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/${language}/README.md" | cut -d'`' -f2)
+            done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/${language}/README.md" | cut -d'`' -f2)
           done
 
       - name: Run Java and Kotlin documented tutorial steps
@@ -391,7 +391,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run the documented Node tutorial steps
@@ -526,7 +526,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run the HTTP client tutorial
