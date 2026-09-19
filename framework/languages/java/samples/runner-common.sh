@@ -130,7 +130,7 @@ zlink_sample_verify_framework_termination() {
       echo "Framework lifecycle evidence is incomplete: ${log_file}" >&2
       echo "READY=${ready_count} TERMINATION=${termination_count} \
 STOPPED_NONE=${stopped_count} FORCE_STOPPED=${force_stopped_count}" >&2
-      rg 'ZLINK_FRAMEWORK_(READY|TERMINATION)' "${log_file}" || true
+      grep -E 'ZLINK_FRAMEWORK_(READY|TERMINATION)' "${log_file}" || true
       failed=1
     fi
   done
@@ -363,8 +363,8 @@ wait_framework_peer_ready_counts() {
         break
       fi
       actual="$({
-        rg 'ZLINK_FRAMEWORK_PEER_READY' "${log_dir}/${log_name}" || true
-      } | { rg -o 'peer=[^ ]+' || true; } | sort -u | wc -l | tr -d ' ')"
+        grep -E 'ZLINK_FRAMEWORK_PEER_READY' "${log_dir}/${log_name}" || true
+      } | { grep -oE 'peer=[^ ]+' || true; } | sort -u | wc -l | tr -d ' ')"
       if (( actual < expected )); then
         all_ready=0
         break

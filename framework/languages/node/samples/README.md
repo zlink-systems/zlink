@@ -44,8 +44,14 @@ This directory is already the download — unzip `zlink-samples-node.zip` and it
 resolves `@zlink-systems/*` from the npm registry at the version that sample pins. Samples are not
 an npm workspace, so install each one separately.
 
-```bash
-cd Bingo.Ts
+```bash title="linux"
+cd zlink-samples-node/Bingo.Ts
+npm install
+npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
+```
+
+```powershell title="windows"
+Set-Location zlink-samples-node/Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```

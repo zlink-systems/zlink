@@ -29,6 +29,14 @@ tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다(저장�
 build`가 암묵적으로 실행하는 `dotnet restore`가 그 패키지를 nuget.org에서
 내려받는다.
 
+```bash title="linux"
+cd zlink-tutorial-dotnet
+```
+
+```powershell title="windows"
+Set-Location zlink-tutorial-dotnet
+```
+
 ## 빌드
 
 문서가 보여주는 코드와 독자가 nuget.org에서 받는 라이브러리를 같은 것으로 유지한다.
@@ -36,17 +44,17 @@ build`가 암묵적으로 실행하는 `dotnet restore`가 그 패키지를 nuge
 그대로 빌드된다.
 
 ```bash title="linux"
-dotnet build Tutorial.sln
+dotnet build Tutorial.sln -c Release
 ```
 
 ```powershell title="windows"
-dotnet build Tutorial.sln
+dotnet build Tutorial.sln -c Release
 ```
 
 저장소 소스와 대조해야 할 때만 아래로 바꾼다(저장소 checkout에서만 동작한다).
 
 ```bash
-dotnet build Tutorial.sln -p:ZLinkTutorialUseLocalSource=true
+dotnet build Tutorial.sln -c Release -p:ZLinkTutorialUseLocalSource=true
 ```
 
 패키지 버전은 [`Directory.Packages.props`](Directory.Packages.props)에 있고
@@ -58,9 +66,9 @@ Server를 먼저 백그라운드로 띄우고, Client가 그 위에 HTTP를 연�
 요청 하나로 서로 연결됐는지 확인하고, 그 결과를 다음 절이 읽을 파일에 남긴다.
 
 ```bash title="linux"
-dotnet run --project Server/Server.csproj > server.log 2>&1 &
+dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
 echo $! > server.pid
-dotnet run --project Client/Client.csproj > client.log 2>&1 &
+dotnet run --project Client/Client.csproj -c Release --no-build > client.log 2>&1 &
 echo $! > client.pid
 for _ in $(seq 1 50); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
@@ -70,10 +78,10 @@ curl -sf http://127.0.0.1:5080/players/p1/profile | tee tutorial-verify.log
 ```
 
 ```powershell title="windows"
-$server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj" `
+$server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj","-c","Release","--no-build" `
   -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru -WindowStyle Hidden
 $server.Id | Out-File server.pid
-$client = Start-Process dotnet -ArgumentList "run","--project","Client/Client.csproj" `
+$client = Start-Process dotnet -ArgumentList "run","--project","Client/Client.csproj","-c","Release","--no-build" `
   -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru -WindowStyle Hidden
 $client.Id | Out-File client.pid
 for ($i = 0; $i -lt 50; $i++) {

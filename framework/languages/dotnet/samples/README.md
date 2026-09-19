@@ -35,6 +35,14 @@ commands in this file from the extracted `zlink-samples-dotnet` directory
 (a repository checkout runs the same commands from
 `framework/languages/dotnet/samples`).
 
+```bash title="linux"
+cd zlink-samples-dotnet
+```
+
+```powershell title="windows"
+Set-Location zlink-samples-dotnet
+```
+
 ## Build
 
 Each `run_sample.sh`/`run_sample.ps1` builds its own sample before running

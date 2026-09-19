@@ -33,6 +33,14 @@ anywhere and run this file's commands from that extracted
 commands from `framework/languages/dotnet/tutorial`). The first build's
 implicit `dotnet restore` fetches that package from nuget.org.
 
+```bash title="linux"
+cd zlink-tutorial-dotnet
+```
+
+```powershell title="windows"
+Set-Location zlink-tutorial-dotnet
+```
+
 ## Build
 
 This keeps the code the docs show and the library a reader gets from
@@ -41,18 +49,18 @@ the `Zlink.Framework` package, and copying just this directory out still
 builds the same way.
 
 ```bash title="linux"
-dotnet build Tutorial.sln
+dotnet build Tutorial.sln -c Release
 ```
 
 ```powershell title="windows"
-dotnet build Tutorial.sln
+dotnet build Tutorial.sln -c Release
 ```
 
 Switch to this only when you need to diff against the repository source
 (only works inside a repository checkout):
 
 ```bash
-dotnet build Tutorial.sln -p:ZLinkTutorialUseLocalSource=true
+dotnet build Tutorial.sln -c Release -p:ZLinkTutorialUseLocalSource=true
 ```
 
 The package version lives in
@@ -66,9 +74,9 @@ on top of it. Once both are ready, one request confirms they are connected,
 and this leaves that result in a file the next section reads.
 
 ```bash title="linux"
-dotnet run --project Server/Server.csproj > server.log 2>&1 &
+dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
 echo $! > server.pid
-dotnet run --project Client/Client.csproj > client.log 2>&1 &
+dotnet run --project Client/Client.csproj -c Release --no-build > client.log 2>&1 &
 echo $! > client.pid
 for _ in $(seq 1 50); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
@@ -78,10 +86,10 @@ curl -sf http://127.0.0.1:5080/players/p1/profile | tee tutorial-verify.log
 ```
 
 ```powershell title="windows"
-$server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj" `
+$server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj","-c","Release","--no-build" `
   -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru -WindowStyle Hidden
 $server.Id | Out-File server.pid
-$client = Start-Process dotnet -ArgumentList "run","--project","Client/Client.csproj" `
+$client = Start-Process dotnet -ArgumentList "run","--project","Client/Client.csproj","-c","Release","--no-build" `
   -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru -WindowStyle Hidden
 $client.Id | Out-File client.pid
 for ($i = 0; $i -lt 50; $i++) {

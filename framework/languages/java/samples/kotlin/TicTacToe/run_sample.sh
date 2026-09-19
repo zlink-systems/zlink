@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 client_source="Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt"
-if rg -n 'receivedCount\([^)]*\)\s*==\s*0' "${client_source}"; then
+if grep -rEn 'receivedCount\([^)]*\)[[:space:]]*==[[:space:]]*0' "${client_source}"; then
   echo "TicTacToe negative push assertions must use expectNone" >&2
   exit 1
 fi

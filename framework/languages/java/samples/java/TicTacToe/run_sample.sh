@@ -11,25 +11,25 @@ if grep -n 'leaveFinishedActors' "${game_source}"; then
   echo "TicTacToe actor cleanup must be driven by LeaveGameMsg, not by the timer." >&2
   exit 1
 fi
-if rg -n 'addHandlersFromPackageOf' Server/src/main/java --glob '*.java'; then
+if grep -rEn 'addHandlersFromPackageOf' Server/src/main/java --include='*.java'; then
   echo "TicTacToe must register framework handlers manually" >&2
   exit 1
 fi
-if rg -n 'ZLinkMessagePackCodec|zlink-framework-codec-msgpack' \
+if grep -rEn 'ZLinkMessagePackCodec|zlink-framework-codec-msgpack' \
     Server/src/main/java Client/src/main/java Server/build.gradle.kts Client/build.gradle.kts; then
   echo "TicTacToe must use the framework default JSON codec" >&2
   exit 1
 fi
-if rg -n '\.fetch\(' Client/src/main/java --glob '*.java'; then
+if grep -rEn '\.fetch\(' Client/src/main/java --include='*.java'; then
   echo "TicTacToe client must use the current asynchronous HTTP terminal." >&2
   exit 1
 fi
-if rg -n 'SampleSettings' Server/src/main/java --glob '*.java'; then
+if grep -rEn 'SampleSettings' Server/src/main/java --include='*.java'; then
   echo "TicTacToe API and Play roles must use separate typed settings" >&2
   exit 1
 fi
 for settings in ApiSettings PlaySettings; do
-  if ! rg -q '@ConfigurationProperties\("sample"\)' \
+  if ! grep -rEq '@ConfigurationProperties\("sample"\)' \
       "Server/src/main/java/systems/zlink/samples/tictactoe/server/configuration/${settings}.java"; then
     echo "TicTacToe ${settings} must use Spring typed binding" >&2
     exit 1

@@ -28,7 +28,7 @@ on_exit() {
 trap on_exit EXIT
 
 cd "$ROOT_DIR"
-if rg -n -U '\.enableClient\(\s*[^)\s]|\.connect(?:Router|PeerPub)\(' Server --glob '*.java'; then
+if grep -rEn '\.enableClient\([[:space:]]*[^)[:space:]]|\.connect(?:Router|PeerPub)\(' Server --include='*.java'; then
   echo "ShoppingMall server code must use location-store automatic connections" >&2
   exit 1
 fi
@@ -121,7 +121,7 @@ post_json() {
 log_count() {
   local pattern="$1" file="$2"
   local count
-  count="$(rg -c -- "$pattern" "$file" 2>/dev/null || true)"
+  count="$(grep -cE -- "$pattern" "$file" 2>/dev/null || true)"
   printf '%s\n' "${count:-0}"
 }
 wait_log_count() {

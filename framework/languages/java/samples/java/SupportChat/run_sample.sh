@@ -35,15 +35,15 @@ if grep -R --include='*.java' -n '\.connectRouter(' Server; then
 fi
 
 client_source="Client/src/main/java/systems/zlink/samples/supportchat/client/Program.java"
-if ! rg -q 'expectNone\(Messages\.(TypingChangedNotify|ConversationClosedNotify)\.class\)' "${client_source}"; then
+if ! grep -rEq 'expectNone\(Messages\.(TypingChangedNotify|ConversationClosedNotify)\.class\)' "${client_source}"; then
   echo "SupportChat negative push checks must use connector expectNone." >&2
   exit 1
 fi
-if rg -n 'private static void expect(Failure|Timeout)\(' "${client_source}"; then
+if grep -rEn 'private static void expect(Failure|Timeout)\(' "${client_source}"; then
   echo "SupportChat must not rebuild connector assertion helpers locally." >&2
   exit 1
 fi
-if rg -n 'CompletableFuture<Messages\.JoinConversationRes>|awaitJoin' Server; then
+if grep -rEn 'CompletableFuture<Messages\.JoinConversationRes>|awaitJoin' Server; then
   echo "SupportChat handlers must return after scheduling a deferred actor Spot join." >&2
   exit 1
 fi

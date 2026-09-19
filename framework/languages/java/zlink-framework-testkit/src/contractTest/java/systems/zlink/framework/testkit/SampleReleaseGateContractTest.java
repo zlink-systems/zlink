@@ -147,6 +147,18 @@ final class SampleReleaseGateContractTest {
         String commonRunner = readSource(samplesRoot.resolve("runner-common.sh"));
         assertTrue(commonRunner.contains("cp -- \"${settings_source}\" \"${settings_target}\""),
             "POSIX sample runner must stage standalone settings under Gradle's standard filename");
+        Pattern ripgrepCommand = Pattern.compile("(?m)(?:^|\\s)rg\\s+");
+        assertFalse(ripgrepCommand.matcher(commonRunner).find(),
+            "the shared POSIX sample runner must use standard grep, not ripgrep");
+        try (Stream<Path> paths = Files.walk(samplesRoot)) {
+            for (Path runner : paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().equals("run_sample.sh"))
+                    .toList()) {
+                assertFalse(ripgrepCommand.matcher(readSource(runner)).find(),
+                    runner + " must use standard grep, not ripgrep");
+            }
+        }
         String commonPowerShellRunner = readSource(samplesRoot.resolve("redis-common.ps1"));
         assertTrue(commonPowerShellRunner.contains(
                 "Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath"),

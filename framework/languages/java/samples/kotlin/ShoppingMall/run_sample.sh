@@ -21,7 +21,7 @@ print_logs() {
 trap cleanup EXIT
 
 for host in Server/CommerceApi/src/main/kotlin Server/OrderWorkflow/src/main/kotlin; do
-  rg -q 'useCoroutineHandlers\(Dispatchers\.Default\)' "$host" --glob '*.kt' || {
+  grep -rEq 'useCoroutineHandlers\(Dispatchers\.Default\)' "$host" --include='*.kt' || {
     echo "ShoppingMall framework host must configure coroutine handlers: $host" >&2; exit 1; }
 done
 mkdir -p "$log_dir" "$store_dir" "$config_dir"
@@ -68,9 +68,9 @@ zlink_sample_build_framework_jars_if_available ../../.. \
 gradle_run :Server:OrderWorkflow:installDist :Server:CommerceApi:installDist :Client:installDist
 
 start_role() { "$2" --config "$3" >"$log_dir/$1.log" 2>&1 & pids+=("$!"); }
-# rg -c prints nothing and exits 1 when there is no match, so `|| true` alone leaves an empty
+# grep -cE prints nothing and exits 1 when there is no match, so `|| true` alone leaves an empty
 # string that breaks (( ... >= 1 )). Always emit a number.
-count() { local n; n="$(rg -c -- "$1" "$2" 2>/dev/null || true)"; printf %s "${n:-0}"; }
+count() { local n; n="$(grep -cE -- "$1" "$2" 2>/dev/null || true)"; printf %s "${n:-0}"; }
 wait_count() {
   local expected="$1" line="$2" log="$3"
   for _ in $(seq 1 "$WAIT_ATTEMPTS"); do [[ "$(count "$line" "$log")" == "$expected" ]] && return; sleep "$WAIT_INTERVAL_SECONDS"; done
