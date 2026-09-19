@@ -3,7 +3,25 @@
 .NET samples demonstrate the public 11.0.0 framework contract through separate
 server-role processes and executable client scenarios. Their domain flows and
 verification rules follow the
-[common sample scenarios](../../../doc/framework/common/sample/README.ko.md).
+[common sample scenarios](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md).
+
+## Prerequisites
+
+- **.NET SDK 8.0** (`dotnet --version` reports an `8.0.x` SDK) on PATH.
+- **Docker**, running and reachable from the shell that starts a sample. Every
+  `run_sample.sh`/`run_sample.ps1` starts and removes its own single-use Redis
+  container (`redis:7.2-alpine`) for that run; nothing else needs Redis
+  installed separately.
+- **Python 3** on PATH (or discoverable through the `py` launcher on Windows).
+  Every `run_sample.sh` uses it to pick free local ports, and ZoneWorld's
+  `run_sample.ps1`/`run_sample.sh` additionally use it to drive the ZW-B8
+  fault-injection proxy.
+- **PowerShell** for the `.ps1` runners: Windows PowerShell 5.1 (built into
+  Windows) or PowerShell 7 both work.
+- ZoneWorld's `-BrowserSmoke`/`--browser-smoke` flag additionally needs Node.js
+  and npm, and only works from a full repository checkout (see
+  [ZoneWorld](ZoneWorld)); it is off by default and not required for the
+  seven-sample check below.
 
 ## Samples
 
@@ -42,16 +60,18 @@ options.AddFanoutChannel("events")
 
 Each sample root owns `run_sample.sh` and `run_sample.ps1`, and one invocation
 runs one sample. The
-[common sample document](../../../doc/framework/common/sample/README.ko.md)
+[common sample document](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)
 owns this rule in its "The Sample Run Script And Redis Isolation Standard"
-section; what follows is only the command for this language.
+section; what follows is only the command for this language, run from this
+`samples` directory (`framework/languages/dotnet/samples` in a repository
+checkout, or the root of an extracted `zlink-samples-dotnet.zip`):
 
 ```bash
-./framework/languages/dotnet/samples/TicTacToe/run_sample.sh
+./TicTacToe/run_sample.sh
 ```
 
 ```powershell
-.\framework\languages\dotnet\samples\TicTacToe\run_sample.ps1
+.\TicTacToe\run_sample.ps1
 ```
 
 There are seven .NET samples, so checking them all takes seven invocations.
