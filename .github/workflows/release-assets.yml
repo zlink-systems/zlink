@@ -112,3 +112,16 @@ jobs:
           tag_name: ${{ inputs.tag }}
           files: dist/tutorials/*.zip
           fail_on_unmatched_files: true
+
+  verify:
+    name: Verify the attached zips build and run standalone (#655)
+    needs: attach
+    # This job runs even though `attach` publishes with `GITHUB_TOKEN`, which
+    # means the `release: published` event this repository's own releases
+    # produce never fires (GitHub does not trigger workflows from
+    # GITHUB_TOKEN-authored events). Calling standalone-zips.yml here, right
+    # after the zips land on the release, is the trigger that actually runs
+    # for every release this workflow attaches to.
+    uses: ./.github/workflows/standalone-zips.yml
+    with:
+      tag: ${{ inputs.tag }}
