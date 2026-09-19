@@ -23,7 +23,7 @@ View in another language — [C++](../../../cpp/guide/server/52-supportchat.en.m
     You can open the SupportChat sample in an editor and follow a message from the customer's
     request to open a conversation, through agent assignment, to the conversation closing, through
     the code of each server it passes. The code in this chapter runs as it stands in
-    `framework/languages/<language>/samples/SupportChat`.
+    `framework/languages/dotnet/samples/SupportChat`.
 
 [Picking a Sample](14-samples.en.md#4-supportchat--building-a-live-chat-support-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and

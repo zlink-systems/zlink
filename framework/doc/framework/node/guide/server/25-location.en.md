@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/25-location.en.md) 
 
     You can ask which node a Spot or Actor is on right now, holding nothing but its id.
     The code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial`.
+    `framework/languages/node/tutorial`.
 
 [Spot](21-spot.en.md) and [Actor](22-actor.en.md) were called by id alone, and the Framework
 found which node they were on. The place that holds that record is the **Location Store**. This
@@ -68,6 +68,8 @@ result is therefore not a verdict that no such id exists.
 
 ## 4. What You See When You Run It
 
+The commands below run against the tutorial (`framework/languages/node/tutorial`) with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'
@@ -108,7 +110,7 @@ untouched.
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - What the Store writes down — [How Channels Work](30-channel-patterns.en.md#61-location-store--where-who-is-where-is-written-down)
 - Operational queries — [Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries)
-- A running version of this chapter's code — `framework/languages/<language>/tutorial`
+- A running version of this chapter's code — `framework/languages/node/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

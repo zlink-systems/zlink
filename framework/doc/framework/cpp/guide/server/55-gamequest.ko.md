@@ -22,7 +22,7 @@ title: "GameQuest 따라 읽기 · C++"
 
     GameQuest 샘플을 편집기에 열고, client의 플레이 action이 player별 owner Spot에서 판정되어 진행과
     완료가 push되기까지, 그리고 유실된 진행을 보정하기까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/<언어>/samples/GameQuest`에서 그대로 실행된다.
+    `framework/languages/cpp/samples/GameQuest`에서 그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#7-gamequest--퀘스트-진행-시스템-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,

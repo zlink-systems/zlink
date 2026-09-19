@@ -22,7 +22,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
 
     You can open the TicTacToe sample in an editor and follow the code from the HTTP call that
     creates a room to the point where both players leave and their Actors are destroyed. The code
-    in this chapter runs as it stands in `framework/languages/<language>/samples/TicTacToe`.
+    in this chapter runs as it stands in `framework/languages/cpp/samples/TicTacToe`.
 
 [Picking a Sample](14-samples.en.md#2-tictactoe--building-a-real-time-head-to-head-game-server)
 introduced what this sample demonstrates. This chapter is what you read after that introduction —

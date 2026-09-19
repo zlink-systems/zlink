@@ -381,6 +381,8 @@ When you need an answer, send a request. The target may be moving, so give a tim
 
 ## 5. What You See When You Run It
 
+The commands below run against the tutorial (`framework/languages/<language>/tutorial`) with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'

@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/stream-connector/02-gettin
 
     You can add the connector package to a project, connect to a server, and exchange the first
     packet. The connection code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial/StreamClient`.
+    `framework/languages/java/tutorial/kotlin/StreamClient`.
 
 The connector ships separately from the server framework, so a client project references the
 connector package alone. This chapter walks from installation to the first reply. The full set of
@@ -55,6 +55,8 @@ until the server's answer arrives and then returns the answer payload.
     scheme.
 
 ## 3. What You See
+
+The command below runs the tutorial (`framework/languages/java/tutorial/kotlin`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj

@@ -22,7 +22,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/2
 
     You can let a program outside the mesh attach over one connection, send requests and
     receive answers. The code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial`.
+    `framework/languages/cpp/tutorial`.
 
 Every call so far ran between nodes inside the mesh. A game client or an app is outside it and
 references no Framework at all. **STREAM is where such a program attaches**, and while the one
@@ -117,6 +117,8 @@ This process references no Framework. It references one separately published **c
 
 ## 5. What You See When You Run It
 
+The command below runs the tutorial (`framework/languages/cpp/tutorial`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True
@@ -141,7 +143,7 @@ connection to an Actor — covered by [Session and Actor](24-actor-session.en.md
 - Binding a connection to an entity — [Session and Actor](24-actor-session.en.md)
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - The whole session lifecycle and its options — [STREAM](23-stream.en.md)
-- A running version of this chapter's code — `framework/languages/<language>/tutorial`
+- A running version of this chapter's code — `framework/languages/cpp/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
