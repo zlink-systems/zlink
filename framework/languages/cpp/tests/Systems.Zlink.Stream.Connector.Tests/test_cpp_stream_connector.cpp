@@ -15,6 +15,7 @@
 #include "runtime/protocol/packet_name_resolver.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/beast/core/buffers_to_string.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/ssl.hpp>
@@ -2176,6 +2177,87 @@ int main ()
         }
     }
 
+    /* stream-connector §10.1.1: a synchronous wait whose connection ends
+     * because of a frame error ends as disconnected too. The frame error
+     * itself reaches the error handler; the wait reports only that it has no
+     * place left to observe. */
+    {
+        boost::asio::io_context bad_frame_io;
+        boost::asio::ip::tcp::acceptor bad_frame_acceptor (
+          bad_frame_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        const auto bad_frame_endpoint =
+          std::string ("tcp://127.0.0.1:")
+          + std::to_string (bad_frame_acceptor.local_endpoint ().port ());
+        callback_latch_t send_bad_frame;
+        callback_latch_t release_bad_frame_connection;
+        joining_thread_t bad_frame_server (
+          [&bad_frame_acceptor, &send_bad_frame, &release_bad_frame_connection] {
+              boost::asio::ip::tcp::socket accepted (bad_frame_acceptor.get_executor ());
+              bad_frame_acceptor.accept (accepted);
+              send_bad_frame.wait_for (std::chrono::seconds (5));
+              /* header_size 1, payload_size 0, and a header byte no header
+               * codec accepts: a frame that decodes to nothing. */
+              const std::array<std::uint8_t, 7> bad_frame{0x00, 0x01, 0x00, 0x00,
+                                                          0x00, 0x00, 0xFF};
+              boost::system::error_code error;
+              boost::asio::write (accepted, boost::asio::buffer (bad_frame), error);
+              /* The socket stays open, so the ending is the frame error and
+               * not an EOF. */
+              release_bad_frame_connection.wait_for (std::chrono::seconds (5));
+              accepted.shutdown (boost::asio::ip::tcp::socket::shutdown_both, error);
+              accepted.close (error);
+          });
+
+        zlink::stream_connector::connector_options_t bad_frame_options;
+        bad_frame_options.endpoint = bad_frame_endpoint;
+        bad_frame_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        bad_frame_options.heartbeat.enabled = false;
+        bad_frame_options.reconnect.enabled = false;
+        bad_frame_options.connect_timeout = std::chrono::milliseconds (1000);
+        auto bad_frame_connector =
+          zlink::stream_connector::connector_factory_t::create (bad_frame_options);
+        std::mutex published_mutex;
+        std::vector<zlink::stream_connector::error_code_t> published_codes;
+        auto bad_frame_error_subscription =
+          bad_frame_connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
+              std::lock_guard<std::mutex> lock (published_mutex);
+              published_codes.push_back (error.code);
+          });
+        if (!bad_frame_connector.connect ()) {
+            send_bad_frame.signal ();
+            release_bad_frame_connection.signal ();
+            bad_frame_server.join ();
+            return 183;
+        }
+        send_bad_frame.signal ();
+        const auto sync_wait =
+          bad_frame_connector.wait_for ("never.arrives", std::chrono::seconds (2));
+        const auto published_deadline =
+          std::chrono::steady_clock::now () + std::chrono::milliseconds (1000);
+        bool frame_error_published = false;
+        while (!frame_error_published && std::chrono::steady_clock::now () < published_deadline) {
+            {
+                std::lock_guard<std::mutex> lock (published_mutex);
+                for (const auto code : published_codes) {
+                    if (code != zlink::stream_connector::error_code_t::disconnected) {
+                        frame_error_published = true;
+                    }
+                }
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        release_bad_frame_connection.signal ();
+        bad_frame_server.join ();
+        bad_frame_connector.close ();
+        if (sync_wait
+            || sync_wait.error_code () != zlink::stream_connector::error_code_t::disconnected) {
+            return 188;
+        }
+        if (!frame_error_published) {
+            return 189;
+        }
+    }
+
     {
         zlink::stream_connector::connector_options_t lifecycle_options;
         lifecycle_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
@@ -3883,6 +3965,13 @@ int main ()
     oversized_wait_options.max_receive_payload_size = 16;
     auto oversized_wait_connector =
       zlink::stream_connector::connector_factory_t::create (oversized_wait_options);
+    std::atomic_bool oversized_wait_frame_error_published{false};
+    auto oversized_wait_error_subscription = oversized_wait_connector.on_error (
+      [&oversized_wait_frame_error_published] (const zlink::stream_connector::error_t &error) {
+          if (error.code == zlink::stream_connector::error_code_t::frame_too_large) {
+              oversized_wait_frame_error_published = true;
+          }
+      });
     if (!oversized_wait_connector.connect ()) {
         return 124;
     }
@@ -3893,10 +3982,26 @@ int main ()
       oversized_wait_connector.wait_for ("oversized.wait", std::chrono::milliseconds (1500));
     oversized_wait_release = true;
     oversized_wait_server_thread.join ();
+    /* stream-connector §9: frame_too_large ends the connection and reaches the
+     * error handler; §10.1.1: the wait that lost its connection ends as
+     * disconnected, not with the cause. */
     if (oversized_wait_result
         || oversized_wait_result.error_code ()
-             != zlink::stream_connector::error_code_t::frame_too_large) {
+             != zlink::stream_connector::error_code_t::disconnected) {
         return 126;
+    }
+    {
+        const auto published_deadline =
+          std::chrono::steady_clock::now () + std::chrono::milliseconds (1000);
+        while (!oversized_wait_frame_error_published
+               && std::chrono::steady_clock::now () < published_deadline) {
+            /* Manual dispatch: the error handler runs on the pump. */
+            (void) oversized_wait_connector.dispatch ();
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        if (!oversized_wait_frame_error_published) {
+            return 127;
+        }
     }
     oversized_wait_connector.close ();
 

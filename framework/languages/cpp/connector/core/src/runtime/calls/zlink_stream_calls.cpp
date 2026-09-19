@@ -1936,12 +1936,15 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
                         return result_t<packet_t>::failure (error_code_t::disconnected,
                                                             "stream connector is closed");
                     }
-                    if (state->last_disconnect_error) {
-                        return result_t<packet_t>::failure (state->last_disconnect_error->code,
-                                                            state->last_disconnect_error->message);
-                    }
-                    return result_t<packet_t>::failure (error_code_t::disconnected,
-                                                        "stream connector is not connected");
+                    /* stream-connector §10.1.1: the connection the wait
+                     * observed has ended, whatever ended it. The cause reached
+                     * the error handler when the connection ended; the wait
+                     * reports only that it has no place left to observe. */
+                    return result_t<packet_t>::failure (
+                      error_code_t::disconnected,
+                      state->last_disconnect_error
+                        ? state->last_disconnect_error->message
+                        : "stream connector is not connected");
                 }
                 const auto next_check =
                   std::min (deadline, steady_clock_t::now () + std::chrono::milliseconds (1));
@@ -1956,7 +1959,11 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
             if (inbound_error_connection) {
                 inbound_error_connection->shutdown_and_close_async ();
             }
-            return result_t<packet_t>::failure (inbound_error->code, inbound_error->message);
+            /* The same ending the asynchronous waits were released with:
+             * connection_ended published the cause, and this wait ends as
+             * disconnected like them (stream-connector §10.1.1). */
+            return result_t<packet_t>::failure (
+              error_code_t::disconnected, "the connection that the wait observed has ended");
         }
 
         queue_due_pong (state);
