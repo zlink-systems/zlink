@@ -22,7 +22,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
   if(ZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE)
     find_package(zlink CONFIG REQUIRED)
-    find_package(zlink_framework 0.10.0 CONFIG REQUIRED)
+    find_package(zlink_framework CONFIG REQUIRED)
   else()
     if(_package_default)
       message(FATAL_ERROR "Source mode requires this sample inside framework/languages/cpp/samples")
@@ -67,5 +67,15 @@ foreach(_target IN LISTS _sample_targets)
     zlink_framework_cpp_add_boost_headers(${_target})
   else()
     target_link_libraries(${_target} PRIVATE Boost::headers)
+  endif()
+  get_target_property(_target_type ${_target} TYPE)
+  if(WIN32 AND _target_type STREQUAL "EXECUTABLE")
+    # Windows has no RPATH: the loader looks next to the executable. Core is a
+    # DLL (zlink.dll) that no package manager deploys for us, so copy every
+    # runtime DLL this target links, Core included, beside it.
+    add_custom_command(TARGET ${_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:${_target}> $<TARGET_FILE_DIR:${_target}>
+      COMMAND_EXPAND_LISTS)
   endif()
 endforeach()

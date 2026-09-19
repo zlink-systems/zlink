@@ -12,6 +12,37 @@ function Get-ZlinkCanonicalVersion {
     return $VersionMatches[0].Matches[0].Groups[1].Value
 }
 
+# The Core and binding versions this framework consumes are the defaults of two
+# cache variables in CMakeLists.txt; sync-version.py keeps them equal to the
+# repository VERSION files. Reading them there works for a release archive,
+# which has no repository around it, exactly as for a checkout.
+function Get-ZlinkCppDependencyVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$CppRoot,
+        [Parameter(Mandatory = $true)][string]$Variable
+    )
+    $Path = Join-Path $CppRoot "CMakeLists.txt"
+    $Pattern = '^set\(' + [regex]::Escape($Variable) + ' "(\d+\.\d+\.\d+)" CACHE STRING$'
+    $VersionMatches = @(Select-String -LiteralPath $Path -Pattern $Pattern)
+    if ($VersionMatches.Count -ne 1) {
+        throw "Expected exactly one $Variable default in $Path."
+    }
+    return $VersionMatches[0].Matches[0].Groups[1].Value
+}
+
+# The zlink repository root when this tree is a checkout, $null for a release
+# archive. Only repository-local defaults (.artifacts, the build token) depend
+# on it; every input has an explicit parameter or environment variable.
+function Get-ZlinkCppRepositoryRoot {
+    param([Parameter(Mandatory = $true)][string]$CppRoot)
+    $Candidate = Join-Path $CppRoot "../../.."
+    if ((Test-Path (Join-Path $Candidate "VERSION") -PathType Leaf) -and
+        (Test-Path (Join-Path $Candidate "bindings/cpp/VERSION") -PathType Leaf)) {
+        return (Resolve-Path $Candidate).Path
+    }
+    return $null
+}
+
 function Get-ZlinkStableBuildToken {
     param([Parameter(Mandatory = $true)][string]$Path)
     $Sha256 = [Security.Cryptography.SHA256]::Create()
@@ -67,7 +98,8 @@ function Get-ZlinkCppWindowsSampleTargets {
             "sample_cpp_framework_zoneworld_zone_node",
             "sample_cpp_framework_zoneworld_gateway",
             "sample_cpp_framework_zoneworld_ops",
-            "sample_cpp_framework_zoneworld_client"
+            "sample_cpp_framework_zoneworld_client",
+            "sample_cpp_framework_zoneworld_session_route_proxy"
         )
     }
 
@@ -90,34 +122,38 @@ function Resolve-ZlinkCppWindowsBuildInputs {
         [string]$VcpkgInstalledDir
     )
 
-    $RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
-    $CoreVersion = Get-ZlinkCanonicalVersion `
-        -Path (Join-Path $RepositoryRoot "VERSION") -Key "LIBZLINK_VERSION"
-    $BindingVersion = Get-ZlinkCanonicalVersion `
-        -Path (Join-Path $RepositoryRoot "bindings/cpp/VERSION") -Key "ZLINK_BINDING_VERSION"
+    $CppRoot = (Resolve-Path $CppRoot).Path
+    $RepositoryRoot = Get-ZlinkCppRepositoryRoot -CppRoot $CppRoot
+    $CoreVersion = Get-ZlinkCppDependencyVersion `
+        -CppRoot $CppRoot -Variable "ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION"
+    $BindingVersion = Get-ZlinkCppDependencyVersion `
+        -CppRoot $CppRoot -Variable "ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION"
     $FrameworkVersion = Get-ZlinkCanonicalVersion `
         -Path (Join-Path $CppRoot "VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
+    # Repository-local defaults hang off the checkout; an archive anchors them
+    # at its own root instead.
+    $DefaultsRoot = if ($RepositoryRoot) { $RepositoryRoot } else { $CppRoot }
 
     if (-not $BuildDir) {
         $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) {
             $env:ZLINK_CPP_BUILD_DIR
         } else {
-            $BuildDrive = Split-Path -Qualifier $RepositoryRoot
+            $BuildDrive = Split-Path -Qualifier $DefaultsRoot
             if (-not $BuildDrive) {
                 $BuildDrive = [IO.Path]::GetTempPath()
             }
-            Join-Path $BuildDrive ".zlink-build/cpp-$(Get-ZlinkStableBuildToken -Path $RepositoryRoot)"
+            Join-Path $BuildDrive ".zlink-build/cpp-$(Get-ZlinkStableBuildToken -Path $DefaultsRoot)"
         }
     }
 
-    $CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
+    $CleanPackageRoot = Join-Path $DefaultsRoot ".artifacts/cpp-clean-$BindingVersion-package"
     if (-not $LocalPackageRoot) {
         $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
             $env:ZLINK_LOCAL_PACKAGE_ROOT
         } elseif (Test-Path $CleanPackageRoot) {
             $CleanPackageRoot
         } else {
-            Join-Path $RepositoryRoot ".artifacts/windows"
+            Join-Path $DefaultsRoot ".artifacts/windows"
         }
     }
 
@@ -137,10 +173,10 @@ function Resolve-ZlinkCppWindowsBuildInputs {
     }
 
     if (-not $VcpkgInstalledDir) {
-        $VcpkgInstalledDir = if (Test-Path (Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed")) {
-            Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed"
+        $VcpkgInstalledDir = if (Test-Path (Join-Path $DefaultsRoot ".artifacts/windows-vcpkg-installed")) {
+            Join-Path $DefaultsRoot ".artifacts/windows-vcpkg-installed"
         } else {
-            Join-Path $RepositoryRoot ".artifacts/windows/vcpkg-installed"
+            Join-Path $DefaultsRoot ".artifacts/windows/vcpkg-installed"
         }
     }
 

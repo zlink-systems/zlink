@@ -277,6 +277,9 @@ framework/languages/dotnet/samples/Bingo/run_sample.sh
 
 ```
 
+un_sample.ps1`이다. Runner는 Redis를 Docker container로 직접 띄운다. 전제
+    조건과 문제 해결은 zip 안의 `README.ko.md`에 있다.
+
 샘플은 하나씩 실행한다. 일곱 개를 모두 확인하려면 일곱 번 호출한다. 브라우저 UI를 포함한
 ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
 여러 sample을 한 번에 도는 runner를 두지 않는 까닭은

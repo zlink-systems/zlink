@@ -16,8 +16,10 @@ process 둘이 서로의 endpoint를 직접 지정해 request/reply 한 번을 �
 [**zlink-tutorial-cpp.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
 
 주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 압축을 풀면
-`zlink-tutorial-cpp/` 아래에 project가 그대로 나오고, 그 안의 패키지 버전은 받은 릴리즈에
-맞춰져 있다.
+`zlink-tutorial-cpp/` 아래에 project가 그대로 나오고, 그 안의 `bootstrap.cmake`가 아래 §1.3의
+세 아카이브 설치를 대신한다 — `cmake -P bootstrap.cmake` 한 번이면 framework가 설치되고
+project가 구성된다. 저장소도 Python도 필요 없다. 절차와 문제 해결은 그 안의
+`README.ko.md`가 담는다.
 
 최신 main을 원하면 저장소에서 그 디렉터리만 가져온다.
 
@@ -34,24 +36,23 @@ git sparse-checkout set framework/languages/cpp/tutorial
 - nlohmann_json·Boost·liblz4·libprotobuf·OpenSSL·opentelemetry-cpp
 
 `zlink`는 아직 공식 vcpkg registry와 ConanCenter에 없다. 이 저장소가 overlay port와 Conan
-recipe를 함께 담고 있으므로 설치 경로는 셋이지만, **지금 끝까지 도는 것은 GitHub Release
-경로뿐이다.**
+recipe를 함께 담고 있으므로 설치 경로는 셋이다. **끝까지 검증한 것은 GitHub Release 경로다.**
+tutorial·samples zip의 `bootstrap.cmake`가 이 경로를 자동화한다.
 
 | 경로 | 지금 상태 |
 |---|---|
-| GitHub Release | source archive 세 개를 차례로 빌드한다. 끝까지 확인했다 |
-| vcpkg overlay port | overlay port 세 개에 결함이 남아 있어 그대로는 설치되지 않는다 |
-| Conan recipe | recipe 세 개에 결함이 남아 있어 그대로는 설치되지 않는다 |
+| GitHub Release | Core prebuilt 하나와 source archive 둘을 차례로 설치한다. Windows·Linux에서 끝까지 확인했다 |
+| vcpkg overlay port | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
+| Conan recipe | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
 
-확인한 명령과 막히는 지점은 프로젝트의
-[`README.md`](../../../languages/cpp/quickstart/README.md)에 있다. 아래 §1.1과 §1.2는 그 결함이
-해결되면 그대로 사용할 수 있도록 남겨 둔 절차다.
+아카이브 경로의 명령은 프로젝트의
+[`README.md`](../../../languages/cpp/quickstart/README.md)에 있다.
 
 ### 1.1 vcpkg
 
-!!! warning "이 경로는 아직 끝까지 설치되지 않는다"
+!!! note "검증 범위 밖"
 
-    overlay port와 recipe에 남은 결함 때문에 지금은 중간에서 멈춘다. 첫 설치는
+    이 경로는 릴리스마다 갱신되지만 이 문서가 검증한 경로가 아니다. 첫 설치는
     [GitHub Release](#13-github-release)로 한다.
 
 ```bash
@@ -69,9 +70,9 @@ cmake -S . -B build \
 
 ### 1.2 Conan
 
-!!! warning "이 경로는 아직 끝까지 설치되지 않는다"
+!!! note "검증 범위 밖"
 
-    overlay port와 recipe에 남은 결함 때문에 지금은 중간에서 멈춘다. 첫 설치는
+    이 경로는 릴리스마다 갱신되지만 이 문서가 검증한 경로가 아니다. 첫 설치는
     [GitHub Release](#13-github-release)로 한다.
 
 ```bash

@@ -272,10 +272,20 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 띄우고 끝나면 정리하므로 `docker`만 있으면 된다.
 
 ```bash
-# 샘플 하나 실행
-framework/languages/cpp/samples/Bingo/run_sample.sh
+# 압축을 푼 zlink-samples-cpp/ 에서. bootstrap.cmake가 공개 아카이브로 framework를
+# 설치하고 일곱 샘플을 build/ 에 구성한다 (저장소 안이라면 framework/languages/cpp/samples/ 에서).
+cmake -P bootstrap.cmake
+cmake --build build --parallel
 
+# 샘플 하나 실행
+./Bingo/run_sample.sh
 ```
+
+Windows PowerShell은 `cmake --build build --config Release --parallel` 뒤
+`.Bingo
+
+un_sample.ps1`이다. Runner는 Redis를 Docker container로 직접 띄운다. 전제
+    조건과 문제 해결은 zip 안의 `README.ko.md`에 있다.
 
 샘플은 하나씩 실행한다. 일곱 개를 모두 확인하려면 일곱 번 호출한다. 브라우저 UI를 포함한
 ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.

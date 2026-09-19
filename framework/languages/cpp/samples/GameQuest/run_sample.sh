@@ -3,9 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_gamequest_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_gamequest_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
 fi
@@ -140,59 +139,36 @@ mkdir -p "$CONFIG_DIR"
 
 # 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$1" "$2" "$3" "$LOG_DIR" \
-    "$GAMEQUEST_REDIS_ENDPOINT" "$GAMEQUEST_REDIS_KEY_PREFIX" \
-    "$GAMEQUEST_API_A_STREAM_ENDPOINT" "$GAMEQUEST_API_B_STREAM_ENDPOINT" \
-    "$GAMEQUEST_API_A_HTTP_URL" "$GAMEQUEST_API_B_HTTP_URL" \
-    "$GAMEQUEST_MISSION_A_ROUTE_ENDPOINT" "$GAMEQUEST_MISSION_B_ROUTE_ENDPOINT" \
-    "$GAMEQUEST_MISSION_A_SPOT_ROUTE_ENDPOINT" "$GAMEQUEST_MISSION_B_SPOT_ROUTE_ENDPOINT" \
-    "$GAMEQUEST_MISSION_A_SPOT_ROUTER_ENDPOINT" "$GAMEQUEST_MISSION_B_SPOT_ROUTER_ENDPOINT" \
-    "$GAMEQUEST_MISSION_A_SPOT_ENDPOINT" "$GAMEQUEST_MISSION_B_SPOT_ENDPOINT" \
-    "$GAMEQUEST_API_A_SPOT_ROUTER_ENDPOINT" "$GAMEQUEST_API_B_SPOT_ROUTER_ENDPOINT" \
-    "$GAMEQUEST_API_A_SPOT_ROUTE" "$GAMEQUEST_API_B_SPOT_ROUTE" <<'CONFIG_PY'
-import json
-import os
-import stat
-import sys
-
-(path, role_name, api_name, mission_name, flow_log_dir, redis_endpoint,
- redis_key_prefix, api_a_stream, api_b_stream, api_a_http, api_b_http,
- mission_a_route, mission_b_route, mission_a_spot_route, mission_b_spot_route,
- mission_a_spot_router, mission_b_spot_router, mission_a_spot, mission_b_spot,
- api_a_spot_router, api_b_spot_router, api_a_spot_route, api_b_spot_route) = sys.argv[1:]
-
-document = {
-    "sample": {
-        "role": {"name": role_name, "logDir": flow_log_dir},
-        "topology": {
-            "redisEndpoint": redis_endpoint,
-            "redisKeyPrefix": redis_key_prefix,
-            "apiAStreamEndpoint": api_a_stream,
-            "apiBStreamEndpoint": api_b_stream,
-            "apiAHttpUrl": api_a_http,
-            "apiBHttpUrl": api_b_http,
-            "missionARouteEndpoint": mission_a_route,
-            "missionBRouteEndpoint": mission_b_route,
-            "missionASpotRouteEndpoint": mission_a_spot_route,
-            "missionBSpotRouteEndpoint": mission_b_spot_route,
-            "missionASpotRouterEndpoint": mission_a_spot_router,
-            "missionBSpotRouterEndpoint": mission_b_spot_router,
-            "missionASpotEndpoint": mission_a_spot,
-            "missionBSpotEndpoint": mission_b_spot,
-            "apiASpotRouterEndpoint": api_a_spot_router,
-            "apiBSpotRouterEndpoint": api_b_spot_router,
-            "apiName": api_name,
-            "missionName": mission_name,
-            "apiASpotRouteEndpoint": api_a_spot_route,
-            "apiBSpotRouteEndpoint": api_b_spot_route,
-        },
+  local role_name="$1" api_name="$2" mission_name="$3"
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{
+  "sample": {
+    "role": {"name": "$role_name", "logDir": "$LOG_DIR"},
+    "topology": {
+      "redisEndpoint": "$GAMEQUEST_REDIS_ENDPOINT",
+      "redisKeyPrefix": "$GAMEQUEST_REDIS_KEY_PREFIX",
+      "apiAStreamEndpoint": "$GAMEQUEST_API_A_STREAM_ENDPOINT",
+      "apiBStreamEndpoint": "$GAMEQUEST_API_B_STREAM_ENDPOINT",
+      "apiAHttpUrl": "$GAMEQUEST_API_A_HTTP_URL",
+      "apiBHttpUrl": "$GAMEQUEST_API_B_HTTP_URL",
+      "missionARouteEndpoint": "$GAMEQUEST_MISSION_A_ROUTE_ENDPOINT",
+      "missionBRouteEndpoint": "$GAMEQUEST_MISSION_B_ROUTE_ENDPOINT",
+      "missionASpotRouteEndpoint": "$GAMEQUEST_MISSION_A_SPOT_ROUTE_ENDPOINT",
+      "missionBSpotRouteEndpoint": "$GAMEQUEST_MISSION_B_SPOT_ROUTE_ENDPOINT",
+      "missionASpotRouterEndpoint": "$GAMEQUEST_MISSION_A_SPOT_ROUTER_ENDPOINT",
+      "missionBSpotRouterEndpoint": "$GAMEQUEST_MISSION_B_SPOT_ROUTER_ENDPOINT",
+      "missionASpotEndpoint": "$GAMEQUEST_MISSION_A_SPOT_ENDPOINT",
+      "missionBSpotEndpoint": "$GAMEQUEST_MISSION_B_SPOT_ENDPOINT",
+      "apiASpotRouterEndpoint": "$GAMEQUEST_API_A_SPOT_ROUTER_ENDPOINT",
+      "apiBSpotRouterEndpoint": "$GAMEQUEST_API_B_SPOT_ROUTER_ENDPOINT",
+      "apiName": "$api_name",
+      "missionName": "$mission_name",
+      "apiASpotRouteEndpoint": "$GAMEQUEST_API_A_SPOT_ROUTE",
+      "apiBSpotRouteEndpoint": "$GAMEQUEST_API_B_SPOT_ROUTE"
     }
+  }
 }
-
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-CONFIG_PY
+CONFIG_JSON
 }
 
 write_role_config mission-a api-a mission-a

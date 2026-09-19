@@ -22,7 +22,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
   if(ZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE)
     find_package(zlink CONFIG REQUIRED)
-    find_package(zlink_framework 0.10.0 CONFIG REQUIRED)
+    find_package(zlink_framework CONFIG REQUIRED)
   else()
     if(_package_default)
       message(FATAL_ERROR "Source mode requires this sample inside framework/languages/cpp/samples")
@@ -51,6 +51,20 @@ add_executable(sample_cpp_framework_zoneworld_client Client/main.cpp)
 target_link_libraries(sample_cpp_framework_zoneworld_client PRIVATE
   zlink::stream_connector zlink::stream_e2e_client)
 
+# The ZW-B8 fault proxy: run_sample.{sh,ps1} puts it between the gateway and a
+# zone node's mesh endpoint. Plain Boost.Asio on the sample's own toolchain --
+# no other runtime is needed to run the sample.
+find_package(Threads REQUIRED)
+add_executable(sample_cpp_framework_zoneworld_session_route_proxy
+  Support/session_route_block_proxy.cpp)
+target_link_libraries(sample_cpp_framework_zoneworld_session_route_proxy PRIVATE
+  Threads::Threads)
+if(WIN32)
+  target_link_libraries(sample_cpp_framework_zoneworld_session_route_proxy PRIVATE ws2_32)
+  target_compile_definitions(sample_cpp_framework_zoneworld_session_route_proxy PRIVATE
+    _WIN32_WINNT=0x0A00)
+endif()
+
 get_property(_sample_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(_target IN LISTS _sample_targets)
   target_compile_features(${_target} PRIVATE cxx_std_20)
@@ -59,5 +73,15 @@ foreach(_target IN LISTS _sample_targets)
     zlink_framework_cpp_add_boost_headers(${_target})
   else()
     target_link_libraries(${_target} PRIVATE Boost::headers)
+  endif()
+  get_target_property(_target_type ${_target} TYPE)
+  if(WIN32 AND _target_type STREQUAL "EXECUTABLE")
+    # Windows has no RPATH: the loader looks next to the executable. Core is a
+    # DLL (zlink.dll) that no package manager deploys for us, so copy every
+    # runtime DLL this target links, Core included, beside it.
+    add_custom_command(TARGET ${_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:${_target}> $<TARGET_FILE_DIR:${_target}>
+      COMMAND_EXPAND_LISTS)
   endif()
 endforeach()

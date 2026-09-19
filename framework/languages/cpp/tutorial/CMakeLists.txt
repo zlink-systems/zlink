@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(zlink_tutorial_cpp LANGUAGES CXX)
 
 # Everything the two processes need comes from this one package. The prefixes
@@ -19,11 +19,20 @@ add_executable(tutorial_stream_client StreamClient/main.cpp)
 target_link_libraries(tutorial_stream_client PRIVATE zlink::stream_connector)
 target_compile_features(tutorial_stream_client PRIVATE cxx_std_20)
 
-if(MSVC)
-  # The framework headers are large enough to exhaust MSVC's default object
-  # file section limit, and they carry UTF-8 source that the compiler reads as
-  # the system code page without /utf-8.
-  target_compile_options(tutorial_server PRIVATE /bigobj /utf-8)
-  target_compile_options(tutorial_client PRIVATE /bigobj /utf-8)
-  target_compile_options(tutorial_stream_client PRIVATE /bigobj /utf-8)
-endif()
+foreach(_target tutorial_server tutorial_client tutorial_stream_client)
+  if(MSVC)
+    # The framework headers are large enough to exhaust MSVC's default object
+    # file section limit, and they carry UTF-8 source that the compiler reads
+    # as the system code page without /utf-8.
+    target_compile_options(${_target} PRIVATE /bigobj /utf-8)
+  endif()
+  if(WIN32)
+    # Windows has no RPATH: the loader looks next to the executable. Core is a
+    # DLL (zlink.dll) that no package manager deploys for us, so copy every
+    # runtime DLL this target links, Core included, beside it.
+    add_custom_command(TARGET ${_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:${_target}> $<TARGET_FILE_DIR:${_target}>
+      COMMAND_EXPAND_LISTS)
+  endif()
+endforeach()
