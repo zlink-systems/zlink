@@ -2,7 +2,7 @@
 
 # ZLink Java Framework 0.18.1 릴리스 노트
 
-Framework 0.18.1는 binding 1.2.0과 Core 1.2.0을 사용합니다. Framework 언어별 릴리스는 독립적으로 버전이 지정됩니다.
+Framework 0.18.1는 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework 언어별 릴리스는 독립적으로 버전이 지정됩니다.
 
 ## 계약 변경
 

@@ -2,7 +2,7 @@
 
 # ZLink Java Framework 0.18.1 Release Notes
 
-Framework 0.18.1 uses binding 1.2.0 and Core 1.2.0. Each Framework language release is versioned independently.
+Framework 0.18.1 uses binding 1.2.1 and Core 1.2.0. Each Framework language release is versioned independently.
 
 ## Contract Changes
 
