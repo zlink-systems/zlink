@@ -78,7 +78,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -o '^| `[a-z-]*` |' "${root}/README.md" | tr -d '|` ')
+          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run every documented step
@@ -117,6 +117,8 @@ jobs:
           profile=$(curl -sf http://127.0.0.1:5080/players/p1/profile)
           echo "${profile}" | grep -q '"playerId":"p1"' || fail "channel request/reply: ${profile}"
           curl -sf -X POST http://127.0.0.1:5080/players/p1/logins > /dev/null
+          # The send completes at admission (202); the handler runs afterwards, so the log line lands a moment later.
+          for _ in $(seq 1 40); do grep -q 'login recorded: p1' server.log && break; sleep 0.25; done
           grep -q 'login recorded: p1' server.log || fail "one-way channel send did not arrive"
 
           # RouteMesh node direct — the caller names one node instead of a channel.
@@ -247,7 +249,7 @@ jobs:
                 echo "::error::snippet marker not found in sources: ${marker}"
                 exit 1
               }
-            done < <(grep -o '^| `[a-z-]*` |' "${root}/${language}/README.md" | tr -d '|` ')
+            done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/${language}/README.md" | cut -d'`' -f2)
           done
 
       - name: Run Java and Kotlin documented tutorial steps
@@ -389,7 +391,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -o '^| `[a-z-]*` |' "${root}/README.md" | tr -d '|` ')
+          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run the documented Node tutorial steps
@@ -524,7 +526,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -o '^| `[a-z-]*` |' "${root}/README.md" | tr -d '|` ')
+          done < <(grep -oE '^| `[a-z-]+` | `[^`]+` |$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run the HTTP client tutorial
