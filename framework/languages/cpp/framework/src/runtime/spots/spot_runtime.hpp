@@ -1624,7 +1624,8 @@ class spot_node_runtime_t
                                   service_provider_t &services,
                                   serializer_registry_t &serializers,
                                   std::optional<std::string> flow_id = std::nullopt,
-                                  std::optional<flow_origin_t> flow_origin = std::nullopt);
+                                  std::optional<flow_origin_t> flow_origin = std::nullopt,
+                                  std::function<void ()> *accepted_turn_terminal = nullptr);
     std::optional<spot_info_t> find_spot (spot_id_t spot_id) const;
     std::vector<spot_info_t> list_spots () const;
     task_t<bool> close_spot (spot_id_t spot_id);

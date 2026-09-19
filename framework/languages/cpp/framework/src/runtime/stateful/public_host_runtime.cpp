@@ -605,6 +605,24 @@ decode_instance_closing_state (const std::vector<std::byte> &payload)
     }
 }
 
+bool instance_close_owns_pending_terminal (const authority_read_result_t &current,
+                                           const std::string &stable_type,
+                                           const std::string &spot_id,
+                                           std::uint64_t object_generation,
+                                           std::uint64_t authority_owner_generation)
+{
+    const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+    if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
+        || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+        || snapshot->object_generation != object_generation
+        || snapshot->authority_owner_generation != authority_owner_generation)
+        return false;
+    const auto closing = decode_instance_closing_state (snapshot->payload);
+    return closing && closing->stable_type == stable_type && closing->spot_id == spot_id
+           && closing->object_generation == object_generation
+           && closing->authority_owner_generation == authority_owner_generation;
+}
+
 std::uint64_t unix_milliseconds_now ()
 {
     return static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -4665,9 +4683,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto application = protocol::decode_application_payload (
                       mailbox_record.parts[application_index], capture_flow ());
                     const auto reply_terminal = [&] (instance_spot_activation_result_t result) {
-                        (void) _transport->reply_instance_spot_activation (
-                          mailbox_record, result.terminal_result, result.failure_code,
-                          std::move (result.application_reply));
+                        auto accepted_turn_terminal =
+                          std::move (result.accepted_turn_terminal);
+                        try {
+                            (void) _transport->reply_instance_spot_activation (
+                              mailbox_record, result.terminal_result, result.failure_code,
+                              std::move (result.application_reply));
+                        }
+                        catch (...) {
+                            if (accepted_turn_terminal)
+                                accepted_turn_terminal ();
+                            throw;
+                        }
+                        if (accepted_turn_terminal)
+                            accepted_turn_terminal ();
                     };
                     if (request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
                         reply_terminal ({101, 0, std::nullopt});
@@ -4833,11 +4862,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                             encode_instance_ready_state (*ready_state)})
                                         .result ()
                                         .value ();
-                                    if (!std::holds_alternative<authority_stored_t> (stored))
-                                        result = {105,
-                                                  static_cast<std::uint32_t> (
-                                                    protocol::framework_error_code::requestFailed),
-                                                  std::nullopt};
+                                    if (!std::holds_alternative<authority_stored_t> (stored)) {
+                                        const auto current_authority =
+                                          store->read_authority (authority_key).result ().value ();
+                                        if (!instance_close_owns_pending_terminal (
+                                              current_authority, ready_state->stable_type,
+                                              ready_state->spot_id,
+                                              ready_state->object_generation,
+                                              ready_state->authority_owner_generation)) {
+                                            result.terminal_result = 105;
+                                            result.failure_code = static_cast<std::uint32_t> (
+                                              protocol::framework_error_code::requestFailed);
+                                            result.application_reply.reset ();
+                                        }
+                                    }
                                     reply_terminal (std::move (result));
                                     return true;
                                 }
@@ -4962,10 +5000,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto *terminal_snapshot =
                       std::get_if<authority_stored_t> (&stored_terminal);
                     if (!terminal_snapshot) {
-                        result = {105,
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::requestFailed),
-                                  std::nullopt};
+                        const auto current_authority =
+                          store->read_authority (authority_key).result ().value ();
+                        if (!instance_close_owns_pending_terminal (
+                              current_authority, ready_state.stable_type, ready_state.spot_id,
+                              ready_state.object_generation,
+                              ready_state.authority_owner_generation)) {
+                            result.terminal_result = 105;
+                            result.failure_code = static_cast<std::uint32_t> (
+                              protocol::framework_error_code::requestFailed);
+                            result.application_reply.reset ();
+                        }
                     } else {
                         ready_state.recovery_reference.clear ();
                         ready_state.recovery_checksum = 0;

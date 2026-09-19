@@ -1873,6 +1873,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                      &services] (const protocol::instance_spot_activation_header_t &request,
                                  const std::optional<std::vector<std::uint8_t>> &metadata,
                                  const protocol::application_payload_t &application) {
+                        std::function<void ()> accepted_turn_terminal;
                         try {
                             std::map<std::string, std::string> decoded_metadata;
                             if (metadata
@@ -1892,7 +1893,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   std::to_string (request.operation.high) + ":"
                                     + std::to_string (request.operation.low),
                                   services, *_serializers, application.flow_id,
-                                  application.flow_origin)
+                                  application.flow_origin, &accepted_turn_terminal)
                                 .result ()
                                 .value ();
                             std::optional<protocol::application_payload_t> application_reply;
@@ -1910,7 +1911,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 }
                             }
                             return host::instance_spot_activation_result_t{
-                              0, 0, std::move (application_reply)};
+                              0, 0, std::move (application_reply),
+                              std::move (accepted_turn_terminal)};
                         }
                         catch (const framework_exception_t &error) {
                             detail::dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
@@ -1927,7 +1929,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               105,
                               static_cast<std::uint32_t> (
                                 protocol::framework_error_code::requestFailed),
-                              std::nullopt};
+                              std::nullopt, std::move (accepted_turn_terminal)};
+                        }
+                        catch (...) {
+                            if (accepted_turn_terminal)
+                                accepted_turn_terminal ();
+                            throw;
                         }
                     }});
             }
