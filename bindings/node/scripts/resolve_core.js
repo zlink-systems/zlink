@@ -41,18 +41,39 @@ if (coreSource === 'local') {
 
   prefix = fs.realpathSync(configured);
   const manifestPath = path.join(prefix, 'share', 'zlink', 'core-package-provenance.json');
-  if (!fs.existsSync(manifestPath)) {
-    fail(`Core package provenance is missing: ${manifestPath}`);
-  }
-
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  if (manifest.package !== 'zlink-core' || !/^\d+\.\d+\.\d+$/.test(manifest.version || '')
-      || Number(manifest.abiMajor) !== 0) {
-    fail(`Installed Core package must have 1.2.0 provenance: ${manifestPath}`);
+  if (fs.existsSync(manifestPath)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (manifest.package !== 'zlink-core' || !/^\d+\.\d+\.\d+$/.test(manifest.version || '')
+        || Number(manifest.abiMajor) !== 0) {
+      fail(`Installed Core package must have 1.2.0 provenance: ${manifestPath}`);
+    }
+    version = manifest.version;
+  } else {
+    // The public GitHub Release archive (libzlink-<platform>.zip/.tar.gz) never
+    // contains this manifest -- it is not a build output, it is synthesized
+    // locally, after checksum verification against the release's
+    // checksums.txt/release-provenance.txt, by
+    // scripts/local-package/core/fetch-release.ps1 (Windows) or
+    // fetch-release.sh (Linux/macOS/WSL). Those scripts are what every CI job
+    // and scripts/local-package/build-windows.ps1 use to turn a release
+    // archive into a prefix this script accepts outright.
+    //
+    // A prefix built by hand from the raw archive (e.g. extracting
+    // libzlink-windows-x64.zip and pointing ZLINK_CORE_INSTALL_PREFIX at it)
+    // has no such manifest and therefore no verified version/ABI to check.
+    // Warn instead of failing closed so a source build from the public
+    // archive is still possible; the header and library existence checks
+    // below still run unconditionally.
+    process.stderr.write(
+      `warning: Core package provenance is missing: ${manifestPath}\n` +
+      'warning: run scripts/local-package/core/fetch-release.ps1 (or fetch-release.sh) ' +
+      'against this release to get a verified prefix; proceeding without version/ABI ' +
+      'verification for this build\n'
+    );
+    version = '';
   }
   includeDir = path.join(prefix, 'include');
   libraryDirs = [path.join(prefix, 'lib'), path.join(prefix, 'lib64')];
-  version = manifest.version;
 } else {
   fail(`ZLINK_CORE_SOURCE must be release or local: ${coreSource}`);
 }
