@@ -646,7 +646,14 @@ try {
 
     if ($BrowserSmoke -and -not $NoBrowserSmoke) {
         Write-Host "==> shared browser client"
-        $browserRoot = (Resolve-Path (Join-Path $ScriptDir "../../../shared_sample/zoneworld/client")).Path
+        $browserRootCandidate = Join-Path $ScriptDir "../../../shared_sample/zoneworld/client"
+        if (-not (Test-Path -LiteralPath $browserRootCandidate)) {
+            throw ("-BrowserSmoke needs shared_sample/zoneworld/client, which lives outside " +
+                "the samples package and ships only in a full zlink repository checkout. " +
+                "Clone https://github.com/zlink-systems/zlink and run this sample from " +
+                "framework/languages/dotnet/samples/ZoneWorld there, or omit -BrowserSmoke.")
+        }
+        $browserRoot = (Resolve-Path $browserRootCandidate).Path
         $browserDist = Join-Path $RunDir "browser-dist"
         $browserMarker = Join-Path $RunDir "browser-lifecycle-armed"
         $browserConfig = Join-Path $RunDir "playwright.live.config.mjs"

@@ -44,31 +44,7 @@ fi
 REDIS_CONTAINER="zlink-gamequest-dotnet-redis-${RUN_ID}"
 zlink_redis_start_scoped_assign REDIS_CONTAINER GAMEQUEST_REDIS_ENDPOINT "zlink-gamequest-dotnet-redis" redis:7.2-alpine
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-chosen = set()
-try:
-    while len(sockets) < 10:
-        port = random.randint(22100, 23999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_sample_pick_ports 10)"
 
 GAMEQUEST_REDIS_KEY_PREFIX="gamequest:dotnet:${RUN_ID}:"
 GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL="http://127.0.0.1:${PORTS[0]}"

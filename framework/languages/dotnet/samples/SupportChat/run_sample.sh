@@ -33,31 +33,7 @@ cleanup() {
 }
 trap zlink_sample_exit_trap EXIT
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-try:
-    chosen = set()
-    while len(sockets) < 4:
-        port = random.randint(22100, 23999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_sample_pick_ports 4)"
 
 SUPPORTCHAT_SUPPORT_MESH_ENDPOINT="tcp://127.0.0.1:${PORTS[0]}"
 SUPPORTCHAT_API_MESH_ENDPOINT="tcp://127.0.0.1:${PORTS[1]}"

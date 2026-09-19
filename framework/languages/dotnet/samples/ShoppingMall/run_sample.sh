@@ -32,31 +32,7 @@ cleanup() {
 }
 trap zlink_sample_exit_trap EXIT
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-chosen = set()
-try:
-    while len(sockets) < 8:
-        port = random.randint(22100, 23999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_sample_pick_ports 8)"
 
 SHOPPINGMALL_REDIS_KEY_PREFIX="shoppingmall:dotnet:${RUN_ID}:"
 SHOPPINGMALL_API_A_HTTP_URL="http://127.0.0.1:${PORTS[0]}"
@@ -159,15 +135,18 @@ relocate_planned_order() {
   local endpoint
   local response
   local state
+  local source_instance
   local last_result="no owner observed"
   for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     for endpoint in "${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}" "${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}"; do
       response="$(curl -fsS -X POST "${endpoint}/self-check/relocate/${order_id}" \
         -H 'Content-Type: application/json' --data '{}')" || continue
-      state="$(python3 -c 'import json,sys; body=json.load(sys.stdin); print("owner=" + str(body["isOwner"]).lower() + " outcome=" + body["outcome"] + " reason=" + body["reason"])' <<<"${response}")"
+      state="owner=$(zlink_json_field "${response}" isOwner) outcome=$(zlink_json_field "${response}" outcome) reason=$(zlink_json_field "${response}" reason)"
       if [[ "${state}" == "owner=true outcome=Started reason=None" || "${state}" == "owner=true outcome=AlreadyStarted reason=None" ]]; then
-        RELOCATION_ANCHOR_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["anchorId"])' <<<"${response}")"
-        case "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sourceInstanceId"] or "")' <<<"${response}")" in
+        RELOCATION_ANCHOR_ID="$(zlink_json_field "${response}" anchorId)"
+        source_instance="$(zlink_json_field "${response}" sourceInstanceId)"
+        [[ "${source_instance}" == "null" ]] && source_instance=""
+        case "${source_instance}" in
           workflow-a) RELOCATION_SOURCE_ENDPOINT="${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}" ;;
           workflow-b) RELOCATION_SOURCE_ENDPOINT="${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}" ;;
           *) echo "Planned relocation returned no workflow source for ${RELOCATION_ANCHOR_ID}" >&2; return 1 ;;
@@ -190,7 +169,7 @@ wait_relocated_anchor_owner() {
     for endpoint in "${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}" "${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}"; do
       [[ "${endpoint}" == "${RELOCATION_SOURCE_ENDPOINT}" ]] && continue
       response="$(curl -fsS "${endpoint}/self-check/owner/${anchor_id}")" || continue
-      if [[ "$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isOwner"]).lower())' <<<"${response}")" == "true" ]]; then
+      if [[ "$(zlink_json_field "${response}" isOwner)" == "true" ]]; then
         return 0
       fi
     done
@@ -205,16 +184,21 @@ wait_relocated_anchor_owner() {
 signal_relocation_ready() {
   local response
   local state
+  local outcome reason relocation_state
   for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     response="$(curl -fsS "${RELOCATION_SOURCE_ENDPOINT}/self-check/relocation-status")" || {
       sleep 0.1
       continue
     }
-    state="$(python3 -c 'import json,sys; body=json.load(sys.stdin); print(body["outcome"] + ":" + body["reason"] + ":" + (body["state"] or ""))' <<<"${response}")"
+    outcome="$(zlink_json_field "${response}" outcome)"
+    reason="$(zlink_json_field "${response}" reason)"
+    relocation_state="$(zlink_json_field "${response}" state)"
+    [[ "${relocation_state}" == "null" ]] && relocation_state=""
+    state="${outcome}:${reason}:${relocation_state}"
     if [[ "${state}" == "InProgress:None:Relocating" ]]; then
       response="$(curl -fsS -X POST "${RELOCATION_SOURCE_ENDPOINT}/self-check/relocation-ready/${RELOCATION_ANCHOR_ID}" \
         -H 'Content-Type: application/json' --data '{}')" || return 1
-      [[ "$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["deferred"]).lower())' <<<"${response}")" == "true" ]] && return 0
+      [[ "$(zlink_json_field "${response}" deferred)" == "true" ]] && return 0
       return 1
     fi
     if [[ "${state}" != "InProgress:None:Serving" && "${state}" != "InProgress:None:Preparing" ]]; then
@@ -235,7 +219,10 @@ wait_relocated_order_completed() {
       sleep 0.1
       continue
     }
-    if python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["state"]["status"] != "Confirmed")' <<<"${response}" 2>/dev/null; then
+    # GetOrderStateRes has exactly one "status" key, nested under "state"
+    # (Shared/Contracts/Messages.cs OrderState.Status); zlink_json_field's flat text
+    # search is safe on this response shape for that reason.
+    if [[ "$(zlink_json_field "${response}" status)" == "Confirmed" ]]; then
       return 0
     fi
     sleep 0.1
@@ -254,7 +241,7 @@ wait_workflow_mesh_ready() {
         all_ready=false
         continue
       }
-      if [[ "$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["ready"]).lower())' <<<"${response}")" != "true" ]]; then
+      if [[ "$(zlink_json_field "${response}" ready)" != "true" ]]; then
         all_ready=false
       fi
     done
@@ -395,22 +382,22 @@ dotnet run --no-build --project "${SCRIPT_DIR}/Client/ShoppingMall.Client.csproj
 wait_log_contains client-completed "${SHOPPINGMALL_LOG_DIR}/client.log" "shoppingmall=completed"
 wait_log_contains workflow-a-order "${LOG_DIR}/workflow-a.log" "shoppingmall-order started order="
 wait_log_contains workflow-b-order "${LOG_DIR}/workflow-b.log" "shoppingmall-order started order="
-ASSERTION_BODY="$(python3 - "${SHOPPINGMALL_LOG_DIR}/shoppingmall-client-orders.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    orders = json.load(source)
-
-required = [
-    "SuccessfulOrderId", "PendingRecoveredOrderId", "ConcurrentOrderId", "ResumedOrderId",
-    "InventoryFailureOrderId", "PaymentFailureOrderId", "ScaleOutOrderId", "RepairOrderId",
-]
-if any(not orders.get(name) for name in required):
-    raise SystemExit("Client order result is incomplete.")
-
-print(json.dumps({name[0].lower() + name[1:]: orders[name] for name in required}, separators=(",", ":")))
-PY
+ORDERS_JSON="$(cat "${SHOPPINGMALL_LOG_DIR}/shoppingmall-client-orders.json")"
+ASSERTION_BODY="$(
+  required=(SuccessfulOrderId PendingRecoveredOrderId ConcurrentOrderId ResumedOrderId \
+    InventoryFailureOrderId PaymentFailureOrderId ScaleOutOrderId RepairOrderId)
+  pairs=()
+  for name in "${required[@]}"; do
+    value="$(zlink_json_field "${ORDERS_JSON}" "${name}")"
+    if [[ -z "${value}" || "${value}" == "null" ]]; then
+      echo "Client order result is incomplete." >&2
+      exit 1
+    fi
+    camel_name="${name,}"
+    pairs+=("\"${camel_name}\":\"${value}\"")
+  done
+  IFS=,
+  echo "{${pairs[*]}}"
 )"
 curl -fsS -X POST "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/assert" \
   -H 'Content-Type: application/json' \
@@ -425,7 +412,7 @@ wait_workflow_mesh_ready
 RELOCATION_CHECKPOINT="$(curl -fsS -X POST "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/workflow/inventory-reserved" \
   -H 'Content-Type: application/json' \
   --data "{\"cartId\":\"cart-success\",\"shippingAddressId\":\"addr-home\",\"paymentMethodId\":\"pm-ok\",\"idempotencyKey\":\"order-relocation-${RUN_ID}\"}")"
-RELOCATION_ORDER_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["orderId"])' <<<"${RELOCATION_CHECKPOINT}")"
+RELOCATION_ORDER_ID="$(zlink_json_field "${RELOCATION_CHECKPOINT}" orderId)"
 relocate_planned_order "${RELOCATION_ORDER_ID}"
 wait_relocated_anchor_owner "${RELOCATION_ANCHOR_ID}"
 wait_relocated_order_completed "${RELOCATION_ORDER_ID}"
