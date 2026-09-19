@@ -604,11 +604,6 @@ curl -i -X POST http://127.0.0.1:5280/rooms/<roomId>/import \
   등록에 `setRoutingIdPrefix("game-client-broadcast")` 한 줄이 그것이고, Store가 없던
   단계에서는 없던 줄이다.
 
-- **묶인 연결이 없을 때의 push.** `boundSession()`에 묶인 연결이 없으면 이 binding은
-  **동기적으로 예외를 던진다.** .NET·C++·Node에서 같은 호출은 아무 일도 하지 않고 끝난다.
-  그래서 `ChangeNickname` handler가 그 실패를 잡아 버린다 — 잡지 않으면 STREAM 없이 rename만
-  하는 10단계 호출이 handler 예외로 끝난다.
-
 ## 문서가 읽는 마커
 
 | 마커 | 자리 |

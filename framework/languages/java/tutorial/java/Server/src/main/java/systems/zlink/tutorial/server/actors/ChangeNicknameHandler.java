@@ -1,8 +1,10 @@
 package systems.zlink.tutorial.server.actors;
 
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.tutorial.server.spots.LobbySpot;
 import systems.zlink.tutorial.shared.Contracts;
@@ -23,21 +25,21 @@ public final class ChangeNicknameHandler
         player.rename(message.nickname());
 
         // --8<-- [start:actor-push]
-        // Reaches the connection bound to this player. The same handler also runs
-        // for a player nobody is connected to -- the HTTP path of the Actor step --
-        // and on this binding that push fails instead of doing nothing, so the
-        // failure is dropped rather than failing the rename.
-        try {
-            return player.context().boundSession()
-                .send(
-                    new Contracts.NicknameChanged(
-                        player.nickname()))
-                .submit()
-                .exceptionally(error -> null);
-        } catch (RuntimeException noConnection) {
-            return CompletableFuture
-                .completedFuture(null);
-        }
+        // Pushes over the connection bound to this player. The same handler also runs
+        // on an HTTP path with no bound connection, where push ends with InvalidOperation.
+        // Rename is already complete, so only that failure is discarded.
+        return player.context().boundSession()
+            .send(
+                new Contracts.NicknameChanged(
+                    player.nickname()))
+            .submit()
+            .exceptionally(error -> {
+                if (error instanceof ZLinkFrameworkException framework
+                    && framework.kind() == ZLinkFrameworkErrorKind.INVALID_OPERATION) {
+                    return null;
+                }
+                throw new CompletionException(error);
+            });
         // --8<-- [end:actor-push]
     }
 }

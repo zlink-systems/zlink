@@ -3,11 +3,13 @@ import {
   zlinkEntrySpotActorRequestHandler,
   zlinkEntrySpotActorSendHandler
 } from '@zlink-systems/nestjs';
-import type {
-  ZLinkActor,
-  ZLinkActorContext,
-  ZLinkActorFactory,
-  ZLinkMessageContext
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  type ZLinkActor,
+  type ZLinkActorContext,
+  type ZLinkActorFactory,
+  type ZLinkMessageContext
 } from '@zlink-systems/framework';
 import {
   NicknameChanged,
@@ -71,11 +73,19 @@ class ChangeNicknameHandler {
     player.rename(message.nickname);
 
     // --8<-- [start:actor-push]
-    // Reaches the connection bound to this player. If none is bound, the call
-    // does nothing rather than failing.
-    await player.context.boundSession
-      .send(new NicknameChanged(player.nickname))
-      .submit();
+    // Pushes over the connection bound to this player. The same handler also runs
+    // on an HTTP path with no bound connection, where push ends with InvalidOperation.
+    // Rename is already complete, so only that failure is discarded.
+    try {
+      await player.context.boundSession
+        .send(new NicknameChanged(player.nickname))
+        .submit();
+    } catch (error) {
+      if (!(error instanceof ZLinkFrameworkException)
+          || error.kind !== ZLinkFrameworkErrorKind.InvalidOperation) {
+        throw error;
+      }
+    }
     // --8<-- [end:actor-push]
   }
 }
