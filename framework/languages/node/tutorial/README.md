@@ -87,8 +87,7 @@ run `npm run server` then `npm run client` directly. The block below does the sa
 unattended, backgrounding both and leaving their PID in a file.
 
 ```bash title="linux"
-docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
-sleep 1
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine && until docker exec zlink-tutorial-node-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 npm run server > server.log 2>&1 &
 echo $! > server.pid
 npm run client > client.log 2>&1 &
@@ -96,8 +95,7 @@ echo $! > client.pid
 ```
 
 ```powershell title="windows"
-docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
-Start-Sleep -Seconds 1
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-node-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
 $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
 Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
