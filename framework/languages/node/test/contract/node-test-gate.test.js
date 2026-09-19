@@ -76,6 +76,15 @@ test('standalone samples stay outside workspaces and carry package-mode build in
   const frameworkVersion = JSON.parse(
     fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'package.json'), 'utf8')
   ).version;
+  // sync-version.py does not know about npm "overrides" (#655/#656): the published
+  // framework still pins an older @zlink-systems/zlink than the one samples need for a
+  // platform prebuild, so each sample package.json hand-forces it. This ties that
+  // hand-maintained copy to the one fixture sync-version.py does update, so a version bump
+  // that forgets the override fails here instead of silently reinstalling a stale binding.
+  const publicContractSnapshot = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'node-public-contract.json'),
+    'utf8'
+  ));
   const browserSamples = new Set([
     'Bingo.Ts', 'DeliveryDispatch.Ts', 'GameQuest.Ts', 'SupportChat.Ts', 'TicTacToe.Ts'
   ]);
@@ -85,6 +94,11 @@ test('standalone samples stay outside workspaces and carry package-mode build in
     const manifest = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'package.json'), 'utf8'));
     const tsconfig = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'tsconfig.json'), 'utf8'));
     assert.equal(manifest.dependencies['@zlink-systems/framework'], frameworkVersion, sampleName);
+    assert.equal(
+      manifest.overrides?.['@zlink-systems/zlink'],
+      publicContractSnapshot.bindingVersion,
+      `${sampleName}: overrides['@zlink-systems/zlink'] must match fixtures/node-public-contract.json's bindingVersion`
+    );
     assert.equal(manifest.scripts.prebuild, 'node scripts/prepare-dependencies.mjs', sampleName);
     assert.equal(manifest.scripts.sample, 'node scripts/run-sample.mjs Runner/sample-runner.mjs', sampleName);
     assert.doesNotMatch(manifest.scripts.build, /\.\.\/\.\.\/(?:node_modules|scripts)/, sampleName);
@@ -110,6 +124,16 @@ test('standalone samples stay outside workspaces and carry package-mode build in
       );
     }
   }
+
+  // The standalone tutorial hand-forces the same binding version for the same reason.
+  const tutorialManifest = JSON.parse(
+    fs.readFileSync(path.join(workspaceRoot, 'tutorial', 'package.json'), 'utf8')
+  );
+  assert.equal(
+    tutorialManifest.overrides?.['@zlink-systems/zlink'],
+    publicContractSnapshot.bindingVersion,
+    "tutorial: overrides['@zlink-systems/zlink'] must match fixtures/node-public-contract.json's bindingVersion"
+  );
 });
 
 test('node runtime and coverage gates isolate native test handles and concurrent runs', () => {
