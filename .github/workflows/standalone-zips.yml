@@ -380,14 +380,20 @@ jobs:
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
 
+      # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
+      # windows-2022 runners run Windows containers only (see the Memurai note above), so the
+      # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample run (README's own 실행/windows block)
-        if: steps.memurai.outcome == 'success'
+        if: false
         working-directory: zlink-samples-dotnet
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
 
+      # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
+      # windows-2022 runners run Windows containers only (see the Memurai note above), so the
+      # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample verify (README's own 검증/windows block)
-        if: steps.memurai.outcome == 'success'
+        if: false
         working-directory: zlink-samples-dotnet
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
@@ -665,14 +671,20 @@ jobs:
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
 
+      # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
+      # windows-2022 runners run Windows containers only (see the Memurai note above), so the
+      # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample run (README's own 실행/windows block)
-        if: steps.memurai.outcome == 'success'
+        if: false
         working-directory: zlink-samples-java
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
 
+      # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
+      # windows-2022 runners run Windows containers only (see the Memurai note above), so the
+      # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample verify (README's own 검증/windows block)
-        if: steps.memurai.outcome == 'success'
+        if: false
         working-directory: zlink-samples-java
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
