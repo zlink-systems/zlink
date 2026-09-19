@@ -562,7 +562,10 @@ final class ZLinkStreamContractTest {
             assertTrue(
                 System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(1),
                 "the wait outlived the ending of its connection");
-            assertEquals(ZLinkStreamConnectionState.RECONNECTING, connector.state());
+            //  The release runs before the state moves on, so the state is
+            //  awaited rather than read at the instant the wait ended.
+            TcpStreamConnectorTestServer.awaitCondition(
+                () -> connector.state() == ZLinkStreamConnectionState.RECONNECTING);
             assertFalse(server.hasAdditionalConnection(Duration.ZERO));
         } finally {
             ConnectorTestAwait.await(connector.close());
