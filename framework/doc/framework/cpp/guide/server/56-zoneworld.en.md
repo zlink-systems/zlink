@@ -23,7 +23,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
     You can open the ZoneWorld sample in an editor and follow, in the code, the path of a player who
     enters the world and crosses a zone boundary onto another node, and the path by which the ops
     console's announcements and maintenance reach every node. The code in this chapter runs as it
-    stands in `framework/languages/<language>/samples/ZoneWorld`.
+    stands in `framework/languages/cpp/samples/ZoneWorld`.
 
 [Picking a Sample](14-samples.en.md#8-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control)
 introduced what this sample demonstrates. This chapter is what you read after that introduction — the

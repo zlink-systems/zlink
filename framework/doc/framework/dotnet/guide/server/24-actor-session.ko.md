@@ -21,7 +21,7 @@ title: "Session과 Actor 연결 · C#/.NET"
 !!! info "이 장을 읽고 나면"
 
     외부 client의 연결 하나를 Actor 하나에 묶고, 그 Actor가 같은 연결로 알림을 보낼 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 `framework/languages/dotnet/tutorial`에서 그대로 실행된다.
 
 [STREAM](23-stream.ko.md)의 session은 연결이 끊기면 함께 끝난다. 플레이어의 상태는 그보다
 오래 남아야 하고, 그 상태를 맡는 것이 [Actor](22-actor.ko.md)다. **이 장은 그 둘을 묶는다.** 묶은 뒤에는 session이 다루지 않은 packet이 그 Actor로 간다.
@@ -107,6 +107,8 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 
 ## 5. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/dotnet/tutorial`)의 Server를 그 README의 「실행」 절대로 띄운 상태에서 StreamClient를 실행한다. StreamClient는 Server의 stream endpoint에 연결한다.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True
@@ -131,7 +133,7 @@ node로 이동하는 중의 처리는 [Session 묶음의 동작 원리](39-sessi
 - 연결을 받는 자리 — [STREAM](23-stream.ko.md)
 - 묶이는 대상 — [Actor](22-actor.ko.md)
 - 묶음의 규칙 — [Session 묶음의 동작 원리](39-session-binding.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

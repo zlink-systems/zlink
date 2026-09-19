@@ -219,6 +219,8 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 
 ## 5. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/<언어>/tutorial`)의 Server를 그 README의 「실행」 절대로 띄운 상태에서 StreamClient를 실행한다. StreamClient는 Server의 stream endpoint에 연결한다.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True

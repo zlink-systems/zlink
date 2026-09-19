@@ -383,11 +383,18 @@ framework/languages/<언어>/tutorial/
 ````markdown
 ### N.4 실행 결과
 
+아래 명령은 tutorial(`framework/languages/<언어>/tutorial`)의 Server와 Client를 그 README의
+「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl http://127.0.0.1:5080/players/p1/profile
 # {"playerId":"p1","nickname":"rookie","level":1}
 ```
 ````
+
+**절의 첫 문장은 무엇이 떠 있어야 하는지 밝힌다** — 어느 프로그램(tutorial의 Server·Client, StreamClient
+등)을 어떤 절차로 띄운 상태인지와 명령이 향하는 주소가 무엇인지. 명령과 출력만 두면 독자는 그 명령이
+무엇을 상대로 실행되는지 알 수 없다. `<언어>` 자리 표시는 생성기가 언어별 실제 경로로 바꾼다.
 
 지어낸 출력을 적지 않는다. 실패 동작을 보여야 하면 그것도 실제로 호출해 확인한 값을 적는다.
 

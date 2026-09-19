@@ -23,7 +23,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
     You can open the DeliveryDispatch sample in an editor and follow the code from a delivery
     request accepted over HTTP, through the offer to a courier and the reassignment on no answer, to
     the status pushed to the customer. The code in this chapter runs as it stands in
-    `framework/languages/<language>/samples/DeliveryDispatch`.
+    `framework/languages/cpp/samples/DeliveryDispatch`.
 
 [Picking a Sample](14-samples.en.md#5-deliverydispatch--building-a-dispatch-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where

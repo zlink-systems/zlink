@@ -21,7 +21,7 @@ title: "STREAM · Java"
 !!! info "이 장을 읽고 나면"
 
     mesh 밖의 프로그램이 연결 하나로 접속해 요청을 보내고 답을 받게 할 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 `framework/languages/java/tutorial/java`에서 그대로 실행된다.
 
 지금까지의 호출은 모두 mesh 안의 node끼리였다. 게임 client나 application은 mesh 밖에 있고, Framework를
 참조하지도 않는다. **STREAM은 그런 프로그램이 접속하는 자리**이고, 연결 하나가 열려 있는 동안
@@ -111,6 +111,8 @@ stream node는 포트를 열고 session type 하나를 받는다. mesh node와�
 
 ## 5. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/java/tutorial/java`)의 Server를 그 README의 「실행」 절대로 띄운 상태에서 StreamClient를 실행한다. StreamClient는 Server의 stream endpoint에 연결한다.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True
@@ -133,7 +135,7 @@ mesh 호출은 호출하는 쪽이 mesh의 구성원이다. 대상은 이름이�
 - 연결을 개체에 묶기 — [Session과 Actor 연결](24-actor-session.ko.md)
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - session lifecycle과 옵션 전체 — [STREAM](23-stream.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — `framework/languages/java/tutorial/java`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

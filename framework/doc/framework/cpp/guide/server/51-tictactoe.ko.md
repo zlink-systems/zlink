@@ -22,7 +22,7 @@ title: "TicTacToe 따라 읽기 · C++"
 
     TicTacToe 샘플을 편집기에 열고, HTTP로 room을 만드는 곳부터 두 player가 방을 나가고 Actor가
     정리되는 곳까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/<언어>/samples/TicTacToe`에서 그대로 실행된다.
+    `framework/languages/cpp/samples/TicTacToe`에서 그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#2-tictactoe--실시간-대전-게임-서버-구축)가 이 샘플이 무엇을 보여
 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지

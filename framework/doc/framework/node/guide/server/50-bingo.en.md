@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/50-bingo.en.md) · 
 
     You can open the Bingo sample in an editor and follow a message from the client's
     authentication to the end of a game, through the code of each server it passes. The code in
-    this chapter runs as it stands in `framework/languages/<language>/samples/Bingo`.
+    this chapter runs as it stands in `framework/languages/node/samples/Bingo.Ts`.
 
 [Picking a Sample](14-samples.en.md#3-bingo--building-an-online-game-server) introduced what this
 sample demonstrates. This chapter is what you read after that introduction — the roles and where

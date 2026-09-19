@@ -376,6 +376,8 @@ stable type을 지정해 만든다. 응답으로 오는 id가 그 뒤 모든 호
 
 ## 5. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/<언어>/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'

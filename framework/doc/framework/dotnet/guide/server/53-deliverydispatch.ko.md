@@ -22,7 +22,7 @@ title: "DeliveryDispatch 따라 읽기 · C#/.NET"
 
     DeliveryDispatch 샘플을 편집기에 열고, HTTP로 접수된 배송 요청이 배송원에게 제안되고 무응답이면
     재배정되어 고객에게 상태가 push되기까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/<언어>/samples/DeliveryDispatch`에서 그대로 실행된다.
+    `framework/languages/dotnet/samples/DeliveryDispatch`에서 그대로 실행된다.
 
 [샘플 고르기](14-samples.ko.md#5-deliverydispatch--배차-시스템-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,

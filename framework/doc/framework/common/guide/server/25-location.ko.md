@@ -73,6 +73,8 @@ Spot은 spot manager에, Actor는 actor manager에 조회한다. 둘 다 id 하�
 
 ## 4. 실행 결과
 
+아래 명령은 tutorial(`framework/languages/<언어>/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
   -H 'Content-Type: application/json' -d '{"title":"lobby"}'

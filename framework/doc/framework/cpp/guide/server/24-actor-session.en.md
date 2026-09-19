@@ -22,7 +22,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/2
 
     You can bind one external client's connection to one Actor, and have that Actor push a
     notification back over the same connection. The code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial`.
+    `framework/languages/cpp/tutorial`.
 
 A [STREAM](23-stream.en.md) session ends when its connection drops. A player's state has to
 outlive that, and what holds it is an [Actor](22-actor.en.md). **This chapter binds the two** —
@@ -110,6 +110,8 @@ answer, yet a value arrives after it — that is the notification the Actor push
 
 ## 5. What You See When You Run It
 
+The command below runs the tutorial (`framework/languages/cpp/tutorial`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
+
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
 # connected: True
@@ -135,7 +137,7 @@ connection, and what happens while the Actor moves to another node are covered b
 - Where the connection is accepted — [STREAM](23-stream.en.md)
 - The entity that gets bound — [Actor](22-actor.en.md)
 - Disconnect notices and relocation — [Session and Actor](24-actor-session.en.md)
-- A running version of this chapter's code — `framework/languages/<language>/tutorial`
+- A running version of this chapter's code — `framework/languages/cpp/tutorial`
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
