@@ -1025,6 +1025,23 @@ test('framework public root excludes internal registration implementation', () =
   }
 });
 
+test('stream-connector publishes its CommonJS module-type marker alongside the browser build', () => {
+  // dist/browser/*.d.ts is authored for the browser ESM build, but the package root manifest
+  // declares "type": "module" for the whole package. Without dist/package.json's own
+  // {"type":"commonjs"} override, a nested package.json that dist/browser has none of, a CJS
+  // consumer's TypeScript (Node16/NodeNext resolution) sees those .d.ts files as ESM and fails
+  // with TS1541/TS1479 (#655) -- reproduced only in package mode, because the repository's own
+  // node_modules symlink happens to carry dist/package.json even though the published tarball
+  // omitted it from "files".
+  const manifestPath = path.join(workspaceRoot, 'packages', 'stream-connector', 'package.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert(
+    manifest.files.includes('dist/package.json'),
+    'stream-connector package.json "files" must include dist/package.json, or CommonJS ' +
+      'consumers of its type-only exports fail to resolve once installed from the registry'
+  );
+});
+
 function readTree(root) {
   let text = '';
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {

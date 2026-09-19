@@ -49,11 +49,6 @@ public static class SupportServerHostFactory
                 redis.ConnectionString = topology.RedisEndpoint;
                 redis.KeyPrefix = topology.RedisKeyPrefix;
             }));
-            options.AddRelocationStore(new ZLinkRedisRelocationStore(redis =>
-            {
-                redis.ConnectionString = topology.RedisEndpoint;
-                redis.KeyPrefix = $"{topology.RedisKeyPrefix}relocation:";
-            }));
             options.ConfigureDispatch()
                 .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             // --8<-- [start:doc-sc-support-register]
@@ -67,7 +62,7 @@ public static class SupportServerHostFactory
             mesh.Objects().Server()
                 .AddEntrySpot<SupportEntrySpot>()
                 .AddActorFactory<SupportUserActor, SupportUserActorFactory>(
-                    SampleNames.SupportActorType, factory => factory.PreserveStateWith<SupportUserActorRelocationAdapter>())
+                    SampleNames.SupportActorType, factory => factory.DisableRelocation())
                 .AddSpotFactory<ConversationSpot>(
                     SampleNames.ConversationSpotType, factory => factory.DisableRelocation());
             // --8<-- [end:doc-sc-support-register]

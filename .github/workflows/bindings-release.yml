@@ -175,10 +175,66 @@ jobs:
             exit 1
           fi
 
+  prepare-node-windows-prebuild:
+    name: Prepare Node Windows Prebuild
+    runs-on: windows-2022
+    needs: resolve
+    if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Build the win32-x64 prebuild from the verified Windows x64 Core release
+        shell: pwsh
+        run: |
+          $corePrefix = (& .\scripts\local-package\core\fetch-release.ps1 `
+            -Version "${{ needs.resolve.outputs.core_version }}" `
+            -Platform windows-x64 `
+            -CacheDir (Join-Path $env:RUNNER_TEMP "zlink-core") |
+              Select-Object -Last 1).Trim()
+          if (-not (Test-Path -LiteralPath $corePrefix -PathType Container)) {
+            throw "Core release prefix was not created: $corePrefix"
+          }
+          .\scripts\local-package\build-windows.ps1 `
+            -Language node `
+            -CorePrefix $corePrefix
+
+      - name: Extract the win32-x64 prebuild from the packaged tarball
+        shell: pwsh
+        run: |
+          $version = "${{ needs.resolve.outputs.node_version }}"
+          $package = ".artifacts\windows\npm\zlink-systems-zlink-$version.tgz"
+          if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
+            throw "Windows node package is missing: $package"
+          }
+          $extractRoot = Join-Path $env:RUNNER_TEMP "node-win32-x64-extract"
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          tar.exe -xzf $package -C $extractRoot
+          $prebuild = Join-Path $extractRoot "package\prebuilds\win32-x64"
+          if (-not (Test-Path -LiteralPath (Join-Path $prebuild "zlink.node") -PathType Leaf)) {
+            throw "Extracted package is missing prebuilds\win32-x64\zlink.node"
+          }
+          $out = Join-Path $env:RUNNER_TEMP "win32-x64-prebuild"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Path (Join-Path $prebuild "*") -Destination $out -Recurse -Force
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: binding-node-windows-prebuild-${{ needs.resolve.outputs.node_version }}
+          path: ${{ runner.temp }}/win32-x64-prebuild
+          if-no-files-found: error
+
   release-node:
     name: Release Node Binding
     runs-on: ubuntu-24.04
-    needs: resolve
+    needs: [resolve, prepare-node-windows-prebuild]
     if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
     permissions:
       contents: write
@@ -230,6 +286,12 @@ jobs:
             echo "Version mismatch: package.json=${file_version}, requested=${{ needs.resolve.outputs.node_version }}" >&2
             exit 1
           fi
+
+      - name: Download Windows win32-x64 prebuild
+        uses: actions/download-artifact@v7
+        with:
+          name: binding-node-windows-prebuild-${{ needs.resolve.outputs.node_version }}
+          path: bindings/node/prebuilds/win32-x64
 
       - name: Build and test
         env:

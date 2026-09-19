@@ -95,18 +95,32 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void SupportChat_Registers_Stateful_Actor_Relocation_Adapter()
+    public void SupportChat_Disables_Relocation_For_Actors_And_The_Conversation_Spot_And_Registers_No_Store()
     {
+        // Contract §4: "Support가 등록하는 identity·roster·conversation Actor factory와
+        // Conversation Spot factory는 모두 DisableRelocation을 선택한다. Planned relocation은
+        // 완료 조건이 아니므로 Relocation Store를 등록하지 않는다."
         var sampleRoot = ResolveSampleRoot("SupportChat");
         var host = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
-        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
-            "Actors", "SupportUserActorRelocationAdapter.cs"));
 
-        Assert.Contains("PreserveStateWith<SupportUserActorRelocationAdapter>()", host,
+        Assert.Contains(
+            "AddActorFactory<SupportUserActor, SupportUserActorFactory>(\n"
+            + "                    SampleNames.SupportActorType, factory => factory.DisableRelocation())",
+            host,
             StringComparison.Ordinal);
-        Assert.Contains("IZLinkActorRelocationAdapter<SupportUserActor>", adapter, StringComparison.Ordinal);
-        Assert.Contains("ValueTask<byte[]> CaptureAsync", adapter, StringComparison.Ordinal);
-        Assert.Contains("ValueTask RestoreAsync", adapter, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddSpotFactory<ConversationSpot>(\n"
+            + "                    SampleNames.ConversationSpotType, factory => factory.DisableRelocation())",
+            host,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("PreserveStateWith", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddRelocationStore", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZLinkRedisRelocationStore", host, StringComparison.Ordinal);
+        Assert.False(
+            File.Exists(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
+                "Actors", "SupportUserActorRelocationAdapter.cs")),
+            "SupportChat must not keep a relocation adapter once every actor and the "
+            + "Conversation Spot use DisableRelocation.");
     }
 
     [Fact]
@@ -132,8 +146,6 @@ public sealed partial class RegressionTests
             "SupportChatSession.cs"));
         var supportActor = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Actors", "SupportUserActor.cs"));
-        var relocationAdapter = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
-            "ZLink", "Actors", "SupportUserActorRelocationAdapter.cs"));
         var joinConversationHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
             "ZLink", "Spots", "EntrySpot", "Handlers", "JoinConversationActorHandler.cs"));
         var entrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
@@ -278,7 +290,6 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains(".Defer()", joinConversationHandler, StringComparison.Ordinal);
         Assert.Contains("public sealed record SupportUserActorCreateReq", serverContracts, StringComparison.Ordinal);
-        Assert.Contains("CompletedJoinOperations", relocationAdapter, StringComparison.Ordinal);
         AssertLocationStoreHost(apiHost);
         AssertLocationStoreHost(sessionHost);
         AssertLocationStoreHost(supportHost);

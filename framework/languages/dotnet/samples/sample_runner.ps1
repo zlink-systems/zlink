@@ -1,7 +1,18 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. (Join-Path $PSScriptRoot '../local_nuget.ps1')
+# Same repository-detection rule Directory.Build.props/Directory.Packages.props use for
+# ZLinkSampleRepositoryDetected: the samples package (zip) never carries ../src, so this is
+# false there. local_nuget.ps1 lives one level up in the repository (build-windows.ps1's
+# helper) and is not part of the packaged samples zip either (#655) -- source it only when
+# the repository is actually present. Package mode falls back to a plain `dotnet build` in
+# Invoke-SampleDotnetBuild below, which is exactly what Directory.Build.props/nuget.config
+# already designed samples to do without a repository checkout.
+$script:ZLinkSampleRepositoryDetected = Test-Path -LiteralPath (
+    Join-Path $PSScriptRoot '../src/Zlink.Framework/Zlink.Framework.csproj')
+if ($script:ZLinkSampleRepositoryDetected) {
+    . (Join-Path $PSScriptRoot '../local_nuget.ps1')
+}
 
 if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
     $IsWindows = $env:OS -eq "Windows_NT"
@@ -719,6 +730,14 @@ function Get-ZlinkSamplePythonCommand {
 function Invoke-SampleDotnetBuild {
     param([Parameter(Mandatory = $true)][string]$Project)
 
+    if (-not $script:ZLinkSampleRepositoryDetected) {
+        # Package mode (local_nuget.ps1 was not sourced, above): no local-package digest or
+        # native-asset verification to do, just build against whatever
+        # Directory.Build.props/nuget.config resolved (PackageReference from nuget.org).
+        & dotnet build $Project --maxcpucount:1 --nologo --verbosity minimal
+        if ($LASTEXITCODE -ne 0) { throw "dotnet build failed for $Project" }
+        return
+    }
     $localRoot = $env:ZLINK_LOCAL_PACKAGE_ROOT
     if (-not $localRoot -and $IsWindows) {
         $candidate = Join-Path $PSScriptRoot '../../../../.artifacts/windows'

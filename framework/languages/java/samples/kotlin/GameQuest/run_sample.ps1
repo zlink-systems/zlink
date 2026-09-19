@@ -235,21 +235,16 @@ try {
     Set-ZlinkSampleUtf8File -Path $clientConfig -Value @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$($controlDir.Replace('\', '/'))")
     @($missionAConfig, $missionBConfig, $apiAConfig, $apiBConfig, $clientConfig) | ForEach-Object { Protect-ConfigFile $_ }
 
-    Push-Location "../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-            "--no-daemon",
-            "--no-parallel",
-            "--max-workers=1",
-            ":zlink-framework-core:jar",
-            ":zlink-framework-kotlin:jar",
-            ":zlink-framework-spring-boot-starter:jar",
-            ":zlink-framework-locations-redis:jar",
-            ":zlink-stream-connector:jar",
-            "--quiet")
-    } finally {
-        Pop-Location
-    }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "../../.." -GradleExecutable $Gradle -Arguments @(
+        "--no-daemon",
+        "--no-parallel",
+        "--max-workers=1",
+        ":zlink-framework-core:jar",
+        ":zlink-framework-kotlin:jar",
+        ":zlink-framework-spring-boot-starter:jar",
+        ":zlink-framework-locations-redis:jar",
+        ":zlink-stream-connector:jar",
+        "--quiet")
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
 

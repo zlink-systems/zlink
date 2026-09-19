@@ -21,6 +21,7 @@ import { CallLogFilter } from './Dispatch/call-log-filter';
 import { NodeStatusHandler } from './Ops/node-status-handler';
 import { GameRoom, GetRoomStateHandler, PostChatHandler } from './Spots/game-room';
 import { LobbySpot } from './Spots/lobby-spot';
+import { JoinMatchQueueHandler, MatchQueue } from './Spots/match-queue';
 import { ChangeNicknameHandler, GetPlayerHandler, Player, PlayerFactory } from './Actors/player';
 import { AuthenticateHandler } from './Sessions/authenticate-handler';
 import { GameSessionFactory } from './Sessions/game-session';
@@ -145,6 +146,15 @@ import { PingHandler } from './Sessions/ping-handler';
         );
         // --8<-- [end:spot-register]
 
+        // --8<-- [start:instance-spot-register]
+        // Registered the same way, but callers never create one explicitly.
+        objects.addInstanceSpotFactory(
+          TutorialNames.matchQueueType,
+          MatchQueue,
+          (factory) => factory.disableRelocation()
+        );
+        // --8<-- [end:instance-spot-register]
+
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.
         objects.addEntrySpot(LobbySpot);
@@ -184,6 +194,8 @@ import { PingHandler } from './Sessions/ping-handler';
     PostChatHandler,
     GetRoomStateHandler,
     LobbySpot,
+    MatchQueue,
+    JoinMatchQueueHandler,
     Player,
     PlayerFactory,
     ChangeNicknameHandler,

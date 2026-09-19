@@ -89,21 +89,75 @@ set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.2.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.2.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
+# The binding and Core package prefixes have three sources, in this order: the
+# two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
+# package outputs under .artifacts when this tree is a checkout that has them,
+# and otherwise wherever find_package() locates the packages (CMAKE_PREFIX_PATH,
+# a vcpkg toolchain). A release archive built outside the repository takes the
+# third route with no option at all.
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
     set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT
       "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows")
-  else()
+  elseif(EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/wsl/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
     set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT
       "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/wsl")
   endif()
 endif()
-set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX
-  "${ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT}/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}" CACHE PATH
-  "Local zlink_cpp package install prefix")
-set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
-  "${ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT}/install/zlink-core/${ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION}" CACHE PATH
-  "Local zlink Core package install prefix used by zlink_cpp")
+if(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
+  set(_zlink_default_cpp_prefix
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT}/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
+  set(_zlink_default_core_prefix
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT}/install/zlink-core/${ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION}")
+else()
+  set(_zlink_default_cpp_prefix "")
+  set(_zlink_default_core_prefix "")
+endif()
+set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX "${_zlink_default_cpp_prefix}" CACHE PATH
+  "Local zlink_cpp package install prefix (empty: wherever find_package locates it)")
+set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX "${_zlink_default_core_prefix}" CACHE PATH
+  "Local zlink Core package install prefix used by zlink_cpp (empty: wherever find_package locates it)")
+if(NOT TARGET zlink::cpp)
+  foreach(_zlink_prefix IN ITEMS
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}")
+    if(_zlink_prefix)
+      list(PREPEND CMAKE_PREFIX_PATH "${_zlink_prefix}")
+    endif()
+  endforeach()
+  if(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/CMakeLists.txt")
+      message(FATAL_ERROR "Bindings source mode requires a zlink repository checkout")
+    endif()
+    set(ZLINK_CPP_CORE_PACKAGE_PREFIX "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" CACHE PATH
+      "Core package used by the workspace binding")
+    add_subdirectory("${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp"
+      "${CMAKE_CURRENT_BINARY_DIR}/bindings-cpp")
+  else()
+    find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
+  endif()
+endif()
+# A package config lives at <prefix>/lib/cmake/<name> (archive installs) or
+# <prefix>/share/<name> (vcpkg); either way the prefix is what remains.
+function(zlink_framework_cpp_prefix_from_config_dir out_var config_dir)
+  get_filename_component(_zlink_parent "${config_dir}" DIRECTORY)
+  get_filename_component(_zlink_parent_name "${_zlink_parent}" NAME)
+  if(_zlink_parent_name STREQUAL "cmake")
+    get_filename_component(_zlink_parent "${_zlink_parent}" DIRECTORY)
+  endif()
+  get_filename_component(_zlink_prefix "${_zlink_parent}" DIRECTORY)
+  set(${out_var} "${_zlink_prefix}" PARENT_SCOPE)
+endfunction()
+if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX AND zlink_cpp_DIR)
+  zlink_framework_cpp_prefix_from_config_dir(_zlink_found_cpp_prefix "${zlink_cpp_DIR}")
+  set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX "${_zlink_found_cpp_prefix}" CACHE PATH
+    "Local zlink_cpp package install prefix (found by find_package)" FORCE)
+endif()
+if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX AND zlink_DIR)
+  zlink_framework_cpp_prefix_from_config_dir(_zlink_found_core_prefix "${zlink_DIR}")
+  set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX "${_zlink_found_core_prefix}" CACHE PATH
+    "Local zlink Core package install prefix used by zlink_cpp (found by find_package)" FORCE)
+endif()
 if(WIN32)
   set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/zlink.dll")
@@ -145,22 +199,6 @@ if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
       "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR}"
     COMMENT "Staging the Core runtime next to the build tree executables"
     VERBATIM)
-endif()
-if(NOT TARGET zlink::cpp)
-  list(PREPEND CMAKE_PREFIX_PATH
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}"
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}")
-  if(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
-    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/CMakeLists.txt")
-      message(FATAL_ERROR "Bindings source mode requires a zlink repository checkout")
-    endif()
-    set(ZLINK_CPP_CORE_PACKAGE_PREFIX "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" CACHE PATH
-      "Core package used by the workspace binding")
-    add_subdirectory("${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp"
-      "${CMAKE_CURRENT_BINARY_DIR}/bindings-cpp")
-  else()
-    find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
-  endif()
 endif()
 
 add_library(zlink_framework_provider_abstractions INTERFACE)

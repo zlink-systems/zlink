@@ -142,8 +142,8 @@ if rg -n '^기준:.*dotnet' sample-porting-inventory.ko.md; then
   exit 1
 fi
 (
-  cd ../../..
-  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
+  zlink_sample_build_framework_jars_if_available ../../.. \
+    --no-daemon --no-parallel --max-workers=1 \
     :zlink-framework-core:jar \
     :zlink-framework-spring-boot-starter:jar \
     :zlink-framework-locations-redis:jar \

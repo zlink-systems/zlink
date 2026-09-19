@@ -24,6 +24,7 @@ import systems.zlink.tutorial.server.sessions.GameSession
 import systems.zlink.tutorial.server.sessions.PingHandler
 import systems.zlink.tutorial.server.spots.GameRoom
 import systems.zlink.tutorial.server.spots.LobbySpot
+import systems.zlink.tutorial.server.spots.MatchQueue
 import systems.zlink.tutorial.shared.GetNodeStatus
 import systems.zlink.tutorial.shared.MaintenanceNotice
 import systems.zlink.tutorial.shared.NodeStatus
@@ -156,6 +157,16 @@ class ServerApplication {
             factory.disableRelocation()
         }
         // --8<-- [end:spot-register]
+
+        // --8<-- [start:instance-spot-register]
+        // Registered the same way, but callers never create one explicitly.
+        objects.addInstanceSpotFactory<MatchQueue>(
+            "match-queue",
+            MatchQueue::class.java,
+        ) { factory ->
+            factory.disableRelocation()
+        }
+        // --8<-- [end:instance-spot-register]
 
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.

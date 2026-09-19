@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
 
-$CppRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+$CppRoot = Get-ZlinkCppSampleTreeRoot
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
 $BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) "zoneworld-cpp-$PID-$([Guid]::NewGuid().ToString('N'))"
@@ -322,22 +322,10 @@ try {
     Write-RoleConfig (Join-Path $ConfigDir "zone-node-3.json") "zone-node-3" $Node3Mesh $Node3Stream $Node3Http $RedisEndpoint $KeyPrefix $Broadcast "" $true $true
 
     if ($B8Child) {
-        $python = Get-ZlinkSamplePythonCommand
-        if ($python) {
-            $proxyRuntime = $python.Path
-            $proxyPrefix = @($python.Arguments)
-            $proxyScript = Join-Path $PSScriptRoot "Support/session_route_block_proxy.py"
-        } else {
-            $node = Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $node) { throw "Python or Node.js is required for the B8 proxy." }
-            $proxyRuntime = $node.Source
-            $proxyPrefix = @()
-            $proxyScript = Join-Path $PSScriptRoot "Support/session_route_block_proxy.mjs"
-        }
+        $proxyRuntime = Find-Binary "sample_cpp_framework_zoneworld_session_route_proxy"
         for ($proxyIndex = 0; $proxyIndex -lt 3; $proxyIndex++) {
             $proxyName = "session-route-proxy-$proxyIndex"
-            $proxyArguments = $proxyPrefix + @(
-                $proxyScript,
+            $proxyArguments = @(
                 "--listen-host", "127.0.0.1", "--listen-port", [string]$ports[$proxyIndex],
                 "--target-host", "127.0.0.2", "--target-port", [string]$ports[$proxyIndex],
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44"))

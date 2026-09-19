@@ -209,20 +209,16 @@ final class ZLinkStreamDispatchQueue {
 
     void clear() {
         List<QueuedDispatch> queued;
-        List<Waiter> pending;
         synchronized (queue) {
             queued = List.copyOf(queue);
-            pending = List.copyOf(waiters);
             queue.clear();
-            waiters.clear();
             version++;
         }
         queued.stream()
             .map(QueuedDispatch::message)
             .filter(Objects::nonNull)
             .forEach(ZLinkStreamDispatchQueue::closeMessage);
-        pending.forEach(waiter -> waiter.result().completeExceptionally(
-            ZLinkStreamException.disconnected("stream dispatch queue was closed")));
+        connectionEnded();
     }
 
     /**
@@ -238,15 +234,12 @@ final class ZLinkStreamDispatchQueue {
      * <p>Only received messages are dropped. Queued callbacks - a state
      * change, an error, a disconnect - belong to the connector surface, not
      * to the receive message queue, and are still owed to the application.
-     *
-     * <p>{@code replacesAnEarlierConnection} says whether a connection ended
-     * before this one. A wait that cannot continue because its connection
-     * ended is {@code Disconnected} (spec 32 10.1); a wait registered before
-     * the first connection has no ended connection behind it.
+     * Waiters are not touched either: the ones of the previous connection
+     * ended with it in {@link #connectionEnded()}, and one registered since
+     * then is waiting for this connection.
      */
-    void resetForNewConnection(boolean replacesAnEarlierConnection) {
+    void resetForNewConnection() {
         List<QueuedDispatch> abandoned;
-        List<Waiter> pending = List.of();
         synchronized (queue) {
             receivedCounts.clear();
             abandoned = queue.stream()
@@ -256,15 +249,35 @@ final class ZLinkStreamDispatchQueue {
                 queue.removeIf(item -> item.message() != null);
                 version++;
             }
-            if (replacesAnEarlierConnection && !waiters.isEmpty()) {
-                pending = List.copyOf(waiters);
-                waiters.clear();
-                version++;
-            }
         }
         abandoned.stream()
             .map(QueuedDispatch::message)
             .forEach(ZLinkStreamDispatchQueue::closeMessage);
+    }
+
+    /**
+     * Fails every registered waiter as {@code Disconnected} because the
+     * connection it was observing has ended - a transport loss, a server
+     * close, or {@code close()}.
+     *
+     * <p>Spec 32 10.1.1: the release belongs to the ending of the
+     * connection, not to the establishment of the next one. Released here, a
+     * wait does not hang until its own timeout when no next connection comes
+     * (reconnect off, attempts spent) and does not rebind to the next one
+     * when it does. The queue and the counts stay: they are rebaselined by
+     * the next {@link #resetForNewConnection()}, not by the ending (spec 32
+     * 10).
+     */
+    void connectionEnded() {
+        List<Waiter> pending;
+        synchronized (queue) {
+            if (waiters.isEmpty()) {
+                return;
+            }
+            pending = List.copyOf(waiters);
+            waiters.clear();
+            version++;
+        }
         pending.forEach(waiter -> waiter.result().completeExceptionally(
             ZLinkStreamException.disconnected(
                 "the connection that the wait observed has ended")));

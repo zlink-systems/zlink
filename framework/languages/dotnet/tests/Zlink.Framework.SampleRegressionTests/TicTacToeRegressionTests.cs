@@ -147,7 +147,7 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("$apiBChannelEndpoint = \"tcp://127.0.0.1:$($ports[9])\"", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("while len(sockets) < 10", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("zlink_sample_pick_ports 10", shellRunner, StringComparison.Ordinal);
         Assert.Contains("$ports = New-SamplePorts -Count 10 -BasePort 0", powershellRunner,
             StringComparison.Ordinal);
         Assert.DoesNotContain("SpotPubSubEndpoint", settings + shellRunner + powershellRunner,
@@ -191,6 +191,29 @@ public sealed partial class RegressionTests
             playProject,
             StringComparison.Ordinal);
         Assert.DoesNotContain("Api/**/*.cs", playProject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TicTacToe_Play_And_Api_Comments_Agree_With_Fixed_Routing_Id_Code()
+    {
+        // Contract §10.1: the runner must name the expected peer, which needs a fixed RID on
+        // the object-role RouteMesh node. The dotnet topology spec confirms fixed RID is allowed
+        // on an object-role MeshNode, so neither PlayServer.cs's nor ApiServer.cs's comment may
+        // claim the opposite of what SetRoutingId already does on that same node.
+        var sampleRoot = ResolveSampleRoot("TicTacToe");
+        var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
+        var apiServer = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServer.cs"));
+
+        foreach (var source in new[] { playServer, apiServer })
+        {
+            Assert.Contains(
+                ".SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))",
+                source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("revert to automatic RID", source, StringComparison.Ordinal);
+            Assert.DoesNotContain(".NET cannot", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("known spec deviation", source, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

@@ -109,15 +109,6 @@ internal sealed class SupportUserActor(
         }
     }
 
-    internal string[] CaptureCompletedJoinOperations() =>
-        _completedJoinOperations.ToArray();
-
-    internal void RestoreCompletedJoinOperations(IEnumerable<string> operationIds)
-    {
-        foreach (var operationId in operationIds)
-            _completedJoinOperations.Add(operationId);
-    }
-
     private (string ConversationId, bool NotifyBoundSession) ResolveRecoveredJoin(
         ZLinkActorJoinCompletion completion)
     {

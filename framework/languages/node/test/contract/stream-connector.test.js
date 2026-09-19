@@ -2648,10 +2648,11 @@ test('reconnecting drops the previous connection\'s unconsumed queue, not only i
 
   assert.equal(instance.receivedCount('OldMessage'), 0);
   // A `waitFor` registered fresh on the new connection must actually wait —
-  // not be handed the stale message the dead connection queued — and time out.
+  // not be handed the stale message the dead connection queued — and time out
+  // (spec 32 section 10.1.1: a wait that times out is ValidationFailed).
   await assert.rejects(
     instance.waitFor('OldMessage').timeout(50).submit(),
-    (error) => error.error?.code === connector.ZlinkStreamErrorCode.RequestTimeout
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
   );
 });
 
@@ -2698,4 +2699,114 @@ test('a waitFor pending across a reconnect rejects as disconnected instead of wa
   );
 
   await pendingRejection;
+});
+
+// Spec stream-connector 32 section 10.1.1: a wait is released with
+// `Disconnected` when the connection it observed ends - not when the next
+// connection is established. With reconnect off there is no next connection,
+// so a release bound to it would leave the wait hanging until its own timeout.
+test('a waitFor pending when the connection ends without a reconnect rejects as disconnected at once', async () => {
+  const connection = new MemoryConnection();
+  connection.read = () => new Promise((_resolve, reject) => {
+    connection.rejectRead = reject;
+  });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+  const pending = instance.waitFor('NeverArrives').timeout(5000).submit();
+  const startedAt = Date.now();
+  const pendingRejection = assert.rejects(
+    pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+
+  connection.rejectRead(new Error('connection read failed'));
+  await pendingRejection;
+  // Released by the ending, not by the 5 s wait timeout.
+  assert.ok(Date.now() - startedAt < 1000, 'the wait waited for its own timeout');
+  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
+});
+
+// Spec stream-connector 32 section 10.1.1: with reconnect on, the wait still
+// ends at the ending of its connection, before the reconnect produces the next
+// one. The second connect is held open until the wait has been observed.
+test('a waitFor pending when the connection ends rejects as disconnected before the reconnect succeeds', async () => {
+  let connectCalls = 0;
+  let secondConnectionProduced = false;
+  let releaseSecondConnect;
+  const secondConnectReleased = new Promise((resolve) => { releaseSecondConnect = resolve; });
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = () => new Promise((_resolve, reject) => {
+    oldConnection.rejectRead = reject;
+  });
+  const newConnection = new MemoryConnection();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        connectCalls += 1;
+        if (connectCalls === 1) return oldConnection;
+        await secondConnectReleased;
+        secondConnectionProduced = true;
+        return newConnection;
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+
+  await instance.connect();
+  const pending = instance.waitFor('NeverArrives').timeout(5000).submit();
+  const startedAt = Date.now();
+  const pendingRejection = assert.rejects(
+    pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+
+  oldConnection.rejectRead(new Error('old connection read failed'));
+  try {
+    await pendingRejection;
+    assert.ok(Date.now() - startedAt < 1000, 'the wait outlived the ending of its connection');
+    // No second connection exists yet: the release came from the ending.
+    assert.equal(secondConnectionProduced, false);
+  } finally {
+    // Released whatever the assertions said, so a failure does not leave the
+    // suite's closing hook waiting on a connect that never returns.
+    releaseSecondConnect();
+  }
+  await waitFor(
+    () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
+    2000
+  );
+});
+
+// Spec stream-connector 32 section 10.1.1: nothing arriving inside the window
+// is a violated observation, `ValidationFailed`. `RequestTimeout` is the code
+// of a request whose reply did not come (section 9), not of this surface.
+test('waitFor and waitForSequence time out as validationFailed while expectNone passes on the same silence', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+
+  await assert.rejects(
+    instance.waitFor('Silent').timeout(20).submit(),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
+  await assert.rejects(
+    instance.waitForSequence('Silent').expect(() => true).timeout(20).run(),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
+  await instance.expectNone('Silent').within(20).run();
+  await instance.close();
 });

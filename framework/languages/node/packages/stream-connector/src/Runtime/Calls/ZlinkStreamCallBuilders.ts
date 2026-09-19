@@ -42,7 +42,7 @@ interface ZlinkStreamConnectorSubmitter {
     timeoutMs: number,
     predicate: (message: ZlinkStreamMessage<TPayload>) => boolean,
     signal?: AbortSignal
-  ): Promise<ZlinkStreamMessage<TPayload>>;
+  ): Promise<ZlinkStreamMessage<TPayload> | undefined>;
 }
 
 class ZlinkStreamCallBuilderState {
@@ -226,14 +226,19 @@ export class ZlinkStreamWaitBuilder<TPayload = ZlinkStreamEncodedPayload> implem
     return this;
   }
 
-  submit(signal?: AbortSignal): Promise<ZlinkStreamMessage<TPayload>> {
+  async submit(signal?: AbortSignal): Promise<ZlinkStreamMessage<TPayload>> {
     this.markExecuted();
-    return this.connector.waitForMessage(
-      this.name,
-      this.timeoutMs ?? this.connector.options.waitTimeoutMs,
-      this.predicate,
-      signal
-    );
+    const timeoutMs = this.timeoutMs ?? this.connector.options.waitTimeoutMs;
+    const message = await this.connector.waitForMessage(this.name, timeoutMs, this.predicate, signal);
+    if (message === undefined) {
+      // Spec stream-connector 32 §10.1.1: nothing arriving inside the window
+      // is a violated observation, not a request that got no reply.
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        `No '${this.name}' message arrived within ${timeoutMs}ms.`
+      );
+    }
+    return message;
   }
 
   private ensureConfigurable(): void {

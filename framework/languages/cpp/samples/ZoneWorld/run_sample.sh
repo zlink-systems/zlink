@@ -4,8 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
 source "$SCRIPT_DIR/sample-manifest.env"
-CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
+source "$SCRIPT_DIR/../sample-build-common.sh"
 B8_CHILD=0
 G4_CHILD=0
 case "${1:-}" in
@@ -22,11 +21,12 @@ if [[ "$#" -ne 0 ]]; then
   echo "usage: $0 [--b8-child|--g4-child]" >&2
   exit 2
 fi
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+zlink_cpp_sample_prepare_build
 
 cmake --build "$BUILD_DIR" --parallel 2 --target sample_cpp_framework_zoneworld_zone_node \
   sample_cpp_framework_zoneworld_gateway sample_cpp_framework_zoneworld_ops \
-  sample_cpp_framework_zoneworld_client >/dev/null
+  sample_cpp_framework_zoneworld_client \
+  sample_cpp_framework_zoneworld_session_route_proxy >/dev/null
 
 B8_PROVEN=0
 G4_PROVEN=0
@@ -104,40 +104,34 @@ mkdir -p "$CONFIG_DIR"
 write_role_config() {
   local path="$1" node_id="$2" mesh_endpoint="$3" stream_endpoint="$4" http_endpoint="$5"
   local mesh_advertise_host="${6:-}" subscriber_only="${7:-false}" disable_bots="${8:-false}" allow_empty_zone_set="${9:-false}"
-  python3 - "$path" "$node_id" "$mesh_endpoint" "$stream_endpoint" \
-    "$http_endpoint" "tcp://127.0.0.1:${redis_port}" \
-    "zoneworld:cpp:${RUN_ID}:" "$BROADCAST" "$LOG_DIR" "$mesh_advertise_host" \
-    "$subscriber_only" "$disable_bots" "$allow_empty_zone_set" <<'CONFIG_PY'
-import json
-import os
-import stat
-import sys
-
-path, node_id, mesh_endpoint, stream_endpoint, http_endpoint, redis_endpoint, redis_key_prefix, broadcast_endpoint, log_dir, mesh_advertise_host, subscriber_only, disable_bots, allow_empty_zone_set = sys.argv[1:]
-document = {
-    "sample": {
-        "zoneworld": {
-            "redisEndpoint": redis_endpoint,
-            "redisKeyPrefix": redis_key_prefix,
-            "nodeId": node_id,
-            "meshEndpoint": mesh_endpoint,
-            "streamEndpoint": stream_endpoint,
-            "broadcastEndpoint": broadcast_endpoint,
-        "bootstrapHttpEndpoint": http_endpoint,
-        "logDir": log_dir,
-        "faultTickZone": "zone-nw" if node_id.startswith("zone-node-") else None,
-        "subscriberOnly": subscriber_only == "true",
-        "disableBots": disable_bots == "true",
-        "allowEmptyZoneSet": allow_empty_zone_set == "true",
-        }
+  local fault_tick_zone="null" advertise_field=""
+  if [[ "$node_id" == zone-node-* ]]; then
+    fault_tick_zone="\"zone-nw\""
+  fi
+  if [[ -n "$mesh_advertise_host" ]]; then
+    advertise_field=",
+      \"meshAdvertiseHost\": \"$mesh_advertise_host\""
+  fi
+  zlink_sample_write_private_file "$path" <<CONFIG_JSON
+{
+  "sample": {
+    "zoneworld": {
+      "redisEndpoint": "tcp://127.0.0.1:${redis_port}",
+      "redisKeyPrefix": "zoneworld:cpp:${RUN_ID}:",
+      "nodeId": "$node_id",
+      "meshEndpoint": "$mesh_endpoint",
+      "streamEndpoint": "$stream_endpoint",
+      "broadcastEndpoint": "$BROADCAST",
+      "bootstrapHttpEndpoint": "$http_endpoint",
+      "logDir": "$LOG_DIR",
+      "faultTickZone": $fault_tick_zone,
+      "subscriberOnly": $subscriber_only,
+      "disableBots": $disable_bots,
+      "allowEmptyZoneSet": $allow_empty_zone_set$advertise_field
     }
+  }
 }
-if mesh_advertise_host:
-    document["sample"]["zoneworld"]["meshAdvertiseHost"] = mesh_advertise_host
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-CONFIG_PY
+CONFIG_JSON
 }
 
 write_role_config "$CONFIG_DIR/zone-node-1.json" zone-node-1 "$NODE1_MESH_BIND" \
@@ -252,7 +246,7 @@ run_client_lane() {
 if [[ "$B8_CHILD" == "1" ]]; then
   for proxy_index in 0 1 2; do
     start_role "session-route-proxy-$proxy_index" \
-      python3 "$SCRIPT_DIR/Support/session_route_block_proxy.py" \
+      "$BIN_DIR/sample_cpp_framework_zoneworld_session_route_proxy" \
       --listen-host 127.0.0.1 --listen-port "${ZONEWORLD_PORTS[$proxy_index]}" \
       --target-host 127.0.0.2 --target-port "${ZONEWORLD_PORTS[$proxy_index]}" \
       --arm-file "$RUN_DIR/b8-block-command-44"

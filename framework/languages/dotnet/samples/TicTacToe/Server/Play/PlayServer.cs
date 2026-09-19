@@ -60,11 +60,9 @@ internal sealed class PlayServer(SampleSettings settings)
             foreach (var endpoint in settings.ApiChannelPeerEndpoints)
                 apiChannel.Connect(endpoint);
 
-                // Spec 10.1 wants a fixed RID here so the expected peer can be named. .NET cannot
-                // yet: ZLinkSpotNodeInitializer.RequiresDescriptorClaim skips the object descriptor
-                // claim when a routing ID is explicit, so an object-role node with a fixed RID is
-                // never matched as a User Spot target. This is a known spec deviation; revert to
-                // automatic RID once it is fixed.
+                // Spec 10.1 wants a fixed RID here so the runner can name the expected peer by
+                // node id. Fixed RID is allowed on an object-role MeshNode (dotnet topology
+                // spec §"Fixed RID"), so this node keeps SetRoutingId permanently.
             var mesh = options.AddRouteMesh(SampleNodes.Mesh)
                 .SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))
                 .Listen(settings.MeshEndpoint);

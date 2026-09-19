@@ -304,69 +304,45 @@ function Get-ZlinkSampleSelfShellPath {
     throw "Could not locate the current PowerShell host executable ($exeName) to relaunch a child lane."
 }
 
-function Get-ZlinkSamplePythonCommand {
-    <#
-        Resolves a working Python 3 interpreter for ZoneWorld's ZW-B8 fault proxy.
-
-        A bare PATH lookup is not enough on Windows, for three separate reasons:
-        - The python.org installer leaves "Add python.exe to PATH" unchecked by default,
-          so a perfectly good per-user install is invisible to Get-Command.
-        - The `py` launcher is installed to a directory of its own, and needs "-3" to
-          select an interpreter rather than reading a shebang.
-        - Windows 11 ships App Execution Alias stubs named python.exe/python3.exe under
-          %LOCALAPPDATA%\Microsoft\WindowsApps, on PATH by default. They resolve, they
-          launch, and then they refuse to run anything (exit 9009) and send the user to
-          the Store. Finding an executable therefore does not mean finding Python.
-
-        So candidates are gathered in preference order -- PATH, then the `py` launcher,
-        then the standard per-user and machine install roots, newest version first --
-        and each one only counts once it has actually reported a Python 3 version.
-    #>
-    $candidates = [System.Collections.Generic.List[object]]::new()
-    $addCandidate = {
-        param([string]$Path, [string[]]$Arguments)
-        if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            $candidates.Add([pscustomobject]@{ Path = $Path; Arguments = $Arguments })
-        }
+# The C++ tree this runner's binaries are built in: the framework checkout when
+# samples/ sits inside one (framework/languages/cpp/build), otherwise the root
+# of the downloaded samples archive (bootstrap.cmake configures its build/).
+# One rule, mirrored by samples/sample-build-common.sh for the Bash runners.
+function Get-ZlinkCppSampleTreeRoot {
+    $samplesRoot = (Resolve-Path (Join-Path $PSScriptRoot ".")).Path
+    $cppRoot = Join-Path $samplesRoot ".."
+    if ((Test-Path (Join-Path $cppRoot "CMakeLists.txt") -PathType Leaf) -and
+        (Test-Path (Join-Path $cppRoot "framework/include/zlink/framework.hpp") -PathType Leaf)) {
+        return (Resolve-Path $cppRoot).Path
     }
+    return $samplesRoot
+}
 
-    foreach ($name in @("python3", "python")) {
-        foreach ($command in @(Get-Command $name -CommandType Application -ErrorAction SilentlyContinue)) {
-            & $addCandidate $command.Source @()
-        }
+# Framework gates a runner runs beside its sample. The named tests exist only
+# in the repository tree's build; the package tree (the downloaded samples
+# archive) has none, so the gate is reported as skipped rather than silently
+# passed. Mirrors zlink_cpp_sample_run_framework_tests in sample-build-common.sh.
+function Invoke-ZlinkSampleFrameworkTests {
+    param(
+        [Parameter(Mandatory = $true)][string]$BuildDir,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$Regex
+    )
+    $treeRoot = Get-ZlinkCppSampleTreeRoot
+    if (-not (Test-Path (Join-Path $treeRoot "framework/include/zlink/framework.hpp") -PathType Leaf)) {
+        Write-Host "framework tests: skipped (package tree; no framework test targets)"
+        return
     }
-    foreach ($command in @(Get-Command "py" -CommandType Application -ErrorAction SilentlyContinue)) {
-        & $addCandidate $command.Source @("-3")
+    $ctest = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $ctest --test-dir $BuildDir -C $Configuration -R $Regex --output-on-failure
+        $status = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
     }
-
-    if ($IsWindows) {
-        foreach ($launcher in @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
-            (Join-Path $env:WINDIR "py.exe"))) {
-            & $addCandidate $launcher @("-3")
-        }
-        foreach ($root in @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Python"),
-            $env:ProgramFiles,
-            ${env:ProgramFiles(x86)})) {
-            if ([string]::IsNullOrWhiteSpace($root)) { continue }
-            Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
-                Sort-Object -Property @{ Expression = { [int]($_.Name -replace '\D', '') } } -Descending |
-                ForEach-Object { & $addCandidate (Join-Path $_.FullName "python.exe") @() }
-        }
+    if ($status -ne 0) {
+        throw "framework tests failed with exit code $status"
     }
-
-    foreach ($candidate in $candidates) {
-        $version = $null
-        try {
-            $version = (& $candidate.Path @(@($candidate.Arguments) + @("--version")) 2>&1 | Out-String)
-        } catch {
-            continue
-        }
-        if ($LASTEXITCODE -eq 0 -and $version -match "Python 3\.") {
-            return $candidate
-        }
-    }
-
-    return $null
 }

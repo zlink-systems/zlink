@@ -236,12 +236,24 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return name;
   }
 
+  /**
+   * Consumes the first message under `name` that `predicate` accepts, or
+   * resolves `undefined` when `timeoutMs` elapses first.
+   *
+   * A timeout is not a failure here. Each wait surface decides what its own
+   * timeout means — `waitFor` fails on it while `expectNone` succeeds — and
+   * reports that decision as `ValidationFailed` (spec stream-connector 32
+   * §10.1.1; .NET `ZlinkStreamReceivedMessages.WaitForAsync` parity). Losing
+   * the connection the wait observes is the one ending decided here, because
+   * the wait has no place left to observe: that is `Disconnected` for every
+   * surface (§10.1.1).
+   */
   waitForMessage<TPayload>(
     name: string,
     timeoutMs: number,
     predicate: (message: ZlinkStreamMessage<TPayload>) => boolean,
     signal?: AbortSignal
-  ): Promise<ZlinkStreamMessage<TPayload>> {
+  ): Promise<ZlinkStreamMessage<TPayload> | undefined> {
     validateName(name);
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Timeout must be a non-negative finite number.');
@@ -265,12 +277,10 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         if (error !== undefined) {
           reject(error);
         } else {
-          resolve(message!);
+          resolve(message);
         }
       };
-      timer = setTimeout(() => {
-        finish(connectorError(ZlinkStreamErrorCode.RequestTimeout, 'Wait for stream message timed out.'));
-      }, timeoutMs);
+      timer = setTimeout(() => finish(), timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
       // Spec stream-connector 32 §7: a wait surface is not a registered
       // callback. It observes the packets the receive queue has not delivered

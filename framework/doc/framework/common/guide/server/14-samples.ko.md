@@ -284,10 +284,18 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 === "C++"
 
     ```bash
-    # 샘플 하나 실행
-    framework/languages/cpp/samples/Bingo/run_sample.sh
+    # 압축을 푼 zlink-samples-cpp/ 에서. bootstrap.cmake가 공개 아카이브로 framework를
+    # 설치하고 일곱 샘플을 build/ 에 구성한다 (저장소 안이라면 framework/languages/cpp/samples/ 에서).
+    cmake -P bootstrap.cmake
+    cmake --build build --parallel
 
+    # 샘플 하나 실행
+    ./Bingo/run_sample.sh
     ```
+
+    Windows PowerShell은 `cmake --build build --config Release --parallel` 뒤
+    `.Bingoun_sample.ps1`이다. Runner는 Redis를 Docker container로 직접 띄운다. 전제
+    조건과 문제 해결은 zip 안의 `README.ko.md`에 있다.
 
 === "Java"
 
@@ -305,6 +313,9 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 === "Node/TypeScript"
 
     ```bash
+    # 처음 한 번, 샘플마다 dependency를 설치한다
+    cd framework/languages/node/samples/Bingo.Ts && npm install && cd -
+
     # 샘플 하나 실행
     framework/languages/node/samples/Bingo.Ts/run_sample.sh
 

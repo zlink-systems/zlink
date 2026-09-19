@@ -9,20 +9,11 @@ declare -n zlink_cpp_sample_redis_port_max=ZLINK_CPP_SAMPLE_REDIS_PORT_MAX
 declare -n zlink_cpp_sample_app_port_min=ZLINK_CPP_SAMPLE_APP_PORT_MIN
 declare -n zlink_cpp_sample_app_port_max=ZLINK_CPP_SAMPLE_APP_PORT_MAX
 
+# A free port refuses the connect; a port with a listener answers it. Bash's
+# /dev/tcp is the whole toolchain this needs, so the runner has no runtime
+# beyond the sample's own.
 zlink_tcp_port_is_available() {
-  python3 - "$1" <<'PY'
-import socket
-import sys
-
-port = int(sys.argv[1])
-listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-try:
-    listener.bind(("127.0.0.1", port))
-except OSError:
-    raise SystemExit(1)
-finally:
-    listener.close()
-PY
+  ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
 zlink_allocate_tcp_ports() {
@@ -30,53 +21,48 @@ zlink_allocate_tcp_ports() {
   local first_port="${2:-${zlink_cpp_sample_app_port_min}}"
   local last_port="${3:-${zlink_cpp_sample_app_port_max}}"
   local paired_offset="${4:-0}"
+  local absolute_last="${zlink_cpp_sample_app_port_max}"
+  if [[ "$count" -le 0 || "$first_port" -le 0 || "$last_port" -lt "$first_port" \
+    || "$paired_offset" -lt 0 ]]; then
+    echo "invalid TCP port allocation request" >&2
+    return 1
+  fi
 
-  python3 - "$count" "$first_port" "$last_port" "$paired_offset" \
-    "${zlink_cpp_sample_app_port_max}" <<'PY'
-import secrets
-import socket
-import sys
-
-count, first_port, last_port, paired_offset, absolute_last = map(int, sys.argv[1:])
-if count <= 0 or first_port <= 0 or last_port < first_port or paired_offset < 0:
-    raise SystemExit("invalid TCP port allocation request")
-
-candidates = list(range(first_port, last_port + 1))
-secrets.SystemRandom().shuffle(candidates)
-listeners = []
-selected = []
-used = set()
-try:
-    for candidate in candidates:
-        ports = [candidate]
-        if paired_offset:
-            ports.append(candidate + paired_offset)
-        if ports[-1] > absolute_last or any(port in used for port in ports):
-            continue
-        current = []
-        try:
-            for port in ports:
-                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                listener.bind(("127.0.0.1", port))
-                current.append(listener)
-        except OSError:
-            for listener in current:
-                listener.close()
-            continue
-        listeners.extend(current)
-        used.update(ports)
-        selected.append(candidate)
-        if len(selected) == count:
-            break
-    if len(selected) != count:
-        raise SystemExit(
-            f"only {len(selected)} of {count} requested TCP ports are available "
-            f"in {first_port}-{last_port}")
-    print(" ".join(str(port) for port in selected))
-finally:
-    for listener in listeners:
-        listener.close()
-PY
+  local -a candidates selected=()
+  local -A used=()
+  local candidate port ports taken
+  mapfile -t candidates < <(shuf -i "${first_port}-${last_port}")
+  for candidate in "${candidates[@]}"; do
+    ports=("$candidate")
+    if [[ "$paired_offset" -gt 0 ]]; then
+      ports+=("$((candidate + paired_offset))")
+    fi
+    if [[ "${ports[-1]}" -gt "$absolute_last" ]]; then
+      continue
+    fi
+    taken=0
+    for port in "${ports[@]}"; do
+      if [[ -n "${used[$port]:-}" ]] || ! zlink_tcp_port_is_available "$port"; then
+        taken=1
+        break
+      fi
+    done
+    if [[ "$taken" == "1" ]]; then
+      continue
+    fi
+    for port in "${ports[@]}"; do
+      used[$port]=1
+    done
+    selected+=("$candidate")
+    if [[ "${#selected[@]}" -eq "$count" ]]; then
+      break
+    fi
+  done
+  if [[ "${#selected[@]}" -ne "$count" ]]; then
+    echo "only ${#selected[@]} of $count requested TCP ports are available in ${first_port}-${last_port}" >&2
+    return 1
+  fi
+  echo "${selected[*]}"
 }
 
 zlink_sample_allocate_ports() {
@@ -86,6 +72,13 @@ zlink_sample_allocate_ports() {
 
 zlink_sample_allocate_paired_ports() {
   zlink_allocate_tcp_ports "$1" 20100 20999 1000
+}
+
+# Runner-generated role configuration is private to the run: it is written with
+# mode 0600 from stdin. Every runner's write_role_config goes through here.
+zlink_sample_write_private_file() {
+  local path="$1"
+  (umask 077 && cat >"$path")
 }
 
 # Single owner of every C++ sample runner's run-directory lifetime.
@@ -160,7 +153,7 @@ zlink_redis_start_scoped() {
       create_status=$?
     fi
     container_id="$(printf '%s\n' "${create_output}" \
-      | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+      | grep -E -m 1 '^[0-9a-f]{12,64}$' || true)"
     if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
       zlink_redis_remove_attempt "${container_id}" "${name}"
       if zlink_redis_is_bind_conflict "${create_output}"; then

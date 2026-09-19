@@ -144,18 +144,13 @@ try {
     Write-Config $dispatchConfig "node1"
     Write-Config $clientConfig "node1"
 
-    Push-Location "../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-            "--no-daemon", "--no-parallel", "--max-workers=1",
-            ":zlink-framework-core:jar",
-            ":zlink-framework-spring-boot-starter:jar",
-            ":zlink-framework-locations-redis:jar",
-            ":zlink-stream-connector:jar",
-            "--quiet")
-    } finally {
-        Pop-Location
-    }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "../../.." -GradleExecutable $Gradle -Arguments @(
+        "--no-daemon", "--no-parallel", "--max-workers=1",
+        ":zlink-framework-core:jar",
+        ":zlink-framework-spring-boot-starter:jar",
+        ":zlink-framework-locations-redis:jar",
+        ":zlink-stream-connector:jar",
+        "--quiet")
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
         "--no-daemon", "--no-parallel", "--max-workers=1",
         ":Server:Tracking:installDist", ":Server:CustomerGateway:installDist", ":Server:CourierSession:installDist",

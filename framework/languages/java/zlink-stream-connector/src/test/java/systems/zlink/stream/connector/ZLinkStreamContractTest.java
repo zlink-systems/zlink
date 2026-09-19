@@ -463,6 +463,116 @@ final class ZLinkStreamContractTest {
         }
     }
 
+    //  --- 10.1.1: a wait ends when the connection it observed ends ---
+
+    /**
+     * Spec 32 10.1.1: the wait is released when its connection ends, not
+     * when the next connection is established. With reconnect off there is
+     * no next connection, so a release bound to it would leave the wait
+     * hanging until its own timeout, which ends as VALIDATION_FAILED.
+     */
+    @Test
+    void aWaitEndsAsDisconnectedWhenTheConnectionEndsWithoutAReconnect() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                new ZLinkStreamConnectorOptions(
+                    server.endpoint(),
+                    ZLinkStreamDispatchMode.MANUAL,
+                    Duration.ofSeconds(1),
+                    1,
+                    Duration.ofMillis(500),
+                    64 * 1024,
+                    false,
+                    Duration.ofMillis(100),
+                    Duration.ofMillis(300),
+                    false,
+                    Duration.ofMillis(10),
+                    Duration.ofMillis(20),
+                    2.0));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiting = connector
+                    .waitFor("Push")
+                    .timeout(Duration.ofSeconds(5))
+                    .submit()
+                    .toCompletableFuture();
+                assertFalse(server.hasAdditionalConnection(Duration.ZERO));
+
+                long startedAt = System.nanoTime();
+                server.closeCurrentSocket();
+
+                assertEquals(
+                    ZLinkStreamErrorCode.DISCONNECTED,
+                    codeOf(assertThrows(CompletionException.class, waiting::join)));
+                //  Released by the ending, not by the 5 s wait timeout.
+                assertTrue(
+                    System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(2),
+                    "the wait waited for its own timeout");
+                TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.state() == ZLinkStreamConnectionState.DISCONNECTED);
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    /**
+     * Spec 32 10.1.1: the wait is released when its connection ends, before
+     * the reconnect that follows has produced the next connection. The
+     * reconnect delay is long enough that no second connection exists when
+     * the wait ends.
+     */
+    @Test
+    void aWaitEndsAsDisconnectedBeforeTheReconnectSucceeds() throws Exception {
+        int port = reservePort();
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+            new ZLinkStreamConnectorOptions(
+                URI.create("tcp://127.0.0.1:" + port),
+                ZLinkStreamDispatchMode.MANUAL,
+                Duration.ofSeconds(1),
+                ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
+                Duration.ofMillis(500),
+                64 * 1024,
+                false,
+                Duration.ofMillis(100),
+                Duration.ofMillis(300),
+                true,
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(3),
+                1.0));
+        try {
+            ConnectorTestAwait.await(connector.connect());
+            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiting = connector
+                .waitFor("Push")
+                .timeout(Duration.ofSeconds(5))
+                .submit()
+                .toCompletableFuture();
+            assertFalse(server.hasAdditionalConnection(Duration.ZERO));
+
+            long startedAt = System.nanoTime();
+            server.closeCurrentSocket();
+
+            assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                codeOf(assertThrows(CompletionException.class, waiting::join)));
+            //  The reconnect waits at least half of its 3 s base delay, so a
+            //  release inside 1 s happened at the ending, not at the next
+            //  connection - which does not exist yet.
+            assertTrue(
+                System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(1),
+                "the wait outlived the ending of its connection");
+            //  The release runs before the state moves on, so the state is
+            //  awaited rather than read at the instant the wait ended.
+            TcpStreamConnectorTestServer.awaitCondition(
+                () -> connector.state() == ZLinkStreamConnectionState.RECONNECTING);
+            assertFalse(server.hasAdditionalConnection(Duration.ZERO));
+        } finally {
+            ConnectorTestAwait.await(connector.close());
+            server.close();
+        }
+    }
+
     //  --- 6: one ending, one disconnect notification ---
 
     @Test

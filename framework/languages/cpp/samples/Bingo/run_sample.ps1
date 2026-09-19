@@ -2,10 +2,9 @@ $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$CppRoot = Get-ZlinkCppSampleTreeRoot
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
 $BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
-$CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 $LogDir = Join-Path $ScriptDir "build/sample-logs"
 $ConfigDir = Join-Path $LogDir "config"
 
@@ -226,12 +225,8 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
 
 $Status = 1
 try {
-    Invoke-Checked $CTestBin @(
-        "--test-dir", $BuildDir,
-        "-C", $BuildConfiguration,
-        "-R", "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway",
-        "--output-on-failure"
-    )
+    Invoke-ZlinkSampleFrameworkTests -BuildDir $BuildDir -Configuration $BuildConfiguration `
+        -Regex "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway"
 
     $ports = Reserve-Endpoints 24
     $apiAChannelEndpoint = if ($env:BINGO_API_A_CHANNEL_ENDPOINT) { $env:BINGO_API_A_CHANNEL_ENDPOINT } else { "tcp://$($ports[2])" }

@@ -30,9 +30,9 @@ interface QueuedMessage {
 /**
  * A registered wait surface plus what to call when the connection it is
  * watching ends before its predicate matched. `onConnectionEnded` is how
- * {@link ZlinkStreamReceivedMessages.resetForNewConnection} fails a wait left
- * over from the connection a reconnect just replaced (spec stream-connector
- * 32 §10.1, Java `ZLinkStreamDispatchQueue.resetForNewConnection` parity).
+ * {@link ZlinkStreamReceivedMessages.connectionEnded} fails a wait the moment
+ * its connection ends (spec stream-connector 32 §10.1.1, Java
+ * `ZLinkStreamDispatchQueue.connectionEnded` parity).
  */
 interface RegisteredObserver {
   readonly consume: EncodedMessageObserver;
@@ -99,10 +99,10 @@ export class ZlinkStreamReceivedMessages {
    * observed, and so the caller has its subscription in hand by then.
    *
    * @param onConnectionEnded Called, instead of {@link observer}, when
-   *   {@link resetForNewConnection} abandons this registration because the
+   *   {@link connectionEnded} abandons this registration because the
    *   connection it was watching ended before a message matched (spec
-   *   stream-connector 32 §10.1: "연결이 끝나 대기를 이어갈 수 없으면
-   *   `Disconnected`다").
+   *   stream-connector 32 §10.1.1: "연결이 끝나 대기를 이어갈 수 없으면
+   *   `Disconnected`다", released when that connection ends).
    */
   observe(
     name: string,
@@ -149,20 +149,29 @@ export class ZlinkStreamReceivedMessages {
    * unlike Java's queued frames, which `closeMessage` releases — so dropping
    * the queue's references is the whole of the release here.
    *
-   * @param replacesAnEarlierConnection False for the very first connection:
-   *   there is no earlier queue or wait to abandon yet. True for a reconnect,
-   *   which also fails every wait surface still registered from the
-   *   connection that just ended with `Disconnected` (Java
-   *   `ZLinkStreamDispatchQueue.resetForNewConnection` parity) — that
-   *   registration was watching a queue this call just discarded, so letting
-   *   it keep watching would silently rebind it to the new connection.
+   * Wait surfaces are not touched here. The ones of the previous connection
+   * were released by {@link connectionEnded} when that connection ended, and
+   * one registered since then is waiting for this connection.
    */
-  resetForNewConnection(replacesAnEarlierConnection: boolean): void {
+  resetForNewConnection(): void {
     this.receivedCounts.clear();
     this.queue.length = 0;
     this.queueHead = 0;
     this.queuedCount = 0;
-    if (!replacesAnEarlierConnection || this.observers.size === 0) {
+  }
+
+  /**
+   * Releases every registered wait surface because the connection it was
+   * watching has ended — a transport loss, a server close, or `close()`.
+   * Spec stream-connector 32 §10.1.1: "푸는 시점은 연결이 끝난 때이지 다음
+   * 연결이 성립한 때가 아니다". The release belongs to the ending, so a wait
+   * does not hang until its own timeout when no next connection comes
+   * (reconnect off, attempts spent) and does not silently rebind to the next
+   * one when it does. The queue and the counts stay: they are rebaselined by
+   * the next {@link resetForNewConnection}, not by the ending (§10).
+   */
+  connectionEnded(): void {
+    if (this.observers.size === 0) {
       return;
     }
     const abandoned = [...this.observers.values()].flatMap((set) => [...set]);

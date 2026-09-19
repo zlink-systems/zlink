@@ -2,7 +2,8 @@
 
 # The samples run what Gradle built, so they must run it on the JDK Gradle
 # compiled with. gradle/zlink-jvm-runtime.sh owns that decision (#517).
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gradle/zlink-jvm-runtime.sh"
+ZLINK_SAMPLES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ZLINK_SAMPLES_ROOT}/gradle/zlink-jvm-runtime.sh"
 zlink_jvm_require_toolchain_runtime || return 1
 
 zlink_sample_configure_port_pool() {
@@ -41,46 +42,7 @@ zlink_sample_reserve_ports_in_range() {
   local count="$1"
   local minimum="$2"
   local maximum="$3"
-  python3 - "${count}" "${minimum}" "${maximum}" <<'PY'
-import random
-import socket
-import sys
-
-count = int(sys.argv[1])
-minimum = int(sys.argv[2])
-maximum = int(sys.argv[3])
-if count < 1 or minimum < 1 or maximum > 65535 or minimum > maximum:
-    print("invalid JVM sample port allocation request", file=sys.stderr)
-    sys.exit(1)
-if count > maximum - minimum + 1:
-    print("JVM sample port pool is smaller than the requested allocation", file=sys.stderr)
-    sys.exit(1)
-
-sockets = []
-try:
-    candidates = list(range(minimum, maximum + 1))
-    random.SystemRandom().shuffle(candidates)
-    for port in candidates:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        sockets.append(sock)
-        if len(sockets) == count:
-            break
-    if len(sockets) != count:
-        print(
-            f"unable to bind-check {count} ports in {minimum}-{maximum}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  java "${ZLINK_SAMPLES_ROOT}/Support/ReservePorts.java" "${count}" "${minimum}" "${maximum}"
 }
 
 zlink_sample_reserve_ports() {
@@ -426,6 +388,25 @@ zlink_sample_gradle_locked() {
   flock --exclusive --close "${lock_path}" "$@"
 }
 
+# Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
+# checkout actually has the framework source above the sample (`framework_root`
+# is `../../..` from a sample directory). A standalone zip has no such root --
+# `zlink.samples.packageMode` already resolves these same jars from Maven
+# Central for the sample's own build (verified: the sample's own installDist
+# succeeds without this step when the framework root is absent), so skipping
+# it there is not a loss, just a no-op.
+zlink_sample_build_framework_jars_if_available() {
+  local framework_root="$1"
+  shift
+  if [[ ! -f "${framework_root}/settings.gradle.kts" ]]; then
+    return 0
+  fi
+  (
+    cd "${framework_root}"
+    zlink_sample_gradle_locked ./gradlew "$@"
+  )
+}
+
 zlink_sample_gradle_standalone() (
   local settings_source="${1}"
   shift
@@ -536,7 +517,10 @@ zlink_redis_start_scoped() {
       "${image}" 2>&1)"
     create_status="$?"
     set -e
-    container_id="$(printf '%s\n' "${create_output}" | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+    # Not awk: mawk (Ubuntu/Debian's default /usr/bin/awk) has no {n,m}
+    # interval expressions, so `/^[0-9a-f]{12,64}$/` silently never matches
+    # there and this scrape always comes back empty. grep -E works on both.
+    container_id="$(printf '%s\n' "${create_output}" | grep -Ex '[0-9a-f]{12,64}' | head -n 1)"
     if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
       zlink_redis_remove_attempt "${container_id}" "${name}"
       if grep -Eqi 'address already in use|port is already allocated|failed to bind host port' \
