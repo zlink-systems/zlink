@@ -549,6 +549,10 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
                std::string::npos);
     EXPECT_NE (support.find ("broadcast_except ("), std::string::npos);
 
+    const auto shoppingmall =
+      read_text_file (samples / "ShoppingMall/Server/OrderWorkflow/main.cpp");
+    EXPECT_NE (shoppingmall.find (".recreate_on_relocation ()"), std::string::npos);
+    EXPECT_NE (shoppingmall.find ("co_await _context.close ()"), std::string::npos);
 }
 
 TEST (CppFrameworkSampleParity, DocumentedSampleRolesDoNotBuildProbeProcesses)

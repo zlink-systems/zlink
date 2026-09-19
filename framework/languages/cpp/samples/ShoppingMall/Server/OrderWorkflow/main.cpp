@@ -26,7 +26,7 @@ class planned_relocation_workflow_spot_t;
 
 struct order_workflow_continue_timer_handler_t
 {
-    void handle (order_workflow_spot_t &spot, const timer_tick_t &) const;
+    task_t<void> handle (order_workflow_spot_t &spot, const timer_tick_t &) const;
 };
 
 struct planned_relocation_readiness_timer_handler_t
@@ -81,7 +81,7 @@ class order_workflow_spot_t : public instance_spot_t
     /* 공통 sample spec §9.3: 시작은 루프를 Created까지만 돌리고 즉시 응답하며, 나머지 단계를
      * 진행할 재개 호출을 기다리지 않고 예약한다. 결제 지연을 HTTP 응답에 묶지 않기 위해서다. */
     // --8<-- [start:doc-sm-spot-start]
-    start_order_workflow_res_t start (const start_order_workflow_req_t &request)
+    task_t<start_order_workflow_res_t> start (const start_order_workflow_req_t &request)
     {
         auto state = _store.update ([&] (nlohmann::json &json) {
             return run_workflow (json, request.order_id, source_command_id (request), &request,
@@ -92,39 +92,44 @@ class order_workflow_spot_t : public instance_spot_t
         if (state.status != order_status_t::confirmed && state.status != order_status_t::failed) {
             schedule_continue (state.order_id);
         }
-        return {state};
+        co_await close_if_terminal (state);
+        co_return start_order_workflow_res_t{state};
     }
     // --8<-- [end:doc-sm-spot-start]
 
     /* 재개는 다음 단계가 없을 때까지 같은 루프를 돌린다. 시작이 예약한 호출이든, 복구용 외부
      * 호출이든 코드는 같다. */
-    continue_order_workflow_res_t continue_ (const continue_order_workflow_req_t &request)
+    task_t<continue_order_workflow_res_t> continue_ (const continue_order_workflow_req_t &request)
     {
-        return {run_to_completion (request.order_id, request.source_command_id)};
+        auto state = run_to_completion (request.order_id, request.source_command_id);
+        co_await close_if_terminal (state);
+        co_return continue_order_workflow_res_t{state};
     }
 
-    void continue_scheduled (const continue_order_workflow_msg_t &message)
+    task_t<void> continue_scheduled (const continue_order_workflow_msg_t &message)
     {
-        (void) run_to_completion (message.order_id);
+        co_await close_if_terminal (run_to_completion (message.order_id));
     }
 
-    rebuild_order_projection_res_t rebuild (const rebuild_order_projection_req_t &request)
+    task_t<rebuild_order_projection_res_t> rebuild (const rebuild_order_projection_req_t &request)
     {
         auto state = _store.update (
           [&] (nlohmann::json &json) { return rebuild_projection (json, request.order_id); });
         std::cerr << "shoppingmall order: projection rebuilt order=" << state.order_id
                   << " status=" << state.status << "\n";
-        return {state};
+        co_await close_if_terminal (state);
+        co_return rebuild_order_projection_res_t{state};
     }
 
-    void run_scheduled_continue ()
+    task_t<void> run_scheduled_continue ()
     {
         (void) _continue_timer.cancel ();
         auto order_id = std::move (_scheduled_order_id);
         _scheduled_order_id.clear ();
         if (!order_id.empty ()) {
-            continue_scheduled (continue_order_workflow_msg_t{std::move (order_id)});
+            co_await continue_scheduled (continue_order_workflow_msg_t{std::move (order_id)});
         }
+        co_return;
     }
 
   private:
@@ -152,6 +157,14 @@ class order_workflow_spot_t : public instance_spot_t
         _continue_timer = _context.add_timer<order_workflow_continue_timer_handler_t> (
           "order-workflow-continue", std::chrono::milliseconds (1));
     }
+
+    task_t<void> close_if_terminal (const order_state_t &state)
+    {
+        if (state.status == order_status_t::confirmed || state.status == order_status_t::failed) {
+            (void) co_await _context.close ();
+        }
+        co_return;
+    }
     // --8<-- [end:doc-sm-background-continue]
 
     redis_state_store_t _store;
@@ -162,10 +175,10 @@ class order_workflow_spot_t : public instance_spot_t
     std::string _order_id;
 };
 
-void order_workflow_continue_timer_handler_t::handle (order_workflow_spot_t &spot,
-                                                      const timer_tick_t &) const
+task_t<void> order_workflow_continue_timer_handler_t::handle (order_workflow_spot_t &spot,
+                                                              const timer_tick_t &) const
 {
-    spot.run_scheduled_continue ();
+    return spot.run_scheduled_continue ();
 }
 
 /* Runner-only operation request.  A dedicated workflow User Spot is the
@@ -543,7 +556,7 @@ int main (int argc, char **argv)
       .add_instance_spot_factory<order_workflow_spot_t, sample_topology_t,
                                  workflow_instance_topology_t> (
         sample_names_t::order_workflow_spot)
-      .disable_relocation ()
+      .recreate_on_relocation ()
       .add_spot_factory<planned_relocation_workflow_spot_t, sample_topology_t,
                         workflow_instance_topology_t> ("shoppingmall.planned.relocation.workflow")
       .set_execution_mode (user_spot_execution_mode_t::spot_wide)

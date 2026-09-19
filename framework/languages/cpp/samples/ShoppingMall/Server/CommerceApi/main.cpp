@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <utility>
 
 namespace zlink::samples::shoppingmall
 {
@@ -20,8 +21,10 @@ using namespace zlink::framework;
 class commerce_api_handlers_t
 {
   public:
-    commerce_api_handlers_t (route_client_t &routes, redis_state_store_t &store) :
-        _routes (routes), _store (store)
+    commerce_api_handlers_t (route_client_t &routes,
+                             redis_state_store_t &store,
+                             location_runtime_query_t &locations) :
+        _routes (routes), _store (store), _locations (locations)
     {
     }
 
@@ -31,7 +34,7 @@ class commerce_api_handlers_t
     task_t<start_order_res_t> start_order (const start_order_req_t &request)
     {
         // --8<-- [start:doc-sm-api-start]
-        auto command = _store.update ([&] (nlohmann::json &state) {
+        auto [command, await_previous_release] = _store.update ([&] (nlohmann::json &state) {
             auto &mappings = state["idempotency"];
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
@@ -43,6 +46,8 @@ class commerce_api_handlers_t
             }
             const auto order_id =
               mappings[request.idempotency_key].value ("orderId", std::string{});
+            const auto already_started =
+              mappings[request.idempotency_key].value ("started", false);
 
             /* 장바구니는 CommerceStateStore의 시드에서 읽어 검증한다 — 금액 범위나 cart id
              * 문자열 비교로 성공·실패를 흉내내지 않는다. */
@@ -51,16 +56,24 @@ class commerce_api_handlers_t
             }
             const auto cart = state["carts"][request.cart_id].get<cart_seed_t> ();
             mappings[request.idempotency_key]["started"] = true;
-            return start_order_workflow_req_t{order_id,
-                                              request.cart_id,
-                                              request.shipping_address_id,
-                                              request.payment_method_id,
-                                              request.idempotency_key,
-                                              "start:" + request.idempotency_key,
-                                              cart.lines,
-                                              cart.amount,
-                                              cart.currency};
+            return std::make_pair (
+              start_order_workflow_req_t{order_id,
+                                         request.cart_id,
+                                         request.shipping_address_id,
+                                         request.payment_method_id,
+                                         request.idempotency_key,
+                                         "start:" + request.idempotency_key,
+                                         cart.lines,
+                                         cart.amount,
+                                         cart.currency},
+              already_started);
         });
+
+        /* 공통 sample spec §9.2-10: terminal workflow를 같은 OrderId로 다시 활성화하는
+         * command는 이전 explicit Close의 authority release가 끝난 뒤에만 보낸다. */
+        if (await_previous_release) {
+            co_await wait_for_workflow_authority_release (command.order_id);
+        }
 
         auto state = (co_await request_workflow<start_order_workflow_res_t> (command)).state;
         // --8<-- [end:doc-sm-api-start]
@@ -209,6 +222,19 @@ class commerce_api_handlers_t
     }
 
   private:
+    task_t<void> wait_for_workflow_authority_release (const std::string &order_id)
+    {
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (!(co_await _locations.find_spot_location (spot_id_t (order_id)))) {
+                co_return;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (50));
+        }
+        throw framework_exception_t (
+          framework_error_kind_t::unavailable,
+          "Order workflow authority was not released after terminal Close: " + order_id);
+    }
+
     /* 조회 모델을 폴링해 원하는 상태에 도달할 때까지 기다린다(self-check hook 전용). */
     task_t<order_state_t> wait_for_status (const std::string &order_id, const std::string &status)
     {
@@ -240,6 +266,7 @@ class commerce_api_handlers_t
 
     route_client_t &_routes;
     redis_state_store_t &_store;
+    location_runtime_query_t &_locations;
 };
 
 /* 공통 sample spec: 샘플 handler는 framework가 처리하는 dispatch 오류를 다시 잡아
@@ -309,7 +336,10 @@ int main (int argc, char **argv)
       std::make_unique<api_instance_topology_t> (instance));
     options.services ()
       .add_singleton<redis_state_store_t, sample_topology_t> ()
-      .add_singleton<commerce_api_handlers_t, route_client_t, redis_state_store_t> ();
+      .add_singleton<commerce_api_handlers_t,
+                     route_client_t,
+                     redis_state_store_t,
+                     location_runtime_query_t> ();
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "location:");
