@@ -34,5 +34,8 @@
     "playwright": "^1.61.1",
     "protobufjs": "^8.7.1",
     "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "@zlink-systems/zlink": "1.2.1"
   }
 }

@@ -33,5 +33,8 @@
     "typescript": "^5.8.3",
     "vite": "^7.1.9",
     "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "@zlink-systems/zlink": "1.2.1"
   }
 }

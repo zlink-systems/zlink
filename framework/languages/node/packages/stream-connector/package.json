@@ -12,6 +12,7 @@
   "types": "dist/browser/index.d.ts",
   "files": [
     "dist/browser",
+    "dist/package.json",
     "LICENSE"
   ],
   "exports": {
