@@ -170,10 +170,9 @@ jobs:
   # 받아 빈 디렉터리에 풀고, 그 zip의 README가 적은 명령만 그대로 실행한다. 로컬 action
   # (`uses: ./...`)도 checkout이 있어야 참조할 수 있으므로 쓰지 않고 전부 inline이다.
   #
-  # #655를 신고한 네 언어 worker(framework-{cpp,dotnet,node,java}/655-standalone-zips)가
-  # 아직 병합되지 않았다(이 PR을 낸 시점 기준, 매 커밋 전에 `git ls-remote`로 다시 확인).
-  # 그래서 알려진 결함과 겹치는 step은 `continue-on-error: true`로 표시하고 TODO에 그
-  # branch 이름을 적었다 — 병합되면 그 TODO를 지우고 continue-on-error를 뗀다.
+  # #655를 신고한 네 언어 worker(framework-{cpp,dotnet,node,java}/655-standalone-zips)는
+  # 모두 병합됐다. 현재 남은 `continue-on-error: true`의 사유는 Windows
+  # Redis(Memurai) 설치·실행이 아직 실제 Actions에서 검증되지 않은 하나뿐이다.
   # ---------------------------------------------------------------------------
 
   zip-dotnet-linux:
@@ -245,25 +244,13 @@ jobs:
         working-directory: zlink-tutorial-dotnet
         run: |
           for f in server.pid client.pid; do
-            [ -f "${f}" ] && kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            if [ -f "${f}" ]; then
+              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            fi
           done
           docker rm -f tutorial-redis 2>/dev/null || true
 
-      # UNVERIFIED (newly found while building this guard, not one of the four
-      # #655 branches): redis-common.sh scrapes the docker container id it
-      # just created with `awk '/^[0-9a-f]{12,64}$/'`. mawk -- Ubuntu's
-      # *default* /usr/bin/awk, confirmed on a bare ubuntu:24.04 image -- does
-      # not support `{n,m}` interval expressions, so the pattern never
-      # matches and the sample's own Redis bootstrap fails with "Failed to
-      # create Redis container ... (docker status 0)" even though `docker
-      # create` itself succeeded. Identical code exists in cpp's and java's
-      # redis-common.sh/runner-common.sh. It passed in the #655 investigation
-      # only because that machine's awk happened to be gawk (WSL default).
-      # Whether the real GitHub-hosted ubuntu-24.04 runner ships gawk or mawk
-      # is UNCONFIRMED (see PR description) -- needs a framework fix (bash
-      # `[[ =~ ]]` instead of an awk interval expression), not a workflow one.
       - name: Sample e2e — Bingo (README/14-samples §9 — run_sample.sh)
-        continue-on-error: true
         working-directory: zlink-samples-dotnet
         run: ./Bingo/run_sample.sh
 
@@ -320,14 +307,8 @@ jobs:
         continue-on-error: true
         run: choco install memurai-developer -y --no-progress
 
-      # TODO(#655, branch framework-dotnet/655-standalone-zips): every Windows
-      # sample's sample_runner.ps1 dot-sources ../local_nuget.ps1, a repo-only
-      # file not present in the zip, so this fails immediately today (issue
-      # #655: Windows samples 0/7). Remove continue-on-error once that branch
-      # merges and Redis is confirmed reachable above.
       - name: Tutorial run smoke — server starts, one request succeeds
         if: steps.memurai.outcome == 'success'
-        continue-on-error: true
         working-directory: zlink-tutorial-dotnet
         shell: pwsh
         run: |
@@ -367,7 +348,6 @@ jobs:
 
       - name: Sample e2e — Bingo (README/14-samples §9 — run_sample.ps1)
         if: steps.memurai.outcome == 'success'
-        continue-on-error: true
         working-directory: zlink-samples-dotnet
         shell: pwsh
         run: .\Bingo\run_sample.ps1
@@ -400,9 +380,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Tutorial build (README's own 빌드/linux block, fallback — npm install && npm run build)
+      - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux -- bash -c 'npm install && npm run build'
+        run: npm install && bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
 
       - name: Start Redis for the tutorial (README — redis://127.0.0.1:6379)
         run: docker run -d --rm --name tutorial-redis -p 6379:6379 redis:7
@@ -438,18 +418,13 @@ jobs:
         working-directory: zlink-tutorial-node
         run: |
           for f in server.pid client.pid; do
-            [ -f "${f}" ] && kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            if [ -f "${f}" ]; then
+              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            fi
           done
           docker rm -f tutorial-redis 2>/dev/null || true
 
-      # TODO(#655, branch framework-node/655-standalone-zips): every sample's
-      # prepare-dependencies.mjs detects prepare-sample-dependencies.mjs (a
-      # repo-only helper packed into the zip by mistake) and switches to
-      # "repository mode", which then ENOENTs reading a parent package.json
-      # that does not exist in the zip (issue #655: Node samples 0/7). Remove
-      # continue-on-error once that branch merges.
       - name: Sample e2e — Bingo.Ts (README/14-samples §9 — run_sample.sh)
-        continue-on-error: true
         working-directory: zlink-samples-node
         run: ./Bingo.Ts/run_sample.sh
 
@@ -524,32 +499,13 @@ jobs:
         working-directory: zlink-tutorial-java
         run: |
           for f in server.pid client.pid; do
-            [ -f "${f}" ] && kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            if [ -f "${f}" ]; then
+              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
+            fi
           done
           docker rm -f tutorial-redis 2>/dev/null || true
 
-      # UNVERIFIED, two independent reasons:
-      # 1. the manual #655 investigation built java/kotlin samples successfully
-      #    but never ran one to completion on Linux either ("미실행" in the
-      #    issue). Also tracks framework-java/655-standalone-zips for the
-      #    missing toolchain resolver noted in the tutorial README.
-      # 2. redis-common.sh's `runner-common.sh` (and the cpp/dotnet
-      #    equivalents) scrape a docker container id with
-      #    `awk '/^[0-9a-f]{12,64}$/'`. mawk -- Ubuntu's *default* awk,
-      #    confirmed present on a bare ubuntu:24.04 image -- does not support
-      #    `{n,m}` interval expressions, so that pattern never matches and the
-      #    sample's own Redis bootstrap fails there even after (1) is fixed.
-      #    It only worked in the manual #655 investigation because that
-      #    machine's `/usr/bin/awk` happened to be gawk (WSL). Whether the
-      #    real GitHub-hosted ubuntu-24.04 runner ships gawk or mawk is
-      #    UNCONFIRMED (see PR description) -- this is a real defect for a
-      #    reader on stock Ubuntu/Debian either way and needs a framework fix
-      #    (bash `[[ =~ ]]` instead of an awk interval expression). Reproduced
-      #    locally: docker create succeeds, but the id never gets recognized,
-      #    so the helper reports "Failed to create Redis container ... (docker
-      #    status 0)" and returns 1.
       - name: Sample e2e — java/TicTacToe (README/14-samples §9 — run_sample.sh)
-        continue-on-error: true
         working-directory: zlink-samples-java
         run: ./java/TicTacToe/run_sample.sh
 
@@ -639,21 +595,14 @@ jobs:
             }
           }
 
-      # TODO(#655, branch framework-java/655-standalone-zips): the issue
-      # reports installDist's generated bin/*.bat fails with "입력 파일이
-      # 너무 깁니다" (classpath substitution exceeds the 8191-character
-      # command line limit at typical extraction depths). Remove
-      # continue-on-error once that branch lands a launcher that does not use
-      # a .bat with an inline classpath.
       - name: Sample e2e — java/TicTacToe (README/14-samples §9 — run_sample.ps1)
         if: steps.memurai.outcome == 'success'
-        continue-on-error: true
         working-directory: zlink-samples-java
         shell: pwsh
         run: .\java\TicTacToe\run_sample.ps1
 
   zip-cpp-linux:
-    name: cpp / ubuntu-24.04 (zip only, placeholder)
+    name: cpp / ubuntu-24.04 (zip only)
     needs: pack
     runs-on: ubuntu-24.04
     steps:
@@ -670,30 +619,36 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
-      - name: Unzip tutorial and Bingo sample
+      - name: Unzip tutorial and TicTacToe sample
         run: |
           set -euo pipefail
           unzip -q zips/zlink-tutorial-cpp.zip
           unzip -q zips/zlink-samples-cpp.zip
 
-      # TODO(#655, branch framework-cpp/655-standalone-zips): the current
-      # tutorial README has zero documented Linux/WSL steps and its Windows
-      # steps assume a repository checkout (`<zlink>/.artifacts/...`,
-      # `bindings/cpp/VERSION`) that a zip does not have; the sample's
-      # run_sample.sh assumes `../..` is `framework/languages/cpp` and fails
-      # on its first line outside the repository (issue #655: samples 0/7,
-      # tutorial build not possible at all). This placeholder runs the
-      # *documented* command as-is so CI keeps reproducing the exact failure
-      # until the branch lands a standalone (vcpkg/Conan) build procedure;
-      # replace it with real steps once the README exists. Note for that
-      # rewrite: cpp's redis-common.sh has the same mawk-vs-gawk container-id
-      # scrape defect as dotnet's and java's (see zip-dotnet-linux) -- fixing
-      # the repository-path bug alone will not turn this green.
-      - name: Sample e2e — Bingo (documented run_sample.sh, expected to fail today)
-        continue-on-error: true
-        working-directory: zlink-samples-cpp
-        run: ./Bingo/run_sample.sh
+      - name: Tutorial build (README's own 빌드/linux block)
+        working-directory: zlink-tutorial-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
 
-      - name: No standalone tutorial build procedure documented yet
+      - name: Tutorial run (README's own 실행/linux block)
+        working-directory: zlink-tutorial-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux --
+
+      - name: Tutorial verify (README's own 검증/linux block)
+        working-directory: zlink-tutorial-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux --
+
+      - name: Sample build (README's own 빌드/linux block)
+        working-directory: zlink-samples-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
+
+      - name: Sample e2e — TicTacToe (README/14-samples §9 — run_sample.sh)
+        working-directory: zlink-samples-cpp
+        run: ./TicTacToe/run_sample.sh
+
+      - name: Stop tutorial processes and Redis
+        if: always()
+        working-directory: zlink-tutorial-cpp
         run: |
-          echo "::warning::cpp tutorial has no standalone (non-repository) build procedure yet — tracked in #655, branch framework-cpp/655-standalone-zips"
+          pkill -f build/tutorial_server 2>/dev/null || true
+          pkill -f build/tutorial_client 2>/dev/null || true
+          docker rm -f zlink-tutorial-redis 2>/dev/null || true
