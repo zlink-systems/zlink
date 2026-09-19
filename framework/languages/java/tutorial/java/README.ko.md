@@ -101,14 +101,14 @@ HTTP client 단계는 mesh 밖의 HTTP client가 Client와 Server의 HTTP 표면
 ```text
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room ca04ca21-399c-4129-81af-3e95ad754891 chat 202
+json body: player 200 room 8ed46dd8-e11d-40fd-8e95-c7be5eda90bc chat 202
 response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200
 download stream: chunks 2 bytes 132
 upload stream: imported 3
-error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
+error kinds: bad request INTERNAL_FAILURE connection refused UNAVAILABLE
 ```
 
 ## 검증

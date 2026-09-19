@@ -41,7 +41,7 @@ async function main(): Promise<void> {
     // --8<-- [start:http-first-request]
     const first = await client
       .get('/players/p1/profile')
-      .async<PlayerProfile>();
+      .submit<PlayerProfile>();
     console.log(`first request: ${first.body.playerId} ${first.body.nickname}`);
     // --8<-- [end:http-first-request]
 
@@ -50,13 +50,13 @@ async function main(): Promise<void> {
       .get('/ops/nodes/game-server-1/status')
       .header('x-trace-id', 'tutorial-1')
       .timeout(5000)
-      .async<{ processId: number }>();
+      .submit<{ processId: number }>();
     // The admin URL is different, so this one-shot request uses a separate client.
     const weight = await ZLinkHttpClient.create(adminBaseUrl)
       .basicAuth('ops', 'tutorial-admin')
       .post('/admin/channels/profile/weight')
       .query('value', '2')
-      .async<WeightResult>();
+      .submit<WeightResult>();
     console.log(`request shaping: status ${status.status} weight ${weight.body.weight}`);
     // --8<-- [end:http-request-shaping]
 
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     const player = await client
       .post('/players/p2')
       .body({ nickname: 'rookie' })
-      .async<string>();
+      .submit<string>();
     const room = await client
       .post('/rooms')
       .body({ title: 'tutorial-room' })
@@ -73,12 +73,12 @@ async function main(): Promise<void> {
     const chat = await client
       .post(`/rooms/${room}/chat`)
       .body({ playerId: 'p2', text: 'hello' })
-      .async<null>();
+      .submit<null>();
     console.log(`json body: player ${player.body} room ${room} chat ${chat.status}`);
     // --8<-- [end:http-json-body]
 
     // --8<-- [start:http-response-kinds]
-    const typed = await client.get('/players/p2').async<PlayerInfo>();
+    const typed = await client.get('/players/p2').submit<PlayerInfo>();
     const raw = await client.get('/players/p2').submitRaw();
     const fetched = await client.get('/players/p2').fetch<PlayerInfo>();
     console.log(`response kinds: typed ${typed.status} raw ${raw.headers['content-type']} fetch ${fetched.nickname}`);
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
     const redirected = await ZLinkHttpClient.create(clientBaseUrl)
       .followRedirects()
       .get('/player/p1')
-      .async<PlayerInfo>();
+      .submit<PlayerInfo>();
     console.log(`redirect: ${redirected.status} ${redirected.body.playerId}`);
     // --8<-- [end:http-redirect]
 
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     // --8<-- [start:http-error-kinds]
     let badRequestKind = 'unknown';
     try {
-      await client.post('/players/p3').async<{ status: string }>();
+      await client.post('/players/p3').submit<{ status: string }>();
     } catch (error: unknown) {
       badRequestKind = frameworkKindName(error);
     }
