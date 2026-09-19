@@ -300,5 +300,17 @@ post_runtime_operation_after (std::chrono::milliseconds delay,
 void change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
                    std::optional<error_t> error = std::nullopt);
+/* Removes every registered wait and hands back its callback, timers cancelled
+ * and pending_waits_version bumped. The caller must hold transport_mutex and
+ * owns the delivery. */
+std::vector<std::function<void (result_t<packet_t>)>>
+take_pending_waits_locked (connector_state_t &state);
+/* Ends the connection with `error`: publishes it, moves the state to
+ * disconnected and releases the waits that observed the connection as
+ * disconnected, delivered like any other completion (stream-connector
+ * §10.1.1). The caller owns what follows - closing the transport, failing the
+ * writes and requests, the reconnect. Must be called with no connector lock
+ * held. */
+void connection_ended (const std::shared_ptr<connector_state_t> &state, const error_t &error);
 
 } // namespace zlink::stream_connector::detail

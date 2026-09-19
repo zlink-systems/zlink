@@ -921,15 +921,18 @@ var ZlinkStreamConnectorBundle = (() => {
       this.timeoutMs = timeoutMs;
       return this;
     }
-    submit(signal) {
+    async submit(signal) {
       var _a;
       this.markExecuted();
-      return this.connector.waitForMessage(
-        this.name,
-        (_a = this.timeoutMs) != null ? _a : this.connector.options.waitTimeoutMs,
-        this.predicate,
-        signal
-      );
+      const timeoutMs = (_a = this.timeoutMs) != null ? _a : this.connector.options.waitTimeoutMs;
+      const message = await this.connector.waitForMessage(this.name, timeoutMs, this.predicate, signal);
+      if (message === void 0) {
+        throw connectorError(
+          "validationFailed" /* ValidationFailed */,
+          `No '${this.name}' message arrived within ${timeoutMs}ms.`
+        );
+      }
+      return message;
     }
     ensureConfigurable() {
       if (this.executed) {
@@ -961,13 +964,9 @@ var ZlinkStreamConnectorBundle = (() => {
       if (this.windowMs === void 0) {
         throw connectorError("validationFailed" /* ValidationFailed */, "expectNone requires within(windowMs).");
       }
-      try {
-        await this.connector.waitForMessage(this.name, this.windowMs, () => true, signal);
-      } catch (error) {
-        if (unwrapStreamError(error).code === "requestTimeout" /* RequestTimeout */) {
-          return;
-        }
-        throw error;
+      const message = await this.connector.waitForMessage(this.name, this.windowMs, () => true, signal);
+      if (message === void 0) {
+        return;
       }
       throw connectorError(
         "validationFailed" /* ValidationFailed */,
@@ -1030,6 +1029,12 @@ var ZlinkStreamConnectorBundle = (() => {
           },
           signal
         );
+        if (message === void 0) {
+          throw connectorError(
+            "validationFailed" /* ValidationFailed */,
+            `The '${this.name}' sequence did not complete within ${timeoutMs}ms.`
+          );
+        }
         messages.push(message);
       }
       return messages;
@@ -1650,10 +1655,10 @@ var ZlinkStreamConnectorBundle = (() => {
      * observed, and so the caller has its subscription in hand by then.
      *
      * @param onConnectionEnded Called, instead of {@link observer}, when
-     *   {@link resetForNewConnection} abandons this registration because the
+     *   {@link connectionEnded} abandons this registration because the
      *   connection it was watching ended before a message matched (spec
-     *   stream-connector 32 §10.1: "연결이 끝나 대기를 이어갈 수 없으면
-     *   `Disconnected`다").
+     *   stream-connector 32 §10.1.1: "연결이 끝나 대기를 이어갈 수 없으면
+     *   `Disconnected`다", released when that connection ends).
      */
     observe(name, observer, onConnectionEnded) {
       validateName(name);
@@ -1696,20 +1701,28 @@ var ZlinkStreamConnectorBundle = (() => {
      * unlike Java's queued frames, which `closeMessage` releases — so dropping
      * the queue's references is the whole of the release here.
      *
-     * @param replacesAnEarlierConnection False for the very first connection:
-     *   there is no earlier queue or wait to abandon yet. True for a reconnect,
-     *   which also fails every wait surface still registered from the
-     *   connection that just ended with `Disconnected` (Java
-     *   `ZLinkStreamDispatchQueue.resetForNewConnection` parity) — that
-     *   registration was watching a queue this call just discarded, so letting
-     *   it keep watching would silently rebind it to the new connection.
+     * Wait surfaces are not touched here. The ones of the previous connection
+     * were released by {@link connectionEnded} when that connection ended, and
+     * one registered since then is waiting for this connection.
      */
-    resetForNewConnection(replacesAnEarlierConnection) {
+    resetForNewConnection() {
       this.receivedCounts.clear();
       this.queue.length = 0;
       this.queueHead = 0;
       this.queuedCount = 0;
-      if (!replacesAnEarlierConnection || this.observers.size === 0) {
+    }
+    /**
+     * Releases every registered wait surface because the connection it was
+     * watching has ended — a transport loss, a server close, or `close()`.
+     * Spec stream-connector 32 §10.1.1: "푸는 시점은 연결이 끝난 때이지 다음
+     * 연결이 성립한 때가 아니다". The release belongs to the ending, so a wait
+     * does not hang until its own timeout when no next connection comes
+     * (reconnect off, attempts spent) and does not silently rebind to the next
+     * one when it does. The queue and the counts stay: they are rebaselined by
+     * the next {@link resetForNewConnection}, not by the ending (§10).
+     */
+    connectionEnded() {
+      if (this.observers.size === 0) {
         return;
       }
       const abandoned = [...this.observers.values()].flatMap((set) => [...set]);
@@ -2149,7 +2162,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.currentConnection = connection;
         this.connectionGeneration += 1;
         this.disconnectedPublished = false;
-        this.receivedMessages.resetForNewConnection(this.connectionGeneration > 1);
+        this.receivedMessages.resetForNewConnection();
         this.lastInboundAt = Date.now();
         await this.setState("connected" /* Connected */, void 0, signal);
         this.startHeartbeat();
@@ -2210,6 +2223,7 @@ var ZlinkStreamConnectorBundle = (() => {
         errors.push(error);
       }
       this.pendingRequests.failAll({ code: "disconnected" /* Disconnected */, message: "Connector closed." });
+      this.receivedMessages.connectionEnded();
       await this.setState("closed" /* Closed */, void 0, signal);
       this.publishDisconnectedWithoutWaiting(signal);
       if (errors.length === 1) throw errors[0];
@@ -2435,6 +2449,7 @@ var ZlinkStreamConnectorBundle = (() => {
       const connection = this.currentConnection;
       this.currentConnection = void 0;
       this.pendingRequests.failAll(error);
+      this.receivedMessages.connectionEnded();
       try {
         await (connection == null ? void 0 : connection.close());
       } catch {
@@ -2928,6 +2943,18 @@ var ZlinkStreamConnectorBundle = (() => {
       validateName(name);
       return name;
     }
+    /**
+     * Consumes the first message under `name` that `predicate` accepts, or
+     * resolves `undefined` when `timeoutMs` elapses first.
+     *
+     * A timeout is not a failure here. Each wait surface decides what its own
+     * timeout means — `waitFor` fails on it while `expectNone` succeeds — and
+     * reports that decision as `ValidationFailed` (spec stream-connector 32
+     * §10.1.1; .NET `ZlinkStreamReceivedMessages.WaitForAsync` parity). Losing
+     * the connection the wait observes is the one ending decided here, because
+     * the wait has no place left to observe: that is `Disconnected` for every
+     * surface (§10.1.1).
+     */
     waitForMessage(name, timeoutMs, predicate, signal) {
       validateName(name);
       if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
@@ -2955,9 +2982,7 @@ var ZlinkStreamConnectorBundle = (() => {
             resolve(message);
           }
         };
-        timer = setTimeout(() => {
-          finish(connectorError("requestTimeout" /* RequestTimeout */, "Wait for stream message timed out."));
-        }, timeoutMs);
+        timer = setTimeout(() => finish(), timeoutMs);
         signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
         disposable = this.receivedMessages.observe(name, (message) => {
           if (done) {

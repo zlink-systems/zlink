@@ -5,7 +5,7 @@ import {
   type ZlinkStreamMessage,
   type ZlinkStreamSequenceCall
 } from '../../Contracts';
-import { connectorError, unwrapStreamError } from '../ZlinkStreamSupport';
+import { connectorError } from '../ZlinkStreamSupport';
 
 export interface ZlinkStreamMessageWaiter {
   readonly options: RequiredZlinkStreamConnectorOptions;
@@ -14,7 +14,7 @@ export interface ZlinkStreamMessageWaiter {
     timeoutMs: number,
     predicate: (message: ZlinkStreamMessage<TPayload>) => boolean,
     signal?: AbortSignal
-  ): Promise<ZlinkStreamMessage<TPayload>>;
+  ): Promise<ZlinkStreamMessage<TPayload> | undefined>;
 }
 
 export class ZlinkStreamExpectNoneBuilder<TPayload> implements ZlinkStreamExpectNoneCall<TPayload> {
@@ -38,13 +38,12 @@ export class ZlinkStreamExpectNoneBuilder<TPayload> implements ZlinkStreamExpect
     if (this.windowMs === undefined) {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'expectNone requires within(windowMs).');
     }
-    try {
-      await this.connector.waitForMessage<TPayload>(this.name, this.windowMs, () => true, signal);
-    } catch (error) {
-      if (unwrapStreamError(error).code === ZlinkStreamErrorCode.RequestTimeout) {
-        return;
-      }
-      throw error;
+    // Spec stream-connector 32 §10.1.1: the window elapsing is this surface's
+    // success; a message inside it is the violated observation. A connection
+    // that ended rejects the wait itself, as `Disconnected`.
+    const message = await this.connector.waitForMessage<TPayload>(this.name, this.windowMs, () => true, signal);
+    if (message === undefined) {
+      return;
     }
     throw connectorError(
       ZlinkStreamErrorCode.ValidationFailed,
@@ -113,6 +112,14 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
         },
         signal
       );
+      if (message === undefined) {
+        // Spec stream-connector 32 §10.1.1: the sequence did not complete
+        // inside the window, a violated observation.
+        throw connectorError(
+          ZlinkStreamErrorCode.ValidationFailed,
+          `The '${this.name}' sequence did not complete within ${timeoutMs}ms.`
+        );
+      }
       messages.push(message);
     }
     return messages;

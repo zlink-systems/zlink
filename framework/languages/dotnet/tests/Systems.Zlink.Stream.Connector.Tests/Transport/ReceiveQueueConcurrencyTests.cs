@@ -212,4 +212,131 @@ public sealed partial class StreamConnectorTests
         done.SetResult();
         await server.WaitAsync(TimeSpan.FromSeconds(15));
     }
+
+    /// <summary>
+    ///     Spec §10.1.1: the wait is released when the connection it observed ends, not
+    ///     when the next connection is established. With reconnect off there is no next
+    ///     connection, so a release bound to it would leave the wait hanging until its own
+    ///     timeout, which ends as <c>ValidationFailed</c>.
+    /// </summary>
+    [Fact]
+    public async Task WaitPendingWhenTheConnectionEndsWithoutAReconnectFailsAsDisconnectedAtOnce()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var drop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            await drop.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        });
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            Heartbeat = DisabledHeartbeat(),
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var startedAt = Environment.TickCount64;
+        drop.SetResult();
+        await server.WaitAsync(TimeSpan.FromSeconds(15));
+
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
+        // Released by the ending, not by the 5 s wait timeout.
+        Assert.True(Environment.TickCount64 - startedAt < 2000, "the wait waited for its own timeout");
+    }
+
+    /// <summary>
+    ///     Spec §10.1.1: with reconnect on, the wait still ends at the ending of its
+    ///     connection, before the reconnect has produced the next one. The reconnect delay
+    ///     is long enough that no reconnect attempt has been made when the wait ends.
+    /// </summary>
+    [Fact]
+    public async Task WaitPendingWhenTheConnectionEndsFailsAsDisconnectedBeforeTheReconnectSucceeds()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var drop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            await drop.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        });
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            Heartbeat = DisabledHeartbeat(),
+            Reconnect = new ZlinkStreamReconnectOptions
+            {
+                InitialDelay = TimeSpan.FromSeconds(3),
+                MaxDelay = TimeSpan.FromSeconds(3),
+                BackoffFactor = 1.0,
+                MaxAttempts = 20
+            }
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var startedAt = Environment.TickCount64;
+        drop.SetResult();
+        await server.WaitAsync(TimeSpan.FromSeconds(15));
+
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
+        // The reconnect waits at least half of its 3 s base delay, so a release inside
+        // 1 s happened at the ending, not at the next connection - which does not exist.
+        Assert.True(Environment.TickCount64 - startedAt < 1000, "the wait outlived the ending of its connection");
+        Assert.Equal(ZlinkStreamConnectionState.Reconnecting, connector.State);
+        Assert.False(listener.Pending());
+    }
+
+    /// <summary>
+    ///     Spec §10.1.1: closing the connector ends the connection the wait was observing,
+    ///     and the wait ends with it as <c>Disconnected</c>.
+    /// </summary>
+    [Fact]
+    public async Task WaitPendingWhenTheConnectorClosesFailsAsDisconnected()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        });
+
+        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            Heartbeat = DisabledHeartbeat(),
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+        });
+
+        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var startedAt = Environment.TickCount64;
+        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
+        Assert.True(Environment.TickCount64 - startedAt < 2000, "the wait waited for its own timeout");
+
+        done.SetResult();
+        await server.WaitAsync(TimeSpan.FromSeconds(15));
+    }
 }

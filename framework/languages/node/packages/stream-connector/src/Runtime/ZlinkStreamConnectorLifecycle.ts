@@ -103,12 +103,10 @@ export class ZlinkStreamConnectorLifecycle {
       // Spec stream-connector 32 §10 (line ~649): the baseline for
       // `receivedCount` is the moment a connection is established, so each
       // new connection counts from 0 and whatever the previous connection
-      // left unconsumed — queued messages and the wait surfaces still
-      // watching for them — is dropped with it. `connectionGeneration` was
-      // just incremented above, so `> 1` is exactly "this is not the first
-      // connection" — the fact Java's `resetForNewConnection` takes as
-      // `replacesAnEarlierConnection`; no separate flag is needed to track it.
-      this.receivedMessages.resetForNewConnection(this.connectionGeneration > 1);
+      // left unconsumed is dropped with it. The wait surfaces of the previous
+      // connection are not this call's concern: `tearDownConnection` released
+      // them when that connection ended (§10.1.1).
+      this.receivedMessages.resetForNewConnection();
       this.lastInboundAt = Date.now();
       await this.setState(ZlinkStreamConnectionState.Connected, undefined, signal);
       this.startHeartbeat();
@@ -178,6 +176,9 @@ export class ZlinkStreamConnectorLifecycle {
       errors.push(error);
     }
     this.pendingRequests.failAll({ code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' });
+    // Spec stream-connector 32 §10.1.1: closing the connector ends the
+    // connection a wait was observing, and the wait ends with it.
+    this.receivedMessages.connectionEnded();
     await this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
     this.publishDisconnectedWithoutWaiting(signal);
     if (errors.length === 1) throw errors[0];
@@ -449,6 +450,10 @@ export class ZlinkStreamConnectorLifecycle {
     const connection = this.currentConnection;
     this.currentConnection = undefined;
     this.pendingRequests.failAll(error);
+    // Spec stream-connector 32 §10.1.1: a wait is released when the
+    // connection it observed ends, here, and not when the reconnect that may
+    // follow establishes the next one.
+    this.receivedMessages.connectionEnded();
     try {
       await connection?.close();
     } catch {

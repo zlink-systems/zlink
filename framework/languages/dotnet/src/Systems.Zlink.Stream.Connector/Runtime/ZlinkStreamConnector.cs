@@ -55,7 +55,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _taskRunner,
             _callbacks,
             connectTransport,
-            _receivedMessages.ResetForConnection);
+            _receivedMessages.ResetForConnection,
+            _receivedMessages.ConnectionEnded);
         _frameSender = new ZlinkStreamFrameSender(
             options,
             _headerCodec,
