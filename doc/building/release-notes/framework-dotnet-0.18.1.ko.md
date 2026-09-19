@@ -2,7 +2,7 @@
 
 # ZLink .NET Framework 0.18.1 릴리스 노트
 
-Framework 0.18.1는 binding 1.2.0과 Core 1.2.0을 사용합니다. Framework 언어별 릴리스는 독립적으로 버전이 지정됩니다.
+Framework 0.18.1는 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework 언어별 릴리스는 독립적으로 버전이 지정됩니다.
 
 ## 계약 변경
 
@@ -17,6 +17,7 @@ Framework 0.18.1는 binding 1.2.0과 Core 1.2.0을 사용합니다. Framework �
 
 ## 수정
 
+- binding 1.2.1이 NuGet 패키지에 `runtimes/win-x64/native/zlink.dll`을 실어, Windows에서 배포 패키지만으로 동작합니다. 1.2.0은 Linux x64 runtime만 담고 있어 Windows에서 `DllNotFoundException`이 났습니다. (#702)
 - 대기자가 자기가 관찰한 연결이 끝나는 순간 `Disconnected`로 끝납니다. 이전에는 다음 연결이 성립할 때 끝나서, 끊긴 뒤 재연결이 없으면 timeout까지 매달렸습니다. `Close`도 대기자를 같은 방식으로 풉니다(스펙 32 §10.1.1). (#667)
 - 배포 samples zip의 `sample_runner.ps1`이 저장소 전용 `local_nuget.ps1`을 무조건 읽어 Windows에서 일곱 샘플이 모두 죽던 것을 고쳤습니다. 저장소 밖에서는 nuget.org의 `Zlink.Framework` 패키지만 참조합니다. (#655)
 - Bingo·TicTacToe·SupportChat 샘플을 계약 정본에 맞췄습니다. Bingo Session callback은 bound Actor를 순회하거나 binding을 직접 제거하지 않습니다. TicTacToe Api·Play는 고정 RID를 쓰고 반대 뜻의 known-deviation 주석을 지웠습니다. SupportChat의 Actor factory는 모두 `DisableRelocation`을 고르고 Relocation Store를 등록하지 않습니다. (#658, #659, #660)

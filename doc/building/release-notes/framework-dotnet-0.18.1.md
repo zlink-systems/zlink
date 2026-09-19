@@ -2,7 +2,7 @@
 
 # ZLink .NET Framework 0.18.1 Release Notes
 
-Framework 0.18.1 uses binding 1.2.0 and Core 1.2.0. Each Framework language release is versioned independently.
+Framework 0.18.1 uses binding 1.2.1 and Core 1.2.0. Each Framework language release is versioned independently.
 
 ## Contract Changes
 
@@ -17,6 +17,7 @@ The public API does not change.
 
 ## Fixes
 
+- Binding 1.2.1 ships `runtimes/win-x64/native/zlink.dll` in the NuGet package, so the published packages alone work on Windows. 1.2.0 carried only the Linux x64 runtime and threw `DllNotFoundException` on Windows. (#702)
 - A waiter now ends as `Disconnected` the moment the connection it observed ends. It used to end when the next connection was established, so with no reconnect after a drop it hung until its own timeout. `Close` releases waiters the same way (spec 32 §10.1.1). (#667)
 - In the distributed samples zip, `sample_runner.ps1` unconditionally dot-sourced the repository-only `local_nuget.ps1`, so all seven samples died on Windows. Outside a checkout the samples reference only the `Zlink.Framework` package from nuget.org. (#655)
 - Bingo, TicTacToe, and SupportChat samples now match the canonical contracts. The Bingo Session callback neither iterates bound Actors nor removes bindings itself. TicTacToe Api and Play keep a fixed RID and the contrary known-deviation comment is gone. Every SupportChat Actor factory selects `DisableRelocation` and no Relocation Store is registered. (#658, #659, #660)
