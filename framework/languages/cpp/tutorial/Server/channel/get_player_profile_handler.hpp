@@ -11,11 +11,9 @@ class get_player_profile_handler_t
     using request_type = get_player_profile_t;
     using reply_type = player_profile_t;
 
-    reply_type handle (
-      const request_type &request)
+    reply_type handle (const request_type &request)
     {
-        return player_profile_t{
-          request.player_id, "rookie", 1};
+        return player_profile_t{request.player_id, "rookie", 1};
     }
 };
 // --8<-- [end:channel-request-handler]

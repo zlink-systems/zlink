@@ -16,25 +16,16 @@ namespace fw = zlink::framework;
 class get_profile_http_handler_t
 {
   public:
-    explicit get_profile_http_handler_t (
-      fw::route_client_t &routes)
-      : _routes (routes)
-    {
-    }
+    explicit get_profile_http_handler_t (fw::route_client_t &routes) : _routes (routes) {}
 
-    fw::task_t<fw::http_response_t>
-      handle (
-        const fw::http_request_t &request)
+    fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
-        const auto player_id =
-          request.route_values.at ("playerId");
+        const auto player_id = request.route_values.at ("playerId");
 
         // The target is a channel name. Which node answers is decided at call time.
-        auto profile = co_await _routes
-          .request_to_channel (
-            "profile",
-            get_player_profile_t{player_id})
-          .async<player_profile_t> ();
+        auto profile =
+          co_await _routes.request_to_channel ("profile", get_player_profile_t{player_id})
+            .async<player_profile_t> ();
 
         co_return fw::http_response_t{
           200,
@@ -80,12 +71,14 @@ class node_status_http_handler_t
         // The target is one node, named by its routing id. No channel takes part,
         // so no candidate is chosen: this node answers or the call fails. The
         // first argument is the mesh, not a channel.
-        auto status = co_await _routes
-                        .request_to_node ("game", zlink::routing_id_t::from (node_rid),
-                                          get_node_status_t{})
-                        .async<node_status_t> ();
+        auto status =
+          co_await _routes
+            .request_to_node ("game", zlink::routing_id_t::from (node_rid), get_node_status_t{})
+            .async<node_status_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (status).dump ()};
     }
 
   private:
@@ -105,11 +98,13 @@ class issue_ticket_http_handler_t
     {
         const auto player_id = request.route_values.at ("playerId");
 
-        auto ticket = co_await _channels
-                        .request_to_channel ("ticketing", issue_session_ticket_t{player_id})
-                        .async<session_ticket_t> ();
+        auto ticket =
+          co_await _channels.request_to_channel ("ticketing", issue_session_ticket_t{player_id})
+            .async<session_ticket_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (ticket.value).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (ticket.value).dump ()};
     }
 
   private:
@@ -129,8 +124,7 @@ class publish_notice_http_handler_t
 
         // Delivered to every subscriber. No recipient is named. The topic is what
         // a subscriber's handler listens on, and it defaults to the packet name.
-        co_await _publisher
-          .publish ("broadcast", maintenance_notice_t::packet_name, notice)
+        co_await _publisher.publish ("broadcast", maintenance_notice_t::packet_name, notice)
           .async ();
 
         co_return fw::http_response_t{202, ""};
@@ -152,14 +146,17 @@ class open_room_http_handler_t
     {
         const auto body = nlohmann::json::parse (request.body).get<open_room_t> ();
 
-        auto created = co_await _rooms
-                         .create ("game-room")   // Picks the factory and the candidate nodes.
-                         .in_mesh ("game")
-                         .creation_request (body) // Reaches the room's create callback.
-                         .async ();
+        auto created =
+          co_await _rooms
+            .create ("game-room") // Picks the factory and the candidate nodes.
+            .in_mesh ("game")
+            .creation_request (body) // Reaches the room's create callback.
+            .async ();
 
         // From here on the room is addressed by this id alone.
-        co_return fw::http_response_t{200, nlohmann::json (created.spot.spot_id ()).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (created.spot.spot_id ()).dump ()};
     }
 
   private:
@@ -200,12 +197,15 @@ class get_room_state_http_handler_t
     {
         const auto room_id = request.route_values.at ("roomId");
 
-        auto state = co_await _routes
-                       .request_to_spot (room_id, get_room_state_t{})
-                       .timeout (std::chrono::seconds (3))
-                       .async<room_state_t> ();
+        auto state =
+          co_await _routes
+            .request_to_spot (room_id, get_room_state_t{})
+            .timeout (std::chrono::seconds (3))
+            .async<room_state_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (state).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (state).dump ()};
     }
 
   private:
@@ -227,14 +227,17 @@ class join_match_queue_http_handler_t
 
         // No create call: the first message for this id brings the queue into
         // being and is then handled by it.
-        auto status = co_await _routes
-                        .request_to_spot (fw::spot_id_t (mode), body)
-                        .instance_spot ("match-queue")
-                        .in_mesh ("game")
-                        .timeout (std::chrono::seconds (3))
-                        .async<match_queue_status_t> ();
+        auto status =
+          co_await _routes
+            .request_to_spot (fw::spot_id_t (mode), body)
+            .instance_spot ("match-queue")
+            .in_mesh ("game")
+            .timeout (std::chrono::seconds (3))
+            .async<match_queue_status_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (status).dump ()};
     }
 
   private:
@@ -260,8 +263,8 @@ class find_room_http_handler_t
 
         co_return fw::http_response_t{
           200, nlohmann::json{{"spotId", room->spot_id ()},
-                              {"node", std::string (room->node_rid ().value ())}}
-                 .dump ()};
+                              {"node",
+                               std::string (room->node_rid ().value ())}}.dump ()};
     }
 
   private:
@@ -282,9 +285,10 @@ class find_player_http_handler_t
             co_return fw::http_response_t{404, ""};
 
         co_return fw::http_response_t{
-          200, nlohmann::json{{"actorId", std::string (player->actor_id ().value ())},
-                              {"node", std::string (player->node_rid ().value ())}}
-                 .dump ()};
+          200, nlohmann::json{{"actorId",
+                              std::string (player->actor_id ().value ())},
+                              {"node",
+                               std::string (player->node_rid ().value ())}}.dump ()};
     }
 
   private:
@@ -305,19 +309,21 @@ class create_player_http_handler_t
         const auto player_id = request.route_values.at ("playerId");
         const auto body = nlohmann::json::parse (request.body).get<create_player_t> ();
 
-        auto created = co_await _players
-                         .get_or_create (fw::actor_id_t (player_id), "player")
-                         .in_mesh ("game")
-                         .creation_request (body)
-                         .timeout (std::chrono::seconds (10))
-                         .async ();
+        auto created =
+          co_await _players
+            .get_or_create (fw::actor_id_t (player_id), "player")
+            .in_mesh ("game")
+            .creation_request (body)
+            .timeout (std::chrono::seconds (10))
+            .async ();
 
-        const auto state = std::holds_alternative<fw::actor_create_existing_t> (created)
-                             ? "existing"
-                             : std::holds_alternative<fw::actor_create_created_t> (created)
-                                 ? "created"
-                                 : "rejected";
-        co_return fw::http_response_t{200, nlohmann::json (state).dump ()};
+        const auto state =
+          std::holds_alternative<fw::actor_create_existing_t> (created)  ? "existing"
+          : std::holds_alternative<fw::actor_create_created_t> (created) ? "created"
+                                                                         : "rejected";
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (state).dump ()};
     }
 
   private:
@@ -357,11 +363,15 @@ class get_player_http_handler_t
     {
         const auto player_id = request.route_values.at ("playerId");
 
-        auto info = co_await _players.request (fw::actor_id_t (player_id), get_player_t{})
-                      .timeout (std::chrono::seconds (3))
-                      .async<player_info_t> ();
+        auto info =
+          co_await _players
+            .request (fw::actor_id_t (player_id), get_player_t{})
+            .timeout (std::chrono::seconds (3))
+            .async<player_info_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (info).dump ()};
+        co_return fw::http_response_t{
+          200,
+          nlohmann::json (info).dump ()};
     }
 
   private:
@@ -378,19 +388,21 @@ int main (int argc, char **argv)
         // --8<-- [start:location-store-client]
         // Rooms are looked up by whoever calls them, so a node that hosts none
         // still needs the store, pointed at the same prefix.
-        options.add_location_store<fw::redis::redis_location_store_t> ()
+        options
+          .add_location_store<fw::redis::redis_location_store_t> ()
           .set_connection_string ("127.0.0.1:6379")
           .set_key_prefix ("zlink-tutorial-cpp:location:");
         // --8<-- [end:location-store-client]
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
-        zlink::routing_id_t client_rid =
-          zlink::routing_id_t::from ("game-client-1");
-        auto mesh = options.add_route_mesh ("game")
-                      .listen ("tcp://0.0.0.0:7402")
-                      .set_routing_id (client_rid)
-                      .set_advertise_host ("127.0.0.1");
+        zlink::routing_id_t client_rid = zlink::routing_id_t::from ("game-client-1");
+        auto mesh =
+          options
+            .add_route_mesh ("game")
+            .listen ("tcp://0.0.0.0:7402")
+            .set_routing_id (client_rid)
+            .set_advertise_host ("127.0.0.1");
 
         // client() means this node exposes no handler for the channel; it only calls.
         mesh.channel ("profile").client ();
@@ -399,16 +411,17 @@ int main (int argc, char **argv)
         // serves the channel from among the peers it learns this way, so a channel
         // call never names a node. The routing id is here so this node can also
         // address that one directly; connect(endpoint) alone would not allow that.
-        zlink::routing_id_t server_routing_id =
-          zlink::routing_id_t::from ("game-server-1");
-        mesh.peer_connections ().connect (
-          server_routing_id, "tcp://127.0.0.1:7401");
+        zlink::routing_id_t server_routing_id = zlink::routing_id_t::from ("game-server-1");
+        mesh.peer_connections ().connect (server_routing_id, "tcp://127.0.0.1:7401");
         // --8<-- [end:channel-client-register]
 
         // --8<-- [start:clientserver-client-register]
         // Here the caller decides who answers: the server it dialed. Mesh peers play
         // no part in the choice.
-        options.add_client_server_channel ("ticketing").client ().connect ("tcp://127.0.0.1:7411");
+        options
+          .add_client_server_channel ("ticketing")
+          .client ()
+          .connect ("tcp://127.0.0.1:7411");
         // --8<-- [end:clientserver-client-register]
 
         // --8<-- [start:fanout-publish-register]
@@ -425,7 +438,8 @@ int main (int argc, char **argv)
         // --8<-- [end:spot-client-register]
 
         // The HTTP surface the examples are driven through.
-        options.http ()
+        options
+          .http ()
           .listen ("http://127.0.0.1:5180")
           .map_get<get_profile_http_handler_t> ("/players/{playerId}/profile")
           .map_post<record_login_http_handler_t> ("/players/{playerId}/logins")

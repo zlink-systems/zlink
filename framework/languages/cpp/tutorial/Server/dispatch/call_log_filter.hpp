@@ -26,10 +26,10 @@ class call_log_filter_t
         // Everything after next() runs on the way back out, so the filters
         // unwind in reverse registration order.
         const auto elapsed = std::chrono::steady_clock::now () - started_at;
-        _logger.info (
-          "dispatch done: " + context.packet_name + " in "
-          + std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (elapsed).count ())
-          + "ms");
+        _logger.info ("dispatch done: " + context.packet_name + " in "
+                      + std::to_string (
+                        std::chrono::duration_cast<std::chrono::milliseconds> (elapsed).count ())
+                      + "ms");
     }
 
   private:

@@ -328,7 +328,7 @@ jobs:
             echo "${http_output}" | grep -q '^basic auth: without 401 with 200$' || fail "basic auth"
             echo "${http_output}" | grep -q '^download stream: chunks [1-9][0-9]* bytes [1-9][0-9]*$' || fail "download"
             echo "${http_output}" | grep -q '^upload stream: imported 3$' || fail "upload"
-            echo "${http_output}" | grep -q '^error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE$' || fail "error kinds"
+            echo "${http_output}" | grep -q '^error kinds: bad request INTERNAL_FAILURE connection refused UNAVAILABLE$' || fail "error kinds"
             cleanup
             trap - EXIT
           }
@@ -486,7 +486,7 @@ jobs:
           echo "${http_output}" | grep -q 'first request: p1 rookie' || fail "HttpClient first request"
           echo "${http_output}" | grep -q 'basic auth: without 401 with 200' || fail "HttpClient auth"
           echo "${http_output}" | grep -q 'upload stream: imported 3' || fail "HttpClient upload"
-          echo "${http_output}" | grep -q 'error kinds: bad request InternalFailure connection refused Unavailable' || fail "HttpClient error kinds"
+          echo "${http_output}" | grep -q '^error kinds: bad request InternalFailure connection refused Unavailable$' || fail "HttpClient error kinds"
 
           echo "all Node tutorial steps passed"
 
@@ -552,4 +552,5 @@ jobs:
           test "$(printf '%s\n' "${output}" | wc -l)" -eq 10
           printf '%s\n' "${output}" | grep -q '^first request: p1 rookie$'
           printf '%s\n' "${output}" | grep -q '^basic auth: without 401 with 200$'
+          printf '%s\n' "${output}" | grep -q '^error kinds: bad request internal_failure connection refused unavailable$'
           ./build/tutorial_stream_client > stream.log

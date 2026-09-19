@@ -16,8 +16,7 @@ namespace
 long long now_unix_ms ()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds> (
-             std::chrono::system_clock::now ().time_since_epoch ())
-      .count ();
+             std::chrono::system_clock::now ().time_since_epoch ()).count ();
 }
 
 template <typename TResult> void require (const TResult &result, const char *what)
@@ -50,7 +49,8 @@ int main ()
         options.dispatch_mode = sc::dispatch_mode_t::manual;
 
         auto connector = sc::connector_factory_t::create (options);
-        connector.codecs ()
+        connector
+          .codecs ()
           .enable_codec (sc::codec_t::json)
           .use_default_codec (sc::codec_t::json);
 
@@ -61,17 +61,19 @@ int main ()
         // then answers with write_packet rather than reply_packet.
         const auto sent_at = now_unix_ms ();
         const auto pong = value_of (
-          connector.request (ping_t{std::to_string (sent_at)}).submit<pong_t> (), "ping");
+          connector.request (ping_t{std::to_string (sent_at)}).submit<pong_t> (),
+          "ping");
 
-        std::cout << "round trip: " << (now_unix_ms () - std::stoll (pong.sent_at_unix_ms))
-                  << "ms" << std::endl;
+        std::cout << "round trip: " << (now_unix_ms () - std::stoll (pong.sent_at_unix_ms)) << "ms"
+                  << std::endl;
         // --8<-- [end:stream-client]
 
         // --8<-- [start:session-actor-client]
         // Binds this connection to a player. Until then the server has no player
         // to forward packets to.
         const auto authenticated = value_of (
-          connector.request (authenticate_t{"p1"}).submit<authenticated_t> (), "authenticate");
+          connector.request (authenticate_t{"p1"}).submit<authenticated_t> (),
+          "authenticate");
 
         std::cout << "bound player: " << authenticated.player_id << std::endl;
 
@@ -82,8 +84,9 @@ int main ()
         // follow the send.
         connector.send (change_nickname_t{"speedy"}).submit ();
 
-        const auto changed =
-          value_of (connector.wait_for<nickname_changed_t> ().submit (), "nickname push");
+        const auto changed = value_of (
+          connector.wait_for<nickname_changed_t> ().submit (),
+          "nickname push");
 
         std::cout << "pushed: " << changed.payload.nickname << std::endl;
         // --8<-- [end:session-actor-client]

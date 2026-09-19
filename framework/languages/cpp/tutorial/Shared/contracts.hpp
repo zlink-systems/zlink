@@ -203,9 +203,7 @@ inline void from_json (const nlohmann::json &json, get_player_profile_t &value)
 
 inline void to_json (nlohmann::json &json, const player_profile_t &value)
 {
-    json = {{"playerId", value.player_id},
-            {"nickname", value.nickname},
-            {"level", value.level}};
+    json = {{"playerId", value.player_id}, {"nickname", value.nickname}, {"level", value.level}};
 }
 
 inline void from_json (const nlohmann::json &json, player_profile_t &value)
@@ -260,7 +258,9 @@ inline void to_json (nlohmann::json &json, const get_node_status_t &)
     json = nlohmann::json::object ();
 }
 
-inline void from_json (const nlohmann::json &, get_node_status_t &) {}
+inline void from_json (const nlohmann::json &, get_node_status_t &)
+{
+}
 
 inline void to_json (nlohmann::json &json, const node_status_t &value)
 {
@@ -304,7 +304,9 @@ inline void to_json (nlohmann::json &json, const get_room_state_t &)
     json = nlohmann::json::object ();
 }
 
-inline void from_json (const nlohmann::json &, get_room_state_t &) {}
+inline void from_json (const nlohmann::json &, get_room_state_t &)
+{
+}
 
 inline void to_json (nlohmann::json &json, const room_state_t &value)
 {
@@ -362,7 +364,9 @@ inline void to_json (nlohmann::json &json, const get_player_t &)
     json = nlohmann::json::object ();
 }
 
-inline void from_json (const nlohmann::json &, get_player_t &) {}
+inline void from_json (const nlohmann::json &, get_player_t &)
+{
+}
 
 inline void to_json (nlohmann::json &json, const player_info_t &value)
 {

@@ -17,7 +17,6 @@ namespace fw = zlink::framework;
 class game_session_t final : public fw::packet_stream_session_t
 {
   public:
-
     fw::task_t<void> on_connected (fw::stream_t &stream) override
     {
         std::cout << "client connected: " << stream.session_id () << std::endl;
@@ -73,8 +72,7 @@ class game_session_t final : public fw::packet_stream_session_t
             auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
             _player_id = std::string (bound.actor_id ());
 
-            stream
-              .reply_packet (zlink::message_t::from_json (authenticated_t{*_player_id}))
+            stream.reply_packet (zlink::message_t::from_json (authenticated_t{*_player_id}))
               .async ();
             co_return;
         }

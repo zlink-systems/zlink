@@ -581,9 +581,9 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 
 ### 12. HTTP client
 
-`HttpClient`는 mesh 밖에서 실행되며 `zlink::http_client` package만 링크한다. 이 예제는
-CLI이므로 `submit<T>().result()`와 `fetch<T>()`를 사용해 blocking 방식으로 완료한다. Server와
-Client를 실행한 상태에서 다음 명령으로 실행한다.
+`HttpClient`는 mesh 밖에서 실행되며 `zlink::http_client` package만 링크한다. 이 CLI는
+비동기 `async<T>()`, `async_raw()`, `fetch<T>()`, `download()` 종결자를 `co_await`로 기다린다.
+Server와 Client를 실행한 상태에서 다음 명령으로 실행한다.
 
 ```bash title="linux"
 ./build/tutorial_http_client
@@ -598,7 +598,7 @@ Client를 실행한 상태에서 다음 명령으로 실행한다.
 ```console
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room be179d01-31b9-408e-8ac6-c86bfa5a4e9c chat 202
+json body: player 200 room fbf674c7-9328-4624-a74a-7bccdab703f6 chat 202
 response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
@@ -608,9 +608,8 @@ upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
 
-이 출력은 framework 0.18.3 이상(#711 포함) 기준이다. 0.18.2 이전 배포판에서는 6단계가 503으로
-멈춘다. C++ HTTP host는 gzip 및 chunked 응답을 제공하지 않으므로 6단계는 평문 응답을
-확인하고 9단계는 버퍼링된 chunk 하나를 받는다.
+이 출력은 framework 0.19.0 기준이다. C++ HTTP host는 gzip 및 chunked 응답을 제공하지 않으므로
+6단계는 평문 응답을 확인하고 9단계는 버퍼링된 chunk 하나를 받는다.
 
 HTTP 표면에는 admin Basic auth, 옛 player 경로 redirect, room export/import NDJSON route가
 있다. admin 자격 증명은 tutorial에 설정 파일을 추가하지 않기 위해 `ops` /
