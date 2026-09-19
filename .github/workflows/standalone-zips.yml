@@ -206,7 +206,7 @@ jobs:
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-dotnet
@@ -248,7 +248,7 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
         working-directory: zlink-samples-dotnet
@@ -297,7 +297,7 @@ jobs:
       - name: Tutorial install (README's own 내려받기와 설치/windows block)
         working-directory: zlink-tutorial-dotnet
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Tutorial build (README's own 빌드/windows block)
         working-directory: zlink-tutorial-dotnet
@@ -349,7 +349,7 @@ jobs:
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-samples-dotnet
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Sample build (README's own 빌드/windows block)
         if: steps.memurai.outcome == 'success'
@@ -399,7 +399,7 @@ jobs:
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-node
@@ -428,7 +428,7 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
         working-directory: zlink-samples-node
@@ -476,7 +476,7 @@ jobs:
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-java
@@ -505,7 +505,7 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
         working-directory: zlink-samples-java
@@ -555,7 +555,7 @@ jobs:
       - name: Tutorial install (README's own 내려받기와 설치/windows block)
         working-directory: zlink-tutorial-java
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Tutorial build (README's own 빌드/windows block)
         working-directory: zlink-tutorial-java
@@ -598,7 +598,7 @@ jobs:
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-samples-java
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Sample build (README's own 빌드/windows block)
         if: steps.memurai.outcome == 'success'
@@ -656,7 +656,7 @@ jobs:
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-cpp
@@ -685,7 +685,7 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
         working-directory: zlink-samples-cpp
