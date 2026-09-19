@@ -33,14 +33,6 @@ anywhere and run this file's commands from that extracted
 commands from `framework/languages/dotnet/tutorial`). The first build's
 implicit `dotnet restore` fetches that package from nuget.org.
 
-```bash title="linux"
-cd zlink-tutorial-dotnet
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-dotnet
-```
-
 ## Build
 
 This keeps the code the docs show and the library a reader gets from

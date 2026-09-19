@@ -45,13 +45,13 @@ resolves `@zlink-systems/*` from the npm registry at the version that sample pin
 an npm workspace, so install each one separately.
 
 ```bash title="linux"
-cd zlink-samples-node/Bingo.Ts
+cd Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```
 
 ```powershell title="windows"
-Set-Location zlink-samples-node/Bingo.Ts
+Set-Location Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```

@@ -29,14 +29,6 @@ tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다(저장�
 build`가 암묵적으로 실행하는 `dotnet restore`가 그 패키지를 nuget.org에서
 내려받는다.
 
-```bash title="linux"
-cd zlink-tutorial-dotnet
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-dotnet
-```
-
 ## 빌드
 
 문서가 보여주는 코드와 독자가 nuget.org에서 받는 라이브러리를 같은 것으로 유지한다.

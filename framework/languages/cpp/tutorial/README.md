@@ -57,14 +57,6 @@ Download
 [`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
 and unpack it. Every command below runs inside the unpacked `zlink-tutorial-cpp/`.
 
-```bash title="linux"
-cd zlink-tutorial-cpp
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-cpp
-```
-
 One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
 block. It downloads three GitHub Release assets -- this platform's Core prebuilt
 (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source

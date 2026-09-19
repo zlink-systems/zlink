@@ -26,14 +26,6 @@ packages from Maven Central. The directory this zip extracts to
 
 All commands below run from inside that directory.
 
-```bash title="linux"
-cd zlink-tutorial-java
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-java
-```
-
 ## Build
 
 ```bash title="linux"

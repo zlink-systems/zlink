@@ -50,14 +50,6 @@ ZW-B8 장애 proxy까지 C++로 샘플과 함께 빌드된다. 세 번째 파티
 [`zlink-samples-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)을
 받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-samples-cpp/` 안에서 실행한다.
 
-```bash title="linux"
-cd zlink-samples-cpp
-```
-
-```powershell title="windows"
-Set-Location zlink-samples-cpp
-```
-
 설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. GitHub Release에서 세
 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework
 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를 빌드해 `.zlink/install/`에

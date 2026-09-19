@@ -25,14 +25,6 @@ English: [`README.md`](./README.md)
 이 파일과 명령 모두 이 zip을 푼 디렉터리(`zlink-tutorial-java/`) 안에서, 그 디렉터리를
 현재 위치로 두고 실행한다.
 
-```bash title="linux"
-cd zlink-tutorial-java
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-java
-```
-
 ## 빌드
 
 ```bash title="linux"
