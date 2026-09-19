@@ -57,11 +57,11 @@ All commands below run from the directory this zip extracts to
 ## Build
 
 ```bash title="linux"
-./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
+./gradlew :kotlin:Server:installDist :kotlin:Client:installDist :kotlin:HttpClient:installDist
 ```
 
 ```powershell title="windows"
-.\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
+.\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist :kotlin:HttpClient:installDist
 ```
 
 ## Run
@@ -84,6 +84,78 @@ The STREAM stage's external client is a third subproject.
 ./gradlew :kotlin:StreamClient:installDist
 kotlin/StreamClient/build/install/StreamClient/bin/StreamClient
 ```
+
+The HTTP client is a separate process outside the mesh. It uses the Kotlin
+`zlinkHttpClient { }` DSL and coroutine terminal extensions, and references only
+the published `zlink-http-client-kotlin` wrapper.
+
+```bash title="linux"
+./gradlew :kotlin:HttpClient:installDist
+kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
+```
+
+```powershell title="windows"
+.\gradlew.bat :kotlin:HttpClient:installDist
+.\kotlin\HttpClient\build\install\HttpClient\bin\HttpClient.bat
+```
+
+```text
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room f68c1472-c7cd-49a8-82db-1e5bf92066e9 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 132
+upload stream: imported 3
+error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
+```
+
+## HTTP operational surface
+
+The Server admin route requires `ops:tutorial-admin` and returns `401` with
+`WWW-Authenticate: Basic realm="tutorial-admin"` when credentials are absent.
+The Client serves gzip when `Accept-Encoding: gzip` is present, redirects
+`/player/p1` to `/players/p1`, and exposes chunked NDJSON export/import at
+`/rooms/<roomId>/export` and `/rooms/<roomId>/import`.
+
+```bash
+curl -i -u ops:tutorial-admin -X POST \
+  'http://127.0.0.1:5381/admin/channels/profile/weight?value=2'
+# 200
+# {"channel":"profile","weight":2}
+
+curl -i -H 'Accept-Encoding: gzip' http://127.0.0.1:5380/rooms/<roomId>
+# 200, Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5380/player/p1
+# 301, Location: /players/p1
+
+curl -i http://127.0.0.1:5380/rooms/<roomId>/export
+# 200, Transfer-Encoding: chunked, Content-Type: application/x-ndjson
+
+curl -i -X POST http://127.0.0.1:5380/rooms/<roomId>/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+# 200, {"imported":2}
+```
+
+## Snippet markers
+
+| Marker | Source |
+|---|---|
+| `http-client-create` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-first-request` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-request-shaping` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-json-body` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-response-kinds` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-compressed-response` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-redirect` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-basic-auth` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-download-stream` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-upload-stream` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-error-kinds` | `HttpClient/.../HttpClientProgram.kt` |
 
 ## Verify
 

@@ -56,11 +56,11 @@ Maven Central에서 내려받는다.
 ## 빌드
 
 ```bash title="linux"
-./gradlew :java:Server:installDist :java:Client:installDist
+./gradlew :java:Server:installDist :java:Client:installDist :java:HttpClient:installDist
 ```
 
 ```powershell title="windows"
-.\gradlew.bat :java:Server:installDist :java:Client:installDist
+.\gradlew.bat :java:Server:installDist :java:Client:installDist :java:HttpClient:installDist
 ```
 
 ## 실행
@@ -82,6 +82,33 @@ STREAM 단계의 외부 client는 세 번째 subproject다.
 ```bash
 ./gradlew :java:StreamClient:installDist
 ./java/StreamClient/build/install/StreamClient/bin/StreamClient
+```
+
+HTTP client 단계는 mesh 밖의 HTTP client가 Client와 Server의 HTTP 표면을 호출하는
+별도 subproject다. `zlink-http-client` package만 참조하며, 아래 출력은 Server와 Client를
+실행한 뒤 프로그램을 실제로 실행해 얻은 값이다.
+
+```bash title="linux"
+./gradlew :java:HttpClient:installDist
+./java/HttpClient/build/install/HttpClient/bin/HttpClient
+```
+
+```powershell title="windows"
+.\gradlew.bat :java:HttpClient:installDist
+.\java\HttpClient\build\install\HttpClient\bin\HttpClient.bat
+```
+
+```text
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room ca04ca21-399c-4129-81af-3e95ad754891 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 132
+upload stream: imported 3
+error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
 ```
 
 ## 검증
@@ -151,6 +178,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 | `java/Server` | channel handler, node 직접 handler, fanout subscriber, filter, runtime weight endpoint, Spot 둘(방과 큐) |
 | `java/Client` | HTTP를 받아 mesh·ClientServer·fanout으로 호출한다 |
 | `java/StreamClient` | mesh 밖의 client. framework가 아니라 connector 하나만 의존한다 |
+| `java/HttpClient` | mesh 밖의 client. `zlink-http-client` package만 의존한다 |
 
 두 process 모두 `spring-boot-starter-web`을 쓴다. Client는 tutorial 호출을 받고, Server는
 runtime weight endpoint 하나를 연다. Server도 HTTP를 여는 덕분에 embedded Tomcat이 JVM을
@@ -278,7 +306,7 @@ node가 도는 중에 바꿀 수 있는 값은 weight 하나다. Server는 이 e
 연다. 포트 5281은 Client의 5280과 겹치지 않게 고른 것이다.
 
 ```bash
-curl -s -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=0'
+curl -s -u ops:tutorial-admin -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=0'
 # 200
 # {"channel":"profile","weight":0}
 ```
@@ -316,7 +344,7 @@ Spring의 미처리 예외 logging까지 가지 않는다.
 100으로 되돌리면 같은 호출이 다시 받는다.
 
 ```bash
-curl -s -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=100'
+curl -s -u ops:tutorial-admin -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=100'
 # 200
 # {"channel":"profile","weight":100}
 
@@ -332,13 +360,13 @@ Server에 두면 여기도 매핑을 탄다.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
-  -X POST 'http://127.0.0.1:5281/admin/channels/no-such/weight?value=50'
+  -u ops:tutorial-admin -X POST 'http://127.0.0.1:5281/admin/channels/no-such/weight?value=50'
 # 500
 # Server 로그:
 # ZLinkConfigurationException: RouteMesh channel is not registered: no-such
 
 curl -s -o /dev/null -w '%{http_code}\n' \
-  -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=99999'
+  -u ops:tutorial-admin -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=99999'
 # 500
 # Server 로그:
 # ZLinkConfigurationException: weight must be in range 0..10000
@@ -498,6 +526,50 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 - **`client().reply`는 Request에만 답한다.** 기다리는 요청이 없는 client에 밀 때는 actor 쪽에서
   `boundSession().send(...)`를 쓴다.
 
+### 13. HTTP 표면 운영 기능
+
+Server의 admin route는 tutorial 고정 자격 증명으로 보호된다. 설정 파일을 두지 않는
+tutorial이므로 자격 증명을 코드에 두었다.
+
+```bash
+curl -i -X POST 'http://127.0.0.1:5281/admin/channels/profile/weight?value=2'
+# 401
+# WWW-Authenticate: Basic realm="tutorial-admin"
+
+curl -i -u ops:tutorial-admin -X POST \
+  'http://127.0.0.1:5281/admin/channels/profile/weight?value=2'
+# 200
+# {"channel":"profile","weight":2}
+```
+
+Client는 요청이 `Accept-Encoding: gzip`을 포함할 때만 room JSON을 gzip으로 보낸다.
+옛 단수 경로는 path-absolute Location으로 301을 낸다.
+
+```bash
+curl -i -H 'Accept-Encoding: gzip' http://127.0.0.1:5280/rooms/<roomId>
+# 200
+# Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5280/player/p1
+# 301
+# Location: /players/p1
+```
+
+export는 `application/x-ndjson`을 줄마다 flush하는 chunked 응답이고, import는 같은
+content type의 chunked body를 줄 단위로 읽어 chat으로 전달한다.
+
+```bash
+curl -i http://127.0.0.1:5280/rooms/<roomId>/export
+# 200
+# Transfer-Encoding: chunked
+# Content-Type: application/x-ndjson
+
+curl -i -X POST http://127.0.0.1:5280/rooms/<roomId>/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+# 200
+# {"imported":2}
+
 ## .NET과 표면이 다른 자리
 
 | 자리 | .NET | Java |
@@ -593,6 +665,17 @@ Java 쪽에서 알아 둘 것은 다음과 같다.
 | `session-actor-bind` | `Server/.../sessions/AuthenticateHandler.java` |
 | `stream-register` | `Server/.../ServerApplication.java` |
 | `stream-client` · `session-actor-client` | `StreamClient/.../StreamClientProgram.java` |
+| `http-client-create` | `HttpClient/.../HttpClientProgram.java` |
+| `http-first-request` | `HttpClient/.../HttpClientProgram.java` |
+| `http-request-shaping` | `HttpClient/.../HttpClientProgram.java` |
+| `http-json-body` | `HttpClient/.../HttpClientProgram.java` |
+| `http-response-kinds` | `HttpClient/.../HttpClientProgram.java` |
+| `http-compressed-response` | `HttpClient/.../HttpClientProgram.java` |
+| `http-redirect` | `HttpClient/.../HttpClientProgram.java` |
+| `http-basic-auth` | `HttpClient/.../HttpClientProgram.java` |
+| `http-download-stream` | `HttpClient/.../HttpClientProgram.java` |
+| `http-upload-stream` | `HttpClient/.../HttpClientProgram.java` |
+| `http-error-kinds` | `HttpClient/.../HttpClientProgram.java` |
 | `error-mapping` | `Client/.../ZLinkErrorResponse.java` |
 
 마커 이름을 바꾸면 그 구간을 읽는 문서가 조용히 빈 코드 블록을 낸다. 이름을 바꿀 때는

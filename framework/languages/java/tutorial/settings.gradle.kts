@@ -51,6 +51,7 @@ include("java:Shared")
 include("java:Server")
 include("java:Client")
 include("java:StreamClient")
+include("java:HttpClient")
 
 // Kotlin has no directory of its own in this repository -- it lives under
 // framework/languages/java, next to the Java sources. The same layout the
@@ -59,3 +60,4 @@ include("kotlin:Shared")
 include("kotlin:Server")
 include("kotlin:Client")
 include("kotlin:StreamClient")
+include("kotlin:HttpClient")

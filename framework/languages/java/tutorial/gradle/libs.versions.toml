@@ -16,6 +16,8 @@ zlink-framework-locations-redis = { module = "systems.zlink:zlink-framework-loca
 zlink-framework-kotlin = { module = "systems.zlink:zlink-framework-kotlin", version.ref = "zlinkFramework" }
 # STREAM 단계의 외부 client가 쓴다. framework가 아니라 connector 하나만 참조한다.
 zlink-stream-connector = { module = "systems.zlink:zlink-stream-connector", version.ref = "zlinkFramework" }
+zlink-http-client = { module = "systems.zlink:zlink-http-client", version.ref = "zlinkFramework" }
+zlink-http-client-kotlin = { module = "systems.zlink:zlink-http-client-kotlin", version.ref = "zlinkFramework" }
 spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "springBoot" }
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
 # Kotlin data class를 Jackson이 다루려면 필요하다. zlink-framework-kotlin이 이미
