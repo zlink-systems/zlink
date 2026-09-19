@@ -22,7 +22,7 @@ Framework 0.18.1는 binding 1.2.0과 Core 1.2.0을 사용합니다. Framework �
 - Instance Spot handler가 자기 turn 안에서 `close()`를 부르면 그 turn의 정상 응답이 `requestFailed`(terminal 105)로 덮이던 것을 고쳤습니다. 수락한 turn의 종료 지점을 handler 반환에서 응답 전송 뒤로 옮겨, close는 새 admission만 막고 accepted turn은 응답을 보낸 뒤 한 번 종료합니다(스펙 §6.2). (#692)
 - `bootstrap.cmake`가 Ninja가 없는 환경에서 generator를 정하지 않아 `CMAKE_MAKE_PROGRAM is not set`으로 죽던 것을 고쳤습니다. Unix Makefiles를 고르고 vcpkg baseline을 shallow fetch합니다. (#655)
 - Ubuntu 기본 awk(mawk)에서 Redis container id 추출이 항상 실패하던 것과, README Windows 블록의 stdout 상속·PowerShell 문자열 문제를 고쳤습니다. (#655)
-- Bingo·TicTacToe·SupportChat 샘플을 계약 정본에 맞췄습니다. Bingo Session mesh는 고정 RID 대신 역할 prefix의 자동 RID를 쓰고, Session disconnect callback은 bound Actor를 순회하거나 통지하지 않습니다. TicTacToe Play StreamNode는 `enable_actor_dispatch()`를 켭니다. SupportChat Entry Spot은 상담원 disconnect에 availability를 내리고, ConversationId metadata를 allow-list에 올리며, 메시지를 발신자를 뺀 참가자에게 push합니다. (#658, #659, #660)
+- Bingo·TicTacToe·SupportChat·ShoppingMall 샘플을 계약 정본에 맞췄습니다. Bingo Session mesh는 고정 RID 대신 역할 prefix의 자동 RID를 쓰고, Session disconnect callback은 bound Actor를 순회하거나 통지하지 않습니다. TicTacToe Play StreamNode는 `enable_actor_dispatch()`를 켭니다. SupportChat Entry Spot은 상담원 disconnect에 availability를 내리고, ConversationId metadata를 allow-list에 올리며, 메시지를 발신자를 뺀 참가자에게 push합니다. ShoppingMall OrderWorkflow Spot은 relocation에 재생성(`recreate_on_relocation`)하고 Confirmed·Failed terminal에서 Instance Spot을 Close하며, API는 이미 시작된 idempotency mapping에 현재 조회 모델을 돌려줍니다. (#658, #659, #660, #663)
 
 ## 설치
 
