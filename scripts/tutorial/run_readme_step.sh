@@ -37,11 +37,12 @@ else
   # that group id; the workflow's cleanup step can then terminate exactly what
   # this job's README block started without matching process names.
   pid_file=".readme-step.pgids"
-  setsid bash -c "${block}" &
+  # The child records its own group id before it runs the block. Reading the
+  # group from outside right after the fork is a race: until setsid(2) has
+  # taken effect ps still reports this script's group, and retaining that
+  # would make the workflow's cleanup step kill the runner itself (exit 143).
+  setsid bash -c 'ps -o pgid= -p "$$" | tr -d " " >> "$1"; shift; exec bash -c "$1"' \
+    _ "${pid_file}" "${block}" &
   block_pid=$!
-  block_pgid="$(ps -o pgid= -p "${block_pid}" | tr -d ' ')"
-  if [ -n "${block_pgid}" ]; then
-    printf '%s\n' "${block_pgid}" >> "${pid_file}"
-  fi
   wait "${block_pid}"
 fi
