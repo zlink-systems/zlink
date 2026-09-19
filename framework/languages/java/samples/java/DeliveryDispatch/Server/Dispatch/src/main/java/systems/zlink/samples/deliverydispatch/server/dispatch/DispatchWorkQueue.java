@@ -13,15 +13,11 @@ public final class DispatchWorkQueue implements AutoCloseable {
         this.worker = worker;
     }
 
-    public void enqueue(Messages.CreateDeliveryReq request) {
+    public void enqueue(Messages.AssignDeliveryMsg request) {
         executor.submit(() -> {
             try {
                 System.out.println("deliverydispatch-dispatch-start=" + request.deliveryId());
-                worker.dispatch(new Messages.AssignDeliveryMsg(
-                    request.deliveryId(),
-                    request.customerId(),
-                    request.pickupAddress(),
-                    request.dropoffAddress())).whenComplete((ignored, error) -> {
+                worker.dispatch(request).whenComplete((ignored, error) -> {
                         if (error == null) {
                             System.out.println("deliverydispatch-dispatch-finished=" + request.deliveryId());
                         } else {

@@ -33,6 +33,7 @@ import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
+import systems.zlink.samples.kotlin.gamequest.server.configuration.GameplayStateStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTopology
@@ -264,7 +265,7 @@ class SyncQuestProgressHandler(
         request: SyncQuestProgressReq,
     ): CompletionStage<SyncQuestProgressRes> {
         spot.requirePlayer(request.playerId)
-        return CompletableFuture.completedFuture(store.sync(request.playerId, 4))
+        return CompletableFuture.completedFuture(store.sync(request.playerId))
     }
 }
 
@@ -280,6 +281,7 @@ class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, Clos
 class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     private val domain = QuestDomain()
     private val shared = RedisSampleStore(topology)
+    private val gameplay = GameplayStateStore(topology)
     private val projections = mutableMapOf<String, MutableList<QuestProgress>>()
     private val eventIdsByIdempotency = mutableMapOf<String, String>()
     private val events = mutableListOf<StoredQuestEvent>()
@@ -319,9 +321,11 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     }
 
     @Synchronized
-    fun sync(playerId: String, firstHuntCount: Int): SyncQuestProgressRes {
+    fun sync(playerId: String): SyncQuestProgressRes {
         // --8<-- [start:doc-gq-sync]
         restorePlayer(playerId)
+        val firstHuntCount = gameplay.snapshot(playerId).killCounts
+            .firstOrNull { it.monsterId == "wolf" }?.count ?: 0
         val projection = copyProjection(playerId).toMutableList()
         val firstHunt = projection.firstOrNull { it.questId == QuestIds.FirstHunt }
         if (firstHunt == null || firstHunt.currentCount < firstHuntCount) {
@@ -409,6 +413,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     fun events(): List<StoredQuestEvent> = events.toList()
 
     override fun close() {
+        gameplay.close()
         shared.close()
     }
 

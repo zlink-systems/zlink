@@ -76,6 +76,10 @@ public final class BingoRoomGame {
         return new Change(joinedState, events, false);
     }
 
+    public boolean canAcceptPlayer() {
+        return status.equals(WaitingForPlayers) && players.size() < settings.requiredPlayers();
+    }
+
     public Messages.BingoRoomState previewJoin(String actorId, String displayName) {
         BingoRoomModels.RoomPlayer existing = player(actorId);
         if (existing != null) {

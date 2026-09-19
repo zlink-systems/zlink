@@ -4,7 +4,6 @@ import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.OrderWorkflowService;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.OrderWorkflowSpot;
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class ContinueOrderWorkflowSpotHandler
@@ -19,9 +18,10 @@ public final class ContinueOrderWorkflowSpotHandler
     public CompletionStage<Messages.ContinueOrderWorkflowRes> handle(
         OrderWorkflowSpot spot,
         Messages.ContinueOrderWorkflowReq request) {
-        return CompletableFuture.completedFuture(
-            new Messages.ContinueOrderWorkflowRes(
-                workflow.continueOrderInSpot(spot, request.orderId()),
+        Messages.OrderState state = workflow.continueOrderInSpot(spot, request.orderId());
+        return spot.closeIfTerminal(state)
+            .thenApply(ignored -> new Messages.ContinueOrderWorkflowRes(
+                state,
                 spot.context().objectGeneration()));
     }
 }

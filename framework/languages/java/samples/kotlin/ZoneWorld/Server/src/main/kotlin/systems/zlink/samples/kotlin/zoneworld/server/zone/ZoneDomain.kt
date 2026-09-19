@@ -32,6 +32,7 @@ import systems.zlink.framework.spots.ZLinkSpot
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler
+import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
 import systems.zlink.framework.spots.ZLinkTimer
@@ -46,6 +47,7 @@ import systems.zlink.samples.kotlin.zoneworld.server.configuration.SampleTopolog
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldNames
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
+import systems.zlink.samples.kotlin.zoneworld.dynamic.BorderSubscriptionHandlers
 class PlayerActor(
     val actorId: String,
     private val actorContext: ZLinkActorContext,
@@ -262,6 +264,16 @@ class ZoneSpot(
     private var botTimer: ZLinkTimer? = null
     private data class BorderSnapshot(val tick: Long, val players: List<Messages.PlayerView>)
 
+    override fun configure() {
+        // The topic selects the two incoming routes for this Zone Spot, so payload handling
+        // does not repeat that routing decision by filtering on its destination zone.
+        ZoneWorldSpec.adjacentZones(context.spotId()).forEach { fromZoneId ->
+            context.handlers().addHandler(
+                BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()),
+            )
+        }
+    }
+
     override fun onCreate(request: ZLinkMessage): CompletionStage<ZLinkSpotCreateResponse> {
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept())
     }
@@ -387,7 +399,6 @@ class ZoneSpot(
     }
     // --8<-- [end:doc-zw-state-push]
     fun applyBorder(event: Messages.ZoneBorderEvent) {
-        if (event.toZoneId != context.spotId()) return
         val current = borders[event.fromZoneId]
         if (current == null || event.tick >= current.tick) borders[event.fromZoneId] = BorderSnapshot(event.tick, event.players.toList())
     }
@@ -573,26 +584,51 @@ class ProbeHandlers {
 }
 
 // --8<-- [start:doc-zw-border-subscribe]
-@ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 class BorderSubscriptionHandlers {
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
-    fun nwNe(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
-    fun nwSw(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
-    fun neNw(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
-    fun neSe(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
-    fun swNw(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
-    fun swSe(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
-    fun seNe(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
-    fun seSw(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> = apply(spot, event)
-    private fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> {
-        spot.applyBorder(event); return CompletableFuture.completedFuture(null)
+    companion object {
+        fun forRoute(fromZoneId: String, toZoneId: String): Class<*> = when (
+            ZoneWorldNames.borderTopic(fromZoneId, toZoneId)
+        ) {
+            ZoneWorldNames.NW_NE -> NorthWestToNorthEast::class.java
+            ZoneWorldNames.NW_SW -> NorthWestToSouthWest::class.java
+            ZoneWorldNames.NE_NW -> NorthEastToNorthWest::class.java
+            ZoneWorldNames.NE_SE -> NorthEastToSouthEast::class.java
+            ZoneWorldNames.SW_NW -> SouthWestToNorthWest::class.java
+            ZoneWorldNames.SW_SE -> SouthWestToSouthEast::class.java
+            ZoneWorldNames.SE_NE -> SouthEastToNorthEast::class.java
+            ZoneWorldNames.SE_SW -> SouthEastToSouthWest::class.java
+            else -> error("unknown border route: $fromZoneId -> $toZoneId")
+        }
+
+        fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> {
+            spot.applyBorder(event)
+            return CompletableFuture.completedFuture(null)
+        }
+    }
+
+    class NorthWestToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class NorthWestToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class NorthEastToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class NorthEastToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class SouthWestToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class SouthWestToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class SouthEastToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    }
+    class SouthEastToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
     }
 }
 // --8<-- [end:doc-zw-border-subscribe]

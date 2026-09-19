@@ -43,6 +43,8 @@ class DispatchServerApplication {
             // to be a channel server (common sample spec section 7.4).
             val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
             options.addClientServerChannel(SampleNames.DispatchChannel)
+                .client()
+            options.addClientServerChannel(SampleNames.DispatchChannel)
                 .server()
                 .setBindHost(dispatchEndpoint.host)
                 .setAdvertiseHost(dispatchEndpoint.host)
@@ -87,8 +89,9 @@ class DispatchServerApplication {
     @Bean
     fun dispatchHttpServer(
         json: ObjectMapper,
+        channels: ZLinkClient,
         queue: DispatchWorkQueue,
-    ): DispatchHttpServer = DispatchHttpServer(json, queue)
+    ): DispatchHttpServer = DispatchHttpServer(json, channels, queue)
 
     @Bean
     fun objectMapper(): ObjectMapper =

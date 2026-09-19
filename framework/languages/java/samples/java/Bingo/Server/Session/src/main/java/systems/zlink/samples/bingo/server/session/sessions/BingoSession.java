@@ -40,16 +40,14 @@ public final class BingoSession implements ZLinkSession {
     // --8<-- [start:doc-bingo-session-disconnect]
     @Override
     public CompletionStage<Void> onDisconnected() {
-        return CompletableFuture.allOf(context.actors().bound().stream()
-            .map(actor -> actor.notifyDisconnected().toCompletableFuture())
-            .toArray(CompletableFuture[]::new))
-            .thenRun(() -> {
-                if (boundActorId != null) {
-                    logger.info(
-                        "bingo-lifecycle session-disconnect actor={} destroy=false",
-                        boundActorId);
-                }
-            });
+        // Framework cleanup owns disconnect notification; this callback only records
+        // the sample lifecycle evidence without submitting another notification.
+        if (boundActorId != null) {
+            logger.info(
+                "bingo-lifecycle session-disconnect actor={} destroy=false",
+                boundActorId);
+        }
+        return CompletableFuture.completedFuture(null);
     }
     // --8<-- [end:doc-bingo-session-disconnect]
 

@@ -98,16 +98,20 @@ class BingoRoomSpot(
             .requestToChannel(SampleNames.ApiChannel, GetPlayerRecordReq(actor.actorId()))
             .timeout(SampleTimings.RequestTimeout)
             .yieldReply<GetPlayerRecordRes>()
+        val game = this.game
+        if (pendingJoins[actor.actorId()] !== request || game == null || !game.canAcceptPlayer()) {
+            pendingJoins.remove(actor.actorId())
+            context.leaveActor(actor).await()
+            return
+        }
+        pendingJoins.remove(actor.actorId())
+        join(actor, request, record.wins, record.losses)
         logger.info(
             "bingo-record fetched actor={} wins={} losses={}",
             actor.actorId(),
             record.wins,
             record.losses,
         )
-        if (pendingJoins[actor.actorId()] === request) {
-            pendingJoins.remove(actor.actorId())
-            join(actor, request, record.wins, record.losses)
-        }
         // --8<-- [end:doc-bingo-room-join]
     }
 

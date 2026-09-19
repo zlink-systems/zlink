@@ -23,7 +23,8 @@ public final class StartOrderWorkflowSpotHandler
         System.out.println("shoppingmall-order started order=" + request.orderId()
             + " spot=" + spot.context().spotId());
         return workflow.startInSpot(spot, request)
-            .thenApply(Messages.StartOrderWorkflowRes::new);
+            .thenCompose(state -> spot.closeIfTerminal(state)
+                .thenApply(ignored -> new Messages.StartOrderWorkflowRes(state)));
     }
     // --8<-- [end:doc-sm-spot-start]
 }

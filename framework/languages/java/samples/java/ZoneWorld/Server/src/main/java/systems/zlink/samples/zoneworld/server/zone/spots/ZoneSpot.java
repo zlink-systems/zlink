@@ -18,6 +18,7 @@ import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
+import systems.zlink.samples.zoneworld.dynamic.BorderSubscriptionHandlers;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
@@ -52,6 +53,16 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     @Override
     public ZLinkSpotContext context() {
         return context;
+    }
+
+    @Override
+    public void configure() {
+        // The topic selects the two incoming routes for this Zone Spot, so payload handling
+        // does not repeat that routing decision by filtering on its destination zone.
+        for (String fromZoneId : ZoneWorldSpec.adjacentZones(context.spotId())) {
+            context.handlers().addHandler(
+                BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()));
+        }
     }
 
     @Override
@@ -264,7 +275,6 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     }
 
     public void applyBorder(Messages.ZoneBorderEvent event) {
-        if (!context.spotId().equals(event.toZoneId())) return;
         BorderSnapshot current = borderSnapshots.get(event.fromZoneId());
         if (current == null || event.tick() >= current.tick()) {
             borderSnapshots.put(event.fromZoneId(),
