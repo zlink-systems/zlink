@@ -81,6 +81,7 @@ condition links the two diagrams.
 | [04. Network Listener Identity](04-network-listener-identity.en.md) | bind/advertise address, port determination, per-listener-kind records, transport RID/Spot ID issuance policy | Contract |
 | [05. Transport Liveness](05-transport-liveness.en.md) | probe/ack and beacon fixed timing, Ready and failure determination, connection loss and reconnect | Contract + implementation spec (sole source of truth) |
 | [06. Service Wire Protocol](06-wire-protocol.en.md) | The actual byte format and command list exchanged between nodes | Implementation spec |
+| [07. Service Wire Schema Dialect](07-schema-dialect.en.md) | How to read `service-wire-v1.schema.json` — top-level keys, byte layout per layout kind, keyword evaluation rules | Implementation spec |
 
 ## 5. Find by Question
 
@@ -98,6 +99,7 @@ condition links the two diagrams.
 | When a connection drops, what is redone and what is not reused | [05. Transport Liveness](05-transport-liveness.en.md#6-connection-loss-and-reconnect) |
 | What bytes and commands actually travel between nodes | [06. Service Wire Protocol](06-wire-protocol.en.md#2-record-framing-and-decode) · [§3](06-wire-protocol.en.md#3-command-space) |
 | Where are the wire details of relocation/actor join covered | [06. Service Wire Protocol §9](06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope) |
+| How do I read the keys, kinds, and keywords of the schema file | [07. Service Wire Schema Dialect](07-schema-dialect.en.md#2-top-level-keys) · [§4](07-schema-dialect.en.md#4-the-ten-typeskind-values) · [§5](07-schema-dialect.en.md#5-field-keywords) |
 
 ## 6. Reading Order
 
@@ -123,6 +125,9 @@ differ, it is marked in the body only with **Per-language discretion.**
   (schema is the sole source of truth), [§2](06-wire-protocol.en.md#2-record-framing-and-decode)
   (framing/decode), [§5](06-wire-protocol.en.md#5-service-liveness) (probe/ack wire),
   [§12. Verification Requirements](06-wire-protocol.en.md#12-verification-requirements)
+- [07. Service Wire Schema Dialect](07-schema-dialect.en.md) — everything needed to read the schema
+  when generating or hand-writing a codec. Read §3 (common rules), §4 (kinds), and §5 (field
+  keywords) before implementing the first layout
 
 **Application developer**
 

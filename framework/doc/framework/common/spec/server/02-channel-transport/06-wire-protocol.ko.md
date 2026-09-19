@@ -4,7 +4,7 @@ title: "Service wire protocol"
 
 # Service wire protocol
 
-[Channel·Transport 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Transport liveness](05-transport-liveness.ko.md)
+[Channel·Transport 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Transport liveness](05-transport-liveness.ko.md) · [다음: 07. Service wire schema dialect](07-schema-dialect.ko.md)
 
 > **이 장이 답하는 것** — node 사이에 오가는 byte 형식과 command 목록.
 >
@@ -70,14 +70,10 @@ self-test, generated-asset check, decoder-fixture check와 schema의 golden fixt
 
 ### Machine-readable schema 관례
 
-생성기 입력은 언어별 추론 모델이 아니라 현재 schema다. `types` array가 이름 있는 layout을 선언한다.
-Primitive와 enum은 `encoding`과 `values`를 사용하고, 순서가 고정된 field는 `kind: "struct"`의 선언 순서
-`fields`를 사용하며, count가 있는 sequence는 `kind: "vector"`의 `countType`과 `item`을 사용한다. Length-delimited,
-conditional, tagged layout은 각각 `lengthType`, `layout`, `cases`, `fields`, `encodingOrder`를 선언한다.
-`$ref`는 선언한 type을, `$bound`는 선언한 limit을 가리킨다. `constraints`, `trailingBytes`, `when`,
-`otherwise`는 encoder와 decoder 모두가 지켜야 하는 검증을 선언한다. Command body는 `commands`의 선언 순서
-`body` array에, durable envelope은 `durableFormats`에, relocation 직접 stream은
-`relocationLogicalStreamFormat`에 있다.
+생성기 입력은 언어별 추론 모델이 아니라 현재 schema다. schema의 최상위 키, `types[].kind`별 byte
+배치, `$ref`·`$bound`·`when`·`constraints` 같은 keyword의 평가 규칙은
+[07. Service wire schema dialect](07-schema-dialect.ko.md)가 소유한다. 이 장은 그 규칙을 다시 적지
+않는다.
 
 현재 schema에는 모든 기존 layout을 같은 방식으로 generator가 내릴 규칙이나 언어별 output mapping이
 완전하게 선언되어 있지는 않다. W-2는 모든 layout kind의 완전한 lowering 범위, conditional·semantic
@@ -830,4 +826,4 @@ Schema self-test, 생성된 codec의 golden fixture decode 결과와 checked-in 
 
 ---
 
-[Channel·Transport 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Transport liveness](05-transport-liveness.ko.md)
+[Channel·Transport 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Transport liveness](05-transport-liveness.ko.md) · [다음: 07. Service wire schema dialect](07-schema-dialect.ko.md)
