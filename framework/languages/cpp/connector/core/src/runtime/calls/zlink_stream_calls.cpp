@@ -820,8 +820,7 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state,
         }
     }
     if (timed_out_connection) {
-        publish_error (*state, *timeout_error);
-        change_state (state, connection_state_t::disconnected, *timeout_error);
+        connection_ended (state, *timeout_error);
         if (timed_out_write_callback) {
             timed_out_write_callback (result_t<void>::failure (
               error_code_t::disconnected, timeout_error->message));
@@ -979,8 +978,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // The state transition must precede socket cancellation. The
         // cancellation completion can otherwise overwrite the original
         // protocol or transport error with Operation canceled.
-        publish_error (*state, *transport_error);
-        change_state (state, connection_state_t::disconnected, *transport_error);
+        connection_ended (state, *transport_error);
         if (failed_write_callback) {
             failed_write_callback (result_t<void>::failure (
               transport_error->code, transport_error->message));
@@ -1299,6 +1297,49 @@ void start_next_async_send (std::shared_ptr<connector_state_t> state)
 }
 
 } // namespace
+
+std::vector<std::function<void (result_t<packet_t>)>>
+take_pending_waits_locked (connector_state_t &state)
+{
+    std::vector<std::function<void (result_t<packet_t>)>> callbacks;
+    if (state.pending_waits.empty ()) {
+        return callbacks;
+    }
+    callbacks.reserve (state.pending_waits.size ());
+    for (auto &[_, wait] : state.pending_waits) {
+        cancel_timer (wait.timeout_timer);
+        if (wait.callback) {
+            callbacks.push_back (std::move (wait.callback));
+        }
+    }
+    state.pending_waits.clear ();
+    ++state.pending_waits_version;
+    return callbacks;
+}
+
+/* stream-connector §10.1.1: the connection a wait observed has ended, so the
+ * wait ends now, as disconnected. The release belongs to the ending, not to
+ * the next connection: released here, a wait does not hang until its own
+ * timeout when no next connection comes (reconnect off, attempts spent) and
+ * does not rebind to the next one when it does. The dispatch queue and the
+ * receive counts stay; the next established connection rebaselines them
+ * (§10). */
+void connection_ended (const std::shared_ptr<connector_state_t> &state, const error_t &error)
+{
+    publish_error (*state, error);
+    change_state (state, connection_state_t::disconnected, error);
+    std::vector<std::function<void (result_t<packet_t>)>> callbacks;
+    {
+        std::lock_guard<std::mutex> lock (state->transport_mutex);
+        callbacks = take_pending_waits_locked (*state);
+    }
+    for (auto &callback : callbacks) {
+        schedule_delivery (state, [callback = std::move (callback)] () mutable {
+            callback (result_t<packet_t>::failure (
+              error_code_t::disconnected, "the connection that the wait observed has ended"));
+        });
+    }
+}
 
 std::function<void (result_t<void>)>
 take_active_write_callback (std::shared_ptr<connector_state_t> state)
@@ -1752,8 +1793,7 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
         }
     }
     if (inbound_error) {
-        publish_error (*state, *inbound_error);
-        change_state (state, connection_state_t::disconnected, *inbound_error);
+        connection_ended (state, *inbound_error);
         if (inbound_error_connection) {
             inbound_error_connection->shutdown_and_close_async ();
         }
@@ -1835,8 +1875,7 @@ result_t<packet_t> receive_next (std::shared_ptr<connector_state_t> state,
         }
 
         if (inbound_error) {
-            publish_error (*state, *inbound_error);
-            change_state (state, connection_state_t::disconnected, *inbound_error);
+            connection_ended (state, *inbound_error);
             if (inbound_error_connection) {
                 inbound_error_connection->shutdown_and_close_async ();
             }
@@ -1913,8 +1952,7 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
         }
 
         if (inbound_error) {
-            publish_error (*state, *inbound_error);
-            change_state (state, connection_state_t::disconnected, *inbound_error);
+            connection_ended (state, *inbound_error);
             if (inbound_error_connection) {
                 inbound_error_connection->shutdown_and_close_async ();
             }
@@ -1989,8 +2027,7 @@ void submit_wait_async (std::shared_ptr<void> state_handle,
     }
 
     if (inbound_error) {
-        publish_error (*state, *inbound_error);
-        change_state (state, connection_state_t::disconnected, *inbound_error);
+        connection_ended (state, *inbound_error);
         if (inbound_error_connection) {
             inbound_error_connection->shutdown_and_close_async ();
         }

@@ -28,10 +28,19 @@ internal sealed class ZlinkStreamReceivedMessages
     private long _version;
 
     /// <summary>
-    ///     Generation of the connection the history belongs to, as
-    ///     <see cref="ResetForConnection" /> last set it.
+    ///     Generation of the connection a wait observes: the one
+    ///     <see cref="ResetForConnection" /> last established, or 0 once
+    ///     <see cref="ConnectionEnded" /> has ended it and until the next one is
+    ///     established.
     /// </summary>
     private long _connectionGeneration;
+
+    /// <summary>
+    ///     Highest generation <see cref="ResetForConnection" /> has applied. Kept apart from
+    ///     <see cref="_connectionGeneration" /> so that an ending, which sets that one back
+    ///     to 0, does not let a superseded attach re-establish an older generation.
+    /// </summary>
+    private long _establishedGeneration;
 
     /// <summary>
     ///     Number of messages with <paramref name="name" /> that arrived on the current
@@ -70,21 +79,50 @@ internal sealed class ZlinkStreamReceivedMessages
     /// <remarks>
     ///     Resetting the counters alone would let the counters and the history describe
     ///     different connections, and a wait would take a packet that arrived before the
-    ///     drop as one of the new connection's (spec §10). Waits still pending on the
-    ///     previous connection wake from here and end as
-    ///     <see cref="ZlinkStreamErrorCode.Disconnected" /> (spec §10.1).
+    ///     drop as one of the new connection's (spec §10). Waits are not ended here: the
+    ///     ones of the previous connection ended with it in <see cref="ConnectionEnded" />,
+    ///     and a wait started since then wakes from here to observe this connection.
     /// </remarks>
     public void ResetForConnection(long connectionGeneration)
     {
         TaskCompletionSource arrived;
         lock (_gate)
         {
-            if (connectionGeneration <= _connectionGeneration) return;
+            if (connectionGeneration <= _establishedGeneration) return;
 
+            _establishedGeneration = connectionGeneration;
             _connectionGeneration = connectionGeneration;
             _counts.Clear();
             _messages.Clear();
             _version++;
+            arrived = _arrived;
+            _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        arrived.TrySetResult();
+    }
+
+    /// <summary>
+    ///     Records that the connection the waits observe has ended — a transport loss, a
+    ///     server close, or <c>Close</c> — and wakes them so they end as
+    ///     <see cref="ZlinkStreamErrorCode.Disconnected" />.
+    /// </summary>
+    /// <remarks>
+    ///     Stream-connector spec §10.1.1: the release belongs to the ending of the
+    ///     connection, not to the establishment of the next one. Released here, a wait
+    ///     does not hang until its own timeout when no next connection comes (reconnect
+    ///     off, attempts spent) and does not rebind to the next one when it does. The
+    ///     history and the counters stay: they are rebaselined by the next
+    ///     <see cref="ResetForConnection" />, not by the ending (spec §10).
+    /// </remarks>
+    public void ConnectionEnded()
+    {
+        TaskCompletionSource arrived;
+        lock (_gate)
+        {
+            if (_connectionGeneration == 0) return;
+
+            _connectionGeneration = 0;
             arrived = _arrived;
             _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }

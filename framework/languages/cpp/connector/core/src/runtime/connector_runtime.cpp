@@ -1482,18 +1482,14 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
                   });
             }
         }
-        for (auto &[_, wait] : state->pending_waits) {
-            detail::cancel_timer (wait.timeout_timer);
-            if (wait.callback) {
-                closed_wait_callbacks.push_back (
-                  [callback = std::move (wait.callback)] () mutable {
-                      callback (result_t<packet_t>::failure (error_code_t::disconnected,
-                                                             "stream connector is closed"));
-                  });
-            }
+        /* stream-connector §10.1.1: closing ends the connection the waits
+         * observed, and the waits end with it. */
+        for (auto &callback : detail::take_pending_waits_locked (*state)) {
+            closed_wait_callbacks.push_back ([callback = std::move (callback)] () mutable {
+                callback (result_t<packet_t>::failure (error_code_t::disconnected,
+                                                       "stream connector is closed"));
+            });
         }
-        state->pending_waits.clear ();
-        ++state->pending_waits_version;
         state->pending_requests.clear ();
         state->pending_sends.clear ();
         state->pending_writes.clear ();

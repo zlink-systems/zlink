@@ -2108,6 +2108,74 @@ int main ()
         }
     }
 
+    /* stream-connector §10.1.1: a wait ends as disconnected when the connection
+     * it observed ends - not when the next connection is established. With
+     * reconnect off there is no next connection, so a release bound to it
+     * would leave the wait hanging until its own timeout; with reconnect on
+     * the release still precedes the reconnect. */
+    for (const bool reconnect_enabled : {false, true}) {
+        boost::asio::io_context ending_io;
+        boost::asio::ip::tcp::acceptor ending_acceptor (
+          ending_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        const auto ending_endpoint = std::string ("tcp://127.0.0.1:")
+                                     + std::to_string (ending_acceptor.local_endpoint ().port ());
+        callback_latch_t release_ending_connection;
+        joining_thread_t ending_server ([&ending_acceptor, &release_ending_connection] {
+            boost::asio::ip::tcp::socket accepted (ending_acceptor.get_executor ());
+            ending_acceptor.accept (accepted);
+            release_ending_connection.wait_for (std::chrono::seconds (5));
+            boost::system::error_code error;
+            accepted.shutdown (boost::asio::ip::tcp::socket::shutdown_both, error);
+            accepted.close (error);
+        });
+
+        zlink::stream_connector::connector_options_t ending_options;
+        ending_options.endpoint = ending_endpoint;
+        ending_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        ending_options.heartbeat.enabled = false;
+        ending_options.connect_timeout = std::chrono::milliseconds (1000);
+        ending_options.reconnect.enabled = reconnect_enabled;
+        /* Jittered to at least 1 s, so no reconnect can complete before the
+         * release below is measured. */
+        ending_options.reconnect.initial_delay = std::chrono::milliseconds (2000);
+        ending_options.reconnect.max_delay = std::chrono::milliseconds (2000);
+        ending_options.reconnect.max_attempts = 3;
+        auto ending_connector =
+          zlink::stream_connector::connector_factory_t::create (ending_options);
+        if (!ending_connector.connect ()) {
+            release_ending_connection.signal ();
+            ending_server.join ();
+            return 183;
+        }
+        callback_latch_t wait_completed;
+        std::atomic_bool wait_succeeded{false};
+        std::optional<zlink::stream_connector::error_code_t> wait_error;
+        ending_connector.wait_for<zlink::stream_connector::packet_t> ("never.arrives")
+          .timeout (std::chrono::seconds (5))
+          .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
+              wait_succeeded = static_cast<bool> (result);
+              wait_error = result.error_code ();
+              wait_completed.signal ();
+          });
+        const auto ended_at = std::chrono::steady_clock::now ();
+        release_ending_connection.signal ();
+        /* Released by the ending: well inside the 5 s wait timeout and inside
+         * the reconnect delay. */
+        const bool released = wait_completed.wait_for (std::chrono::milliseconds (1000));
+        const auto release_took = std::chrono::steady_clock::now () - ended_at;
+        const auto state_at_release = ending_connector.state ();
+        ending_server.join ();
+        ending_connector.close ();
+        if (!released || wait_succeeded
+            || wait_error != zlink::stream_connector::error_code_t::disconnected) {
+            return reconnect_enabled ? 185 : 184;
+        }
+        if (release_took >= std::chrono::milliseconds (1000)
+            || state_at_release == zlink::stream_connector::connection_state_t::connected) {
+            return reconnect_enabled ? 187 : 186;
+        }
+    }
+
     {
         zlink::stream_connector::connector_options_t lifecycle_options;
         lifecycle_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;

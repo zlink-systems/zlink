@@ -1120,7 +1120,8 @@ public sealed partial class StreamConnectorTests
                 reconnectStarted.TrySetResult();
                 return ValueTask.FromResult<IZlinkStreamConnection>(secondConnection);
             },
-            _ => { });
+            _ => { },
+            () => { });
         var states = new List<ZlinkStreamConnectionState>();
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1186,7 +1187,8 @@ public sealed partial class StreamConnectorTests
             taskRunner,
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
-            _ => { });
+            _ => { },
+            () => { });
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackFailures = new List<ZlinkStreamError>();
@@ -1265,7 +1267,8 @@ public sealed partial class StreamConnectorTests
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(
                 Interlocked.Increment(ref connectCount) == 1 ? firstConnection : secondConnection),
-            _ => { });
+            _ => { },
+            () => { });
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1328,7 +1331,8 @@ public sealed partial class StreamConnectorTests
             taskRunner,
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
-            _ => { });
+            _ => { },
+            () => { });
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2013,7 +2017,8 @@ public sealed partial class StreamConnectorTests
             taskRunner,
             callbacks,
             OpenTransportAsync,
-            _ => { });
+            _ => { },
+            () => { });
 
         await lifecycle.ConnectAsync(
             token => Task.Delay(Timeout.InfiniteTimeSpan, token),

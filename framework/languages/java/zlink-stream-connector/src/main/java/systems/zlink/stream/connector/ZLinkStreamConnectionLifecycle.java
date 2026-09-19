@@ -49,10 +49,6 @@ final class ZLinkStreamConnectionLifecycle {
     private volatile ZLinkStreamTransportConnection connection;
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile long lastInboundNanos = System.nanoTime();
-    //  Spec 32 10 clears what the previous connection left unconsumed, and
-    //  before the first connection there is no previous one. Guarded by
-    //  connectionAttemptLock.
-    private boolean hadConnection;
     private volatile CompletableFuture<Void> connectionAttempt;
 
     ZLinkStreamConnectionLifecycle(
@@ -151,6 +147,10 @@ final class ZLinkStreamConnectionLifecycle {
         closeQuietly(current);
         pendingRequests.failAll(
             ZLinkStreamException.disconnected("server closed the session"));
+        //  Spec 32 10.1.1: a wait is released when the connection it observed
+        //  ends, here, and not when the reconnect that may follow establishes
+        //  the next one.
+        dispatchQueue.connectionEnded();
         boolean reconnectEnabled = configuration.reconnect().enabled();
         if (reconnectEnabled) {
             startAutomaticReconnect();
@@ -272,7 +272,6 @@ final class ZLinkStreamConnectionLifecycle {
     private void activateConnection(ZLinkStreamTransportConnection transport) {
         boolean closed;
         boolean stateChanged = false;
-        boolean replacesAnEarlierConnection = false;
         synchronized (connectionAttemptLock) {
             closed = state == ZLinkStreamConnectionState.CLOSED;
             if (!closed) {
@@ -281,8 +280,6 @@ final class ZLinkStreamConnectionLifecycle {
                 //  leaving a read loop on a closed connector.
                 connection = transport;
                 lastInboundNanos = System.nanoTime();
-                replacesAnEarlierConnection = hadConnection;
-                hadConnection = true;
                 stateChanged = setStateLocked(ZLinkStreamConnectionState.CONNECTED);
             }
         }
@@ -297,8 +294,10 @@ final class ZLinkStreamConnectionLifecycle {
         //  connection is established, so every reconnect starts again at 0,
         //  and whatever the previous connection left unconsumed goes with
         //  it. Keeping the queue would let waitFor hand back a packet from
-        //  before the drop as if it belonged to the new connection.
-        dispatchQueue.resetForNewConnection(replacesAnEarlierConnection);
+        //  before the drop as if it belonged to the new connection. The
+        //  waits of the previous connection are not this call's concern:
+        //  they ended with that connection (spec 32 10.1.1).
+        dispatchQueue.resetForNewConnection();
         //  A new connection carries no outstanding write, so the send chain
         //  of the connection that ended does not hold up this one.
         connectionEstablishedNotifier.run();
@@ -347,6 +346,9 @@ final class ZLinkStreamConnectionLifecycle {
         stopHeartbeat();
         closeQuietly(failed);
         pendingRequests.failAll(ex);
+        //  Spec 32 10.1.1: the wait ends with its connection, not with the
+        //  next one.
+        dispatchQueue.connectionEnded();
         boolean reconnectEnabled = configuration.reconnect().enabled();
         if (reconnectEnabled) {
             startAutomaticReconnect();
