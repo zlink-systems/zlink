@@ -84,12 +84,11 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 --8<-- "framework/languages/cpp/tutorial/Server/spots/lobby_spot.hpp:actor-push"
 ```
 
-!!! warning "묶인 연결이 없을 때의 결과가 언어마다 다르다"
+!!! note "묶인 연결이 없으면 push는 InvalidOperation으로 끝난다"
 
-    같은 handler는 mesh 호출로도 호출된다. 그 호출에는 묶인 연결이 없다. .NET·C++·Node에서 그
-    호출은 **아무 일도 하지 않고 끝난다.** Java와 Kotlin에서는 **예외를 던진다.** 이 예외는 동기
-    예외이므로 반환된 결과를 확인하는 방식으로는 감지되지 않는다. 두 언어의 코드가 그 실패를
-    직접 처리하는 이유다.
+    같은 handler는 mesh 호출로도 불리며, 그때는 묶인 연결이 없다. 이 경우 push는 호출의 terminal에서
+    `InvalidOperation`으로 끝나며, 언어별 비동기 완료 수단으로 그 실패를 관찰한다. 위 코드는 rename을
+    이미 끝낸 뒤 push하므로 **그 실패만** 받아 버린다.
 
 ## 4. 접속하는 쪽 — mesh 밖의 client
 

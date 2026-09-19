@@ -87,12 +87,12 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
 --8<-- "framework/languages/node/tutorial/Server/Actors/player.ts:actor-push"
 ```
 
-!!! warning "What happens with no bound connection differs by language"
+!!! note "A push without a bound connection ends with InvalidOperation"
 
-    The same handler is also called by a mesh call, and then no connection is bound. On .NET, C++
-    and Node that call **does nothing and completes.** On Java and Kotlin it **throws** — and
-    synchronously, so catching the returned result does not catch it. That is why the code in those
-    two languages traps the failure.
+    The same handler is also called by a mesh call, where no connection is bound. In that case, the
+    push ends with `InvalidOperation` at the call's terminal, and the failure is observed through each
+    language's asynchronous completion mechanism. The code above has already completed the rename
+    before pushing, so it discards **only that failure**.
 
 ## 4. The Attaching Side — a Client Outside the Mesh
 

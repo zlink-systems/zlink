@@ -657,13 +657,6 @@ mesh.channelName("profile").server().addHandlerGroup(HandlerGroups.PROFILE)
 `addHandlerGroup`이 없고, `FanoutChannelBuilder.addPublishHandler(Class, Class)`는 타입
 인자를 묶지 않기 때문이다.
 
-### 묶인 연결이 없을 때의 push는 예외다
-
-`boundSession()`에 묶인 연결이 없으면 이 binding은 **동기적으로 예외를 던진다.**
-.NET·C++·Node에서 같은 호출은 아무 일도 하지 않고 끝난다. 그래서 `ChangeNicknameHandler`가
-`runCatching`으로 그 실패를 잡는다 — 잡지 않으면 STREAM 없이 rename만 하는 10단계 호출이
-handler 예외로 끝난다.
-
 ### 64비트 정수는 문자열로 간다
 
 framework-json codec(`ZLinkFrameworkJsonProfile`)은 `Long`을 십진 JSON 문자열로 싣고

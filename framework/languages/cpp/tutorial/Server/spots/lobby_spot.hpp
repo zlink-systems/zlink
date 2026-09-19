@@ -36,13 +36,20 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
         player.rename (message.nickname);
 
         // --8<-- [start:actor-push]
-        // Reaches the connection bound to this player. If none is bound, the
-        // call does nothing rather than failing.
-        co_await player
-          .context ()
-          .bound_session ()
-          .send (nickname_changed_t{player.nickname})
-          .async ();
+        // Pushes over the connection bound to this player. The same handler also runs
+        // on an HTTP path with no bound connection, where push ends with InvalidOperation.
+        // Rename is already complete, so only that failure is discarded.
+        try {
+            co_await player
+              .context ()
+              .bound_session ()
+              .send (nickname_changed_t{player.nickname})
+              .async ();
+        }
+        catch (const fw::framework_exception_t &error) {
+            if (error.kind () != fw::framework_error_kind_t::invalid_operation)
+                throw;
+        }
         // --8<-- [end:actor-push]
     }
     // --8<-- [end:actor-send-handler]
