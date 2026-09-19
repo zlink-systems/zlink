@@ -62,9 +62,9 @@ dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&
 echo $! > server.pid
 dotnet run --project Client/Client.csproj -c Release --no-build > client.log 2>&1 &
 echo $! > client.pid
-for _ in $(seq 1 50); do
+for _ in $(seq 1 60); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
-  sleep 0.2
+  sleep 1
 done
 curl -sf http://127.0.0.1:5080/players/p1/profile
 ```
@@ -76,9 +76,9 @@ $server.Id | Out-File server.pid
 $client = Start-Process dotnet -ArgumentList "run","--project","Client/Client.csproj","-c","Release","--no-build" `
   -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru -WindowStyle Hidden
 $client.Id | Out-File client.pid
-for ($i = 0; $i -lt 50; $i++) {
-  try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 1 | Out-Null; break }
-  catch { Start-Sleep -Milliseconds 200 }
+for ($i = 0; $i -lt 60; $i++) {
+  try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 2 | Out-Null; break }
+  catch { Start-Sleep -Seconds 1 }
 }
 Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress
 ```

@@ -320,6 +320,19 @@ jobs:
         continue-on-error: true
         run: choco install memurai-developer -y --no-progress
 
+      - name: Wait for the Redis-compatible server on 6379
+        if: steps.memurai.outcome == 'success'
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name Memurai -ErrorAction SilentlyContinue
+          if ($svc) { Write-Host "Memurai service: $($svc.Status)"; if ($svc.Status -ne 'Running') { Start-Service -Name Memurai } }
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 6379); $c.Close(); $ready = $true; break } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ready) { throw "no Redis-compatible server on 127.0.0.1:6379 after 60 s" }
+          Write-Host "127.0.0.1:6379 accepts connections"
+
       - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-tutorial-dotnet
@@ -332,6 +345,15 @@ jobs:
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-dotnet
+        shell: pwsh
+        run: |
+          foreach ($file in @('server.log', 'server.err.log', 'client.log', 'client.err.log')) {
+            if (Test-Path $file) { Write-Host "::group::$file"; Get-Content $file -Tail 200; Write-Host "::endgroup::" }
+          }
+
       - name: Stop tutorial processes
         if: always()
         working-directory: zlink-tutorial-dotnet
@@ -340,10 +362,11 @@ jobs:
           foreach ($file in @('server.pid', 'client.pid')) {
             if (Test-Path $file) {
               foreach ($pid_ in Get-Content $file) {
-                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null }
+                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null | Out-Null }
               }
             }
           }
+          exit 0
 
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
@@ -582,6 +605,19 @@ jobs:
         continue-on-error: true
         run: choco install memurai-developer -y --no-progress
 
+      - name: Wait for the Redis-compatible server on 6379
+        if: steps.memurai.outcome == 'success'
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name Memurai -ErrorAction SilentlyContinue
+          if ($svc) { Write-Host "Memurai service: $($svc.Status)"; if ($svc.Status -ne 'Running') { Start-Service -Name Memurai } }
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 6379); $c.Close(); $ready = $true; break } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ready) { throw "no Redis-compatible server on 127.0.0.1:6379 after 60 s" }
+          Write-Host "127.0.0.1:6379 accepts connections"
+
       - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-tutorial-java
@@ -594,6 +630,15 @@ jobs:
         shell: bash
         run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
+      - name: Tutorial logs (on failure)
+        if: failure()
+        working-directory: zlink-tutorial-java
+        shell: pwsh
+        run: |
+          foreach ($file in @('server.log', 'server.err.log', 'client.log', 'client.err.log')) {
+            if (Test-Path $file) { Write-Host "::group::$file"; Get-Content $file -Tail 200; Write-Host "::endgroup::" }
+          }
+
       - name: Stop tutorial processes
         if: always()
         working-directory: zlink-tutorial-java
@@ -602,10 +647,11 @@ jobs:
           foreach ($file in @('server.pid', 'client.pid')) {
             if (Test-Path $file) {
               foreach ($pid_ in Get-Content $file) {
-                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null }
+                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null | Out-Null }
               }
             }
           }
+          exit 0
 
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
