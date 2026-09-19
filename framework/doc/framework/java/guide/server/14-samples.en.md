@@ -299,6 +299,9 @@ One runner per sample directory brings up several servers together with a client
 and runs verification too. For a sample that needs a location store, the runner brings up
 its own Redis container and cleans it up when done, so all you need is `docker`.
 
+un_sample.ps1`. The runner starts Redis itself as a Docker container. The
+    prerequisites and troubleshooting are in the `README.md` inside the archive.
+
 ```bash
 # The java and kotlin samples sit under one sample root, split by language directory.
 framework/languages/java/samples/java/TicTacToe/run_sample.sh

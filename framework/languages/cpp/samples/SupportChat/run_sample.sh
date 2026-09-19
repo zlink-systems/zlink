@@ -3,9 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_supportchat_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_supportchat_client" ]]; then BIN_DIR="$BIN_DIR/linux-ninja-debug"; fi
 
 WAIT_ATTEMPTS=300
@@ -56,17 +55,13 @@ CONFIG_DIR="$RUN_DIR/config"
 mkdir -p "$CONFIG_DIR"
 
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$1" "$FLOW_LOG_DIR" "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" "$API_ROUTE" "$API_SPOT_ROUTE" "$SUPPORT_ROUTE" "$SUPPORT_SPOT_ROUTER" "$SUPPORT_SPOT" "$SUPPORT_HTTP_URL" "$SUPPORT_ACTOR_ROUTE" "$SESSION_STREAM" "$SESSION_SPOT_ROUTER" "$SESSION_SPOT" "$SESSION_ACTOR_ROUTE" <<'CONFIG_PY'
-import json, os, stat, sys
-(path, role, log_dir, redis, prefix, api_route, api_spot_route, support_route, support_spot_router, support_spot, support_http, support_actor_route, session_stream, session_spot_router, session_spot, session_actor_route) = sys.argv[1:]
-document = {"sample": {"role": {"name": role, "logDir": log_dir}, "topology": {
-  "redisEndpoint": redis, "redisKeyPrefix": prefix, "apiRouteEndpoint": api_route, "apiSpotRouteEndpoint": api_spot_route,
-  "supportRouteEndpoint": support_route, "supportSpotRouterEndpoint": support_spot_router, "supportSpotEndpoint": support_spot,
-  "supportHttpUrl": support_http, "supportActorRouteEndpoint": support_actor_route, "sessionStreamEndpoint": session_stream,
-  "sessionSpotRouterEndpoint": session_spot_router, "sessionSpotEndpoint": session_spot, "sessionActorRouteEndpoint": session_actor_route}}}
-with open(path, "w", encoding="utf-8") as f: json.dump(document, f, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-CONFIG_PY
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{"sample": {"role": {"name": "$1", "logDir": "$FLOW_LOG_DIR"}, "topology": {
+  "redisEndpoint": "$REDIS_ENDPOINT", "redisKeyPrefix": "$REDIS_KEY_PREFIX", "apiRouteEndpoint": "$API_ROUTE", "apiSpotRouteEndpoint": "$API_SPOT_ROUTE",
+  "supportRouteEndpoint": "$SUPPORT_ROUTE", "supportSpotRouterEndpoint": "$SUPPORT_SPOT_ROUTER", "supportSpotEndpoint": "$SUPPORT_SPOT",
+  "supportHttpUrl": "$SUPPORT_HTTP_URL", "supportActorRouteEndpoint": "$SUPPORT_ACTOR_ROUTE", "sessionStreamEndpoint": "$SESSION_STREAM",
+  "sessionSpotRouterEndpoint": "$SESSION_SPOT_ROUTER", "sessionSpotEndpoint": "$SESSION_SPOT", "sessionActorRouteEndpoint": "$SESSION_ACTOR_ROUTE"}}}
+CONFIG_JSON
 }
 
 dump_logs() { for log in "$LOG_DIR"/*.log "$FLOW_LOG_DIR"/flow-*.log; do [[ -f "$log" ]] && { echo "===== $log" >&2; cat "$log" >&2; }; done; }

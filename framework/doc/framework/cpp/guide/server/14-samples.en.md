@@ -300,10 +300,21 @@ and runs verification too. For a sample that needs a location store, the runner 
 its own Redis container and cleans it up when done, so all you need is `docker`.
 
 ```bash
-# Run one sample
-framework/languages/cpp/samples/Bingo/run_sample.sh
+# Inside the unpacked zlink-samples-cpp/. bootstrap.cmake installs the framework from the
+# published archives and configures the seven samples into build/ (inside the repository:
+# framework/languages/cpp/samples/).
+cmake -P bootstrap.cmake
+cmake --build build --parallel
 
+# Run one sample
+./Bingo/run_sample.sh
 ```
+
+On Windows PowerShell it is `cmake --build build --config Release --parallel` followed by
+`.Bingo
+
+un_sample.ps1`. The runner starts Redis itself as a Docker container. The
+    prerequisites and troubleshooting are in the `README.md` inside the archive.
 
 Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its
 browser UI work the same way: invoke `ZoneWorld/run_sample.sh` from that language's sample

@@ -795,6 +795,18 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
         }
     }
 
+    {
+        // The Bash runners write role configuration through one 0600 helper.
+        layout_file_contents_t helper;
+        read_layout_file (samples_root / "redis-common.sh", helper);
+        for (const auto *required : {"zlink_sample_write_private_file() {", "umask 077"}) {
+            if (helper.text.find (required) == std::string::npos) {
+                std::cerr << "redis-common.sh must contain \"" << required << "\"\n";
+                ok = false;
+            }
+        }
+    }
+
     for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
         if (!entry.is_regular_file ()) {
             continue;
@@ -814,8 +826,11 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
             continue;
         }
         if (extension == ".sh"
-            && content.find ("os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)") == std::string::npos) {
-            std::cerr << "runner-generated application config must use mode 0600: "
+            && content.find ("zlink_sample_write_private_file \"$CONFIG_DIR/")
+                 == std::string::npos
+            && content.find ("zlink_sample_write_private_file \"$path\"") == std::string::npos) {
+            std::cerr << "runner-generated application config must be written through "
+                         "zlink_sample_write_private_file (mode 0600): "
                       << entry.path () << '\n';
             ok = false;
         }
@@ -827,6 +842,69 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
         if (content.find (shell->self_delete) != std::string::npos) {
             std::cerr << "runner must not delete its run directory itself (\"" << shell->self_delete
                       << "\"); a failing run has to keep the role logs: " << entry.path () << '\n';
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+/* The downloaded samples archive runs with the sample's own toolchain, Docker
+ * for Redis and nothing else (#655). No runner may reach for Python or Node:
+ * port selection and role configuration are Bash/PowerShell, and the ZoneWorld
+ * ZW-B8 fault proxy is a C++ program built with the sample. */
+bool sample_runners_need_no_other_runtime (const std::filesystem::path &root)
+{
+    bool ok = true;
+    const auto samples_root = root / "samples";
+    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
+        if (!entry.is_regular_file ()) {
+            continue;
+        }
+        const auto extension = entry.path ().extension ().string ();
+        if (extension == ".py" || extension == ".mjs" || extension == ".js") {
+            std::cerr << "sample tree must not carry a Python or Node program: " << entry.path ()
+                      << '\n';
+            ok = false;
+            continue;
+        }
+        if (extension != ".sh" && extension != ".ps1") {
+            continue;
+        }
+        std::size_t line_no = 0;
+        for (const auto line : entry.contents ().lines) {
+            ++line_no;
+            if (line.find ("python") != std::string::npos
+                || line.find ("node.exe") != std::string::npos
+                || line.find ("node ") == 0) {
+                std::cerr << "sample runner must not require Python or Node: " << entry.path ()
+                          << ':' << line_no << '\n';
+                ok = false;
+            }
+        }
+    }
+    return ok;
+}
+
+/* The tutorial and samples archives are packed from their own directories, so
+ * each carries its own copy of bootstrap.cmake, the script that installs the
+ * published framework beside the archive (#655). One text, two paths: the
+ * copies must stay byte-identical, and both must exist with their two READMEs. */
+bool downloadable_archives_carry_identical_bootstrap (const std::filesystem::path &root)
+{
+    bool ok = true;
+    layout_file_contents_t tutorial;
+    layout_file_contents_t samples;
+    read_layout_file (root / "tutorial/bootstrap.cmake", tutorial);
+    read_layout_file (root / "samples/bootstrap.cmake", samples);
+    if (tutorial.text.empty () || tutorial.text != samples.text) {
+        std::cerr << "tutorial/bootstrap.cmake and samples/bootstrap.cmake must be identical\n";
+        ok = false;
+    }
+    for (const auto *required : {"tutorial/README.ko.md", "tutorial/README.md",
+                                 "samples/README.ko.md", "samples/README.md",
+                                 "samples/CMakeLists.txt"}) {
+        if (!std::filesystem::exists (root / required)) {
+            std::cerr << "downloadable archive entry point is missing: " << required << '\n';
             ok = false;
         }
     }
@@ -1917,6 +1995,8 @@ int main ()
     ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
     ok &= cpp_runners_prefer_the_selected_build_directory (root);
+    ok &= sample_runners_need_no_other_runtime (root);
+    ok &= downloadable_archives_carry_identical_bootstrap (root);
     ok &= redesigned_cpp_contract_symbols_do_not_regress (root);
     ok &= contract_headers_have_compile_coverage (root, "framework/include", "");
     ok &= contract_headers_have_compile_coverage (root, "connector/core/include", "");

@@ -17,8 +17,10 @@ one archive is all you need — there is no reason to clone the whole repository
 [**Download zlink-tutorial-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
 
 The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
-leaves the project under `zlink-tutorial-cpp/`, with the package versions of the release you
-downloaded.
+leaves the project under `zlink-tutorial-cpp/`, whose `bootstrap.cmake` replaces the three-archive
+install of section 1.3 below: one `cmake -P bootstrap.cmake` installs the framework and configures
+the project. Neither the repository nor Python is needed. The procedure and its troubleshooting
+are in the `README.md` inside.
 
 For the current main, take just that directory out of the repository.
 
@@ -35,24 +37,24 @@ git sparse-checkout set framework/languages/cpp/tutorial
 - nlohmann_json, Boost, liblz4, libprotobuf, OpenSSL, opentelemetry-cpp
 
 `zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
-overlay port and Conan recipes as well, so there are three installation paths — but **only the
-GitHub Release path completes today.**
+overlay port and Conan recipes as well, so there are three installation paths. **The GitHub
+Release path is the one verified end to end**; the tutorial and samples archives' `bootstrap.cmake`
+automates it.
 
 | Path | Where it stands |
 |---|---|
-| GitHub Release | Three source archives built in order. Verified end to end |
-| vcpkg overlay port | Defects remain in the three ports; it does not install as published |
-| Conan recipe | Defects remain in the three recipes; they do not install as published |
+| GitHub Release | One Core prebuilt and two source archives installed in order. Verified end to end on Windows and Linux |
+| vcpkg overlay port | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
+| Conan recipe | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
 
-The commands that were run and the point each path stops at are in the project's
-[`README.md`](../../../languages/cpp/quickstart/README.md). Sections 1.1 and 1.2 below keep the
-procedure for when those defects are fixed.
+The commands of the archive path are in the project's
+[`README.md`](../../../languages/cpp/quickstart/README.md).
 
 ### 1.1 vcpkg
 
-!!! warning "This path does not install cleanly yet"
+!!! note "Outside the verified path"
 
-    Defects in the overlay port and the recipes stop it partway. Use
+    This path is refreshed at every release but is not the one this page verified. Use
     [GitHub Release](#13-github-release) for a first install.
 
 ```bash
@@ -70,9 +72,9 @@ cmake -S . -B build \
 
 ### 1.2 Conan
 
-!!! warning "This path does not install cleanly yet"
+!!! note "Outside the verified path"
 
-    Defects in the overlay port and the recipes stop it partway. Use
+    This path is refreshed at every release but is not the one this page verified. Use
     [GitHub Release](#13-github-release) for a first install.
 
 ```bash

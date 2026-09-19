@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$CppRoot = Get-ZlinkCppSampleTreeRoot
 $env:TICTACTOE_LOG_DIR = if ($env:TICTACTOE_LOG_DIR) { $env:TICTACTOE_LOG_DIR } else { Join-Path $ScriptDir "logs" }
 New-Item -ItemType Directory -Force -Path $env:TICTACTOE_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:TICTACTOE_LOG_DIR "*.log")

@@ -312,10 +312,19 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
 === "C++"
 
     ```bash
-    # Run one sample
-    framework/languages/cpp/samples/Bingo/run_sample.sh
+    # Inside the unpacked zlink-samples-cpp/. bootstrap.cmake installs the framework from the
+    # published archives and configures the seven samples into build/ (inside the repository:
+    # framework/languages/cpp/samples/).
+    cmake -P bootstrap.cmake
+    cmake --build build --parallel
 
+    # Run one sample
+    ./Bingo/run_sample.sh
     ```
+
+    On Windows PowerShell it is `cmake --build build --config Release --parallel` followed by
+    `.Bingoun_sample.ps1`. The runner starts Redis itself as a Docker container. The
+    prerequisites and troubleshooting are in the `README.md` inside the archive.
 
 === "Java"
 

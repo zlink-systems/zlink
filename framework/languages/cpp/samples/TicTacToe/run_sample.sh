@@ -2,9 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Port reservation is necessarily a short hand-off: the runner cannot pass its
-# Python socket descriptors to the sample processes. Retry only when a role
+# Port selection is necessarily a short hand-off: the runner only probes that
+# a port is free before the sample processes bind it. Retry only when a role
 # reports the concrete bind error caused by another process taking the port.
 # Functional failures keep their original status and are never retried here.
 if [[ "${1:-}" != "--zlink-tictactoe-retry-child" ]]; then
@@ -24,21 +23,20 @@ if [[ "${1:-}" != "--zlink-tictactoe-retry-child" ]]; then
 fi
 
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_tictactoe_play \
   sample_cpp_framework_tictactoe_api \
   sample_cpp_framework_tictactoe_client \
-  test_cpp_framework_sample_parity \
-  zlink_cpp_framework_mesh_node_vertical_test \
-  test_cpp_framework_actor_gateway >/dev/null
+  $(zlink_cpp_sample_framework_test_targets \
+    test_cpp_framework_sample_parity \
+    zlink_cpp_framework_mesh_node_vertical_test \
+    test_cpp_framework_actor_gateway) >/dev/null
 
 PLAY_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_play"
 API_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_api"
 CLIENT_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_client"
-CTEST_BIN="${CTEST_BIN:-ctest}"
 
 for binary in "$PLAY_BIN" "$API_BIN" "$CLIENT_BIN"; do
   if [[ ! -x "$binary" ]]; then
@@ -48,9 +46,8 @@ for binary in "$PLAY_BIN" "$API_BIN" "$CLIENT_BIN"; do
   fi
 done
 
-"$CTEST_BIN" --test-dir "$BUILD_DIR" \
-  -R 'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)' \
-  --output-on-failure
+zlink_cpp_sample_run_framework_tests \
+  'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)'
 
 read -r -a PORTS <<<"$(zlink_sample_allocate_ports 17)"
 
@@ -251,60 +248,40 @@ mkdir -p "$CONFIG_DIR"
 
 # 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$2" "$3" "$FLOW_LOG_DIR" "$API_A_ENDPOINT" \
-    "$API_B_ENDPOINT" "$API_A_HTTP_ENDPOINT" "$API_B_HTTP_ENDPOINT" "$PLAY_A_ENDPOINT" \
-    "$PLAY_B_ENDPOINT" "$PLAY_A_ROUTE_ENDPOINT" "$PLAY_B_ROUTE_ENDPOINT" \
-    "$API_A_ROUTE_ENDPOINT" "$API_B_ROUTE_ENDPOINT" \
-    "$PLAY_A_SPOT_ENDPOINT" "$PLAY_B_SPOT_ENDPOINT" "$PLAY_A_SPOT_ROUTER_ENDPOINT" \
-    "$PLAY_B_SPOT_ROUTER_ENDPOINT" "$PLAY_A_STREAM_ENDPOINT" "$PLAY_B_STREAM_ENDPOINT" \
-    "$TICTACTOE_CPP_REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" <<'CONFIG_PY'
-import json
-import os
-import stat
-import sys
-
-(path, api_node, play_node, flow_log_dir, api_a_endpoint, api_b_endpoint,
- api_a_http, api_b_http, play_a_endpoint, play_b_endpoint, play_a_route,
- play_b_route, api_a_route, api_b_route, play_a_spot, play_b_spot, play_a_spot_router,
- play_b_spot_router, play_a_stream, play_b_stream, redis_endpoint,
- redis_key_prefix) = sys.argv[1:]
-
-document = {
-    "sample": {
-        "host": {"keepRunning": True},
-        "topology": {
-            "logDir": flow_log_dir,
-            "apiNode": api_node,
-            "playNode": play_node,
-            "apiEndpoint": api_a_endpoint,
-            "apiAEndpoint": api_a_endpoint,
-            "apiBEndpoint": api_b_endpoint,
-            "apiHttpEndpoint": api_a_http,
-            "apiAHttpEndpoint": api_a_http,
-            "apiBHttpEndpoint": api_b_http,
-            "playEndpoint": play_a_endpoint,
-            "playAEndpoint": play_a_endpoint,
-            "playBEndpoint": play_b_endpoint,
-            "playARouteEndpoint": play_a_route,
-            "playBRouteEndpoint": play_b_route,
-            "apiARouteEndpoint": api_a_route,
-            "apiBRouteEndpoint": api_b_route,
-            "playASpotEndpoint": play_a_spot,
-            "playBSpotEndpoint": play_b_spot,
-            "playASpotRouterEndpoint": play_a_spot_router,
-            "playBSpotRouterEndpoint": play_b_spot_router,
-            "playAStreamEndpoint": play_a_stream,
-            "playBStreamEndpoint": play_b_stream,
-            "redisEndpoint": redis_endpoint,
-            "redisKeyPrefix": redis_key_prefix,
-        },
+  local api_node="$2" play_node="$3"
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{
+  "sample": {
+    "host": {"keepRunning": true},
+    "topology": {
+      "logDir": "$FLOW_LOG_DIR",
+      "apiNode": "$api_node",
+      "playNode": "$play_node",
+      "apiEndpoint": "$API_A_ENDPOINT",
+      "apiAEndpoint": "$API_A_ENDPOINT",
+      "apiBEndpoint": "$API_B_ENDPOINT",
+      "apiHttpEndpoint": "$API_A_HTTP_ENDPOINT",
+      "apiAHttpEndpoint": "$API_A_HTTP_ENDPOINT",
+      "apiBHttpEndpoint": "$API_B_HTTP_ENDPOINT",
+      "playEndpoint": "$PLAY_A_ENDPOINT",
+      "playAEndpoint": "$PLAY_A_ENDPOINT",
+      "playBEndpoint": "$PLAY_B_ENDPOINT",
+      "playARouteEndpoint": "$PLAY_A_ROUTE_ENDPOINT",
+      "playBRouteEndpoint": "$PLAY_B_ROUTE_ENDPOINT",
+      "apiARouteEndpoint": "$API_A_ROUTE_ENDPOINT",
+      "apiBRouteEndpoint": "$API_B_ROUTE_ENDPOINT",
+      "playASpotEndpoint": "$PLAY_A_SPOT_ENDPOINT",
+      "playBSpotEndpoint": "$PLAY_B_SPOT_ENDPOINT",
+      "playASpotRouterEndpoint": "$PLAY_A_SPOT_ROUTER_ENDPOINT",
+      "playBSpotRouterEndpoint": "$PLAY_B_SPOT_ROUTER_ENDPOINT",
+      "playAStreamEndpoint": "$PLAY_A_STREAM_ENDPOINT",
+      "playBStreamEndpoint": "$PLAY_B_STREAM_ENDPOINT",
+      "redisEndpoint": "$TICTACTOE_CPP_REDIS_ENDPOINT",
+      "redisKeyPrefix": "$REDIS_KEY_PREFIX"
     }
+  }
 }
-
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-CONFIG_PY
+CONFIG_JSON
 }
 
 write_role_config play-a a a

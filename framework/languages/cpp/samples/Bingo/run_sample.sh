@@ -2,9 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Port reservation is a short hand-off because the runner cannot pass its
-# Python socket descriptors to the sample processes. Retry only a role startup
+# Port selection is a short hand-off because the runner only probes that a port
+# is free before the sample processes bind it. Retry only a role startup
 # that reports EADDRINUSE; functional sample failures keep their status.
 if [[ "${1:-}" != "--zlink-bingo-retry-child" ]]; then
   for attempt in 1 2 3; do
@@ -23,18 +22,18 @@ if [[ "${1:-}" != "--zlink-bingo-retry-child" ]]; then
 fi
 
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_bingo_api \
   sample_cpp_framework_bingo_matchmaking \
   sample_cpp_framework_bingo_play \
   sample_cpp_framework_bingo_session \
   sample_cpp_framework_bingo_client \
-  test_cpp_framework_sample_parity \
-  zlink_cpp_framework_mesh_node_vertical_test \
-  test_cpp_framework_actor_gateway >/dev/null
+  $(zlink_cpp_sample_framework_test_targets \
+    test_cpp_framework_sample_parity \
+    zlink_cpp_framework_mesh_node_vertical_test \
+    test_cpp_framework_actor_gateway) >/dev/null
 
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_bingo_api" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_bingo_api" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
@@ -45,7 +44,6 @@ MATCHMAKING_BIN="$BIN_DIR/sample_cpp_framework_bingo_matchmaking"
 PLAY_BIN="$BIN_DIR/sample_cpp_framework_bingo_play"
 SESSION_BIN="$BIN_DIR/sample_cpp_framework_bingo_session"
 CLIENT_BIN="$BIN_DIR/sample_cpp_framework_bingo_client"
-CTEST_BIN="${CTEST_BIN:-ctest}"
 
 for binary in "$API_BIN" "$MATCHMAKING_BIN" "$PLAY_BIN" "$SESSION_BIN" "$CLIENT_BIN"; do
   if [[ ! -x "$binary" ]]; then
@@ -55,9 +53,8 @@ for binary in "$API_BIN" "$MATCHMAKING_BIN" "$PLAY_BIN" "$SESSION_BIN" "$CLIENT_
   fi
 done
 
-"$CTEST_BIN" --test-dir "$BUILD_DIR" \
-  -R 'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway' \
-  --output-on-failure
+zlink_cpp_sample_run_framework_tests \
+  'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway'
 
 read -r -a PORTS <<<"$(zlink_sample_allocate_paired_ports 24)"
 
@@ -267,72 +264,47 @@ mkdir -p "$CONFIG_DIR"
 
 # 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$2" "$3" "$4" "$5" "$6" "$7" "$FLOW_LOG_DIR" \
-    "$API_A_CHANNEL_ENDPOINT" "$API_B_CHANNEL_ENDPOINT" "$PLAY_A_CHANNEL_ENDPOINT" \
-    "$PLAY_B_CHANNEL_ENDPOINT" "$PLAY_A_ROUTE_ENDPOINT" "$PLAY_B_ROUTE_ENDPOINT" \
-    "$PLAY_A_SPOT_ENDPOINT" "$PLAY_B_SPOT_ENDPOINT" "$PLAY_A_SPOT_ROUTER_ENDPOINT" \
-    "$PLAY_B_SPOT_ROUTER_ENDPOINT" "$SESSION_A_STREAM_ENDPOINT" \
-    "$SESSION_B_STREAM_ENDPOINT" "$API_A_PLAY_ROUTE_ENDPOINT" \
-    "$API_B_PLAY_ROUTE_ENDPOINT" "$API_A_MATCHMAKING_ROUTE_ENDPOINT" \
-    "$API_B_MATCHMAKING_ROUTE_ENDPOINT" "$MATCHMAKING_ROUTE_ENDPOINT" \
-    "$SESSION_A_PLAY_ROUTE_ENDPOINT" "$SESSION_B_PLAY_ROUTE_ENDPOINT" \
-    "$BINGO_REDIS_ENDPOINT" "$BINGO_REDIS_KEY_PREFIX" <<'CONFIG_PY'
-import json
-import os
-import stat
-import sys
-
-(path, api_node, play_node, session_node, stream_endpoint, session_spot_endpoint,
- session_router_endpoint, flow_log_dir, api_a_channel, api_b_channel,
- play_a_channel, play_b_channel, play_a_route, play_b_route, play_a_spot,
- play_b_spot, play_a_spot_router, play_b_spot_router, session_a_stream,
- session_b_stream, api_a_play_route, api_b_play_route,
- api_a_matchmaking_route, api_b_matchmaking_route, matchmaking_route,
- session_a_play_route, session_b_play_route,
- redis_endpoint, redis_key_prefix) = sys.argv[1:]
-
-document = {
-    "sample": {
-        "host": {"keepRunning": True},
-        "topology": {
-            "logDir": flow_log_dir,
-            "apiNode": api_node,
-            "playNode": play_node,
-            "sessionNode": session_node,
-            "apiChannelEndpoint": api_a_channel,
-            "apiAChannelEndpoint": api_a_channel,
-            "apiBChannelEndpoint": api_b_channel,
-            "playChannelEndpoint": play_a_channel,
-            "playAChannelEndpoint": play_a_channel,
-            "playBChannelEndpoint": play_b_channel,
-            "playARouteEndpoint": play_a_route,
-            "playBRouteEndpoint": play_b_route,
-            "apiAPlayRouteEndpoint": api_a_play_route,
-            "apiBPlayRouteEndpoint": api_b_play_route,
-            "apiAMatchmakingRouteEndpoint": api_a_matchmaking_route,
-            "apiBMatchmakingRouteEndpoint": api_b_matchmaking_route,
-            "matchmakingRouteEndpoint": matchmaking_route,
-            "playASpotEndpoint": play_a_spot,
-            "playBSpotEndpoint": play_b_spot,
-            "playASpotRouterEndpoint": play_a_spot_router,
-            "playBSpotRouterEndpoint": play_b_spot_router,
-            "sessionSpotEndpoint": session_spot_endpoint,
-            "sessionRouterEndpoint": session_router_endpoint,
-            "streamEndpoint": stream_endpoint,
-            "sessionAStreamEndpoint": session_a_stream,
-            "sessionBStreamEndpoint": session_b_stream,
-            "sessionAPlayRouteEndpoint": session_a_play_route,
-            "sessionBPlayRouteEndpoint": session_b_play_route,
-            "redisEndpoint": redis_endpoint,
-            "redisKeyPrefix": redis_key_prefix,
-        },
+  local api_node="$2" play_node="$3" session_node="$4" stream_endpoint="$5"
+  local session_spot_endpoint="$6" session_router_endpoint="$7"
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{
+  "sample": {
+    "host": {"keepRunning": true},
+    "topology": {
+      "logDir": "$FLOW_LOG_DIR",
+      "apiNode": "$api_node",
+      "playNode": "$play_node",
+      "sessionNode": "$session_node",
+      "apiChannelEndpoint": "$API_A_CHANNEL_ENDPOINT",
+      "apiAChannelEndpoint": "$API_A_CHANNEL_ENDPOINT",
+      "apiBChannelEndpoint": "$API_B_CHANNEL_ENDPOINT",
+      "playChannelEndpoint": "$PLAY_A_CHANNEL_ENDPOINT",
+      "playAChannelEndpoint": "$PLAY_A_CHANNEL_ENDPOINT",
+      "playBChannelEndpoint": "$PLAY_B_CHANNEL_ENDPOINT",
+      "playARouteEndpoint": "$PLAY_A_ROUTE_ENDPOINT",
+      "playBRouteEndpoint": "$PLAY_B_ROUTE_ENDPOINT",
+      "apiAPlayRouteEndpoint": "$API_A_PLAY_ROUTE_ENDPOINT",
+      "apiBPlayRouteEndpoint": "$API_B_PLAY_ROUTE_ENDPOINT",
+      "apiAMatchmakingRouteEndpoint": "$API_A_MATCHMAKING_ROUTE_ENDPOINT",
+      "apiBMatchmakingRouteEndpoint": "$API_B_MATCHMAKING_ROUTE_ENDPOINT",
+      "matchmakingRouteEndpoint": "$MATCHMAKING_ROUTE_ENDPOINT",
+      "playASpotEndpoint": "$PLAY_A_SPOT_ENDPOINT",
+      "playBSpotEndpoint": "$PLAY_B_SPOT_ENDPOINT",
+      "playASpotRouterEndpoint": "$PLAY_A_SPOT_ROUTER_ENDPOINT",
+      "playBSpotRouterEndpoint": "$PLAY_B_SPOT_ROUTER_ENDPOINT",
+      "sessionSpotEndpoint": "$session_spot_endpoint",
+      "sessionRouterEndpoint": "$session_router_endpoint",
+      "streamEndpoint": "$stream_endpoint",
+      "sessionAStreamEndpoint": "$SESSION_A_STREAM_ENDPOINT",
+      "sessionBStreamEndpoint": "$SESSION_B_STREAM_ENDPOINT",
+      "sessionAPlayRouteEndpoint": "$SESSION_A_PLAY_ROUTE_ENDPOINT",
+      "sessionBPlayRouteEndpoint": "$SESSION_B_PLAY_ROUTE_ENDPOINT",
+      "redisEndpoint": "$BINGO_REDIS_ENDPOINT",
+      "redisKeyPrefix": "$BINGO_REDIS_KEY_PREFIX"
     }
+  }
 }
-
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-CONFIG_PY
+CONFIG_JSON
 }
 
 write_role_config play-a a a a "$SESSION_A_STREAM_ENDPOINT" "$SESSION_A_SPOT_ENDPOINT" "$SESSION_A_ROUTER_ENDPOINT"

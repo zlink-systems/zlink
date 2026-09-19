@@ -3,9 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_deliverydispatch_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_deliverydispatch_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
 fi
@@ -104,63 +103,40 @@ API_HTTP_URL="http://127.0.0.1:${API_HTTP_PORT}"
 write_role_config() {
   local role="$1"
   local instance_name="${2:-}"
-  python3 - "$CONFIG_DIR/${role}.json" "$role" "$instance_name" "$FLOW_LOG_DIR" \
-    "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" "$API_HTTP_URL" "$DISPATCH_ROUTE" \
-    "$DISPATCH_SPOT_ROUTER" "$DISPATCH_SPOT" "$TRACKING_ROUTE" \
-    "$TRACKING_SPOT_ROUTER" "$TRACKING_SPOT" "$CUSTOMER_STREAM" \
-    "$CUSTOMER_SPOT_ROUTER" "$CUSTOMER_SPOT" "$COURIER_STREAM" \
-    "$COURIER_SESSION_SPOT_ROUTER" "$COURIER_SESSION_SPOT" \
-    "$COURIER_NODE1_ROUTE" "$COURIER_NODE1_ROUTER" "$COURIER_NODE1" \
-    "$COURIER_NODE2_ROUTE" "$COURIER_NODE2_ROUTER" "$COURIER_NODE2" <<'PY'
-import json
-import os
-import stat
-import sys
-
-(path, role_name, instance_name, flow_log_dir, redis_endpoint, redis_key_prefix,
- api_http_url, dispatch_route, dispatch_spot_router, dispatch_spot, tracking_route,
- tracking_spot_router, tracking_spot, customer_stream, customer_spot_router,
- customer_spot, courier_stream, courier_session_spot_router,
- courier_session_spot, courier_node1_route, courier_node1_router, courier_node1,
- courier_node2_route, courier_node2_router, courier_node2) = sys.argv[1:]
-
-role = {"name": role_name, "logDir": flow_log_dir}
-if instance_name:
-    role["instanceName"] = instance_name
-
-document = {
-    "sample": {
-        "role": role,
-        "topology": {
-            "redisEndpoint": redis_endpoint,
-            "redisKeyPrefix": redis_key_prefix,
-            "dispatchApiHttpUrl": api_http_url,
-            "dispatchRouteEndpoint": dispatch_route,
-            "dispatchSpotRouterEndpoint": dispatch_spot_router,
-            "dispatchSpotEndpoint": dispatch_spot,
-            "trackingRouteEndpoint": tracking_route,
-            "trackingSpotRouterEndpoint": tracking_spot_router,
-            "trackingSpotEndpoint": tracking_spot,
-            "customerStreamEndpoint": customer_stream,
-            "customerSpotRouterEndpoint": customer_spot_router,
-            "customerSpotEndpoint": customer_spot,
-            "courierStreamEndpoint": courier_stream,
-            "courierSessionSpotRouterEndpoint": courier_session_spot_router,
-            "courierSessionSpotEndpoint": courier_session_spot,
-            "courierActorNode1RouteEndpoint": courier_node1_route,
-            "courierActorNode1RouterEndpoint": courier_node1_router,
-            "courierActorNode1Endpoint": courier_node1,
-            "courierActorNode2RouteEndpoint": courier_node2_route,
-            "courierActorNode2RouterEndpoint": courier_node2_router,
-            "courierActorNode2Endpoint": courier_node2,
-        },
+  local instance_field=""
+  if [[ -n "$instance_name" ]]; then
+    instance_field=", \"instanceName\": \"$instance_name\""
+  fi
+  zlink_sample_write_private_file "$CONFIG_DIR/${role}.json" <<CONFIG_JSON
+{
+  "sample": {
+    "role": {"name": "$role", "logDir": "$FLOW_LOG_DIR"$instance_field},
+    "topology": {
+      "redisEndpoint": "$REDIS_ENDPOINT",
+      "redisKeyPrefix": "$REDIS_KEY_PREFIX",
+      "dispatchApiHttpUrl": "$API_HTTP_URL",
+      "dispatchRouteEndpoint": "$DISPATCH_ROUTE",
+      "dispatchSpotRouterEndpoint": "$DISPATCH_SPOT_ROUTER",
+      "dispatchSpotEndpoint": "$DISPATCH_SPOT",
+      "trackingRouteEndpoint": "$TRACKING_ROUTE",
+      "trackingSpotRouterEndpoint": "$TRACKING_SPOT_ROUTER",
+      "trackingSpotEndpoint": "$TRACKING_SPOT",
+      "customerStreamEndpoint": "$CUSTOMER_STREAM",
+      "customerSpotRouterEndpoint": "$CUSTOMER_SPOT_ROUTER",
+      "customerSpotEndpoint": "$CUSTOMER_SPOT",
+      "courierStreamEndpoint": "$COURIER_STREAM",
+      "courierSessionSpotRouterEndpoint": "$COURIER_SESSION_SPOT_ROUTER",
+      "courierSessionSpotEndpoint": "$COURIER_SESSION_SPOT",
+      "courierActorNode1RouteEndpoint": "$COURIER_NODE1_ROUTE",
+      "courierActorNode1RouterEndpoint": "$COURIER_NODE1_ROUTER",
+      "courierActorNode1Endpoint": "$COURIER_NODE1",
+      "courierActorNode2RouteEndpoint": "$COURIER_NODE2_ROUTE",
+      "courierActorNode2RouterEndpoint": "$COURIER_NODE2_ROUTER",
+      "courierActorNode2Endpoint": "$COURIER_NODE2"
     }
+  }
 }
-
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-PY
+CONFIG_JSON
 }
 
 write_role_config tracking

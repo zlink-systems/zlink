@@ -3,9 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
-CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-source "$CPP_ROOT/samples/sample-build-common.sh"
-zlink_cpp_sample_prepare_build "$CPP_ROOT"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_shoppingmall_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_shoppingmall_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
 fi
@@ -111,9 +110,19 @@ wait_prefix_exact_across() {
   return 1
 }
 
+# Scalar field of the compact JSON object the sample API answers with
+# ("field":"text" or "field":true|false|number). Bash pattern matching is the
+# whole toolchain this needs.
 json_field() {
   local body="$1" field="$2"
-  python3 -c 'import json, sys; value = json.load(sys.stdin)[sys.argv[1]]; print(str(value).lower() if isinstance(value, bool) else value)' "$field" <<<"$body"
+  if [[ "$body" =~ \"$field\":\"([^\"]*)\" ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$body" =~ \"$field\":([A-Za-z0-9.+-]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo "field $field not found in: $body" >&2
+    return 1
+  fi
 }
 
 post_json() {
@@ -126,7 +135,9 @@ wait_order_status() {
   local base_url="$1" order_id="$2" expected="$3" status=""
   for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
     if body="$(post_json "$base_url" /orders/get "{\"orderId\":\"$order_id\"}" 2>/dev/null)"; then
-      status="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["state"]["status"])' <<<"$body")"
+      if [[ "$body" =~ \"state\":(\{[^}]*\}) ]]; then
+        status="$(json_field "${BASH_REMATCH[1]}" status)"
+      fi
       [[ "$status" == "$expected" ]] && return 0
     fi
     sleep "$WAIT_SECONDS"
@@ -171,35 +182,19 @@ REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
 REDIS_KEY_PREFIX="shoppingmall:cpp:${RUN_ID}:"
 
 write_role_config() {
-  python3 - "$CONFIG_DIR/$1.json" "$1" "$FLOW_LOG_DIR" "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" \
-    "$API_A_HTTP_URL" "$API_B_HTTP_URL" "$API_A_ROUTE" "$API_B_ROUTE" \
-    "$API_A_SPOT_ROUTER" "$API_B_SPOT_ROUTER" "$WORKFLOW_A_HTTP_URL" "$WORKFLOW_B_HTTP_URL" \
-    "$WORKFLOW_A_ROUTE" "$WORKFLOW_B_ROUTE" "$WORKFLOW_A_SPOT_ROUTE" "$WORKFLOW_B_SPOT_ROUTE" \
-    "$WORKFLOW_A_SPOT" "$WORKFLOW_A_SPOT_ROUTER" "$WORKFLOW_B_SPOT" "$WORKFLOW_B_SPOT_ROUTER" <<'PY'
-import json
-import os
-import stat
-import sys
-(path, role_name, flow_log_dir, redis_endpoint, redis_key_prefix, api_a_http, api_b_http,
- api_a_route, api_b_route, api_a_spot_router, api_b_spot_router, workflow_a_http,
- workflow_b_http, workflow_a_route, workflow_b_route, workflow_a_spot_route,
- workflow_b_spot_route, workflow_a_spot, workflow_a_spot_router, workflow_b_spot,
- workflow_b_spot_router) = sys.argv[1:]
-document = {"sample": {"role": {"name": role_name, "logDir": flow_log_dir}, "topology": {
-    "redisEndpoint": redis_endpoint, "redisKeyPrefix": redis_key_prefix,
-    "apiAHttpUrl": api_a_http, "apiBHttpUrl": api_b_http,
-    "apiARouteEndpoint": api_a_route, "apiBRouteEndpoint": api_b_route,
-    "apiASpotRouterEndpoint": api_a_spot_router, "apiBSpotRouterEndpoint": api_b_spot_router,
-    "workflowAHttpUrl": workflow_a_http, "workflowBHttpUrl": workflow_b_http,
-    "workflowARouteEndpoint": workflow_a_route, "workflowBRouteEndpoint": workflow_b_route,
-    "workflowASpotRouteEndpoint": workflow_a_spot_route, "workflowBSpotRouteEndpoint": workflow_b_spot_route,
-    "workflowASpotEndpoint": workflow_a_spot, "workflowASpotRouterEndpoint": workflow_a_spot_router,
-    "workflowBSpotEndpoint": workflow_b_spot, "workflowBSpotRouterEndpoint": workflow_b_spot_router,
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{"sample": {"role": {"name": "$1", "logDir": "$FLOW_LOG_DIR"}, "topology": {
+    "redisEndpoint": "$REDIS_ENDPOINT", "redisKeyPrefix": "$REDIS_KEY_PREFIX",
+    "apiAHttpUrl": "$API_A_HTTP_URL", "apiBHttpUrl": "$API_B_HTTP_URL",
+    "apiARouteEndpoint": "$API_A_ROUTE", "apiBRouteEndpoint": "$API_B_ROUTE",
+    "apiASpotRouterEndpoint": "$API_A_SPOT_ROUTER", "apiBSpotRouterEndpoint": "$API_B_SPOT_ROUTER",
+    "workflowAHttpUrl": "$WORKFLOW_A_HTTP_URL", "workflowBHttpUrl": "$WORKFLOW_B_HTTP_URL",
+    "workflowARouteEndpoint": "$WORKFLOW_A_ROUTE", "workflowBRouteEndpoint": "$WORKFLOW_B_ROUTE",
+    "workflowASpotRouteEndpoint": "$WORKFLOW_A_SPOT_ROUTE", "workflowBSpotRouteEndpoint": "$WORKFLOW_B_SPOT_ROUTE",
+    "workflowASpotEndpoint": "$WORKFLOW_A_SPOT", "workflowASpotRouterEndpoint": "$WORKFLOW_A_SPOT_ROUTER",
+    "workflowBSpotEndpoint": "$WORKFLOW_B_SPOT", "workflowBSpotRouterEndpoint": "$WORKFLOW_B_SPOT_ROUTER"
 }}}
-with open(path, "w", encoding="utf-8") as file:
-    json.dump(document, file, indent=2)
-os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-PY
+CONFIG_JSON
 }
 
 write_role_config workflow-a
@@ -280,14 +275,7 @@ fi
 # The relocated workflow fixture resumes from its target lifecycle and finishes
 # the order itself; the runner does not issue a continuation after relocation.
 wait_order_status "$API_A_HTTP_URL" "$planned_relocation_order_id" Confirmed
-assertion_body="$(python3 - "$success_order_id" "$client_pending_order_id" "$concurrent_order_id" "$resume_order_id" "$inventory_failure_order_id" "$payment_failure_order_id" "$scale_out_order_id" <<'PY'
-import json
-import sys
-keys = ("successfulOrderId", "pendingRecoveredOrderId", "concurrentOrderId", "resumedOrderId",
-        "inventoryFailureOrderId", "paymentFailureOrderId", "scaleOutOrderId")
-print(json.dumps(dict(zip(keys, sys.argv[1:]))))
-PY
-)"
+assertion_body="{\"successfulOrderId\":\"$success_order_id\",\"pendingRecoveredOrderId\":\"$client_pending_order_id\",\"concurrentOrderId\":\"$concurrent_order_id\",\"resumedOrderId\":\"$resume_order_id\",\"inventoryFailureOrderId\":\"$inventory_failure_order_id\",\"paymentFailureOrderId\":\"$payment_failure_order_id\",\"scaleOutOrderId\":\"$scale_out_order_id\"}"
 assertion_result="$(post_json "$API_A_HTTP_URL" /self-check/assert "$assertion_body")"
 [[ "$(json_field "$assertion_result" passed)" == true ]] || {
   echo "ShoppingMall server assertion failed: $assertion_result" >&2

@@ -1,176 +1,224 @@
+[English](./README.md) | [한국어](./README.ko.md)
+
 # C++ Tutorial
 
-기능별 가이드가 코드를 읽어 가는 프로그램이다. 장을 하나씩 따라가면 이 프로그램이 그
-순서대로 커진다.
+The program the feature guides read their code from. Follow the chapters one by one and this
+program grows in the same order. It is the `.NET Tutorial` ported to C++: the four kinds of
+Channel messaging (RouteMesh request and one-way, node direct call, ClientServer, Fanout),
+handler filters, runtime weight changes, Spot, Actor, Location and STREAM.
 
-`.NET Tutorial`을 C++로 옮긴 것이다. 아직 Channel 메시징 네 가지(RouteMesh 요청·단방향,
-node 직접 호출, ClientServer, Fanout)와 handler filter, runtime weight 변경, 그리고 id로 부르는
-Spot 하나까지만 옮겼다. Actor, STREAM, 모니터링 장은 아직 없다.
+This directory closes on itself. The procedure below uses only the Core, binding and framework
+archives published on GitHub Releases plus vcpkg; the zlink repository is never cloned.
 
-## quickstart·샘플과 나눠 두는 이유
-
-| | 목적 |
+| | Purpose |
 |---|---|
-| [`../quickstart/`](../quickstart/) | 설치부터 첫 응답까지. 기능을 더하지 않는다 |
-| **`tutorial/`** (여기) | 기능을 차례로 쌓는다. 기능별 가이드가 이 코드를 읽는다 |
-| [`../samples/`](../samples/) | 완결된 업무 흐름을 보이는 application |
+| quickstart (repository `framework/languages/cpp/quickstart/`) | Install through the first reply. Adds no features |
+| **tutorial** (here) | Adds features one at a time. The feature guides read this code |
+| samples (`zlink-samples-cpp.zip`) | Applications with a complete business flow |
 
-tutorial은 기능마다 최소한만 담는다. 도메인 로직을 넣기 시작하면 샘플의 축소판이 된다.
+## Contents
 
-## 전제
+1. [Prerequisites](#1-prerequisites)
+2. [Download and install](#2-download-and-install)
+3. [Build](#3-build)
+4. [Run](#4-run)
+5. [Verify](#5-verify)
+6. [Troubleshooting](#6-troubleshooting)
+7. [Project layout](#7-project-layout)
+8. [Step by step](#8-step-by-step)
+9. [How the documentation reads this code](#9-how-the-documentation-reads-this-code)
+10. [Differences from the .NET tutorial](#10-differences-from-the-net-tutorial)
 
-- C++20 compiler. 여기서 쓴 것은 MSVC 19.44 (Visual Studio 17 2022, x64)다.
-- CMake 3.20 이상. 여기서 쓴 것은 3.31.6이다.
-- `zlink_framework` CMake 패키지. 설치 절차는 아래에 있다.
-- **Redis가 필요하다.** `127.0.0.1:6379`, 키 prefix는 `zlink-tutorial-cpp:`다. Spot 단계가
-  쓴다 — 방은 host가 아니라 id로 불리므로 지금 어느 node에 있는지를 Location Store에서
-  읽는다. Channel 메시징 네 가지와 filter, weight 변경만 볼 생각이면 Redis 없이도 돌지만,
-  그때는 startup에서 Location Store 연결 실패가 로그에 남는다.
+## 1. Prerequisites
 
-## framework를 빌드해 설치한다
+| Tool | Windows | Linux / WSL |
+|---|---|---|
+| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
+| CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
+| Ninja | not needed | recommended; Makefiles are used when it is absent |
+| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg`, `./bootstrap-vcpkg.sh`, then set `VCPKG_ROOT` |
+| Docker Desktop | runs one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 
-.NET tutorial은 nuget.org에 배포된 `Zlink.Framework` 패키지를 참조한다. C++에는 아직
-그런 경로가 없다. 저장소의 C++ framework를 빌드해 설치 prefix를 만들고, 그 prefix를
-`CMAKE_PREFIX_PATH`로 가리켜 `find_package(zlink_framework CONFIG REQUIRED)`가 되게 한다.
+Nothing else is needed: no zlink repository, no Python, no Node.js, no distribution Boost.
+vcpkg builds the third-party libraries (Boost, nlohmann_json, lz4, protobuf, OpenSSL,
+opentelemetry-cpp, redis-plus-plus) from source, so **the first install takes about 20
+minutes** and several GB of disk. Later installs finish in minutes from vcpkg's binary cache.
 
-아래는 이 tutorial을 실제로 빌드할 때 쓴 명령이다. `<zlink>`는 zlink 저장소 root다.
+The third-party versions are pinned with a vcpkg `builtin-baseline`. A clone older than that
+commit needs `git -C $VCPKG_ROOT pull`.
 
-```powershell
-$Core      = "$env:LOCALAPPDATA/zlink/core/1.2.0/windows-x64"
-$Vcpkg     = "<zlink>/.artifacts/windows-vcpkg-installed"
-$Toolchain = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake"
-$Build     = "D:/.zlink-build/tutorial-cpp-fw"
-$Install   = "D:/.zlink-build/tutorial-cpp-install"
+## 2. Download and install
 
-cmake -S "<zlink>/framework/languages/cpp" -B $Build -G "Visual Studio 17 2022" -A x64 `
-  "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" "-DVCPKG_INSTALLED_DIR=$Vcpkg" -DVCPKG_MANIFEST_MODE=OFF `
-  "-Dzlink_DIR=$Core/lib/cmake/zlink" `
-  "-DCMAKE_CXX_FLAGS=/EHsc /utf-8 /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00" `
-  "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG" `
-  -DZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE=ON `
-  "-DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=$Core" `
-  -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.2.0 `
-  -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.2.0 `
-  -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF `
-  -DZLINK_FRAMEWORK_CPP_BUILD_E2E=OFF -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF `
-  -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF `
-  -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON `
-  -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF -DZLINK_STREAM_CONNECTOR_BUILD_GODOT=OFF `
-  -DZLINK_STREAM_CONNECTOR_BUILD_AXMOL=OFF `
-  -DCMAKE_MAP_IMPORTED_CONFIG_DEBUG=Release `
-  -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release `
-  -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+Download
+[`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
+and unpack it. Every command below runs inside the unpacked `zlink-tutorial-cpp/`.
 
-cmake --build $Build --config Release --parallel 12
-cmake --install $Build --config Release --prefix $Install
-```
+One script, `bootstrap.cmake`, does the whole install. It downloads three GitHub Release
+assets -- this platform's Core prebuilt (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`)
+and the framework source (`framework-cpp/v0.18.0`) -- builds the binding and the framework into
+`.zlink/install/`, and configures this project into `build/`. Only the framework version is
+written in the script; the Core and binding versions and the third-party list come from the
+framework archive.
 
-두 버전 값은 저장소의 현재 Core·binding 버전과 같아야 한다. Core는 `<zlink>/VERSION`이
-1.2.0이고, binding은 `<zlink>/bindings/cpp/CMakeLists.txt`의 `project(zlink_cpp VERSION 1.2.0)`
-이다. 설치된 `zlink_framework_cppConfig.cmake`가 여기 적은 값을 그대로
-`find_dependency(zlink_cpp <값> EXACT CONFIG)`로 적어 내는데,
-`USE_BINDINGS_SOURCE=ON`이 함께 빌드하는 `bindings/cpp`는 1.2.0이므로 1.1.0을 적으면
-tutorial의 `find_package(zlink_framework CONFIG REQUIRED)`가 configure에서 멈춘다.
-
-```
-The following configuration files were considered but not accepted:
-  D:/.zlink-build/tutorial-cpp-install/lib/cmake/zlink_cpp/zlink_cppConfig.cmake, version: 1.2.0
-```
-
-framework 0.15.0에서 이 두 변수의 기본값도 1.1.0에서 1.2.0으로 올랐다. 값을 적지 않으면
-기본값이 쓰인다.
-
-`ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE=ON`이 들어간 이유가 있다.
-`<zlink>/.artifacts/windows/install/zlink-cpp/1.1.0`에 미리 staging된 C++ binding 패키지는
-`find_dependency(zlink 1.1.0 EXACT)`를 요구한다. 저장소의 현재 Core 버전은 1.2.0이므로
-(`<zlink>/VERSION`) 그 staging본으로는 configure가 통과하지 않는다.
-
-```
-Could not find a configuration file for package "zlink" that exactly
-matches requested version "1.1.0".
-  ... zlink/1.2.0/windows-x64/lib/cmake/zlink/zlinkConfig.cmake, version: 1.2.0
-```
-
-`USE_BINDINGS_SOURCE=ON`은 `<zlink>/bindings/cpp`를 함께 빌드한다. 이 경로는
-`bindings/cpp`의 install 규칙까지 같은 prefix로 실행하므로, 설치된 prefix에
-`zlink_framework`와 `zlink_cpp` 패키지가 나란히 놓인다.
-
-```
-$Install/lib/cmake/
-  zlink_cpp/  zlink_framework/  zlink_framework_cpp/
-  zlink_http_client_cpp/  zlink_stream_connector_cpp/
-```
-
-Core는 `bin/zlink.dll`과 `lib/zlink.lib`만 이 prefix로 들어오고 CMake config는 오지 않는다.
-`zlink_framework_cppConfig.cmake`가 `find_dependency(zlink 1.2.0 EXACT CONFIG)`를 부르므로
-아래에서 Core prefix를 `CMAKE_PREFIX_PATH`에 함께 적는다.
-
-## 프로젝트
-
-| 프로젝트 | 역할 |
-|---|---|
-| `Shared` | 두 쪽이 함께 쓰는 message 계약 |
-| `Server` | channel handler와 node 직접 호출 handler를 실행하고, filter를 건다. 운영 endpoint 하나를 위해 HTTP도 연다 |
-| `Client` | HTTP를 받아 mesh로 호출한다 |
-| `StreamClient` | mesh 밖의 client. framework가 아니라 connector만 링크한다 |
-
-## 빌드
+Windows PowerShell:
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" "-DVCPKG_INSTALLED_DIR=$Vcpkg" -DVCPKG_MANIFEST_MODE=OFF `
-  "-DCMAKE_PREFIX_PATH=$Install;$Core" `
-  -DCMAKE_MAP_IMPORTED_CONFIG_DEBUG=Release `
-  -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release `
-  -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
-
-cmake --build build --config Release --parallel 8
+cmake -P bootstrap.cmake
 ```
 
-Core는 DLL이다. 실행 전에 `zlink.dll`을 실행 파일 옆에 둔다.
+Linux / WSL bash:
+
+```bash
+export VCPKG_ROOT=$HOME/vcpkg
+cmake -P bootstrap.cmake
+```
+
+`VCPKG_ROOT` is where vcpkg was cloned. Parallelism defaults to the logical core count;
+lower it with `-DZLINK_JOBS=4` placed before `-P`. To start over, delete `.zlink/` and `build/`.
+
+## 3. Build
+
+Windows PowerShell:
 
 ```powershell
-Copy-Item "$Install/bin/zlink.dll" build/Release/
+cmake --build build --config Release --parallel
 ```
 
-## 실행
+Linux / WSL bash:
 
-터미널 두 개. Server를 먼저 실행한다.
+```bash
+cmake --build build --parallel
+```
+
+Three executables come out -- under `build\Release\` on Windows, `build/` on Linux. On Windows
+the Core `zlink.dll` and the third-party DLLs are copied next to the executables (Windows has
+no RPATH; the loader only looks beside the image).
+
+## 4. Run
+
+Redis must be at `127.0.0.1:6379`; the Spot, Actor and Location steps use it as the Location
+Store. Start one with Docker (same on both platforms).
+
+```bash
+docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+```
+
+Start the Server first, then the Client. Handler and filter logs go to **stderr**.
+
+Windows PowerShell:
 
 ```powershell
-build/Release/tutorial_server.exe
-build/Release/tutorial_client.exe
+Start-Process -NoNewWindow .\build\Release\tutorial_server.exe
+Start-Process -NoNewWindow .\build\Release\tutorial_client.exe
 ```
 
-STREAM 단계의 외부 client는 세 번째 실행 파일이다.
+Linux / WSL bash:
+
+```bash
+./build/tutorial_server &
+./build/tutorial_client &
+```
+
+The first request confirms the two processes are connected over the mesh. In PowerShell `curl`
+is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double quotes of a JSON body
+as `\"`.
 
 ```powershell
-build/Release/tutorial_stream_client.exe
+curl.exe http://127.0.0.1:5180/players/p1/profile
+curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{\"title\":\"lobby\"}'
 ```
 
-handler와 filter의 로그는 `app.logging().use_console()`로 **stderr**에 나간다.
+```bash
+curl http://127.0.0.1:5180/players/p1/profile
+curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
+```
 
-쓰는 port는 아래와 같다. 다른 언어의 tutorial과 같은 기계에서 함께 돌릴 수 있도록
-.NET tutorial과 다른 값을 쓴다.
+The external client of the STREAM step is the third executable. Run it while the Server is up;
+it completes its own check and exits.
 
-| 용도 | port |
+```powershell
+.\build\Release\tutorial_stream_client.exe
+```
+
+```bash
+./build/tutorial_stream_client
+```
+
+Cleanup stops the two processes and the Redis container.
+
+```powershell
+Stop-Process -Name tutorial_server,tutorial_client
+docker stop zlink-tutorial-redis
+```
+
+```bash
+kill %1 %2
+docker stop zlink-tutorial-redis
+```
+
+The ports differ from the .NET tutorial so both can run on one machine.
+
+| Use | Port |
 |---|---|
 | Client HTTP | 5180 |
-| Server HTTP (운영 endpoint) | 5181 |
+| Server HTTP (operations endpoint) | 5181 |
 | Server mesh | 7401 |
 | Client mesh | 7402 |
 | ClientServer channel | 7411 |
 | Fanout publisher | 7412 |
 | Server stream node | 7421 |
 
-## 단계
+## 5. Verify
 
-각 기능은 따로 읽어도 된다. 앞 단계를 하지 않아도 그다음 단계가 동작한다.
-아래 출력은 모두 실제로 찍어 본 것이다.
+| Step | Evidence of success |
+|---|---|
+| `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
+| Build | the three executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client` exist |
+| First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
+| Spot (Redis) | `curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'` prints a room id string (`"9e78fd70-..."`) |
+| STREAM | `tutorial_stream_client` prints the four lines `connected: true` ... `pushed: speedy` and exits |
 
-### 1. Channel 메시징 — RouteMesh
+[Step by step](#8-step-by-step) lists the request and expected output of all ten steps.
 
-요청하는 쪽이 node를 고르지 않는다. 채널 이름만 주면 그 채널을 담당하는 node가 받는다.
+## 6. Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `bootstrap: vcpkg was not found. Set VCPKG_ROOT ...` | No vcpkg. On Windows enable the **vcpkg package manager** component in the Visual Studio Installer; on either platform point `VCPKG_ROOT` at a vcpkg clone |
+| `error: this vcpkg instance requires a manifest with a specified baseline` | Only after hand-editing the manifest `bootstrap.cmake` writes (`.zlink/manifest/vcpkg.json`). Delete `.zlink/manifest` and rerun |
+| `error: no version database entry for <port> at <version>`, or another baseline error | The vcpkg clone predates the baseline commit. `git -C $VCPKG_ROOT pull`, then rerun |
+| `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall. The next run downloads it again from the start |
+| `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |
+| `error LNK2038: mismatch detected for 'RuntimeLibrary'` | Leftovers of a `.zlink/` built with other options. Delete `.zlink/build`, `.zlink/cpp`, `.zlink/install` and `build`, then bootstrap again |
+| On Windows an executable exits at once with no output (exit code `-1073741515`, `STATUS_DLL_NOT_FOUND`) | `zlink.dll` is not beside the executable. Rerun `cmake --build build --config Release`; the post-build step copies it into `build\Release\` |
+| `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop is not running. Start it and repeat `docker run ...` |
+| `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | Another Redis owns 6379. That one can be used as is -- the tutorial only looks at `127.0.0.1:6379` |
+| Server log reports a `Location Store` connection failure | No Redis. The Channel steps still work; the Spot, Actor and Location steps fail |
+| `bind: Address already in use` / `Only one usage of each socket address` | Another process holds a port from the table above. Check for a `tutorial_server` or `tutorial_client` left from an earlier run |
+| `curl: (7) Failed to connect to 127.0.0.1 port 5180` | The Client is not up yet, or died. Read the Client's stderr |
+
+## 7. Project layout
+
+| Project | Role |
+|---|---|
+| `Shared` | Message contracts both sides share |
+| `Server` | Runs the channel handlers and the node direct-call handler, and installs the filter. Opens HTTP for one operations endpoint |
+| `Client` | Accepts HTTP and calls over the mesh |
+| `StreamClient` | A client outside the mesh. Links the connector only, never the framework |
+| `bootstrap.cmake` | Installs the framework from the published archives and configures this project |
+
+`CMakeLists.txt` builds the three executables from one `find_package(zlink_framework CONFIG
+REQUIRED)`. To reuse it in your own project, pass `.zlink/install` in `CMAKE_PREFIX_PATH`.
+
+## 8. Step by step
+
+Each feature can be read on its own; a step works without the ones before it. The outputs
+below were all captured from real runs. The Korean README explains each step in depth; this
+section keeps the requests and what they show.
+
+### 1. Channel messaging -- RouteMesh
+
+The caller does not pick a node. It names a channel, and a node serving that channel answers.
 
 ```console
 $ curl http://127.0.0.1:5180/players/p1/profile
@@ -181,7 +229,7 @@ HTTP/1.1 202 Accepted
 Content-Length: 0
 ```
 
-두 번째는 응답을 기다리지 않는 단방향 호출이다. Server의 stderr에 이렇게 남는다.
+The second call is one-way; the Server's stderr shows the filter around the handler:
 
 ```
 info class call_log_filter_t - dispatch start: RecordLogin
@@ -189,13 +237,12 @@ info class record_login_handler_t - login recorded: p1
 info class call_log_filter_t - dispatch done: RecordLogin in 2ms
 ```
 
-JSON key의 순서는 알파벳 순이다. nlohmann JSON이 object를 정렬된 map으로 들고 있기
-때문이며, 선언 순서와 무관하다.
+JSON keys are alphabetical: nlohmann JSON keeps objects as sorted maps.
 
-### 2. Channel 메시징 — node 직접 호출
+### 2. Channel messaging -- node direct call
 
-channel을 거치지 않는 경로다. 받는 쪽은 `mesh.add_route_request_handler`로 mesh에 바로
-등록하고, 부르는 쪽은 node의 routing id를 지정한다. 운영 명령에만 쓴다.
+No channel involved. The receiver registers with `mesh.add_route_request_handler`; the caller
+names the node's routing id. Operations commands only.
 
 ```console
 $ curl http://127.0.0.1:5180/ops/nodes/game-server-1/status
@@ -206,38 +253,25 @@ HTTP/1.1 404 Not Found
 {"correlationId":"http-6","error":"not_found","message":"MeshNode request target was not found"}
 ```
 
-`channelName`이 비어 있는 것이 요점이다. channel이 관여하지 않았다는 뜻이다. `calledBy`는
-부른 쪽 node의 routing id이고, `uptime`은 답한 process 하나의 것이다. channel 호출과 달리
-후보를 고르지 않으므로, 없는 node를 적으면 그대로 실패한다.
+An empty `channelName` is the point. The receiver must fix its id with `set_routing_id`, and the
+caller must map that id to an endpoint with `peer_connections().connect(routing_id, endpoint)`.
 
-이 호출에는 등록 쪽 조건이 둘 더 있다. 받는 node가 `set_routing_id`로 id를 고정해야 하고
-(고정하지 않으면 생성된 id라 부르는 쪽이 적을 수 없다), 부르는 쪽이
-`peer_connections().connect(routing_id, endpoint)`로 어느 id가 그 endpoint에 있는지 알려야
-한다. `connect(endpoint)`만 쓰면 channel 호출은 되지만 node 직접 호출은 대상을 모른다.
+### 3. Channel messaging -- ClientServer
 
-handler가 `route_message_context_t`를 함께 받아야 위 세 값이 손에 들어온다. 인자를 하나만
-선언한 handler도 유효하며, 그때는 context가 오지 않는다.
-
-### 3. Channel 메시징 — ClientServer
-
-호출 코드는 위와 같다. 다른 것은 **누가 받느냐**다. 부르는 쪽이 연결한 서버가 받는다.
+Same calling code; the difference is **who receives**: the server the caller connected to.
 
 ```console
 $ curl -X POST http://127.0.0.1:5180/players/p1/tickets
 "ticket-p1"
 ```
 
-C++에서는 부르는 쪽이 쓰는 타입도 다르다. RouteMesh는 `route_client_t`, ClientServer는
-`channel_client_t`다. `route_client_t::request_to_channel`에 ClientServer channel 이름을 주면
-호출이 이렇게 거절된다.
+RouteMesh calls use `route_client_t`, ClientServer calls use `channel_client_t`. Naming a
+ClientServer channel through `route_client_t::request_to_channel` is refused with
+`503 {"error":"unavailable","message":"RouteMesh channel 'ticketing' is not registered"}`.
 
-```
-503 {"error":"unavailable","message":"RouteMesh channel 'ticketing' is not registered"}
-```
+### 4. Channel messaging -- Fanout
 
-### 4. Channel 메시징 — Fanout
-
-보내는 쪽이 받는 node를 모른다. 구독한 node가 모두 받는다.
+The publisher does not know the receivers; every subscribed node gets the event.
 
 ```console
 $ curl -i -X POST http://127.0.0.1:5180/notices \
@@ -246,7 +280,7 @@ HTTP/1.1 202 Accepted
 Content-Length: 0
 ```
 
-Server의 stderr:
+Server stderr:
 
 ```
 info class call_log_filter_t - dispatch start: MaintenanceNotice
@@ -254,90 +288,29 @@ info class maintenance_notice_subscriber_t - maintenance notice: scheduled maint
 info class call_log_filter_t - dispatch done: MaintenanceNotice in 1ms
 ```
 
-fanout handler는 다른 handler와 등록 경로가 다르다. 이름 붙인 handler group에 넣고, channel이
-그 group을 집는다. `add_fanout_channel(...).add_handler<...>()` 같은 직접 등록은 없다.
-
-```cpp
-options.handlers ().group ("broadcast").add_publish<maintenance_notice_subscriber_t> ();
-options.add_fanout_channel ("broadcast")
-  .connect ("tcp://127.0.0.1:7412")
-  .use_handler_group ("broadcast");
-```
-
-`connect(...)`가 이 구독자를 수동으로 만든다. Location Store로 publisher를 찾는
-`enable_subscriber()`를 옆에 같이 쓰면 startup에서 거절된다.
-
-```
-fanout channel 'broadcast' cannot combine automatic discovery with manual subscriber endpoints
-```
+Fanout handlers go into a named handler group that the channel picks up; there is no direct
+`add_fanout_channel(...).add_handler<...>()`. Combining `connect(...)` with `enable_subscriber()`
+is refused at startup: `fanout channel 'broadcast' cannot combine automatic discovery with manual
+subscriber endpoints`.
 
 ### 5. Handler filter
 
-위 네 호출의 Server 로그에 한 쌍씩 찍힌 `dispatch start` / `dispatch done`이 filter다.
-handler마다 같은 로그를 적지 않아도 되도록 dispatch를 감싼다.
+The `dispatch start` / `dispatch done` pair around every call above is the filter. All four
+paths -- channel request and one-way, ClientServer, Fanout, node direct call -- pass through it.
+The category reads `class call_log_filter_t` because `logger_t<T>` defaults to `typeid(T).name()`
+and MSVC prefixes that with `class `.
 
-```
-info class call_log_filter_t - dispatch start: GetPlayerProfile
-info class call_log_filter_t - dispatch done: GetPlayerProfile in 1ms
-info class call_log_filter_t - dispatch start: RecordLogin
-info class record_login_handler_t - login recorded: p1
-info class call_log_filter_t - dispatch done: RecordLogin in 2ms
-info class call_log_filter_t - dispatch start: IssueSessionTicket
-info class call_log_filter_t - dispatch done: IssueSessionTicket in 1ms
-info class call_log_filter_t - dispatch start: MaintenanceNotice
-info class maintenance_notice_subscriber_t - maintenance notice: scheduled maintenance
-info class call_log_filter_t - dispatch done: MaintenanceNotice in 1ms
-info class call_log_filter_t - dispatch start: GetNodeStatus
-info class call_log_filter_t - dispatch done: GetNodeStatus in 0ms
-```
+### 6. Runtime weight change
 
-Channel 요청·단방향, ClientServer, Fanout, node 직접 호출 네 경로 모두 filter를 지난다.
-
-로그의 category가 `class call_log_filter_t`인 것은 `logger_t<T>`의 기본 category가
-`typeid(T).name()`이기 때문이다. MSVC의 그 값이 `class `로 시작한다.
-
-### 6. Runtime weight 변경
-
-지금까지의 값은 모두 startup에 정해졌다. weight는 다르다. process를 돌린 채로 바꿀 수 있는
-유일한 값이다. 0으로 두면 socket은 열린 채 남고 처리 중인 호출도 끝까지 가지만, 다른 node가
-새 호출의 대상으로 이 node를 고르지 않는다. 평상시 값은 100이다.
-
-바꾸는 창구는 `route_mesh_runtime_options_t`다. builder가 아니라 **돌고 있는 mesh**를 가리키는
-타입이고, HTTP handler가 생성자로 받는다.
-
-```cpp
-explicit channel_weight_handler_t (fw::route_mesh_runtime_options_t &mesh) : _mesh (mesh) {}
-```
-
-앞의 다섯 호출과 달리 이 endpoint는 Server가 직접 받는다. Server는 여기서 처음으로 HTTP를
-열며, port는 Client의 5180과 겹치지 않게 5181을 쓴다.
+Everything so far was fixed at startup; weight is the one value changed while running. At 0 the
+socket stays open and in-flight calls finish, but no other node picks this node for new calls.
+The Server answers this endpoint itself.
 
 ```console
 $ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
 HTTP/1.1 200 OK
-Content-Type: application/json
-X-Correlation-Id: http-1
-Content-Length: 32
-
 {"channel":"profile","weight":0}
 
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
-HTTP/1.1 200 OK
-Content-Type: application/json
-X-Correlation-Id: http-2
-Content-Length: 34
-
-{"channel":"profile","weight":100}
-```
-
-응답의 `weight`는 요청 값을 그대로 돌려준 것이 아니라 `weight(value)` 뒤에 `weight()`로 다시
-읽은 값이다. 쓰기가 실제로 반영되었다는 뜻이다.
-
-weight가 0인 동안 `profile` channel을 부르는 두 호출은 실패한다. 이 tutorial에는 그 channel을
-담당하는 node가 하나뿐이고, 그 하나가 후보에서 빠지면 고를 대상이 남지 않는다. 요청과 단방향
-호출의 응답이 서로 다르다.
-
-```console
 $ curl -i http://127.0.0.1:5180/players/p1/profile
 HTTP/1.1 503 Service Unavailable
 {"correlationId":"http-7","error":"unavailable","message":"RouteMesh channel request was not submitted"}
@@ -345,111 +318,37 @@ HTTP/1.1 503 Service Unavailable
 $ curl -i -X POST http://127.0.0.1:5180/players/p1/logins
 HTTP/1.1 404 Not Found
 {"correlationId":"http-8","error":"not_found","message":"RouteMesh channel send target was not found"}
+
+$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
+HTTP/1.1 200 OK
+{"channel":"profile","weight":100}
 ```
 
-Server의 stderr에는 이 두 호출의 `dispatch start`가 찍히지 않는다. 부르는 쪽이 대상을 고르는
-단계에서 멈추므로 message가 Server에 닿지 않는다.
+ClientServer, fanout and node direct calls keep answering at weight 0: they are not RouteMesh
+channel selections. Invalid input is refused with 400: a missing `value`
+(`{"error":"value is required"}`), an unknown channel (`RouteMesh channel is not configured:
+nope`) and `value=99999` (`channel weight must be in range 0..10000`).
 
-나머지 세 호출은 weight가 0이어도 그대로 답한다. ClientServer(`/players/p1/tickets`)와
-fanout(`/notices`)은 RouteMesh channel이 아니고, node 직접 호출(`/ops/nodes/...`)은 후보를
-고르지 않고 routing id로 대상을 적기 때문이다.
+### 7. Spot -- calling by id
 
-위 블록의 두 번째 명령으로 weight를 100으로 되돌리면 두 호출 모두 원래대로 답한다.
-
-```console
-$ curl http://127.0.0.1:5180/players/p1/profile
-{"level":1,"nickname":"rookie","playerId":"p1"}
-
-$ curl -i -X POST http://127.0.0.1:5180/players/p1/logins
-HTTP/1.1 202 Accepted
-Content-Length: 0
-```
-
-위 출력은 framework 0.16.0에서 찍은 것이다. 0.15.0 전까지 C++은 이 경우에도 200을 냈고, 다른 네
-언어만 실패했다. weight를 바꾼 node가 새 descriptor를 자기 topology에만 반영하고 peer에게
-보내지 않아 부르는 쪽이 옛 weight를 들고 있었던 것으로, 0.15.0이 이 값을 peer에게 함께
-보내면서 고쳐졌다(zlink `92c7773`, issue #481).
-
-!!! warning "두 응답의 error kind가 서로 다른 것은 C++만 남은 차이다"
-
-    [#498](https://github.com/zlink-systems/zlink/issues/498)은 후보가 비었을 때 request와
-    one-way send가 **둘 다 `Unavailable`**로 끝나도록 맞췄고, 0.16.0에 들어갔다. .NET·Java·
-    Kotlin·Node는 이 단계에서 두 호출 모두 503을 낸다. **C++만 one-way send가 아직
-    `NotFound`(404)다.**
-
-    request 경로와 달리 RouteMesh channel의 one-way send는
-    `framework/src/runtime/host/app.cpp`의 `one_way_native_submit_result`를 지나는데, #498이
-    고친 자리는 `channel_outbound_exchange.cpp`의 두 곳이라 이 경로가 빠졌다. 위 404는 그것을
-    실행해 확인한 값이다.
-
-거절되는 경우는 다음과 같다.
+One id, and the call goes to whichever node holds that room now.
 
 ```console
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight'
-HTTP/1.1 400 Bad Request
-{"error":"value is required"}
-
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/nope/weight?value=100'
-HTTP/1.1 400 Bad Request
-{"correlationId":"http-4","error":"protocol_error","message":"RouteMesh channel is not configured: nope"}
-
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=99999'
-HTTP/1.1 400 Bad Request
-{"correlationId":"http-5","error":"protocol_error","message":"channel weight must be in range 0..10000"}
-```
-
-첫 번째는 handler가 직접 낸 응답이다. C++에는 query string을 `int` 인자로 묶어 주는 model
-binding이 없어 `query_values`에서 손으로 꺼내며, 없는 경우를 handler가 답하지 않으면 500
-`invalid map<K, T> key`가 나간다. 뒤의 둘은 runtime이 낸 것이다. 등록하지 않은 channel 이름과
-범위 밖의 값은 `route_mesh_runtime_options_t`가 받아 주지 않는다.
-
-이 호출에는 Server의 stderr에 `dispatch start` / `dispatch done`이 찍히지 않는다. filter가 감싸는
-것은 이 node가 **받은 message**의 dispatch이고, 이 endpoint는 message가 아니라 이 process 안의
-HTTP 호출이기 때문이다.
-
-### 7. Spot — id로 부르기
-
-지금까지의 호출은 모두 대상을 이름으로 골랐다. channel 이름을 주면 Framework가 그 channel을
-맡은 node 중 하나를 고르고, routing id를 주면 그 node가 답했다. Spot은 다르다. **id 하나를
-주면 그 id의 방이 지금 있는 node로 간다.**
-
-방을 먼저 연다. 응답은 그 방의 id다.
-
-```console
-$ curl -X POST http://127.0.0.1:5180/rooms     -H 'Content-Type: application/json' -d '{"title":"lobby"}'
+$ curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 "9e78fd70-edee-47b4-8433-d1539862917f"
-```
 
-id는 Framework가 만든다. 그 뒤로는 이 값 하나로 방을 부른다.
-
-```console
-$ curl -i -X POST http://127.0.0.1:5180/rooms/9e78fd70-edee-47b4-8433-d1539862917f/chat     -H 'Content-Type: application/json' -d '{"playerId":"p1","text":"hello"}'
+$ curl -i -X POST http://127.0.0.1:5180/rooms/9e78fd70-edee-47b4-8433-d1539862917f/chat -H 'Content-Type: application/json' -d '{"playerId":"p1","text":"hello"}'
 HTTP/1.1 202 Accepted
 
 $ curl http://127.0.0.1:5180/rooms/9e78fd70-edee-47b4-8433-d1539862917f
 {"chat":["p1: hello"],"title":"lobby"}
 ```
 
-첫 호출은 응답을 기다리지 않는 단방향이고, 두 번째는 방이 만든 답을 받는다. 방은 두 호출
-사이에 상태를 들고 있었다.
+The Framework creates the id; the Location Store (Redis) records where it lives.
 
-C++ 쪽에서 알아 둘 것은 다음과 같다.
+### 8. Actor -- a player called by id
 
-- **Spot 하나를 등록하는 순간 Location Store와 Relocation Store가 모두 필요하다.** 등록
-  자체가 조건이라 relocation을 꺼도 Relocation Store를 요구한다.
-- **mesh node의 Object role을 `none`으로 두지 않는다.** 앞 단계까지는 `none`이었다. Spot을
-  등록하려면 Server, 부르려면 Client여야 한다.
-- **C++ user Spot은 admit할 actor 타입을 언제나 이름 짓는다.** 이 방은 actor를 받지 않으므로
-  기반 타입을 적고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 그 타입 인자가 없다.
-
-```cpp
-class game_room_t : public fw::spot_t<fw::actor_t>
-```
-
-### 8. Actor — id로 부르는 플레이어
-
-방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
-다시 만들면 있던 것을 돌려준다.
+The **caller** picks the id; creating the same id again returns the existing actor.
 
 ```console
 $ curl -X POST http://127.0.0.1:5180/players/p7 -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
@@ -468,17 +367,12 @@ $ curl http://127.0.0.1:5180/players/p7
 {"nickname":"veteran","playerId":"p7"}
 ```
 
-C++ 쪽에서 알아 둘 것은 다음과 같다.
+Actors are made by `player_factory_t`, not by a constructor; one Entry Spot must be registered,
+and in C++ its `on_actor_join` admission callback is mandatory.
 
-- **Actor는 생성자로 만들어지지 않는다.** `player_factory_t`가 만들고 context를 심는다.
-- **Entry Spot을 하나 등록해야 한다.** 새로 만들어진 player가 처음 들어가는 자리다.
-- **C++의 entry spot만 입장 승인 callback이 필수다.** `lobby_spot_t::on_actor_join`이
-  그 관문이고, 거절하도록 두면 Actor 생성 자체가 실패한다.
+### 9. Location -- where is it
 
-### 9. Location — 위치 조회
-
-Spot과 Actor는 id로만 불렀고, 어디에 있는지는 Framework가 찾았다. 그 기록을 직접 읽는
-호출이다.
+Reads the Location Store only; nothing is sent to the target.
 
 ```console
 $ curl http://127.0.0.1:5180/locations/rooms/d50a66f2-fb52-4d4f-82a0-fdbeafd45511
@@ -491,58 +385,36 @@ $ curl -i http://127.0.0.1:5180/locations/players/ghost
 HTTP/1.1 404 Not Found
 ```
 
-조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
-대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
+### 10. STREAM and the Session-Actor link
 
-### 10. STREAM과 Session-Actor 연결
-
-외부 client가 TCP로 붙는다. framework가 아니라 connector만 링크한다.
+An external client attaches over TCP, linking the connector only.
 
 ```console
-$ build/Release/tutorial_stream_client.exe
+$ ./build/tutorial_stream_client
 connected: true
 round trip: 2ms          # STREAM request/reply
-bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+bound player: p1         # the connection is bound to a player
+pushed: speedy           # the player pushes over that connection
 ```
 
-`pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
-알림**을 받았다.
+`pushed` is the point: the client only sent a nickname change and received a push the player
+sent on its own. In C++ every packet arrives through one `on_packet`, `reply_packet` answers
+requests only (pushes use `bound_session().send(...)`), and the connector is opened with manual
+dispatch so a push arriving before `wait` is queued rather than dropped.
 
-C++ 쪽에서 알아 둘 것은 다음과 같다.
+## 9. How the documentation reads this code
 
-- **session handler 등록 표면이 없다.** 모든 packet이 `on_packet` 하나로 오고, 이 tutorial은
-  packet 이름으로 갈래를 나눈다. .NET·Java·Kotlin·Node는 handler를 따로 등록한다.
-- **`reply_packet`은 Request에만 답한다.** 기다리는 요청이 없는 client에 밀 때는 actor 쪽에서
-  `bound_session().send(...)`를 쓴다.
-- **connector는 manual dispatch로 열었다.** 그래야 wait를 걸기 전에 도착한 push가 버려지지
-  않고 큐에 남는다.
-
-## 문서가 읽는 방식
-
-문서는 코드를 손으로 옮겨 적지 않고 이 파일들에서 구간을 읽는다. 구간은 소스의
-`--8<--` 마커가 정한다.
+The documentation does not copy code; it reads regions of these files, delimited by `--8<--`
+markers in the source:
 
 ```
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
 ```
 
-Spot 단계가 더한 마커는 아래와 같다.
+Renaming a marker makes the page that reads it emit an empty block, so rename the marker and
+the page together. Marker names match the .NET tutorial.
 
-| 마커 | 자리 |
-|---|---|
-| `spot-contracts` | `Shared/contracts.hpp` |
-| `spot-class` · `spot-handlers` | `Server/spots/game_room.hpp` |
-| `location-store` · `relocation-store` | `Server/main.cpp` |
-| `object-server` · `spot-register` | `Server/main.cpp` |
-| `location-store-client` · `spot-client-register` | `Client/main.cpp` |
-| `spot-create-call` · `spot-message-call` | `Client/main.cpp` |
-| `spot-send-call` · `spot-request-call` | `Client/main.cpp`. `spot-message-call` 안에 나뉘어 있다 |
-
-마커 이름을 바꾸면 그 구간을 읽는 문서가 조용히 빈 코드 블록을 낸다. 이름을 바꿀 때는
-문서를 함께 고친다. 마커 이름은 .NET tutorial과 같다.
-
-| 마커 | 자리 |
+| Marker | Location |
 |---|---|
 | `channel-contracts` | `Shared/contracts.hpp` |
 | `channel-request-handler` | `Server/channel/get_player_profile_handler.hpp` |
@@ -569,11 +441,16 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `fanout-publish-register` | `Client/main.cpp` |
 | `fanout-call` | `Client/main.cpp` |
 | `weight-runtime` | `Server/ops/channel_weight_handler.hpp` |
+| `spot-contracts` | `Shared/contracts.hpp` |
+| `spot-class` · `spot-handlers` | `Server/spots/game_room.hpp` |
+| `location-store` · `relocation-store` | `Server/main.cpp` |
+| `object-server` · `spot-register` | `Server/main.cpp` |
+| `location-store-client` · `spot-client-register` | `Client/main.cpp` |
+| `spot-create-call` · `spot-message-call` · `spot-send-call` · `spot-request-call` | `Client/main.cpp` |
 | `location-find` | `Client/main.cpp` |
 | `actor-contracts` | `Shared/contracts.hpp` |
 | `actor-class` · `actor-factory` | `Server/actors/player.hpp` |
-| `entry-spot` · `actor-handlers` · `actor-push` | `Server/spots/lobby_spot.hpp` |
-| `actor-send-handler` · `actor-request-handler` | `Server/spots/lobby_spot.hpp`. `actor-handlers` 안에 나뉘어 있다 |
+| `entry-spot` · `actor-handlers` · `actor-push` · `actor-send-handler` · `actor-request-handler` | `Server/spots/lobby_spot.hpp` |
 | `actor-register` | `Server/main.cpp` |
 | `actor-create-call` · `actor-send-call` · `actor-request-call` | `Client/main.cpp` |
 | `stream-contracts` · `session-actor-contracts` | `Shared/contracts.hpp` |
@@ -581,25 +458,20 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `stream-register` | `Server/main.cpp` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
 
-## .NET tutorial과 달라진 지점
+## 10. Differences from the .NET tutorial
 
-같은 장면을 옮기면서 뜻이 바뀐 자리다. 이름만 다른 것(`AddRouteMesh` →
-`add_route_mesh` 등)은 적지 않는다.
+Places where the meaning changed in the port; renamings alone (`AddRouteMesh` ->
+`add_route_mesh`) are not listed.
 
-| 내용 | .NET | C++ |
+| Topic | .NET | C++ |
 |---|---|---|
-| Location Store | Redis store를 걸고, fanout 구독자가 publisher를 자동으로 찾는다 | store가 없다. 구독자에게 publisher endpoint를 직접 적는다. 대신 mesh node에 `set_object_role(object_role_t::none)`이 필요하다. 이 값을 두지 않으면 mesh node가 Object Server가 되고, 그 role은 Location Store를 요구한다 |
-| fanout handler 등록 | `AddFanoutChannel(...).AddHandler<...>()` | handler group을 거친다. channel builder에 handler를 직접 다는 API가 없다 |
-| ClientServer 호출자 | `IZLinkRouteClient`가 mesh channel과 ClientServer channel을 함께 다룬다 | 타입이 나뉜다. mesh는 `route_client_t`, ClientServer는 `channel_client_t` |
-| fanout publish의 topic | `Publish("broadcast", notice)` — topic을 적지 않는다 | `publish("broadcast", topic, notice)` — topic을 적는다. 구독자 handler가 듣는 topic의 기본값이 event 타입의 packet 이름이므로 그 값을 적는다 |
-| mesh advertise host | `Listen("tcp://0.0.0.0:7201")`만으로 동작한다 | wildcard bind에는 `set_advertise_host`가 필요하다. fanout publisher도 마찬가지여서 `tcp://127.0.0.1:7412`로 bind한다. wildcard로 두면 startup에서 `Fanout wildcard bind host requires an advertise host`로 죽는다 |
-| `NodeStatus`의 `ProcessId` | 있다 | 없다. process id를 얻는 표준 C++ API가 없어 뺐다 |
-| `NodeStatus`의 `Uptime` 기준 | `Process.StartTime` | 정적 초기화 시점. handler 객체는 호출마다 새로 만들어지므로 handler의 멤버로 재면 언제나 `0s`다 |
-| `ChannelName`의 빈 값 | `null`이므로 `?? "(none)"`로 바꾼다 | `std::optional`이 비어 있고, `value_or("")`로 빈 문자열을 낸다 |
-| message 계약 | record 선언만으로 직렬화된다 | `to_json`/`from_json` 한 쌍이 있어야 JSON codec이 그 타입을 받는다. 그 쌍을 손으로 쓰는 덕에 C++ 멤버는 snake_case로 두고 wire의 key는 camelCase로 맞춘다 |
-| 없는 node를 부른 결과 | 500 | 404 `MeshNode request target was not found` |
-| runtime weight의 자리 | `Server/Program.cs`의 `app.MapPost(...)` 한 덩어리 | handler class(`Server/ops/channel_weight_handler.hpp`)와 등록(`Server/main.cpp`의 `options.http()`)으로 나뉜다. `weight-runtime` 마커는 handler 쪽에 있다 |
-| runtime weight의 접근자 | property. `mesh.Channel(c).Weight = value` | getter·setter 한 쌍. `mesh.channel(c).weight(value)`로 쓰고 `weight()`로 읽는다 |
-| runtime weight의 `value` | `int value` 인자로 선언하면 query string이 묶인다 | model binding이 없다. `request.query_values`에서 손으로 꺼내고, 없는 경우도 handler가 답해야 한다 |
-| Server의 HTTP | 원래 `WebApplication`이라 HTTP가 이미 있다 | Server가 HTTP를 열지 않았다. 이 endpoint 때문에 `options.http().listen("http://127.0.0.1:5181")`을 처음 추가했다 |
-| 아직 옮기지 않은 장 | User Spot, Instance Spot, Actor, STREAM·Session-Actor, 모니터링 | 없다 |
+| Location Store for fanout | a Redis store lets subscribers find the publisher | subscribers name the publisher endpoint; the mesh node needs `set_object_role(object_role_t::none)`, otherwise it becomes an Object Server and requires a Location Store |
+| Fanout handler registration | `AddFanoutChannel(...).AddHandler<...>()` | through a handler group; the channel builder has no direct handler API |
+| ClientServer caller | `IZLinkRouteClient` covers mesh and ClientServer channels | two types: `route_client_t` for the mesh, `channel_client_t` for ClientServer |
+| Fanout publish topic | `Publish("broadcast", notice)` | `publish("broadcast", topic, notice)`; the topic is the event's packet name, the subscriber handler's default |
+| Mesh advertise host | `Listen("tcp://0.0.0.0:7201")` is enough | a wildcard bind needs `set_advertise_host`; the fanout publisher binds `tcp://127.0.0.1:7412` for the same reason |
+| `NodeStatus.ProcessId` | present | absent; standard C++ has no process id API |
+| `NodeStatus.Uptime` origin | `Process.StartTime` | static initialization; handler objects are created per call |
+| Empty `ChannelName` | `null`, shown as `"(none)"` | empty `std::optional`, shown as `""` via `value_or("")` |
+| Message contracts | records serialize as declared | a `to_json`/`from_json` pair is required; members stay snake_case, wire keys camelCase |
+| Calling a missing node | 500 | 404 `MeshNode request target was not found` |
