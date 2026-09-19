@@ -23,7 +23,7 @@ undici의 낮은 수준 설정을 흡수한다. typed JSON 경로(`body(dto)`/`s
 | 라이브러리 contract | `packages/http-client/src/{index,client,request-builder,types}.ts` | package 내부 공개 표면 |
 | runtime 구현 | `packages/http-client/src/runtime/*` | internal |
 | 회귀 테스트 | `test/contract/http-client.test.js` | private |
-| 패키지 | `@zlink-systems/http-client` | 현재 workspace 전용 private package |
+| 패키지 | `@zlink-systems/http-client` | npm registry에 공개 배포(framework와 같은 버전) |
 
 공개 표면에는 undici `Dispatcher`/`Agent`/`request` 타입을 노출하지 않는다.
 

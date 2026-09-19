@@ -28,7 +28,7 @@ This deliverable's Framework dependency is `@zlink-systems/framework`.
 | Library contract | `packages/http-client/src/{index,client,request-builder,types}.ts` | Package-internal public surface |
 | Runtime implementation | `packages/http-client/src/runtime/*` | internal |
 | Regression test | `test/contract/http-client.test.js` | private |
-| Package | `@zlink-systems/http-client` | Currently workspace-only private package |
+| Package | `@zlink-systems/http-client` | Published to the npm registry (same version as the framework) |
 
 The public surface doesn't expose an undici `Dispatcher`/`Agent`/
 `request` type.
