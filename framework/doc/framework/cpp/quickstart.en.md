@@ -14,7 +14,10 @@ name each other's endpoint directly and exchange one request/reply.
 This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
 one archive is all you need — there is no reason to clone the whole repository.
 
-[**Download zlink-tutorial-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
+!!! tip "Download the tutorial"
+
+    [:material-download: **zlink-tutorial-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip){ .md-button .md-button--primary }
+
 
 The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
 leaves the project under `zlink-tutorial-cpp/`, whose `bootstrap.cmake` replaces the three-archive

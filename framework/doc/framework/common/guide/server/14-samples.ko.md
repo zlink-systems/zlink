@@ -17,25 +17,25 @@
 
 === "C++"
 
-    [**zlink-samples-cpp.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)
+    [:material-download: **zlink-samples-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip){ .md-button .md-button--primary }
 
 === "C#/.NET"
 
-    [**zlink-samples-dotnet.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip)
+    [:material-download: **zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip){ .md-button .md-button--primary }
 
 === "Java"
 
-    [**zlink-samples-java.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
 === "Kotlin"
 
-    [**zlink-samples-java.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
     Kotlin 샘플은 Java 샘플과 gradle project를 공유하므로 같은 파일이다.
 
 === "Node/TypeScript"
 
-    [**zlink-samples-node.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip)
+    [:material-download: **zlink-samples-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip){ .md-button .md-button--primary }
 
 주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 샘플은 배포된 패키지만
 참조하므로 압축을 풀고 바로 빌드한다. 그 안의 버전은 받은 릴리즈에 맞춰져 있다.

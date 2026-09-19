@@ -14,7 +14,10 @@ request/reply 한 번을 주고받는다.
 이 장은 최소 project를 처음부터 만든다. **완성된 tutorial을 바로 실행하려면** 압축 파일 하나만
 받으면 된다. 저장소 전체를 clone할 필요가 없다.
 
-[**zlink-tutorial-java.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip)
+!!! tip "tutorial 내려받기"
+
+    [:material-download: **zlink-tutorial-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip){ .md-button .md-button--primary }
+
 
 주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 압축을 풀면
 `zlink-tutorial-java/` 아래에 project가 그대로 나오고, 그 안의 패키지 버전은 받은 릴리즈에

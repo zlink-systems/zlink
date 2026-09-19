@@ -36,7 +36,7 @@ typical online game server.
 
 The samples do not need the whole repository. One archive per language holds all of them.
 
-[**Download zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+[:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
 The Kotlin samples share a gradle project with the Java ones, so it is the same file.
 

@@ -33,7 +33,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 
 샘플은 저장소 전체를 clone하지 않아도 된다. 언어별 압축 파일 하나에 샘플이 모두 들어 있다.
 
-[**zlink-samples-java.zip 내려받기**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+[:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
 Kotlin 샘플은 Java 샘플과 gradle project를 공유하므로 같은 파일이다.
 
