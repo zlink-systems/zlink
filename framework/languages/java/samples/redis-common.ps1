@@ -383,6 +383,32 @@ function Invoke-ZlinkSampleGradleBuild {
     }
 }
 
+function Invoke-ZlinkSampleFrameworkJarBuild {
+    <#
+        Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
+        checkout actually has the framework source above the sample ($FrameworkRoot is
+        "../../.." from a sample directory). A standalone zip has no such root --
+        zlink.samples.packageMode already resolves these same jars from Maven Central
+        for the sample's own build (verified: the sample's own installDist succeeds
+        without this step when the framework root is absent), so skipping it there is
+        not a loss, just a no-op.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FrameworkRoot,
+        [Parameter(Mandatory = $true)][string]$GradleExecutable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    if (-not (Test-Path (Join-Path $FrameworkRoot "settings.gradle.kts") -PathType Leaf)) {
+        return
+    }
+    Push-Location $FrameworkRoot
+    try {
+        Invoke-ZlinkSampleGradleBuild -GradleExecutable $GradleExecutable -Arguments $Arguments
+    } finally {
+        Pop-Location
+    }
+}
+
 function Invoke-ZlinkDockerCommand {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,

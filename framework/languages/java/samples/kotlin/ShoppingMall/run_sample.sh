@@ -61,12 +61,10 @@ sample.apiAHttpUrl=$api_a_http
 sample.apiBHttpUrl=$api_b_http
 EOF
 
-(
-  cd ../../..
-  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
-    :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar \
-    :zlink-framework-kotlin:jar :zlink-framework-locations-redis:jar --quiet
-)
+zlink_sample_build_framework_jars_if_available ../../.. \
+  --no-daemon --no-parallel --max-workers=1 \
+  :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar \
+  :zlink-framework-kotlin:jar :zlink-framework-locations-redis:jar --quiet
 gradle_run :Server:OrderWorkflow:installDist :Server:CommerceApi:installDist :Client:installDist
 
 start_role() { "$2" --config "$3" >"$log_dir/$1.log" 2>&1 & pids+=("$!"); }

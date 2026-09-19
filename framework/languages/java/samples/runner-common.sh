@@ -388,6 +388,25 @@ zlink_sample_gradle_locked() {
   flock --exclusive --close "${lock_path}" "$@"
 }
 
+# Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
+# checkout actually has the framework source above the sample (`framework_root`
+# is `../../..` from a sample directory). A standalone zip has no such root --
+# `zlink.samples.packageMode` already resolves these same jars from Maven
+# Central for the sample's own build (verified: the sample's own installDist
+# succeeds without this step when the framework root is absent), so skipping
+# it there is not a loss, just a no-op.
+zlink_sample_build_framework_jars_if_available() {
+  local framework_root="$1"
+  shift
+  if [[ ! -f "${framework_root}/settings.gradle.kts" ]]; then
+    return 0
+  fi
+  (
+    cd "${framework_root}"
+    zlink_sample_gradle_locked ./gradlew "$@"
+  )
+}
+
 zlink_sample_gradle_standalone() (
   local settings_source="${1}"
   shift
@@ -498,7 +517,10 @@ zlink_redis_start_scoped() {
       "${image}" 2>&1)"
     create_status="$?"
     set -e
-    container_id="$(printf '%s\n' "${create_output}" | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+    # Not awk: mawk (Ubuntu/Debian's default /usr/bin/awk) has no {n,m}
+    # interval expressions, so `/^[0-9a-f]{12,64}$/` silently never matches
+    # there and this scrape always comes back empty. grep -E works on both.
+    container_id="$(printf '%s\n' "${create_output}" | grep -Ex '[0-9a-f]{12,64}' | head -n 1)"
     if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
       zlink_redis_remove_attempt "${container_id}" "${name}"
       if grep -Eqi 'address already in use|port is already allocated|failed to bind host port' \

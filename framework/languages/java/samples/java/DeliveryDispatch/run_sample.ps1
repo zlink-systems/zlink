@@ -137,10 +137,7 @@ try {
     $dispatchConfig = Write-SampleConfig "dispatch" "dispatch"
     $clientConfig = Write-SampleConfig "client" "client"
 
-    Push-Location "../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @("--no-daemon", ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar", ":zlink-framework-locations-redis:jar", ":zlink-stream-connector:jar", "--quiet")
-    } finally { Pop-Location }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "../../.." -GradleExecutable $Gradle -Arguments @("--no-daemon", ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar", ":zlink-framework-locations-redis:jar", ":zlink-stream-connector:jar", "--quiet")
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:Tracking:installDist", ":Server:CustomerGateway:installDist", ":Server:CourierSession:installDist", ":Server:CourierSpotNode:installDist", ":Server:Dispatch:installDist", ":Client:installDist", "--quiet")
 
     Start-AppRole "Server/Tracking" "Tracking" $trackingConfig "tracking.log"

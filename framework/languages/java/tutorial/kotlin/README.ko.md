@@ -58,15 +58,16 @@ Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
 설치할 것은 없다 — Gradle wrapper가 Gradle을, Gradle이 위 패키지를 Maven Central에서
 내려받는다.
 
+아래 명령은 모두 이 zip을 푼 디렉터리(`zlink-tutorial-java/`, tutorial 루트 - 여기서
+`../`)에서 실행한다.
+
 ## 빌드
 
-```bash
-cd zlink-tutorial-java     # 이 zip을 푼 디렉터리(tutorial 루트)
+```bash title="linux"
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
@@ -74,12 +75,12 @@ cd zlink-tutorial-java
 
 터미널 두 개. Server를 먼저 실행한다.
 
-```bash
+```bash title="linux"
 kotlin/Server/build/install/Server/bin/Server
 kotlin/Client/build/install/Client/bin/Client
 ```
 
-```powershell
+```powershell title="windows"
 .\kotlin\Server\build\install\Server\bin\Server.bat
 .\kotlin\Client\build\install\Client\bin\Client.bat
 ```
@@ -101,10 +102,17 @@ INFO 38136 --- [m-raw-mesh-game] s.z.f.r.binding.ZLinkJavaRawMeshNode     : ZLIN
 
 Client가 뜬 뒤 아래 호출이 `200`과 함께 profile을 돌려주면 성공이다("단계"의 1번 참고).
 
-```bash
+```bash title="linux"
 curl http://127.0.0.1:5380/players/p1/profile
 # 200
 # {"playerId":"p1","nickname":"rookie","level":1}
+```
+
+```powershell title="windows"
+Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
+# playerId nickname level
+# -------- -------- -----
+# p1       rookie   1
 ```
 
 ## 문제 해결

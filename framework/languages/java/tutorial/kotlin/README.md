@@ -42,7 +42,7 @@ Nothing else is required. `zlink-framework-core`'s POM points at binding
 `systems.zlink:zlink`, and that jar bundles both Linux and Windows native
 libraries, so no extra native setup is needed on Windows either.
 
-## Download And Install
+## Download and install
 
 This tutorial never checks out the repository; it only references
 `systems.zlink:zlink-framework-*` packages from Maven Central. `kotlin/`
@@ -51,15 +51,16 @@ builds standalone as long as it travels with `../` (the tutorial root)'s
 nothing separate to download or install: the Gradle wrapper fetches Gradle,
 and Gradle fetches the packages above from Maven Central.
 
+All commands below run from the directory this zip extracts to
+(`zlink-tutorial-java/`, the tutorial root — `../` from here).
+
 ## Build
 
-```bash
-cd zlink-tutorial-java     # the directory this zip extracts to (tutorial root)
+```bash title="linux"
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
@@ -67,12 +68,12 @@ cd zlink-tutorial-java
 
 Two terminals. Start the Server first.
 
-```bash
+```bash title="linux"
 kotlin/Server/build/install/Server/bin/Server
 kotlin/Client/build/install/Client/bin/Client
 ```
 
-```powershell
+```powershell title="windows"
 .\kotlin\Server\build\install\Server\bin\Server.bat
 .\kotlin\Client\build\install\Client\bin\Client.bat
 ```
@@ -95,10 +96,14 @@ INFO 38136 --- [m-raw-mesh-game] s.z.f.r.binding.ZLinkJavaRawMeshNode     : ZLIN
 With the Client up, this call returning `200` with a profile confirms
 success (see stage 1 in the Korean README's walkthrough for more calls).
 
-```bash
+```bash title="linux"
 curl http://127.0.0.1:5380/players/p1/profile
 # 200
 # {"playerId":"p1","nickname":"rookie","level":1}
+```
+
+```powershell title="windows"
+Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 ```
 
 ## Troubleshooting

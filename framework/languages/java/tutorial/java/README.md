@@ -47,7 +47,7 @@ Nothing else is required. `zlink-framework-core`'s POM points at binding
 libraries (`LibraryLoader` finds and loads them from inside the jar), so no
 extra native setup is needed on Windows either.
 
-## Download And Install
+## Download and install
 
 This tutorial never checks out the repository; it only references
 `systems.zlink:zlink-framework-*` packages from Maven Central. This
@@ -58,15 +58,16 @@ zip. There is nothing separate to download or install: the Gradle wrapper
 (`./gradlew` / `gradlew.bat`) fetches the right Gradle version on first run,
 and Gradle then fetches the packages above from Maven Central.
 
+All commands below run from the directory this zip extracts to
+(`zlink-tutorial-java/`, the tutorial root — `../` from here).
+
 ## Build
 
-```bash
-cd zlink-tutorial-java     # the directory this zip extracts to
+```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
 ```
 
@@ -74,12 +75,12 @@ cd zlink-tutorial-java
 
 Two terminals. Start the Server first.
 
-```bash
+```bash title="linux"
 ./java/Server/build/install/Server/bin/Server
 ./java/Client/build/install/Client/bin/Client
 ```
 
-```powershell
+```powershell title="windows"
 .\java\Server\build\install\Server\bin\Server.bat
 .\java\Client\build\install\Client\bin\Client.bat
 ```
@@ -103,10 +104,14 @@ s.z.f.r.binding.ZLinkJavaRawMeshNode : ZLINK_FRAMEWORK_PEER_READY mesh=game peer
 With the Client up, this call returning `200` with a profile confirms
 success (see stage 1 in the Korean README's walkthrough for more calls).
 
-```bash
+```bash title="linux"
 curl http://127.0.0.1:5280/players/p1/profile
 # 200
 # {"playerId":"p1","nickname":"rookie","level":1}
+```
+
+```powershell title="windows"
+Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 ```
 
 ## Troubleshooting

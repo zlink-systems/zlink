@@ -32,7 +32,7 @@ ZoneWorld ZW-B8 fault proxy (`ZoneWorld/Support/SessionRouteBlockProxy.java`)
 both run as JDK single-file source programs (`java <file>.java ...`), so the
 JDK 25 above is the only runtime either one needs.
 
-## Download And Install
+## Download and install
 
 No repository checkout. The directory this zip extracts to
 (`zlink-samples-java/`) is everything you need; it builds against the
@@ -42,20 +42,20 @@ published `zlink-framework-*` packages from Maven Central (version: see
 separate to download or install: the Gradle wrapper fetches Gradle, and
 Gradle fetches the packages above.
 
+All commands below run from inside that directory.
+
 ## Build
 
 The run scripts (see "Run" below) build as part of running, so a separate
 build step isn't required. To check the IDE-importable Gradle build without
 running any scenario:
 
-```bash
-cd zlink-samples-java
+```bash title="linux"
 ./gradlew projects
 ./gradlew buildAllSamples
 ```
 
-```powershell
-cd zlink-samples-java
+```powershell title="windows"
 .\gradlew.bat projects
 .\gradlew.bat buildAllSamples
 ```
@@ -71,7 +71,7 @@ own container (see "Prerequisites" — Docker is the only requirement).
 
 Linux/WSL:
 
-```bash
+```bash title="linux"
 ./java/Bingo/run_sample.sh
 ./java/DeliveryDispatch/run_sample.sh
 ./java/GameQuest/run_sample.sh
@@ -90,7 +90,7 @@ Linux/WSL:
 
 Windows:
 
-```powershell
+```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\GameQuest\run_sample.ps1

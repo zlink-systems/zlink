@@ -22,16 +22,17 @@ English: [`README.md`](./README.md)
 저장소를 checkout하지 않는다. `systems.zlink:zlink-framework-*` 패키지를 Maven Central에서
 받아 빌드한다. 이 zip을 푼 디렉터리(`zlink-tutorial-java/`)가 전부다.
 
+이 파일과 명령 모두 이 zip을 푼 디렉터리(`zlink-tutorial-java/`) 안에서, 그 디렉터리를
+현재 위치로 두고 실행한다.
+
 ## 빌드
 
-```bash
-cd zlink-tutorial-java
+```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
 .\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
 ```

@@ -50,15 +50,16 @@ tutorial과 나란히 옮긴다. 별도로 내려받거나 설치할 것은 없�
 `gradlew.bat`)가 첫 실행에서 정확한 Gradle 버전을 내려받고, 그 다음 Gradle이 위 패키지들을
 Maven Central에서 내려받는다.
 
+아래 명령은 모두 이 zip을 푼 디렉터리(`zlink-tutorial-java/`, tutorial 루트 - 여기서
+`../`)에서 실행한다.
+
 ## 빌드
 
-```bash
-cd zlink-tutorial-java     # 이 zip을 푼 디렉터리
+```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
 ```
 
@@ -66,12 +67,12 @@ cd zlink-tutorial-java
 
 터미널 두 개. Server를 먼저 실행한다.
 
-```bash
+```bash title="linux"
 ./java/Server/build/install/Server/bin/Server
 ./java/Client/build/install/Client/bin/Client
 ```
 
-```powershell
+```powershell title="windows"
 .\java\Server\build\install\Server\bin\Server.bat
 .\java\Client\build\install\Client\bin\Client.bat
 ```
@@ -94,10 +95,17 @@ s.z.f.r.binding.ZLinkJavaRawMeshNode : ZLINK_FRAMEWORK_PEER_READY mesh=game peer
 
 Client가 뜬 뒤 아래 호출이 `200`과 함께 profile을 돌려주면 성공이다("단계"의 1번 참고).
 
-```bash
+```bash title="linux"
 curl http://127.0.0.1:5280/players/p1/profile
 # 200
 # {"playerId":"p1","nickname":"rookie","level":1}
+```
+
+```powershell title="windows"
+Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
+# playerId nickname level
+# -------- -------- -----
+# p1       rookie   1
 ```
 
 ## 문제 해결

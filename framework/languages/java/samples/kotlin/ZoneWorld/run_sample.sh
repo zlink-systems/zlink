@@ -91,9 +91,10 @@ if rg -n 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shar
 fi
 
 echo "==> build"
-(cd ../../.. && zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
+zlink_sample_build_framework_jars_if_available ../../.. \
+  --no-daemon --no-parallel --max-workers=1 \
   :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar \
-  :zlink-framework-locations-redis:jar :zlink-framework-kotlin:jar :zlink-stream-connector:jar --quiet)
+  :zlink-framework-locations-redis:jar :zlink-framework-kotlin:jar :zlink-stream-connector:jar --quiet
 gradle_run :Server:installDist :Client:installDist >/dev/null
 SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 

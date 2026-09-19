@@ -18,22 +18,22 @@ subprojects of the same Gradle build, sharing `settings.gradle.kts`,
   docker run --rm -p 6379:6379 redis
   ```
 
-## Download And Install
+## Download and install
 
 No repository checkout. Build against the `systems.zlink:zlink-framework-*`
 packages from Maven Central. The directory this zip extracts to
 (`zlink-tutorial-java/`) is everything you need.
 
+All commands below run from inside that directory.
+
 ## Build
 
-```bash
-cd zlink-tutorial-java
+```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
 
-```powershell
-cd zlink-tutorial-java
+```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
 .\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
 ```

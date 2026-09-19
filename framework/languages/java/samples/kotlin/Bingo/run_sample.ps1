@@ -185,20 +185,15 @@ sample.session-node=a
     $matchmakingConfig = Write-SampleConfig "matchmaking" "matchmaking-node" "matchmaking"
     $clientConfig = Write-SampleConfig "client" "client-node" "client"
 
-    Push-Location "../../.."
-    try {
-        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-            "--no-daemon",
-            ":zlink-framework-core:jar",
-            ":zlink-framework-spring-boot-starter:jar",
-            ":zlink-framework-kotlin:jar",
-            ":zlink-framework-locations-redis:jar",
-            ":zlink-framework-codec-protobuf:jar",
-            ":zlink-stream-connector:jar",
-            "--quiet")
-    } finally {
-        Pop-Location
-    }
+    Invoke-ZlinkSampleFrameworkJarBuild -FrameworkRoot "../../.." -GradleExecutable $Gradle -Arguments @(
+        "--no-daemon",
+        ":zlink-framework-core:jar",
+        ":zlink-framework-spring-boot-starter:jar",
+        ":zlink-framework-kotlin:jar",
+        ":zlink-framework-locations-redis:jar",
+        ":zlink-framework-codec-protobuf:jar",
+        ":zlink-stream-connector:jar",
+        "--quiet")
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:Session:installDist", ":Server:Api:installDist", ":Server:Play:installDist", ":Server:Matchmaking:installDist", ":Client:installDist", "--quiet")
 

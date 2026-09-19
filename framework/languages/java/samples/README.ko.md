@@ -33,16 +33,15 @@ program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 ## 빌드
 
 실행 script(아래 "실행")가 빌드까지 함께 하므로 따로 빌드할 필요는 없다. IDE 연동이나
-CI에서 실행 없이 빌드만 확인하려면 다음을 쓴다.
+CI에서 실행 없이 빌드만 확인하려면, 이 zip을 푼 디렉터리(`zlink-samples-java/`) 안에서
+다음을 쓴다.
 
-```bash
-cd zlink-samples-java
+```bash title="linux"
 ./gradlew projects
 ./gradlew buildAllSamples
 ```
 
-```powershell
-cd zlink-samples-java
+```powershell title="windows"
 .\gradlew.bat projects
 .\gradlew.bat buildAllSamples
 ```
@@ -51,11 +50,12 @@ cd zlink-samples-java
 
 Sample 하나마다 `run_sample.sh`와 `run_sample.ps1`이 있고, 한 번 실행하면 sample 하나를
 끝까지 돌린다. Redis는 스크립트가 자기 몫의 컨테이너를 직접 띄우고 끝나면 지우므로 따로
-띄울 필요가 없다(위 "전제 조건"의 Docker만 있으면 된다).
+띄울 필요가 없다(위 "전제 조건"의 Docker만 있으면 된다). 아래 명령도 모두
+`zlink-samples-java/` 안에서 실행한다.
 
 Linux·WSL:
 
-```bash
+```bash title="linux"
 ./java/Bingo/run_sample.sh
 ./java/DeliveryDispatch/run_sample.sh
 ./java/GameQuest/run_sample.sh
@@ -74,7 +74,7 @@ Linux·WSL:
 
 Windows:
 
-```powershell
+```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\GameQuest\run_sample.ps1
