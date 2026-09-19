@@ -14,16 +14,17 @@
 
 ## 전제 조건
 
-- **Node.js 22 이상.** `@zlink-systems/zlink@1.2.1`이 `"engines": { "node": ">=22" }`를 선언한다.
+- **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
   `node --version`으로 확인한다.
 - **Docker Desktop(또는 Docker Engine)이 떠 있어야 한다.** Redis 하나를 그 안에서 띄운다(아래
   「실행」). 그 외 설치할 것은 없다.
-- **Windows·Linux(x64) 모두 된다.** `@zlink-systems/zlink@1.2.1`은 `prebuilds/linux-x64/`와
-  `prebuilds/win32-x64/`를 함께 싣는다(#656) — `npm install`이 어느 쪽에서도 소스 빌드로
-  넘어가지 않는다. macOS(`darwin-*`)는 아직 없다 — prebuild가 없으면 `scripts/install.js`가
-  `node-gyp rebuild`로 넘어가고, 그 빌드는 설치된 Core를 가리키는 `ZLINK_CORE_INSTALL_PREFIX`를
-  요구한다. 이 문서의 출력은 Windows 11 위 WSL2 Ubuntu-24.04, Node `v22.23.2`, npm
-  `10.9.8`에서 받은 것이다.
+- **framework 0.18.1부터 Windows에서도 네이티브 빌드 없이 설치된다.** `@zlink-systems/zlink`
+  1.2.1은 `prebuilds/linux-x64/`와 `prebuilds/win32-x64/`를 함께 싣는다(#656).
+  `@zlink-systems/framework`가 그 버전을 정확히 고정하는 것은 0.18.1부터다 — 그 전 버전을
+  고정한 zip에서는 아직 1.2.0만 받아 Windows의 `npm install`이 `node-gyp rebuild`로
+  넘어가고, 설치된 Core를 가리키는 `ZLINK_CORE_INSTALL_PREFIX`를 요구하며 실패한다.
+  macOS(`darwin-*`)는 아직 prebuild가 없다. 이 문서의 출력은 Windows 11 위 WSL2
+  Ubuntu-24.04, Node `v22.23.2`, npm `10.9.8`에서 받은 것이다.
 
 ## 내려받기와 설치
 
@@ -42,7 +43,7 @@ npm install
 | `@zlink-systems/nestjs` | `0.18.0` | 같은 목록. `@zlink-systems/framework: '0.18.0'`을 정확히 고정해 의존한다 |
 | `@nestjs/common`·`@nestjs/core` | `10.4.22` | `@zlink-systems/nestjs@0.18.0`이 `^10.4.22`를 의존·peer 의존한다 |
 | `reflect-metadata` | `0.2.2` | `@zlink-systems/nestjs@0.18.0`의 `^0.2.2` 범위를 만족한다 |
-| `@zlink-systems/zlink` | `1.2.1`(`overrides`) | `@zlink-systems/framework@0.18.0`은 아직 `1.2.0`을 정확히 고정한다. win32-x64 prebuild(#656)를 받으려고 `package.json`의 `overrides`로 `1.2.1`을 강제한다 — `scripts/local-package/sync-version.py`가 관리하는 `@zlink-systems` 세 패키지와 달리 이 값은 손으로 맞춘다 |
+| `@zlink-systems/zlink` | 고정하지 않는다 | `@zlink-systems/framework`가 정확히 고정한다. 0.18.0은 `1.2.0`, 0.18.1부터는 win32-x64 prebuild(#656)가 있는 `1.2.1`이다. 전이 해석에 맡긴다 |
 
 세 `@zlink-systems` 패키지 버전은 저장소의 `scripts/local-package/sync-version.py`가
 `framework/languages/node/VERSION`에 맞춰 갱신한다(저장소 안에서만 해당). 손으로 고치지 않는다.
@@ -155,7 +156,8 @@ if (-not $ready) { exit 1 }
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 꺼져 있다. 띄운 뒤 다시 실행한다 |
 | `curl`이 `Connection refused`를 돌려준다 | Server(`npm run server`)가 아직 뜨지 않았거나 죽었다. 그 터미널의 로그를 먼저 본다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(macOS) | `@zlink-systems/zlink@1.2.1`에는 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows에서 실행한다 |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이 zip이 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
+| 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | `EBADENGINE`(Node 버전 경고) | Node.js 22 미만이다. 위 「전제 조건」대로 22 이상으로 올린다 |
 | `server listening`이 뜨는 데 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 모듈 적재만으로 이만큼 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
 
@@ -651,4 +653,4 @@ weight가 0인 동안 1번은 `errno 0`으로, 2번은 `One-way send route is no
 |---|---|
 | `ZLinkRouteClient`에 `sendToSpot`/`requestToSpot`이 있다 | Node interface 명세 02장 §4가 둘을 `ZLinkRouteClient`에 싣고 인자를 `spotId: SpotId`로 적는다. 공개 계약 `contracts/Channels/RouteCalls.ts`의 `ZLinkRouteClient`에는 둘이 없고(`ZLinkSpotClient` 쪽에 있다), 구현 `DefaultZLinkRouteClient`에는 있으나 인자가 `SpotHandle`이다 |
 | NestJS builder의 Fanout 구독 topic 지정 | 02장 §1의 `ZLinkFanoutChannelBuilder`에는 `subscribe(topic)`·`connect(endpoint)`·`subscriberConnections()`가 있다. `@zlink-systems/nestjs`의 `ZLinkNestFanoutChannelBuilder`에는 셋 다 없고 `enableSubscriber(endpoint?)`만 있다. topic을 하나도 등록하지 않으면 빈 prefix로 전체를 구독한다 |
-| `@zlink-systems/zlink@1.2.0`의 prebuild 범위(당시 확인, 지금은 1.2.1로 해결) | 패키지의 `files`는 `prebuilds/win32-*/*.dll`과 `prebuilds/darwin-*/*.dylib`를 싣도록 적혀 있었다. 1.2.0의 npm tarball에는 `prebuilds/linux-x64/`만 들어 있어 Windows·macOS에서 `npm install`이 source build로 넘어갔다(#656). 1.2.1은 `prebuilds/win32-x64/`를 추가로 담아 이 문서가 이제 `overrides`로 그 버전을 강제한다 — `darwin-*`는 여전히 없다 |
+| `@zlink-systems/zlink@1.2.0`의 prebuild 범위(framework 0.18.1부터 1.2.1로 해결) | 패키지의 `files`는 `prebuilds/win32-*/*.dll`과 `prebuilds/darwin-*/*.dylib`를 싣도록 적혀 있었다. 1.2.0의 npm tarball에는 `prebuilds/linux-x64/`만 들어 있어 Windows·macOS에서 `npm install`이 source build로 넘어갔다(#656). 1.2.1은 `prebuilds/win32-x64/`를 추가로 담고, `@zlink-systems/framework`는 0.18.1부터 그 버전을 고정한다 — `darwin-*`는 여전히 없다 |

@@ -14,15 +14,16 @@ A program that the feature guides read through, chapter by chapter. This directo
 
 ## Prerequisites
 
-- **Node.js 22 or newer.** `@zlink-systems/zlink@1.2.1` declares `"engines": { "node": ">=22" }`.
+- **Node.js 22 or newer.** `@zlink-systems/zlink` declares `"engines": { "node": ">=22" }`.
   Check with `node --version`.
 - **Docker Desktop (or Docker Engine) running.** It hosts a single Redis (see "Run" below).
   Nothing else needs to be installed.
-- **Both Windows and Linux (x64) work.** `@zlink-systems/zlink@1.2.1` ships
-  `prebuilds/linux-x64/` and `prebuilds/win32-x64/` together (#656) — `npm install` never falls
-  back to a source build on either. macOS (`darwin-*`) is not there yet — without a prebuild,
-  `scripts/install.js` falls back to `node-gyp rebuild`, which requires
-  `ZLINK_CORE_INSTALL_PREFIX` pointing at an installed Core. This document's output was captured
+- **Windows installs without a native build starting from framework 0.18.1.**
+  `@zlink-systems/zlink` 1.2.1 ships `prebuilds/linux-x64/` and `prebuilds/win32-x64/` together
+  (#656). `@zlink-systems/framework` pins that version exactly starting at 0.18.1 — a zip
+  pinning an earlier framework still gets `1.2.0` only, so `npm install` on Windows falls back
+  to `node-gyp rebuild`, which requires `ZLINK_CORE_INSTALL_PREFIX` pointing at an installed
+  Core, and fails. macOS (`darwin-*`) has no prebuild yet. This document's output was captured
   on Windows 11 under WSL2 Ubuntu-24.04, Node `v22.23.2`, npm `10.9.8`.
 
 ## Download and install
@@ -42,7 +43,7 @@ npm install
 | `@zlink-systems/nestjs` | `0.18.0` | Same list. Depends on `@zlink-systems/framework: '0.18.0'` exactly |
 | `@nestjs/common`/`@nestjs/core` | `10.4.22` | `@zlink-systems/nestjs@0.18.0` depends on and peer-depends on `^10.4.22` |
 | `reflect-metadata` | `0.2.2` | Satisfies `@zlink-systems/nestjs@0.18.0`'s `^0.2.2` range |
-| `@zlink-systems/zlink` | `1.2.1` (`overrides`) | `@zlink-systems/framework@0.18.0` still pins it to `1.2.0` exactly. `package.json`'s `overrides` forces `1.2.1` to get the win32-x64 prebuild (#656) — unlike the three `@zlink-systems` packages `sync-version.py` owns, this value is hand-maintained |
+| `@zlink-systems/zlink` | Not pinned | `@zlink-systems/framework` pins it exactly. 0.18.0 pins `1.2.0`; starting at 0.18.1 it pins `1.2.1`, which ships the win32-x64 prebuild (#656). Left to transitive resolution |
 
 The three `@zlink-systems` package versions are updated by the repository's
 `scripts/local-package/sync-version.py` to match `framework/languages/node/VERSION` (repository
@@ -156,7 +157,8 @@ responses for each step are under "Steps" and "Actual output" below.
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop (or `dockerd`) is not running. Start it and try again |
 | `curl` returns `Connection refused` | The server (`npm run server`) is not up yet or has died. Check that terminal's log first |
 | `EADDRINUSE` (port conflict) | Another process already holds one of the ports in "Ports" below. Stop it, or clean up another running instance of this tutorial first |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (macOS) | `@zlink-systems/zlink@1.2.1` has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | This zip pins a `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
+| Same error (macOS) | `@zlink-systems/zlink@1.2.1` also has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows (0.18.1 on) |
 | `EBADENGINE` (Node version warning) | Node.js is older than 22. Upgrade per "Prerequisites" above |
 | `server listening` takes 20-45 seconds to appear | The project sits on a WSL 9p mount such as `/mnt/d`; module loading alone takes this long there. Moving it to a Linux filesystem (e.g. `~/`) cuts this down |
 
@@ -658,4 +660,4 @@ inside the repository — that source is not in this zip). The places read were
 |---|---|
 | `ZLinkRouteClient` carries `sendToSpot`/`requestToSpot` | The Node interface spec, chapter 02 §4, puts both on `ZLinkRouteClient` with a `spotId: SpotId` argument. The public contract `contracts/Channels/RouteCalls.ts`'s `ZLinkRouteClient` has neither (they are on `ZLinkSpotClient`); the implementation `DefaultZLinkRouteClient` has them, but with a `SpotHandle` argument |
 | The NestJS builder's way to name a Fanout subscription topic | Chapter 02 §1's `ZLinkFanoutChannelBuilder` has `subscribe(topic)`, `connect(endpoint)` and `subscriberConnections()`. `@zlink-systems/nestjs`'s `ZLinkNestFanoutChannelBuilder` has none of the three, only `enableSubscriber(endpoint?)`. Registering no topic at all subscribes to everything under an empty prefix |
-| `@zlink-systems/zlink@1.2.0`'s prebuild coverage (checked then; resolved by 1.2.1 now) | The package's `files` field was written to ship `prebuilds/win32-*/*.dll` and `prebuilds/darwin-*/*.dylib`. 1.2.0's published tarball carried only `prebuilds/linux-x64/`, so Windows and macOS fell back to a source build (#656). 1.2.1 adds `prebuilds/win32-x64/`, which is why this document now forces that version with `overrides` — `darwin-*` is still missing |
+| `@zlink-systems/zlink@1.2.0`'s prebuild coverage (resolved by framework 0.18.1's `1.2.1`) | The package's `files` field was written to ship `prebuilds/win32-*/*.dll` and `prebuilds/darwin-*/*.dylib`. 1.2.0's published tarball carried only `prebuilds/linux-x64/`, so Windows and macOS fell back to a source build (#656). 1.2.1 adds `prebuilds/win32-x64/`, and `@zlink-systems/framework` pins that version starting at 0.18.1 — `darwin-*` is still missing |

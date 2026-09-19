@@ -25,10 +25,10 @@ reachable from inside the repository; not needed to run the samples).
 
 ## Prerequisites
 
-- **Node.js 22 or newer.** `@zlink-systems/zlink@1.2.1` declares `"engines": { "node": ">=22" }`.
-  Check with `node --version`. Each sample's `package.json` forces this version with
-  `overrides` — the published `@zlink-systems/framework@0.18.0` still pins `1.2.0`, but `1.2.1`
-  is what carries the Windows prebuild (#656).
+- **Node.js 22 or newer.** `@zlink-systems/zlink` declares `"engines": { "node": ">=22" }`.
+  Check with `node --version`. Starting at `@zlink-systems/framework` 0.18.1, it pins
+  `zlink@1.2.1`, which carries the Windows prebuild (#656) — a zip pinning an earlier
+  framework still gets `1.2.0` (see "Troubleshooting" below).
 - **Docker Desktop (or Docker Engine) running.** Nothing else. Each sample runner creates its own
   Redis container (`redis:7.2-alpine`) and removes it when it exits, so you never install or start
   Redis yourself.
@@ -119,7 +119,8 @@ container it started.
 |---|---|
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop (or `dockerd`) is not running. Start it and try again |
 | `Package mode requires @zlink-systems/... Run npm install in ...` | You skipped `npm install` in that sample's directory. Do "Download and install" above first |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (macOS) | `@zlink-systems/zlink@1.2.1` has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | This zip pins a `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
+| Same error (macOS) | `@zlink-systems/zlink@1.2.1` also has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows (0.18.1 on) |
 | `browserType.launch: Executable doesn't exist` in a Chromium sample | You skipped `npm run browser:install` in that sample's directory |
 | Port conflict (`EADDRINUSE`) | The runner picks a random loopback port each time, so this is rare unless you run the same sample twice at once. Retrying usually clears it |
 | Playwright reports `Host system is missing dependencies` on Linux | Playwright needs system libraries that aren't installed. Run `npx playwright install-deps chromium` (needs admin rights) |

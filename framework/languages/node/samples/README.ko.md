@@ -25,10 +25,10 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 
 ## 전제 조건
 
-- **Node.js 22 이상.** `@zlink-systems/zlink@1.2.1`이 `"engines": { "node": ">=22" }`를 선언한다.
-  `node --version`으로 확인한다. 각 샘플의 `package.json`이 `overrides`로 이 버전을 강제한다 —
-  아직 배포된 `@zlink-systems/framework@0.18.0`은 `1.2.0`을 고정하지만, `1.2.1`이라야
-  Windows용 prebuild(#656)를 받는다.
+- **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
+  `node --version`으로 확인한다. `@zlink-systems/framework` 0.18.1부터는 Windows용
+  prebuild(#656)가 있는 `zlink@1.2.1`을 고정한다 — 그 전 버전을 고정한 zip은 아직
+  `1.2.0`만 받는다(아래 「문제 해결」).
 - **Docker Desktop(또는 Docker Engine)이 떠 있어야 한다.** 그 외에는 없다. 각 sample runner가
   Redis container(`redis:7.2-alpine`)를 직접 만들고 끝나면 제거하므로, Redis를 따로 설치하거나
   띄울 필요가 없다.
@@ -118,7 +118,8 @@ PASS Bingo.Ts
 |---|---|
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 꺼져 있다. 띄운 뒤 다시 실행한다 |
 | `Package mode requires @zlink-systems/... Run npm install in ...` | 그 샘플 디렉터리에서 `npm install`을 하지 않았다. 실행 전 위 「내려받기와 설치」를 먼저 한다 |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(macOS) | `@zlink-systems/zlink@1.2.1`에는 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows에서 실행한다 |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이 zip이 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
+| 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | Chromium을 쓰는 샘플에서 `browserType.launch: Executable doesn't exist` | 그 샘플 디렉터리에서 `npm run browser:install`을 하지 않았다 |
 | 포트 충돌(`EADDRINUSE`) | runner가 매번 무작위 loopback 포트를 고르므로 같은 샘플을 동시에 두 번 돌리지만 않으면 드물다. 재시도하면 대개 사라진다 |
 | Linux에서 Playwright가 `Host system is missing dependencies` | Playwright가 요구하는 시스템 라이브러리가 없다. `npx playwright install-deps chromium`으로 설치한다(관리자 권한 필요) |
