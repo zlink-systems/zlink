@@ -32,9 +32,11 @@ class create_game_http_handler_t
         _logger.info (std::string ("recv ") + create_game_http_req_t::packet_name);
         // --8<-- [start:doc-create]
         // co_await는 coroutine 안에서만 쓴다. 이 handler의 반환형이 task_t인 이유다.
-        auto room = co_await _spots.create (sample_names_t::match_spot) // 이 stable type을 등록한 node가 후보가 된다.
+        auto room = co_await _spots.create (sample_names_t::match_spot)
+          // 이 stable type을 등록한 node가 후보가 된다.
                       .in_mesh (sample_names_t::game_spot_node)         // Spot을 만들 mesh를 고른다.
-                      .creation_request (                               // 새 Spot의 생성 callback에 전달할 최초 설정이다.
+                      .creation_request (
+                        // 새 Spot의 생성 callback에 전달할 최초 설정이다.
                         tictactoe_game_create_req_t{
                           game_name, sample_names_t::required_level})
                       .async ();                                       // C++의 비동기 완료 terminal이다.

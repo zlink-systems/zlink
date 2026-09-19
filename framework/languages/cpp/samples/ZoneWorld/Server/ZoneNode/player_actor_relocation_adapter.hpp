@@ -42,8 +42,7 @@ class player_actor_t final : public fw::actor_t
     explicit player_actor_t (fw::actor_context_t context) :
         _context (std::move (context))
     {
-        player_id = std::string (
-          _context.actor_ref ().actor_id ().value ());
+        player_id = std::string (_context.actor_ref ().actor_id ().value ());
     }
 
     fw::actor_context_t &context () noexcept override
@@ -85,8 +84,7 @@ class player_actor_t final : public fw::actor_t
             pending_crash_probe = false;
         }
         else if (const auto *failed =
-                   std::get_if<fw::actor_join_failed_t> (
-                     &completion)) {
+                   std::get_if<fw::actor_join_failed_t> (&completion)) {
             std::cerr << "zoneworld-join-failed player="
                       << player_id << " kind="
                       << static_cast<int> (failed->error_kind)
@@ -104,8 +102,7 @@ class player_actor_t final : public fw::actor_t
             pending_crash_probe = false;
         }
         else if (const auto *rejected =
-                   std::get_if<fw::actor_join_rejected_t> (
-                     &completion)) {
+                   std::get_if<fw::actor_join_rejected_t> (&completion)) {
             std::cerr << "zoneworld-join-rejected player="
                       << player_id << '\n';
             auto reason =
@@ -125,8 +122,7 @@ class player_actor_t final : public fw::actor_t
             }
             else {
                 co_await _context.bound_session ()
-                  .send (move_rejected_notify_t{
-                    reason, x, y})
+                  .send (move_rejected_notify_t{reason, x, y})
                   .async ();
             }
             pending_join = false;
@@ -235,8 +231,7 @@ class player_relocation_adapter_t final
       std::stop_token) override
     {
         const auto restored = zlink::message_t::from (
-          std::span<const std::byte> (
-            payload.data (), payload.size ()))
+          std::span<const std::byte> (payload.data (), payload.size ()))
                                 .parse_json<player_state_t> ();
         actor.x = restored.x;
         actor.y = restored.y;

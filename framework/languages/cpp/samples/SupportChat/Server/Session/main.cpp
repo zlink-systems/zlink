@@ -235,8 +235,7 @@ int main (int argc, char **argv)
       .bind (topology.session_stream_endpoint)
       .register_session<supportchat_session_t> ();
     // --8<-- [end:doc-sc-session-register]
-    app.add_hosted_service (
-      std::make_unique<sample_readiness_service_t> ("stream", "session"));
+    app.add_hosted_service (std::make_unique<sample_readiness_service_t> ("stream", "session"));
     app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
       sample_names_t::mesh, "session"));
     return app.run (argc, argv);

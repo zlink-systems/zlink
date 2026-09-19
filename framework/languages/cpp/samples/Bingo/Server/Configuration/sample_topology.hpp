@@ -193,7 +193,8 @@ struct sample_topology_t
 inline std::string host_from_tcp_endpoint (const std::string &endpoint)
 {
     constexpr auto prefix = "tcp://";
-    const auto begin = endpoint.rfind (prefix, 0) == 0 ? std::char_traits<char>::length (prefix) : 0;
+    const auto begin = endpoint.rfind (prefix, 0) == 0 ? std::char_traits<char>::length (prefix) :
+      0;
     const auto separator = endpoint.rfind (':');
     if (separator == std::string::npos || separator <= begin) {
         throw std::runtime_error ("TCP endpoint must contain a host and port");

@@ -314,7 +314,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     require (alice_shared.payload.players.size () >= 2 && bob_shared.payload.players.size () >= 2,
              "both same-zone clients must see both players");
     std::cout << "scenario ZW-A4 passed\n";
-    require (std::is_sorted (alice_shared.payload.players.begin (), alice_shared.payload.players.end (),
+    require (std::is_sorted (alice_shared.payload.players.begin (),
+                             alice_shared.payload.players.end (),
                              [] (const auto &left, const auto &right) {
                                  return left.player_id < right.player_id;
                              }),
@@ -367,7 +368,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     auto blocked_join_wait =
       probe.wait_for<join_world_res_t> ()
         .where ([] (const auto &reply_message) {
-        const auto &reply = reply_message.payload; return reply.player_id == "player-maintenance"; })
+        const auto &reply = reply_message.payload; return reply.player_id == "player-maintenance";
+          })
         .async ();
     probe.send (join_world_req_t{"player-maintenance"}).submit ();
     const auto blocked_join = co_await blocked_join_wait;

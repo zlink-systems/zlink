@@ -38,11 +38,12 @@ int main (int argc, char **argv)
         return 2;
     }
     try {
-        zlink::samples::shoppingmall::shoppingmall_client_scenario_t{}.run (api_a_http_url,
-                                                                            api_b_http_url,
-                                                                            resume_order_id,
-                                                                            projection_continue_order_id,
-                                                                            projection_rebuild_order_id);
+        zlink::samples::shoppingmall::shoppingmall_client_scenario_t{}.run (
+          api_a_http_url,
+          api_b_http_url,
+          resume_order_id,
+          projection_continue_order_id,
+          projection_rebuild_order_id);
         std::cout << "shoppingmall=completed" << std::endl;
         return 0;
     }

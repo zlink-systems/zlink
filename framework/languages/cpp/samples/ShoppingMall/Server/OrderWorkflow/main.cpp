@@ -40,7 +40,9 @@ class order_workflow_spot_t : public instance_spot_t
     order_workflow_spot_t (instance_spot_context_t context,
                            sample_topology_t topology,
                            workflow_instance_topology_t instance) :
-        _store (std::move (topology)), _context (std::move (context)), _instance (std::move (instance))
+        _store (std::move (topology)),
+        _context (std::move (context)),
+        _instance (std::move (instance))
     {
     }
 
@@ -144,8 +146,7 @@ class order_workflow_spot_t : public instance_spot_t
                                      const std::string &source_command_id = {})
     {
         return _store.update ([&] (nlohmann::json &json) {
-            return run_workflow (json, order_id, source_command_id, nullptr,
-                                 /*max_steps=*/16);
+            return run_workflow (json, order_id, source_command_id, nullptr, /*max_steps=*/16);
         });
     }
 
@@ -224,7 +225,9 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
     planned_relocation_workflow_spot_t (spot_context_t context,
                                         sample_topology_t topology,
                                         workflow_instance_topology_t instance) :
-        _context (std::move (context)), _store (std::move (topology)), _instance (std::move (instance))
+        _context (std::move (context)),
+        _store (std::move (topology)),
+        _instance (std::move (instance))
     {
     }
 
@@ -492,8 +495,7 @@ class planned_relocation_service_t final : public hosted_service_t
                           completion->ready.notify_one ();
                       });
                     std::unique_lock lock (completion->mutex);
-                    completion->ready.wait (
-                      lock, [&completion] { return completion->completed; });
+                    completion->ready.wait (lock, [&completion] { return completion->completed; });
                     if (completion->error) {
                         std::rethrow_exception (completion->error);
                     }
@@ -554,14 +556,12 @@ int main (int argc, char **argv)
     workflow_route.objects ()
       .server ()
       .add_instance_spot_factory<order_workflow_spot_t, sample_topology_t,
-                                 workflow_instance_topology_t> (
-        sample_names_t::order_workflow_spot)
+                                 workflow_instance_topology_t> (sample_names_t::order_workflow_spot)
       .recreate_on_relocation ()
       .add_spot_factory<planned_relocation_workflow_spot_t, sample_topology_t,
                         workflow_instance_topology_t> ("shoppingmall.planned.relocation.workflow")
       .set_execution_mode (user_spot_execution_mode_t::spot_wide)
-      .set_relocation_coordination_mode (
-        spot_relocation_coordination_mode_t::application_signaled)
+      .set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled)
       .recreate_on_relocation ();
     // --8<-- [end:doc-sm-workflow-register]
     options.http ()

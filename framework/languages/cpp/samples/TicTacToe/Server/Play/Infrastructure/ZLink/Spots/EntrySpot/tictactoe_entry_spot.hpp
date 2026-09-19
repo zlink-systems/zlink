@@ -56,8 +56,7 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
       player_actor_t &actor,
       const message_t &create_request) override
     {
-        actor.apply_player (
-          create_request.decode<player_actor_create_req_t> ().player);
+        actor.apply_player (create_request.decode<player_actor_create_req_t> ().player);
         created_actor_ids.push_back (actor.actor_id);
         co_return actor_create_response_t::accept ();
     }

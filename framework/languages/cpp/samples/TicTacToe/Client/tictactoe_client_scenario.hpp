@@ -25,6 +25,10 @@ namespace zlink::samples::tictactoe
 // This CLI scenario completes each HTTP request before advancing its workflow state.
 class tictactoe_client_scenario_t
 {
+    using game_state_message_t = zlink::stream_connector::message_t<game_state_notify_t>;
+    using win_milestone_message_t =
+      zlink::stream_connector::message_t<win_milestone_notify_t>;
+
   public:
     bool run (stream_e2e_client::coroutine_connector_t &client1,
               stream_e2e_client::coroutine_connector_t &client2,
@@ -99,8 +103,7 @@ class tictactoe_client_scenario_t
             auto observer = zlink::stream_e2e_client::use (core_observer);
             auto reconnected_client =
               zlink::stream_e2e_client::use (core_reconnected_client);
-            return run_game (
-              client1, client2, observer, reconnected_client, room, options);
+            return run_game (client1, client2, observer, reconnected_client, room, options);
         }
         catch (const std::exception &ex) {
             std::cerr << "tictactoe scenario failed: " << ex.what () << '\n';
@@ -117,8 +120,7 @@ class tictactoe_client_scenario_t
                           const tictactoe_client_options_t &options)
     {
         auto result =
-          run_game_async (
-            client1, client2, observer, reconnected_client, room, options)
+          run_game_async (client1, client2, observer, reconnected_client, room, options)
             .result ();
         return result && result.value ();
     }
@@ -204,10 +206,10 @@ class tictactoe_client_scenario_t
             auto client1_wait_game_start =
               client1.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.status == tictactoe_status_t::in_progress
-                           && message.state.o_actor_id == options.o_actor_id;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.status == tictactoe_status_t::in_progress
+                           && payload.state.o_actor_id == options.o_actor_id;
                 })
                 .async ();
             trace ("join client2");
@@ -230,7 +232,8 @@ class tictactoe_client_scenario_t
             trace ("wait client1 saw client2 join");
             auto client1_saw_client2_join = co_await client1_wait_client2_join;
             ensure (client1_saw_client2_join.payload.actor_id == client2_auth.player.actor_id);
-            ensure (client1_saw_client2_join.payload.display_name == client2_auth.player.display_name);
+            ensure (client1_saw_client2_join.payload.display_name ==
+              client2_auth.player.display_name);
             ensure (client1_saw_client2_join.payload.level == client2_auth.player.level);
             ensure (client1_saw_client2_join.payload.room_id == room.room_id);
             ensure (client1_saw_client2_join.payload.mark == tictactoe_marks_t::o);
@@ -245,10 +248,10 @@ class tictactoe_client_scenario_t
             auto client2_wait_first_move =
               client2.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.last_move_actor_id == options.x_actor_id
-                           && message.state.last_move_cell == 0;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.last_move_actor_id == options.x_actor_id
+                           && payload.state.last_move_cell == 0;
                 })
                 .async ();
             trace ("client1 first move");
@@ -270,10 +273,10 @@ class tictactoe_client_scenario_t
             auto client1_wait_first_o_move =
               client1.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.last_move_actor_id == options.o_actor_id
-                           && message.state.last_move_cell == 3;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.last_move_actor_id == options.o_actor_id
+                           && payload.state.last_move_cell == 3;
                 })
                 .async ();
             trace ("client2 first move");
@@ -295,10 +298,10 @@ class tictactoe_client_scenario_t
             auto client2_wait_second_x_move =
               client2.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.last_move_actor_id == options.x_actor_id
-                           && message.state.last_move_cell == 1;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.last_move_actor_id == options.x_actor_id
+                           && payload.state.last_move_cell == 1;
                 })
                 .async ();
             trace ("client1 second move");
@@ -315,15 +318,16 @@ class tictactoe_client_scenario_t
             auto client2_saw_second_x_move = co_await client2_wait_second_x_move;
             ensure (client2_saw_second_x_move.payload.state.room_id == room.room_id);
             ensure (client2_saw_second_x_move.payload.state.last_move_cell == 1);
-            ensure (same_state (client2_saw_second_x_move.payload.state, client1_second_move.state));
+            ensure (same_state (client2_saw_second_x_move.payload.state,
+              client1_second_move.state));
 
             auto client1_wait_second_o_move =
               client1.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.last_move_actor_id == options.o_actor_id
-                           && message.state.last_move_cell == 4;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.last_move_actor_id == options.o_actor_id
+                           && payload.state.last_move_cell == 4;
                 })
                 .async ();
             trace ("client2 second move");
@@ -340,22 +344,23 @@ class tictactoe_client_scenario_t
             auto client1_saw_second_o_move = co_await client1_wait_second_o_move;
             ensure (client1_saw_second_o_move.payload.state.room_id == room.room_id);
             ensure (client1_saw_second_o_move.payload.state.last_move_cell == 4);
-            ensure (same_state (client1_saw_second_o_move.payload.state, client2_second_move.state));
+            ensure (same_state (client1_saw_second_o_move.payload.state,
+              client2_second_move.state));
 
             auto client2_wait_winning_move =
               client2.wait_for<game_state_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<game_state_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.state.winner == options.x_actor_id;
+                  [&options] (const game_state_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.state.winner == options.x_actor_id;
                 })
                 .async ();
             auto observer_wait_milestone =
               observer.wait_for<win_milestone_notify_t> ()
                 .where (
-                  [&options] (const zlink::stream_connector::message_t<win_milestone_notify_t> &message_message) {
-                    const auto &message = message_message.payload;
-                    return message.actor_id == options.x_actor_id && message.wins == 100;
+                  [&options] (const win_milestone_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.actor_id == options.x_actor_id && payload.wins == 100;
                 })
                 .async ();
             trace ("client1 winning move");

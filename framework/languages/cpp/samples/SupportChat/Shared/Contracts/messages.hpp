@@ -372,8 +372,12 @@ inline void from_json (const nlohmann::json &json, conversation_state_t &value)
 }
 
 #define SUPPORTCHAT_JSON_STRING_REQ(type, field_name, json_name) \
-inline void to_json (nlohmann::json &json, const type &value) { json = {{json_name, value.field_name}}; } \
-inline void from_json (const nlohmann::json &json, type &value) { value.field_name = json.value (json_name, ""); }
+inline void to_json (nlohmann::json &json, const type &value) { \
+    json = {{json_name, value.field_name}}; \
+} \
+inline void from_json (const nlohmann::json &json, type &value) { \
+    value.field_name = json.value (json_name, ""); \
+}
 
 SUPPORTCHAT_JSON_STRING_REQ (authenticate_req_t, access_token, "accessToken")
 SUPPORTCHAT_JSON_STRING_REQ (authenticate_user_req_t, access_token, "accessToken")

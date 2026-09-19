@@ -192,8 +192,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
               state.room_id, player.actor_id, player.display_name, player.wins};
             // --8<-- [start:doc-multicast-publish]
             co_await _context
-              .publish (sample_names_t::player_milestone_topic,
-                        milestone_event)
+              .publish (sample_names_t::player_milestone_topic, milestone_event)
               .async ();
             // --8<-- [end:doc-multicast-publish]
         }

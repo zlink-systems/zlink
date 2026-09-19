@@ -136,8 +136,7 @@ class supportchat_client_scenario_t
         expect_public_contract (greeting_notify, "customer greeting notification");
         std::cout << "supportchat bound-push=verified" << std::endl;
 
-        auto reply_for_agent = wait_chat (
-          agent, opened.conversation_id, "Payment keeps failing.");
+        auto reply_for_agent = wait_chat (agent, opened.conversation_id, "Payment keeps failing.");
         auto reply = request_in_conversation<send_chat_message_res_t> (
           customer, opened.conversation_id, send_chat_message_req_t{"Payment keeps failing."},
           "customer reply failed");
@@ -193,15 +192,15 @@ class supportchat_client_scenario_t
           second_customer, second_opened.conversation_id, "Let me check your account.");
         auto second_greeting = request_in_conversation<send_chat_message_res_t> (
           agent, second_opened.conversation_id,
-          send_chat_message_req_t{"Let me check your account."}, "second conversation greeting failed");
+          send_chat_message_req_t{"Let me check your account."},
+            "second conversation greeting failed");
         expect (second_greeting.message.message_seq == 1
                   && second_greeting.state.conversation_id == second_opened.conversation_id,
                 "second conversation sequence must start at 1");
         expect (second_greeting_for_customer.get ().message.message_seq == 1,
                 "second customer did not receive agent greeting");
 
-        auto customer_typing = wait_typing (
-          customer, opened.conversation_id, "agent-1", true);
+        auto customer_typing = wait_typing (customer, opened.conversation_id, "agent-1", true);
         auto agent_typing_none = wait_no_typing (agent);
         agent.send (set_typing_msg_t{true})
           .metadata (conversation_id_metadata_key, opened.conversation_id)
@@ -348,7 +347,8 @@ class supportchat_client_scenario_t
         auto first_closed_agent = wait_closed (
           reconnected_agent, opened.conversation_id,
           "agent closed notification wait failed");
-        expect (second_idle_customer.get ().state.status == conversation_status_t::waiting_for_close,
+        expect (second_idle_customer.get ().state.status ==
+          conversation_status_t::waiting_for_close,
                 "resumed customer did not receive idle notification");
         expect (second_idle_agent.get ().state.status == conversation_status_t::waiting_for_close,
                 "resumed agent did not receive idle notification");
@@ -393,7 +393,8 @@ class supportchat_client_scenario_t
     unwrap_payload (std::future<zlink::stream_connector::message_t<TPayload>> source)
     {
         return std::async (std::launch::async,
-                           [source = std::move (source)] () mutable { return source.get ().payload; });
+                           [source = std::move (source)] () mutable { return source.get ().payload;
+                             });
     }
 
     static std::future<conversation_idle_notify_t> wait_idle (connector_t &connector,

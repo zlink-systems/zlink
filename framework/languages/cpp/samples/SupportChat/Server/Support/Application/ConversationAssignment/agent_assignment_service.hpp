@@ -39,7 +39,8 @@ class agent_availability_directory_t
 
     std::optional<available_agent_t> assign ()
     {
-        const auto available = std::find_if (_order.begin (), _order.end (), [this] (const auto &id) {
+        const auto available = std::find_if (_order.begin (), _order.end (), [this] (const auto &id)
+          {
             return _agents.find (id)->second.active_conversations < _capacity;
         });
         if (available == _order.end ()) {

@@ -35,7 +35,8 @@ using conversation_timeout_event_t =
 class conversation_t
 {
   public:
-    conversation_t (std::string conversation_id, std::string subject, std::string customer_actor_id) :
+    conversation_t (std::string conversation_id, std::string subject, std::string customer_actor_id)
+      :
         _conversation_id (std::move (conversation_id)),
         _subject (std::move (subject)),
         _customer_actor_id (std::move (customer_actor_id)),

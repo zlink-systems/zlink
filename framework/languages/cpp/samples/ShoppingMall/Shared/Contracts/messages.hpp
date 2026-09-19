@@ -493,7 +493,8 @@ inline void from_json (const nlohmann::json &json, order_state_t &value)
 {
     value.order_id = json_string (json, "orderId", "order_id");
     value.status = json.value ("status", "");
-    value.shipping_address_id = json_nullable_string (json, "shippingAddressId", "shipping_address_id");
+    value.shipping_address_id = json_nullable_string (json, "shippingAddressId",
+      "shipping_address_id");
     value.reservation_id = json_nullable_string (json, "reservationId", "reservation_id");
     value.payment_id = json_nullable_string (json, "paymentId", "payment_id");
     value.reason = json_nullable_string (json, "reason", "reason");

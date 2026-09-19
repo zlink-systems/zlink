@@ -28,10 +28,8 @@ class bingo_room_relocation_adapter_t final
              std::stop_token) override
     {
         const auto message = zlink::message_t::from (
-          std::span<const std::byte> (
-            payload.data (), payload.size ()));
-        spot.restore_relocation_state (
-          message.parse_json<bingo_room_relocation_state_t> ());
+          std::span<const std::byte> (payload.data (), payload.size ()));
+        spot.restore_relocation_state (message.parse_json<bingo_room_relocation_state_t> ());
         co_return;
     }
 };
