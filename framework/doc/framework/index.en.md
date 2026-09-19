@@ -1,9 +1,10 @@
 # ZLink Framework
 
-**Existing frameworks designed for HTTP request-response don't handle TCP-based real-time
-messaging.** ZLink Framework provides a messaging layer that meets that need, fully
-integrated on top of `ASP.NET Core`, Spring Boot, NestJS, and a C++ host — the way Spring
-MVC sits on top of Spring. There's no need to move to a separate runtime.
+**ZLink is a real-time TCP messaging framework for applications built with `ASP.NET Core`,
+Spring Boot, NestJS, and C++.** Existing frameworks designed for HTTP request-response
+don't handle TCP-based real-time messaging. ZLink provides that layer fully integrated with
+each host — the way Spring MVC sits on top of Spring. There's no need to move to a separate
+runtime.
 
 This need is most apparent in real-time games, but it isn't limited to them. For any system
 that distributes in-memory state such as rooms, sessions, or players across multiple

@@ -1,9 +1,9 @@
 # ZLink Framework
 
-**HTTP 요청-응답을 위해 설계된 기존 프레임워크는 TCP 기반의 실시간 메시징을
-다루지 않는다.** ZLink Framework는 그 요구를 충족하는 메시징 계층을 제공한다.
-Spring 위에 Spring MVC가 올라가는 것과 같은 자리에서, `ASP.NET Core` · Spring Boot · NestJS · C++ host
-위에 완전히 통합된 형태로 들어간다. 별도 런타임으로 옮겨갈 필요가 없다.
+**ZLink은 `ASP.NET Core` · Spring Boot · NestJS · C++ 애플리케이션용 실시간 TCP
+메시징 프레임워크다.** HTTP 요청-응답을 위해 설계된 기존 프레임워크는 TCP 기반의
+실시간 메시징을 다루지 않는다. ZLink은 Spring 위에 Spring MVC가 올라가는 것과 같은 자리에서
+각 host에 완전히 통합된 메시징 계층을 제공한다. 별도 런타임으로 옮겨갈 필요가 없다.
 
 이 요구가 가장 뚜렷하게 나타나는 분야는 실시간 게임이다. 대상은 여기에 한정되지 않는다.
 방·세션·플레이어처럼 메모리에 상주하는 상태를 여러 서버에 나눠 두고 client에

@@ -2,7 +2,7 @@ site_name: ZLink
 site_url: https://zlink.systems/
 # 기본 로케일(en)과 같은 값을 적는다. 로케일별 값은 아래 i18n languages의
 # site_description으로 덮어쓴다 — theme.language와 같은 규칙이다.
-site_description: ZLink Framework — a real-time TCP messaging layer for ASP.NET Core, Spring Boot, NestJS, and C++
+site_description: ZLink is a real-time TCP messaging framework for ASP.NET Core, Spring Boot, NestJS, and C++.
 
 repo_url: https://github.com/zlink-systems/zlink
 repo_name: zlink-systems/zlink
@@ -120,7 +120,7 @@ plugins:
           # 영어 홈의 <meta name="description">에 한국어가 나가지 않도록 로케일별로
           # 덮어쓴다. site_description을 따로 적지 않으면 위 최상위 값(en 기준)을
           # 그대로 물려받는다.
-          site_description: ZLink Framework — 실시간 메시징 서버 프레임워크
+          site_description: ZLink은 ASP.NET Core, Spring Boot, NestJS, C++용 실시간 TCP 메시징 프레임워크입니다.
           # 번역표는 nav 라벨 문자열 전체를 키로 잡는 평면 map이다. 키는 nav에
           # 적힌 영어 그대로여야 하고, 여기 없는 라벨은 한국어 화면에서도 영어로
           # 남는다. 반대로 nav를 한국어로 적으면 영어 화면에서 한국어가 남는다 —

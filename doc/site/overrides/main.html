@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% set is_zlink_homepage = page and (page.is_homepage or page.url == "ko/") %}
+
+{% block htmltitle %}
+  {% if is_zlink_homepage %}
+    {% if config.theme.language == "ko" %}
+      <title>ZLink — 실시간 TCP 메시징 프레임워크</title>
+    {% else %}
+      <title>ZLink — Real-time TCP Messaging Framework</title>
+    {% endif %}
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}
+
+{% block extrahead %}
+  {{ super() }}
+  {% if is_zlink_homepage %}
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://zlink.systems/#organization",
+            "name": "ZLink",
+            "alternateName": "zlink",
+            "url": "https://zlink.systems/",
+            "logo": "https://github.com/zlink-systems.png?size=512",
+            "sameAs": ["https://github.com/zlink-systems"]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://zlink.systems/#website",
+            "name": "ZLink",
+            "alternateName": "zlink",
+            "url": "https://zlink.systems/",
+            "description": {{ config.site_description | tojson }},
+            "publisher": {"@id": "https://zlink.systems/#organization"}
+          }
+        ]
+      }
+    </script>
+  {% endif %}
+{% endblock %}
