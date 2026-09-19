@@ -235,17 +235,16 @@ nav:
           - Contents: cpp/guide/http-client/README.md
           - Overview: cpp/guide/http-client/01-overview.md
           - Getting started: cpp/guide/http-client/02-getting-started.md
-          - Client configuration: cpp/guide/http-client/03-client-configuration.md
-          - Making requests: cpp/guide/http-client/04-making-requests.md
-          - Request body: cpp/guide/http-client/05-request-body.md
-          - Handling responses: cpp/guide/http-client/06-handling-responses.md
-          - Async and coroutines: cpp/guide/http-client/07-async-coroutines.md
-          - Streaming: cpp/guide/http-client/08-streaming.md
-          - Authentication and TLS: cpp/guide/http-client/09-authentication-tls.md
-          - Redirect, retry, cookie: cpp/guide/http-client/10-redirects-retries-cookies.md
-          - Proxy: cpp/guide/http-client/11-proxy.md
-          - Compression: cpp/guide/http-client/12-compression.md
-          - Error handling: cpp/guide/http-client/13-error-handling.md
+          - Making requests: cpp/guide/http-client/03-making-requests.md
+          - Request body: cpp/guide/http-client/04-request-body.md
+          - Handling responses: cpp/guide/http-client/05-handling-responses.md
+          - Authentication, TLS and proxy: cpp/guide/http-client/06-auth-tls-proxy.md
+          - Streaming: cpp/guide/http-client/07-streaming.md
+          - Client and request lifetime: cpp/guide/http-client/08-client-lifecycle.md
+          - Redirect, retry and cookie: cpp/guide/http-client/09-redirect-retry-cookie.md
+          - Response rules: cpp/guide/http-client/10-response-rules.md
+          - Error handling: cpp/guide/http-client/11-error-handling.md
+          - Coroutine integration: cpp/guide/http-client/12-coroutines.md
       - Reference:
           - Key type index: cpp/guide/server/13-interface-catalog.md
           - Reference home: cpp/reference/README.md
@@ -311,17 +310,15 @@ nav:
           - Contents: dotnet/guide/http-client/README.md
           - Overview: dotnet/guide/http-client/01-overview.md
           - Getting started: dotnet/guide/http-client/02-getting-started.md
-          - Client configuration: dotnet/guide/http-client/03-client-configuration.md
-          - Making requests: dotnet/guide/http-client/04-making-requests.md
-          - Request body: dotnet/guide/http-client/05-request-body.md
-          - Handling responses: dotnet/guide/http-client/06-handling-responses.md
-          - Async: dotnet/guide/http-client/07-async.md
-          - Streaming: dotnet/guide/http-client/08-streaming.md
-          - Authentication and TLS: dotnet/guide/http-client/09-authentication-tls.md
-          - Redirect, retry, cookie: dotnet/guide/http-client/10-redirects-retries-cookies.md
-          - Proxy: dotnet/guide/http-client/11-proxy.md
-          - Compression: dotnet/guide/http-client/12-compression.md
-          - Error handling: dotnet/guide/http-client/13-error-handling.md
+          - Making requests: dotnet/guide/http-client/03-making-requests.md
+          - Request body: dotnet/guide/http-client/04-request-body.md
+          - Handling responses: dotnet/guide/http-client/05-handling-responses.md
+          - Authentication, TLS and proxy: dotnet/guide/http-client/06-auth-tls-proxy.md
+          - Streaming: dotnet/guide/http-client/07-streaming.md
+          - Client and request lifetime: dotnet/guide/http-client/08-client-lifecycle.md
+          - Redirect, retry and cookie: dotnet/guide/http-client/09-redirect-retry-cookie.md
+          - Response rules: dotnet/guide/http-client/10-response-rules.md
+          - Error handling: dotnet/guide/http-client/11-error-handling.md
       - Reference:
           - Key type index: dotnet/guide/server/13-interface-catalog.md
           - Reference home: dotnet/reference/README.md
@@ -385,17 +382,15 @@ nav:
           - Contents: java/guide/http-client/README.md
           - Overview: java/guide/http-client/01-overview.md
           - Getting started: java/guide/http-client/02-getting-started.md
-          - Client configuration: java/guide/http-client/03-client-configuration.md
-          - Making requests: java/guide/http-client/04-making-requests.md
-          - Request body: java/guide/http-client/05-request-body.md
-          - Handling responses: java/guide/http-client/06-handling-responses.md
-          - Async: java/guide/http-client/07-async.md
-          - Streaming: java/guide/http-client/08-streaming.md
-          - Authentication and TLS: java/guide/http-client/09-authentication-tls.md
-          - Redirect, retry, cookie: java/guide/http-client/10-redirects-retries-cookies.md
-          - Proxy: java/guide/http-client/11-proxy.md
-          - Compression: java/guide/http-client/12-compression.md
-          - Error handling: java/guide/http-client/13-error-handling.md
+          - Making requests: java/guide/http-client/03-making-requests.md
+          - Request body: java/guide/http-client/04-request-body.md
+          - Handling responses: java/guide/http-client/05-handling-responses.md
+          - Authentication, TLS and proxy: java/guide/http-client/06-auth-tls-proxy.md
+          - Streaming: java/guide/http-client/07-streaming.md
+          - Client and request lifetime: java/guide/http-client/08-client-lifecycle.md
+          - Redirect, retry and cookie: java/guide/http-client/09-redirect-retry-cookie.md
+          - Response rules: java/guide/http-client/10-response-rules.md
+          - Error handling: java/guide/http-client/11-error-handling.md
       - Reference:
           - Key type index: java/guide/server/13-interface-catalog.md
           - Reference home: java/reference/README.md
@@ -459,17 +454,16 @@ nav:
           - Contents: kotlin/guide/http-client/README.md
           - Overview: kotlin/guide/http-client/01-overview.md
           - Getting started: kotlin/guide/http-client/02-getting-started.md
-          - Client configuration: kotlin/guide/http-client/03-client-configuration.md
-          - Making requests: kotlin/guide/http-client/04-making-requests.md
-          - Request body: kotlin/guide/http-client/05-request-body.md
-          - Handling responses: kotlin/guide/http-client/06-handling-responses.md
-          - Coroutines: kotlin/guide/http-client/07-coroutines.md
-          - Streaming: kotlin/guide/http-client/08-streaming.md
-          - Authentication and TLS: kotlin/guide/http-client/09-authentication-tls.md
-          - Redirect, retry, cookie: kotlin/guide/http-client/10-redirects-retries-cookies.md
-          - Proxy: kotlin/guide/http-client/11-proxy.md
-          - Compression: kotlin/guide/http-client/12-compression.md
-          - Error handling: kotlin/guide/http-client/13-error-handling.md
+          - Making requests: kotlin/guide/http-client/03-making-requests.md
+          - Request body: kotlin/guide/http-client/04-request-body.md
+          - Handling responses: kotlin/guide/http-client/05-handling-responses.md
+          - Authentication, TLS and proxy: kotlin/guide/http-client/06-auth-tls-proxy.md
+          - Streaming: kotlin/guide/http-client/07-streaming.md
+          - Client and request lifetime: kotlin/guide/http-client/08-client-lifecycle.md
+          - Redirect, retry and cookie: kotlin/guide/http-client/09-redirect-retry-cookie.md
+          - Response rules: kotlin/guide/http-client/10-response-rules.md
+          - Error handling: kotlin/guide/http-client/11-error-handling.md
+          - Coroutine integration: kotlin/guide/http-client/12-coroutines.md
       - Reference:
           - Key type index: kotlin/guide/server/13-interface-catalog.md
           - Reference home: kotlin/reference/README.md
@@ -535,17 +529,15 @@ nav:
           - Contents: node/guide/http-client/README.md
           - Overview: node/guide/http-client/01-overview.md
           - Getting started: node/guide/http-client/02-getting-started.md
-          - Client configuration: node/guide/http-client/03-client-configuration.md
-          - Making requests: node/guide/http-client/04-making-requests.md
-          - Request body: node/guide/http-client/05-request-body.md
-          - Handling responses: node/guide/http-client/06-handling-responses.md
-          - Async: node/guide/http-client/07-async.md
-          - Streaming: node/guide/http-client/08-streaming.md
-          - Authentication and TLS: node/guide/http-client/09-authentication-tls.md
-          - Redirect, retry, cookie: node/guide/http-client/10-redirects-retries-cookies.md
-          - Proxy: node/guide/http-client/11-proxy.md
-          - Compression: node/guide/http-client/12-compression.md
-          - Error handling: node/guide/http-client/13-error-handling.md
+          - Making requests: node/guide/http-client/03-making-requests.md
+          - Request body: node/guide/http-client/04-request-body.md
+          - Handling responses: node/guide/http-client/05-handling-responses.md
+          - Authentication, TLS and proxy: node/guide/http-client/06-auth-tls-proxy.md
+          - Streaming: node/guide/http-client/07-streaming.md
+          - Client and request lifetime: node/guide/http-client/08-client-lifecycle.md
+          - Redirect, retry and cookie: node/guide/http-client/09-redirect-retry-cookie.md
+          - Response rules: node/guide/http-client/10-response-rules.md
+          - Error handling: node/guide/http-client/11-error-handling.md
       - Reference:
           - Key type index: node/guide/server/13-interface-catalog.md
           - Reference home: node/reference/README.md
