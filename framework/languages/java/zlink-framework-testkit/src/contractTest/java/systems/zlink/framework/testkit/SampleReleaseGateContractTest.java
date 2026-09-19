@@ -759,8 +759,8 @@ final class SampleReleaseGateContractTest {
         Path kotlinZoneWorld = samplesRoot().resolve("kotlin/ZoneWorld/Server");
         assertSourceContains(javaZoneWorld, ".java", "context.handlers().addHandler(");
         assertSourceContains(kotlinZoneWorld, ".kt", "context.handlers().addHandler(");
-        assertSourceContains(javaZoneWorld, ".java", "ZoneWorldSpec.zones()");
-        assertSourceContains(kotlinZoneWorld, ".kt", "ZoneWorldSpec.zones()");
+        assertSourceContains(javaZoneWorld, ".java", "ZoneWorldSpec.adjacentZones(context.spotId())");
+        assertSourceContains(kotlinZoneWorld, ".kt", "ZoneWorldSpec.adjacentZones(context.spotId())");
         assertSourceContains(javaZoneWorld, ".java", "implements ZLinkSpotSubscriptionHandler");
         assertSourceContains(kotlinZoneWorld, ".kt", ": ZLinkSpotSubscriptionHandler");
         String javaZoneSpot = readSource(javaZoneWorld.resolve(

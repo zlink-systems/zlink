@@ -57,13 +57,11 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public void configure() {
-        // Every zone observes the shared border view. The topic selects a route; the payload
-        // is applied as-is rather than being filtered by its destination zone.
-        for (String fromZoneId : ZoneWorldSpec.zones()) {
-            for (String toZoneId : ZoneWorldSpec.adjacentZones(fromZoneId)) {
-                context.handlers().addHandler(
-                    BorderSubscriptionHandlers.forRoute(fromZoneId, toZoneId));
-            }
+        // The topic selects the two incoming routes for this Zone Spot, so payload handling
+        // does not repeat that routing decision by filtering on its destination zone.
+        for (String fromZoneId : ZoneWorldSpec.adjacentZones(context.spotId())) {
+            context.handlers().addHandler(
+                BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()));
         }
     }
 
