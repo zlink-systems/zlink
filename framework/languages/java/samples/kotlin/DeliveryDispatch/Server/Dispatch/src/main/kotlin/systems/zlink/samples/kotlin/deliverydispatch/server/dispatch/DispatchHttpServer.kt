@@ -6,7 +6,12 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.runBlocking
+import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTopology
+import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeliveryMsg
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.CreateDeliveryReq
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.CreateDeliveryRes
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatus
@@ -14,6 +19,7 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.ServerAsse
 
 class DispatchHttpServer(
     private val json: ObjectMapper,
+    private val channels: ZLinkClient,
     private val queue: DispatchWorkQueue,
 ) : AutoCloseable {
     private val server: HttpServer
@@ -33,7 +39,13 @@ class DispatchHttpServer(
             return
         }
         val request = json.readValue(exchange.requestBody, CreateDeliveryReq::class.java)
-        queue.enqueue(request)
+        val assign = AssignDeliveryMsg(
+            deliveryId = request.deliveryId,
+            customerId = request.customerId,
+            pickupAddress = request.pickupAddress,
+            dropoffAddress = request.dropoffAddress,
+        )
+        runBlocking { channels.sendToChannel(SampleNames.DispatchChannel, assign).submit().await() }
         exchange.writeJson(
             200,
             json.writeValueAsString(CreateDeliveryRes(request.deliveryId)),

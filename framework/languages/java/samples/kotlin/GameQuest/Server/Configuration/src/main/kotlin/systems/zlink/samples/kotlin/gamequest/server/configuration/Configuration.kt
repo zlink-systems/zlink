@@ -10,6 +10,10 @@ import java.time.Duration
 import org.springframework.boot.context.properties.ConfigurationProperties
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.GameplayMsg
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapshotRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.ItemCountSnapshot
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillCountSnapshot
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgress
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.StoredQuestEvent
 
@@ -151,4 +155,55 @@ class RedisSampleStore(topology: SampleTopology) : AutoCloseable {
 
     private fun key(name: String): String = "${location.redisKeyPrefix}gamequest:$name"
     private fun redisUri(endpoint: String): String = if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
+}
+
+class GameplayStateStore(topology: SampleTopology) : AutoCloseable {
+    private val location = topology.location()
+    private val client = RedisClient.create(redisUri(location.redisEndpoint))
+    private val connection = client.connect()
+    private val redis = connection.sync()
+
+    fun record(event: GameplayMsg) {
+        if (redis.sadd(key("recorded-events:${event.playerId}"), event.eventId) == 0L) return
+        val payload = event.decodePayload()
+        when (event.type) {
+            "kill" -> increment(key("kills:${event.playerId}"), payload.value, payload.count)
+            "collect" -> increment(key("items:${event.playerId}"), payload.value, payload.count)
+            "mission" -> redis.sadd(key("missions:${event.playerId}"), payload.value)
+            "feature" -> redis.sadd(key("features:${event.playerId}"), payload.value)
+            "area" -> redis.sadd(key("areas:${event.playerId}"), payload.value)
+        }
+    }
+
+    fun incrementKill(playerId: String, monsterId: String, count: Int) =
+        increment(key("kills:$playerId"), monsterId, count)
+
+    fun snapshot(playerId: String): GetGameplaySnapshotRes {
+        val kills = redis.hgetall(key("kills:$playerId")).map {
+            KillCountSnapshot(it.key, null, it.value.toInt())
+        }
+        val items = redis.hgetall(key("items:$playerId")).map {
+            ItemCountSnapshot(it.key, it.value.toInt())
+        }
+        val missions = redis.smembers(key("missions:$playerId")).sorted()
+        val features = redis.smembers(key("features:$playerId")).sorted()
+        val areas = redis.smembers(key("areas:$playerId")).sorted()
+        return GetGameplaySnapshotRes(
+            playerId, kills, items, missions, features, areas,
+            kills.sumOf { it.count.toLong() } + items.sumOf { it.count.toLong() }
+                + missions.size + features.size + areas.size,
+        )
+    }
+
+    override fun close() {
+        connection.close()
+        client.shutdown()
+    }
+
+    private fun increment(key: String, field: String, count: Int) {
+        redis.hincrby(key, field, count.toLong())
+    }
+
+    private fun key(name: String) = "${location.redisKeyPrefix}gamequest:gameplay:$name"
+    private fun redisUri(endpoint: String) = if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
 }

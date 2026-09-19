@@ -665,6 +665,112 @@ final class SampleReleaseGateContractTest {
         assertSourceDoesNotContain(kotlinZoneWorld, ".kt", "EnterZoneMsg");
     }
 
+    // Contract §7.1: HTTP create admits a delivery through the dispatch channel's one-way send —
+    // the channel has both a client sender and a server handler, so the HTTP edge must not reach
+    // into worker/queue state directly. Contract §7.2: the sweeper's reassign is asynchronous, so a plain try/catch around
+    // the call does not observe a failure that surfaces after the call returns.
+    @Test
+    void deliveryDispatchHttpCreateSendsThroughDispatchChannelAndSweeperObservesReassignFailures()
+        throws IOException {
+        Path javaDispatch = samplesRoot().resolve("java/DeliveryDispatch/Server/Dispatch");
+        Path kotlinDispatch = samplesRoot().resolve("kotlin/DeliveryDispatch/Server/Dispatch");
+
+        String javaHttpServer = readSource(javaDispatch.resolve(
+            "src/main/java/systems/zlink/samples/deliverydispatch/server/dispatch/"
+                + "DispatchHttpServer.java"));
+        assertTrue(javaHttpServer.contains("sendToChannel(SampleNames.DispatchChannel"),
+            "Java DispatchHttpServer must admit a new delivery with a dispatch channel send");
+        assertFalse(javaHttpServer.contains("queue.enqueue("),
+            "Java DispatchHttpServer must not enqueue directly; only the DispatchChannel "
+                + "handler may");
+
+        String kotlinHttpServer = readSource(kotlinDispatch.resolve(
+            "src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/dispatch/"
+                + "DispatchHttpServer.kt"));
+        assertTrue(kotlinHttpServer.contains("sendToChannel(SampleNames.DispatchChannel"),
+            "Kotlin DispatchHttpServer must admit a new delivery with a dispatch channel send");
+        assertFalse(kotlinHttpServer.contains("queue.enqueue("),
+            "Kotlin DispatchHttpServer must not enqueue directly; only the DispatchChannel "
+                + "handler may");
+
+        String javaDispatchApplication = readSource(javaDispatch.resolve(
+            "src/main/java/systems/zlink/samples/deliverydispatch/server/dispatch/"
+                + "DispatchServerApplication.java"));
+        assertTrue(javaDispatchApplication.contains("SampleNames.DispatchChannel)\n                .client()")
+                && javaDispatchApplication.contains("SampleNames.DispatchChannel)\n                .server()"),
+            "Java dispatch registration must expose both the channel client and its server handler");
+        String kotlinDispatchApplication = readSource(kotlinDispatch.resolve(
+            "src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/dispatch/"
+                + "DispatchServerApplication.kt"));
+        assertTrue(kotlinDispatchApplication.contains("SampleNames.DispatchChannel)\n                .client()")
+                && kotlinDispatchApplication.contains("SampleNames.DispatchChannel)\n                .server()"),
+            "Kotlin dispatch registration must expose both the channel client and its server handler");
+
+        assertSourceContains(javaDispatch, ".java", "@ZLinkHandlerGroup(SampleNames.DispatchChannel)");
+        assertSourceContains(javaDispatch, ".java", "AssignDeliveryMsg");
+        String javaAssignHandler = readSource(javaDispatch.resolve(
+            "src/main/java/systems/zlink/samples/deliverydispatch/server/dispatch/handlers/"
+                + "AssignDeliveryHandler.java"));
+        assertTrue(javaAssignHandler.contains("@ZLinkHandlerGroup(SampleNames.DispatchChannel)")
+                && javaAssignHandler.contains("queue.enqueue("),
+            "Java AssignDeliveryHandler must be the dispatch channel's own enqueue path");
+
+        String kotlinAssignHandler = readSource(kotlinDispatch.resolve(
+            "src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/dispatch/"
+                + "handlers/AssignDeliveryHandler.kt"));
+        assertTrue(kotlinAssignHandler.contains("@ZLinkHandlerGroup(SampleNames.DispatchChannel)")
+                && kotlinAssignHandler.contains("queue.enqueue("),
+            "Kotlin AssignDeliveryHandler must be the dispatch channel's own enqueue path");
+
+        String javaSweeper = readSource(javaDispatch.resolve(
+            "src/main/java/systems/zlink/samples/deliverydispatch/server/dispatch/"
+                + "OfferDeadlineSweeper.java"));
+        assertTrue(javaSweeper.contains("worker.reassign(offer).exceptionally("),
+            "Java sweeper must observe the reassign CompletionStage's async failures, "
+                + "not just synchronous RuntimeExceptions");
+    }
+
+    @Test
+    void maintainedSamplesConformToBingoShoppingMallGameQuestAndZoneWorldContracts()
+        throws IOException {
+        Path javaBingo = samplesRoot().resolve("java/Bingo");
+        Path kotlinBingo = samplesRoot().resolve("kotlin/Bingo");
+        assertSourceContains(javaBingo.resolve("Server/Play"), ".java", "!game.canAcceptPlayer()");
+        assertSourceContains(kotlinBingo.resolve("Server/Play"), ".kt", "!game.canAcceptPlayer()");
+        assertSourceDoesNotContain(javaBingo.resolve("Server/Session"), ".java", "notifyDisconnected()");
+        assertSourceDoesNotContain(kotlinBingo.resolve("Server/Session"), ".kt", "notifyDisconnected()");
+
+        Path javaShoppingMall = samplesRoot().resolve("java/ShoppingMall/Server/OrderWorkflow");
+        Path kotlinShoppingMall = samplesRoot().resolve("kotlin/ShoppingMall/Server/OrderWorkflow");
+        assertSourceContains(javaShoppingMall, ".java", "closeIfTerminal");
+        assertSourceContains(kotlinShoppingMall, ".kt", "closeIfTerminal");
+        assertSourceContains(javaShoppingMall, ".java", "context.close()");
+        assertSourceContains(kotlinShoppingMall, ".kt", "instanceContext.close()");
+
+        Path javaGameQuest = samplesRoot().resolve("java/GameQuest/Server/QuestMission");
+        Path kotlinGameQuest = samplesRoot().resolve("kotlin/GameQuest/Server/QuestMission");
+        assertSourceContains(javaGameQuest, ".java", "gameplay.snapshot(playerId)");
+        assertSourceDoesNotContain(javaGameQuest, ".java", "gameplay.killCount(playerId");
+        assertSourceContains(kotlinGameQuest, ".kt", "GameplayStateStore");
+        assertSourceContains(kotlinGameQuest, ".kt", "gameplay.snapshot(playerId).killCounts");
+        assertSourceDoesNotContain(kotlinGameQuest, ".kt", "sync(request.playerId, 4)");
+
+        Path javaZoneWorld = samplesRoot().resolve("java/ZoneWorld/Server");
+        Path kotlinZoneWorld = samplesRoot().resolve("kotlin/ZoneWorld/Server");
+        assertSourceContains(javaZoneWorld, ".java", "context.handlers().addHandler(");
+        assertSourceContains(kotlinZoneWorld, ".kt", "context.handlers().addHandler(");
+        assertSourceContains(javaZoneWorld, ".java", "ZoneWorldSpec.adjacentZones(context.spotId())");
+        assertSourceContains(kotlinZoneWorld, ".kt", "ZoneWorldSpec.adjacentZones(context.spotId())");
+        String javaZoneSpot = readSource(javaZoneWorld.resolve(
+            "src/main/java/systems/zlink/samples/zoneworld/server/zone/spots/ZoneSpot.java"));
+        String kotlinZoneSpot = readSource(kotlinZoneWorld.resolve(
+            "src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/zone/ZoneDomain.kt"));
+        assertFalse(javaZoneSpot.contains("!context.spotId().equals(event.toZoneId())"),
+            "Java ZoneSpot must subscribe only to incoming borders instead of filtering every event");
+        assertFalse(kotlinZoneSpot.contains("event.toZoneId != context.spotId()"),
+            "Kotlin ZoneSpot must subscribe only to incoming borders instead of filtering every event");
+    }
+
     @Test
     void sampleWireCallSitesUseDirectionSuffixes() throws IOException {
         Map<Path, List<String>> offenders = new LinkedHashMap<>();
@@ -2576,7 +2682,10 @@ final class SampleReleaseGateContractTest {
             userSpotSource,
             actorSource,
             sessionSource,
-            List.of("CompletionStage<Void> onDisconnected()", "notifyDisconnected()"));
+            "Bingo".equals(sample)
+                ? List.of("CompletionStage<Void> onDisconnected()", "session-disconnect")
+                : List.of("CompletionStage<Void> onDisconnected()", "notifyDisconnected()"),
+            "Bingo".equals(sample) ? List.of("notifyDisconnected()") : List.of());
     }
 
     private static void assertKotlinActorLifecycleSpec(
@@ -2598,7 +2707,10 @@ final class SampleReleaseGateContractTest {
             userSpotSource,
             actorSource,
             sessionSource,
-            List.of("onDisconnectedSuspending", "notifyDisconnected().await()"));
+            "Bingo".equals(sample)
+                ? List.of("onDisconnectedSuspending", "session-disconnect")
+                : List.of("onDisconnectedSuspending", "notifyDisconnected().await()"),
+            "Bingo".equals(sample) ? List.of("notifyDisconnected()") : List.of());
     }
 
     private static void assertActorLifecycleSpec(
@@ -2607,7 +2719,8 @@ final class SampleReleaseGateContractTest {
         String userSpotSource,
         String actorSource,
         String sessionSource,
-        List<String> disconnectCleanupNeedles) {
+        List<String> disconnectCleanupNeedles,
+        List<String> disconnectForbiddenNeedles) {
         for (String needle : List.of(
             "onCreateActor",
             "onJoinedActor",
@@ -2639,6 +2752,11 @@ final class SampleReleaseGateContractTest {
         }
         assertFalse(sessionSource.contains("leaveActor(") || sessionSource.contains("destroyActor("),
             sample + " session disconnect must not leave rooms or destroy actors");
+        for (String needle : disconnectForbiddenNeedles) {
+            assertFalse(sessionSource.contains(needle),
+                sample + " session disconnect must not include " + needle
+                    + " (framework already submits disconnect to bound Actors; §7.5 forbids iterating them)");
+        }
     }
 
     /**

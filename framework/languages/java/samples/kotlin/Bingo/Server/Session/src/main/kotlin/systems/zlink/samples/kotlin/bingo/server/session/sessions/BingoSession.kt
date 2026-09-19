@@ -19,9 +19,8 @@ class BingoSession(
 
     // --8<-- [start:doc-bingo-session-disconnect]
     override suspend fun onDisconnectedSuspending() {
-        for (actor in context.actors().bound()) {
-            actor.notifyDisconnected().await()
-        }
+        // Framework cleanup owns disconnect notification; this callback only records
+        // the sample lifecycle evidence without submitting another notification.
         boundActorId?.let { actorId ->
             logger.info(
                 "bingo-lifecycle session-disconnect actor={} destroy=false",

@@ -4,7 +4,6 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.runBlocking
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeliveryMsg
-import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.CreateDeliveryReq
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.ServerAssertionReq
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.ServerAssertionRes
 
@@ -13,18 +12,11 @@ class DispatchWorkQueue(
 ) : AutoCloseable {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
-    fun enqueue(request: CreateDeliveryReq) {
+    fun enqueue(request: AssignDeliveryMsg) {
         executor.submit {
             try {
                 println("deliverydispatch-dispatch-start=${request.deliveryId}")
-                runBlocking { worker.dispatch(
-                    AssignDeliveryMsg(
-                        deliveryId = request.deliveryId,
-                        customerId = request.customerId,
-                        pickupAddress = request.pickupAddress,
-                        dropoffAddress = request.dropoffAddress,
-                    ),
-                ) }
+                runBlocking { worker.dispatch(request) }
                 println("deliverydispatch-dispatch-finished=${request.deliveryId}")
             } catch (ex: RuntimeException) {
                 System.err.println("deliverydispatch-dispatch-failed=${request.deliveryId}: ${ex.message}")

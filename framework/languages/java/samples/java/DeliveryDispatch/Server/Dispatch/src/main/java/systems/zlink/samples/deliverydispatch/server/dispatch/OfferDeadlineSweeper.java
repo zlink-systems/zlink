@@ -38,9 +38,15 @@ public final class OfferDeadlineSweeper implements AutoCloseable {
             System.out.println("deliverydispatch dispatch: offer expired delivery="
                 + offer.request().deliveryId() + " attempt=" + offer.attempt());
             try {
-                worker.reassign(offer);
+                // The sweeper comes back next tick; one failed reassign must not stop it. That
+                // covers async failures too, so the CompletionStage's exception is observed here
+                // rather than left to escape the try/catch unnoticed.
+                worker.reassign(offer).exceptionally(error -> {
+                    System.err.println("deliverydispatch dispatch: reassign failed delivery="
+                        + offer.request().deliveryId() + ": " + error.getMessage());
+                    return null;
+                });
             } catch (RuntimeException error) {
-                // The sweeper comes back next tick; one failed reassign must not stop it.
                 System.err.println("deliverydispatch dispatch: reassign failed delivery="
                     + offer.request().deliveryId() + ": " + error.getMessage());
             }

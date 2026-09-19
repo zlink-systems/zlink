@@ -1,6 +1,5 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.handlers
 
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.OrderWorkflowSpot
@@ -23,7 +22,8 @@ class StartOrderWorkflowHandler(
         val state = workflow.start(request)
         println("shoppingmall-order started order=${request.orderId} spot=${spot.context().spotId()}")
         continuations.enqueue(request.orderId)
-        return CompletableFuture.completedFuture(StartOrderWorkflowRes(state))
+        return spot.closeIfTerminal(state)
+            .thenApply { StartOrderWorkflowRes(state) }
         // --8<-- [end:doc-sm-spot-start]
     }
 }

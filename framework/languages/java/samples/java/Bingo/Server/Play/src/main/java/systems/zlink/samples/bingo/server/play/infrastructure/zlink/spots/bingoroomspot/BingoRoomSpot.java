@@ -104,14 +104,18 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             .requestToChannel(SampleNames.ApiChannel, BingoMessages.getPlayerRecordReq(actor.actorId()))
             .timeout(SampleTimings.RequestTimeout)
             .yield(Messages.GetPlayerRecordRes.class)
-            .thenAccept(record -> {
-                logger.info("bingo-record fetched actor={} wins={} losses={}",
-                    actor.actorId(), record.getWins(), record.getLosses());
-                if (pendingJoins.get(actor.actorId()) != request) {
-                    return;
+            .thenCompose(record -> {
+                if (pendingJoins.get(actor.actorId()) != request
+                    || game == null
+                    || !game.canAcceptPlayer()) {
+                    pendingJoins.remove(actor.actorId());
+                    return context.leaveActor(actor);
                 }
                 pendingJoins.remove(actor.actorId());
                 join(actor, request, record.getWins(), record.getLosses());
+                logger.info("bingo-record fetched actor={} wins={} losses={}",
+                    actor.actorId(), record.getWins(), record.getLosses());
+                return CompletableFuture.completedFuture((Void) null);
             });
         // --8<-- [end:doc-bingo-room-join]
     }

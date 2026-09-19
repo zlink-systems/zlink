@@ -104,6 +104,8 @@ data class StartOrderWorkflowRes(val state: OrderState)
 @ZLinkPacket("ContinueOrderWorkflowReq")
 data class ContinueOrderWorkflowReq(val orderId: String)
 
+data class RunOrderWorkflowMsg(val orderId: String)
+
 data class ContinueOrderWorkflowRes(val state: OrderState, val objectGeneration: Long? = null)
 
 @ZLinkPacket("RebuildOrderProjectionReq")

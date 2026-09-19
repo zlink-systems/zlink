@@ -46,6 +46,7 @@ import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.GameQuestReadinessReporter
+import systems.zlink.samples.kotlin.gamequest.server.configuration.GameplayStateStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTimings
@@ -445,12 +446,8 @@ private fun writeJson(exchange: HttpExchange, status: Int, body: Any) {
 
 class GameQuestStore(topology: SampleTopology) : AutoCloseable {
     private val shared = RedisSampleStore(topology)
+    private val gameplay = GameplayStateStore(topology)
     private val projections = mutableMapOf<String, MutableList<QuestProgress>>()
-    private val completedMissions = mutableMapOf<String, MutableSet<String>>()
-    private val unlockedFeatures = mutableMapOf<String, MutableSet<String>>()
-    private val enteredAreas = mutableMapOf<String, MutableSet<String>>()
-    private val kills = mutableMapOf<String, MutableMap<String, Int>>()
-    private val items = mutableMapOf<String, MutableMap<String, Int>>()
 
     @Synchronized
     fun bind(playerId: String, apiName: String) = shared.bind(playerId, apiName)
@@ -459,15 +456,7 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
     fun unbind(playerId: String) = shared.unbind(playerId)
 
     @Synchronized
-    fun recordGameplay(event: GameplayMsg) {
-        when (event.type) {
-            "kill" -> kills.getOrPut(event.playerId) { mutableMapOf() }.merge(event.decodePayload().value, event.decodePayload().count, Int::plus)
-            "collect" -> items.getOrPut(event.playerId) { mutableMapOf() }.merge(event.decodePayload().value, event.decodePayload().count, Int::plus)
-            "mission" -> completedMissions.getOrPut(event.playerId) { mutableSetOf() } += event.decodePayload().value
-            "feature" -> unlockedFeatures.getOrPut(event.playerId) { mutableSetOf() } += event.decodePayload().value
-            "area" -> enteredAreas.getOrPut(event.playerId) { mutableSetOf() } += event.decodePayload().value
-        }
-    }
+    fun recordGameplay(event: GameplayMsg) = gameplay.record(event)
 
     @Synchronized
     fun mergeProjection(playerId: String, projection: List<QuestProgress>) {
@@ -494,23 +483,11 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
 
     @Synchronized
     fun addUnpublishedKill(playerId: String) {
-        kills.getOrPut(playerId) { mutableMapOf() }.merge("wolf", 1, Int::plus)
+        gameplay.incrementKill(playerId, "wolf", 1)
     }
 
     @Synchronized
-    fun snapshot(playerId: String): GetGameplaySnapshotRes {
-        val killCounts = kills[playerId].orEmpty().map { KillCountSnapshot(it.key, null, it.value) }
-        val itemCounts = items[playerId].orEmpty().map { ItemCountSnapshot(it.key, it.value) }
-        return GetGameplaySnapshotRes(
-            playerId,
-            killCounts,
-            itemCounts,
-            completedMissions[playerId].orEmpty().toList(),
-            unlockedFeatures[playerId].orEmpty().toList(),
-            enteredAreas[playerId].orEmpty().toList(),
-            (killCounts.size + itemCounts.size).toLong(),
-        )
-    }
+    fun snapshot(playerId: String): GetGameplaySnapshotRes = gameplay.snapshot(playerId)
 
     @Synchronized
     fun assertState(): GameQuestServerAssertRes {
@@ -577,6 +554,7 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
     }
 
     override fun close() {
+        gameplay.close()
         shared.close()
     }
 

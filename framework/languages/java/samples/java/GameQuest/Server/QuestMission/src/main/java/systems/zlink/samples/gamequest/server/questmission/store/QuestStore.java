@@ -63,7 +63,11 @@ public final class QuestStore implements AutoCloseable {
     public Messages.SyncQuestProgressRes sync(String playerId) {
         PlayerState state = state(playerId);
         // --8<-- [start:doc-gq-sync]
-        int firstHuntCount = gameplay.killCount(playerId, "wolf");
+        int firstHuntCount = gameplay.snapshot(playerId).killCounts().stream()
+            .filter(kill -> "wolf".equals(kill.monsterId()))
+            .mapToInt(Messages.KillCountSnapshot::count)
+            .findFirst()
+            .orElse(0);
         List<Messages.QuestProgress> projection = copyProjection(state);
         Messages.QuestProgress firstHunt = projection.stream()
             .filter(progress -> progress.questId().equals(Messages.QuestIds.FirstHunt))

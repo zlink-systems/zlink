@@ -47,6 +47,8 @@ public final class DispatchServerApplication {
             // to be a channel server (common sample spec section 7.4).
             URI dispatchEndpoint = URI.create(topology.dispatchChannelEndpoint());
             options.addClientServerChannel(SampleNames.DispatchChannel)
+                .client();
+            options.addClientServerChannel(SampleNames.DispatchChannel)
                 .server()
                 .setBindHost(dispatchEndpoint.getHost())
                 .setAdvertiseHost(dispatchEndpoint.getHost())
@@ -104,9 +106,10 @@ public final class DispatchServerApplication {
     @Bean
     DispatchHttpServer dispatchHttpServer(
         ObjectMapper json,
+        ZLinkClient channels,
         DispatchWorkQueue queue,
         SampleTopology topology) throws IOException {
-        return new DispatchHttpServer(json, queue, topology.dispatchHttpEndpoint());
+        return new DispatchHttpServer(json, channels, queue, topology.dispatchHttpEndpoint());
     }
 
     @Bean

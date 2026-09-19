@@ -4,6 +4,9 @@ import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import java.util.concurrent.atomic.AtomicBoolean
 import org.springframework.stereotype.Component
+import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
+import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.RunOrderWorkflowMsg
 
 /**
  * Drives the asynchronous part of the checkout saga. Workflow handlers reply to
@@ -13,7 +16,7 @@ import org.springframework.stereotype.Component
 @Component
 class WorkflowSagaWorker(
     private val queue: WorkflowContinuationQueue,
-    private val workflow: OrderWorkflowService,
+    private val routes: ZLinkRouteClient,
 ) {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
@@ -45,8 +48,13 @@ class WorkflowSagaWorker(
                     return
                 } ?: return
             try {
-                val state = workflow.continueWorkflow(orderId)
-                System.err.println("shoppingmall order: advanced order=$orderId status=${state.status}")
+                routes.sendToSpot(orderId, RunOrderWorkflowMsg(orderId))
+                    .instanceSpot(SampleNames.OrderWorkflowSpotType)
+                    .inMesh(SampleNames.OrderWorkflowMesh)
+                    .submit()
+                    .toCompletableFuture()
+                    .join()
+                System.err.println("shoppingmall order: advanced order=$orderId")
             } catch (error: RuntimeException) {
                 System.err.println("shoppingmall order: saga failed order=$orderId error=${error.message}")
             }

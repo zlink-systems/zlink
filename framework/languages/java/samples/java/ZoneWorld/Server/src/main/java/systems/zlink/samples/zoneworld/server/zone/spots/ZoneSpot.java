@@ -18,6 +18,7 @@ import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
+import systems.zlink.samples.zoneworld.server.zone.handlers.BorderSubscriptionHandlers;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
@@ -52,6 +53,16 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     @Override
     public ZLinkSpotContext context() {
         return context;
+    }
+
+    @Override
+    public void configure() {
+        // Each zone receives only its incoming borders. The topic already encodes both ends,
+        // so handling every border and filtering on toZoneId would duplicate routing policy.
+        for (String fromZoneId : ZoneWorldSpec.adjacentZones(context.spotId())) {
+            context.handlers().addHandler(
+                BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()));
+        }
     }
 
     @Override
@@ -264,7 +275,6 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     }
 
     public void applyBorder(Messages.ZoneBorderEvent event) {
-        if (!context.spotId().equals(event.toZoneId())) return;
         BorderSnapshot current = borderSnapshots.get(event.fromZoneId());
         if (current == null || event.tick() >= current.tick()) {
             borderSnapshots.put(event.fromZoneId(),

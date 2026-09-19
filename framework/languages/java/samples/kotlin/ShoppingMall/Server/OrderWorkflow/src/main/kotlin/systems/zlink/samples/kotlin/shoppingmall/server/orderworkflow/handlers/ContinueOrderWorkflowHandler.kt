@@ -1,6 +1,5 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.handlers
 
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.OrderWorkflowSpot
@@ -16,11 +15,10 @@ class ContinueOrderWorkflowHandler(
         request: ContinueOrderWorkflowReq,
     ): CompletionStage<ContinueOrderWorkflowRes> {
         spot.requireOrder(request.orderId)
-        return CompletableFuture.completedFuture(
-            ContinueOrderWorkflowRes(
-                workflow.continueWorkflow(spot, request.orderId),
-                spot.context().objectGeneration(),
-            ),
-        )
+        val state = workflow.continueWorkflow(spot, request.orderId)
+        return spot.closeIfTerminal(state)
+            .thenApply {
+                ContinueOrderWorkflowRes(state, spot.context().objectGeneration())
+            }
     }
 }

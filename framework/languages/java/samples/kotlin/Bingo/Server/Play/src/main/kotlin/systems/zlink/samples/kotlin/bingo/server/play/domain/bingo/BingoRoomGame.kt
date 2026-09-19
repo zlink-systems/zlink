@@ -51,6 +51,9 @@ class BingoRoomGame(
         return Change(joinedState, events, false)
     }
 
+    fun canAcceptPlayer(): Boolean =
+        status == WaitingForPlayers && players.size < settings.requiredPlayers
+
     fun previewJoin(actorId: String, displayName: String): BingoRoomState {
         val existing = player(actorId)
         if (existing != null) {
