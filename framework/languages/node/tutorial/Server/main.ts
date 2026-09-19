@@ -212,6 +212,9 @@ class ServerModule {}
 // socket open and finishes in-flight work, but other nodes stop choosing this
 // one for new calls. 100 is the normal value.
 const weightRoute = /^\/admin\/channels\/([^/]+)\/weight$/;
+// This credential is intentionally fixed in the tutorial; a settings file would hide the
+// request shape that this example is meant to teach.
+const tutorialAdminAuthorization = `Basic ${Buffer.from('ops:tutorial-admin').toString('base64')}`;
 
 function setChannelWeight(
   mesh: ZLinkRouteMeshRuntimeOptions,
@@ -233,6 +236,12 @@ function startAdminHttpServer(mesh: ZLinkRouteMeshRuntimeOptions): http.Server {
     const matched = weightRoute.exec(url.pathname);
     if (request.method !== 'POST' || matched === null) {
       response.writeHead(404).end();
+      return;
+    }
+    if (request.headers.authorization !== tutorialAdminAuthorization) {
+      response.writeHead(401, {
+        'www-authenticate': 'Basic realm="tutorial-admin"'
+      }).end();
       return;
     }
     try {
