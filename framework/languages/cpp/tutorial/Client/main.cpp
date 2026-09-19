@@ -1,4 +1,5 @@
 #include "../Shared/contracts.hpp"
+#include "http_operations.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
@@ -438,6 +439,9 @@ int main (int argc, char **argv)
           .map_post<create_player_http_handler_t> ("/players/{playerId}")
           .map_post<change_nickname_http_handler_t> ("/players/{playerId}/nickname")
           .map_get<get_player_http_handler_t> ("/players/{playerId}")
+          .map_get<redirect_player_http_handler_t> ("/player/{playerId}")
+          .map_get<export_room_http_handler_t> ("/rooms/{roomId}/export")
+          .map_post<import_room_http_handler_t> ("/rooms/{roomId}/import")
           .map_get<find_room_http_handler_t> ("/locations/rooms/{roomId}")
           .map_get<find_player_http_handler_t> ("/locations/players/{playerId}");
     });

@@ -64,11 +64,11 @@ Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
 ## 빌드
 
 ```bash title="linux"
-./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
+./gradlew :kotlin:Server:installDist :kotlin:Client:installDist :kotlin:HttpClient:installDist
 ```
 
 ```powershell title="windows"
-.\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
+.\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist :kotlin:HttpClient:installDist
 ```
 
 ## 실행
@@ -90,6 +90,33 @@ STREAM 단계의 외부 client는 세 번째 subproject다.
 ```bash
 ./gradlew :kotlin:StreamClient:installDist
 kotlin/StreamClient/build/install/StreamClient/bin/StreamClient
+```
+
+HTTP client 단계는 mesh 밖의 HTTP client가 Client와 Server의 HTTP 표면을 호출하는
+별도 subproject다. Kotlin wrapper의 `zlinkHttpClient { }` DSL과 coroutine 종결자를
+사용하며, 아래 출력은 Server와 Client를 실행한 뒤 프로그램을 실제로 실행해 얻은 값이다.
+
+```bash title="linux"
+./gradlew :kotlin:HttpClient:installDist
+kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
+```
+
+```powershell title="windows"
+.\gradlew.bat :kotlin:HttpClient:installDist
+.\kotlin\HttpClient\build\install\HttpClient\bin\HttpClient.bat
+```
+
+```text
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room f68c1472-c7cd-49a8-82db-1e5bf92066e9 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 132
+upload stream: imported 3
+error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
 ```
 
 ## 검증
@@ -153,6 +180,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 | `Server` | channel handler와 filter를 실행하고 Spot 둘(방과 큐)을 호스팅한다. 운영 endpoint 하나만 HTTP로 연다 |
 | `Client` | HTTP를 받아 mesh로 호출한다 |
 | `StreamClient` | mesh 밖의 client. framework가 아니라 connector 하나만 의존한다 |
+| `HttpClient` | mesh 밖의 client. `zlink-http-client-kotlin` wrapper만 의존한다 |
 
 ## 포트
 
@@ -305,7 +333,7 @@ Spot·Actor handler는 걸리지 않는다.
 후보에서 빠지는 것**이다.
 
 ```bash
-curl -i -X POST 'http://127.0.0.1:5381/admin/channels/profile/weight?value=0'
+curl -i -u ops:tutorial-admin -X POST 'http://127.0.0.1:5381/admin/channels/profile/weight?value=0'
 # HTTP/1.1 200
 # Content-Type: application/json
 # {"channel":"profile","weight":0}
@@ -336,7 +364,7 @@ curl -i -X POST http://127.0.0.1:5380/players/p1/logins
 100으로 되돌리면 다시 받는다.
 
 ```bash
-curl -i -X POST 'http://127.0.0.1:5381/admin/channels/profile/weight?value=100'
+curl -i -u ops:tutorial-admin -X POST 'http://127.0.0.1:5381/admin/channels/profile/weight?value=100'
 # HTTP/1.1 200
 # {"channel":"profile","weight":100}
 
@@ -348,7 +376,7 @@ curl http://127.0.0.1:5380/players/p1/profile
 등록하지 않은 channel 이름을 주면 기동 때와 같은 검사에 걸린다.
 
 ```bash
-curl -i -X POST 'http://127.0.0.1:5381/admin/channels/no-such-channel/weight?value=50'
+curl -i -u ops:tutorial-admin -X POST 'http://127.0.0.1:5381/admin/channels/no-such-channel/weight?value=50'
 # HTTP/1.1 500
 # {"timestamp":"2026-09-16T19:03:42.624+00:00","status":500,"error":"Internal Server Error",
 #  "path":"/admin/channels/no-such-channel/weight"}
@@ -535,6 +563,50 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
 - **`StreamClient`는 coroutine을 쓰지 않는다.** connector에 Kotlin wrapper가 없고 이 process는
   Spring도 없으므로, `CompletionStage`를 `join()`으로 기다린다.
 
+### 13. HTTP 표면 운영 기능
+
+Server의 admin route는 tutorial 고정 자격 증명으로 보호된다. 설정 파일을 두지 않는
+tutorial이므로 자격 증명을 코드에 두었다.
+
+```bash
+curl -i -X POST 'http://127.0.0.1:5381/admin/channels/profile/weight?value=2'
+# 401
+# WWW-Authenticate: Basic realm="tutorial-admin"
+
+curl -i -u ops:tutorial-admin -X POST \
+  'http://127.0.0.1:5381/admin/channels/profile/weight?value=2'
+# 200
+# {"channel":"profile","weight":2}
+```
+
+Client는 요청이 `Accept-Encoding: gzip`을 포함할 때만 room JSON을 gzip으로 보낸다.
+옛 단수 경로는 path-absolute Location으로 301을 낸다.
+
+```bash
+curl -i -H 'Accept-Encoding: gzip' http://127.0.0.1:5380/rooms/<roomId>
+# 200
+# Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5380/player/p1
+# 301
+# Location: /players/p1
+```
+
+export는 `application/x-ndjson`을 줄마다 flush하는 chunked 응답이고, import는 같은
+content type의 chunked body를 줄 단위로 읽어 chat으로 전달한다.
+
+```bash
+curl -i http://127.0.0.1:5380/rooms/<roomId>/export
+# 200
+# Transfer-Encoding: chunked
+# Content-Type: application/x-ndjson
+
+curl -i -X POST http://127.0.0.1:5380/rooms/<roomId>/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+# 200
+# {"imported":2}
+
 ## Kotlin 표면과 Java 표면
 
 Kotlin 패키지 `zlink-framework-kotlin`은 Java 런타임 위에 얹히는 것이라, 이 프로그램도
@@ -653,6 +725,17 @@ framework-json codec(`ZLinkFrameworkJsonProfile`)은 `Long`을 십진 JSON 문�
 | `session-handler` · `session-actor-bind` | `Server/.../sessions/SessionHandlers.kt` |
 | `stream-register` | `Server/.../ServerApplication.kt` |
 | `stream-client` · `session-actor-client` | `StreamClient/.../StreamClientProgram.kt` |
+| `http-client-create` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-first-request` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-request-shaping` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-json-body` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-response-kinds` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-compressed-response` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-redirect` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-basic-auth` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-download-stream` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-upload-stream` | `HttpClient/.../HttpClientProgram.kt` |
+| `http-error-kinds` | `HttpClient/.../HttpClientProgram.kt` |
 | `error-mapping` | `Client/.../ZLinkErrorResponse.kt` |
 
 마커 이름을 바꾸면 그 구간을 읽는 문서가 조용히 빈 코드 블록을 낸다. 이름을 바꿀 때는

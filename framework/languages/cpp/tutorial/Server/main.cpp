@@ -4,6 +4,7 @@
 #include "channel/record_login_handler.hpp"
 #include "dispatch/call_log_filter.hpp"
 #include "ops/channel_weight_handler.hpp"
+#include "ops/authenticated_channel_weight_handler.hpp"
 #include "ops/node_status_handler.hpp"
 #include "actors/player.hpp"
 #include "spots/game_room.hpp"
@@ -156,7 +157,7 @@ int main (int argc, char **argv)
         // Client's 5180 when both run on the same host.
         options.http ()
           .listen ("http://127.0.0.1:5181")
-          .map_post<channel_weight_handler_t> ("/admin/channels/{channel}/weight");
+          .map_post<authenticated_channel_weight_handler_t> ("/admin/channels/{channel}/weight");
     });
 
     return app.run (argc, argv);

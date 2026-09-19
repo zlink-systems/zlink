@@ -67,6 +67,18 @@ npm run build
 only while the tutorial itself is CommonJS, so they are not built under one tsconfig — it is
 built separately (see "11. STREAM and the Session-Actor Link" below).
 
+`HttpClient` is also a separate project with its own `package.json`. It can be built as
+CommonJS, but it is kept separate so the guide example depends only on the
+`@zlink-systems/http-client` package.
+
+```bash title="linux"
+npm run build:http-client
+```
+
+```powershell title="windows"
+npm run build:http-client
+```
+
 ## Run
 
 Redis is required (the Spot stage uses it). There is no runner here, so this tutorial starts one
@@ -195,6 +207,7 @@ responses for each step are under "Steps" and "Actual output" below.
 | `Server/Spots/lobby-spot.ts` | The Entry Spot a newly created player first enters |
 | `Server/Sessions/` | The session owning one external client connection, and its two handlers |
 | `StreamClient/` | The client outside the mesh. A **separate project** that references only the connector, not the framework |
+| `HttpClient/` | The HTTP client outside the mesh. A **separate project** that references only the http-client package |
 
 ## Steps
 
@@ -286,10 +299,10 @@ The server opens HTTP on `127.0.0.1:5481` just for this one endpoint. Since the 
 body, the new value is given as a query string.
 
 ```bash
-curl -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
 # {"channel":"profile","weight":0}
 
-curl -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
 # {"channel":"profile","weight":100}
 ```
 
@@ -307,8 +320,44 @@ An unregistered channel name becomes a `ZLinkConfigurationException`, and this r
 into 400.
 
 ```bash
-curl -X POST 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
 # 400 {"error":"RouteMesh channel 'no-such-channel' is not registered."}
+```
+
+The operational route is protected by Basic authentication. Missing or incorrect credentials
+return `401` with `WWW-Authenticate: Basic realm="tutorial-admin"` and an empty body.
+
+```bash
+curl -i -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=2'
+# 401
+# WWW-Authenticate: Basic realm="tutorial-admin"
+
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=2'
+# {"channel":"profile","weight":2}
+```
+
+Room reads return gzip when the request includes `Accept-Encoding: gzip`, and the old singular
+path redirects to the current path. The room export/import routes use chunked
+`application/x-ndjson` responses and requests.
+
+```bash
+curl --compressed -H 'Accept-Encoding: gzip' http://127.0.0.1:5480/rooms/<roomId>
+# {"title":"lobby","chat":["p1: hello"]}
+
+curl -i http://127.0.0.1:5480/player/p1
+# 301
+# Location: /players/p1
+
+curl -i http://127.0.0.1:5480/rooms/<roomId>/export
+# Content-Type: application/x-ndjson
+# Transfer-Encoding: chunked
+# {"roomId":"<roomId>"}
+# {"message":"p1: hello"}
+
+printf '%s\n' '{"playerId":"p1","text":"imported"}' \
+  | curl -X POST http://127.0.0.1:5480/rooms/<roomId>/import \
+      -H 'Content-Type: application/x-ndjson' --data-binary @-
+# {"imported":1}
 ```
 
 ### 7. Spot — addressing by id
@@ -450,6 +499,42 @@ Things worth knowing on the Node side:
 - **`client.reply` only answers a Request.** To push to a client with no pending request, use
   `context.boundSession.send(...)`.
 
+### 12. HTTP client
+
+`HttpClient` calls the HTTP surfaces provided by the tutorial Client and Server through the
+public API of `@zlink-systems/http-client`. One run demonstrates typed, raw, and body-only
+responses, per-request timeout and headers, gzip, redirects, Basic authentication,
+download/upload streams, and exception kinds.
+
+```bash title="linux"
+cd HttpClient
+npm install
+npm run build
+npm start
+```
+
+```powershell title="windows"
+cd HttpClient
+npm install
+npm run build
+npm start
+```
+
+The output is as follows. The room id and download byte count may differ between runs.
+
+```
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player created room 53a738ae-f462-4923-91d8-7877d4092452 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 74
+upload stream: imported 3
+error kinds: bad request InternalFailure connection refused Unavailable
+```
+
 ## Actual output
 
 ```
@@ -512,7 +597,7 @@ weight restored to 100.
 
 ```
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
 {"channel":"profile","weight":0}
 HTTP_STATUS:200
 
@@ -539,7 +624,7 @@ $ curl -s -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:5480/ops/nodes/game
 HTTP_STATUS:200
 
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
 {"channel":"profile","weight":100}
 HTTP_STATUS:200
 
@@ -570,7 +655,7 @@ $ curl -s -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:5480/ops/nodes/no-s
 HTTP_STATUS:404
 
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
 {"error":"RouteMesh channel 'no-such-channel' is not registered."}
 HTTP_STATUS:400
 ```
@@ -648,6 +733,17 @@ marked by `--8<--` markers in the source. Marker names match the .NET tutorial.
 | `session-actor-bind` | `Server/Sessions/authenticate-handler.ts` |
 | `stream-register` | `Server/main.ts` |
 | `stream-client` / `session-actor-client` | `StreamClient/main.ts` |
+| `http-client-create` | `HttpClient/main.ts` |
+| `http-first-request` | `HttpClient/main.ts` |
+| `http-request-shaping` | `HttpClient/main.ts` |
+| `http-json-body` | `HttpClient/main.ts` |
+| `http-response-kinds` | `HttpClient/main.ts` |
+| `http-compressed-response` | `HttpClient/main.ts` |
+| `http-redirect` | `HttpClient/main.ts` |
+| `http-basic-auth` | `HttpClient/main.ts` |
+| `http-download-stream` | `HttpClient/main.ts` |
+| `http-upload-stream` | `HttpClient/main.ts` |
+| `http-error-kinds` | `HttpClient/main.ts` |
 | `error-mapping` | `Client/zlink-error-response.ts` |
 
 ## Where this differs from the .NET tutorial on the surface

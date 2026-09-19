@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Text;
+using System.Text.Json;
 using Systems.Zlink;
 using Tutorial.Client;
 using Tutorial.Shared;
@@ -8,6 +11,7 @@ using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Locations.Redis;
 
+var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 var builder = WebApplication.CreateBuilder(args);
 
 // The HTTP surface the examples below are driven through.
@@ -70,6 +74,109 @@ var app = builder.Build();
 // Maps a failed framework call to the status code that says what happened.
 // Without it every failure below reaches the host's default handler as a 500.
 app.UseZLinkErrorResponse();
+
+app.Use(async (context, next) =>
+{
+    var segments = context.Request.Path.Value?
+        .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var isRoomState = segments is { Length: 2 }
+        && string.Equals(segments[0], "rooms", StringComparison.OrdinalIgnoreCase);
+    var acceptsGzip = context.Request.Headers.TryGetValue("Accept-Encoding", out var acceptEncoding)
+        && acceptEncoding.Any(value => value?.Contains("gzip", StringComparison.OrdinalIgnoreCase) == true);
+
+    if (!isRoomState || !acceptsGzip)
+    {
+        await next(context);
+        return;
+    }
+
+    context.Response.Headers.ContentEncoding = "gzip";
+    context.Response.ContentLength = null;
+    var originalBody = context.Response.Body;
+    await using (var gzip = new GZipStream(originalBody, CompressionLevel.Fastest, leaveOpen: true))
+    {
+        context.Response.Body = gzip;
+        try
+        {
+            await next(context);
+        }
+        finally
+        {
+            context.Response.Body = originalBody;
+        }
+    }
+});
+
+app.MapGet("/player/{playerId}", (string playerId, HttpResponse response) =>
+{
+    response.StatusCode = StatusCodes.Status301MovedPermanently;
+    response.Headers.Location = $"/players/{playerId}";
+    return Results.StatusCode(StatusCodes.Status301MovedPermanently);
+});
+
+app.MapGet("/rooms/{roomId}/export", async (
+    string roomId,
+    IZLinkSpotClient rooms,
+    HttpResponse response,
+    CancellationToken cancellationToken) =>
+{
+    var state = await rooms
+        .RequestToSpot(roomId, new GetRoomState())
+        .Timeout(TimeSpan.FromSeconds(3))
+        .Async<RoomState>(cancellationToken);
+
+    response.ContentType = "application/x-ndjson";
+    response.ContentLength = null;
+    await response.BodyWriter.WriteAsync(
+        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { roomId }) + "\n"),
+        cancellationToken);
+    await response.BodyWriter.FlushAsync(cancellationToken);
+
+    foreach (var message in state.Chat)
+    {
+        await response.BodyWriter.WriteAsync(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { message }) + "\n"),
+            cancellationToken);
+        await response.BodyWriter.FlushAsync(cancellationToken);
+    }
+
+});
+
+app.MapPost("/rooms/{roomId}/import", async (
+    string roomId,
+    HttpRequest request,
+    IZLinkSpotClient rooms,
+    CancellationToken cancellationToken) =>
+{
+    if (!request.ContentType?.StartsWith("application/x-ndjson", StringComparison.OrdinalIgnoreCase) ?? true)
+        return Results.BadRequest();
+
+    using var reader = new StreamReader(request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+    var imported = 0;
+    while (await reader.ReadLineAsync(cancellationToken) is { } line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            continue;
+
+        PostChat? message;
+        try
+        {
+            message = JsonSerializer.Deserialize<PostChat>(line, jsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest();
+        }
+
+        if (message is null)
+            return Results.BadRequest();
+
+        await rooms.SendToSpot(roomId, message).Async(cancellationToken);
+        imported++;
+    }
+
+    return Results.Ok(new ImportedResponse(imported));
+});
 
 // --8<-- [start:channel-request-call]
 app.MapGet(
@@ -326,3 +433,5 @@ app.MapGet("/status", (IZLinkFrameworkRuntime runtime) =>
 // --8<-- [end:monitoring-call]
 
 await app.RunAsync();
+
+public sealed record ImportedResponse(int Imported);

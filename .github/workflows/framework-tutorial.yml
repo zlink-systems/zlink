@@ -14,12 +14,18 @@ on:
     paths:
       - ".github/workflows/framework-tutorial.yml"
       - "framework/languages/dotnet/tutorial/**"
+      - "framework/languages/java/tutorial/**"
+      - "framework/languages/node/tutorial/**"
+      - "framework/languages/cpp/tutorial/**"
   pull_request:
     branches:
       - main
     paths:
       - ".github/workflows/framework-tutorial.yml"
       - "framework/languages/dotnet/tutorial/**"
+      - "framework/languages/java/tutorial/**"
+      - "framework/languages/node/tutorial/**"
+      - "framework/languages/cpp/tutorial/**"
   workflow_dispatch:
 
 env:
@@ -72,7 +78,7 @@ jobs:
               echo "::error::snippet marker not found in sources: ${marker}"
               missing=1
             }
-          done < <(grep -o '^| `[a-z-]*` |' "${root}/README.md" | tr -d '|` ')
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
           test "${missing}" -eq 0
 
       - name: Run every documented step
@@ -111,6 +117,8 @@ jobs:
           profile=$(curl -sf http://127.0.0.1:5080/players/p1/profile)
           echo "${profile}" | grep -q '"playerId":"p1"' || fail "channel request/reply: ${profile}"
           curl -sf -X POST http://127.0.0.1:5080/players/p1/logins > /dev/null
+          # The send completes at admission (202); the handler runs afterwards, so the log line lands a moment later.
+          for _ in $(seq 1 40); do grep -q 'login recorded: p1' server.log && break; sleep 0.25; done
           grep -q 'login recorded: p1' server.log || fail "one-way channel send did not arrive"
 
           # RouteMesh node direct — the caller names one node instead of a channel.
@@ -126,9 +134,9 @@ jobs:
           grep -q 'dispatch done' server.log || fail "filter did not run after the handler"
 
           # Weight is the one value a running node can change.
-          weight=$(curl -sf -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=0")
+          weight=$(curl -sf -u ops:tutorial-admin -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=0")
           echo "${weight}" | grep -q '"weight":0' || fail "weight change: ${weight}"
-          curl -sf -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=100" > /dev/null
+          curl -sf -u ops:tutorial-admin -X POST "http://127.0.0.1:5081/admin/channels/profile/weight?value=100" > /dev/null
 
           # ClientServer channel — the caller's connection decides who answers.
           ticket=$(curl -sf -X POST http://127.0.0.1:5080/players/p1/tickets)
@@ -176,8 +184,372 @@ jobs:
           echo "${stream}" | grep -q 'bound player: p1' || fail "session to player binding"
           echo "${stream}" | grep -q 'pushed: speedy' || fail "player push to bound session"
 
+          # HTTP client surface and operational routes
+          http_client=$(dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build 2>&1)
+          echo "${http_client}"
+          echo "${http_client}" | grep -q '^first request: p1 rookie$' || fail "http client first request"
+          echo "${http_client}" | grep -q '^request shaping: status 200 weight 2$' || fail "http client request shaping"
+          echo "${http_client}" | grep -q '^json body: player 200 room .* chat 202$' || fail "http client JSON body"
+          echo "${http_client}" | grep -q '^response kinds: typed 200 raw application/json; charset=utf-8 fetch anonymous$' || fail "http client response kinds"
+          echo "${http_client}" | grep -q '^compressed response: 200 encoding-removed True$' || fail "http client compression"
+          echo "${http_client}" | grep -q '^redirect: 200 p1$' || fail "http client redirect"
+          echo "${http_client}" | grep -q '^basic auth: without 401 with 200$' || fail "http client basic auth"
+          echo "${http_client}" | grep -q '^download stream: chunks [1-9][0-9]* bytes [1-9][0-9]*$' || fail "http client download"
+          echo "${http_client}" | grep -q '^upload stream: imported 3$' || fail "http client upload"
+          echo "${http_client}" | grep -q '^error kinds: bad request InternalFailure connection refused Unavailable$' || fail "http client errors"
+
           # Runtime status
           status=$(curl -sf http://127.0.0.1:5080/status)
           echo "${status}" | grep -q '"ready":true' || fail "runtime status: ${status}"
 
           echo "all tutorial steps passed"
+
+  tutorial-java-kotlin:
+    name: java-kotlin
+    runs-on: ubuntu-24.04
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Build Java and Kotlin tutorials against the published packages
+        working-directory: framework/languages/java/tutorial
+        run: >-
+          bash ./gradlew --no-daemon build
+          :java:Server:installDist :java:Client:installDist
+          :java:StreamClient:installDist :java:HttpClient:installDist
+          :kotlin:Server:installDist :kotlin:Client:installDist
+          :kotlin:StreamClient:installDist :kotlin:HttpClient:installDist
+
+      - name: Check that the documented HTTP snippet markers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=framework/languages/java/tutorial
+          for language in java kotlin; do
+            while read -r marker; do
+              grep -Frq -- "--8<-- [start:${marker}]" "${root}" || {
+                echo "::error::snippet marker not found in sources: ${marker}"
+                exit 1
+              }
+            done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/${language}/README.md" | cut -d'`' -f2)
+          done
+
+      - name: Run Java and Kotlin documented tutorial steps
+        working-directory: framework/languages/java/tutorial
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_language() {
+            local language="$1"
+            local client_port="$2"
+            local admin_port="$3"
+            local server_bin="$4"
+            local client_bin="$5"
+            local stream_bin="$6"
+            local http_client_bin="$7"
+            local log_dir="run-${language}-ci"
+
+            mkdir -p "${log_dir}"
+            "${server_bin}" > "${log_dir}/server.log" 2>&1 &
+            local server_pid=$!
+            "${client_bin}" > "${log_dir}/client.log" 2>&1 &
+            local client_pid=$!
+
+            cleanup() {
+              kill "${client_pid}" "${server_pid}" 2>/dev/null || true
+              wait "${client_pid}" 2>/dev/null || true
+              wait "${server_pid}" 2>/dev/null || true
+            }
+            trap cleanup EXIT
+
+            fail() {
+              echo "::error::${language}: $1"
+              tail -n 120 "${log_dir}/server.log"
+              tail -n 120 "${log_dir}/client.log"
+              exit 1
+            }
+
+            local ready=0
+            for _ in $(seq 1 90); do
+              if curl -sf --max-time 5 "http://127.0.0.1:${client_port}/players/warmup/profile" > /dev/null; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            [ "${ready}" -eq 1 ] || fail "the two processes never connected"
+
+            profile=$(curl -sf "http://127.0.0.1:${client_port}/players/p1/profile")
+            echo "${profile}" | grep -q '"playerId":"p1"' || fail "profile: ${profile}"
+            status=$(curl -sf "http://127.0.0.1:${client_port}/ops/nodes/game-server-1/status")
+            echo "${status}" | grep -q '"meshName":"game"' || fail "node status: ${status}"
+            unauthorized=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              "http://127.0.0.1:${admin_port}/admin/channels/profile/weight?value=2")
+            [ "${unauthorized}" = "401" ] || fail "admin without auth: ${unauthorized}"
+            authorized=$(curl -s -o /dev/null -w '%{http_code}' -u ops:tutorial-admin -X POST \
+              "http://127.0.0.1:${admin_port}/admin/channels/profile/weight?value=2")
+            [ "${authorized}" = "200" ] || fail "admin with auth: ${authorized}"
+
+            curl -sf -X POST "http://127.0.0.1:${client_port}/players/p1" \
+              -H 'Content-Type: application/json' -d '{"nickname":"rookie"}' > /dev/null
+
+            stream_output=$("${stream_bin}") || fail "StreamClient failed"
+            echo "${stream_output}" | grep -q 'round trip:' || fail "stream request/reply"
+            echo "${stream_output}" | grep -q 'bound player: p1' || fail "stream binding"
+            echo "${stream_output}" | grep -q 'pushed: speedy' || fail "stream push"
+
+            http_output=$("${http_client_bin}") || fail "HttpClient failed"
+            echo "${http_output}"
+            [ "$(printf '%s\n' "${http_output}" | wc -l)" -eq 10 ] || fail "HttpClient did not print 10 lines"
+            echo "${http_output}" | grep -q '^first request: p1 rookie$' || fail "first request"
+            echo "${http_output}" | grep -q '^request shaping: status 200 weight 2$' || fail "request shaping"
+            echo "${http_output}" | grep -q '^response kinds: typed 200 raw application/json fetch anonymous$' || fail "response kinds"
+            echo "${http_output}" | grep -q '^compressed response: 200 encoding-removed true$' || fail "compression"
+            echo "${http_output}" | grep -q '^redirect: 200 p1$' || fail "redirect"
+            echo "${http_output}" | grep -q '^basic auth: without 401 with 200$' || fail "basic auth"
+            echo "${http_output}" | grep -q '^download stream: chunks [1-9][0-9]* bytes [1-9][0-9]*$' || fail "download"
+            echo "${http_output}" | grep -q '^upload stream: imported 3$' || fail "upload"
+            echo "${http_output}" | grep -q '^error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE$' || fail "error kinds"
+            cleanup
+            trap - EXIT
+          }
+
+          run_language java 5280 5281 \
+            ./java/Server/build/install/Server/bin/Server \
+            ./java/Client/build/install/Client/bin/Client \
+            ./java/StreamClient/build/install/StreamClient/bin/StreamClient \
+            ./java/HttpClient/build/install/HttpClient/bin/HttpClient
+          run_language kotlin 5380 5381 \
+            ./kotlin/Server/build/install/Server/bin/Server \
+            ./kotlin/Client/build/install/Client/bin/Client \
+            ./kotlin/StreamClient/build/install/StreamClient/bin/StreamClient \
+            ./kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
+
+  tutorial-node:
+    name: node
+    runs-on: ubuntu-24.04
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install the published packages
+        working-directory: framework/languages/node/tutorial
+        run: |
+          npm install
+          npm --prefix HttpClient install
+
+      - name: Build the tutorial and HttpClient
+        working-directory: framework/languages/node/tutorial
+        run: |
+          npm run build
+          npm run build:http-client
+
+      - name: Check that the documented snippet markers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=framework/languages/node/tutorial
+          missing=0
+          while read -r marker; do
+            grep -rq -- "--8<-- \[start:${marker}\]" "${root}" || {
+              echo "::error::snippet marker not found in sources: ${marker}"
+              missing=1
+            }
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
+          test "${missing}" -eq 0
+
+      - name: Run the documented Node tutorial steps
+        shell: bash
+        working-directory: framework/languages/node/tutorial
+        run: |
+          set -euo pipefail
+
+          npm run server > server.log 2>&1 &
+          server_pid=$!
+          npm run client > client.log 2>&1 &
+          client_pid=$!
+          cleanup() {
+            kill "${client_pid}" "${server_pid}" 2>/dev/null || true
+            wait "${client_pid}" "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          fail() {
+            echo "::error::$1"
+            echo '--- server.log ---'
+            cat server.log
+            echo '--- client.log ---'
+            cat client.log
+            exit 1
+          }
+
+          warmup="warmup-$$-${RANDOM}"
+          streak=0
+          for _ in $(seq 1 90); do
+            if curl -sf --max-time 10 http://127.0.0.1:5480/players/p1/profile > /dev/null \
+               && curl -sf --max-time 10 -X POST "http://127.0.0.1:5480/match-queues/${warmup}" \
+                    -H 'Content-Type: application/json' -d '{"playerId":"warmup"}' > /dev/null; then
+              streak=$((streak + 1))
+              [ "${streak}" -ge 3 ] && break
+            else
+              streak=0
+              sleep 1
+            fi
+          done
+          [ "${streak}" -ge 3 ] || fail "the two Node processes never connected"
+
+          profile=$(curl -sf http://127.0.0.1:5480/players/p1/profile)
+          echo "${profile}" | grep -q '"playerId":"p1"' || fail "profile route: ${profile}"
+          curl -sf -X POST http://127.0.0.1:5480/players/p1/logins > /dev/null
+          grep -q 'login recorded: p1' server.log || fail "one-way channel send"
+
+          status=$(curl -sf http://127.0.0.1:5480/ops/nodes/game-server-1/status)
+          echo "${status}" | grep -q '"meshName":"game"' || fail "node direct route: ${status}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5480/ops/nodes/no-such-node/status)
+          [ "${code}" = "404" ] || fail "unknown node id should fail, got ${code}"
+
+          weight=$(curl -sf -u ops:tutorial-admin -X POST \
+            "http://127.0.0.1:5481/admin/channels/profile/weight?value=0")
+          echo "${weight}" | grep -q '"weight":0' || fail "weight change: ${weight}"
+          curl -sf -u ops:tutorial-admin -X POST \
+            "http://127.0.0.1:5481/admin/channels/profile/weight?value=100" > /dev/null
+
+          ticket=$(curl -sf -X POST http://127.0.0.1:5480/players/p1/tickets)
+          [ "${ticket}" = '"ticket-p1"' ] || fail "ClientServer route: ${ticket}"
+          curl -sf -X POST http://127.0.0.1:5480/notices \
+            -H 'Content-Type: application/json' -d '{"message":"ci-broadcast"}' > /dev/null
+          grep -q 'maintenance notice: ci-broadcast' server.log || fail "fanout route"
+
+          room=$(curl -sf -X POST http://127.0.0.1:5480/rooms \
+            -H 'Content-Type: application/json' -d '{"title":"ci-room"}' | tr -d '"')
+          curl -sf -X POST "http://127.0.0.1:5480/rooms/${room}/chat" \
+            -H 'Content-Type: application/json' -d '{"playerId":"p1","text":"hello"}' > /dev/null
+          state=$(curl -sf "http://127.0.0.1:5480/rooms/${room}")
+          echo "${state}" | grep -q 'p1: hello' || fail "room state: ${state}"
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST "http://127.0.0.1:5481/admin/channels/profile/weight?value=2")
+          [ "${code}" = "401" ] || fail "admin authentication: ${code}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5480/player/p1)
+          [ "${code}" = "301" ] || fail "redirect route: ${code}"
+          headers=$(curl -sS -D - -o /dev/null -H 'Accept-Encoding: gzip' \
+            "http://127.0.0.1:5480/rooms/${room}")
+          echo "${headers}" | grep -qi '^content-encoding: gzip' || fail "gzip response"
+          export_headers=$(curl -sS -D - -o /dev/null \
+            "http://127.0.0.1:5480/rooms/${room}/export")
+          echo "${export_headers}" | grep -qi '^transfer-encoding: chunked' || fail "chunked export"
+          imported=$(printf '%s\n%s\n%s\n' \
+            '{"playerId":"p1","text":"one"}' \
+            '{"playerId":"p1","text":"two"}' \
+            '{"playerId":"p1","text":"three"}' \
+            | curl -sf -X POST "http://127.0.0.1:5480/rooms/${room}/import" \
+                -H 'Content-Type: application/x-ndjson' --data-binary @-)
+          echo "${imported}" | grep -q '"imported":3' || fail "chunked import: ${imported}"
+
+          http_output=$(npm run http-client)
+          echo "${http_output}"
+          echo "${http_output}" | grep -q 'first request: p1 rookie' || fail "HttpClient first request"
+          echo "${http_output}" | grep -q 'basic auth: without 401 with 200' || fail "HttpClient auth"
+          echo "${http_output}" | grep -q 'upload stream: imported 3' || fail "HttpClient upload"
+          echo "${http_output}" | grep -q 'error kinds: bad request InternalFailure connection refused Unavailable' || fail "HttpClient error kinds"
+
+          echo "all Node tutorial steps passed"
+
+  tutorial-cpp:
+    name: cpp
+    runs-on: ubuntu-24.04
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build the C++ tutorial against the published archives
+        working-directory: framework/languages/cpp/tutorial
+        run: |
+          cmake -P bootstrap.cmake
+          cmake --build build --parallel
+
+      - name: Check that the documented snippet markers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=framework/languages/cpp/tutorial
+          missing=0
+          while read -r marker; do
+            grep -rq -- "--8<-- \[start:${marker}\]" "${root}" || {
+              echo "::error::snippet marker not found in sources: ${marker}"
+              missing=1
+            }
+          done < <(grep -oE '^[|] `[a-z-]+` [|] `[^`]+` [|]$' "${root}/README.md" | cut -d'`' -f2)
+          test "${missing}" -eq 0
+
+      - name: Run the HTTP client tutorial
+        shell: bash
+        working-directory: framework/languages/cpp/tutorial
+        run: |
+          set -euo pipefail
+          ./build/tutorial_server > server.log 2>&1 & server_pid=$!
+          ./build/tutorial_client > client.log 2>&1 & client_pid=$!
+          cleanup() { kill "${server_pid}" "${client_pid}" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -sf -u ops:tutorial-admin -X POST \
+            'http://127.0.0.1:5181/admin/channels/profile/weight?value=100' > /dev/null
+          output=$(./build/tutorial_http_client)
+          printf '%s\n' "${output}"
+          test "$(printf '%s\n' "${output}" | wc -l)" -eq 10
+          printf '%s\n' "${output}" | grep -q '^first request: p1 rookie$'
+          printf '%s\n' "${output}" | grep -q '^basic auth: without 401 with 200$'
+          ./build/tutorial_stream_client > stream.log

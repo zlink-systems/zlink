@@ -64,11 +64,11 @@ All commands below run from the directory this zip extracts to
 ## Build
 
 ```bash title="linux"
-./gradlew :java:Server:installDist :java:Client:installDist
+./gradlew :java:Server:installDist :java:Client:installDist :java:HttpClient:installDist
 ```
 
 ```powershell title="windows"
-.\gradlew.bat :java:Server:installDist :java:Client:installDist
+.\gradlew.bat :java:Server:installDist :java:Client:installDist :java:HttpClient:installDist
 ```
 
 ## Run
@@ -91,6 +91,78 @@ The STREAM stage's external client is a third subproject.
 ./gradlew :java:StreamClient:installDist
 ./java/StreamClient/build/install/StreamClient/bin/StreamClient
 ```
+
+The HTTP client is a separate process outside the mesh. It references only the
+published `zlink-http-client` package and exercises the Client HTTP surface and
+the authenticated Server admin surface.
+
+```bash title="linux"
+./gradlew :java:HttpClient:installDist
+./java/HttpClient/build/install/HttpClient/bin/HttpClient
+```
+
+```powershell title="windows"
+.\gradlew.bat :java:HttpClient:installDist
+.\java\HttpClient\build\install\HttpClient\bin\HttpClient.bat
+```
+
+```text
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room ca04ca21-399c-4129-81af-3e95ad754891 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 132
+upload stream: imported 3
+error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
+```
+
+## HTTP operational surface
+
+The Server admin route requires `ops:tutorial-admin` and returns `401` with
+`WWW-Authenticate: Basic realm="tutorial-admin"` when the credentials are absent.
+The Client serves gzip when `Accept-Encoding: gzip` is present, redirects
+`/player/p1` to `/players/p1`, and exposes chunked NDJSON export/import at
+`/rooms/<roomId>/export` and `/rooms/<roomId>/import`.
+
+```bash
+curl -i -u ops:tutorial-admin -X POST \
+  'http://127.0.0.1:5281/admin/channels/profile/weight?value=2'
+# 200
+# {"channel":"profile","weight":2}
+
+curl -i -H 'Accept-Encoding: gzip' http://127.0.0.1:5280/rooms/<roomId>
+# 200, Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5280/player/p1
+# 301, Location: /players/p1
+
+curl -i http://127.0.0.1:5280/rooms/<roomId>/export
+# 200, Transfer-Encoding: chunked, Content-Type: application/x-ndjson
+
+curl -i -X POST http://127.0.0.1:5280/rooms/<roomId>/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+# 200, {"imported":2}
+```
+
+## Snippet markers
+
+| Marker | Source |
+|---|---|
+| `http-client-create` | `HttpClient/.../HttpClientProgram.java` |
+| `http-first-request` | `HttpClient/.../HttpClientProgram.java` |
+| `http-request-shaping` | `HttpClient/.../HttpClientProgram.java` |
+| `http-json-body` | `HttpClient/.../HttpClientProgram.java` |
+| `http-response-kinds` | `HttpClient/.../HttpClientProgram.java` |
+| `http-compressed-response` | `HttpClient/.../HttpClientProgram.java` |
+| `http-redirect` | `HttpClient/.../HttpClientProgram.java` |
+| `http-basic-auth` | `HttpClient/.../HttpClientProgram.java` |
+| `http-download-stream` | `HttpClient/.../HttpClientProgram.java` |
+| `http-upload-stream` | `HttpClient/.../HttpClientProgram.java` |
+| `http-error-kinds` | `HttpClient/.../HttpClientProgram.java` |
 
 ## Verify
 

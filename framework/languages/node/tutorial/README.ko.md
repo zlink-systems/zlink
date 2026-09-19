@@ -66,6 +66,17 @@ npm run build
 tutorial 본체는 CommonJS이므로 한 tsconfig로 묶지 않는다 — 빌드도 따로 한다(아래 "11. STREAM과
 Session-Actor 연결" 참고).
 
+`HttpClient`도 자기 `package.json`을 가진 별도 프로젝트다. CommonJS로 빌드할 수 있지만
+가이드가 참조하는 `@zlink-systems/http-client` 패키지만 의존하도록 분리한다.
+
+```bash title="linux"
+npm run build:http-client
+```
+
+```powershell title="windows"
+npm run build:http-client
+```
+
 ## 실행
 
 Redis가 필요하다(Spot 단계가 쓴다). runner가 따로 없으므로 이 tutorial에서는 직접 하나
@@ -194,6 +205,7 @@ if (-not $ready) { exit 1 }
 | `Server/Spots/lobby-spot.ts` | 새로 만들어진 player가 처음 들어가는 Entry Spot |
 | `Server/Sessions/` | 외부 client 연결 하나를 맡는 session과 그 handler 둘 |
 | `StreamClient/` | mesh 밖의 client. framework가 아니라 connector만 참조하는 **별도 프로젝트**다 |
+| `HttpClient/` | mesh 밖의 HTTP client. http-client 패키지만 참조하는 **별도 프로젝트**다 |
 
 ## 단계
 
@@ -282,10 +294,10 @@ Server는 이 한 자리를 위해 `127.0.0.1:5481`에 HTTP를 연다. body가 �
 query string으로 준다.
 
 ```bash
-curl -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
 # {"channel":"profile","weight":0}
 
-curl -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
 # {"channel":"profile","weight":100}
 ```
 
@@ -302,8 +314,44 @@ node가 없다"와 "서버에 결함이 있다"를 구분하지 못한다.
 돌려준다.
 
 ```bash
-curl -X POST 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
 # 400 {"error":"RouteMesh channel 'no-such-channel' is not registered."}
+```
+
+운영 route는 Basic 인증으로 보호한다. 자격 증명이 없거나 틀리면 `401`과
+`WWW-Authenticate: Basic realm="tutorial-admin"`을 반환하고 body는 비운다.
+
+```bash
+curl -i -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=2'
+# 401
+# WWW-Authenticate: Basic realm="tutorial-admin"
+
+curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=2'
+# {"channel":"profile","weight":2}
+```
+
+방 조회는 `Accept-Encoding: gzip` 요청에 gzip 응답을 반환하고, 옛 단수 경로는 새 경로로
+301 redirect한다. 방의 export/import route는 각각 `application/x-ndjson` chunked 응답과
+요청을 사용한다.
+
+```bash
+curl --compressed -H 'Accept-Encoding: gzip' http://127.0.0.1:5480/rooms/<roomId>
+# {"title":"lobby","chat":["p1: hello"]}
+
+curl -i http://127.0.0.1:5480/player/p1
+# 301
+# Location: /players/p1
+
+curl -i http://127.0.0.1:5480/rooms/<roomId>/export
+# Content-Type: application/x-ndjson
+# Transfer-Encoding: chunked
+# {"roomId":"<roomId>"}
+# {"message":"p1: hello"}
+
+printf '%s\n' '{"playerId":"p1","text":"imported"}' \
+  | curl -X POST http://127.0.0.1:5480/rooms/<roomId>/import \
+      -H 'Content-Type: application/x-ndjson' --data-binary @-
+# {"imported":1}
 ```
 
 ### 7. Spot — id로 부르기
@@ -430,6 +478,42 @@ pushed: speedy           # player가 그 연결로 밀어 준다
 `pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
 알림**을 받았다.
 
+### 12. HTTP client
+
+`HttpClient`는 tutorial Client와 Server가 제공하는 HTTP 표면을
+`@zlink-systems/http-client`의 공개 API로 호출한다. typed·raw·body-only 응답, 요청별
+timeout과 header, gzip·redirect·Basic 인증, download/upload stream, 예외 kind를 한 실행에서
+차례로 확인한다.
+
+```bash title="linux"
+cd HttpClient
+npm install
+npm run build
+npm start
+```
+
+```powershell title="windows"
+cd HttpClient
+npm install
+npm run build
+npm start
+```
+
+실행 출력은 다음과 같다. room id와 download byte 수는 실행마다 달라질 수 있다.
+
+```
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player created room 53a738ae-f462-4923-91d8-7877d4092452 chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 74
+upload stream: imported 3
+error kinds: bad request InternalFailure connection refused Unavailable
+```
+
 Node 쪽에서 알아 둘 것은 다음과 같다.
 
 - **stream 전송은 WebSocket이다.** 양쪽 endpoint가 `ws://`다. .NET·C++·Java·Kotlin의
@@ -503,7 +587,7 @@ weight를 0으로 내리고 같은 다섯 호출을 다시 넣은 뒤 100으로 
 
 ```
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
 {"channel":"profile","weight":0}
 HTTP_STATUS:200
 
@@ -530,7 +614,7 @@ $ curl -s -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:5480/ops/nodes/game
 HTTP_STATUS:200
 
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/profile/weight?value=100'
 {"channel":"profile","weight":100}
 HTTP_STATUS:200
 
@@ -561,7 +645,7 @@ $ curl -s -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:5480/ops/nodes/no-s
 HTTP_STATUS:404
 
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
-    'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
+    -u ops:tutorial-admin 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
 {"error":"RouteMesh channel 'no-such-channel' is not registered."}
 HTTP_STATUS:400
 ```
@@ -639,6 +723,17 @@ weight가 0인 동안 1번은 `errno 0`으로, 2번은 `One-way send route is no
 | `session-actor-bind` | `Server/Sessions/authenticate-handler.ts` |
 | `stream-register` | `Server/main.ts` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.ts` |
+| `http-client-create` | `HttpClient/main.ts` |
+| `http-first-request` | `HttpClient/main.ts` |
+| `http-request-shaping` | `HttpClient/main.ts` |
+| `http-json-body` | `HttpClient/main.ts` |
+| `http-response-kinds` | `HttpClient/main.ts` |
+| `http-compressed-response` | `HttpClient/main.ts` |
+| `http-redirect` | `HttpClient/main.ts` |
+| `http-basic-auth` | `HttpClient/main.ts` |
+| `http-download-stream` | `HttpClient/main.ts` |
+| `http-upload-stream` | `HttpClient/main.ts` |
+| `http-error-kinds` | `HttpClient/main.ts` |
 | `error-mapping` | `Client/zlink-error-response.ts` |
 
 ## .NET tutorial과 표면이 다른 지점
