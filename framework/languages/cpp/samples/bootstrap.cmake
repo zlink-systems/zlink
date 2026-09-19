@@ -69,23 +69,27 @@ if(NOT ZLINK_CORE_PLATFORM MATCHES "^(windows-x64|linux-x64|linux-arm64|macos-ar
 endif()
 
 # --- vcpkg ---------------------------------------------------------------------
-if(NOT VCPKG_ROOT)
-  set(VCPKG_ROOT "$ENV{VCPKG_ROOT}")
-endif()
-if(NOT VCPKG_ROOT)
-  # GitHub Actions runner images name their vcpkg this way.
-  set(VCPKG_ROOT "$ENV{VCPKG_INSTALLATION_ROOT}")
-endif()
-if(NOT VCPKG_ROOT AND CMAKE_HOST_WIN32)
+# The first candidate that really holds the toolchain wins: -DVCPKG_ROOT, the
+# VCPKG_ROOT environment variable, VCPKG_INSTALLATION_ROOT (GitHub Actions
+# runner images), then the copy Visual Studio 2022 installs on Windows.
+set(_zlink_vcpkg_candidates "${VCPKG_ROOT}" "$ENV{VCPKG_ROOT}" "$ENV{VCPKG_INSTALLATION_ROOT}")
+if(CMAKE_HOST_WIN32)
   file(GLOB _zlink_vs_vcpkg
     "$ENV{ProgramFiles}/Microsoft Visual Studio/2022/*/VC/vcpkg/scripts/buildsystems/vcpkg.cmake")
-  if(_zlink_vs_vcpkg)
-    list(GET _zlink_vs_vcpkg 0 _zlink_vs_vcpkg)
-    get_filename_component(VCPKG_ROOT "${_zlink_vs_vcpkg}/../../.." ABSOLUTE)
-  endif()
+  foreach(_zlink_vs_toolchain IN LISTS _zlink_vs_vcpkg)
+    get_filename_component(_zlink_vs_root "${_zlink_vs_toolchain}/../../.." ABSOLUTE)
+    list(APPEND _zlink_vcpkg_candidates "${_zlink_vs_root}")
+  endforeach()
 endif()
+set(VCPKG_ROOT "")
+foreach(_zlink_candidate IN LISTS _zlink_vcpkg_candidates)
+  if(_zlink_candidate AND EXISTS "${_zlink_candidate}/scripts/buildsystems/vcpkg.cmake")
+    set(VCPKG_ROOT "${_zlink_candidate}")
+    break()
+  endif()
+endforeach()
 set(ZLINK_TOOLCHAIN "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-if(NOT VCPKG_ROOT OR NOT EXISTS "${ZLINK_TOOLCHAIN}")
+if(NOT VCPKG_ROOT)
   zlink_fail("vcpkg was not found. Set VCPKG_ROOT to a vcpkg checkout "
     "(https://github.com/microsoft/vcpkg) or pass -DVCPKG_ROOT=<dir>")
 endif()

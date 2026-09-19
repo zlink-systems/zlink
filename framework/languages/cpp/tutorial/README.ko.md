@@ -93,16 +93,15 @@ mesh로 연결됐는지 확인한다. handler와 filter의 로그는 **stderr**�
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
 ./build/tutorial_server > server.log 2>&1 &
 ./build/tutorial_client > client.log 2>&1 &
-sleep 3
-curl http://127.0.0.1:5180/players/p1/profile
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile && break; sleep 1; done
 ```
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
 Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardError server.log
 Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardError client.log
-Start-Sleep -Seconds 3
-curl.exe http://127.0.0.1:5180/players/p1/profile
+foreach ($i in 1..60) { $profile = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
+$profile
 ```
 
 PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의
@@ -158,8 +157,11 @@ docker stop zlink-tutorial-redis
 이를 확인한다.
 
 ```bash title="linux"
-curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"' && echo "tutorial-http=ok"
-./build/tutorial_stream_client && echo "tutorial-stream=ok"
+set -e
+curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"'
+echo "tutorial-http=ok"
+./build/tutorial_stream_client
+echo "tutorial-stream=ok"
 ```
 
 ```powershell title="windows"

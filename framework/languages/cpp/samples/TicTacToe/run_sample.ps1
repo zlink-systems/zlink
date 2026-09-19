@@ -20,7 +20,6 @@ if (Test-Path (Join-Path $BuildDir "$BuildConfiguration/sample_cpp_framework_tic
 $PlayBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe"
 $ApiBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_api.exe"
 $ClientBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_client.exe"
-$CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 
 foreach ($Binary in @($PlayBin, $ApiBin, $ClientBin)) {
     if (-not (Test-Path $Binary)) {
@@ -181,11 +180,8 @@ function Cleanup([int]$Status) {
     return $Status
 }
 
-& $CTestBin --test-dir $BuildDir `
-    -C $BuildConfiguration `
-    -R "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)" `
-    --output-on-failure
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-ZlinkSampleFrameworkTests -BuildDir $BuildDir -Configuration $BuildConfiguration `
+    -Regex "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)"
 
 $ports = Reserve-Ports 16
 $ApiAEndpoint = "tcp://127.0.0.1:$($ports[0])"

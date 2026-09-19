@@ -317,3 +317,32 @@ function Get-ZlinkCppSampleTreeRoot {
     }
     return $samplesRoot
 }
+
+# Framework gates a runner runs beside its sample. The named tests exist only
+# in the repository tree's build; the package tree (the downloaded samples
+# archive) has none, so the gate is reported as skipped rather than silently
+# passed. Mirrors zlink_cpp_sample_run_framework_tests in sample-build-common.sh.
+function Invoke-ZlinkSampleFrameworkTests {
+    param(
+        [Parameter(Mandatory = $true)][string]$BuildDir,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$Regex
+    )
+    $treeRoot = Get-ZlinkCppSampleTreeRoot
+    if (-not (Test-Path (Join-Path $treeRoot "framework/include/zlink/framework.hpp") -PathType Leaf)) {
+        Write-Host "framework tests: skipped (package tree; no framework test targets)"
+        return
+    }
+    $ctest = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $ctest --test-dir $BuildDir -C $Configuration -R $Regex --output-on-failure
+        $status = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($status -ne 0) {
+        throw "framework tests failed with exit code $status"
+    }
+}
