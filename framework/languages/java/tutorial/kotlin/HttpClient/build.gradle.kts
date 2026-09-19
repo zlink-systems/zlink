@@ -8,8 +8,10 @@ kotlin {
 }
 
 dependencies {
+    // --8<-- [start:http-client-dependency]
     // This process is outside the mesh and references only the HTTP client wrapper.
     implementation(libs.zlink.http.client.kotlin)
+    // --8<-- [end:http-client-dependency]
 }
 
 application {
