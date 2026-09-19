@@ -20,25 +20,25 @@ The samples do not need the whole repository. One archive per language holds all
 
 === "C++"
 
-    [**Download zlink-samples-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)
+    [:material-download: **zlink-samples-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip){ .md-button .md-button--primary }
 
 === "C#/.NET"
 
-    [**Download zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip)
+    [:material-download: **zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip){ .md-button .md-button--primary }
 
 === "Java"
 
-    [**Download zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
 === "Kotlin"
 
-    [**Download zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip)
+    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
 
     The Kotlin samples share a gradle project with the Java ones, so it is the same file.
 
 === "Node/TypeScript"
 
-    [**Download zlink-samples-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip)
+    [:material-download: **zlink-samples-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip){ .md-button .md-button--primary }
 
 The address does not depend on the platform: Windows and WSL fetch the same file. The samples
 reference published packages only, so they build straight after unpacking, with the versions of

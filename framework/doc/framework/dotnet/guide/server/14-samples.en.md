@@ -36,7 +36,7 @@ typical online game server.
 
 The samples do not need the whole repository. One archive per language holds all of them.
 
-[**Download zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip)
+[:material-download: **zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip){ .md-button .md-button--primary }
 
 The address does not depend on the platform: Windows and WSL fetch the same file. The samples
 reference published packages only, so they build straight after unpacking, with the versions of

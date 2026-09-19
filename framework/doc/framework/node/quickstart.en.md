@@ -14,7 +14,10 @@ processes name each other's endpoint directly and exchange one request/reply.
 This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
 one archive is all you need — there is no reason to clone the whole repository.
 
-[**Download zlink-tutorial-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip)
+!!! tip "Download the tutorial"
+
+    [:material-download: **zlink-tutorial-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip){ .md-button .md-button--primary }
+
 
 The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
 leaves the project under `zlink-tutorial-node/`, with the package versions of the release you
