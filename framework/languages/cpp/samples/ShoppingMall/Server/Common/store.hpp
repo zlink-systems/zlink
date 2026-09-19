@@ -95,7 +95,8 @@ class redis_state_store_t
     class redis_lock_t
     {
       public:
-        explicit redis_lock_t (const redis_state_store_t &store) : _store (store), _token (make_token ())
+        explicit redis_lock_t (const redis_state_store_t &store) :
+            _store (store), _token (make_token ())
         {
             const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
             while (std::chrono::steady_clock::now () < deadline) {

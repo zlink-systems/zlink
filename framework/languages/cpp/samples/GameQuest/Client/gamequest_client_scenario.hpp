@@ -22,6 +22,11 @@ namespace zlink::samples::gamequest
 // This CLI scenario completes each HTTP request before advancing its workflow state.
 class gamequest_client_scenario_t
 {
+    using quest_progress_message_t =
+      zlink::stream_connector::message_t<quest_progress_notify_t>;
+    using quest_completed_message_t =
+      zlink::stream_connector::message_t<quest_completed_notify_t>;
+
   public:
     bool run (const std::string &api_a_stream_endpoint,
               const std::string &api_b_stream_endpoint,
@@ -46,12 +51,12 @@ class gamequest_client_scenario_t
 
             auto first_progress = api_a.wait_for<quest_progress_notify_t> ()
                                     .where (
-                                      [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
-                                        const auto &notify = notify_message.payload;
-                                        return notify.player_id == "player-alice"
-                                               && notify.progress.quest_id
+                                      [] (const quest_progress_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-alice"
+                                               && payload.progress.quest_id
                                                     == quest_ids_t::first_hunt
-                                               && notify.progress.current_count == 1;
+                                               && payload.progress.current_count == 1;
                                     })
                                     .timeout (std::chrono::seconds (12))
                                     .to_future ("first hunt progress wait failed");
@@ -68,17 +73,16 @@ class gamequest_client_scenario_t
 
             auto first_hunt_completed = api_a.wait_for<quest_completed_notify_t> ()
                                           .where (
-                                            [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
-                                              const auto &notify = notify_message.payload;
-                                              return notify.player_id == "player-alice"
-                                                     && notify.progress.quest_id
+                                             [] (const quest_completed_message_t &message) {
+                                              const auto &payload = message.payload;
+                                              return payload.player_id == "player-alice"
+                                                     && payload.progress.quest_id
                                                           == quest_ids_t::first_hunt
-                                                     && notify.reward_granted;
+                                                     && payload.reward_granted;
                                           })
                                           .timeout (std::chrono::seconds (12))
                                           .to_future ("first hunt completion wait failed");
-            (void) api_a.request (
-                       kill_monster_req_t{"player-alice", "wolf", "forest", "kill-2"})
+            (void) api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-2"})
               .packet_name (kill_monster_req_t::packet_name)
               .async<kill_monster_res_t> ()
               .result ();
@@ -89,7 +93,8 @@ class gamequest_client_scenario_t
                                 .result ();
             ensure (third_kill && third_kill.value ().event_id == "player-alice-kill-3",
                     "third kill event id mismatch");
-            ensure (first_hunt_completed.get ().payload.progress.status == quest_status_t::reward_granted,
+            ensure (first_hunt_completed.get ().payload.progress.status ==
+              quest_status_t::reward_granted,
                     "first hunt completion push mismatch");
 
             auto duplicate = api_a.request (
@@ -114,12 +119,12 @@ class gamequest_client_scenario_t
 
             auto herb_completed = api_b.wait_for<quest_completed_notify_t> ()
                                     .where (
-                                      [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
-                                        const auto &notify = notify_message.payload;
-                                        return notify.player_id == "player-bob"
-                                               && notify.progress.quest_id
+                                      [] (const quest_completed_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-bob"
+                                               && payload.progress.quest_id
                                                     == quest_ids_t::herb_gathering
-                                               && notify.reward_granted;
+                                               && payload.reward_granted;
                                     })
                                     .timeout (std::chrono::seconds (12))
                                     .to_future ("herb completion wait failed");
@@ -215,16 +220,17 @@ class gamequest_client_scenario_t
                     "player-alice rejoin on the second node failed");
             auto ruins_completed = alice_b.wait_for<quest_completed_notify_t> ()
                                      .where (
-                                       [] (const zlink::stream_connector::message_t<quest_completed_notify_t> &notify_message) {
-                                         const auto &notify = notify_message.payload;
-                                         return notify.player_id == "player-alice"
-                                                && notify.progress.quest_id
+                                       [] (const quest_completed_message_t &message) {
+                                         const auto &payload = message.payload;
+                                         return payload.player_id == "player-alice"
+                                                && payload.progress.quest_id
                                                      == quest_ids_t::visit_ruins;
                                      })
                                      .timeout (std::chrono::seconds (12))
                                      .to_future ("ruins completion wait after reconnect failed");
             alice_b.send (enter_area_req_t{"player-alice", "ruins", "enter-ruins"}).submit ();
-            ensure (ruins_completed.get ().payload.progress.status == quest_status_t::reward_granted,
+            ensure (ruins_completed.get ().payload.progress.status ==
+              quest_status_t::reward_granted,
                     "reconnected player did not receive the notify on the new node");
 
             /* §9-8: the close contract is the one-way ClosePlayerQuestMsg.  The
@@ -239,10 +245,8 @@ class gamequest_client_scenario_t
             /* A call that already resolved the retired Ready owner terminates
              * as stale. The Framework invalidates that route, but does not
              * resubmit the same application request to a new owner. */
-            auto stale_owner = alice_b.request (
-                                    get_quest_progress_req_t{"player-alice"})
-                               .packet_name (
-                                 get_quest_progress_req_t::packet_name)
+            auto stale_owner = alice_b.request (get_quest_progress_req_t{"player-alice"})
+                               .packet_name (get_quest_progress_req_t::packet_name)
                                .async<get_quest_progress_res_t> ()
                                .result ();
             ensure (!stale_owner
@@ -282,19 +286,19 @@ class gamequest_client_scenario_t
                     "GameQuest scale-out player join failed");
             auto scale_a_progress = scale_a.wait_for<quest_progress_notify_t> ()
                                       .where (
-                                        [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
-                                          const auto &notify = notify_message.payload;
-                                          return notify.player_id == "player-scale-a"
-                                                 && notify.progress.current_count == 1;
+                                         [] (const quest_progress_message_t &message) {
+                                           const auto &payload = message.payload;
+                                           return payload.player_id == "player-scale-a"
+                                                  && payload.progress.current_count == 1;
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-a progress wait failed");
             auto scale_b_progress = scale_b.wait_for<quest_progress_notify_t> ()
                                       .where (
-                                        [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
-                                          const auto &notify = notify_message.payload;
-                                          return notify.player_id == "player-scale-b"
-                                                 && notify.progress.current_count == 1;
+                                         [] (const quest_progress_message_t &message) {
+                                           const auto &payload = message.payload;
+                                           return payload.player_id == "player-scale-b"
+                                                  && payload.progress.current_count == 1;
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-b progress wait failed");
@@ -306,7 +310,8 @@ class gamequest_client_scenario_t
                                    .result ();
             scale_b.send (collect_item_req_t{"player-scale-b", "healing-herb", 1, "scale-herb-1"})
               .submit ();
-            ensure (scale_a_event && scale_a_event.value ().event_id == "player-scale-a-scale-kill-1",
+            ensure (scale_a_event && scale_a_event.value ().event_id ==
+              "player-scale-a-scale-kill-1",
                     "GameQuest scale-out event id mismatch");
             ensure (scale_a_progress.get ().payload.progress.current_count == 1
                       && scale_b_progress.get ().payload.progress.current_count == 1,
@@ -324,12 +329,12 @@ class gamequest_client_scenario_t
             ensure (static_cast<bool> (owner_joined), "owner-failure player join failed");
             auto owner_progress = owner_failure.wait_for<quest_progress_notify_t> ()
                                     .where (
-                                      [] (const zlink::stream_connector::message_t<quest_progress_notify_t> &notify_message) {
-                                        const auto &notify = notify_message.payload;
-                                        return notify.player_id == "player-owner-failure"
-                                               && notify.progress.quest_id
+                                      [] (const quest_progress_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-owner-failure"
+                                               && payload.progress.quest_id
                                                     == quest_ids_t::first_hunt
-                                               && notify.progress.current_count == 1;
+                                               && payload.progress.current_count == 1;
                                     })
                                     .timeout (std::chrono::seconds (12))
                                     .to_future ("owner-failure progress wait failed");
@@ -344,7 +349,8 @@ class gamequest_client_scenario_t
                     "owner-failure setup event id mismatch");
             ensure (owner_progress.get ().payload.progress.current_count == 1,
                     "owner-failure owner did not process the setup event");
-            std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure" << std::endl;
+            std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure" <<
+              std::endl;
             wait_for_release (owner_loss_release_file);
 
             auto unavailable = owner_failure.request (
@@ -471,7 +477,8 @@ class gamequest_client_scenario_t
                              .packet_name (get_quest_progress_req_t::packet_name)
                              .template async<get_quest_progress_res_t> ()
                              .result ();
-            if (current && has_progress (current.value ().active_quests, quest_id, expected_count)) {
+            if (current && has_progress (current.value ().active_quests, quest_id, expected_count))
+              {
                 return true;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (100));

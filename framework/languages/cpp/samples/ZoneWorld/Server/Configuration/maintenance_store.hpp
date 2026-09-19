@@ -100,8 +100,10 @@ class maintenance_store_t
         const auto size = std::stoll (header.substr (1));
         if (size < 0) return {'$', {}, true};
         while (buffer.size () < static_cast<std::size_t> (size + 2))
-            boost::asio::read (socket, buffer,
-              boost::asio::transfer_at_least (static_cast<std::size_t> (size + 2) - buffer.size ()));
+            boost::asio::read (
+              socket, buffer,
+              boost::asio::transfer_at_least (
+                static_cast<std::size_t> (size + 2) - buffer.size ()));
         std::string value (static_cast<std::size_t> (size), '\0');
         std::istream input (&buffer);
         input.read (value.data (), size);

@@ -54,12 +54,10 @@ inline configuration_t load_configuration (
     app.config ().load_cli (argc, argv);
     const auto path = app.config ().model ().get ("config");
     if (!path) {
-        throw std::runtime_error (
-          "ZoneWorld role requires --config=<path>");
+        throw std::runtime_error ("ZoneWorld role requires --config=<path>");
     }
     app.config ().load_json (*path);
-    return app.config ().bind_required<configuration_t> (
-      "sample.zoneworld");
+    return app.config ().bind_required<configuration_t> ("sample.zoneworld");
 }
 
 } // namespace zlink::samples::zoneworld

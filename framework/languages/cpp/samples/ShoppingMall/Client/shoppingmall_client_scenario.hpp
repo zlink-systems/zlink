@@ -73,7 +73,11 @@ class shoppingmall_client_scenario_t
 
         const auto success_req =
           start_order_req_t{"cart-success", "addr-home", "pm-ok", "order-success-001"};
-        auto success = api_a.post ("/orders/start").body (success_req).submit<start_order_res_t> ().value ().body;
+        auto success = api_a.post ("/orders/start")
+                         .body (success_req)
+                         .submit<start_order_res_t> ()
+                         .value ()
+                         .body;
         /* 공통 sample spec §15: 새 주문의 StartOrderRes는 `Created`만 담고 즉시 돌아온다. 종료는
      * GetOrderStateReq 폴링으로 확인한다. */
         ensure (success.state.status == order_status_t::created, "new order responds Created");
@@ -88,16 +92,25 @@ class shoppingmall_client_scenario_t
         ensure (confirmed.amount == decimal_t ("120.00"), "amount");
         ensure (confirmed.currency.value_or ("") == "USD", "currency");
 
-        auto duplicate =
-          api_b.post ("/orders/start").body (success_req).submit<start_order_res_t> ().value ().body;
+        auto duplicate = api_b.post ("/orders/start")
+                           .body (success_req)
+                           .submit<start_order_res_t> ()
+                           .value ()
+                           .body;
         ensure (duplicate.order_id == success.order_id, "duplicate idempotency");
 
         const auto concurrent_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-concurrent-001"};
-        auto concurrent_a =
-          api_a.post ("/orders/start").body (concurrent_req).submit<start_order_res_t> ().value ().body;
-        auto concurrent_b =
-          api_b.post ("/orders/start").body (concurrent_req).submit<start_order_res_t> ().value ().body;
+        auto concurrent_a = api_a.post ("/orders/start")
+                              .body (concurrent_req)
+                              .submit<start_order_res_t> ()
+                              .value ()
+                              .body;
+        auto concurrent_b = api_b.post ("/orders/start")
+                              .body (concurrent_req)
+                              .submit<start_order_res_t> ()
+                              .value ()
+                              .body;
         ensure (concurrent_a.order_id == concurrent_b.order_id, "concurrent idempotency");
         emit_produced_order ("concurrent", concurrent_a.order_id);
         auto concurrent_confirmed =
@@ -106,7 +119,11 @@ class shoppingmall_client_scenario_t
 
         const auto pending_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-pending-001"};
-        auto pending = api_b.post ("/orders/start").body (pending_req).submit<start_order_res_t> ().value ().body;
+        auto pending = api_b.post ("/orders/start")
+                         .body (pending_req)
+                         .submit<start_order_res_t> ()
+                         .value ()
+                         .body;
         emit_produced_order ("pending", pending.order_id);
         ensure (pending.state.status == order_status_t::created, "pending recovered as Created");
         auto pending_confirmed =
@@ -127,8 +144,11 @@ class shoppingmall_client_scenario_t
 
         const auto inventory_req =
           start_order_req_t{"cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"};
-        auto inventory_started =
-          api_a.post ("/orders/start").body (inventory_req).submit<start_order_res_t> ().value ().body;
+        auto inventory_started = api_a.post ("/orders/start")
+                                   .body (inventory_req)
+                                   .submit<start_order_res_t> ()
+                                   .value ()
+                                   .body;
         emit_produced_order ("inventory-failure", inventory_started.order_id);
         auto inventory_failed =
           wait_for_status (api_a, inventory_started.order_id, order_status_t::failed);
@@ -137,8 +157,11 @@ class shoppingmall_client_scenario_t
 
         const auto payment_req =
           start_order_req_t{"cart-success", "addr-home", "pm-decline", "order-payment-001"};
-        auto payment_started =
-          api_b.post ("/orders/start").body (payment_req).submit<start_order_res_t> ().value ().body;
+        auto payment_started = api_b.post ("/orders/start")
+                                 .body (payment_req)
+                                 .submit<start_order_res_t> ()
+                                 .value ()
+                                 .body;
         emit_produced_order ("payment-failure", payment_started.order_id);
         auto payment_failed =
           wait_for_status (api_b, payment_started.order_id, order_status_t::failed);
@@ -148,14 +171,16 @@ class shoppingmall_client_scenario_t
 
         auto healed = api_b.post ("/orders/continue")
                         .body (continue_order_workflow_req_t{projection_continue_order_id,
-                                                             "continue:" + projection_continue_order_id})
+                                                             "continue:" +
+                                                               projection_continue_order_id})
                         .submit<continue_order_workflow_res_t> ().value ().body;
         ensure (healed.state.status == order_status_t::confirmed, "healed projection");
         auto healed_read = get_order (api_a, projection_continue_order_id);
         ensure (healed_read.status == order_status_t::confirmed, "healed read");
         auto rebuilt = api_a.post ("/orders/rebuild")
                          .body (rebuild_order_projection_req_t{projection_rebuild_order_id,
-                                                               "rebuild:" + projection_rebuild_order_id})
+                                                               "rebuild:" +
+                                                                 projection_rebuild_order_id})
                          .submit<rebuild_order_projection_res_t> ().value ().body;
         ensure (rebuilt.state.status == order_status_t::confirmed, "rebuilt projection");
         auto rebuilt_read = get_order (api_b, projection_rebuild_order_id);
@@ -168,7 +193,11 @@ class shoppingmall_client_scenario_t
 
         const auto scale_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-scale-001"};
-        auto scale = api_b.post ("/orders/start").body (scale_req).submit<start_order_res_t> ().value ().body;
+        auto scale = api_b.post ("/orders/start")
+                       .body (scale_req)
+                       .submit<start_order_res_t> ()
+                       .value ()
+                       .body;
         emit_produced_order ("scale-out", scale.order_id);
         auto scale_confirmed = wait_for_status (api_a, scale.order_id, order_status_t::confirmed);
         ensure (scale_confirmed.status == order_status_t::confirmed, "scale confirmed");

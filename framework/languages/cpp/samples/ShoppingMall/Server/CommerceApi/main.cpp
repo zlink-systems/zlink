@@ -235,7 +235,8 @@ class commerce_api_handlers_t
               && state["idempotency"].size () == 10;
             if (passed) {
                 std::cerr << "shoppingmall-evidence order=" << request.successful_order_id
-                          << " events=" << event_types_for (state, request.successful_order_id).size ()
+                          << " events="
+                          << event_types_for (state, request.successful_order_id).size ()
                           << "\n";
             }
             return server_assertion_res_t{passed, evidence};

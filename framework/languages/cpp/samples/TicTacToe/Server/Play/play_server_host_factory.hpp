@@ -59,8 +59,9 @@ class play_server_host_factory_t
         game_spot.set_routing_id (zlink::routing_id_t::from (
           topology.play_node == "b" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid));
         if (topology.play_node == "a") {
-            game_spot.peer_connections ().connect (zlink::routing_id_t::from (sample_names_t::play_b_rid),
-                                                   topology.play_b_route_endpoint);
+            game_spot.peer_connections ().connect (
+              zlink::routing_id_t::from (sample_names_t::play_b_rid),
+              topology.play_b_route_endpoint);
         }
         game_spot.listen (topology.selected_play_route_endpoint ());
         game_spot.objects ()

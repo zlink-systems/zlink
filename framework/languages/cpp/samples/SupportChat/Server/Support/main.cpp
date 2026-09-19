@@ -940,7 +940,6 @@ int main (int argc, char **argv)
         support_user_actor_type)
       .preserve_state_with<support_user_actor_relocation_adapter_t> ();
     // --8<-- [end:doc-sc-support-register]
-    app.add_hosted_service (
-      std::make_unique<sample_readiness_service_t> ("public", "support"));
+    app.add_hosted_service (std::make_unique<sample_readiness_service_t> ("public", "support"));
     return app.run (argc, argv);
 }

@@ -1016,12 +1016,10 @@ int main (int argc, char **argv)
         options.http ().listen (configuration.bootstrap_http_endpoint).map_health ("/health");
     }
     if (!configuration.subscriber_only) {
-        app.add_hosted_service (
-          std::make_unique<zone_bootstrap_service_t> (configuration));
+        app.add_hosted_service (std::make_unique<zone_bootstrap_service_t> (configuration));
         app.add_hosted_service (std::make_unique<node_report_service_t> ());
     } else {
-        app.add_hosted_service (
-          std::make_unique<zone_bootstrap_service_t> (configuration));
+        app.add_hosted_service (std::make_unique<zone_bootstrap_service_t> (configuration));
     }
     return app.run (argc, argv);
 }
