@@ -48,7 +48,7 @@ class session_server_host_factory_t
         options.add_client_server_channel (sample_names_t::api_channel).client ();
         auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
         room_mesh
-          .set_routing_id (zlink::routing_id_t::from ("bingo-session-" + topology.session_node))
+          .set_automatic_routing_id_prefix ("bingo-session")
           .listen (topology.selected_session_route_endpoint ());
         room_mesh.objects ().client ();
         room_mesh.channel (sample_names_t::room_spot_mesh).client ();
