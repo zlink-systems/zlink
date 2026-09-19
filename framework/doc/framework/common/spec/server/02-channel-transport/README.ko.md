@@ -75,6 +75,7 @@ flowchart LR
 | [04. Network listener identity](04-network-listener-identity.ko.md) | bind/advertise 주소, port 확정, listener 종류별 record, transport RID·Spot ID 발급 정책 | 계약 |
 | [05. Transport liveness](05-transport-liveness.ko.md) | probe/ack·beacon 고정 시간, Ready와 장애 판정, connection loss와 reconnect | 계약 + 구현 스펙(단일 기준) |
 | [06. Service wire protocol](06-wire-protocol.ko.md) | node 사이에 실제로 오가는 byte 형식과 command 목록 | 구현 스펙 |
+| [07. Service wire schema dialect](07-schema-dialect.ko.md) | `service-wire-v1.schema.json`을 읽는 법 — 최상위 키, layout kind별 byte 배치, keyword 평가 규칙 | 구현 스펙 |
 
 ## 5. 질문으로 찾기
 
@@ -92,6 +93,7 @@ flowchart LR
 | 연결이 끊기면 무엇을 다시 하고 무엇을 재사용하지 않는가 | [05. Transport liveness](05-transport-liveness.ko.md#6-connection-loss와-reconnect) |
 | node 사이에 실제로 오가는 byte와 command는 무엇인가 | [06. Service wire protocol](06-wire-protocol.ko.md#2-record-framing과-decode) · [§3](06-wire-protocol.ko.md#3-command-space) |
 | relocation·actor join의 wire 세부는 어디서 보는가 | [06. Service wire protocol §9](06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope) |
+| schema 파일의 키·kind·keyword는 어떻게 읽는가 | [07. Service wire schema dialect](07-schema-dialect.ko.md#2-최상위-키) · [§4](07-schema-dialect.ko.md#4-typeskind-열-가지) · [§5](07-schema-dialect.ko.md#5-field-keyword) |
 
 ## 6. 읽는 순서
 
@@ -114,6 +116,8 @@ flowchart LR
   기준), [§2](06-wire-protocol.ko.md#2-record-framing과-decode)(frame·decode),
   [§5](06-wire-protocol.ko.md#5-service-liveness)(probe/ack wire),
   [§12. 검증 요구](06-wire-protocol.ko.md#12-검증-요구)
+- [07. Service wire schema dialect](07-schema-dialect.ko.md) — schema에서 codec을 만들거나 손으로
+  쓸 때 읽는 법 전부. §3(공통 규칙)·§4(kind)·§5(field keyword)는 첫 layout을 구현하기 전에 읽는다
 
 **application 개발자**
 

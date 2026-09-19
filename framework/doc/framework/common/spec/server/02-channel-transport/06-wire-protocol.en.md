@@ -4,7 +4,7 @@ title: "Service Wire Protocol"
 
 # Service Wire Protocol
 
-[Channel·Transport topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Transport Liveness](05-transport-liveness.en.md)
+[Channel·Transport topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Transport Liveness](05-transport-liveness.en.md) · [Next: 07. Service Wire Schema Dialect](07-schema-dialect.en.md)
 
 > **What this chapter answers** — the byte format and command list exchanged between nodes.
 >
@@ -77,18 +77,12 @@ declared bytes and failures.
 
 ### Machine-Readable Schema Conventions
 
-The generator input is the existing schema, not a model inferred separately
-for each language. Its
-`types` array declares named layouts: primitives and enums use `encoding` and
-`values`; ordered fixed fields use `kind: "struct"` with declaration-order
-`fields`; counted sequences use `kind: "vector"` with `countType` and `item`;
-and length-delimited, conditional, and tagged layouts declare their own
-`lengthType`, `layout`, `cases`, `fields`, or `encodingOrder`. `$ref` names a
-declared type, `$bound` names a declared limit, and `constraints`,
-`trailingBytes`, `when`, and `otherwise` state validation required of both
-encoders and decoders. Command bodies are declaration-order `body` arrays under
-`commands`; durable envelopes are under `durableFormats`; the relocation direct
-stream is declared by `relocationLogicalStreamFormat`.
+The generator input is the current schema, not a per-language inferred model.
+The schema's top-level keys, the byte layout of every `types[].kind`, and the
+evaluation rules of keywords such as `$ref`, `$bound`, `when`, and
+`constraints` are owned by
+[07. Service Wire Schema Dialect](07-schema-dialect.en.md). This chapter does
+not restate them.
 
 The schema does not yet give every existing layout a uniform generator-ready
 lowering rule or per-language output mapping. W-2 must fill those missing
@@ -920,4 +914,4 @@ checked-in codec tables alone confirm the following.
 
 ---
 
-[Channel·Transport topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Transport Liveness](05-transport-liveness.en.md)
+[Channel·Transport topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Transport Liveness](05-transport-liveness.en.md) · [Next: 07. Service Wire Schema Dialect](07-schema-dialect.en.md)

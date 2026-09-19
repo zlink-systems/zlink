@@ -125,6 +125,7 @@ liveness checks, and the byte/command format on the wire.
 | [04. network-listener-identity](02-channel-transport/04-network-listener-identity.en.md) | Why do a listener's bind address and advertised address differ, and when is each used | Contract |
 | [05. transport-liveness](02-channel-transport/05-transport-liveness.en.md) | How is a remote connection's liveness checked, and how is it reconnected when it drops | Contract+Implementation |
 | [06. wire-protocol](02-channel-transport/06-wire-protocol.en.md) | What bytes and commands actually pass between nodes | Implementation spec |
+| [07. schema-dialect](02-channel-transport/07-schema-dialect.en.md) | How to read the wire schema file | Implementation spec |
 
 ### 03-spot-actor
 

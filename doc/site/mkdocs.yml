@@ -590,6 +590,7 @@ nav:
           - Network Listener Identity: common/spec/server/02-channel-transport/04-network-listener-identity.md
           - Transport Liveness: common/spec/server/02-channel-transport/05-transport-liveness.md
           - Service Wire Protocol: common/spec/server/02-channel-transport/06-wire-protocol.md
+          - Service Wire Schema Dialect: common/spec/server/02-channel-transport/07-schema-dialect.md
       - Spot and Actor:
           - Spot and Actor overview: common/spec/server/03-spot-actor/README.md
           - Spot Model — Entry, User, Instance: common/spec/server/03-spot-actor/01-spot-model.md

@@ -115,6 +115,7 @@ select-one으로 대상을 고르는 방법, 연결 생존 확인과 wire 상의
 | [04. network-listener-identity](02-channel-transport/04-network-listener-identity.ko.md) | listener의 bind 주소와 advertised 주소는 왜 다르고, 언제 각각 쓰이는가 | 계약 |
 | [05. transport-liveness](02-channel-transport/05-transport-liveness.ko.md) | remote connection이 살아 있는지 어떻게 확인하고, 끊기면 어떻게 다시 잇는가 | 계약+구현 |
 | [06. wire-protocol](02-channel-transport/06-wire-protocol.ko.md) | node 사이에 실제로 어떤 byte와 command가 오가는가 | 구현 스펙 |
+| [07. schema-dialect](02-channel-transport/07-schema-dialect.ko.md) | wire schema 파일을 어떻게 읽는가 | 구현 스펙 |
 
 ### 03-spot-actor
 
