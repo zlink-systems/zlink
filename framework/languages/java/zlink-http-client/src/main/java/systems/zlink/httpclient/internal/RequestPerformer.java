@@ -16,14 +16,14 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.httpclient.ZLinkHttpMethod;
 
 /**
@@ -109,7 +109,7 @@ public final class RequestPerformer {
         if (options.followRedirects() > 0 && RedirectPolicy.isRedirect(status) && location != null && !location.isEmpty()) {
             closeQuietly(response.body());
             if (redirectsLeft == 0) {
-                throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "HTTP request exceeded the redirect limit");
+                throw HttpClientErrors.protocol("HTTP request exceeded the redirect limit");
             }
             RedirectPolicy.Rewrite rewrite = RedirectPolicy.rewriteMethodAndBody(status, method, body);
             return hop(spec, RedirectPolicy.resolveLocation(current, location), origin,
@@ -147,11 +147,24 @@ public final class RequestPerformer {
      * leaving them hung — and the deadline is cancelled once the read finishes.
      */
     private CompletableFuture<RawResult> readWithDeadline(InputStream stream, long timeoutMillis, Supplier<RawResult> read) {
+        AtomicBoolean timedOut = new AtomicBoolean();
         ScheduledFuture<?> deadline =
-            timeoutScheduler.schedule(() -> closeQuietly(stream), timeoutMillis, TimeUnit.MILLISECONDS);
+            timeoutScheduler.schedule(() -> {
+                timedOut.set(true);
+                closeQuietly(stream);
+            }, timeoutMillis, TimeUnit.MILLISECONDS);
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return read.get();
+                RawResult result = read.get();
+                if (timedOut.get()) {
+                    throw new CompletionException(new HttpTimeoutException("HTTP request attempt timed out"));
+                }
+                return result;
+            } catch (RuntimeException cause) {
+                if (timedOut.get()) {
+                    throw new CompletionException(new HttpTimeoutException("HTTP request attempt timed out"));
+                }
+                throw cause;
             } finally {
                 deadline.cancel(false);
             }

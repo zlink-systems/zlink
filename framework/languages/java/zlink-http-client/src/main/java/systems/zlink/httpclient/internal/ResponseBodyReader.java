@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
@@ -60,9 +59,8 @@ final class ResponseBodyReader {
         }
     }
 
-    private static ZLinkFrameworkException tooLarge() {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "HTTP response exceeded the maximum body size");
+    static ZLinkFrameworkException tooLarge() {
+        return HttpClientErrors.rejected("HTTP response exceeded the maximum body size");
     }
 
     DecodedBody decompress(byte[] bytes, Map<String, String> headers) {

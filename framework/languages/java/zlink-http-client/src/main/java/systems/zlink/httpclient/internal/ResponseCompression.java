@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
 import java.util.zip.InflaterInputStream;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
@@ -17,7 +16,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
  * removes the {@code Content-Encoding} header afterwards. {@code java.net.http} does not
  * auto-decompress, so streaming downloads are never transparently decoded and the body limit is
  * enforced against the decoded size. A malformed body raises a decode failure; exceeding the limit
- * raises a request failure.
+ * raises a rejected response.
  */
 public final class ResponseCompression {
 
@@ -49,17 +48,13 @@ public final class ResponseCompression {
 
     private static byte[] decode(InputStream stream, long maxBytes) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        // The limit failure is unchecked, so it escapes the callers' IOException->malformed
-        // mapping and keeps its REQUEST_FAILED kind.
-        BoundedRead.copy(stream, maxBytes,
-            () -> new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                "HTTP response compressed body exceeds maxResponseBodySize"),
+        // The limit failure is unchecked, so it escapes the callers' IOException->malformed mapping.
+        BoundedRead.copy(stream, maxBytes, ResponseBodyReader::tooLarge,
             (buffer, length) -> output.write(buffer, 0, length));
         return output.toByteArray();
     }
 
     private static ZLinkFrameworkException malformed(IOException cause) {
-        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP response compressed body is malformed", cause);
+        return HttpClientErrors.protocol("HTTP response compressed body is malformed", cause);
     }
 }
