@@ -30,16 +30,16 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
     }
 
     // --8<-- [start:actor-send-handler]
-    fw::task_t<void> change_nickname (player_t &player,
-                                      fw::message_context_t &,
-                                      const change_nickname_t &message)
+    fw::task_t<void>
+    change_nickname (player_t &player, fw::message_context_t &, const change_nickname_t &message)
     {
         player.rename (message.nickname);
 
         // --8<-- [start:actor-push]
         // Reaches the connection bound to this player. If none is bound, the
         // call does nothing rather than failing.
-        co_await player.context ()
+        co_await player
+          .context ()
           .bound_session ()
           .send (nickname_changed_t{player.nickname})
           .async ();
@@ -50,8 +50,12 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
     // --8<-- [start:actor-request-handler]
     player_info_t get_player (const player_t &player, fw::message_context_t &, const get_player_t &)
     {
-        return player_info_t{std::string (player.context ().actor_id ().value ()),
-                             player.nickname};
+        return player_info_t{
+          std::string (player
+                         .context ()
+                         .actor_id ()
+                         .value ()),
+          player.nickname};
     }
     // --8<-- [end:actor-request-handler]
     // --8<-- [end:actor-handlers]

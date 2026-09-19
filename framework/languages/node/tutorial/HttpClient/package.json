@@ -7,7 +7,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@zlink-systems/http-client": "0.18.1"
+    "@zlink-systems/http-client": "0.19.0"
   },
   "devDependencies": {
     "typescript": "5.8.3",

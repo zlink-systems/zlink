@@ -44,7 +44,8 @@ class channel_weight_handler_t
         // Read back rather than echo, so the number in the reply is the mesh's
         // own and not the one that was asked for.
         return fw::http_response_t{
-          200, nlohmann::json{{"channel", channel}, {"weight", options.weight ()}}.dump ()};
+          200,
+          nlohmann::json{{"channel", channel}, {"weight", options.weight ()}}.dump ()};
     }
 
   private:

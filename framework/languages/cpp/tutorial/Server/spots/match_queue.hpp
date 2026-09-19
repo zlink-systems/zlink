@@ -17,23 +17,11 @@ namespace fw = zlink::framework;
 class match_queue_t : public fw::instance_spot_t
 {
   public:
-    explicit match_queue_t (
-      fw::instance_spot_context_t context)
-      : _context (std::move (context))
-    {
-    }
+    explicit match_queue_t (fw::instance_spot_context_t context) : _context (std::move (context)) {}
 
-    fw::instance_spot_context_t &context ()
-      noexcept override
-    {
-        return _context;
-    }
+    fw::instance_spot_context_t &context () noexcept override { return _context; }
 
-    const fw::instance_spot_context_t &context () const
-      noexcept override
-    {
-        return _context;
-    }
+    const fw::instance_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {

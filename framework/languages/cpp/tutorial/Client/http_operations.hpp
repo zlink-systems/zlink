@@ -32,9 +32,11 @@ class export_room_http_handler_t
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
         const auto room_id = request.route_values.at ("roomId");
-        const auto state = co_await _routes.request_to_spot (room_id, get_room_state_t{})
-                             .timeout (std::chrono::seconds (3))
-                             .async<room_state_t> ();
+        const auto state =
+          co_await _routes
+            .request_to_spot (room_id, get_room_state_t{})
+            .timeout (std::chrono::seconds (3))
+            .async<room_state_t> ();
 
         std::string body = nlohmann::json{{"roomId", room_id}}.dump () + "\n";
         for (const auto &message : state.chat)
@@ -69,7 +71,8 @@ class import_room_http_handler_t
         }
 
         co_return fw::http_response_t{
-          200, nlohmann::json{{"imported", imported}}.dump ()};
+          200,
+          nlohmann::json{{"imported", imported}}.dump ()};
     }
 
   private:

@@ -421,9 +421,9 @@ dispatch so a push arriving before `wait` is queued rather than dropped.
 
 ### 12. HTTP client
 
-`HttpClient` runs outside the mesh and links only the `zlink::http_client` package. Because this is
-a CLI, it completes requests with the blocking `submit<T>().result()` and `fetch<T>()` forms. Run
-it while the Server and Client are up:
+`HttpClient` runs outside the mesh and links only the `zlink::http_client` package. The CLI awaits
+the asynchronous `async<T>()`, `async_raw()`, `fetch<T>()`, and `download()` terminators. Run it
+while the Server and Client are up:
 
 ```bash title="linux"
 ./build/tutorial_http_client
@@ -438,7 +438,7 @@ The output below is from one run; the room id and download byte count vary per r
 ```console
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room be179d01-31b9-408e-8ac6-c86bfa5a4e9c chat 202
+json body: player 200 room fbf674c7-9328-4624-a74a-7bccdab703f6 chat 202
 response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
@@ -448,9 +448,8 @@ upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
 
-This output is based on framework 0.18.3 or later (including #711). Releases before 0.18.3 stop at
-step 6 with a 503 response. The C++ HTTP host does not provide gzip or chunked responses, so step
-6 checks the plain response and step 9 receives one buffered chunk.
+This output is based on framework 0.19.0. The C++ HTTP host does not provide gzip or chunked
+responses, so step 6 checks the plain response and step 9 receives one buffered chunk.
 
 The HTTP surface includes Basic auth for the admin route, a legacy player-path redirect, and NDJSON
 room export/import routes. The admin credential is hard-coded as `ops` / `tutorial-admin` because

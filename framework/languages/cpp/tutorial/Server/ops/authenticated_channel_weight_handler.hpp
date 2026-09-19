@@ -28,8 +28,7 @@ class authenticated_channel_weight_handler_t
   private:
     static constexpr std::string_view admin_user = "ops";
     static constexpr std::string_view admin_password = "tutorial-admin";
-    static constexpr std::string_view expected_authorization =
-      "Basic b3BzOnR1dG9yaWFsLWFkbWlu";
+    static constexpr std::string_view expected_authorization = "Basic b3BzOnR1dG9yaWFsLWFkbWlu";
 
     static bool same_name (std::string_view left, std::string_view right)
     {

@@ -109,14 +109,14 @@ kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
 ```text
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room f68c1472-c7cd-49a8-82db-1e5bf92066e9 chat 202
+json body: player 200 room 47e7f688-6185-41b9-8e16-c22ef0dcd075 chat 202
 response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200
 download stream: chunks 2 bytes 132
 upload stream: imported 3
-error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
+error kinds: bad request INTERNAL_FAILURE connection refused UNAVAILABLE
 ```
 
 ## 검증
