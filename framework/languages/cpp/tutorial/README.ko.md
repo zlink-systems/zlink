@@ -598,15 +598,19 @@ Client를 실행한 상태에서 다음 명령으로 실행한다.
 ```console
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room <실행 결과의 roomId> chat 202
-response kinds: typed 200 raw application/json fetch rookie
+json body: player 200 room be179d01-31b9-408e-8ac6-c86bfa5a4e9c chat 202
+response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200
-download stream: chunks 1 bytes <실행 결과의 bytes>
+download stream: chunks 1 bytes 74
 upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
+
+이 출력은 framework 0.19.0(#711 포함) 기준이다. 0.18.2 배포판에서는 6단계가 503으로
+멈춘다. C++ HTTP host는 gzip 및 chunked 응답을 제공하지 않으므로 6단계는 평문 응답을
+확인하고 9단계는 버퍼링된 chunk 하나를 받는다.
 
 HTTP 표면에는 admin Basic auth, 옛 player 경로 redirect, room export/import NDJSON route가
 있다. admin 자격 증명은 tutorial에 설정 파일을 추가하지 않기 위해 `ops` /

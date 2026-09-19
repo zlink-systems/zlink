@@ -438,15 +438,19 @@ The output below is from one run; the room id and download byte count vary per r
 ```console
 first request: p1 rookie
 request shaping: status 200 weight 2
-json body: player 200 room <roomId from this run> chat 202
-response kinds: typed 200 raw application/json fetch rookie
+json body: player 200 room be179d01-31b9-408e-8ac6-c86bfa5a4e9c chat 202
+response kinds: typed 200 raw application/json fetch anonymous
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200
-download stream: chunks 1 bytes <bytes from this run>
+download stream: chunks 1 bytes 74
 upload stream: imported 3
 error kinds: bad request internal_failure connection refused unavailable
 ```
+
+This output is based on framework 0.19.0 (including #711). The released 0.18.2 build stops at
+step 6 with a 503 response. The C++ HTTP host does not provide gzip or chunked responses, so step
+6 checks the plain response and step 9 receives one buffered chunk.
 
 The HTTP surface includes Basic auth for the admin route, a legacy player-path redirect, and NDJSON
 room export/import routes. The admin credential is hard-coded as `ops` / `tutorial-admin` because
