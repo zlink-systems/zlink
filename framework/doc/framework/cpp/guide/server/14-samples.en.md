@@ -310,12 +310,6 @@ cmake --build build --parallel
 ./Bingo/run_sample.sh
 ```
 
-On Windows PowerShell it is `cmake --build build --config Release --parallel` followed by
-`.Bingo
-
-un_sample.ps1`. The runner starts Redis itself as a Docker container. The
-    prerequisites and troubleshooting are in the `README.md` inside the archive.
-
 Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its
 browser UI work the same way: invoke `ZoneWorld/run_sample.sh` from that language's sample
 root. Why no runner walks several samples is settled by

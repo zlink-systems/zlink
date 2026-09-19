@@ -273,9 +273,6 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 검증까지 수행한다. Location store가 필요한 샘플은 runner가 Redis 컨테이너를 직접
 띄우고 끝나면 정리하므로 `docker`만 있으면 된다.
 
-un_sample.ps1`이다. Runner는 Redis를 Docker container로 직접 띄운다. 전제
-    조건과 문제 해결은 zip 안의 `README.ko.md`에 있다.
-
 ```bash
 framework/languages/java/samples/kotlin/TicTacToe/run_sample.sh
 ```
