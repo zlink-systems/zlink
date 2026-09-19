@@ -34,7 +34,7 @@ title: "오류 처리 · Java"
 | network, DNS, proxy CONNECT 또는 target 연결을 현재 사용할 수 없다 | `Unavailable` |
 | 설정한 response body byte 제한을 넘었다 | `Rejected` |
 | 시도당 timeout을 넘었다 | `DeadlineExceeded` |
-| typed 응답의 HTTP status가 400 이상이거나 다른 kind로 분류할 수 없는 실행 실패다 | `InternalFailure` |
+| typed 응답의 HTTP status가 400 이상이거나 다른 kind로 분류할 수 없는 실행 실패다 | `internalFailure` |
 
 언어별 enum 표기는 C++가 `protocol_error`·`unavailable`·`rejected`·`deadline_exceeded`·`internal_failure`,
 .NET과 Node/TypeScript가 PascalCase, Java와 Kotlin이 `PROTOCOL_ERROR`·`UNAVAILABLE`·`REJECTED`·
@@ -52,8 +52,11 @@ request builder가 실제 전송과 응답 대기를 시작하는 마지막 호�
 
 ```console
 error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
-# 0.19.0부터 connection refused는 UNAVAILABLE
 ```
+
+첫 값은 typed 요청의 400 status를 `internalFailure`로 분류한 결과다. 두 번째 값은 연결 거부 결과다.
+현재 Java·Kotlin 배포판은 연결 거부를 `INTERNAL_FAILURE`로 보고하고, 0.19.0(#704)부터
+`UNAVAILABLE`로 보고한다.
 
 ## 3. retry 뒤에 판단할 것
 
@@ -69,7 +72,7 @@ error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
 
 | 증상 | 원인 |
 |---|---|
-| 400 응답을 `protocolError`로 처리했다 | typed 경로의 status 400 이상은 `InternalFailure`다. 오류 payload가 필요하면 raw 응답을 사용한다. |
+| 400 응답을 `protocolError`로 처리했다 | typed 경로의 status 400 이상은 `internalFailure`다. raw 응답은 status·header·body를 그대로 보존하므로 오류 payload를 읽는 경로다. |
 | 큰 JSON 응답이 network 오류처럼 보인다 | response body 한도를 넘으면 `Rejected`다. 압축 응답도 해제한 크기로 판단한다. |
 | timeout 뒤 요청이 한 번 더 서버에 도달한다 | 설정한 retry가 `DeadlineExceeded`를 다시 시도했다. |
 | cancellation을 Framework kind로 잡으려 한다 | 호출자 cancellation은 각 언어의 cancellation 결과로 전달된다. |

@@ -36,26 +36,15 @@ Redirect tracking is off by default. This tutorial uses a client with tracking e
 redirect: 200 p1
 ```
 
+The result shows that the final response after following the legacy-address redirect has status 200 and player id `p1`.
+
 ## 2. When a redirect changes a request
 
 Redirects resolve absolute and relative `Location` URLs. For 301 and 302, GET and HEAD keep their method and body, while POST becomes GET and loses its body. A 303 always becomes GET. A 307 or 308 keeps the method and body, except that a streaming body cannot be rewound and is dropped.
 
-<!-- diagram: http-client-redirect-retry -->
-```mermaid
-flowchart TD
-    A[Send request] --> B{Redirect status?}
-    B -->|301, 302, 303, 307, 308| C[Resolve Location]
-    C --> D{Redirect limit or invalid Location?}
-    D -->|Yes| E[ProtocolError]
-    D -->|No| F[Apply method and auth rules]
-    F --> A
-    B -->|No| G{Unavailable or timeout?}
-    G -->|No| H[Return response or failure]
-    G -->|Yes| I{Retry enabled and non-streaming?}
-    I -->|No| H
-    I -->|Yes| J[Backoff with full jitter]
-    J --> A
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-redirect-retry-en.html"
+        title="http client redirect retry" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-redirect-retry-en.html" target="_blank">↗ 크게 보기</a></p>
 
 `Authorization` is removed when the destination has a different origin. An origin is the same only when scheme, host, and port all match. Intermediate redirect bodies are drained and hidden; only the final response reaches the caller.
 
@@ -88,3 +77,7 @@ A cookie jar is client-local storage that saves response `Set-Cookie` values and
 
 - Status and JSON-decoding paths — [Response Rules](10-response-rules.en.md)
 - Error kinds remaining after retry — [Error Handling](11-error-handling.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

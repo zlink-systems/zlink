@@ -11,12 +11,9 @@ HTTP client는 application이 외부 HTTP API에 요청을 보내고 응답을 �
 
 서버 framework 안의 handler도, framework를 올리지 않는 CLI·배치·별도 client process도 외부 HTTP API를 호출할 수 있다. 반복 호출에는 client 하나를 만들어 재사용하고, 한 번뿐인 호출에는 one-shot을 사용한다. one-shot은 builder에서 곧바로 요청을 만드는 편의 경로다.
 
-<!-- diagram: http-client-overview -->
-```mermaid
-flowchart LR
-    App[Application] --> Client[HTTP client]
-    Client --> Api[External HTTP API]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview.html" target="_blank">↗ 크게 보기</a></p>
 
 다음 예제는 typed 응답을 받는 첫 요청을 미리 보인다. typed 응답은 status·header와 JSON으로 해석한 body를 함께 담는다.
 
@@ -50,6 +47,8 @@ flowchart LR
     --8<-- "framework/languages/node/tutorial/HttpClient/main.ts:http-first-request"
     ```
 
+다섯 예제는 같은 builder 의미론으로 profile GET 요청을 보내고, JSON body를 `PlayerProfile`로 해석한 typed 응답에서 player id와 nickname을 읽는다.
+
 ## 2. 서버 HTTP 표면과의 경계
 
 HTTP client는 외부 API를 호출하는 쪽의 도구다. 서버가 HTTP route를 열고 request를 받는 기능은 이 client의 범위가 아니며, browser의 `fetch`를 대체하는 API도 아니다.
@@ -63,3 +62,7 @@ HTTP client는 외부 API를 호출하는 쪽의 도구다. 서버가 HTTP route
 ## 다음 장
 
 [설치와 첫 요청](02-getting-started.ko.md)에서 package를 추가하고 첫 GET 요청을 실행한다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

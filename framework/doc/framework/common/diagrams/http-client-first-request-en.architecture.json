@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "First GET request", "subtitle": "From builder to typed response", "output": "http-client-first-request-en.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 90, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "builder", "type": "frontend", "label": "builder", "sublabel": "base URL · defaults", "row": 0, "col": 0 },
+    { "id": "client", "type": "backend", "label": "client", "sublabel": "built", "row": 0, "col": 1 },
+    { "id": "request", "type": "frontend", "label": "request", "sublabel": "select GET", "row": 0, "col": 2 },
+    { "id": "response", "type": "external", "label": "typed response", "sublabel": "decode JSON", "row": 0, "col": 3 }
+  ],
+  "connections": [{ "from": "builder", "to": "client", "variant": "default", "label": "build" }, { "from": "client", "to": "request", "variant": "default", "label": "GET" }, { "from": "request", "to": "response", "variant": "default", "label": "send" }],
+  "cards": [{ "dot": "cyan", "title": "Request construction and response termination", "items": ["A builder holding the base URL and default options creates a client; choosing a method such as GET or POST from the client creates a request builder.", "A typed response terminator decodes the JSON body to the requested type and returns the response envelope. An asynchronous terminator does not occupy a thread or event loop while waiting."] }]
+}

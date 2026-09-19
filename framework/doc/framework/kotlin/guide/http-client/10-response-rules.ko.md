@@ -31,8 +31,8 @@ application 타입으로 읽은 결과이고, raw 응답은 status·header·원�
 | 응답 형태 | 2xx·3xx | 4xx·5xx | body |
 |---|---|---|---|
 | raw 응답 | 성공으로 반환 | 성공으로 반환 | 원본 body를 제공한다 |
-| typed 응답 | 성공으로 반환 | `InternalFailure` | JSON decode한 값을 제공한다 |
-| body만 받는 응답 | 성공으로 반환 | `InternalFailure` | decode한 body만 제공한다 |
+| typed 응답 | 성공으로 반환 | `internalFailure` | JSON decode한 값을 제공한다 |
+| body만 받는 응답 | 성공으로 반환 | `internalFailure` | decode한 body만 제공한다 |
 | download sink | 성공으로 반환 | raw 응답과 같이 반환 | 최종 응답 byte만 sink에 전달한다 |
 
 typed 응답과 body만 받는 응답은 status가 400 이상이면 body를 노출하지 않는다. 오류 payload가 필요하면
@@ -78,7 +78,7 @@ raw 응답은 status·header·body를 모두 보존하므로 API의 오류 paylo
 
 | 증상 | 원인 |
 |---|---|
-| 404 또는 500의 payload를 typed 응답에서 읽지 못한다 | typed와 body만 받는 경로는 status 400 이상을 `InternalFailure`로 처리한다. |
+| 404 또는 500의 payload를 typed 응답에서 읽지 못한다 | typed와 body만 받는 경로는 status 400 이상을 `internalFailure`로 처리한다. |
 | 성공 status인데 typed 호출이 실패한다 | JSON body가 대상 타입으로 decode되지 않아 `protocolError`가 발생했다. |
 | 작은 gzip 응답이 body 제한을 넘는다 | 한도는 압축을 해제한 body 크기에 적용된다. |
 | download 파일이 gzip byte처럼 보인다 | download sink에는 압축 해제를 적용하지 않는다. |

@@ -20,21 +20,15 @@ title: "Client와 요청의 생애 · C#/.NET"
 
 !!! info "이 장을 읽고 나면"
 
-    client를 재사용하고 닫는 시점, 요청 builder를 끝내는 방법, timeout과 옵션의 적용 범위를 판단할 수 있다. 생성 코드는 각 언어의 `HttpClient` tutorial에서 가져왔다.
+    HTTP 호출 자원을 재사용하고 닫는 시점, 요청을 끝내는 방법, timeout과 옵션의 적용 범위를 판단할 수 있다. 생성 코드는 각 언어의 `HttpClient` tutorial에서 가져왔다.
 
 client는 base URL과 전송 옵션을 가진 재사용 단위다. builder는 client를 만들고, client가 만든 request builder는 HTTP method·path·body를 모은다. 종결자(terminator)는 모은 요청을 제출하고 응답 형태를 결정하는 마지막 호출이다.
 
 ## 1. Builder에서 응답까지 흐른다
 
-<!-- diagram: http-client-client-lifecycle -->
-```mermaid
-flowchart LR
-    B[Client builder] --> C[Client\npool and defaults]
-    C --> R[Request builder\nmethod, path, body]
-    R --> T[Terminator]
-    T --> H[HTTP response]
-    H --> O[typed, raw, body, or download]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-client-lifecycle.html"
+        title="http client client lifecycle" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-client-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 client는 같은 대상 서비스에 보내는 요청의 connection pool과 기본값을 유지한다. request builder는 요청 하나에만 속하며, 종결자를 호출하면 그 요청을 제출한다.
 
@@ -46,19 +40,23 @@ client는 같은 대상 서비스에 보내는 요청의 connection pool과 기�
 --8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-client-create"
 ```
 
+예제는 base URL과 3초 timeout으로 client 하나를 만들고 프로그램이 끝날 때 닫는 수명 범위를 보여 준다.
+
+Spot 또는 channel handler는 static factory로 client를 새로 만들지 않고 DI로 주입된 client를 사용한다. 이 경계가 handler 사이의 connection pool 재사용과 framework 실행 문맥을 보존한다.
+
 ## 3. 응답 형태에 맞는 종결자를 고른다
 
-종결자는 request builder를 실제 HTTP 요청으로 제출한다. 같은 응답 형태라도 언어마다 표기만 다르며, 표의 이름은 호출 위치의 실행 모델과 별개로 응답을 받는 역할을 나타낸다.
+종결자는 request builder를 실제 HTTP 요청으로 제출한다. typed 응답은 status와 header, JSON으로 읽은 body를 함께 담고, raw 응답은 status와 header, JSON으로 읽기 전 body를 담는다. 같은 응답 형태라도 언어마다 표기만 다르며, 표의 이름은 호출 위치의 실행 모델과 별개로 응답을 받는 역할을 나타낸다.
 
 | 응답 형태 | C++ | C#/.NET | Java | Kotlin | Node/TypeScript |
 | --- | --- | --- | --- | --- | --- |
-| typed 응답 | `async<T>()` | `Async<T>()` | `submit(Class<T>)` | `await<T>()` | `submit<T>()` |
-| raw 응답 | `async_raw()` | `AsyncRaw()` | `submitRaw()` | `awaitRaw()` | `submitRaw()` |
-| body만 | `fetch<T>()` | `Fetch<T>()` | `fetch(Class<T>)` | `fetch<T>()` | `fetch<T>()` |
-| streaming download | `download(sink)` | `DownloadAsync(sink)` | `download(sink)` | `awaitDownload(sink)` | `download(sink)` |
-| callback 완료 | `async<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | suspend 함수로 대체 | `submit<T>(callback)` |
-| gate 반납 | `yield<T>()` | `Yield<T>()` | `yield(Class<T>)` | `yield<T>()` | `yield<T>()` |
-| blocking CLI | `submit<T>()` / `submit_raw()` | 제공하지 않음 | 제공하지 않음 | 제공하지 않음 | 제공하지 않음 |
+| typed 응답 `HttpResponse<T>` | `async<T>()` | `Async<T>(ct?)` | `submit(Class<T>)` | `await(type)` / `await<T>()` (suspend) | `submit<T>()` |
+| raw 응답 | `async_raw()` | `AsyncRaw(ct?)` | `submitRaw()` | `awaitRaw()` (suspend) | `submitRaw()` |
+| decoded body `T`만 | `fetch<T>()` | `Fetch<T>(ct?)` | `fetch(Class<T>)` | `fetch<T>()` (suspend) | `fetch<T>()` |
+| streaming download | `download(sink)` | `DownloadAsync(sink, ct?)` | `download(Consumer<byte[]>)` | `awaitDownload(sink)` | `download(sink)` |
+| callback 완료 | `async<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | (suspend로 대체) | `submit<T>(callback)` |
+| gate 반납 (DI server builder 전용) | `yield<T>()` | `Yield<T>(ct?)` | `yield(Class<T>)` | `yield<T>()` (suspend) | `yield<T>()` |
+| blocking (CLI·client 시나리오 전용) | `submit_raw()`, `submit<T>()` | 두지 않는다 | 두지 않는다 | 두지 않는다 | 두지 않는다 |
 
 ## 4. Timeout의 두 경계를 구분한다
 
@@ -91,8 +89,12 @@ client `Timeout` 기본값은 3000ms이며, 요청 builder의 `Timeout`은 그 �
 
 ## 7. One-shot은 한 번의 편의 경로다
 
-client builder에서도 method를 바로 시작할 수 있다. 이 one-shot 경로는 제출할 때 client를 만들고 완료 후 닫으므로 connection pool을 재사용하지 않는다. 한 번뿐인 관리 작업에는 사용할 수 있지만, 반복 호출과 고부하 경로에는 재사용 client를 둔다.
+client builder에서도 method를 바로 시작할 수 있다. 이 one-shot 경로는 제출할 때 client를 만들고 완료 후 닫으므로 connection pool을 재사용하지 않는다. one-shot request는 한 번 제출한 뒤 재제출할 수 없으며, 재제출하면 `InvalidOperation`으로 실패한다. 한 번뿐인 관리 작업에는 사용할 수 있지만, 반복 호출과 고부하 경로에는 재사용 client를 둔다.
 
 ## 8. 다음 장
 
 redirect, retry, cookie jar의 자동 처리 규칙은 [Redirect·Retry·Cookie](09-redirect-retry-cookie.ko.md)에서 다룬다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

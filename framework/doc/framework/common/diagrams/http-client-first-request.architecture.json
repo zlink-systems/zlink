@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "첫 GET 요청", "subtitle": "builder에서 typed 응답까지", "output": "http-client-first-request.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 90, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "builder", "type": "frontend", "label": "builder", "sublabel": "base URL·기본값", "row": 0, "col": 0 },
+    { "id": "client", "type": "backend", "label": "client", "sublabel": "완성", "row": 0, "col": 1 },
+    { "id": "request", "type": "frontend", "label": "request", "sublabel": "GET 선택", "row": 0, "col": 2 },
+    { "id": "response", "type": "external", "label": "typed response", "sublabel": "JSON 해석", "row": 0, "col": 3 }
+  ],
+  "connections": [{ "from": "builder", "to": "client", "variant": "default", "label": "build" }, { "from": "client", "to": "request", "variant": "default", "label": "GET" }, { "from": "request", "to": "response", "variant": "default", "label": "send" }],
+  "cards": [{ "dot": "cyan", "title": "요청 구성과 응답 종결", "items": ["builder는 base URL과 기본 option을 담아 client를 만들고, client에서 GET·POST 같은 method를 선택하면 request builder가 만들어진다.", "typed 응답 종결자는 JSON body를 지정한 type으로 해석하고 응답 봉투를 반환한다. 비동기 종결자는 대기 중 thread나 event loop를 점유하지 않는다."] }]
+}

@@ -29,8 +29,8 @@ The processing path changes according to what a caller needs from the same HTTP 
 | Response shape | 2xx/3xx | 4xx/5xx | Body |
 |---|---|---|---|
 | Raw response | Returns successfully | Returns successfully | Provides the original body |
-| Typed response | Returns successfully | `InternalFailure` | Provides the JSON-decoded value |
-| Body-only response | Returns successfully | `InternalFailure` | Provides only the decoded body |
+| Typed response | Returns successfully | `internalFailure` | Provides the JSON-decoded value |
+| Body-only response | Returns successfully | `internalFailure` | Provides only the decoded body |
 | Download sink | Returns successfully | Returns like raw | Delivers only final-response bytes to the sink |
 
 Typed and body-only responses do not expose a body when status is 400 or higher. Select raw when an error payload is required. HEAD and 204 have an empty successful body; on typed paths this becomes the language's absent value.
@@ -65,7 +65,7 @@ A raw response preserves status, headers, and body, so it suits direct handling 
 
 | Symptom | Cause |
 |---|---|
-| A 404 or 500 payload is unavailable from a typed response. | Typed and body-only paths turn status 400 or higher into `InternalFailure`. |
+| A 404 or 500 payload is unavailable from a typed response. | Typed and body-only paths turn status 400 or higher into `internalFailure`. |
 | A typed call fails despite a successful status. | The JSON body could not decode into the target type, producing `protocolError`. |
 | A small gzip response exceeds the body limit. | The limit applies to the decompressed body size. |
 | A downloaded file looks like gzip bytes. | A download sink does not decompress. |

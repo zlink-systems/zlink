@@ -45,8 +45,9 @@ CANONICAL = {
 FRAMEWORK_CANONICAL = {
     "C#/.NET": ".cs",
     "C++": [".cpp", ".hpp"],
-    "Java": ".java",
-    "Kotlin": ".kt",
+    #  Gradle 빌드 스크립트(.kts)는 Java·Kotlin tutorial의 의존 선언을 담는 소스다 — 설치 장이 읽는다.
+    "Java": [".java", ".kts"],
+    "Kotlin": [".kt", ".kts"],
     "Node/TypeScript": ".ts",
 }
 

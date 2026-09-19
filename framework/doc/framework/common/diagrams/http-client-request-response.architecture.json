@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "응답 종결자", "subtitle": "하나의 HTTP 응답에서 필요한 결과를 선택", "output": "http-client-request-response.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 100, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "request", "type": "frontend", "label": "request builder", "row": 0, "col": 0 }, { "id": "term", "type": "backend", "label": "terminator", "row": 0, "col": 1 }, { "id": "http", "type": "external", "label": "HTTP response", "row": 0, "col": 2 }, { "id": "typed", "type": "backend", "label": "typed response", "sublabel": "status·header·body", "row": 1, "col": 2 }, { "id": "raw", "type": "external", "label": "raw response", "sublabel": "status·header·raw", "row": 0, "col": 3 }, { "id": "body", "type": "frontend", "label": "body value", "sublabel": "해석된 값", "row": 2, "col": 2 }
+  ],
+  "connections": [{ "from": "request", "to": "term", "variant": "default" }, { "from": "term", "to": "http", "variant": "default", "label": "send" }, { "from": "http", "to": "typed", "variant": "default", "label": "decode", "labelDy": 24 }, { "from": "http", "to": "raw", "variant": "default", "label": "keep raw" }, { "from": "typed", "to": "body", "variant": "default", "label": "body only", "labelDy": 24 }],
+  "cards": [{ "dot": "cyan", "title": "응답 선택", "items": ["request builder의 종결자는 HTTP response를 받아 typed response, raw response 또는 body만 반환한다.", "typed response는 status, headers, JSON으로 해석한 body를 함께 보존하고, raw response는 raw body를 보존한다."] }]
+}

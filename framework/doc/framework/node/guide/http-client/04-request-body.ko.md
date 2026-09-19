@@ -29,11 +29,9 @@ request body는 POST·PUT·PATCH처럼 내용을 보내는 요청에 붙는다. 
 
 typed JSON body는 application DTO를 `application/json`으로 보낸다. 응답을 받는 방식은 body의 형식과 독립적이므로 typed·raw·body만 받는 응답 중 필요한 형태를 고른다.
 
-<!-- diagram: http-client-request-body -->
-```mermaid
-flowchart LR
-    Dto[Application DTO] --> Json[JSON body] --> Request
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-request-body.html"
+        title="http client request body" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-request-body.html" target="_blank">↗ 크게 보기</a></p>
 
 ```typescript
 --8<-- "framework/languages/node/tutorial/HttpClient/main.ts:http-json-body"
@@ -55,3 +53,7 @@ form은 짧은 name·value 쌍을 `application/x-www-form-urlencoded`로 보내�
 ## 다음 장
 
 [응답 받기](05-handling-responses.ko.md)에서 JSON body를 해석한 응답, raw 응답, body만 받는 응답을 고른다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

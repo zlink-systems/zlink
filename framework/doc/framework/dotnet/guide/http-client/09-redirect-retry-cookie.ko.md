@@ -40,6 +40,8 @@ redirect 추적은 기본으로 꺼져 있다. 아래 tutorial은 이전 player 
 redirect: 200 p1
 ```
 
+이 결과는 이전 주소의 redirect를 따라간 최종 응답이 status 200과 player id `p1`을 반환했음을 보여 준다.
+
 ## 2. redirect가 요청을 바꾸는 경우
 
 redirect는 `Location`의 절대 URL과 상대 URL을 해석한다. 301·302에서 GET과 HEAD는 method와 body를
@@ -47,22 +49,9 @@ redirect는 `Location`의 절대 URL과 상대 URL을 해석한다. 301·302에�
 body를 유지한다. streaming body는 되감아 다시 읽을 수 없으므로 307·308에서도 다음 요청으로 넘기지
 않는다.
 
-<!-- diagram: http-client-redirect-retry -->
-```mermaid
-flowchart TD
-    A[Send request] --> B{Redirect status?}
-    B -->|301, 302, 303, 307, 308| C[Resolve Location]
-    C --> D{Redirect limit or invalid Location?}
-    D -->|Yes| E[ProtocolError]
-    D -->|No| F[Apply method and auth rules]
-    F --> A
-    B -->|No| G{Unavailable or timeout?}
-    G -->|No| H[Return response or failure]
-    G -->|Yes| I{Retry enabled and non-streaming?}
-    I -->|No| H
-    I -->|Yes| J[Backoff with full jitter]
-    J --> A
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-redirect-retry.html"
+        title="http client redirect retry" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-redirect-retry.html" target="_blank">↗ 크게 보기</a></p>
 
 다른 origin으로 이동하면 `Authorization` header를 제거한다. origin은 scheme, host, port가 모두 같은
 경우에만 같으므로, 같은 origin 안에서만 인증 정보를 보존한다. redirect 중간 응답의 body는 비우고
@@ -109,3 +98,7 @@ host마다 최대 128개를 보관하며 넘치면 가장 오래된 cookie부터
 
 - status와 JSON decode의 처리 경로 — [응답 처리 규칙](10-response-rules.ko.md)
 - retry 뒤에 남는 오류 kind — [오류 처리](11-error-handling.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

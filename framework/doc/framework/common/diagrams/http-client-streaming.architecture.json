@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Streaming upload와 download", "subtitle": "provider와 sink가 HTTP API에 직접 연결", "output": "http-client-streaming.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 130, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [{ "id": "provider", "type": "frontend", "label": "body provider", "sublabel": "stream upload 입력", "row": 0, "col": 0 }, { "id": "upload", "type": "backend", "label": "HTTP upload", "row": 0, "col": 1 }, { "id": "api", "type": "external", "label": "target HTTP API", "row": 0, "col": 2 }, { "id": "download", "type": "backend", "label": "HTTP download", "row": 1, "col": 1 }, { "id": "sink", "type": "frontend", "label": "download sink", "sublabel": "download 출력", "row": 1, "col": 0 }],
+  "connections": [{ "from": "provider", "to": "upload", "variant": "default" }, { "from": "upload", "to": "api", "variant": "default" }, { "from": "api", "to": "download", "variant": "default" }, { "from": "download", "to": "sink", "variant": "default" }],
+  "cards": [{ "dot": "cyan", "title": "스트리밍 경로", "items": ["body stream provider는 HTTP upload에 byte를 제공하고, target HTTP API의 응답은 HTTP download를 거쳐 download sink로 전달된다."] }]
+}

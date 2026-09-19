@@ -13,22 +13,16 @@ title: "Kotlin 코루틴 통합"
     Kotlin coroutine에서 HTTP 요청을 suspend로 기다리고, 취소와 dispatcher 경계를 구분할 수 있다.
     코드 예제는 Kotlin `HttpClient` tutorial에서, coroutine bridge의 동작은 Kotlin 공개 인터페이스에서 확인했다.
 
-Kotlin 확장은 Java HTTP client가 돌려주는 `CompletionStage`를 suspend 함수로 잇는다. `await`는 typed
-응답을, `awaitRaw`는 raw 응답을, `fetch`는 decoded body를, `awaitDownload`는 download 완료를 기다린다.
+Kotlin 확장은 Java HTTP client가 돌려주는 `CompletionStage`를 suspend 함수로 잇는다. typed 응답은
+status·header와 decode한 DTO를 함께 담고, raw 응답은 status·header와 decode하지 않은 body를 담는다.
+`await`는 typed 응답을, `awaitRaw`는 raw 응답을, `fetch`는 decoded body를, `awaitDownload`는 download 완료를 기다린다.
 이 장은 이 확장이 thread를 점유하지 않는 이유와 coroutine 경계를 다룬다.
 
 ## 1. Suspend 확장이 CompletionStage를 잇는다
 
-<!-- diagram: http-client-kotlin-coroutines -->
-```mermaid
-flowchart LR
-    C[Kotlin coroutine] --> W[suspend extension]
-    W --> J[Java CompletionStage]
-    J --> H[HTTP operation]
-    H --> J
-    J --> D[caller's dispatcher]
-    D --> C
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-kotlin-coroutines.html"
+        title="http client kotlin coroutines" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-kotlin-coroutines.html" target="_blank">↗ 크게 보기</a></p>
 
 `await`·`awaitRaw`·`fetch`·`awaitDownload`·`yield`는 suspend 함수다. 확장은 `CompletionStage`가
 완료될 때 coroutine을 재개하므로 HTTP 응답을 기다리는 동안 thread를 점유하지 않는다. `yield`는
@@ -39,6 +33,8 @@ server request builder에서 현재 execution turn을 유지하며 완료를 기
 ```kotlin title="framework/languages/java/tutorial/kotlin/HttpClient/src/main/kotlin/systems/zlink/tutorial/httpclient/HttpClientProgram.kt"
 --8<-- "framework/languages/java/tutorial/kotlin/HttpClient/src/main/kotlin/systems/zlink/tutorial/httpclient/HttpClientProgram.kt:http-first-request"
 ```
+
+이 코드는 `fetch<PlayerProfile>()`로 응답 봉투를 제외하고 decode한 `PlayerProfile` body를 직접 받는다.
 
 ## 2. Coroutine 취소와 HTTP 요청 취소를 구분한다
 
@@ -70,3 +66,7 @@ handler, actor, spot 경로는 suspend 함수 안에서 HTTP 확장을 직접 �
 
 - client 기본값과 실행 모델 전체 — [Client와 요청의 생애](08-client-lifecycle.ko.md)
 - 오류 kind와 재시도 판단 — [오류 처리](11-error-handling.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

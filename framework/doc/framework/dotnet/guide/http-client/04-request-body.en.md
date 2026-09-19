@@ -29,11 +29,9 @@ A request body is attached to a request that sends content, such as POST, PUT, o
 
 A typed JSON body sends an application DTO as `application/json`. The response form is independent of the body format, so choose a typed response, raw response, or a body-only response as needed.
 
-<!-- diagram: http-client-request-body -->
-```mermaid
-flowchart LR
-    Dto[Application DTO] --> Json[JSON body] --> Request
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-request-body-en.html"
+        title="http client request body" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-request-body-en.html" target="_blank">↗ 크게 보기</a></p>
 
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-json-body"
@@ -55,3 +53,7 @@ A raw body with an arbitrary content type and a streaming upload that supplies b
 ## Next Chapter
 
 [Handling Responses](05-handling-responses.en.md) chooses a JSON-decoded response, a raw response, or a body-only response.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

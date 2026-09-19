@@ -20,41 +20,44 @@ View in another language — [C++](../../../cpp/guide/http-client/07-streaming.e
 
 !!! info "After reading this chapter"
 
-    You can process response chunks through a download sink and send a request body through a body stream provider. The code in this chapter comes from each language's `HttpClient` tutorial.
+    This chapter processes a response in chunks and sends a request body in parts. Its code comes from each language's `HttpClient` tutorial.
 
 Streaming moves a large body through a caller callback or provider. Unlike a JSON body, it does not serialize or accumulate the whole body. [Response Rules](10-response-rules.en.md) covers status and compression rules.
 
-<!-- diagram: http-client-streaming -->
-```mermaid
-flowchart LR
-    P[Body stream provider] --> U[HTTP upload]
-    D[HTTP download] --> S[Download sink]
-    U --> X[Target HTTP API]
-    X --> D
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-streaming-en.html"
+        title="http client streaming" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-streaming-en.html" target="_blank">↗ 크게 보기</a></p>
 
 The provider and sink are each consumed once while the body moves. This is why the streaming path does not apply replay or transparent decompression.
 
-## 1. Receive a Response Through a Download Sink
+## 1. Response Chunks Flow Through a Download Sink
 
-A download sink is a callback invoked for each received body chunk. The final status and headers are returned as a raw response; bodies from intermediate redirect responses do not reach the sink.
+A download sink is a callback invoked for each received body chunk. A raw response carries status, headers, and the body before JSON decoding. The final raw response from a download preserves status and headers; bodies from intermediate redirect responses do not reach the sink.
 
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-download-stream"
 ```
 
-## 2. Send a Request Through a Body Stream Provider
+The example counts each export-body chunk and accumulates the total number of chunks and bytes.
 
-A body stream provider returns the next chunk to send and signals completion with the language's empty value. Specify the content type with the provider.
+## 2. Request Chunks Come from a Body Stream Provider
+
+A body stream provider returns the next chunk to send and signals completion with the language's empty value. Its configuration includes the content type.
 
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-upload-stream"
 ```
 
-## 3. Do Not Expect Retry or Decompression
+The example supplies three NDJSON lines in sequence and confirms that the server imported three items.
+
+## 3. Retry and Decompression Are Excluded
 
 A download sink and a body stream provider consume their body once and cannot recreate it. A streaming request is therefore excluded from retry and redirect replay. A download sink receives compressed response bytes unchanged; decompression is not applied.
 
 ## 4. Next Chapter
 
-[Client and Request Lifecycle](08-client-lifecycle.en.md) covers client reuse, close timing, terminators, and timeout boundaries.
+[Client and Request Lifecycle](08-client-lifecycle.en.md) covers client reuse, close timing, response completion, and timeout boundaries.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

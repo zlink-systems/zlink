@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Request body", "subtitle": "Convert an application DTO to a JSON body", "output": "http-client-request-body-en.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [{ "id": "dto", "type": "frontend", "label": "application DTO", "sublabel": "input value", "row": 0, "col": 0 }, { "id": "json", "type": "backend", "label": "JSON body", "sublabel": "serialize", "row": 0, "col": 1 }, { "id": "request", "type": "external", "label": "request", "sublabel": "HTTP body", "row": 0, "col": 2 }],
+  "connections": [{ "from": "dto", "to": "json", "variant": "default", "label": "encode" }, { "from": "json", "to": "request", "variant": "default", "label": "attach" }],
+  "cards": [{ "dot": "cyan", "title": "JSON request body", "items": ["Serialize an application DTO into a JSON body and attach it to the HTTP request."] }]
+}

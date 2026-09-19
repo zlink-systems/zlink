@@ -27,14 +27,11 @@ The HTTP client is a client-side library that sends application requests to an e
 
 ## 1. Where to Use the HTTP Client
 
-A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. Create one client and reuse it for repeated calls. Use a one-shot for a single call; a one-shot builds a request directly from the builder.
+A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. A repeated-call application creates one client and reuses it. A single call can use a one-shot, which builds a request directly from the builder.
 
-<!-- diagram: http-client-overview -->
-```mermaid
-flowchart LR
-    App[Application] --> Client[HTTP client]
-    Client --> Api[External HTTP API]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview-en.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview-en.html" target="_blank">↗ 크게 보기</a></p>
 
 The following example previews the first request with a typed response. A typed response contains the status, headers, and a JSON-decoded body.
 
@@ -42,16 +39,22 @@ The following example previews the first request with a typed response. A typed 
 --8<-- "framework/languages/java/tutorial/java/HttpClient/src/main/java/systems/zlink/tutorial/httpclient/HttpClientProgram.java:http-first-request"
 ```
 
+All five examples use the same builder semantics to send a profile GET request, decode its JSON body as a typed `PlayerProfile` response, and read the player ID and nickname.
+
 ## 2. Boundary with the Server HTTP Surface
 
 The HTTP client calls an external API. It does not open server HTTP routes or receive server requests, and it is not a browser replacement for `fetch`.
 
 The HTTP client provides request methods, headers, bodies, and response rules. The external API's routes, authentication policy, and request and response DTOs belong to the application.
 
-## 3. Follow the Flow in the Tutorial
+## 3. Tutorial Flow
 
-The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Start with [Installation and the First Request](02-getting-started.en.md).
+The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Its first step is [Installation and the First Request](02-getting-started.en.md).
 
 ## Next Chapter
 
 [Installation and the First Request](02-getting-started.en.md) adds the package and runs the first GET request.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

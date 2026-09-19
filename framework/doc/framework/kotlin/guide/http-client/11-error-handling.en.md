@@ -32,7 +32,7 @@ An error kind is a closed classification for deciding how to recover from a fail
 | The network, DNS, proxy CONNECT, or target connection is currently unavailable. | `Unavailable` |
 | The configured response-body byte limit was exceeded. | `Rejected` |
 | A per-attempt timeout elapsed. | `DeadlineExceeded` |
-| A typed response has HTTP status 400 or higher, or an execution failure has no other kind. | `InternalFailure` |
+| A typed response has HTTP status 400 or higher, or an execution failure has no other kind. | `internalFailure` |
 
 Enum spelling is `protocol_error`, `unavailable`, `rejected`, `deadline_exceeded`, and `internal_failure` in C++; PascalCase in .NET and Node/TypeScript; and `PROTOCOL_ERROR`, `UNAVAILABLE`, `REJECTED`, `DEADLINE_EXCEEDED`, and `INTERNAL_FAILURE` in Java and Kotlin.
 
@@ -46,8 +46,9 @@ The tutorial catches both an error status from a typed request and a connection 
 
 ```console
 error kinds: bad request INTERNAL_FAILURE connection refused INTERNAL_FAILURE
-# From 0.19.0, connection refused is UNAVAILABLE.
 ```
+
+The first value classifies status 400 from a typed request as `internalFailure`; the second value is the result of a refused connection. The current Java and Kotlin packages report a refused connection as `INTERNAL_FAILURE`. Starting with 0.19.0 (#704), they report `UNAVAILABLE`.
 
 ## 3. What to decide after retry
 
@@ -59,7 +60,7 @@ Exceptions and results do not carry a retry hint. An application must not automa
 
 | Symptom | Cause |
 |---|---|
-| A 400 response is handled as `protocolError`. | Status 400 or higher on a typed path is `InternalFailure`. Use raw when an error payload is needed. |
+| A 400 response is handled as `protocolError`. | Status 400 or higher on a typed path is `internalFailure`. A raw response preserves status, headers, and body, so it is the path for reading an error payload. |
 | A large JSON response appears to be a network failure. | Exceeding the response-body limit is `Rejected`, including an expanded compressed body. |
 | The server receives a request again after a timeout. | Configured retry repeated `DeadlineExceeded`. |
 | Cancellation is handled as a Framework kind. | Caller cancellation remains the language's cancellation result. |

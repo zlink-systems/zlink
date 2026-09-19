@@ -14,21 +14,18 @@ title: "C++ 코루틴 통합"
     응답 형태 예제는 C++ `HttpClient` tutorial에서, 실행 위치의 설명은 HTTP client의 C++ 공개 인터페이스에서 확인했다.
 
 `task_t`는 나중에 완료될 값을 나타내고 `co_await`는 그 값이 준비될 때까지 현재 coroutine만 중단한다.
-HTTP client의 비동기 종결자는 `task_t`를 반환한다. 이 장은 그 작업이 실행되는 위치와
+request builder가 모은 요청을 제출하는 마지막 호출을 종결자(terminator)라고 한다. HTTP client의
+0.19.0 비동기 종결자는 `task_t`를 반환한다. 현재 0.18.x tutorial과의 차이는
+[현재 tutorial의 blocking 응답](#3-현재-tutorial의-blocking-응답)에서 구분한다. 이 장은 그 작업이 실행되는 위치와
 continuation이 다시 시작되는 위치를 다룬다. 요청과 응답의 종류는 [Client와 요청의 생애](08-client-lifecycle.ko.md)에서 다룬다.
 
 ## 1. 작업 실행과 재개를 구분한다
 
-<!-- diagram: http-client-cpp-coroutines -->
-```mermaid
-flowchart LR
-    R[request builder terminator] --> E[execute scheduler\nHTTP work]
-    E --> H[HTTP response]
-    H --> S[resume scheduler\ncontinuation]
-    S --> C[co_await caller]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-cpp-coroutines.html"
+        title="http client cpp coroutines" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-cpp-coroutines.html" target="_blank">↗ 크게 보기</a></p>
 
-`async_raw`·`async<T>`·`fetch<T>`·`download`는 선택된 execute scheduler에 HTTP 작업을 등록한다.
+0.19.0 계약의 `async_raw()`·`async<T>()`·`fetch<T>()`·`download(sink)`는 선택된 execute scheduler에 HTTP 작업을 등록한다.
 응답이 준비되면 caller의 continuation과 callback은 resume scheduler에서 다시 실행된다. 따라서
 HTTP I/O를 수행하는 worker와 framework 작업을 계속할 worker를 분리할 수 있다.
 
@@ -51,23 +48,32 @@ framework 실행 줄에 복귀해야 하면 `framework_resume_scheduler_t`를 re
 이 adapter는 framework queue에 continuation을 게시하므로, HTTP worker가 framework 상태를 직접 실행하지 않는다.
 `nullptr` scheduler를 전달하면 client 생성 또는 요청이 `invalid_operation`으로 실패한다.
 
-## 3. 비동기 종결자로 응답을 받는다
+## 3. 현재 tutorial의 blocking 응답
 
-typed 응답, raw 응답, body만 받는 응답, download는 모두 비동기 작업이다. 다음 tutorial은 현재 배포 패키지의
-응답 형태를 함께 보인다.
+현재 배포된 0.18.x tutorial은 CLI에서 blocking 종결자를 사용한다. typed 응답은 status·header와
+decode한 DTO를 함께 담고, raw 응답은 status·header와 decode하지 않은 body를 담는다. body만 받는
+호출은 응답 봉투를 제외하고 decode한 DTO를 직접 반환한다.
+
+다음 코드는 typed 응답과 raw 응답을 `submit<T>().result()`·`submit_raw().result()`로 기다리고,
+body만 받는 호출은 현재 0.18.x의 `fetch<T>()`로 동기 완료한다.
 
 ```cpp title="framework/languages/cpp/tutorial/HttpClient/main.cpp"
 --8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-response-kinds"
 ```
 
-!!! note "0.19.0 API 전환"
+이 코드는 typed 응답의 status, raw 응답의 `content-type` header, body만 받은 DTO의 nickname을 출력한다.
 
-    위 tutorial은 0.18.x 패키지의 이름과 blocking 호출을 사용한다. 0.19.0에서는 typed·raw·body 응답을 받는 비동기 종결자와 `co_await` 조합으로 전환한다.
+## 4. 0.19.0 비동기 계약
 
-`task_t`를 runtime에서 기다릴 때는 `co_await`를 사용한다. `fetch<T>`도 body를 직접 돌려주지만
-비동기 작업이므로 현재 worker를 기다리게 하지 않는다.
+0.19.0 계약에서는 `async<T>()`·`async_raw()`·`fetch<T>()`·`download(sink)`가 모두 `task_t`를 반환한다.
+runtime code는 이 비동기 종결자를 `co_await`와 결합하므로 현재 worker가 HTTP 완료를 기다리지 않는다.
+`fetch<T>()`도 body를 직접 반환하지만 비동기 작업이다.
 
-## 4. Blocking 종결자는 CLI에만 둔다
+현재 tutorial과 0.19.0 계약의 이름·실행 방식 차이는
+[#707](https://github.com/zlink-systems/zlink/issues/707)에서 수렴한다. #707이 배포 패키지와 tutorial에
+반영되기 전까지 위 코드는 현재 0.18.x의 blocking 동작을 나타낸다.
+
+## 5. Blocking 종결자는 CLI에만 둔다
 
 `submit_raw`와 `submit<T>`는 호출 thread에서 완료될 때까지 기다리고 `result_t`를 반환한다. 이 경로는
 CLI와 client scenario처럼 호출 thread를 점유해도 되는 곳만을 위한 것이다. framework runtime 실행 문맥에서
@@ -76,7 +82,11 @@ CLI와 client scenario처럼 호출 thread를 점유해도 되는 곳만을 위�
 HTTP callback 또는 coroutine 안에서 blocking 결과를 기다리면 execute worker가 다음 HTTP 작업을 시작하지 못할 수 있다.
 runtime code에서는 비동기 종결자와 `co_await`를 결합한다.
 
-## 5. 다음 장
+## 6. 다음 장
 
 - client 기본값과 실행 모델 전체 — [Client와 요청의 생애](08-client-lifecycle.ko.md)
 - 오류 kind와 재시도 판단 — [오류 처리](11-error-handling.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

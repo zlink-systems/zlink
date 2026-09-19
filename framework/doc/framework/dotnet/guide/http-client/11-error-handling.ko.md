@@ -54,6 +54,10 @@ request builder가 실제 전송과 응답 대기를 시작하는 마지막 호�
 error kinds: bad request InternalFailure connection refused Unavailable
 ```
 
+첫 값은 typed 요청의 400 status를 `InternalFailure`로 분류한 결과다. 두 번째 값은 연결 거부 결과다.
+현재 Java·Kotlin 배포판은 연결 거부를 `INTERNAL_FAILURE`로 보고하고, 0.19.0(#704)부터
+`UNAVAILABLE`로 보고한다.
+
 ## 3. retry 뒤에 판단할 것
 
 자동 retry는 `Unavailable`과 `DeadlineExceeded`를 낳는 전송 실패를 설정한 operation 안에서만 다시
@@ -68,7 +72,7 @@ error kinds: bad request InternalFailure connection refused Unavailable
 
 | 증상 | 원인 |
 |---|---|
-| 400 응답을 `ProtocolError`로 처리했다 | typed 경로의 status 400 이상은 `InternalFailure`다. 오류 payload가 필요하면 raw 응답을 사용한다. |
+| 400 응답을 `ProtocolError`로 처리했다 | typed 경로의 status 400 이상은 `InternalFailure`다. raw 응답은 status·header·body를 그대로 보존하므로 오류 payload를 읽는 경로다. |
 | 큰 JSON 응답이 network 오류처럼 보인다 | response body 한도를 넘으면 `Rejected`다. 압축 응답도 해제한 크기로 판단한다. |
 | timeout 뒤 요청이 한 번 더 서버에 도달한다 | 설정한 retry가 `DeadlineExceeded`를 다시 시도했다. |
 | cancellation을 Framework kind로 잡으려 한다 | 호출자 cancellation은 각 언어의 cancellation 결과로 전달된다. |
