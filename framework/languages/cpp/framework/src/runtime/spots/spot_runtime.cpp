@@ -11816,8 +11816,11 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
                                                    service_provider_t &services,
                                                    serializer_registry_t &serializers,
                                                    std::optional<std::string> flow_id,
-                                                   std::optional<flow_origin_t> flow_origin)
+                                                   std::optional<flow_origin_t> flow_origin,
+                                                   std::function<void ()> *accepted_turn_terminal)
 {
+    if (accepted_turn_terminal)
+        *accepted_turn_terminal = {};
     /* Instance Spot cold activation carries the first application message
      * outside the normal Spot route record. Keep it in the same diagnostic
      * stream as a Ready Spot dispatch so an operator can follow activation,
@@ -11849,6 +11852,28 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
           detail::result_access_t::failure<zlink::message_t> (error));
     }
     auto state = context_state;
+    std::function<void ()> release_accepted_turn;
+    if (accepted_turn_terminal) {
+        if (!state->enter_callback ()) {
+            const framework_exception_t error (framework_error_kind_t::not_found,
+                                               "spot activation is closed");
+            report_spot_dispatch_error (
+              _state, dispatch_error_surface_t::spot_route,
+              request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+              dispatch_reason_from_error (error.kind ()),
+              request ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+              packet_name, std::nullopt, std::string (spot_id), std::nullopt,
+              std::make_exception_ptr (error), correlation_id);
+            return task_t<zlink::message_t> (
+              detail::result_access_t::failure<zlink::message_t> (error));
+        }
+        const auto settled = std::make_shared<std::atomic_bool> (false);
+        release_accepted_turn = [state, settled] {
+            if (!settled->exchange (true, std::memory_order_acq_rel))
+                state->leave_callback ();
+        };
+        *accepted_turn_terminal = release_accepted_turn;
+    }
     const auto message_kind =
       request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send;
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
@@ -11866,13 +11891,25 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
         trace_spot_id = std::string (spot_id);
         trace_correlation_id = correlation_id;
     }
-    auto handler_task = spot_handler_registry_t (state).invoke_erased (
-      spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
-      state->spot_instance.get (), nullptr, services, serializers, zlink::message_t::from (payload),
-      spot_inbound_message_t{.content_type = std::move (content_type),
-                             .values = std::move (metadata),
-                             .mesh_name = state->mesh_name,
-                             .correlation_id = std::move (correlation_id)});
+    auto handler_task = [&] {
+        try {
+            return spot_handler_registry_t (state).invoke_erased (
+              spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
+              state->spot_instance.get (), nullptr, services, serializers,
+              zlink::message_t::from (payload),
+              spot_inbound_message_t{.content_type = std::move (content_type),
+                                     .values = std::move (metadata),
+                                     .mesh_name = state->mesh_name,
+                                     .correlation_id = std::move (correlation_id)});
+        }
+        catch (...) {
+            if (release_accepted_turn)
+                release_accepted_turn ();
+            if (accepted_turn_terminal)
+                *accepted_turn_terminal = {};
+            throw;
+        }
+    } ();
     detail::observe_task_completion (
       handler_task, [node = _state, state, request, message_kind, trace_packet_name, trace_spot_id,
                      trace_correlation_id] (const result_t<zlink::message_t> &result) {

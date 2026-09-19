@@ -350,6 +350,9 @@ struct instance_spot_activation_result_t
     std::uint32_t terminal_result = 0;
     std::uint32_t failure_code = 0;
     std::optional<protocol::application_payload_t> application_reply;
+    // Releases the accepted application turn only after its reply is handed
+    // to the transport. Instance Spot close waits on this terminal.
+    std::function<void ()> accepted_turn_terminal;
 };
 
 struct instance_spot_activation_materializer_t

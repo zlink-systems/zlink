@@ -143,6 +143,92 @@ class traced_instance_spot_t final : public zlink::framework::instance_spot_t
     zlink::framework::instance_spot_context_t _context;
 };
 
+class close_after_reply_instance_spot_t final : public zlink::framework::instance_spot_t
+{
+  public:
+    explicit close_after_reply_instance_spot_t (
+      zlink::framework::instance_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::instance_spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::instance_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ().add_handler<&close_after_reply_instance_spot_t::on_request> ();
+    }
+
+    zlink::framework::task_t<reply_t> on_request (const request_t &request)
+    {
+        const auto closed = co_await _context.close ();
+        if (!closed) {
+            throw std::runtime_error ("Instance Spot close was not admitted");
+        }
+        co_return reply_t{request.value + 1};
+    }
+
+  private:
+    zlink::framework::instance_spot_context_t _context;
+};
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
+      CloseFromRequestKeepsAcceptedTurnAliveUntilReplyCompletes)
+{
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t builder;
+    builder.add_route_mesh ("instance-close-after-reply")
+      .add_instance_spot_factory<close_after_reply_instance_spot_t> (
+        "closing-player",
+        [] (zlink::framework::instance_spot_context_t context) {
+            return std::make_shared<close_after_reply_instance_spot_t> (
+              std::move (context));
+        },
+        [] (auto &factory) { factory.disable_relocation (); });
+    auto runtime = zlink::framework::detail::spot_node_runtime_t::from (
+      builder, "instance-close-after-reply");
+    ASSERT_TRUE (runtime);
+    zlink::framework::detail::channel_runtime_t::from (builder.message_bus ())
+      .bind_serializers (serializers);
+
+    const auto spot_id = zlink::framework::spot_id_t ("closing-player-1");
+    const auto created = runtime->get_or_create_spot ("closing-player", spot_id);
+    ASSERT_EQ (zlink::framework::spot_create_state_t::created, created.state);
+
+    zlink::framework::service_collection_t services;
+    auto provider = services.build_provider ();
+    const auto payload = zlink::framework::detail::encoded_payload_to_raw (
+      serializers.get<request_t> ().serialize (request_t{41}));
+    std::function<void ()> accepted_turn_terminal;
+    const auto first = runtime->dispatch_instance_activation (
+      spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
+      payload.to_bytes (), {}, true, "close-request-1", provider, serializers, std::nullopt,
+      std::nullopt, &accepted_turn_terminal)
+                         .result ();
+    ASSERT_TRUE (first) << (first.error () ? first.error ()->what () : "unknown error");
+    ASSERT_TRUE (accepted_turn_terminal);
+    const auto reply = serializers.get<reply_t> ().deserialize (
+      zlink::framework::detail::encoded_payload_from_raw (first.value ()));
+    EXPECT_EQ (42, reply.value);
+    accepted_turn_terminal ();
+
+    const auto second = runtime->dispatch_instance_activation (
+      spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
+      payload.to_bytes (), {}, true, "close-request-2", provider, serializers)
+                          .result ();
+    ASSERT_FALSE (second);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::not_found,
+               second.error_kind ());
+}
+
 TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIntentActivatesOnceAndReadyOwnerIgnoresPlacementHints)
 {

@@ -6612,8 +6612,10 @@ void verify_remote_user_spot_create_close_terminal_once ()
     std::size_t instance_activation_count = 0;
     std::size_t instance_prepare_count = 0;
     bool fail_recovery_dispatch_once = false;
+    bool close_during_instance_turn = false;
     auto instance_relocations =
       std::make_shared<memory_relocation_repository_t> ();
+    const std::weak_ptr<host::public_host_runtime_t> weak_target = target;
     target->configure_instance_spot_operations (
       store, instance_relocations, owner->token,
       host::instance_spot_activation_materializer_t{
@@ -6623,19 +6625,20 @@ void verify_remote_user_spot_create_close_terminal_once ()
             assert (!activation.target.spot_id.empty ());
             return true;
         },
-        [&instance_activation_count, &store,
-         &fail_recovery_dispatch_once] (
+        [&instance_activation_count, &store, &fail_recovery_dispatch_once,
+         &close_during_instance_turn, weak_target] (
           const protocol::instance_spot_activation_header_t &activation,
           const std::optional<std::vector<std::uint8_t>> &metadata,
           const protocol::application_payload_t &application) {
             ++instance_activation_count;
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
-            assert (std::holds_alternative<authority_snapshot_t> (
-              store->read_authority (
-                zlink::framework::runtime::spot_authority_key (
-                  activation.target.spot_id))
-                .result ().value ()));
+            const auto authority = store->read_authority (
+              zlink::framework::runtime::spot_authority_key (activation.target.spot_id))
+                                     .result ()
+                                     .value ();
+            const auto *authority_snapshot = std::get_if<authority_snapshot_t> (&authority);
+            assert (authority_snapshot);
             assert (metadata
                     == std::optional<std::vector<std::uint8_t>> (
                       {{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3,
@@ -6647,10 +6650,23 @@ void verify_remote_user_spot_create_close_terminal_once ()
                 throw std::runtime_error (
                   "simulated process failure after Ready publication");
             }
+            std::function<void ()> accepted_turn_terminal;
+            if (close_during_instance_turn) {
+                const auto runtime = weak_target.lock ();
+                assert (runtime);
+                auto close = runtime->begin_instance_spot_close (
+                  activation.target.stable_type, activation.target.spot_id,
+                  authority_snapshot->object_generation,
+                  authority_snapshot->authority_owner_generation);
+                assert (close);
+                accepted_turn_terminal =
+                  [close = std::move (*close)] () mutable { assert (close (true)); };
+            }
             return host::instance_spot_activation_result_t{
               0, 0,
               protocol::application_payload_t{
-                "quest.reply", "application/json", {'{', '}'}}};
+                "quest.reply", "application/json", {'{', '}'}},
+              std::move (accepted_turn_terminal)};
         }});
     source->start ();
     target->start ();
@@ -6716,6 +6732,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (instance_reply_payload->packet_name == "quest.reply");
     assert (instance_prepare_count == 1);
     assert (instance_activation_count == 1);
+
     assert (instance_relocations->size () == 0);
 
     instance_reply_header.reset ();
@@ -6857,6 +6874,44 @@ void verify_remote_user_spot_create_close_terminal_once ()
             && instance_reply_payload->packet_name == "quest.reply");
     assert (instance_prepare_count == 3);
     assert (instance_activation_count == 3);
+
+    auto closing_instance_request = replay_instance_request;
+    closing_instance_request.operation = {123, 458};
+    closing_instance_request.target.deadline_unix_ms =
+      static_cast<std::uint64_t> (
+        std::chrono::duration_cast<std::chrono::milliseconds> (
+          std::chrono::system_clock::now ().time_since_epoch () + 5s)
+          .count ());
+    close_during_instance_turn = true;
+    instance_reply_header.reset ();
+    instance_reply_payload.reset ();
+    assert (source->activate_instance_spot_remote (
+      target->status ().routing_id (), closing_instance_request,
+      std::vector<std::uint8_t>{1, 1, 5, 't', 'r', 'a', 'c', 'e',
+                                0, 3, 'a', 'b', 'c'},
+      {"quest.start", "application/json", {'{', '}'}}, 5s,
+      [&] (foundation::operation_terminal_t terminal,
+           protocol::reply_header_t header,
+           std::optional<protocol::application_payload_t> reply_payload) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          instance_reply_header = header;
+          instance_reply_payload = std::move (reply_payload);
+      })
+              .result ()
+              .value ());
+    deadline = std::chrono::steady_clock::now () + 5s;
+    while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
+        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (instance_reply_header && instance_reply_header->terminal_result == 0);
+    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
+    assert (std::holds_alternative<authority_missing_t> (
+      store->read_authority (zlink::framework::runtime::spot_authority_key ("instance-1"))
+        .result ()
+        .value ()));
+    close_during_instance_turn = false;
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (
