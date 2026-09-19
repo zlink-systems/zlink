@@ -1,57 +1,60 @@
-[← Table Of Contents](README.en.md)
+---
+title: "HTTP Client Overview · C#/.NET"
+---
 
-# 1. Overview
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/01-overview.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## What It Is
+# HTTP Client Overview
 
-`Zlink.HttpClient` is the client package .NET applications use to call HTTP APIs. Client
-configuration and request configuration are built with a fluent builder, so you don't need to
-rewrite redirect/cookie/compression/retry policy at every call site.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Next: Installation and the First Request](02-getting-started.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/http-client/01-overview.en.md) · **C#/.NET** · [Java](../../../java/guide/http-client/01-overview.en.md) · [Kotlin](../../../kotlin/guide/http-client/01-overview.en.md) · [Node/TypeScript](../../../node/guide/http-client/01-overview.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can decide when an application inside or outside the server framework should use the HTTP client
+    for an external HTTP API, and know its boundary.
+
+The HTTP client is a client-side library that sends application requests to an external HTTP API and receives responses. The five languages differ only in names and notation; they provide the same semantics for building requests and choosing responses.
+
+## 1. Where to Use the HTTP Client
+
+A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. A repeated-call application creates one client and reuses it. A single call can use a one-shot, which builds a request directly from the builder.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview-en.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview-en.html" target="_blank">↗ 크게 보기</a></p>
+
+The following example previews the first request with a typed response. A typed response contains the status, headers, and a JSON-decoded body.
 
 ```csharp
-// Configure the client and the request in one flow.
-var profile = await client.Get("/players/7281").Fetch<PlayerProfile>();
+--8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-first-request"
 ```
 
-It's not a JSON-only client. It's a general-purpose HTTP client, and the typed path
-(`Body(dto)` / `Fetch<T>()` / `Async<T>()`) is a convenience layer built on top of it.
+All five examples use the same builder semantics to send a profile GET request, decode its JSON body as a typed `PlayerProfile` response, and read the player ID and nickname.
 
-## Usage Principles
+## 2. Boundary with the Server HTTP Surface
 
-- Client configuration and request configuration are both written as method chains.
-- Create the client once and reuse it. Use the one-shot builder only for one-off requests.
-- Typed body and response use the default JSON codec. If you need a different codec, register a
-  `.NET` codec extension when building the client.
+The HTTP client calls an external API. It does not open server HTTP routes or receive server requests, and it is not a browser replacement for `fetch`.
 
-## Execution Model
+The HTTP client provides request methods, headers, bodies, and response rules. The external API's routes, authentication policy, and request and response DTOs belong to the application.
 
-Request execution runs on top of .NET's asynchronous primitives.
+## 3. Tutorial Flow
 
-- `AsyncRaw()` / `Async<T>()` / `DownloadAsync(sink)` return a `ValueTask<T>`.
-- No blocking terminator that synchronously pulls out the completion value is provided.
-- A standalone client provides `Async` and a callback. A server client injected through DI also
-  provides a one-way `Async()` with no normal completion value. A standalone client's
-  `ZLinkHttpRequestBuilder` has no `Yield` that gives back Spot execution authority.
+The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Its first step is [Installation and the First Request](02-getting-started.en.md).
 
-There's one practical takeaway to remember from this model:
+## Next Chapter
 
-> Wait on an ordinary request with `Async<T>()`. If you need the Spot to make progress on other
-> work, run the HTTP request inside `RunIoWorker(...)` and wait on the worker call's `Yield()`.
+[Installation and the First Request](02-getting-started.en.md) adds the package and runs the first GET request.
 
-The detailed rules are covered in [7. Async](07-async.en.md).
-
-## Feature Overview
-
-- Methods: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- Body: typed JSON DTO · raw (arbitrary content-type) · form-urlencoded ·
-  multipart/form-data · chunked streaming upload
-- Response: raw · typed JSON · streaming download
-- Connection pool (native), redirect tracking, transport retry, cookie jar
-- Authentication: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS verification, test certificate trust
-- HTTP proxy
-- Transparent gzip/deflate response decoding
-
-Out of scope: a common caller-cancellation model (the standard `CancellationToken` is supported).
-
-[Next: Getting Started →](02-getting-started.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

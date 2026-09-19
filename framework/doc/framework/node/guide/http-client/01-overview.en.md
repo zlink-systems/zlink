@@ -1,55 +1,60 @@
-[← Table Of Contents](README.en.md)
+---
+title: "HTTP Client Overview · Node/TypeScript"
+---
 
-# 1. Overview
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/01-overview.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## What It Is
+# HTTP Client Overview
 
-`@zlink-systems/http-client` is the client-side artifact Node applications use to call HTTP APIs.
-Node has a global `fetch`, but it lacks automatic gzip decoding, a cookie jar, redirect count
-limits, and fine-grained proxy/TLS control, which clashes with the zlink contract. This client puts
-a fluent builder on top of undici's low-level layer, hiding that complexity and aligning it with the
-framework's error/codec model.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Next: Installation and the First Request](02-getting-started.en.md)
+<!-- framework-adapter-nav:end -->
 
-```ts
-const profile = await client.get('/players/7281').async<PlayerProfile>();
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/http-client/01-overview.en.md) · [C#/.NET](../../../dotnet/guide/http-client/01-overview.en.md) · [Java](../../../java/guide/http-client/01-overview.en.md) · [Kotlin](../../../kotlin/guide/http-client/01-overview.en.md) · **Node/TypeScript**
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can decide when an application inside or outside the server framework should use the HTTP client
+    for an external HTTP API, and know its boundary.
+
+The HTTP client is a client-side library that sends application requests to an external HTTP API and receives responses. The five languages differ only in names and notation; they provide the same semantics for building requests and choosing responses.
+
+## 1. Where to Use the HTTP Client
+
+A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. A repeated-call application creates one client and reuses it. A single call can use a one-shot, which builds a request directly from the builder.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview-en.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview-en.html" target="_blank">↗ 크게 보기</a></p>
+
+The following example previews the first request with a typed response. A typed response contains the status, headers, and a JSON-decoded body.
+
+```typescript
+--8<-- "framework/languages/node/tutorial/HttpClient/main.ts:http-first-request"
 ```
 
-It's not a JSON-only client. It's a general-purpose HTTP client, and the typed JSON path
-(`body(dto)` / `async<T>()`) is a convenience layer built on top of it.
+All five examples use the same builder semantics to send a profile GET request, decode its JSON body as a typed `PlayerProfile` response, and read the player ID and nickname.
 
-## Design Principles
+## 2. Boundary with the Server HTTP Surface
 
-- **Fluent builder.** Both client configuration and request configuration are written as method
-  chains.
-- **No undici in the public surface.** The `Dispatcher`, `Agent`, and `request` types are not
-  revealed in the public API. The undici dependency is confined inside the runtime implementation.
-- **Native wrapping.** Transport is delegated to undici, but the parts whose contract and semantics
-  differ (cookie jar, redirect loop, retry, compression control) are implemented directly in a thin
-  wrapper.
+The HTTP client calls an external API. It does not open server HTTP routes or receive server requests, and it is not a browser replacement for `fetch`.
 
-## Backend Choice — undici, Not `fetch`
+The HTTP client provides request methods, headers, bodies, and response rules. The external API's routes, authentication policy, and request and response DTOs belong to the application.
 
-The parity implementation uses undici's low-level `request`. `fetch` has no numeric redirect limit
-matching `follow_redirects(n)`, automatically decodes gzip which breaks streaming/header-removal/
-decoded-limit semantics, and has limited per-client proxy/TLS control. undici's `request` does no
-auto-redirect, auto-decompress, or cookie handling, letting the wrapper control the semantics.
+## 3. Tutorial Flow
 
-## Execution Model
+The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Its first step is [Installation and the First Request](02-getting-started.en.md).
 
-- `submitRaw()` / `async<T>()` / `download(sink)` return a `Promise`. While `await`ing, HTTP I/O is
-  handled on the libuv event loop's asynchronous sockets, and **the event loop thread is not
-  occupied.**
-- Node has no synchronous blocking HTTP access (no blocking path).
+## Next Chapter
 
-## Feature Overview
+[Installation and the First Request](02-getting-started.en.md) adds the package and runs the first GET request.
 
-- Methods: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- Body: typed JSON · raw · form-urlencoded · multipart/form-data · chunked streaming upload
-- Response: raw · typed JSON · streaming download
-- Connection pool (undici), redirect tracking, transport retry, cookie jar
-- Authentication: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS verification, test certificate trust
-- HTTP proxy
-- Transparent gzip/deflate response decoding
-
-[Next: Getting Started →](02-getting-started.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

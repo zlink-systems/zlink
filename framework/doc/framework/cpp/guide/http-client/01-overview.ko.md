@@ -1,73 +1,60 @@
-[← 목차](README.ko.md)
+---
+title: "HTTP client 개요 · C++"
+---
 
-# 1. 개요
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/http-client/01-overview.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-## 무엇인가
+# HTTP client 개요
 
-`zlink::http_client`는 C++ 애플리케이션이 HTTP API를 호출할 때 사용하는 client-side
-산출물이다. C++ 표준 라이브러리에는 HTTP client가 없고 Boost.Beast를 직접 사용하면
-socket·resolver·parser 같은 낮은 수준 타입이 application 코드에 흘러들어온다.
-이 client는 그 복잡성을 fluent builder 뒤로 숨긴다.
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [다음: 설치와 첫 요청](02-getting-started.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/http-client/01-overview.ko.md) · [Java](../../../java/guide/http-client/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/http-client/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/http-client/01-overview.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    서버 framework 안팎의 application이 외부 HTTP API를 호출할 때 HTTP client를 선택하고,
+    이 client가 맡지 않는 경계를 안다.
+
+HTTP client는 application이 외부 HTTP API에 요청을 보내고 응답을 받는 client-side library다. 다섯 언어는 이름과 표기만 다르며, 요청을 만들고 응답을 고르는 같은 의미론을 제공한다.
+
+## 1. HTTP client를 쓰는 자리
+
+서버 framework 안의 handler도, framework를 올리지 않는 CLI·배치·별도 client process도 외부 HTTP API를 호출할 수 있다. 반복 호출에는 client 하나를 만들어 재사용하고, 한 번뿐인 호출에는 one-shot을 사용한다. one-shot은 builder에서 곧바로 요청을 만드는 편의 경로다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview.html" target="_blank">↗ 크게 보기</a></p>
+
+다음 예제는 typed 응답을 받는 첫 요청을 미리 보인다. typed 응답은 status·header와 JSON으로 해석한 body를 함께 담는다.
 
 ```cpp
-// Boost.Beast 직접 사용: resolver, stream, request<string_body>, flat_buffer ...
-// zlink::http_client: 아래 한 문장
-auto profile = client.get ("/players/7281").fetch<player_profile_t> ();
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-first-request"
 ```
 
-JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
-(`body(dto)` / `submit<T>()` / `fetch<T>()`)는 그 위에 더해진 편의 계층이다.
+다섯 예제는 같은 builder 의미론으로 profile GET 요청을 보내고, JSON body를 `PlayerProfile`로 해석한 typed 응답에서 player id와 nickname을 읽는다.
 
-## 설계 원칙
+## 2. 서버 HTTP 표면과의 경계
 
-- **fluent builder.** client 구성과 request 구성 모두 메서드 체인으로 사용한다.
-- **public header에 Beast 없음.** `Boost.Beast`, `Boost.Asio`, OpenSSL, socket,
-  resolver, parser 타입은 public header에 드러나지 않는다. 의존성은 runtime
-  구현(private) 안에 갇힌다.
-- **request가 client를 소유.** request builder는 client를 값으로 보유하므로,
-  임시 client로 만든 단발 request도 use-after-free 없이 안전하다.
+HTTP client는 외부 API를 호출하는 쪽의 도구다. 서버가 HTTP route를 열고 request를 받는 기능은 이 client의 범위가 아니며, browser의 `fetch`를 대체하는 API도 아니다.
 
-## 산출물 경계
+요청의 method·header·body와 응답 처리 규칙은 HTTP client가 제공한다. 외부 API의 route, 인증 정책, 요청·응답 DTO는 application이 소유한다.
 
-| 역할 | 위치 | 공개 여부 |
-|------|------|-----------|
-| facade header | `http-client/include/zlink/http_client.hpp` | public |
-| contract header | `http-client/include/zlink/http_client/contracts/*` | public |
-| runtime 구현 | `http-client/src/runtime/*` | private |
-| 회귀 테스트 | `http-client/tests/*` | private |
-| CMake target | `zlink::http_client` | public target |
+## 3. tutorial로 흐름 확인하기
 
-## 실행 모델
+각 언어의 `HttpClient` tutorial은 client 생성부터 JSON 요청, 응답 종류, 인증, stream, 오류까지 한 process에서 실행한다. [설치와 첫 요청](02-getting-started.ko.md)에서 그 첫 단계부터 시작한다.
 
-요청 실행은 coroutine 기반이다.
+## 다음 장
 
-- `submit_raw()`/`submit<T>()`는 HTTP 작업을 내부 scheduler에 등록하고 `task_t`를
-  돌려준다. coroutine 실행은 client builder의 기본값이며 따로 켤 필요가 없다.
-- `co_await`는 응답이 준비될 때까지 호출 스레드를 점유하지 않고 suspend된다.
-- `.coroutines(...)` 오버로드는 HTTP 작업을 실행할 scheduler와 continuation을 다시
-  실행할 scheduler를 직접 지정할 때 사용한다.
+[설치와 첫 요청](02-getting-started.ko.md)에서 package를 추가하고 첫 GET 요청을 실행한다.
 
-이 모델의 실용적 결론 하나만 기억하면 된다:
-
-> framework runtime/handler 스레드 안에서는 `submit<T>()`를 `co_await`하고,
-> `.result()`/`fetch<T>()` 같은 blocking 접근은 테스트·client 시나리오처럼 blocking이
-> 허용되는 곳에서만 사용한다. continuation을 특정 실행 줄에서 이어받아야 하면
-> `.coroutines(resume)`로 server가 제공한 resume scheduler를 지정한다.
-
-자세한 규칙은 [7. 비동기와 코루틴](07-async-coroutines.ko.md)에서 다룬다.
-
-## 기능 한눈에 보기
-
-- 메서드: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- body: typed JSON DTO · raw(임의 content-type) · form-urlencoded ·
-  multipart/form-data · chunked streaming 업로드
-- 응답: raw · typed JSON · streaming 다운로드
-- connection keep-alive pool, redirect 추적, transport retry, cookie jar
-- 인증: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS 검증, test certificate trust
-- HTTP proxy (absolute-form + `CONNECT` tunnel)
-- gzip/deflate 응답 투명 해제
-
-범위 밖: HTTP/2(Boost.Beast 미지원), caller cancellation 공통 모델.
-
-[다음: 시작하기 →](02-getting-started.ko.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

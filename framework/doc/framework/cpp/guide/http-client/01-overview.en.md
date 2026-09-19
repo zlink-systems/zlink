@@ -1,74 +1,60 @@
-[← Table Of Contents](README.en.md)
+---
+title: "HTTP Client Overview · C++"
+---
 
-# 1. Overview
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/01-overview.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## What It Is
+# HTTP Client Overview
 
-`zlink::http_client` is the client-side artifact C++ applications use to call HTTP APIs. The C++
-standard library has no HTTP client, and using Boost.Beast directly lets low-level types like
-socket/resolver/parser flow into application code. This client hides that complexity behind a
-fluent builder.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Next: Installation and the First Request](02-getting-started.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/http-client/01-overview.en.md) · [Java](../../../java/guide/http-client/01-overview.en.md) · [Kotlin](../../../kotlin/guide/http-client/01-overview.en.md) · [Node/TypeScript](../../../node/guide/http-client/01-overview.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can decide when an application inside or outside the server framework should use the HTTP client
+    for an external HTTP API, and know its boundary.
+
+The HTTP client is a client-side library that sends application requests to an external HTTP API and receives responses. The five languages differ only in names and notation; they provide the same semantics for building requests and choosing responses.
+
+## 1. Where to Use the HTTP Client
+
+A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. A repeated-call application creates one client and reuses it. A single call can use a one-shot, which builds a request directly from the builder.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview-en.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview-en.html" target="_blank">↗ 크게 보기</a></p>
+
+The following example previews the first request with a typed response. A typed response contains the status, headers, and a JSON-decoded body.
 
 ```cpp
-// Using Boost.Beast directly: resolver, stream, request<string_body>, flat_buffer ...
-// zlink::http_client: the one line below
-auto profile = client.get ("/players/7281").fetch<player_profile_t> ();
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-first-request"
 ```
 
-It's not a JSON-only client. It's a general-purpose HTTP client, and the typed JSON path
-(`body(dto)` / `submit<T>()` / `fetch<T>()`) is a convenience layer built on top of it.
+All five examples use the same builder semantics to send a profile GET request, decode its JSON body as a typed `PlayerProfile` response, and read the player ID and nickname.
 
-## Design Principles
+## 2. Boundary with the Server HTTP Surface
 
-- **Fluent builder.** Both client configuration and request configuration are written as method
-  chains.
-- **No Beast in the public header.** The `Boost.Beast`, `Boost.Asio`, OpenSSL, socket, resolver, and
-  parser types are not revealed in public headers. The dependency is confined inside the (private)
-  runtime implementation.
-- **The request owns the client.** Since the request builder holds the client by value, even a
-  one-off request built with a temporary client is safe, with no use-after-free.
+The HTTP client calls an external API. It does not open server HTTP routes or receive server requests, and it is not a browser replacement for `fetch`.
 
-## Deliverable Boundary
+The HTTP client provides request methods, headers, bodies, and response rules. The external API's routes, authentication policy, and request and response DTOs belong to the application.
 
-| Role | Location | Exposure |
-|------|------|-----------|
-| Facade header | `http-client/include/zlink/http_client.hpp` | public |
-| Contract headers | `http-client/include/zlink/http_client/contracts/*` | public |
-| Runtime implementation | `http-client/src/runtime/*` | private |
-| Regression tests | `http-client/tests/*` | private |
-| CMake target | `zlink::http_client` | public target |
+## 3. Tutorial Flow
 
-## Execution Model
+The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Its first step is [Installation and the First Request](02-getting-started.en.md).
 
-Request execution is coroutine-based.
+## Next Chapter
 
-- `submit_raw()`/`submit<T>()` register the HTTP work with an internal scheduler and return a
-  `task_t`. Coroutine execution is the client builder's default and needs no opt-in.
-- `co_await` suspends without occupying the calling thread until the response is ready.
-- The `.coroutines(...)` overloads are for naming the scheduler that runs the HTTP work and the
-  scheduler that resumes the continuation.
+[Installation and the First Request](02-getting-started.en.md) adds the package and runs the first GET request.
 
-There's one practical takeaway to remember from this model:
-
-> Inside a framework runtime/handler thread, `co_await` `submit<T>()`, and use blocking accesses
-> like `.result()`/`fetch<T>()` only where blocking is allowed, such as tests or client scenarios. If
-> a continuation has to resume on a particular execution line, name the server-provided resume
-> scheduler with `.coroutines(resume)`.
-
-The detailed rules are covered in [7. Async And Coroutines](07-async-coroutines.en.md).
-
-## Feature Overview
-
-- Methods: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- Body: typed JSON DTO · raw (arbitrary content-type) · form-urlencoded ·
-  multipart/form-data · chunked streaming upload
-- Response: raw · typed JSON · streaming download
-- Connection keep-alive pool, redirect tracking, transport retry, cookie jar
-- Authentication: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS verification, test certificate trust
-- HTTP proxy (absolute-form + `CONNECT` tunnel)
-- Transparent gzip/deflate response decoding
-
-Out of scope: HTTP/2 (not supported by Boost.Beast), a common caller-cancellation model.
-
-[Next: Getting Started →](02-getting-started.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

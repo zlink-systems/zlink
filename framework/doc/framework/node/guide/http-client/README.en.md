@@ -1,40 +1,26 @@
-# ZLink HTTP Client For Node — User Guide
+# Node/TypeScript HTTP Client
 
-`@zlink-systems/http-client` is a general-purpose HTTP client for sending HTTP requests from Node. It
-is used with a zlink-style fluent builder, and the public surface does not expose undici types.
+The user guide to `@zlink-systems/http-client`. It lets handlers inside the server framework and tools outside the mesh
+call external HTTP APIs in the zlink call-builder form. The five languages share one semantics, and
+chapters 01–11 of this guide are generated from a common source shared by all five.
 
-```ts
-import { ZLinkHttpClient } from '@zlink-systems/http-client';
-
-const game = await ZLinkHttpClient.create('https://game-api.example.internal')
-  .post('/games')
-  .body({ name: 'ranked-match-0611' })
-  .async<CreateGameRes>();
-```
-
-## Table Of Contents
-
-| Chapter | Document | Content |
+| Order | Document | Content |
 |----|------|------|
-| 1 | [Overview](01-overview.en.md) | Design philosophy, deliverable boundary, execution model |
-| 2 | [Getting Started](02-getting-started.en.md) | Package reference, first request, one-line request |
-| 3 | [Client Configuration](03-client-configuration.en.md) | Builder options, client reuse, undici mapping |
-| 4 | [Making Requests](04-making-requests.en.md) | HTTP methods, query parameters, headers, request timeout |
-| 5 | [Request Body](05-request-body.en.md) | JSON, raw, form, multipart, streaming upload |
-| 6 | [Handling Responses](06-handling-responses.en.md) | Response structure, `async`, status handling |
-| 7 | [Async](07-async.en.md) | `Promise`, `await`, non-blocking guarantee |
-| 8 | [Streaming](08-streaming.en.md) | `download(sink)` download, chunked upload |
-| 9 | [Authentication And TLS](09-authentication-tls.en.md) | Basic/Bearer, HTTPS verification, mTLS |
-| 10 | [Redirect · Retry · Cookie](10-redirects-retries-cookies.en.md) | Redirect semantics, retries, cookie jar |
-| 11 | [Proxy](11-proxy.en.md) | HTTP proxy, proxy authentication |
-| 12 | [Compression](12-compression.en.md) | Transparent gzip/deflate decoding |
-| 13 | [Error Handling](13-error-handling.en.md) | Error kind mapping, retriable, exception paths |
+| 1 | [HTTP Client Overview](01-overview.en.md) | When to use it and what it does not take on |
+| 2 | [Installation and the First Request](02-getting-started.en.md) | Installing the package, one client, a first typed response |
+| 3 | [Making Requests](03-making-requests.en.md) | Method, path, query, header, per-request timeout |
+| 4 | [Request Body](04-request-body.en.md) | JSON, form, multipart and the exclusivity rule |
+| 5 | [Handling Responses](05-handling-responses.en.md) | Typed, raw, body only, compressed responses |
+| 6 | [Authentication, TLS and Proxy](06-auth-tls-proxy.en.md) | Basic/Bearer, trusted certificates, mTLS, proxy |
+| 7 | [Streaming](07-streaming.en.md) | Download sink and chunked upload |
+| 8 | [Client and Request Lifetime](08-client-lifecycle.en.md) | builder → client → terminator, option table, execution model |
+| 9 | [Redirect, Retry and Cookie](09-redirect-retry-cookie.en.md) | Follow rules, backoff, cookie jar semantics |
+| 10 | [Response Rules](10-response-rules.en.md) | Path per status, decode, size limit, decompression |
+| 11 | [Error Handling](11-error-handling.en.md) | The five error kinds and the retry decision |
 
-## Quick Guide
+The file number identifies the same chapter regardless of language.
 
-- If this is your first time → [2. Getting Started](02-getting-started.en.md)
-- The async execution model → [7. Async](07-async.en.md)
-- How failures are reported → [13. Error Handling](13-error-handling.en.md)
+## Related Documents
 
-The formal contract and regression test axes are owned by the spec document
-[node-http-client.ko.md](../../../common/spec/http-client/languages/node/node-http-client.en.md).
+- Server guide: [Node/TypeScript Server Guide](../server/README.en.md)
+- Stream Connector guide: [Node/TypeScript Stream Connector](../stream-connector/README.en.md)

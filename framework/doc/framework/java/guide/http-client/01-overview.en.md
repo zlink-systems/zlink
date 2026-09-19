@@ -1,60 +1,60 @@
-[← Table Of Contents](README.en.md)
+---
+title: "HTTP Client Overview · Java"
+---
 
-# 1. Overview
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/01-overview.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## What It Is
+# HTTP Client Overview
 
-`zlink-http-client` is the client-side artifact Java applications use to call HTTP APIs. The JDK has
-`java.net.http.HttpClient`, but settings like the cookie jar, redirect count limit, and compression
-control end up scattered across call sites. This client hides that complexity behind a fluent builder
-and aligns it with the framework's error/codec model.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Next: Installation and the First Request](02-getting-started.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/http-client/01-overview.en.md) · [C#/.NET](../../../dotnet/guide/http-client/01-overview.en.md) · **Java** · [Kotlin](../../../kotlin/guide/http-client/01-overview.en.md) · [Node/TypeScript](../../../node/guide/http-client/01-overview.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can decide when an application inside or outside the server framework should use the HTTP client
+    for an external HTTP API, and know its boundary.
+
+The HTTP client is a client-side library that sends application requests to an external HTTP API and receives responses. The five languages differ only in names and notation; they provide the same semantics for building requests and choosing responses.
+
+## 1. Where to Use the HTTP Client
+
+A handler in the server framework, a CLI, a batch process, and a separate client process can all call an external HTTP API. A repeated-call application creates one client and reuses it. A single call can use a one-shot, which builds a request directly from the builder.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview-en.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview-en.html" target="_blank">↗ 크게 보기</a></p>
+
+The following example previews the first request with a typed response. A typed response contains the status, headers, and a JSON-decoded body.
 
 ```java
-PlayerProfile profile = client.get("/players/7281").fetch(PlayerProfile.class);
+--8<-- "framework/languages/java/tutorial/java/HttpClient/src/main/java/systems/zlink/tutorial/httpclient/HttpClientProgram.java:http-first-request"
 ```
 
-It's not a JSON-only client. It's a general-purpose HTTP client, and the typed JSON path
-(`body(dto)` / `submit(Type)` / `fetch(Type)`) is a convenience layer built on top of it.
+All five examples use the same builder semantics to send a profile GET request, decode its JSON body as a typed `PlayerProfile` response, and read the player ID and nickname.
 
-## Design Principles
+## 2. Boundary with the Server HTTP Surface
 
-- **Fluent builder.** Both client configuration and request configuration are written as method
-  chains.
-- **No java.net.http in the public surface.** The `HttpClient`, `HttpRequest`, `HttpResponse` types
-  are not revealed in the public API. The dependency is confined inside the runtime implementation
-  (internal).
-- **Native wrapping.** Transport is delegated to `java.net.http`, but the parts whose contract and
-  semantics differ (cookie jar, redirect loop, retry, compression control) are implemented directly
-  in a thin wrapper.
+The HTTP client calls an external API. It does not open server HTTP routes or receive server requests, and it is not a browser replacement for `fetch`.
 
-## Deliverable Boundary
+The HTTP client provides request methods, headers, bodies, and response rules. The external API's routes, authentication policy, and request and response DTOs belong to the application.
 
-| Role | Location | Exposure |
-|------|------|-----------|
-| Public contract | `src/main/java/systems/zlink/httpclient/{ZLink*,RawHttpResponse,HttpResponse,ZLinkHttpMethod}.java` | public |
-| Runtime implementation | `src/main/java/systems/zlink/httpclient/internal/*` | internal |
-| Regression tests | `src/test/java/...` | private |
-| Gradle subproject | `zlink-http-client` | public |
+## 3. Tutorial Flow
 
-## Execution Model
+The `HttpClient` tutorial for each language runs client creation, JSON requests, response forms, authentication, streams, and errors in one process. Its first step is [Installation and the First Request](02-getting-started.en.md).
 
-- `submitRaw()` / `submit(Type)` / `download(sink)` return a `CompletionStage`. With
-  `java.net.http`'s NIO-selector-based asynchronous I/O, the calling thread is not occupied while
-  waiting on the network.
-- `fetch(Type)` also returns a `CompletionStage`. It hands the decoded body alone to a caller
-  that needs no status or header.
+## Next Chapter
 
-The detailed rules are covered in [7. Async](07-async.en.md).
+[Installation and the First Request](02-getting-started.en.md) adds the package and runs the first GET request.
 
-## Feature Overview
-
-- Methods: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- Body: typed JSON · raw · form-urlencoded · multipart/form-data · chunked streaming upload
-- Response: raw · typed JSON · streaming download
-- Connection pool (native), redirect tracking, transport retry, cookie jar
-- Authentication: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS verification, test certificate trust
-- HTTP proxy
-- Transparent gzip/deflate response decoding
-
-[Next: Getting Started →](02-getting-started.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

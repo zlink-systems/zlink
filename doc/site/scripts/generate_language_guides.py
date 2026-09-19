@@ -48,7 +48,7 @@ REPO_ROOT = SITE_DIR.parents[1]
 FRAMEWORK = REPO_ROOT / "framework" / "doc" / "framework"
 #  같은 규칙으로 도는 절. 각각 `common/guide/<이름>/`에 소스가 있고, 언어마다
 #  `<lang>/guide/<이름>/`에 생성된다.
-SECTIONS = ("server", "stream-connector")
+SECTIONS = ("server", "stream-connector", "http-client")
 
 
 def common_dir(section: str) -> Path:

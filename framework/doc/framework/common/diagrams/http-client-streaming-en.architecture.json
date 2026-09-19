@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Streaming upload and download", "subtitle": "A provider and sink connect directly to an HTTP API", "output": "http-client-streaming-en.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 130, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [{ "id": "provider", "type": "frontend", "label": "body provider", "sublabel": "stream upload input", "row": 0, "col": 0 }, { "id": "upload", "type": "backend", "label": "HTTP upload", "row": 0, "col": 1 }, { "id": "api", "type": "external", "label": "target HTTP API", "row": 0, "col": 2 }, { "id": "download", "type": "backend", "label": "HTTP download", "row": 1, "col": 1 }, { "id": "sink", "type": "frontend", "label": "download sink", "sublabel": "download output", "row": 1, "col": 0 }],
+  "connections": [{ "from": "provider", "to": "upload", "variant": "default" }, { "from": "upload", "to": "api", "variant": "default" }, { "from": "api", "to": "download", "variant": "default" }, { "from": "download", "to": "sink", "variant": "default" }],
+  "cards": [{ "dot": "cyan", "title": "Streaming path", "items": ["The body stream provider supplies bytes to the HTTP upload; the target HTTP API response passes through HTTP download to the download sink."] }]
+}

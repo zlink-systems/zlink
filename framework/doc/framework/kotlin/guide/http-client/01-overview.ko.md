@@ -1,57 +1,60 @@
-[← 목차](README.ko.md)
+---
+title: "HTTP client 개요 · Kotlin"
+---
 
-# 1. 개요
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/http-client/01-overview.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-## 무엇인가
+# HTTP client 개요
 
-`zlink-http-client-kotlin`은 Kotlin 애플리케이션이 HTTP API를 호출할 때 사용하는 client-side
-산출물이다. cookie jar·redirect 횟수 제한·압축 통제 같은 설정을 fluent builder와 DSL 뒤로
-숨기고 framework의 에러·코덱 모델과 맞춘다. 모든 제출은 coroutine `suspend` 함수다.
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [다음: 설치와 첫 요청](02-getting-started.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — [C++](../../../cpp/guide/http-client/01-overview.ko.md) · [C#/.NET](../../../dotnet/guide/http-client/01-overview.ko.md) · [Java](../../../java/guide/http-client/01-overview.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/http-client/01-overview.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    서버 framework 안팎의 application이 외부 HTTP API를 호출할 때 HTTP client를 선택하고,
+    이 client가 맡지 않는 경계를 안다.
+
+HTTP client는 application이 외부 HTTP API에 요청을 보내고 응답을 받는 client-side library다. 다섯 언어는 이름과 표기만 다르며, 요청을 만들고 응답을 고르는 같은 의미론을 제공한다.
+
+## 1. HTTP client를 쓰는 자리
+
+서버 framework 안의 handler도, framework를 올리지 않는 CLI·배치·별도 client process도 외부 HTTP API를 호출할 수 있다. 반복 호출에는 client 하나를 만들어 재사용하고, 한 번뿐인 호출에는 one-shot을 사용한다. one-shot은 builder에서 곧바로 요청을 만드는 편의 경로다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-overview.html"
+        title="http client overview" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-overview.html" target="_blank">↗ 크게 보기</a></p>
+
+다음 예제는 typed 응답을 받는 첫 요청을 미리 보인다. typed 응답은 status·header와 JSON으로 해석한 body를 함께 담는다.
 
 ```kotlin
-val profile = client.get("/players/7281").fetch<PlayerProfile>()
+--8<-- "framework/languages/java/tutorial/kotlin/HttpClient/src/main/kotlin/systems/zlink/tutorial/httpclient/HttpClientProgram.kt:http-first-request"
 ```
 
-JSON 전용 client가 아니다. 일반 HTTP client이며 typed JSON 경로
-(`body(dto)` / `await<T>()` / `fetch<T>()`)는 그 위에 더해진 편의 계층이다.
+다섯 예제는 같은 builder 의미론으로 profile GET 요청을 보내고, JSON body를 `PlayerProfile`로 해석한 typed 응답에서 player id와 nickname을 읽는다.
 
-## 설계 원칙
+## 2. 서버 HTTP 표면과의 경계
 
-- **coroutine 우선.** 모든 제출은 `suspend` 함수이며 호출한 coroutine의 dispatcher에서
-  재개된다. blocking 메서드는 없다.
-- **DSL + fluent builder.** client 구성은 `zlinkHttpClient(url) { ... }` DSL로, request 구성은
-  메서드 체인으로 사용한다.
-- **공개 표면에 transport 타입 없음.** `ZLinkHttpClient`·`HttpResponse`·`RawHttpResponse`만
-  노출하고 내부 transport 타입은 드러나지 않는다.
+HTTP client는 외부 API를 호출하는 쪽의 도구다. 서버가 HTTP route를 열고 request를 받는 기능은 이 client의 범위가 아니며, browser의 `fetch`를 대체하는 API도 아니다.
 
-## 산출물 경계
+요청의 method·header·body와 응답 처리 규칙은 HTTP client가 제공한다. 외부 API의 route, 인증 정책, 요청·응답 DTO는 application이 소유한다.
 
-| 역할 | 위치 | 공개 여부 |
-|------|------|-----------|
-| 공개 contract | `src/main/kotlin/systems/zlink/httpclient/kotlin/HttpClientCoroutines.kt` | public |
-| Gradle 서브프로젝트 | `zlink-http-client-kotlin` | public |
-| 회귀 테스트 | `src/test/kotlin/...` | private |
+## 3. tutorial로 흐름 확인하기
 
-`zlink-http-client-kotlin`은 검증된 `zlink-http-client` 전송 런타임을 전이 의존으로 가져와
-재사용하고 그 위에 coroutine 확장과 DSL만 추가한다.
+각 언어의 `HttpClient` tutorial은 client 생성부터 JSON 요청, 응답 종류, 인증, stream, 오류까지 한 process에서 실행한다. [설치와 첫 요청](02-getting-started.ko.md)에서 그 첫 단계부터 시작한다.
 
-## 실행 모델
+## 다음 장
 
-- `awaitRaw()` / `await(type)` / `await<T>()` / `fetch<T>()` / `awaitDownload(sink)`는 모두
-  `suspend` 함수다. 네이티브 비동기 I/O로 네트워크 대기 중 호출 스레드는 점유되지 않는다.
-- 테스트·CLI에서는 `runBlocking { ... }` 안에서 호출한다.
+[설치와 첫 요청](02-getting-started.ko.md)에서 package를 추가하고 첫 GET 요청을 실행한다.
 
-자세한 규칙은 [7. 코루틴](07-coroutines.ko.md)에서 다룬다.
-
-## 기능 한눈에 보기
-
-- 메서드: `GET` `POST` `PUT` `DELETE` `PATCH` `HEAD` `OPTIONS`
-- body: typed JSON · raw · form-urlencoded · multipart/form-data · chunked streaming 업로드
-- 응답: raw · typed JSON · streaming 다운로드
-- connection pool, redirect 추적, transport retry, cookie jar
-- 인증: Basic · Bearer · proxy Basic · mTLS client certificate
-- HTTPS/TLS 검증, test certificate trust
-- HTTP proxy
-- gzip/deflate 응답 투명 해제
-
-[다음: 시작하기 →](02-getting-started.ko.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

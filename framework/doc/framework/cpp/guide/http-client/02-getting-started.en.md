@@ -1,100 +1,70 @@
-[← Table Of Contents](README.en.md)
+---
+title: "Installation and the First Request · C++"
+---
 
-# 2. Getting Started
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/02-getting-started.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## CMake Integration
+# Installation and the First Request
 
-Just link the `zlink::http_client` target. Since the public header doesn't expose Beast/OpenSSL, no
-extra dependency setup is needed on the consumer side.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Previous: HTTP Client Overview](01-overview.en.md) | [Next: Making Requests](03-making-requests.en.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+View in another language — **C++** · [C#/.NET](../../../dotnet/guide/http-client/02-getting-started.en.md) · [Java](../../../java/guide/http-client/02-getting-started.en.md) · [Kotlin](../../../kotlin/guide/http-client/02-getting-started.en.md) · [Node/TypeScript](../../../node/guide/http-client/02-getting-started.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can add the HTTP client package to a project, receive a typed GET response through one client,
+    and choose a one-shot for a single request.
+
+The HTTP client ships separately from the server framework. A calling process needs only the HTTP client package. The tutorial below creates a client and reads one profile.
+
+## 1. Package Reference
 
 ```cmake
-find_package(zlink_framework_cpp CONFIG REQUIRED)
 find_package(zlink_http_client_cpp CONFIG REQUIRED)
-
-add_executable(matchmaker_cli src/main.cpp)
-target_link_libraries(matchmaker_cli PRIVATE zlink::http_client)
+target_link_libraries(my_client PRIVATE zlink::http_client)
 ```
 
-In source, include only the one facade header.
+Each tab shows where that language references the package. The Java and Kotlin tabs quote the tutorial's actual Gradle dependencies, while Node/TypeScript installs the public npm package.
+
+## 2. Client Creation and the First GET Request
+
+A builder holding the base URL and default options creates a client. A request builder is created when a method such as GET or POST is selected from the client. A typed response terminator decodes the JSON body to the requested type and returns the response envelope. An asynchronous terminator does not occupy a thread or event loop while it waits for the result.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-first-request-en.html"
+        title="http client first request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-first-request-en.html" target="_blank">↗ 크게 보기</a></p>
 
 ```cpp
-#include <zlink/http_client.hpp>
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-client-create"
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-first-request"
 ```
 
-## First Request
+The code creates a client with a three-second default timeout, sends a profile GET request, and prints the player ID and nickname from the typed response body.
 
-This is the most basic flow for reading a player profile from a game API server.
+## 3. Result
 
-```cpp
-#include <zlink/http_client.hpp>
-#include <iostream>
-
-struct player_profile_t
-{
-    std::string nickname;
-    int rating = 0;
-};
-
-void from_json (const nlohmann::json &json, player_profile_t &value)
-{
-    value.nickname = json.at ("nickname").get<std::string> ();
-    value.rating = json.at ("rating").get<int> ();
-}
-
-int main ()
-{
-    auto client = zlink::http_client::client_t::create ("https://game-api.example.internal")
-                    .timeout (std::chrono::seconds (3))
-                    .build ();
-
-    auto result = client.get ("/players/7281").submit<player_profile_t> ().result ();
-    if (!result) {
-        std::cerr << "request failed: " << result.error ()->what () << '\n';
-        return 1;
-    }
-
-    const auto &profile = result.value ().body;
-    std::cout << profile.nickname << " (rating " << profile.rating << ")\n";
-    return 0;
-}
+```text
+# (#714 will fill this after its fix)
 ```
 
-This splits into three steps.
+The captured runs for four languages show the same player ID and nickname. The C++ result remains reserved for the #714 fix.
 
-1. `create(base_url)...build()` — creates the client. At this point, a runtime with a connection
-   pool is created.
-2. `client.get(path)...submit<T>()` — builds and sends the request.
-3. `.result()` — waits for the result, received as a `result_t` (a success/failure wrapper).
+## 4. A Single Request
 
-JSON conversion is wired through [nlohmann ADL functions](05-request-body.en.md) (`to_json`/
-`from_json`). The response structure (`result_t` → `http_response_t<T>` → DTO) is explained in
-[6. Handling Responses](06-handling-responses.en.md).
+A one-shot obtains its request builder directly from the client builder. It closes the client after completion, so it does not reuse a connection pool. A service that calls the same API repeatedly keeps a client as in the preceding section.
 
-## Shorter: fetch
+## Next Chapter
 
-Where you only need the typed body and it's fine to receive a failure as an exception (tests, client
-scenarios), `fetch<T>()` unwraps everything and directly returns the DTO.
+[Making Requests](03-making-requests.en.md) sets methods, paths, queries, headers, and per-request timeouts. [Handling Responses](05-handling-responses.en.md) chooses a response form, and [Client and Request Lifecycle](08-client-lifecycle.en.md) covers reuse and closing.
 
-```cpp
-auto profile = client.get ("/players/7281").fetch<player_profile_t> ();
-// throws zlink::framework::framework_exception_t on failure
-```
-
-## One-Line Request: Skipping build()
-
-If it's just one request, you can start the request directly on the builder, without `build()`.
-Since the request keeps the client (and runtime) alive until the end, this is safe even with a
-temporary builder.
-
-```cpp
-auto created = zlink::http_client::client_t::create (options.api_http_endpoint)
-                 .post ("/games")
-                 .body (create_game_http_req_t{.game_name = "ranked-match-0611"})
-                 .fetch<create_game_http_res_t> ();
-```
-
-However, if you make several requests to the same server, you need to build a client with `build()`
-and reuse it to get the connection pool's benefit (keep-alive reuse) — see
-[3. Client Configuration](03-client-configuration.en.md).
-
-[Next: Client Configuration →](03-client-configuration.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

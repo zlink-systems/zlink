@@ -26,18 +26,18 @@ SPEC_DIR = REPO_ROOT / "framework" / "doc" / "framework" / "common" / "spec"
 #  (`TicTacToeGame`·`CommerceApi`)까지 표면으로 보면 엉뚱한 치환이 생긴다.
 FRAMEWORK_SOURCES = {
     "C#/.NET": (["framework/languages/dotnet/src"], [".cs"]),
-    "C++": (["framework/languages/cpp/framework"], [".hpp", ".cpp"]),
+    "C++": (["framework/languages/cpp/framework", "framework/languages/cpp/http-client"], [".hpp", ".cpp"]),
     "Java": (["framework/languages/java"], [".java"]),
     "Kotlin": (["framework/languages/java"], [".kt", ".java"]),
     "Node/TypeScript": (["framework/languages/node/packages"], [".ts"]),
 }
 
 SPEC_DIRS = {
-    "C#/.NET": ["server/languages/dotnet"],
-    "C++": ["server/languages/cpp"],
-    "Java": ["server/languages/java"],
-    "Kotlin": ["server/languages/kotlin", "server/languages/java"],
-    "Node/TypeScript": ["server/languages/node"],
+    "C#/.NET": ["server/languages/dotnet", "http-client/languages/dotnet"],
+    "C++": ["server/languages/cpp", "http-client/languages/cpp"],
+    "Java": ["server/languages/java", "http-client/languages/java"],
+    "Kotlin": ["server/languages/kotlin", "server/languages/java", "http-client/languages/kotlin", "http-client/languages/java"],
+    "Node/TypeScript": ["server/languages/node", "http-client/languages/node"],
 }
 
 #  관례로 안 되는 자리. 이름 자체가 갈리므로 표가 소유한다.

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Client 수명주기", "subtitle": "builder부터 응답 종결까지", "output": "http-client-client-lifecycle.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 70, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [{ "id": "builder", "type": "frontend", "label": "client builder", "row": 0, "col": 0 }, { "id": "client", "type": "backend", "label": "client", "sublabel": "pool·기본값", "row": 0, "col": 1 }, { "id": "request", "type": "frontend", "label": "request builder", "sublabel": "method·path·body", "row": 0, "col": 2 }, { "id": "term", "type": "backend", "label": "terminator", "row": 0, "col": 3 }, { "id": "http", "type": "external", "label": "HTTP response", "row": 0, "col": 4 }, { "id": "output", "type": "frontend", "label": "result", "sublabel": "typed·raw·body·file", "row": 0, "col": 5 }],
+  "connections": [{ "from": "builder", "to": "client", "variant": "default", "label": "build" }, { "from": "client", "to": "request", "variant": "default", "label": "create" }, { "from": "request", "to": "term", "variant": "default" }, { "from": "term", "to": "http", "variant": "default", "label": "send" }, { "from": "http", "to": "output", "variant": "default", "label": "return" }],
+  "cards": [{ "dot": "cyan", "title": "재사용하는 client", "items": ["client builder가 connection pool과 기본값을 가진 client를 만들고, client가 request builder를 만든다.", "종결자는 HTTP response를 typed, raw, body-only 또는 download 결과로 반환한다."] }]
+}

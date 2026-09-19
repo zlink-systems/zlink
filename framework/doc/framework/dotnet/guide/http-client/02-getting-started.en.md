@@ -1,67 +1,69 @@
-[← Table Of Contents](README.en.md)
+---
+title: "Installation and the First Request · C#/.NET"
+---
 
-# 2. Getting Started
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/http-client/02-getting-started.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
 
-## Project Reference
+# Installation and the First Request
 
-Add the `Zlink.HttpClient` package to the consuming project. Only the framework contract package the
-HTTP client uses is installed alongside it — not the whole server runtime.
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Previous: HTTP Client Overview](01-overview.en.md) | [Next: Making Requests](03-making-requests.en.md)
+<!-- framework-adapter-nav:end -->
 
-```xml
-<ItemGroup>
-  <PackageReference Include="Zlink.HttpClient" Version="0.16.0" />
-</ItemGroup>
+<!-- language-switch:start -->
+View in another language — [C++](../../../cpp/guide/http-client/02-getting-started.en.md) · **C#/.NET** · [Java](../../../java/guide/http-client/02-getting-started.en.md) · [Kotlin](../../../kotlin/guide/http-client/02-getting-started.en.md) · [Node/TypeScript](../../../node/guide/http-client/02-getting-started.en.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "After reading this chapter"
+
+    You can add the HTTP client package to a project, receive a typed GET response through one client,
+    and choose a one-shot for a single request.
+
+The HTTP client ships separately from the server framework. A calling process needs only the HTTP client package. The tutorial below creates a client and reads one profile.
+
+## 1. Package Reference
+
+```bash
+dotnet add package Zlink.HttpClient
 ```
+
+Each tab shows where that language references the package. The Java and Kotlin tabs quote the tutorial's actual Gradle dependencies, while Node/TypeScript installs the public npm package.
+
+## 2. Client Creation and the First GET Request
+
+A builder holding the base URL and default options creates a client. A request builder is created when a method such as GET or POST is selected from the client. A typed response terminator decodes the JSON body to the requested type and returns the response envelope. An asynchronous terminator does not occupy a thread or event loop while it waits for the result.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-first-request-en.html"
+        title="http client first request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-first-request-en.html" target="_blank">↗ 크게 보기</a></p>
 
 ```csharp
-using Zlink.HttpClient;
+--8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-client-create"
+--8<-- "framework/languages/dotnet/tutorial/HttpClient/Program.cs:http-first-request"
 ```
 
-## First Request
+The code creates a client with a three-second default timeout, sends a profile GET request, and prints the player ID and nickname from the typed response body.
 
-```csharp
-using var client = ZLinkHttpClient.Create("http://127.0.0.1:18080")
-    .Build();
+## 3. Result
 
-var player = await client.Get("/players/7281").Fetch<PlayerProfile>();
-Console.WriteLine(player.Name);
+```text
+first request: p1 rookie
 ```
 
-- Start a builder with `Create(baseUrl)` and build the client with `.Build()`.
-- The client is reusable and thread-safe. Typically you create it once and use it for a long time.
-- Manage the client's lifetime with `using`.
+The captured runs for four languages show the same player ID and nickname. The C++ result remains reserved for the #714 fix.
 
-## One-Line Request
+## 4. A Single Request
 
-For a one-off request, you can skip `Build()` and call methods directly on the builder.
+A one-shot obtains its request builder directly from the client builder. It closes the client after completion, so it does not reuse a connection pool. A service that calls the same API repeatedly keeps a client as in the preceding section.
 
-```csharp
-var res = await ZLinkHttpClient.Create("https://game-api.example.internal")
-    .Post("/games")
-    .Body(new CreateGameReq("ranked-match-0611"))
-    .Fetch<CreateGameRes>();
-```
+## Next Chapter
 
-If you call it repeatedly, creating the client once and reusing it is better for connection pool
-reuse.
+[Making Requests](03-making-requests.en.md) sets methods, paths, queries, headers, and per-request timeouts. [Handling Responses](05-handling-responses.en.md) chooses a response form, and [Client and Request Lifecycle](08-client-lifecycle.en.md) covers reuse and closing.
 
-## Getting Completion Via Callback
-
-```csharp
-client.Get("/leaderboard").Async<Leaderboard>((error, response) =>
-{
-    if (error is not null)
-    {
-        Console.Error.WriteLine(error.Message); // Failures are also confirmed in the same callback.
-        return;
-    }
-
-    Console.WriteLine(response!.Body.TopPlayer); // Use the successful response's typed body.
-});
-```
-
-The callback suits a client that doesn't use awaitables, or event-loop code. Ordinary code that
-needs to keep computing from the completion value `await`s `Async<T>()` instead
-([Chapter 7](07-async.en.md)).
-
-[Next: Client Configuration →](03-client-configuration.en.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

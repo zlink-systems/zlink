@@ -1,99 +1,70 @@
-[← 목차](README.ko.md)
+---
+title: "설치와 첫 요청 · C++"
+---
 
-# 2. 시작하기
+<!-- generated:start -->
+<!-- 이 파일은 `common/guide/http-client/02-getting-started.ko.md`에서 생성한다. 직접 고치지 않는다.
+     고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
+<!-- generated:end -->
 
-## CMake 연동
+# 설치와 첫 요청
 
-`zlink::http_client` target을 링크하면 끝이다. public header가 Beast/OpenSSL을
-노출하지 않으므로 소비자 쪽에 추가 의존성 설정이 필요 없다.
+<!-- framework-adapter-nav:start -->
+[목차](README.ko.md) | [이전: HTTP client 개요](01-overview.ko.md) | [다음: 요청 만들기](03-making-requests.ko.md)
+<!-- framework-adapter-nav:end -->
+
+<!-- language-switch:start -->
+다른 언어로 보기 — **C++** · [C#/.NET](../../../dotnet/guide/http-client/02-getting-started.ko.md) · [Java](../../../java/guide/http-client/02-getting-started.ko.md) · [Kotlin](../../../kotlin/guide/http-client/02-getting-started.ko.md) · [Node/TypeScript](../../../node/guide/http-client/02-getting-started.ko.md)
+{ .zlink-langswitch }
+<!-- language-switch:end -->
+
+!!! info "이 장을 읽고 나면"
+
+    HTTP client package를 project에 추가하고, client 하나로 typed GET 응답을 받으며,
+    한 번뿐인 요청에는 one-shot을 선택할 수 있다.
+
+HTTP client는 서버 framework와 별도로 배포된다. 호출하는 process는 HTTP client package만 참조하면 된다. 아래 tutorial은 client를 만들고 profile을 한 번 읽는다.
+
+## 1. package 추가
 
 ```cmake
-find_package(zlink_framework_cpp CONFIG REQUIRED)
 find_package(zlink_http_client_cpp CONFIG REQUIRED)
-
-add_executable(matchmaker_cli src/main.cpp)
-target_link_libraries(matchmaker_cli PRIVATE zlink::http_client)
+target_link_libraries(my_client PRIVATE zlink::http_client)
 ```
 
-소스에서는 facade header 하나만 include한다.
+각 탭은 해당 언어의 package 참조 지점을 보여 준다. Java와 Kotlin은 tutorial의 실제 Gradle dependency를 인용하고, Node/TypeScript는 공개 npm package를 설치한다.
+
+## 2. client를 만들고 첫 GET 요청 보내기
+
+client는 base URL과 기본 옵션을 담는 builder를 완성해 만든다. request builder는 client에서 GET·POST 같은 method를 선택할 때 만들어진다. typed 응답 종결자는 JSON body를 지정한 type으로 해석하고 응답 봉투를 돌려준다. 비동기 종결자는 결과를 기다리는 동안 thread나 event loop를 점유하지 않는다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/http-client-first-request.html"
+        title="http client first request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/http-client-first-request.html" target="_blank">↗ 크게 보기</a></p>
 
 ```cpp
-#include <zlink/http_client.hpp>
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-client-create"
+--8<-- "framework/languages/cpp/tutorial/HttpClient/main.cpp:http-first-request"
 ```
 
-## 첫 요청
+이 코드는 3초 기본 timeout을 가진 client를 만들고 profile GET 요청을 보낸 뒤, typed 응답 body의 player id와 nickname을 출력한다.
 
-게임 API 서버에서 플레이어 프로필을 읽어 오는 가장 기본적인 흐름이다.
+## 3. 실행 결과
 
-```cpp
-#include <zlink/http_client.hpp>
-#include <iostream>
-
-struct player_profile_t
-{
-    std::string nickname;
-    int rating = 0;
-};
-
-void from_json (const nlohmann::json &json, player_profile_t &value)
-{
-    value.nickname = json.at ("nickname").get<std::string> ();
-    value.rating = json.at ("rating").get<int> ();
-}
-
-int main ()
-{
-    auto client = zlink::http_client::client_t::create ("https://game-api.example.internal")
-                    .timeout (std::chrono::seconds (3))
-                    .build ();
-
-    auto result = client.get ("/players/7281").submit<player_profile_t> ().result ();
-    if (!result) {
-        std::cerr << "request failed: " << result.error ()->what () << '\n';
-        return 1;
-    }
-
-    const auto &profile = result.value ().body;
-    std::cout << profile.nickname << " (rating " << profile.rating << ")\n";
-    return 0;
-}
+```text
+# (#714 수정 뒤 채운다)
 ```
 
-세 단계로 나뉜다.
+네 언어의 실제 실행 결과는 같은 player id와 nickname을 보여 준다. C++ 결과는 #714 수정 뒤 같은 자리에 채운다.
 
-1. `create(base_url)...build()` — client를 만든다. 이 시점에 connection pool을
-   가진 runtime이 생긴다.
-2. `client.get(path)...submit<T>()` — request를 구성하고 보낸다.
-3. `.result()` — 결과를 기다려 `result_t`(성공/실패 래퍼)로 받는다.
+## 4. 한 번뿐인 요청
 
-JSON 변환은 [nlohmann ADL 함수](05-request-body.ko.md)(`to_json`/`from_json`)로
-연결된다. 응답 구조(`result_t` → `http_response_t<T>` → DTO)는
-[6. Response 다루기](06-handling-responses.ko.md)에서 풀어 설명한다.
+one-shot은 builder에서 바로 request builder를 얻는다. 이 경로는 완료 뒤 client를 닫으므로 연결 pool을 재사용하지 않는다. 같은 API를 반복 호출하는 service에는 앞 절처럼 client를 보관한다.
 
-## 더 짧게: fetch
+## 다음 장
 
-typed body만 필요하고 실패를 예외로 받아도 되는 곳(테스트, client 시나리오)에서는
-`fetch<T>()`가 래퍼를 모두 풀어 DTO를 직접 돌려준다.
+[요청 만들기](03-making-requests.ko.md)에서 method·path·query·header와 요청별 timeout을 정한다. [응답 받기](05-handling-responses.ko.md)에서 응답 형태를 고르고, [client와 요청의 생애](08-client-lifecycle.ko.md)에서 재사용과 종료 규칙을 확인한다.
 
-```cpp
-auto profile = client.get ("/players/7281").fetch<player_profile_t> ();
-// 실패 시 zlink::framework::framework_exception_t throw
-```
-
-## 한 줄 요청: build() 생략
-
-요청이 한 번뿐이면 `build()` 없이 builder에서 바로 request를 시작할 수 있다.
-요청이 client(와 runtime)를 끝까지 살려주므로 임시 builder여도 안전하다.
-
-```cpp
-auto created = zlink::http_client::client_t::create (options.api_http_endpoint)
-                 .post ("/games")
-                 .body (create_game_http_req_t{.game_name = "ranked-match-0611"})
-                 .fetch<create_game_http_res_t> ();
-```
-
-단, 같은 서버에 여러 번 요청한다면 `build()`로 client를 만들어 재사용해야
-connection pool의 이득(keep-alive 재사용)을 본다 —
-[3. Client 구성](03-client-configuration.ko.md) 참고.
-
-[다음: Client 구성 →](03-client-configuration.ko.md)
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d&&d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

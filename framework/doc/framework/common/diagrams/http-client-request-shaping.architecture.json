@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "요청 형태 만들기", "subtitle": "base URL부터 완성된 request까지", "output": "http-client-request-shaping.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 70, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "base", "type": "frontend", "label": "base URL", "row": 0, "col": 0 }, { "id": "path", "type": "frontend", "label": "path", "row": 0, "col": 1 }, { "id": "query", "type": "frontend", "label": "query", "row": 0, "col": 2 }, { "id": "header", "type": "frontend", "label": "header", "row": 0, "col": 3 }, { "id": "timeout", "type": "frontend", "label": "timeout", "row": 0, "col": 4 }, { "id": "request", "type": "backend", "label": "request", "sublabel": "전송 준비", "row": 0, "col": 5 }
+  ],
+  "connections": [{ "from": "base", "to": "path", "variant": "default" }, { "from": "path", "to": "query", "variant": "default" }, { "from": "query", "to": "header", "variant": "default" }, { "from": "header", "to": "timeout", "variant": "default" }, { "from": "timeout", "to": "request", "variant": "default" }],
+  "cards": [{ "dot": "cyan", "title": "요청의 구성 순서", "items": ["base URL에 path와 query를 붙이고, header와 timeout을 설정해 전송할 request를 만든다."] }]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Shape a request", "subtitle": "From base URL to a send-ready request", "output": "http-client-request-shaping-en.html", "legend": { "mode": "hidden" } },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 70, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "base", "type": "frontend", "label": "base URL", "row": 0, "col": 0 }, { "id": "path", "type": "frontend", "label": "path", "row": 0, "col": 1 }, { "id": "query", "type": "frontend", "label": "query", "row": 0, "col": 2 }, { "id": "header", "type": "frontend", "label": "header", "row": 0, "col": 3 }, { "id": "timeout", "type": "frontend", "label": "timeout", "row": 0, "col": 4 }, { "id": "request", "type": "backend", "label": "request", "sublabel": "ready to send", "row": 0, "col": 5 }
+  ],
+  "connections": [{ "from": "base", "to": "path", "variant": "default" }, { "from": "path", "to": "query", "variant": "default" }, { "from": "query", "to": "header", "variant": "default" }, { "from": "header", "to": "timeout", "variant": "default" }, { "from": "timeout", "to": "request", "variant": "default" }],
+  "cards": [{ "dot": "cyan", "title": "Request construction order", "items": ["Start with the base URL, add a path and query, then configure headers and a timeout to form the request to send."] }]
+}
