@@ -207,59 +207,32 @@ API_B_CONFIG_FILE="${RUN_DIR}/appsettings.api-b.json"
 CLIENT_CONFIG_FILE="${RUN_DIR}/appsettings.client.json"
 CLOSE_REPLAY_RELEASE_FILE="${RUN_DIR}/close-replay-release"
 OWNER_LOSS_RELEASE_FILE="${RUN_DIR}/owner-loss-release"
-python3 - "${MISSION_A_CONFIG_FILE}" "${MISSION_B_CONFIG_FILE}" "${API_A_CONFIG_FILE}" "${API_B_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
-import json
-import sys
-
-settings = {
-    "LogDirectory": "${GAMEQUEST_LOG_DIR}",
-    "RedisEndpoint": "${GAMEQUEST_REDIS_ENDPOINT}",
-    "RedisKeyPrefix": "${GAMEQUEST_REDIS_KEY_PREFIX}",
+cat >"$MISSION_A_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${GAMEQUEST_LOG_DIR}","RedisEndpoint":"${GAMEQUEST_REDIS_ENDPOINT}","RedisKeyPrefix":"${GAMEQUEST_REDIS_KEY_PREFIX}","InstanceName":"mission-a","GameApiAHttpBaseUrl":"${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}","MissionAHttpBaseUrl":"${GAMEQUEST_MISSION_A_HTTP_URL}","MissionAMeshEndpoint":"${GAMEQUEST_MISSION_A_MESH_ENDPOINT}"}}
+EOF
+cat >"$MISSION_B_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${GAMEQUEST_LOG_DIR}","RedisEndpoint":"${GAMEQUEST_REDIS_ENDPOINT}","RedisKeyPrefix":"${GAMEQUEST_REDIS_KEY_PREFIX}","InstanceName":"mission-b","GameApiAHttpBaseUrl":"${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}","MissionBHttpBaseUrl":"${GAMEQUEST_MISSION_B_HTTP_URL}","MissionBMeshEndpoint":"${GAMEQUEST_MISSION_B_MESH_ENDPOINT}"}}
+EOF
+cat >"$API_A_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${GAMEQUEST_LOG_DIR}","RedisEndpoint":"${GAMEQUEST_REDIS_ENDPOINT}","RedisKeyPrefix":"${GAMEQUEST_REDIS_KEY_PREFIX}","InstanceName":"api-a","GameApiAHttpBaseUrl":"${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}","GameApiAStreamBindEndpoint":"${GAMEQUEST_API_A_STREAM_BIND_ENDPOINT}","GameApiAMeshEndpoint":"${GAMEQUEST_GAMEAPI_A_MESH_ENDPOINT}"}}
+EOF
+cat >"$API_B_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${GAMEQUEST_LOG_DIR}","RedisEndpoint":"${GAMEQUEST_REDIS_ENDPOINT}","RedisKeyPrefix":"${GAMEQUEST_REDIS_KEY_PREFIX}","InstanceName":"api-b","GameApiBHttpBaseUrl":"${GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL}","GameApiBStreamBindEndpoint":"${GAMEQUEST_API_B_STREAM_BIND_ENDPOINT}","GameApiBMeshEndpoint":"${GAMEQUEST_GAMEAPI_B_MESH_ENDPOINT}"}}
+EOF
+cat >"$CLIENT_CONFIG_FILE" <<EOF
+{
+  "Client": {
     "GameApiAHttpBaseUrl": "${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}",
     "GameApiBHttpBaseUrl": "${GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL}",
     "MissionAHttpBaseUrl": "${GAMEQUEST_MISSION_A_HTTP_URL}",
     "MissionBHttpBaseUrl": "${GAMEQUEST_MISSION_B_HTTP_URL}",
-    "GameApiAStreamBindEndpoint": "${GAMEQUEST_API_A_STREAM_BIND_ENDPOINT}",
-    "GameApiBStreamBindEndpoint": "${GAMEQUEST_API_B_STREAM_BIND_ENDPOINT}",
-    "GameApiAMeshEndpoint": "${GAMEQUEST_GAMEAPI_A_MESH_ENDPOINT}",
-    "GameApiBMeshEndpoint": "${GAMEQUEST_GAMEAPI_B_MESH_ENDPOINT}",
-    "MissionAMeshEndpoint": "${GAMEQUEST_MISSION_A_MESH_ENDPOINT}",
-    "MissionBMeshEndpoint": "${GAMEQUEST_MISSION_B_MESH_ENDPOINT}",
+    "GameApiAStreamEndpoint": "${GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT}",
+    "GameApiBStreamEndpoint": "${GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT}",
+    "CloseReplayReleaseFile": "${CLOSE_REPLAY_RELEASE_FILE}",
+    "OwnerLossReleaseFile": "${OWNER_LOSS_RELEASE_FILE}"
+  }
 }
-common = {
-    "LogDirectory": settings["LogDirectory"],
-    "RedisEndpoint": settings["RedisEndpoint"],
-    "RedisKeyPrefix": settings["RedisKeyPrefix"],
-}
-roles = [
-    {**common, "InstanceName": "mission-a", "GameApiAHttpBaseUrl": settings["GameApiAHttpBaseUrl"],
-     "MissionAHttpBaseUrl": settings["MissionAHttpBaseUrl"],
-     "MissionAMeshEndpoint": settings["MissionAMeshEndpoint"]},
-    {**common, "InstanceName": "mission-b", "GameApiAHttpBaseUrl": settings["GameApiAHttpBaseUrl"],
-     "MissionBHttpBaseUrl": settings["MissionBHttpBaseUrl"],
-     "MissionBMeshEndpoint": settings["MissionBMeshEndpoint"]},
-    {**common, "InstanceName": "api-a", "GameApiAHttpBaseUrl": settings["GameApiAHttpBaseUrl"],
-     "GameApiAStreamBindEndpoint": settings["GameApiAStreamBindEndpoint"],
-     "GameApiAMeshEndpoint": settings["GameApiAMeshEndpoint"]},
-    {**common, "InstanceName": "api-b", "GameApiBHttpBaseUrl": settings["GameApiBHttpBaseUrl"],
-     "GameApiBStreamBindEndpoint": settings["GameApiBStreamBindEndpoint"],
-     "GameApiBMeshEndpoint": settings["GameApiBMeshEndpoint"]},
-]
-for path, role in zip(sys.argv[1:-1], roles):
-    with open(path, "w", encoding="utf-8") as output:
-        json.dump({"Sample": role}, output, indent=2)
-with open(sys.argv[-1], "w", encoding="utf-8") as output:
-    json.dump({"Client": {
-        "GameApiAHttpBaseUrl": "${GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL}",
-        "GameApiBHttpBaseUrl": "${GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL}",
-        "MissionAHttpBaseUrl": "${GAMEQUEST_MISSION_A_HTTP_URL}",
-        "MissionBHttpBaseUrl": "${GAMEQUEST_MISSION_B_HTTP_URL}",
-        "GameApiAStreamEndpoint": "${GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT}",
-        "GameApiBStreamEndpoint": "${GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT}",
-        "CloseReplayReleaseFile": "${CLOSE_REPLAY_RELEASE_FILE}",
-        "OwnerLossReleaseFile": "${OWNER_LOSS_RELEASE_FILE}",
-    }}, output, indent=2)
-PY
+EOF
 
 start_server mission-a "${SCRIPT_DIR}/Server/QuestMission/GameQuest.QuestMission.csproj" --config "${MISSION_A_CONFIG_FILE}"
 wait_port mission-a-mesh "${GAMEQUEST_MISSION_A_MESH_ENDPOINT}"

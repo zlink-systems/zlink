@@ -239,7 +239,7 @@ public sealed partial class RegressionTests
         // Negative control: the same check reports the pre-fix shape, where the replacement
         // configuration carried no empty-zone-set intent.
         Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
-            shell.Replace("\"allowEmptyZoneSet\": True,", string.Empty, StringComparison.Ordinal)));
+            shell.Replace("false true\n", "false false\n", StringComparison.Ordinal)));
         Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
             powershell.Replace("allowEmptyZoneSet = $true", string.Empty, StringComparison.Ordinal)));
 
@@ -288,9 +288,16 @@ public sealed partial class RegressionTests
         for (var index = 0; index < lines.Length; index++)
         {
             var header = lines[index];
-            if (!header.Contains("-replacement\"", StringComparison.Ordinal)) continue;
+            if (!header.Contains("-replacement\"", StringComparison.Ordinal)
+                && !header.Contains("-replacement ", StringComparison.Ordinal)) continue;
+            if (header.Contains("write_zone_node_config", StringComparison.Ordinal))
+            {
+                if (!header.EndsWith(" true", StringComparison.Ordinal)) offenders.Add(header.Trim());
+                continue;
+            }
             if (!header.Contains("write(", StringComparison.Ordinal)
-                && !header.Contains("Write-ZoneWorldConfig", StringComparison.Ordinal)) continue;
+                && !header.Contains("Write-ZoneWorldConfig", StringComparison.Ordinal)
+                && !header.Contains("write_zone_node_config", StringComparison.Ordinal)) continue;
 
             var body = new StringBuilder();
             for (var line = index + 1; line < lines.Length; line++)

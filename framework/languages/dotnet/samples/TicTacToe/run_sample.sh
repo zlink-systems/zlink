@@ -58,52 +58,21 @@ fi
 zlink_redis_start_scoped_assign REDIS_CONTAINER_ID TICTACTOE_REDIS_ENDPOINT "zlink-tictactoe-dotnet-redis" redis:7.2-alpine
 REDIS_ENDPOINT="${TICTACTOE_REDIS_ENDPOINT}"
 
-python3 - "${API_A_CONFIG_FILE}" "${API_B_CONFIG_FILE}" "${PLAY_A_CONFIG_FILE}" "${PLAY_B_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
-import json
-import sys
-
-api_a_path, api_b_path, play_a_path, play_b_path, client_path = sys.argv[1:]
-
-def api(instance_name, bind_url, mesh_endpoint, api_channel_listen_endpoint):
-    return {
-        "Sample": {
-            "InstanceName": instance_name,
-            "ApiBindUrl": bind_url,
-            "MeshEndpoint": mesh_endpoint,
-            "PeerMeshEndpoints": ["${PLAY_A_MESH_ENDPOINT}", "${PLAY_B_MESH_ENDPOINT}"],
-            "ApiChannelListenEndpoint": api_channel_listen_endpoint,
-            "PlayEndpoints": ["${PLAY_A_ENDPOINT}", "${PLAY_B_ENDPOINT}"],
-            "RedisEndpoint": "${REDIS_ENDPOINT}",
-            "RedisKeyPrefix": "${TICTACTOE_REDIS_KEY_PREFIX}",
-            "LogDirectory": "${SAMPLE_LOG_DIR}"
-        }
-    }
-
-def play(instance_name, mesh_endpoint, peer_mesh_endpoints, play_endpoint, api_channel_peer_endpoints):
-    return {
-        "Sample": {
-            "InstanceName": instance_name,
-            "MeshEndpoint": mesh_endpoint,
-            "PeerMeshEndpoints": peer_mesh_endpoints,
-            "ApiChannelPeerEndpoints": api_channel_peer_endpoints,
-            "PlayEndpoint": play_endpoint,
-            "PlayEndpoints": ["${PLAY_A_ENDPOINT}", "${PLAY_B_ENDPOINT}"],
-            "RedisEndpoint": "${REDIS_ENDPOINT}",
-            "RedisKeyPrefix": "${TICTACTOE_REDIS_KEY_PREFIX}",
-            "LogDirectory": "${SAMPLE_LOG_DIR}"
-        }
-    }
-
-for path, settings in [
-    (api_a_path, api("api-a", "${API_A_BIND_URL}", "${API_A_MESH_ENDPOINT}", "${API_A_CHANNEL_ENDPOINT}")),
-    (api_b_path, api("api-b", "${API_B_BIND_URL}", "${API_B_MESH_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}")),
-    (play_a_path, play("play-a", "${PLAY_A_MESH_ENDPOINT}", [], "${PLAY_A_ENDPOINT}", ["${API_A_CHANNEL_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}"])),
-    (play_b_path, play("play-b", "${PLAY_B_MESH_ENDPOINT}", ["${PLAY_A_MESH_ENDPOINT}"], "${PLAY_B_ENDPOINT}", ["${API_A_CHANNEL_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}"])),
-    (client_path, {"Sample": {"ApiPublicUrls": ["${API_A_PUBLIC_URL}"], "LogDirectory": "${SAMPLE_LOG_DIR}"}}),
-]:
-    with open(path, "w", encoding="utf-8") as output:
-        json.dump(settings, output, indent=2)
-PY
+cat >"$API_A_CONFIG_FILE" <<EOF
+{"Sample":{"InstanceName":"api-a","ApiBindUrl":"${API_A_BIND_URL}","MeshEndpoint":"${API_A_MESH_ENDPOINT}","PeerMeshEndpoints":["${PLAY_A_MESH_ENDPOINT}","${PLAY_B_MESH_ENDPOINT}"],"ApiChannelListenEndpoint":"${API_A_CHANNEL_ENDPOINT}","PlayEndpoints":["${PLAY_A_ENDPOINT}","${PLAY_B_ENDPOINT}"],"RedisEndpoint":"${REDIS_ENDPOINT}","RedisKeyPrefix":"${TICTACTOE_REDIS_KEY_PREFIX}","LogDirectory":"${SAMPLE_LOG_DIR}"}}
+EOF
+cat >"$API_B_CONFIG_FILE" <<EOF
+{"Sample":{"InstanceName":"api-b","ApiBindUrl":"${API_B_BIND_URL}","MeshEndpoint":"${API_B_MESH_ENDPOINT}","PeerMeshEndpoints":["${PLAY_A_MESH_ENDPOINT}","${PLAY_B_MESH_ENDPOINT}"],"ApiChannelListenEndpoint":"${API_B_CHANNEL_ENDPOINT}","PlayEndpoints":["${PLAY_A_ENDPOINT}","${PLAY_B_ENDPOINT}"],"RedisEndpoint":"${REDIS_ENDPOINT}","RedisKeyPrefix":"${TICTACTOE_REDIS_KEY_PREFIX}","LogDirectory":"${SAMPLE_LOG_DIR}"}}
+EOF
+cat >"$PLAY_A_CONFIG_FILE" <<EOF
+{"Sample":{"InstanceName":"play-a","MeshEndpoint":"${PLAY_A_MESH_ENDPOINT}","PeerMeshEndpoints":[],"ApiChannelPeerEndpoints":["${API_A_CHANNEL_ENDPOINT}","${API_B_CHANNEL_ENDPOINT}"],"PlayEndpoint":"${PLAY_A_ENDPOINT}","PlayEndpoints":["${PLAY_A_ENDPOINT}","${PLAY_B_ENDPOINT}"],"RedisEndpoint":"${REDIS_ENDPOINT}","RedisKeyPrefix":"${TICTACTOE_REDIS_KEY_PREFIX}","LogDirectory":"${SAMPLE_LOG_DIR}"}}
+EOF
+cat >"$PLAY_B_CONFIG_FILE" <<EOF
+{"Sample":{"InstanceName":"play-b","MeshEndpoint":"${PLAY_B_MESH_ENDPOINT}","PeerMeshEndpoints":["${PLAY_A_MESH_ENDPOINT}"],"ApiChannelPeerEndpoints":["${API_A_CHANNEL_ENDPOINT}","${API_B_CHANNEL_ENDPOINT}"],"PlayEndpoint":"${PLAY_B_ENDPOINT}","PlayEndpoints":["${PLAY_A_ENDPOINT}","${PLAY_B_ENDPOINT}"],"RedisEndpoint":"${REDIS_ENDPOINT}","RedisKeyPrefix":"${TICTACTOE_REDIS_KEY_PREFIX}","LogDirectory":"${SAMPLE_LOG_DIR}"}}
+EOF
+cat >"$CLIENT_CONFIG_FILE" <<EOF
+{"Sample":{"ApiPublicUrls":["${API_A_PUBLIC_URL}"],"LogDirectory":"${SAMPLE_LOG_DIR}"}}
+EOF
 
 endpoint_host() {
   local endpoint="$1"

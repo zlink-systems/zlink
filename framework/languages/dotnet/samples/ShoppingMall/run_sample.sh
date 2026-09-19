@@ -284,51 +284,21 @@ WORKFLOW_B_CONFIG_FILE="${RUN_DIR}/appsettings.workflow-b.json"
 API_A_CONFIG_FILE="${RUN_DIR}/appsettings.api-a.json"
 API_B_CONFIG_FILE="${RUN_DIR}/appsettings.api-b.json"
 CLIENT_CONFIG_FILE="${RUN_DIR}/appsettings.client.json"
-python3 - "${WORKFLOW_A_CONFIG_FILE}" "${WORKFLOW_B_CONFIG_FILE}" "${API_A_CONFIG_FILE}" "${API_B_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}" <<PY
-import json
-import sys
-
-settings = {
-    "LogDirectory": "${SHOPPINGMALL_LOG_DIR}",
-    "RedisEndpoint": "${SHOPPINGMALL_REDIS_ENDPOINT}",
-    "RedisKeyPrefix": "${SHOPPINGMALL_REDIS_KEY_PREFIX}",
-    "ApiAHttpUrl": "${SHOPPINGMALL_API_A_HTTP_URL}",
-    "ApiBHttpUrl": "${SHOPPINGMALL_API_B_HTTP_URL}",
-    "WorkflowAHttpUrl": "${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}",
-    "WorkflowBHttpUrl": "${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}",
-    "ApiAMeshEndpoint": "${SHOPPINGMALL_API_A_MESH_ENDPOINT}",
-    "ApiBMeshEndpoint": "${SHOPPINGMALL_API_B_MESH_ENDPOINT}",
-    "WorkflowAMeshEndpoint": "${SHOPPINGMALL_WORKFLOW_A_MESH_ENDPOINT}",
-    "WorkflowBMeshEndpoint": "${SHOPPINGMALL_WORKFLOW_B_MESH_ENDPOINT}",
-}
-common = {
-    "LogDirectory": settings["LogDirectory"],
-    "RedisEndpoint": settings["RedisEndpoint"],
-    "RedisKeyPrefix": settings["RedisKeyPrefix"],
-}
-roles = [
-    # Each workflow needs BOTH mesh endpoints: its own to listen on and its peer's to connect to.
-    {**common, "InstanceId": "workflow-a", "WorkflowAHttpUrl": settings["WorkflowAHttpUrl"],
-     "WorkflowAMeshEndpoint": settings["WorkflowAMeshEndpoint"],
-     "WorkflowBMeshEndpoint": settings["WorkflowBMeshEndpoint"]},
-    {**common, "InstanceId": "workflow-b", "WorkflowBHttpUrl": settings["WorkflowBHttpUrl"],
-     "WorkflowBMeshEndpoint": settings["WorkflowBMeshEndpoint"],
-     "WorkflowAMeshEndpoint": settings["WorkflowAMeshEndpoint"]},
-    {**common, "InstanceId": "api-a", "ApiAHttpUrl": settings["ApiAHttpUrl"],
-     "ApiAMeshEndpoint": settings["ApiAMeshEndpoint"]},
-    {**common, "InstanceId": "api-b", "ApiBHttpUrl": settings["ApiBHttpUrl"],
-     "ApiBMeshEndpoint": settings["ApiBMeshEndpoint"]},
-]
-for path, role in zip(sys.argv[1:-1], roles):
-    with open(path, "w", encoding="utf-8") as output:
-        json.dump({"Sample": role}, output, indent=2)
-with open(sys.argv[-1], "w", encoding="utf-8") as output:
-    json.dump({"Client": {
-        "LogDirectory": "${SHOPPINGMALL_LOG_DIR}",
-        "ApiAHttpUrl": "${SHOPPINGMALL_API_A_HTTP_URL}",
-        "ApiBHttpUrl": "${SHOPPINGMALL_API_B_HTTP_URL}",
-    }}, output, indent=2)
-PY
+cat >"$WORKFLOW_A_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SHOPPINGMALL_LOG_DIR}","RedisEndpoint":"${SHOPPINGMALL_REDIS_ENDPOINT}","RedisKeyPrefix":"${SHOPPINGMALL_REDIS_KEY_PREFIX}","InstanceId":"workflow-a","WorkflowAHttpUrl":"${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}","WorkflowAMeshEndpoint":"${SHOPPINGMALL_WORKFLOW_A_MESH_ENDPOINT}","WorkflowBMeshEndpoint":"${SHOPPINGMALL_WORKFLOW_B_MESH_ENDPOINT}"}}
+EOF
+cat >"$WORKFLOW_B_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SHOPPINGMALL_LOG_DIR}","RedisEndpoint":"${SHOPPINGMALL_REDIS_ENDPOINT}","RedisKeyPrefix":"${SHOPPINGMALL_REDIS_KEY_PREFIX}","InstanceId":"workflow-b","WorkflowBHttpUrl":"${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}","WorkflowBMeshEndpoint":"${SHOPPINGMALL_WORKFLOW_B_MESH_ENDPOINT}","WorkflowAMeshEndpoint":"${SHOPPINGMALL_WORKFLOW_A_MESH_ENDPOINT}"}}
+EOF
+cat >"$API_A_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SHOPPINGMALL_LOG_DIR}","RedisEndpoint":"${SHOPPINGMALL_REDIS_ENDPOINT}","RedisKeyPrefix":"${SHOPPINGMALL_REDIS_KEY_PREFIX}","InstanceId":"api-a","ApiAHttpUrl":"${SHOPPINGMALL_API_A_HTTP_URL}","ApiAMeshEndpoint":"${SHOPPINGMALL_API_A_MESH_ENDPOINT}"}}
+EOF
+cat >"$API_B_CONFIG_FILE" <<EOF
+{"Sample":{"LogDirectory":"${SHOPPINGMALL_LOG_DIR}","RedisEndpoint":"${SHOPPINGMALL_REDIS_ENDPOINT}","RedisKeyPrefix":"${SHOPPINGMALL_REDIS_KEY_PREFIX}","InstanceId":"api-b","ApiBHttpUrl":"${SHOPPINGMALL_API_B_HTTP_URL}","ApiBMeshEndpoint":"${SHOPPINGMALL_API_B_MESH_ENDPOINT}"}}
+EOF
+cat >"$CLIENT_CONFIG_FILE" <<EOF
+{"Client":{"LogDirectory":"${SHOPPINGMALL_LOG_DIR}","ApiAHttpUrl":"${SHOPPINGMALL_API_A_HTTP_URL}","ApiBHttpUrl":"${SHOPPINGMALL_API_B_HTTP_URL}"}}
+EOF
 
 start_server workflow-a "${SCRIPT_DIR}/Server/OrderWorkflow/ShoppingMall.OrderWorkflow.csproj" --config "${WORKFLOW_A_CONFIG_FILE}"
 wait_port workflow-a-mesh "${SHOPPINGMALL_WORKFLOW_A_MESH_ENDPOINT}"

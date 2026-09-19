@@ -133,7 +133,7 @@ zlink_redis_port_is_available() {
 
 # Reserves `count` distinct free ports in the samples' shared ephemeral range for one run's
 # role endpoints. Same best-effort guarantee as zlink_redis_port_is_available above -- ports
-# are checked one at a time and not held, where the Python version this replaced held all of
+# are checked one at a time and not held, where the former implementation held all of
 # a batch's sockets open until every port in it was found. Prints them space-separated.
 zlink_sample_pick_ports() {
   local count="$1"
@@ -158,7 +158,7 @@ zlink_sample_pick_ports() {
 
 # Reads one scalar field out of a JSON document: quoted strings come back unquoted, and
 # null/true/false/numbers come back as their literal token text (a null is the string "null",
-# not empty -- callers that need Python's `or ""`/`or None` fallback do that themselves). This
+# not empty -- callers that need an empty/null fallback do that themselves). This
 # is a text search, not a parser: every caller passes a document this same sample's own typed
 # JSON serializer produced, for a field name that appears once in it, never third-party or
 # adversarial JSON. Returns non-zero and prints nothing if the field is absent.

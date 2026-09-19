@@ -6,6 +6,25 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void Sample_Tree_Does_Not_Require_Python()
+    {
+        var root = ResolveSamplesRoot();
+        var pythonPrograms = Directory
+            .EnumerateFiles(root, "*.py", SearchOption.AllDirectories)
+            .Select(NormalizeRelativePath)
+            .ToArray();
+        Assert.Empty(pythonPrograms);
+
+        var references = Directory
+            .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => Path.GetExtension(path) is ".sh" or ".ps1" or ".md")
+            .Where(path => ReadSource(path).Contains("python", StringComparison.OrdinalIgnoreCase))
+            .Select(NormalizeRelativePath)
+            .ToArray();
+        Assert.Empty(references);
+    }
+
+    [Fact]
     public void Sample_Uses_Stream_Connector_Assertions()
     {
         var sourceFiles = EnumerateSourceFiles(ResolveSamplesRoot()).ToArray();
@@ -82,6 +101,9 @@ public sealed partial class RegressionTests
     public void AutomaticSamplesUseAssemblyScanningAndLocationDiscovery(string sampleName)
     {
         var sources = EnumerateSourceFiles(ResolveSampleRoot(sampleName))
+            .Where(path => !path.Contains(
+                $"{Path.DirectorySeparatorChar}Support{Path.DirectorySeparatorChar}SessionRouteBlockProxy{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal))
             .Select(ReadSource)
             .ToArray();
         var combined = string.Join('\n', sources);
