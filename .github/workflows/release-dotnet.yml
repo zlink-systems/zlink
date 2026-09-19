@@ -29,12 +29,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  release-dotnet:
+  resolve-dotnet-binding:
     # nuget.org's zlink-dotnet-release Trusted Publishing policy is bound to this
     # workflow file name, so both the binding and the framework .NET packages
     # are pushed from here (one job each).
     if: startsWith(github.ref_name, 'dotnet/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'binding')
-    name: Build and publish .NET binding
+    name: Resolve .NET binding release inputs
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -78,11 +78,66 @@ jobs:
           echo "core_version=${core_version}" >> "${GITHUB_OUTPUT}"
           echo "core_tag=core/v${core_version}" >> "${GITHUB_OUTPUT}"
 
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      core_version: ${{ steps.versions.outputs.core_version }}
+      core_tag: ${{ steps.versions.outputs.core_tag }}
+
+  prepare-dotnet-windows-native:
+    name: Prepare .NET Windows native runtime
+    runs-on: windows-2022
+    needs: resolve-dotnet-binding
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch the verified Windows x64 Core release
+        shell: pwsh
+        run: |
+          $corePrefix = (& .\scripts\local-package\core\fetch-release.ps1 `
+            -Version "${{ needs.resolve-dotnet-binding.outputs.core_version }}" `
+            -Platform windows-x64 `
+            -CacheDir (Join-Path $env:RUNNER_TEMP "zlink-core") |
+              Select-Object -Last 1).Trim()
+          if (-not (Test-Path -LiteralPath $corePrefix -PathType Container)) {
+            throw "Core release prefix was not created: $corePrefix"
+          }
+
+          $nativeDlls = @(
+            @(
+              (Join-Path $corePrefix "bin\zlink.dll"),
+              (Join-Path $corePrefix "lib\zlink.dll")
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+          )
+          if ($nativeDlls.Count -ne 1) {
+            throw "Expected exactly one zlink.dll in bin or lib under $corePrefix"
+          }
+
+          $nativeRoot = Join-Path $env:RUNNER_TEMP "dotnet-win-x64-native"
+          New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
+          Copy-Item -LiteralPath $nativeDlls[0] -Destination (Join-Path $nativeRoot "zlink.dll")
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: binding-dotnet-windows-native-${{ needs.resolve-dotnet-binding.outputs.version }}
+          path: ${{ runner.temp }}/dotnet-win-x64-native
+          if-no-files-found: error
+
+  release-dotnet:
+    # nuget.org's zlink-dotnet-release Trusted Publishing policy is bound to this
+    # workflow file name, so both the binding and the framework .NET packages
+    # are pushed from here (one job each).
+    name: Build and publish .NET binding
+    runs-on: ubuntu-24.04
+    needs: [resolve-dotnet-binding, prepare-dotnet-windows-native]
+    if: needs.resolve-dotnet-binding.result == 'success' && needs.prepare-dotnet-windows-native.result == 'success'
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Validate exact Core release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          CORE_TAG: ${{ steps.versions.outputs.core_tag }}
+          CORE_TAG: ${{ needs.resolve-dotnet-binding.outputs.core_tag }}
         run: |
           api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${CORE_TAG}"
           status=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -108,7 +163,7 @@ jobs:
         id: dotnet-core
         shell: bash
         env:
-          ZLINK_CORE_RELEASE_VERSION: ${{ steps.versions.outputs.core_version }}
+          ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve-dotnet-binding.outputs.core_version }}
           ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
           core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
@@ -117,6 +172,12 @@ jobs:
             --cache-dir "${ZLINK_CORE_CACHE_DIR}")
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
 
+      - name: Download Windows x64 native runtime
+        uses: actions/download-artifact@v6
+        with:
+          name: binding-dotnet-windows-native-${{ needs.resolve-dotnet-binding.outputs.version }}
+          path: ${{ runner.temp }}/dotnet-win-x64-native
+
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
@@ -124,7 +185,7 @@ jobs:
       - name: Build, test, and pack
         env:
           CI: true
-          ZLINK_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib/libzlink.so.${{ steps.versions.outputs.core_version }}
+          ZLINK_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib/libzlink.so.${{ needs.resolve-dotnet-binding.outputs.core_version }}
           LD_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib
         run: |
           dotnet build bindings/dotnet/src/Zlink/Zlink.csproj -c Release
@@ -133,12 +194,15 @@ jobs:
           dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release \
             -p:PackageOutputPath="${GITHUB_WORKSPACE}/dist/dotnet" \
             -p:ZLinkLinuxX64NativeRoot="${{ steps.dotnet-core.outputs.prefix }}/lib" \
-            -p:ZLinkCoreVersion="${{ steps.versions.outputs.core_version }}" \
+            -p:ZLinkWindowsX64NativeRoot="${{ runner.temp }}/dotnet-win-x64-native" \
+            -p:ZLinkCoreVersion="${{ needs.resolve-dotnet-binding.outputs.core_version }}" \
             -p:ZLinkCoreProvenancePath="${{ steps.dotnet-core.outputs.prefix }}/share/zlink/core-package-provenance.json"
+          unzip -l "dist/dotnet/Zlink.${{ needs.resolve-dotnet-binding.outputs.version }}.nupkg" \
+            | grep -F 'runtimes/win-x64/native/zlink.dll'
 
       - uses: actions/upload-artifact@v6
         with:
-          name: binding-dotnet-${{ steps.versions.outputs.version }}
+          name: binding-dotnet-${{ needs.resolve-dotnet-binding.outputs.version }}
           path: |
             dist/dotnet/*.nupkg
             dist/dotnet/*.snupkg
