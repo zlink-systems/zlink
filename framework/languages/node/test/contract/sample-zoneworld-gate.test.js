@@ -176,6 +176,11 @@ test('ZoneWorld applies the Node sample configuration policy without environment
     recursive: true,
     withFileTypes: true
   }).filter((entry) => entry.isFile() && /\.(?:ts|mjs|sh)$/.test(entry.name))
+    // The policy covers the sample's own server, client and runner sources. `scripts/`
+    // is the host tooling that deliberately owns process.env (bb82ed2953), and
+    // node_modules/dist exist only after a package-mode install or a build.
+    .filter((entry) => !/(?:^|[\\/])(?:node_modules|dist|scripts)(?:[\\/]|$)/.test(
+      path.relative(path.join(nodeRoot, 'samples/ZoneWorld'), entry.parentPath)))
     .map((entry) => read(path.join(entry.parentPath, entry.name).slice(nodeRoot.length + 1)))
     .join('\n');
 
