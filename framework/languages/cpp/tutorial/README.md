@@ -93,7 +93,9 @@ with the first request that the two processes are connected over the mesh. Handl
 logs go to **stderr**.
 
 ```bash title="linux"
-docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+redis_name="zlink-redis-$$"
+docker run -d --rm --name "${redis_name}" -p 127.0.0.1:6379:6379 redis:7-alpine
+printf '%s\n' "${redis_name}" > redis.container
 ./build/tutorial_server > server.log 2>&1 &
 ./build/tutorial_client > client.log 2>&1 &
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile && break; sleep 1; done
@@ -130,7 +132,8 @@ docker stop zlink-tutorial-redis
 
 ```bash
 pkill -f build/tutorial_server; pkill -f build/tutorial_client
-docker stop zlink-tutorial-redis
+redis_name="$(cat redis.container)"
+case "${redis_name}" in zlink-redis-[0-9]*) docker rm -f "${redis_name}" ;; esac
 ```
 
 The ports differ from the .NET tutorial so both can run on one machine.

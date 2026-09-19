@@ -45,13 +45,13 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 샘플마다 따로 설치한다.
 
 ```bash title="linux"
-cd Bingo.Ts
+cd TicTacToe.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
 
 ```powershell title="windows"
-Set-Location Bingo.Ts
+Set-Location TicTacToe.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
@@ -89,11 +89,11 @@ Linux·WSL에는 별도 빌드 단계가 없다 — 아래 「실행」의 `run_
 하나를 실행한다. 이 디렉터리에서 그대로 호출한다.
 
 ```bash title="linux"
-./Bingo.Ts/run_sample.sh
+./TicTacToe.Ts/run_sample.sh
 ```
 
 ```powershell title="windows"
-./Bingo.Ts/run_sample.ps1
+./TicTacToe.Ts/run_sample.ps1
 ```
 
 일곱 개를 모두 확인하려면 호출도 일곱 번이다. 경로의 `Bingo.Ts` 자리에 `DeliveryDispatch.Ts`,
@@ -112,7 +112,7 @@ self-check와 정리를 모두 스스로 담당한다 — Redis를 미리 띄워
 각 runner는 성공하면 표준 출력 마지막 줄에 `PASS <Sample>`을 찍고 종료 코드 `0`으로 끝난다.
 
 ```
-PASS Bingo.Ts
+PASS TicTacToe.Ts
 ```
 
 실패하면 `PASS`가 나오지 않고, 실패한 역할과 검증 항목을 표준 오류에 남긴 뒤 0이 아닌 종료

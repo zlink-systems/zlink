@@ -45,13 +45,13 @@ resolves `@zlink-systems/*` from the npm registry at the version that sample pin
 an npm workspace, so install each one separately.
 
 ```bash title="linux"
-cd Bingo.Ts
+cd TicTacToe.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```
 
 ```powershell title="windows"
-Set-Location Bingo.Ts
+Set-Location TicTacToe.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```
@@ -88,11 +88,11 @@ Each sample has a `run_sample.sh` (Linux/WSL) and `run_sample.ps1` (Windows); on
 one sample. Call it from this directory as-is.
 
 ```bash title="linux"
-./Bingo.Ts/run_sample.sh
+./TicTacToe.Ts/run_sample.sh
 ```
 
 ```powershell title="windows"
-./Bingo.Ts/run_sample.ps1
+./TicTacToe.Ts/run_sample.ps1
 ```
 
 Checking all seven means seven invocations. Put `DeliveryDispatch.Ts`, `GameQuest.Ts`,
@@ -112,7 +112,7 @@ For example, Bingo's full client flow can be seen in
 Every runner prints `PASS <Sample>` as the last line of standard output and exits `0` on success.
 
 ```
-PASS Bingo.Ts
+PASS TicTacToe.Ts
 ```
 
 On failure there is no `PASS` line; the runner writes the failing role and the check that failed
