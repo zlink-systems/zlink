@@ -793,6 +793,12 @@ struct lease_target_reply_t
     std::string node_rid;
 };
 
+struct user_spot_delivery_probe_t
+{
+    static constexpr const char *packet_name = "user-spot-delivery-probe";
+    int value{};
+};
+
 void to_json (nlohmann::json &json, const auto_connect_request_t &value)
 {
     json = nlohmann::json{{"value", value.value}};
@@ -855,6 +861,16 @@ void to_json (nlohmann::json &json, const lease_target_reply_t &value)
 void from_json (const nlohmann::json &json, lease_target_reply_t &value)
 {
     value.node_rid = json.at ("nodeRid").get<std::string> ();
+}
+
+void to_json (nlohmann::json &json, const user_spot_delivery_probe_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+
+void from_json (const nlohmann::json &json, user_spot_delivery_probe_t &value)
+{
+    value.value = json.at ("value").get<int> ();
 }
 
 class auto_connect_request_handler_t
@@ -1136,7 +1152,18 @@ class local_user_spot_t final
     {
         return _context;
     }
-    void configure () override {}
+    void configure () override
+    {
+        _context.handlers ().add_handler<&local_user_spot_t::handle> (
+          user_spot_delivery_probe_t::packet_name);
+    }
+
+    void handle (const user_spot_delivery_probe_t &message)
+    {
+        last_delivery.store (message.value, std::memory_order_release);
+    }
+
+    static inline std::atomic_int last_delivery{0};
 
   private:
     zlink::framework::spot_context_t _context;
@@ -1521,6 +1548,84 @@ class user_spot_manager_client_t final
                 co_return;
             }
             observed = true;
+        }
+        catch (const std::exception &error) {
+            last_error = error.what ();
+        }
+        _app->stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    bool observed = false;
+    std::string last_error;
+
+  private:
+    zlink::framework::app_t *_app;
+};
+
+class successive_user_spot_delivery_client_t final
+    : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit successive_user_spot_delivery_client_t (
+      zlink::framework::app_t &app) :
+        _app (&app)
+    {
+    }
+
+    zlink::framework::task_t<void> start (
+      zlink::framework::service_provider_t &services) override
+    {
+        try {
+            auto &manager =
+              services.get_required<zlink::framework::spot_manager_t> ();
+            for (const auto *id : {"fence-first", "fence-second"}) {
+                const auto created =
+                  manager
+                    .get_or_create (zlink::framework::spot_id_t (id), "room")
+                    .in_mesh ("spot-fence-mesh")
+                    .timeout (std::chrono::seconds (2))
+                    .async ()
+                    .result ();
+                if (!created) {
+                    last_error = created.error ()
+                                   ? created.error ()->what ()
+                                   : "User Spot create failed";
+                    _app->stop ();
+                    co_return;
+                }
+            }
+
+            auto route = _app->advanced ().zlink ().route_client (
+              services.get_required<zlink::framework::serializer_registry_t> ());
+            const auto submitted =
+              route
+                .send_to_spot (zlink::framework::spot_id_t ("fence-second"),
+                               user_spot_delivery_probe_t{42})
+                .async ()
+                .result ();
+            if (!submitted) {
+                last_error = submitted.error ()
+                               ? submitted.error ()->what ()
+                               : "User Spot delivery submission failed";
+                _app->stop ();
+                co_return;
+            }
+            const auto deadline =
+              std::chrono::steady_clock::now () + std::chrono::seconds (2);
+            while (local_user_spot_t::last_delivery.load (
+                     std::memory_order_acquire)
+                     != 42
+                   && std::chrono::steady_clock::now () < deadline) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            }
+            observed = local_user_spot_t::last_delivery.load (
+                         std::memory_order_acquire)
+                       == 42;
+            if (!observed)
+                last_error = "The second User Spot rejected its current authority fence";
         }
         catch (const std::exception &error) {
             last_error = error.what ();
@@ -2819,6 +2924,39 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     });
     auto service =
       std::make_unique<user_spot_manager_client_t> (app);
+    client = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    EXPECT_EQ (0, app.run (0, nullptr));
+    ASSERT_NE (nullptr, client);
+    EXPECT_TRUE (client->observed) << client->last_error;
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      SuccessiveUserSpotAcceptsItsCurrentAuthorityFence)
+{
+    local_user_spot_t::last_delivery.store (0, std::memory_order_release);
+    auto store = std::make_shared<in_memory_location_store_t> ();
+    auto app = zlink::framework::app_t::create ();
+    successive_user_spot_delivery_client_t *client = nullptr;
+    const auto endpoint =
+      std::string ("tcp://127.0.0.1:")
+      + std::to_string (bindable_loopback_port (29723));
+
+    app.add_zlink_framework ([&] (
+                               zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
+        options.add_route_mesh ("spot-fence-mesh")
+          .set_routing_id (zlink::routing_id_t::from ("spot-fence-node"))
+          .listen (endpoint)
+          .add_spot_factory<local_user_spot_t> (
+            "room", [] (zlink::framework::spot_context_t context) {
+                return std::make_shared<local_user_spot_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); });
+    });
+    auto service =
+      std::make_unique<successive_user_spot_delivery_client_t> (app);
     client = service.get ();
     app.add_hosted_service (std::move (service));
 
