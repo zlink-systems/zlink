@@ -93,17 +93,19 @@ with the first request that the two processes are connected over the mesh. Handl
 logs go to **stderr**.
 
 ```bash title="linux"
-docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine && until docker exec zlink-tutorial-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 ./build/tutorial_server > server.log 2>&1 &
 ./build/tutorial_client > client.log 2>&1 &
-for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile && break; sleep 1; done
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
+curl -sf http://127.0.0.1:5180/players/p1/profile
 ```
 
 ```powershell title="windows"
-docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
 Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
 Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
+if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
 $answer
 ```
 

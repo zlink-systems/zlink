@@ -85,8 +85,7 @@ Redis가 필요하다(Spot 단계가 쓴다). runner가 따로 없으므로 이 
 일을 자동으로 하도록 백그라운드로 띄우고 PID를 파일에 남긴다.
 
 ```bash title="linux"
-docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
-sleep 1
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine && until docker exec zlink-tutorial-node-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 npm run server > server.log 2>&1 &
 echo $! > server.pid
 npm run client > client.log 2>&1 &
@@ -94,8 +93,7 @@ echo $! > client.pid
 ```
 
 ```powershell title="windows"
-docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
-Start-Sleep -Seconds 1
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-node-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
 $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
 Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
