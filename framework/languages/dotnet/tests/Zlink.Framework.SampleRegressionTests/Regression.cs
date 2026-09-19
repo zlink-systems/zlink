@@ -772,7 +772,6 @@ public sealed partial class RegressionTests
         Assert.Contains("Disconnected", actor, StringComparison.Ordinal);
 
         Assert.Contains("OnDisconnectedAsync", session, StringComparison.Ordinal);
-        Assert.Contains("NotifyDisconnectedAsync", session, StringComparison.Ordinal);
     }
 
     [Fact]

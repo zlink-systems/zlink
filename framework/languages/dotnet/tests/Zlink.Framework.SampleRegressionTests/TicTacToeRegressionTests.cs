@@ -194,6 +194,29 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
+    public void TicTacToe_Play_And_Api_Comments_Agree_With_Fixed_Routing_Id_Code()
+    {
+        // Contract §10.1: the runner must name the expected peer, which needs a fixed RID on
+        // the object-role RouteMesh node. The dotnet topology spec confirms fixed RID is allowed
+        // on an object-role MeshNode, so neither PlayServer.cs's nor ApiServer.cs's comment may
+        // claim the opposite of what SetRoutingId already does on that same node.
+        var sampleRoot = ResolveSampleRoot("TicTacToe");
+        var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
+        var apiServer = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServer.cs"));
+
+        foreach (var source in new[] { playServer, apiServer })
+        {
+            Assert.Contains(
+                ".SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))",
+                source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("revert to automatic RID", source, StringComparison.Ordinal);
+            Assert.DoesNotContain(".NET cannot", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("known spec deviation", source, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void TicTacToe_Registers_Stateful_Actor_Relocation_Adapter()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");

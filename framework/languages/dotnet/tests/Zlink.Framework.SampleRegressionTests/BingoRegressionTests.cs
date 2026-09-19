@@ -224,6 +224,23 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
+    public void Bingo_Session_Disconnect_Does_Not_Iterate_Bound_Actors_Or_Notify()
+    {
+        // Contract §7.5: "Session callback이 Actor를 순회하거나 binding을 직접 제거하지 않는다."
+        // Framework already merges duplicate disconnect notifications; the sample only records
+        // lifecycle evidence, matching Node's reference session (bingo-session.ts).
+        var sampleRoot = ResolveSampleRoot("Bingo");
+        var session = ReadSource(Path.Combine(
+            sampleRoot, "Server", "Session", "Sessions", "BingoSession.cs"));
+
+        Assert.DoesNotContain("NotifyDisconnectedAsync", session, StringComparison.Ordinal);
+        Assert.Contains(
+            "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
+            session,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bingo_Runner_Uses_Isolated_Docker_Redis()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
