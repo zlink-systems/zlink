@@ -375,9 +375,6 @@ function Invoke-ZlinkSampleGradleBuild {
         if ($gradleExitCode -ne 0) {
             throw "Gradle build failed: $($Arguments -join ' ')"
         }
-        if ($Arguments -match ':installDist$') {
-            Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
-        }
     } finally {
         if ($temporarySettingsPath) {
             Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
