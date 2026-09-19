@@ -5,7 +5,7 @@
 기능별 가이드가 코드를 읽어 가는 프로그램이다. 장을 하나씩 따라가면 이 프로그램이 그
 순서대로 커진다. `.NET Tutorial`을 C++로 옮긴 것이며, Channel 메시징 네 가지(RouteMesh
 요청·단방향, node 직접 호출, ClientServer, Fanout), handler filter, runtime weight 변경, Spot,
-Actor, Location, STREAM을 담는다.
+Actor, Location, STREAM, HTTP client를 담는다.
 
 이 디렉터리는 저장소 없이 닫힌다. 아래 절차는 GitHub Release에 공개된 Core·binding·framework
 아카이브와 vcpkg만 사용하며, zlink 저장소를 clone하지 않는다.
@@ -115,8 +115,8 @@ curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json'
 curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
-STREAM 단계의 외부 client는 세 번째 실행 파일이다. Server가 떠 있는 상태에서 실행하면
-자기 검증을 마치고 종료한다 — [검증](#검증) 블록이 실행한다.
+STREAM 단계의 외부 client는 세 번째 실행 파일이다. HTTP client 단계의 외부 client는 네 번째
+실행 파일이다. 두 프로그램은 Server와 Client가 떠 있는 상태에서 자기 검증을 마치고 종료한다.
 
 정리는 process 둘과 Redis 컨테이너를 내리는 것이다.
 
@@ -148,7 +148,7 @@ docker stop zlink-tutorial-redis
 | 단계 | 성공의 증거 |
 |---|---|
 | `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap done. Next: cmake --build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
-| 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client` 세 실행 파일이 있다 |
+| 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client`·`tutorial_http_client` 네 실행 파일이 있다 |
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
 | Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
@@ -200,10 +200,12 @@ Write-Output 'tutorial-stream=ok'
 | `Server` | channel handler와 node 직접 호출 handler를 실행하고, filter를 건다. 운영 endpoint 하나를 위해 HTTP도 연다 |
 | `Client` | HTTP를 받아 mesh로 호출한다 |
 | `StreamClient` | mesh 밖의 client. framework가 아니라 connector만 링크한다 |
+| `HttpClient` | mesh 밖의 client. framework가 아니라 http-client package만 링크한다 |
 | `bootstrap.cmake` | 공개 아카이브로 framework를 설치하고 이 프로젝트를 구성한다 |
 
-`CMakeLists.txt`는 `find_package(zlink_framework CONFIG REQUIRED)` 하나로 세 실행 파일을
-만든다. 자기 프로젝트에 옮길 때는 `CMAKE_PREFIX_PATH`에 `.zlink/install`을 주면 된다.
+`CMakeLists.txt`는 `find_package(zlink_framework CONFIG REQUIRED)`와
+`find_package(zlink_http_client_cpp CONFIG REQUIRED)`로 네 실행 파일을 만든다. 자기 프로젝트에
+옮길 때는 `CMAKE_PREFIX_PATH`에 `.zlink/install`을 주면 된다.
 
 ## 단계별 확인
 
@@ -355,7 +357,7 @@ explicit channel_weight_handler_t (fw::route_mesh_runtime_options_t &mesh) : _me
 열며, port는 Client의 5180과 겹치지 않게 5181을 쓴다.
 
 ```console
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
 HTTP/1.1 200 OK
 Content-Type: application/json
 X-Correlation-Id: http-1
@@ -363,7 +365,7 @@ Content-Length: 32
 
 {"channel":"profile","weight":0}
 
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
 HTTP/1.1 200 OK
 Content-Type: application/json
 X-Correlation-Id: http-2
@@ -427,15 +429,15 @@ Content-Length: 0
 거절되는 경우는 다음과 같다.
 
 ```console
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight'
 HTTP/1.1 400 Bad Request
 {"error":"value is required"}
 
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/nope/weight?value=100'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/nope/weight?value=100'
 HTTP/1.1 400 Bad Request
 {"correlationId":"http-4","error":"protocol_error","message":"RouteMesh channel is not configured: nope"}
 
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=99999'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=99999'
 HTTP/1.1 400 Bad Request
 {"correlationId":"http-5","error":"protocol_error","message":"channel weight must be in range 0..10000"}
 ```
@@ -577,6 +579,62 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 - **connector는 manual dispatch로 열었다.** 그래야 wait를 걸기 전에 도착한 push가 버려지지
   않고 큐에 남는다.
 
+### 12. HTTP client
+
+`HttpClient`는 mesh 밖에서 실행되며 `zlink::http_client` package만 링크한다. 이 예제는
+CLI이므로 `submit<T>().result()`와 `fetch<T>()`를 사용해 blocking 방식으로 완료한다. Server와
+Client를 실행한 상태에서 다음 명령으로 실행한다.
+
+```bash title="linux"
+./build/tutorial_http_client
+```
+
+```powershell title="windows"
+& .\build\Release\tutorial_http_client.exe
+```
+
+출력은 다음과 같다. 방 id와 다운로드 바이트 수는 실행마다 달라진다.
+
+```console
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room <실행 결과의 roomId> chat 202
+response kinds: typed 200 raw application/json fetch rookie
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 1 bytes <실행 결과의 bytes>
+upload stream: imported 3
+error kinds: bad request internal_failure connection refused unavailable
+```
+
+HTTP 표면에는 admin Basic auth, 옛 player 경로 redirect, room export/import NDJSON route가
+있다. admin 자격 증명은 tutorial에 설정 파일을 추가하지 않기 위해 `ops` /
+`tutorial-admin`으로 하드코딩되어 있다.
+
+```console
+$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=2'
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Basic realm="tutorial-admin"
+
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=2'
+HTTP/1.1 200 OK
+{"channel":"profile","weight":2}
+
+$ curl -i http://127.0.0.1:5180/player/p1
+HTTP/1.1 301 Moved Permanently
+Location: /players/p1
+
+$ curl http://127.0.0.1:5180/rooms/<room-id>/export
+{"roomId":"<room-id>"}
+{"message":"p2: hello"}
+
+$ curl -X POST http://127.0.0.1:5180/rooms/<room-id>/import \
+    -H 'Content-Type: application/x-ndjson' \
+    --data-binary $'{"playerId":"p1","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+{"imported":2}
+```
+
 ## 문서가 읽는 방식
 
 문서는 코드를 손으로 옮겨 적지 않고 이 파일들에서 구간을 읽는다. 구간은 소스의
@@ -647,6 +705,17 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `session-class` · `session-handler` · `session-actor-bind` · `session-actor-relay` | `Server/sessions/game_session.hpp` |
 | `stream-register` | `Server/main.cpp` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
+| `http-client-create` | `HttpClient/main.cpp` |
+| `http-first-request` | `HttpClient/main.cpp` |
+| `http-request-shaping` | `HttpClient/main.cpp` |
+| `http-json-body` | `HttpClient/main.cpp` |
+| `http-response-kinds` | `HttpClient/main.cpp` |
+| `http-compressed-response` | `HttpClient/main.cpp` |
+| `http-redirect` | `HttpClient/main.cpp` |
+| `http-basic-auth` | `HttpClient/main.cpp` |
+| `http-download-stream` | `HttpClient/main.cpp` |
+| `http-upload-stream` | `HttpClient/main.cpp` |
+| `http-error-kinds` | `HttpClient/main.cpp` |
 
 ## .NET tutorial과 달라진 지점
 
