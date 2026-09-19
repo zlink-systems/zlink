@@ -61,7 +61,11 @@ Kotlin tutorial이 같은 Gradle build 안 `../kotlin/`에 있다. 두 언어는
   `mesh.objects()`를 호출하지 않으면 node의 object role은 기본값 `NONE`으로 남고, C++의
   `set_object_role(object_role_t::none)`에 해당하는 것이 Java에서는 별도 호출이 아니라
   **호출하지 않는 것**이다. peer·ClientServer server·fanout publisher endpoint는 Store가
-  있어도 손으로 적는다.
+  있어도 손으로 적는다. 저장소 checkout 없이 Docker만 있으면 된다.
+
+  ```bash
+  docker run --rm -p 6379:6379 redis
+  ```
 
 ## 구성
 

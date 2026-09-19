@@ -183,7 +183,7 @@ start_zone() {
 if [[ "$B8_CHILD" == 1 ]]; then
   for spec in "zone-node-1:$mesh1" "zone-node-2:$mesh2" "gateway:$gateway_mesh"; do
     name=${spec%%:*}; port=${spec##*:}
-    start "proxy-$name" python3 "$ROOT_DIR/Support/session_route_block_proxy.py" \
+    start "proxy-$name" java "$ROOT_DIR/Support/SessionRouteBlockProxy.java" \
       --listen-host 127.0.0.1 --listen-port "$port" --target-host 127.0.0.2 --target-port "$port" \
       --arm-file "$RUN_DIR/b8-block-command-44"
     wait_log "proxy-$name" proxy-ready

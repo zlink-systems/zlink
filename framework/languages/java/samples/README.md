@@ -23,10 +23,12 @@ sample scenarios defined by the
 - **Docker and Redis.** Each sample run script starts and removes its own
   Redis container (`redis-common.ps1` / `runner-common.sh`); Docker must be
   running first.
-- **Python 3.** Every Linux `run_sample.sh` and the Windows ZoneWorld runner
-  (`ZoneWorld/run_sample.ps1`, the ZW-B8 fault proxy) invoke `python3`
-  (Linux) or a resolved `python` (Windows); see `PythonResolution.Tests.ps1`
-  for how Windows resolution is checked.
+
+No Python is required. The Linux port-reservation helper
+(`runner-common.sh`'s `zlink_sample_reserve_ports_in_range`) and the Windows
+ZoneWorld ZW-B8 fault proxy (`ZoneWorld/Support/SessionRouteBlockProxy.java`)
+both run as JDK single-file source programs (`java <file>.java ...`), so the
+JDK 25 above is the only runtime either one needs.
 
 ## Samples
 

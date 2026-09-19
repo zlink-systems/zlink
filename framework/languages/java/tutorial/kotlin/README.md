@@ -36,7 +36,11 @@ Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
   단계가 쓴다 — 방은 host가 아니라 id로 불리므로 지금 어느 node에 있는지를 Location Store에서
   읽는다. Channel 메시징만 볼 생각이면 Store 등록 두 자리와 `mesh.objects()` 호출을 빼면
   Redis 없이도 돈다. Fanout 구독자는 Store가 있어도 publisher endpoint를 직접 적는다
-  (`Server`의 `fanout-subscribe` 참고).
+  (`Server`의 `fanout-subscribe` 참고). 저장소 checkout 없이 Docker만 있으면 된다.
+
+  ```bash
+  docker run --rm -p 6379:6379 redis
+  ```
 
 ### Windows에서 실행할 때
 

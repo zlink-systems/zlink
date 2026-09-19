@@ -2,7 +2,8 @@
 
 # The samples run what Gradle built, so they must run it on the JDK Gradle
 # compiled with. gradle/zlink-jvm-runtime.sh owns that decision (#517).
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gradle/zlink-jvm-runtime.sh"
+ZLINK_SAMPLES_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ZLINK_SAMPLES_ROOT}/gradle/zlink-jvm-runtime.sh"
 zlink_jvm_require_toolchain_runtime || return 1
 
 zlink_sample_configure_port_pool() {
@@ -41,46 +42,7 @@ zlink_sample_reserve_ports_in_range() {
   local count="$1"
   local minimum="$2"
   local maximum="$3"
-  python3 - "${count}" "${minimum}" "${maximum}" <<'PY'
-import random
-import socket
-import sys
-
-count = int(sys.argv[1])
-minimum = int(sys.argv[2])
-maximum = int(sys.argv[3])
-if count < 1 or minimum < 1 or maximum > 65535 or minimum > maximum:
-    print("invalid JVM sample port allocation request", file=sys.stderr)
-    sys.exit(1)
-if count > maximum - minimum + 1:
-    print("JVM sample port pool is smaller than the requested allocation", file=sys.stderr)
-    sys.exit(1)
-
-sockets = []
-try:
-    candidates = list(range(minimum, maximum + 1))
-    random.SystemRandom().shuffle(candidates)
-    for port in candidates:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        sockets.append(sock)
-        if len(sockets) == count:
-            break
-    if len(sockets) != count:
-        print(
-            f"unable to bind-check {count} ports in {minimum}-{maximum}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  java "${ZLINK_SAMPLES_ROOT}/Support/ReservePorts.java" "${count}" "${minimum}" "${maximum}"
 }
 
 zlink_sample_reserve_ports() {
