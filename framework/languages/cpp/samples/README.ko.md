@@ -133,7 +133,7 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
-if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
+if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
 ```
 

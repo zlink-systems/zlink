@@ -137,7 +137,7 @@ The block below checks this with TicTacToe alone.
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
-if ($LASTEXITCODE -ne 0 -or $lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
+if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
 ```
 

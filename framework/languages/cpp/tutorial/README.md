@@ -101,8 +101,8 @@ for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile && br
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardError client.log
+Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
+Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 $answer
 ```
