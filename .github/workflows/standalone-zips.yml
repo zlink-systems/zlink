@@ -387,7 +387,7 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
-      - name: Unzip tutorial and Bingo.Ts sample
+      - name: Unzip tutorial and TicTacToe.Ts sample
         run: |
           set -euo pipefail
           unzip -q zips/zlink-tutorial-node.zip
@@ -482,6 +482,13 @@ jobs:
         working-directory: zlink-tutorial-java
         run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
 
+      - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
+        run: |
+          set -euo pipefail
+          redis_name="zlink-redis-$$"
+          docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
+          printf '%s\n' "${redis_name}" > zlink-tutorial-java/redis.container
+
       - name: Tutorial run (README's own 실행/linux block)
         working-directory: zlink-tutorial-java
         run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
@@ -501,6 +508,12 @@ jobs:
               esac
               kill -TERM -- "-${pgid}" 2>/dev/null || true
             done < .readme-step.pgids
+          fi
+          if [ -f redis.container ]; then
+            redis_name="$(cat redis.container)"
+            case "${redis_name}" in
+              zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
+            esac
           fi
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
@@ -682,6 +695,10 @@ jobs:
               kill -TERM -- "-${pgid}" 2>/dev/null || true
             done < .readme-step.pgids
           fi
+          # The C++ README run block names its container zlink-tutorial-redis
+          # (README convention shared with the windows block); the runner is
+          # ephemeral, so remove that fixed name here.
+          docker rm -f zlink-tutorial-redis 2>/dev/null || true
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-cpp

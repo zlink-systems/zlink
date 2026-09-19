@@ -65,6 +65,12 @@ CRLF_SUFFIXES = (".bat", ".cmd", ".ps1")
 EXECUTABLE_NAMES = ("gradlew",)
 EXECUTABLE_SUFFIXES = (".sh",)
 
+# ZIP의 DOS timestamp에는 timezone이 없다. Windows(KST)에서 만든 archive를
+# Ubuntu(UTC)에서 풀면 원본 시각이 9시간 미래가 되어 Ninja가 CMake manifest를
+# 계속 재생성한다. 모든 entry에 충분히 과거인 같은 시각을 써서 묶는 OS와
+# timezone에 무관하게 만들고, 산출물도 재현 가능하게 유지한다.
+ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
 TEXT_SUFFIXES = (
     ".bat", ".cmd", ".ps1", ".sh", ".cs", ".csproj", ".props", ".targets", ".sln",
     ".java", ".kt", ".kts", ".ts", ".js", ".json", ".toml", ".properties",
@@ -126,7 +132,7 @@ def pack(lang: str, section: str, ref: str,
             if excluded(section, lang, item.filename):
                 continue
             data = normalize(item.filename, source.read(item))
-            info = zipfile.ZipInfo(prefix + item.filename, date_time=item.date_time)
+            info = zipfile.ZipInfo(prefix + item.filename, date_time=ZIP_DATE_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             #  `ZipInfo.create_system`은 이 프로세스가 도는 OS로 기본값이 정해진다
             #  (Windows에서는 0=MS-DOS). 그러면 external_attr에 POSIX mode를 넣어도
