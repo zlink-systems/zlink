@@ -366,8 +366,9 @@ call has the same shape. No lock beforehand, no creation beforehand ([06](21-spo
 
 === "C++"
 
-    The C++ tutorial gains its match queue in a follow-up. This tab then reads
-    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+    ```
 
 === "Java"
 
@@ -455,8 +456,9 @@ blocks below are the tutorial's real code ([06](21-spot.en.md)).
 
 === "C++"
 
-    The C++ tutorial gains its match queue in a follow-up. This tab then reads
-    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+    ```
 
 === "Java"
 
@@ -615,8 +617,9 @@ Spot's state directly, with no partition, no offset and no distributed lock
 
 === "C++"
 
-    The C++ tutorial gains its match queue in a follow-up. This tab then reads
-    `framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler"
+    ```
 
 === "Java"
 

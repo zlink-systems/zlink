@@ -153,6 +153,7 @@ The ports differ from the .NET tutorial so both can run on one machine.
 | Build | the three executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client` exist |
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
 | Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |
+| Instance Spot | two requests for the same queue id return `waiting` 1, then 2 |
 | STREAM | `tutorial_stream_client` prints the four lines `connected: true` ... `pushed: speedy` and exits with 0 |
 
 The block below checks this against the processes the [Run](#run) block started: the first
@@ -174,7 +175,7 @@ if ($LASTEXITCODE -ne 0) { throw 'tutorial-stream failed' }
 Write-Output 'tutorial-stream=ok'
 ```
 
-[Step by step](#step-by-step) lists the request and expected output of all ten steps.
+[Step by step](#step-by-step) lists the request and expected output of all eleven steps.
 
 ## Troubleshooting
 
@@ -342,7 +343,25 @@ $ curl http://127.0.0.1:5180/rooms/9e78fd70-edee-47b4-8433-d1539862917f
 
 The Framework creates the id; the Location Store (Redis) records where it lives.
 
-### 8. Actor -- a player called by id
+### 8. Instance Spot -- a queue the first message creates
+
+There is no create call. The first message for an id makes the Framework create the queue,
+then handles that same message.
+
+```bash
+curl -X POST http://127.0.0.1:5180/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5180/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+The queue keeps what was added. Calling the same id again continues the count; use a new id
+to start over.
+
+### 9. Actor -- a player called by id
 
 The **caller** picks the id; creating the same id again returns the existing actor.
 
@@ -366,7 +385,7 @@ $ curl http://127.0.0.1:5180/players/p7
 Actors are made by `player_factory_t`, not by a constructor; one Entry Spot must be registered,
 and in C++ its `on_actor_join` admission callback is mandatory.
 
-### 9. Location -- where is it
+### 10. Location -- where is it
 
 Reads the Location Store only; nothing is sent to the target.
 
@@ -381,7 +400,7 @@ $ curl -i http://127.0.0.1:5180/locations/players/ghost
 HTTP/1.1 404 Not Found
 ```
 
-### 10. STREAM and the Session-Actor link
+### 11. STREAM and the Session-Actor link
 
 An external client attaches over TCP, linking the connector only.
 
@@ -443,6 +462,10 @@ the page together. Marker names match the .NET tutorial.
 | `object-server` · `spot-register` | `Server/main.cpp` |
 | `location-store-client` · `spot-client-register` | `Client/main.cpp` |
 | `spot-create-call` · `spot-message-call` · `spot-send-call` · `spot-request-call` | `Client/main.cpp` |
+| `instance-spot-contracts` | `Shared/contracts.hpp` |
+| `instance-spot-class` · `instance-spot-handler` | `Server/spots/match_queue.hpp` |
+| `instance-spot-register` | `Server/main.cpp` |
+| `instance-spot-call` | `Client/main.cpp` |
 | `location-find` | `Client/main.cpp` |
 | `actor-contracts` | `Shared/contracts.hpp` |
 | `actor-class` · `actor-factory` | `Server/actors/player.hpp` |

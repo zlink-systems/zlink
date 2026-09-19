@@ -8,6 +8,7 @@
 #include "actors/player.hpp"
 #include "spots/game_room.hpp"
 #include "spots/lobby_spot.hpp"
+#include "spots/match_queue.hpp"
 #include "sessions/game_session.hpp"
 
 #include <zlink/framework.hpp>
@@ -125,6 +126,13 @@ int main (int argc, char **argv)
           .add_spot_factory<game_room_t> ("game-room")
           .disable_relocation ();
         // --8<-- [end:spot-register]
+
+        // --8<-- [start:instance-spot-register]
+        // Registered the same way, but callers never create one explicitly.
+        objects
+          .add_instance_spot_factory<match_queue_t> ("match-queue")
+          .disable_relocation ();
+        // --8<-- [end:instance-spot-register]
 
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.

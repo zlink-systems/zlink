@@ -85,6 +85,21 @@ struct room_state_t
 };
 // --8<-- [end:spot-contracts]
 
+// --8<-- [start:instance-spot-contracts]
+// A match queue has no create call, so nothing here corresponds to open_room_t.
+struct join_match_queue_t
+{
+    static constexpr const char *packet_name = "JoinMatchQueue";
+    std::string player_id;
+};
+
+struct match_queue_status_t
+{
+    static constexpr const char *packet_name = "MatchQueueStatus";
+    int waiting;
+};
+// --8<-- [end:instance-spot-contracts]
+
 // --8<-- [start:actor-contracts]
 // Reaches the player's create callback rather than a handler.
 struct create_player_t
@@ -300,6 +315,26 @@ inline void from_json (const nlohmann::json &json, room_state_t &value)
 {
     value.title = json.value ("title", "");
     value.chat = json.value ("chat", std::vector<std::string>{});
+}
+
+inline void to_json (nlohmann::json &json, const join_match_queue_t &value)
+{
+    json = {{"playerId", value.player_id}};
+}
+
+inline void from_json (const nlohmann::json &json, join_match_queue_t &value)
+{
+    value.player_id = json.value ("playerId", "");
+}
+
+inline void to_json (nlohmann::json &json, const match_queue_status_t &value)
+{
+    json = {{"waiting", value.waiting}};
+}
+
+inline void from_json (const nlohmann::json &json, match_queue_status_t &value)
+{
+    value.waiting = json.value ("waiting", 0);
 }
 
 inline void to_json (nlohmann::json &json, const create_player_t &value)

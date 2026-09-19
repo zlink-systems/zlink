@@ -213,6 +213,34 @@ class get_room_state_http_handler_t
 // --8<-- [end:spot-request-call]
 // --8<-- [end:spot-message-call]
 
+// --8<-- [start:instance-spot-call]
+class join_match_queue_http_handler_t
+{
+  public:
+    explicit join_match_queue_http_handler_t (fw::route_client_t &routes) : _routes (routes) {}
+
+    fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
+    {
+        const auto mode = request.route_values.at ("mode");
+        const auto body = nlohmann::json::parse (request.body).get<join_match_queue_t> ();
+
+        // No create call: the first message for this id brings the queue into
+        // being and is then handled by it.
+        auto status = co_await _routes
+                        .request_to_spot (fw::spot_id_t (mode), body)
+                        .instance_spot ("match-queue")
+                        .in_mesh ("game")
+                        .timeout (std::chrono::seconds (3))
+                        .async<match_queue_status_t> ();
+
+        co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
+    }
+
+  private:
+    fw::route_client_t &_routes;
+};
+// --8<-- [end:instance-spot-call]
+
 // --8<-- [start:location-find]
 // find answers from the Location Store alone: it reports where the object is,
 // and only while it is ready to receive. Nothing is sent to the object.
@@ -406,6 +434,7 @@ int main (int argc, char **argv)
           .map_post<open_room_http_handler_t> ("/rooms")
           .map_post<post_chat_http_handler_t> ("/rooms/{roomId}/chat")
           .map_get<get_room_state_http_handler_t> ("/rooms/{roomId}")
+          .map_post<join_match_queue_http_handler_t> ("/match-queues/{mode}")
           .map_post<create_player_http_handler_t> ("/players/{playerId}")
           .map_post<change_nickname_http_handler_t> ("/players/{playerId}/nickname")
           .map_get<get_player_http_handler_t> ("/players/{playerId}")
