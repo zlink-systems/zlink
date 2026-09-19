@@ -335,8 +335,9 @@ tutorial의 대기열 호출이다 — 길드 id 자리에 큐 id가 있을 뿐,
 
 === "C++"
 
-    C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+    ```
 
 === "Java"
 
@@ -417,8 +418,9 @@ tutorial의 실제 코드다([06](21-spot.ko.md)).
 
 === "C++"
 
-    C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-    `framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+    ```
 
 === "Java"
 
@@ -565,8 +567,9 @@ id가 있을 뿐, partition도 offset도 분산 락도 없이 Spot 상태를 그
 
 === "C++"
 
-    C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-    `framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`를 읽는다.
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler"
+    ```
 
 === "Java"
 

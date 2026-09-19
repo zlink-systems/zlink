@@ -239,8 +239,9 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 tutorial의 대기열 호출이다 — 길드 id 자리에 큐 id가 있을 뿐, 호출 모양은 같다. 사전 락도,
 사전 생성도 없다([06](21-spot.ko.md)).
 
-C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+```
 
 길드 자체는 아직 실행 가능한 기준 샘플이 없다 — 실제로 쓰이는 같은 API 표면은 GameQuest의
 `PlayerQuestSpot` 등록·호출 방식에서 볼 수 있다.
@@ -295,8 +296,9 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 **코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 하나로 줄어든다 — 아래는
 tutorial의 실제 코드다([06](21-spot.ko.md)).
 
-C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`을 읽는다.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+```
 
 sticky 라우팅이 있던 자리는 actor의 bound session push로 줄어든다 — 이것도 tutorial의
 실제 코드다.
@@ -391,8 +393,9 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 요청을 하나의 Spot이 직렬로 받는다. 아래는 tutorial의 대기열 handler다. 주문 id 자리에 큐
 id가 있을 뿐, partition도 offset도 분산 락도 없이 Spot 상태를 그대로 만진다([06](21-spot.ko.md)).
 
-C++ tutorial의 대기열은 뒤따르는 작업에서 추가한다. 그때 이 탭이
-`framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`를 읽는다.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler"
+```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
 없이 HTTP API + 주문 workflow만으로 구성된 이 상황의 기준 샘플이다. 주문 상태

@@ -262,8 +262,9 @@ same time in the first place.
 is the tutorial's match-queue call — a queue id stands where the guild id would, and the
 call has the same shape. No lock beforehand, no creation beforehand ([06](21-spot.en.md)).
 
-The C++ tutorial gains its match queue in a follow-up. This tab then reads
-`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+```
 
 The guild scenario itself has no runnable reference sample yet — the same API surface in
 real use can be seen in GameQuest's `PlayerQuestSpot` registration/call approach.
@@ -325,8 +326,9 @@ inter-server delivery. The **location store is the only new infrastructure.**
 **As code.** Where the distributed lock used to sit, one Instance Spot call remains — the
 blocks below are the tutorial's real code ([06](21-spot.en.md)).
 
-The C++ tutorial gains its match queue in a follow-up. This tab then reads
-`framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call`.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:instance-spot-call"
+```
 
 Where sticky routing used to sit, an actor's bound-session push remains — this too is the
 tutorial's real code.
@@ -433,8 +435,9 @@ match-queue handler. A queue id stands where the order id would, and the handler
 Spot's state directly, with no partition, no offset and no distributed lock
 ([06](21-spot.en.md)).
 
-The C++ tutorial gains its match queue in a follow-up. This tab then reads
-`framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler`.
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/spots/match_queue.hpp:instance-spot-handler"
+```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
 the reference sample for this exact situation, built with no real-time push at all, just an

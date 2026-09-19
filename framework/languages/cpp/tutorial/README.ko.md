@@ -159,6 +159,7 @@ docker stop zlink-tutorial-redis
 | 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client` 세 실행 파일이 있다 |
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
+| Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
 | STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy` 네 줄을 찍고 0으로 종료한다 |
 
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
@@ -180,7 +181,7 @@ if ($LASTEXITCODE -ne 0) { throw 'tutorial-stream failed' }
 Write-Output 'tutorial-stream=ok'
 ```
 
-[단계별 확인](#단계별-확인)에 열 단계의 요청과 기대 출력이 전부 있다.
+[단계별 확인](#단계별-확인)에 열한 단계의 요청과 기대 출력이 전부 있다.
 
 ## 문제 해결
 
@@ -495,7 +496,24 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 class game_room_t : public fw::spot_t<fw::actor_t>
 ```
 
-### 8. Actor — id로 부르는 플레이어
+### 8. Instance Spot — 첫 메시지가 만드는 대기열
+
+만드는 호출이 없다. 그 id로 첫 메시지가 도착하면 Framework가 만들고 같은 메시지를 처리한다.
+
+```bash
+curl -X POST http://127.0.0.1:5180/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p1"}'
+# {"waiting":1}
+
+curl -X POST http://127.0.0.1:5180/match-queues/ranked \
+  -H 'Content-Type: application/json' -d '{"playerId":"p2"}'
+# {"waiting":2}
+```
+
+대기열은 넣은 값을 계속 들고 있다. 같은 id로 다시 호출하면 숫자가 이어진다. 처음부터 다시
+보려면 다른 id를 쓴다.
+
+### 9. Actor — id로 부르는 플레이어
 
 방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
 다시 만들면 있던 것을 돌려준다.
@@ -524,7 +542,7 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 - **C++의 entry spot만 입장 승인 callback이 필수다.** `lobby_spot_t::on_actor_join`이
   그 관문이고, 거절하도록 두면 Actor 생성 자체가 실패한다.
 
-### 9. Location — 위치 조회
+### 10. Location — 위치 조회
 
 Spot과 Actor는 id로만 불렀고, 어디에 있는지는 Framework가 찾았다. 그 기록을 직접 읽는
 호출이다.
@@ -543,7 +561,7 @@ HTTP/1.1 404 Not Found
 조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
 대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
 
-### 10. STREAM과 Session-Actor 연결
+### 11. STREAM과 Session-Actor 연결
 
 외부 client가 TCP로 붙는다. framework가 아니라 connector만 링크한다.
 
@@ -587,6 +605,10 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `location-store-client` · `spot-client-register` | `Client/main.cpp` |
 | `spot-create-call` · `spot-message-call` | `Client/main.cpp` |
 | `spot-send-call` · `spot-request-call` | `Client/main.cpp`. `spot-message-call` 안에 나뉘어 있다 |
+| `instance-spot-contracts` | `Shared/contracts.hpp` |
+| `instance-spot-class` · `instance-spot-handler` | `Server/spots/match_queue.hpp` |
+| `instance-spot-register` | `Server/main.cpp` |
+| `instance-spot-call` | `Client/main.cpp` |
 
 마커 이름을 바꾸면 그 구간을 읽는 문서가 조용히 빈 코드 블록을 낸다. 이름을 바꿀 때는
 문서를 함께 고친다. 마커 이름은 .NET tutorial과 같다.
@@ -618,6 +640,10 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `fanout-publish-register` | `Client/main.cpp` |
 | `fanout-call` | `Client/main.cpp` |
 | `weight-runtime` | `Server/ops/channel_weight_handler.hpp` |
+| `instance-spot-contracts` | `Shared/contracts.hpp` |
+| `instance-spot-class` · `instance-spot-handler` | `Server/spots/match_queue.hpp` |
+| `instance-spot-register` | `Server/main.cpp` |
+| `instance-spot-call` | `Client/main.cpp` |
 | `location-find` | `Client/main.cpp` |
 | `actor-contracts` | `Shared/contracts.hpp` |
 | `actor-class` · `actor-factory` | `Server/actors/player.hpp` |
