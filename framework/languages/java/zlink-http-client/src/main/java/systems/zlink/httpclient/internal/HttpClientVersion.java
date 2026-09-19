@@ -8,7 +8,7 @@ package systems.zlink.httpclient.internal;
  */
 public final class HttpClientVersion {
 
-    public static final String VERSION = "0.18.0";
+    public static final String VERSION = "0.18.1";
 
     public static final String USER_AGENT =
         "zlink-http-client/" + VERSION.substring(0, VERSION.lastIndexOf('.'));

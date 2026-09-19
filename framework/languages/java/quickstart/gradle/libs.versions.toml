@@ -1,6 +1,6 @@
 [versions]
 # 세 zlink-framework-* artifact를 한 번에 고정한다.
-zlinkFramework = "0.18.0"
+zlinkFramework = "0.18.1"
 # 아래 셋은 zlink-framework POM이 선언한 값과 맞춘 것이다.
 # 충돌 해석에 맡기지 않는다.
 springBoot = "3.5.14"

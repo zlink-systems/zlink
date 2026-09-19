@@ -13,7 +13,7 @@ required_conan_version = ">=2.1"
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.18.0"
+    version = "0.18.1"
     package_type = "static-library"
     license = "FSL-1.1-ALv2"
     homepage = "https://github.com/zlink-systems/zlink"

@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-shoppingmall",
-  "version-string": "0.18.0",
+  "version-string": "0.18.1",
   "dependencies": [
     "zlink",
     "zlink-framework"
