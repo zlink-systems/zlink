@@ -44,14 +44,6 @@ Gradle fetches the packages above.
 
 All commands below run from inside that directory.
 
-```bash title="linux"
-cd zlink-samples-java
-```
-
-```powershell title="windows"
-Set-Location zlink-samples-java
-```
-
 ## Build
 
 The run scripts (see "Run" below) build as part of running, so a separate

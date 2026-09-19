@@ -33,12 +33,10 @@ into this tutorial. There is no repository to clone. Like quickstart, it referen
 registry packages.
 
 ```bash title="linux"
-cd zlink-tutorial-node
 npm install
 ```
 
 ```powershell title="windows"
-Set-Location zlink-tutorial-node
 npm install
 ```
 

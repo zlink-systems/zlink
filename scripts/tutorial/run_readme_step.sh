@@ -16,7 +16,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 err_file="$(mktemp)"
 trap 'rm -f "${err_file}"' EXIT
 
-if ! block="$(python3 "${script_dir}/extract_readme_step.py" "${readme}" "${section}" "${platform}" 2>"${err_file}")"; then
+block="$(python3 "${script_dir}/extract_readme_step.py" "${readme}" "${section}" "${platform}" 2>"${err_file}")" && status=0 || status=$?
+if [ "${status}" -eq 3 ]; then
+  echo "README extraction: $(cat "${err_file}")"
+  exit 0
+fi
+if [ "${status}" -ne 0 ]; then
   echo "README extraction failed: $(cat "${err_file}")" >&2
   exit 1
 fi

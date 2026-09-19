@@ -56,14 +56,6 @@ vcpkg는 `builtin-baseline`으로 세 번째 파티 버전을 고정한다. clon
 [`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)을
 받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-tutorial-cpp/` 안에서 실행한다.
 
-```bash title="linux"
-cd zlink-tutorial-cpp
-```
-
-```powershell title="windows"
-Set-Location zlink-tutorial-cpp
-```
-
 설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. 이 스크립트는 GitHub
 Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding
 소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를
