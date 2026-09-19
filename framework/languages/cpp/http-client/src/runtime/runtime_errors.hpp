@@ -9,7 +9,11 @@
 namespace zlink::http_client::detail
 {
 
-zlink::framework::framework_exception_t request_error (const std::string &message);
+zlink::framework::framework_exception_t request_internal_failure_error (const std::string &message);
+zlink::framework::framework_exception_t request_protocol_error (const std::string &message);
+zlink::framework::framework_exception_t request_unavailable_error (const std::string &message);
+zlink::framework::framework_exception_t response_body_limit_error (const std::string &message);
+zlink::framework::result_t<raw_http_response_t> request_timeout_error (const std::string &message);
 zlink::framework::result_t<raw_http_response_t> timeout_before_exchange ();
 zlink::framework::result_t<raw_http_response_t> map_transport_exception (const std::exception &ex);
 zlink::framework::result_t<raw_http_response_t> map_unexpected_exception (const std::exception &ex);

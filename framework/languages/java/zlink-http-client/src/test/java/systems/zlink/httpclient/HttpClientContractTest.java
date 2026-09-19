@@ -449,8 +449,26 @@ final class HttpClientContractTest {
             .timeout(Duration.ofMillis(150))
             .followRedirects(2)
             .build()) {
-            assertThrows(CompletionException.class,
+            CompletionException ex = assertThrows(CompletionException.class,
                 () -> client.get("/first").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
+        } finally {
+            server.closeable().close();
+        }
+    }
+
+    @Test
+    void unsupportedRedirectLocationIsProtocolError() throws Exception {
+        TestSupport.Server server = TestSupport.httpServer(exchange -> {
+            exchange.getResponseHeaders().add("location", "http://[");
+            TestSupport.respond(exchange, 302, "");
+        });
+        try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).followRedirects(2).build()) {
+            CompletionException ex = assertThrows(CompletionException.class,
+                () -> client.get("/start").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         } finally {
             server.closeable().close();
         }
@@ -463,8 +481,10 @@ final class HttpClientContractTest {
             TestSupport.respond(exchange, 302, "");
         });
         try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).followRedirects(2).build()) {
-            assertThrows(CompletionException.class,
+            CompletionException ex = assertThrows(CompletionException.class,
                 () -> client.get("/loop").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         } finally {
             server.closeable().close();
         }
@@ -501,6 +521,21 @@ final class HttpClientContractTest {
             assertTrue(connections.get() >= 2);
         } finally {
             serverSocket.close();
+        }
+    }
+
+    @Test
+    void connectionRefusedIsUnavailable() throws Exception {
+        int port;
+        try (ServerSocket unused = new ServerSocket(0, 0, InetAddress.getLoopbackAddress())) {
+            port = unused.getLocalPort();
+        }
+        try (ZLinkHttpClient client = ZLinkHttpClient.create("http://127.0.0.1:" + port)
+            .timeout(Duration.ofSeconds(1)).build()) {
+            CompletionException ex = assertThrows(CompletionException.class,
+                () -> client.get("/unavailable").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
         }
     }
 
@@ -618,8 +653,31 @@ final class HttpClientContractTest {
             TestSupport.respondBytes(exchange, 200, new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
         });
         try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).compression().build()) {
-            assertThrows(CompletionException.class,
+            CompletionException ex = assertThrows(CompletionException.class,
                 () -> client.get("/bad").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        } finally {
+            server.closeable().close();
+        }
+    }
+
+    @Test
+    void compressedDecodedResponseBodySizeIsRejected() throws Exception {
+        var buffer = new ByteArrayOutputStream();
+        try (OutputStream compressor = new GZIPOutputStream(buffer)) {
+            compressor.write("x".repeat(4096).getBytes(StandardCharsets.UTF_8));
+        }
+        TestSupport.Server server = TestSupport.httpServer(exchange -> {
+            exchange.getResponseHeaders().add("content-encoding", "gzip");
+            TestSupport.respondBytes(exchange, 200, buffer.toByteArray());
+        });
+        try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl())
+            .compression().maxResponseBodySize(1024).build()) {
+            CompletionException ex = assertThrows(CompletionException.class,
+                () -> client.get("/compressed-big").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.REJECTED, failure.kind());
         } finally {
             server.closeable().close();
         }
@@ -639,7 +697,7 @@ final class HttpClientContractTest {
             CompletionException ex = assertThrows(CompletionException.class,
                 () -> client.get("/slow").submitRaw().toCompletableFuture().join());
             ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
-            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, failure.kind());
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
         } finally {
             server.closeable().close();
         }
@@ -682,7 +740,8 @@ final class HttpClientContractTest {
                     .toCompletableFuture()
                     .orTimeout(2, TimeUnit.SECONDS)
                     .join());
-            assertTrue(error.getCause() instanceof ZLinkFrameworkException);
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) error.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
         } finally {
             serverSocket.close();
             serverThread.interrupt();
@@ -695,8 +754,42 @@ final class HttpClientContractTest {
         TestSupport.Server server = TestSupport.httpServer(exchange ->
             TestSupport.respond(exchange, 200, "x".repeat(4096)));
         try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).maxResponseBodySize(1024).build()) {
-            assertThrows(CompletionException.class,
+            CompletionException ex = assertThrows(CompletionException.class,
                 () -> client.get("/big").submitRaw().toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.REJECTED, failure.kind());
+        } finally {
+            server.closeable().close();
+        }
+    }
+
+    @Test
+    void streamingDownloadResponseBodySizeIsRejected() throws Exception {
+        TestSupport.Server server = TestSupport.httpServer(exchange ->
+            TestSupport.respond(exchange, 200, "x".repeat(4096)));
+        try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).maxResponseBodySize(1024).build()) {
+            CompletionException ex = assertThrows(CompletionException.class,
+                () -> client.get("/download-big")
+                    .download(chunk -> { })
+                    .toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.REJECTED, failure.kind());
+        } finally {
+            server.closeable().close();
+        }
+    }
+
+    @Test
+    void unclassifiedExecutionFailureIsInternalFailure() throws Exception {
+        TestSupport.Server server = TestSupport.httpServer(exchange ->
+            TestSupport.respond(exchange, 200, "payload"));
+        try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).build()) {
+            CompletionException ex = assertThrows(CompletionException.class,
+                () -> client.get("/sink-failure")
+                    .download(chunk -> { throw new IllegalStateException("sink failed"); })
+                    .toCompletableFuture().join());
+            ZLinkFrameworkException failure = (ZLinkFrameworkException) ex.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, failure.kind());
         } finally {
             server.closeable().close();
         }
@@ -748,9 +841,12 @@ final class HttpClientContractTest {
     @Test
     void validationRejectsBadRequestConfiguration() throws Exception {
         try (ZLinkHttpClient client = ZLinkHttpClient.create("http://127.0.0.1:1").build()) {
-            assertThrows(ZLinkFrameworkException.class, () -> client.get("no-slash"));
-            assertThrows(ZLinkFrameworkException.class,
+            ZLinkFrameworkException badPath = assertThrows(
+                ZLinkFrameworkException.class, () -> client.get("no-slash"));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, badPath.kind());
+            ZLinkFrameworkException duplicateBody = assertThrows(ZLinkFrameworkException.class,
                 () -> client.post("/r").body("a", "text/plain").form("b", "c").submitRaw());
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, duplicateBody.kind());
             assertThrows(ZLinkFrameworkException.class,
                 () -> client.post("/r").bodyStream(null, "application/octet-stream"));
             assertThrows(ZLinkFrameworkException.class, () -> client.get("/r").download(null));

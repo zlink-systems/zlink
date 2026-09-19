@@ -12,8 +12,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.httpclient.internal.RequestPerformer.RawResult;
 
 /**
@@ -49,20 +47,13 @@ final class RetryPolicy {
                 return CompletableFuture.supplyAsync(() -> null, delayed)
                     .thenCompose(ignored -> attempt(attempt + 1, maxRetries, perform));
             }
-            return CompletableFuture.failedFuture(
-                cause instanceof ZLinkFrameworkException
-                    ? cause
-                    : new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                        cause.getMessage(),
-                        cause));
+            return CompletableFuture.failedFuture(HttpClientErrors.fromExecutionFailure(cause));
         });
     }
 
     private static boolean isRetriable(Throwable cause) {
         // Transport failures and timeouts (HttpTimeoutException extends IOException) are retriable,
-        // including body-read failures surfaced as UncheckedIOException by ResponseBodyReader and
-        // body-read timeouts surfaced as TimeoutException by orTimeout.
+        // including body-read failures surfaced as UncheckedIOException by ResponseBodyReader.
         return cause instanceof IOException
             || cause instanceof UncheckedIOException
             || cause instanceof TimeoutException;

@@ -353,6 +353,12 @@ http::response<http::string_body> make_response (const http::request<http::strin
         response.prepare_payload ();
         return response;
     }
+    if (target == "/gzip-malformed") {
+        response.set (http::field::content_encoding, "gzip");
+        response.body () = "not-gzip";
+        response.prepare_payload ();
+        return response;
+    }
     if (target == "/big") {
         response.set (http::field::content_type, "application/octet-stream");
         response.body () = big_download_body ();
@@ -1288,6 +1294,8 @@ TEST (ZLinkHttpClient, MapsStatusDecodeAndTimeoutFailures)
     const auto timeout = client.get ("/slow").submit_raw ();
     ASSERT_FALSE (timeout);
     ASSERT_NE (timeout.error (), nullptr);
+    EXPECT_EQ (timeout.error_kind (),
+               zlink::framework::framework_error_kind_t::deadline_exceeded);
     EXPECT_EQ (zlink::framework::detail::boundary_state (*timeout.error ()),
                zlink::framework::detail::boundary_error_t::timed_out);
 }
@@ -1425,6 +1433,23 @@ TEST (ZLinkHttpClient, FollowsAbsoluteRedirectLocations)
     EXPECT_EQ (result.value ().status, 200);
 }
 
+TEST (ZLinkHttpClient, RejectsUnsupportedRedirectLocationAsProtocolError)
+{
+    loopback_http_server_t server;
+    auto client = zlink::http_client::client_t::create (server.base_url ())
+                    .follow_redirects ()
+                    .build ();
+
+    const auto result = client.get ("/redirect-custom")
+                          .header ("X-ZLink-Redirect-Location", "games")
+                          .submit_raw ()
+                          .result ();
+
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::protocol_error);
+}
+
 TEST (ZLinkHttpClient, RedirectStripsAuthorizationAcrossHosts)
 {
     loopback_http_server_t origin;
@@ -1493,6 +1518,8 @@ TEST (ZLinkHttpClient, StopsAtTheRedirectLimit)
 
     const auto result = client.get ("/redirect-loop").submit_raw ();
     ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::protocol_error);
     EXPECT_NE (std::string (result.error ()->what ()).find ("redirect limit"), std::string::npos);
 }
 
@@ -1507,6 +1534,19 @@ TEST (ZLinkHttpClient, RetriesRetriableTransportFailures)
     const auto result = client.get ("/flaky").submit<create_game_reply_t> ();
     ASSERT_TRUE (result) << result.error ()->what ();
     EXPECT_EQ (result.value ().status, 200);
+}
+
+TEST (ZLinkHttpClient, MapsConnectionRefusalToUnavailable)
+{
+    auto client = zlink::http_client::client_t::create ("http://127.0.0.1:1")
+                    .timeout (500ms)
+                    .build ();
+
+    const auto result = client.get ("/games").submit_raw ().result ();
+
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::unavailable);
 }
 
 TEST (ZLinkHttpClient, DoesNotInternallyRetryNonIdempotentRequestsOnStaleConnection)
@@ -1600,6 +1640,19 @@ TEST (ZLinkHttpClient, DecompressesGzipResponses)
     EXPECT_EQ (result.value ().headers.count ("content-length"), 0U);
 }
 
+TEST (ZLinkHttpClient, RejectsMalformedCompressedResponseAsProtocolError)
+{
+    loopback_http_server_t server;
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
+
+    const auto result = client.get ("/gzip-malformed").submit_raw ().result ();
+
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::protocol_error);
+}
+
 TEST (ZLinkHttpClient, RejectsDecompressedResponseAboveBodyLimit)
 {
     loopback_http_server_t server;
@@ -1668,6 +1721,22 @@ TEST (ZLinkHttpClient, RejectsDownloadResponseAboveBodyLimit)
     EXPECT_EQ (result.error_kind (),
                zlink::framework::framework_error_kind_t::rejected);
     EXPECT_LT (received.size (), big_download_body ().size ());
+}
+
+TEST (ZLinkHttpClient, MapsDownloadSinkFailureToInternalFailure)
+{
+    loopback_http_server_t server;
+    auto client = make_json_client (server.base_url (), std::chrono::milliseconds (2000));
+
+    const auto result = client.get ("/big")
+                          .download ([] (std::string_view) {
+                              throw std::runtime_error ("download sink failed");
+                          })
+                          .result ();
+
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::internal_failure);
 }
 
 TEST (ZLinkHttpClient, CoroutineDownloadSinkRunsOnExecuteSchedulerWorker)
@@ -1942,6 +2011,23 @@ TEST (ZLinkHttpClient, TunnelsHttpsThroughProxyConnect)
     EXPECT_EQ (result.value ().status, 200);
     EXPECT_GT (proxy.connect_tunnels (), 0);
 }
+
+TEST (ZLinkHttpClient, MapsProxyConnectFailureToUnavailable)
+{
+    loopback_https_server_t server;
+    loopback_proxy_t proxy (std::string ("Basic cHJveHk6c2VjcmV0"));
+    auto client = zlink::http_client::client_t::create (server.base_url ())
+                    .trust_certificate_file (ZLINK_HTTP_CLIENT_TEST_CERT)
+                    .proxy (proxy.url ())
+                    .build ();
+
+    const auto result = client.get ("/games").submit_raw ().result ();
+
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (),
+               zlink::framework::framework_error_kind_t::unavailable);
+    EXPECT_GT (proxy.rejected_requests (), 0);
+}
 #endif
 
 #ifdef ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL
@@ -1968,7 +2054,7 @@ TEST (ZLinkHttpClient, RejectsUntrustedHttpsCertificate)
     auto result = client.get ("/games").submit<create_game_reply_t> ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
 }
 
 TEST (ZLinkHttpClient, RejectsHttpsHostnameMismatch)
@@ -1980,7 +2066,7 @@ TEST (ZLinkHttpClient, RejectsHttpsHostnameMismatch)
     auto result = client.get ("/games").submit<create_game_reply_t> ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
 }
 #endif
 

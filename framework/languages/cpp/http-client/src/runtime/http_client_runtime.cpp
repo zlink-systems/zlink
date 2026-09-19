@@ -83,9 +83,9 @@ http_client_runtime_t::submit (http_request_t request) const
     auto runtime = shared_from_this ();
     auto execute_scheduler = _options.execute_scheduler;
     if (!execute_scheduler) {
-        completion.complete (zlink::framework::result_t<raw_http_response_t>::failure (
-          zlink::framework::framework_error_kind_t::protocol_error,
-          "HTTP client coroutine execute scheduler is not configured"));
+        completion.complete (
+          zlink::framework::detail::result_access_t::failure<raw_http_response_t> (
+            request_protocol_error ("HTTP client coroutine execute scheduler is not configured")));
         return task;
     }
     try {
