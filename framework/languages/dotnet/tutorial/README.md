@@ -74,7 +74,7 @@ for _ in $(seq 1 50); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
   sleep 0.2
 done
-curl -sf http://127.0.0.1:5080/players/p1/profile | tee tutorial-verify.log
+curl -sf http://127.0.0.1:5080/players/p1/profile
 ```
 
 ```powershell title="windows"
@@ -88,24 +88,23 @@ for ($i = 0; $i -lt 50; $i++) {
   try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 1 | Out-Null; break }
   catch { Start-Sleep -Milliseconds 200 }
 }
-Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress | Tee-Object -FilePath tutorial-verify.log
+Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress
 ```
 
 ## Verify
 
-`tutorial-verify.log` containing `"playerId":"p1"` means the Server and
-Client found each other (the same request "Run" issued produced that
-response). Once confirmed, stop both processes.
+A `/players/p1/profile` response containing `"playerId":"p1"` means the Server and
+Client found each other (the same request "Run" issued). Once confirmed, stop both
+processes.
 
 ```bash title="linux"
-grep -q '"playerId":"p1"' tutorial-verify.log
+curl -sf http://127.0.0.1:5080/players/p1/profile | grep -q '"playerId":"p1"'
 kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null || true
 ```
 
 ```powershell title="windows"
-if (-not (Select-String -Path tutorial-verify.log -Pattern '"playerId":"p1"' -Quiet)) {
-  throw "tutorial verify failed: $(Get-Content tutorial-verify.log -Raw)"
-}
+$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/players/p1/profile'
+if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
 Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
 ```
 

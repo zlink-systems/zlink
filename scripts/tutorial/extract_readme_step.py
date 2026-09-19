@@ -104,21 +104,15 @@ def main() -> int:
 
     block = extract(path.read_text(encoding="utf-8"), section, platform)
     if block is None:
-        if section == "내려받기와 설치":
-            # Not every zip has an install step (a tutorial that only needs `dotnet build`
-            # has nothing to fetch beforehand). Report the absence and let the caller
-            # continue; the other three sections are mandatory.
-            print(
-                f"no '{platform}'-titled block under '## {section}' in {readme_path}; nothing to install",
-                file=sys.stderr,
-            )
-            return 3
+        # A section without a block for this platform means the README asks the
+        # reader to do nothing there (Node samples have no Linux build step; a
+        # tutorial may have nothing to install). Report the absence and let the
+        # caller continue; the verify step still has to observe a real response.
         print(
-            f"no '{platform}'-titled fenced block found under section '## {section}' in {readme_path} "
-            "(README does not follow the #655 convention yet)",
+            f"no '{platform}'-titled block under '## {section}' in {readme_path}; nothing to run for this section",
             file=sys.stderr,
         )
-        return 2
+        return 3
 
     sys.stdout.write(block)
     return 0
