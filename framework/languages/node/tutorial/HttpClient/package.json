@@ -1,0 +1,16 @@
+{
+  "name": "zlink-tutorial-http-client",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@zlink-systems/http-client": "0.18.1"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3",
+    "@types/node": "22.15.30"
+  }
+}

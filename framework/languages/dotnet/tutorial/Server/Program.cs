@@ -1,3 +1,4 @@
+using System.Text;
 using Systems.Zlink;
 using Zlink.Framework.Contracts.Configuration;
 using Tutorial.Server.Actors;
@@ -140,6 +141,49 @@ builder.Services.AddZLinkFramework(options =>
 });
 
 var app = builder.Build();
+
+// Tutorial credentials stay in code because this standalone sample deliberately
+// has no configuration file; production admin credentials belong in configuration.
+const string tutorialAdminUser = "ops";
+const string tutorialAdminPassword = "tutorial-admin";
+const string tutorialAdminChallenge = "Basic realm=\"tutorial-admin\"";
+
+app.Use(async (context, next) =>
+{
+    if (!context.Request.Path.StartsWithSegments("/admin"))
+    {
+        await next(context);
+        return;
+    }
+
+    var authorization = context.Request.Headers.Authorization.ToString();
+    var authorized = false;
+    if (authorization.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            var encoded = authorization["Basic ".Length..].Trim();
+            var credentials = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            var separator = credentials.IndexOf(':');
+            authorized = separator >= 0
+                && string.Equals(credentials[..separator], tutorialAdminUser, StringComparison.Ordinal)
+                && string.Equals(credentials[(separator + 1)..], tutorialAdminPassword, StringComparison.Ordinal);
+        }
+        catch (FormatException)
+        {
+            authorized = false;
+        }
+    }
+
+    if (!authorized)
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers.WWWAuthenticate = tutorialAdminChallenge;
+        return;
+    }
+
+    await next(context);
+});
 
 // --8<-- [start:weight-runtime]
 // Weight is the one value this node can change while running. 0 keeps the

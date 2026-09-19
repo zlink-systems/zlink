@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import * as http from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -118,7 +119,16 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
 })
 class ClientModule {}
 
-type RouteHandler = (params: readonly string[], body: string) => Promise<HttpResult>;
+type TutorialHttpResult = HttpResult & {
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly stream?: boolean;
+};
+
+type RouteHandler = (
+  params: readonly string[],
+  body: string,
+  headers: http.IncomingHttpHeaders
+) => Promise<TutorialHttpResult>;
 
 interface Route {
   readonly method: string;
@@ -334,6 +344,39 @@ function registerRoutes(
     return ok(info);
   });
   // --8<-- [end:actor-request-call]
+
+  // --8<-- [start:http-surface-client]
+  map('GET', /^\/player\/([^/]+)$/, async ([playerId]) => ({
+    status: 301,
+    headers: { location: `/players/${playerId}` }
+  }));
+
+  map('GET', /^\/rooms\/([^/]+)\/export$/, async ([roomId]) => {
+    const state = await spots
+      .requestToSpot(roomId, new GetRoomState())
+      .timeout(3000)
+      .submit<RoomState>();
+    return {
+      status: 200,
+      body: { roomId, title: state.title, chat: state.chat },
+      headers: { 'content-type': 'application/x-ndjson' },
+      stream: true
+    };
+  });
+
+  map('POST', /^\/rooms\/([^/]+)\/import$/, async ([roomId], body) => {
+    const messages = body
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { playerId: string; text: string });
+    for (const message of messages) {
+      await spots
+        .sendToSpot(roomId, new PostChat(message.playerId, message.text))
+        .submit();
+    }
+    return ok({ imported: messages.length });
+  });
+  // --8<-- [end:http-surface-client]
 }
 
 // This process's own HTTP surface -- a plain node:http server, not a NestJS
@@ -354,16 +397,56 @@ function startHttpServer(): http.Server {
       const params = matched.match.slice(1).map((value) => decodeURIComponent(value));
       // The error mapping sits here, ahead of every route registered above.
       withZLinkErrorResponse(() => matched.candidate
-        .handle(params, Buffer.concat(chunks).toString('utf8')))
-        .then((result) => {
-          if (result.body === undefined) {
-            response.writeHead(result.status).end();
+        .handle(
+          params,
+          Buffer.concat(chunks).toString('utf8'),
+          request.headers
+        ))
+        .then(async (result) => {
+          const extended = result as TutorialHttpResult;
+          if (extended.body === undefined) {
+            response.writeHead(extended.status, extended.headers).end();
             return;
           }
-          response.writeHead(result.status, { 'content-type': 'application/json' });
-          response.end(JSON.stringify(result.body));
+          if (extended.stream === true) {
+            const room = extended.body as { roomId: string; chat: readonly string[] };
+            response.writeHead(extended.status, {
+              'content-type': 'application/x-ndjson',
+              ...extended.headers
+            });
+            response.write(`${JSON.stringify({ roomId: room.roomId })}\n`);
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            for (const line of room.chat) {
+              response.write(`${JSON.stringify({ message: line })}\n`);
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            response.end();
+            return;
+          }
+          let body = Buffer.from(JSON.stringify(extended.body));
+          const responseHeaders: Record<string, string> = {
+            'content-type': 'application/json',
+            ...extended.headers
+          };
+          const acceptsGzip = (request.headers['accept-encoding'] ?? '')
+            .toString()
+            .toLowerCase()
+            .split(',')
+            .some((encoding) => encoding.trim() === 'gzip');
+          if (acceptsGzip && url.pathname.match(/^\/rooms\/[^/]+$/) !== null) {
+            responseHeaders['content-encoding'] = 'gzip';
+          }
+          if (responseHeaders['content-encoding'] === 'gzip') {
+            body = gzipSync(body);
+          }
+          response.writeHead(extended.status, responseHeaders);
+          response.end(body);
         })
         .catch((error: unknown) => {
+          if (error instanceof SyntaxError) {
+            response.writeHead(400).end();
+            return;
+          }
           response.writeHead(500, { 'content-type': 'application/json' });
           response.end(JSON.stringify({
             error: error instanceof Error ? error.message : String(error)

@@ -5,7 +5,7 @@
 The program the feature guides read their code from. Follow the chapters one by one and this
 program grows in the same order. It is the `.NET Tutorial` ported to C++: the four kinds of
 Channel messaging (RouteMesh request and one-way, node direct call, ClientServer, Fanout),
-handler filters, runtime weight changes, Spot, Actor, Location and STREAM.
+handler filters, runtime weight changes, Spot, Actor, Location, STREAM and the HTTP client.
 
 This directory closes on itself. The procedure below uses only the Core, binding and framework
 archives published on GitHub Releases plus vcpkg; the zlink repository is never cloned.
@@ -118,8 +118,8 @@ curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json'
 curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
-The external client of the STREAM step is the third executable. Run it while the Server is up;
-it completes its own check and exits -- the [Verify](#verify) block runs it.
+The external client of the STREAM step is the third executable. The HTTP client step is the fourth
+executable. Run both while the Server and Client are up; each completes its own check and exits.
 
 Cleanup stops the two processes and the Redis container.
 
@@ -150,7 +150,7 @@ The ports differ from the .NET tutorial so both can run on one machine.
 | Step | Evidence of success |
 |---|---|
 | `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
-| Build | the three executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client` exist |
+| Build | the four executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client`, `tutorial_http_client` exist |
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
 | Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |
 | Instance Spot | two requests for the same queue id return `waiting` 1, then 2 |
@@ -202,10 +202,12 @@ Write-Output 'tutorial-stream=ok'
 | `Server` | Runs the channel handlers and the node direct-call handler, and installs the filter. Opens HTTP for one operations endpoint |
 | `Client` | Accepts HTTP and calls over the mesh |
 | `StreamClient` | A client outside the mesh. Links the connector only, never the framework |
+| `HttpClient` | A client outside the mesh. Links only the HTTP client package, never the framework |
 | `bootstrap.cmake` | Installs the framework from the published archives and configures this project |
 
-`CMakeLists.txt` builds the three executables from one `find_package(zlink_framework CONFIG
-REQUIRED)`. To reuse it in your own project, pass `.zlink/install` in `CMAKE_PREFIX_PATH`.
+`CMakeLists.txt` builds the four executables from `find_package(zlink_framework CONFIG REQUIRED)` and
+`find_package(zlink_http_client_cpp CONFIG REQUIRED)`. To reuse it in your own project, pass
+`.zlink/install` in `CMAKE_PREFIX_PATH`.
 
 ## Step by step
 
@@ -304,7 +306,7 @@ socket stays open and in-flight calls finish, but no other node picks this node 
 The Server answers this endpoint itself.
 
 ```console
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
 HTTP/1.1 200 OK
 {"channel":"profile","weight":0}
 
@@ -316,7 +318,7 @@ $ curl -i -X POST http://127.0.0.1:5180/players/p1/logins
 HTTP/1.1 404 Not Found
 {"correlationId":"http-8","error":"not_found","message":"RouteMesh channel send target was not found"}
 
-$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=100'
 HTTP/1.1 200 OK
 {"channel":"profile","weight":100}
 ```
@@ -417,6 +419,66 @@ sent on its own. In C++ every packet arrives through one `on_packet`, `reply_pac
 requests only (pushes use `bound_session().send(...)`), and the connector is opened with manual
 dispatch so a push arriving before `wait` is queued rather than dropped.
 
+### 12. HTTP client
+
+`HttpClient` runs outside the mesh and links only the `zlink::http_client` package. Because this is
+a CLI, it completes requests with the blocking `submit<T>().result()` and `fetch<T>()` forms. Run
+it while the Server and Client are up:
+
+```bash title="linux"
+./build/tutorial_http_client
+```
+
+```powershell title="windows"
+& .\build\Release\tutorial_http_client.exe
+```
+
+The output below is from one run; the room id and download byte count vary per run.
+
+```console
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room be179d01-31b9-408e-8ac6-c86bfa5a4e9c chat 202
+response kinds: typed 200 raw application/json fetch anonymous
+compressed response: 200 encoding-removed true
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 1 bytes 74
+upload stream: imported 3
+error kinds: bad request internal_failure connection refused unavailable
+```
+
+This output is based on framework 0.18.3 or later (including #711). Releases before 0.18.3 stop at
+step 6 with a 503 response. The C++ HTTP host does not provide gzip or chunked responses, so step
+6 checks the plain response and step 9 receives one buffered chunk.
+
+The HTTP surface includes Basic auth for the admin route, a legacy player-path redirect, and NDJSON
+room export/import routes. The admin credential is hard-coded as `ops` / `tutorial-admin` because
+the tutorial deliberately has no configuration file.
+
+```console
+$ curl -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=2'
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Basic realm="tutorial-admin"
+
+$ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=2'
+HTTP/1.1 200 OK
+{"channel":"profile","weight":2}
+
+$ curl -i http://127.0.0.1:5180/player/p1
+HTTP/1.1 301 Moved Permanently
+Location: /players/p1
+
+$ curl http://127.0.0.1:5180/rooms/<room-id>/export
+{"roomId":"<room-id>"}
+{"message":"p2: hello"}
+
+$ curl -X POST http://127.0.0.1:5180/rooms/<room-id>/import \
+    -H 'Content-Type: application/x-ndjson' \
+    --data-binary $'{"playerId":"p1","text":"one"}\n{"playerId":"p2","text":"two"}\n'
+{"imported":2}
+```
+
 ## How the documentation reads this code
 
 The documentation does not copy code; it reads regions of these files, delimited by `--8<--`
@@ -476,6 +538,17 @@ the page together. Marker names match the .NET tutorial.
 | `session-class` · `session-handler` · `session-actor-bind` · `session-actor-relay` | `Server/sessions/game_session.hpp` |
 | `stream-register` | `Server/main.cpp` |
 | `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
+| `http-client-create` | `HttpClient/main.cpp` |
+| `http-first-request` | `HttpClient/main.cpp` |
+| `http-request-shaping` | `HttpClient/main.cpp` |
+| `http-json-body` | `HttpClient/main.cpp` |
+| `http-response-kinds` | `HttpClient/main.cpp` |
+| `http-compressed-response` | `HttpClient/main.cpp` |
+| `http-redirect` | `HttpClient/main.cpp` |
+| `http-basic-auth` | `HttpClient/main.cpp` |
+| `http-download-stream` | `HttpClient/main.cpp` |
+| `http-upload-stream` | `HttpClient/main.cpp` |
+| `http-error-kinds` | `HttpClient/main.cpp` |
 
 ## Differences from the .NET tutorial
 

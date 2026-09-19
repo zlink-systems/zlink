@@ -4,8 +4,10 @@
   "version": "0.0.0",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:http-client": "npm --prefix HttpClient run build",
     "server": "node dist/Server/main.js",
-    "client": "node dist/Client/main.js"
+    "client": "node dist/Client/main.js",
+    "http-client": "npm --prefix HttpClient start"
   },
   "dependencies": {
     "@zlink-systems/framework": "0.18.1",

@@ -131,6 +131,7 @@ passed`다.
 | `Server` | channel handler, 방·큐, 플레이어, client session을 실행한다 |
 | `Client` | HTTP를 받아 mesh로 호출한다. 방과 플레이어를 만들고 부른다 |
 | `StreamClient` | 외부 TCP client. framework 없이 connector만 참조한다 |
+| `HttpClient` | 외부 HTTP client. framework 없이 http-client만 참조한다 |
 
 ## quickstart·샘플과 나눠 두는 이유
 
@@ -270,7 +271,67 @@ pushed: speedy            # player가 그 연결로 밀어 준다
 `pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민 알림**을
 받았다.
 
-### 9. 모니터링
+### 9. HTTP client
+
+`HttpClient`는 tutorial Client와 Server가 제공하는 HTTP 표면을 `ZLinkHttpClient`로 호출하는 외부
+프로그램이다. framework 패키지는 참조하지 않고 `Zlink.HttpClient`만 참조하며, 각 기능의 호출 코드는
+아래 마커에서 기능별 http-client 가이드가 읽는다.
+
+Server와 Client를 실행한 상태에서 다음 명령으로 빌드하고 실행한다.
+
+```bash title="linux"
+dotnet build Tutorial.sln -c Release
+dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
+```
+
+```powershell title="windows"
+dotnet build Tutorial.sln -c Release
+dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
+```
+
+실행 결과:
+
+```
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room a40e6276-59e8-4892-9386-ce3af2a20e95 chat 202
+response kinds: typed 200 raw application/json; charset=utf-8 fetch anonymous
+compressed response: 200 encoding-removed True
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 74
+upload stream: imported 3
+error kinds: bad request InternalFailure connection refused Unavailable
+```
+
+운영 route는 다음과 같이 확인한다. admin route는 Basic auth가 없으면 401과
+`WWW-Authenticate: Basic realm="tutorial-admin"`을 반환하고, 올바른 자격 증명이 있으면 weight를
+변경한다.
+
+```bash
+curl -i -u ops:tutorial-admin -X POST \
+  "http://127.0.0.1:5081/admin/channels/profile/weight?value=2"
+# 200 {"channel":"profile","weight":2}
+
+curl -i http://127.0.0.1:5080/player/p1
+# 301 Location: /players/p1
+
+curl -i -H 'Accept-Encoding: gzip' \
+  http://127.0.0.1:5080/rooms/$ROOM
+# 200 Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5080/rooms/$ROOM/export
+# 200 Content-Type: application/x-ndjson
+# {"roomId":"..."}
+# {"message":"p1: hello"}
+
+curl -X POST http://127.0.0.1:5080/rooms/$ROOM/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n{"playerId":"p2","text":"three"}\n'
+# {"imported":3}
+```
+
+### 10. 모니터링
 
 ```bash
 curl http://127.0.0.1:5080/status
@@ -351,6 +412,17 @@ curl http://127.0.0.1:5080/status
 | `session-actor-bind` | `Server/Sessions/AuthenticateHandler.cs` |
 | `session-actor-relay` | `Server/Sessions/GameSession.cs` |
 | `session-actor-client` | `StreamClient/Program.cs` |
+| `http-client-create` | `HttpClient/Program.cs` |
+| `http-first-request` | `HttpClient/Program.cs` |
+| `http-request-shaping` | `HttpClient/Program.cs` |
+| `http-json-body` | `HttpClient/Program.cs` |
+| `http-response-kinds` | `HttpClient/Program.cs` |
+| `http-compressed-response` | `HttpClient/Program.cs` |
+| `http-redirect` | `HttpClient/Program.cs` |
+| `http-basic-auth` | `HttpClient/Program.cs` |
+| `http-download-stream` | `HttpClient/Program.cs` |
+| `http-upload-stream` | `HttpClient/Program.cs` |
+| `http-error-kinds` | `HttpClient/Program.cs` |
 | `monitoring-call` | `Client/Program.cs` |
 
 ## 계약을 확인한 자리

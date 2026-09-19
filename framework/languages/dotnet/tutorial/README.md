@@ -135,3 +135,79 @@ passed`.
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del
   ```
+
+## HttpClient
+
+`HttpClient` is an external HTTP client program that calls the tutorial Client
+and Server surfaces through `ZLinkHttpClient`. It references only the
+`Zlink.HttpClient` package, so the calls are usable as source snippets in the
+feature guides without referencing Framework internals.
+
+With Server and Client running, build and run it as follows:
+
+```bash title="linux"
+dotnet build Tutorial.sln -c Release
+dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
+```
+
+```powershell title="windows"
+dotnet build Tutorial.sln -c Release
+dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
+```
+
+The recorded output is:
+
+```
+first request: p1 rookie
+request shaping: status 200 weight 2
+json body: player 200 room a40e6276-59e8-4892-9386-ce3af2a20e95 chat 202
+response kinds: typed 200 raw application/json; charset=utf-8 fetch anonymous
+compressed response: 200 encoding-removed True
+redirect: 200 p1
+basic auth: without 401 with 200
+download stream: chunks 2 bytes 74
+upload stream: imported 3
+error kinds: bad request InternalFailure connection refused Unavailable
+```
+
+The operational routes can be checked with these requests. The admin route
+requires Basic auth; without it the response is 401 with
+`WWW-Authenticate: Basic realm="tutorial-admin"`.
+
+```bash
+curl -i -u ops:tutorial-admin -X POST \
+  "http://127.0.0.1:5081/admin/channels/profile/weight?value=2"
+# 200 {"channel":"profile","weight":2}
+
+curl -i http://127.0.0.1:5080/player/p1
+# 301 Location: /players/p1
+
+curl -i -H 'Accept-Encoding: gzip' http://127.0.0.1:5080/rooms/$ROOM
+# 200 Content-Encoding: gzip
+
+curl -i http://127.0.0.1:5080/rooms/$ROOM/export
+# 200 Content-Type: application/x-ndjson
+# {"roomId":"..."}
+# {"message":"p1: hello"}
+
+curl -X POST http://127.0.0.1:5080/rooms/$ROOM/import \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary $'{"playerId":"p2","text":"one"}\n{"playerId":"p2","text":"two"}\n{"playerId":"p2","text":"three"}\n'
+# {"imported":3}
+```
+
+The source marker table for the HTTP client is:
+
+| Marker | Source |
+|---|---|
+| `http-client-create` | `HttpClient/Program.cs` |
+| `http-first-request` | `HttpClient/Program.cs` |
+| `http-request-shaping` | `HttpClient/Program.cs` |
+| `http-json-body` | `HttpClient/Program.cs` |
+| `http-response-kinds` | `HttpClient/Program.cs` |
+| `http-compressed-response` | `HttpClient/Program.cs` |
+| `http-redirect` | `HttpClient/Program.cs` |
+| `http-basic-auth` | `HttpClient/Program.cs` |
+| `http-download-stream` | `HttpClient/Program.cs` |
+| `http-upload-stream` | `HttpClient/Program.cs` |
+| `http-error-kinds` | `HttpClient/Program.cs` |
