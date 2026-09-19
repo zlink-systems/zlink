@@ -57,6 +57,13 @@ CONNECT/auth (per-language possible scope).
 of non-blocking) · one-shot path works · (cpp) custom execute/resume
 scheduler.
 
+**Execution surface**: each language's terminator names and return types
+match [Language interfaces §1.4](language-interfaces.en.md#14-terminators)
+and no terminator outside the table (including one-way) exists · the
+standalone builder has no `Yield` · the DI server builder's `Yield` returns
+the gate · (cpp) blocking terminators fail with `InvalidOperation` in a
+runtime execution context · (cpp) `fetch<T>()` completes asynchronously.
+
 ## 11.3 Gate
 
 - Coverage: java/kotlin JaCoCo LINE ≥ 0.80, node's built-in coverage

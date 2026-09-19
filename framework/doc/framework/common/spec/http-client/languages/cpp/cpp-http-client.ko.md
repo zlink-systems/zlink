@@ -21,7 +21,7 @@
 `zlink::http_client`는 C++에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
 JSON 전용 client가 아니라 일반 HTTP client이며 zlink의 call object와 fluent builder
 스타일로 낮은 수준 타입과 설정의 복잡성을 흡수한다. typed JSON 경로
-(`body(dto)`/`submit<T>()`/`fetch<T>()`)는 그 위에 더해진 편의 계층이다.
+(`body(dto)`/`async<T>()`/`fetch<T>()`)는 그 위에 더해진 편의 계층이다.
 
 `zlink::http_client`는 `zlink::framework` target을 public dependency로 사용한다.
 Framework 공용 오류·codec 계약을 소비하는 방향은
@@ -63,9 +63,14 @@ response parser, SSL stream, SSL context 타입을 노출하지 않는다.
 - body 소스(상호 배타): typed JSON `body(dto)`, raw `body(content, content_type)`,
   chunked streaming `body_stream(provider, content_type)`,
   `form(name, value)`(x-www-form-urlencoded), `multipart(...)`/`multipart_file(...)`
-- `submit<T>()`, `submit_raw()`, blocking `fetch<T>()`(typed body 직접 반환, 실패 시 throw)
-- server request builder의 one-way `submit()`은 `task_t<void>`를 반환한다. 이 task는 비동기
-  완료와 실패만 전달하며 전송 결과나 admission status를 포함하지 않는다.
+- 종결자 — 이름은 [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)를 따른다.
+  비동기: `async<T>()` → `task_t<http_response_t<T>>`, `async_raw()` → `task_t<raw_http_response_t>`,
+  `fetch<T>()` → `task_t<T>`(typed body 직접 반환, 실패 시 예외), `async<T>(callback)`.
+  blocking(CLI·client 시나리오 전용): `submit<T>()` → `result_t<http_response_t<T>>`,
+  `submit_raw()` → `result_t<raw_http_response_t>`. runtime 실행 문맥에서는 `invalid_operation`으로
+  즉시 실패한다.
+- server request builder는 standalone 표면에 `yield<T>()`를 더한다. 동작 의미는
+  [언어별 인터페이스 §1.4](../../language-interfaces.ko.md#14-종결자-terminator)와 server 실행 계약을 따른다.
 - `download(sink)`: 응답 body를 버퍼링 없이 chunk 단위로 streaming
 - connection keep-alive pool: 같은 origin(+proxy) 연결을 재사용하고 죽은 pooled 연결은
   fresh 연결로 1회 자동 재시도한다
@@ -83,10 +88,10 @@ auto client = zlink::http_client::client_t::create()
 auto created = co_await client
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
-  .submit<create_game_http_res_t>();
+  .async<create_game_http_res_t>();
 ```
 
-typed submit은 내부에서 raw submit 결과를 `.result()`로 기다리지 않고 `task_t` 완료를
+typed `async<T>()`는 내부에서 raw 작업 결과를 `.result()`로 기다리지 않고 `task_t` 완료를
 await한다. 이 규칙은 샘플 handler가 HTTP client를 사용할 때 runtime thread를 막지 않도록
 하기 위한 것이다.
 
@@ -101,29 +106,29 @@ auto created = zlink::http_client::client_t::create()
   .base_url(topology.api_http_endpoint)
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
-  .submit<create_game_http_res_t>()
-  .result();
+  .submit<create_game_http_res_t>();   // blocking — CLI·client 시나리오 전용
 ```
 
 이 shortcut은 builder가 임시 객체여도 안전하다. `request_builder_t`가 client를 (raw
 pointer가 아니라) 값으로 보유하므로, on-demand로 만든 client와 그 runtime이 request가
 끝날 때까지 유지된다.
 
-`submit<T>()`의 결과는 `result_t<http_response_t<T>>`다. 즉 성공/실패 래퍼와 HTTP 봉투
-(`status`/`headers`/`body`)를 거쳐 `.value().body`로 typed DTO에 닿는다. typed body만
-바로 필요한 경우에는 `fetch<T>()`를 사용한다. `fetch<T>()`는 result와 봉투를 풀어 DTO를 직접
-반환하고 실패는 예외로 던진다.
+blocking `submit<T>()`는 `result_t<http_response_t<T>>`를 반환한다 — 성공/실패 래퍼와 HTTP 봉투
+(`status`/`headers`/`body`)를 거쳐 `.value().body`로 typed DTO에 닿는다. `co_await async<T>()`는
+`http_response_t<T>`를 직접 반환하고 실패를 예외로 전달한다. typed body만 필요하면 `co_await fetch<T>()`가
+DTO를 직접 반환하고 실패를 예외로 던진다.
 
 ```cpp
-auto created = zlink::http_client::client_t::create(topology.api_http_endpoint)
+auto created = co_await zlink::http_client::client_t::create(topology.api_http_endpoint)
   .post("/games")
   .body(create_game_http_req_t { .game_name = game_name })
   .fetch<create_game_http_res_t>();   // create_game_http_res_t (실패 시 예외)
 ```
 
-`fetch<T>()`는 결과를 blocking으로 기다린다. 따라서 테스트와 client 시나리오처럼 blocking이
-허용되는 곳에서 사용한다. runtime/handler 코드는 runtime thread를 막지 않도록 `submit<T>()`를
-`co_await`한다.
+`fetch<T>()`는 다른 네 언어와 같이 비동기로 완료된다. blocking으로 기다려야 하는 테스트·client
+시나리오는 `submit<T>()`·`submit_raw()`를 사용하고, runtime/handler 코드는 runtime thread를 막지
+않도록 `async<T>()`를 `co_await`한다. blocking 종결자를 runtime 실행 문맥에서 호출하면
+`invalid_operation`으로 즉시 실패한다.
 
 일반 HTTP client 기능은 아래 범위를 지원한다.
 
@@ -132,14 +137,14 @@ auto created = zlink::http_client::client_t::create(topology.api_http_endpoint)
 - request body: typed JSON DTO, raw(임의 content-type), chunked streaming
   (`body_stream`), form-urlencoded, multipart/form-data
   (한 request에 body 소스는 하나만 허용)
-- 응답: raw(`submit_raw`), typed JSON(`submit<T>`/`fetch<T>`), streaming(`download(sink)`)
+- 응답: raw(`async_raw`/`submit_raw`), typed JSON(`async<T>`/`submit<T>`/`fetch<T>`), streaming(`download(sink)`)
 - timeout(client 기본 + request 단위 override), default header, request header
 - 인증: HTTP Basic(`basic_auth`), Bearer(`bearer_token`),
   proxy Basic(`proxy_basic_auth`), mTLS client certificate(`client_certificate_file`)
 - connection keep-alive pool: 같은 origin(+proxy)의 idle 연결을 재사용한다. 서버가
   연결을 닫았으면(stale) fresh 연결로 1회 자동 재시도한다. `body_stream` request는
   provider를 되감을 수 없으므로 항상 fresh 연결을 사용한다.
-- coroutine scheduler: 설정하지 않은 client는 기존 blocking submit 의미를 유지한다.
+- coroutine scheduler: `async_*`·`fetch`·`download`는 설정과 무관하게 execute scheduler에서 실행된다. 설정하지 않은 client는 기본 scheduler를 쓴다.
   `.coroutines()`를 명시하면 HTTP 작업을 내부 scheduler에 등록하고 custom scheduler를
   주입하면 HTTP 실행 위치와 continuation resume 위치를 분리할 수 있다.
 - redirect 자동 추적: `follow_redirects(max)`. `301/302`의 `POST`와 `303`은 `GET`으로
@@ -185,7 +190,7 @@ typed JSON 요청/응답은 아래 흐름으로 작성한다.
 
 | 동작 | C++ 흐름 |
 |------|----------|
-| JSON 요청 + typed 응답 | `client.post(path).body(dto).submit<TReply>()` |
+| JSON 요청 + typed 응답 | `co_await client.post(path).body(dto).async<TReply>()` |
 | 응답 JSON decode | `message_t::parse_json<T>()` 기반 response decode |
 
 ## 5. HTTPS와 TLS
@@ -203,9 +208,11 @@ test certificate나 local development certificate를 trust하는 설정은 HTTP 
 
 ## 6. Coroutine 실행 계약
 
-`submit_raw()`와 `submit<T>()`는 `zlink::framework::task_t`를 반환한다. coroutine 설정이
-없는 client는 기존 blocking submit 의미를 유지한다. 호출 중 HTTP 작업을 동기로 실행하고,
-caller가 반환된 task에 `.result()`를 호출하면 현재 스레드는 결과가 올 때까지 기다린다.
+`async_raw()`·`async<T>()`·`fetch<T>()`·`download(sink)`는 `zlink::framework::task_t`를 반환하고 HTTP
+작업을 execute scheduler에 등록한다 — `.coroutines(...)` 설정이 없으면 기본 execute scheduler를,
+있으면 주입된 scheduler를 사용한다. `.coroutines(...)`는 execute·resume scheduler만 교체하며 비동기
+여부를 바꾸지 않는다. blocking `submit_raw()`·`submit<T>()`는 scheduler와 무관하게 호출 스레드에서 작업을
+끝내고 `result_t`를 돌려준다.
 
 `.coroutines()`를 명시한 client는 HTTP 작업을 HTTP client 내부 scheduler에 등록한다. 이
 scheduler는 public header에 Boost.Asio, Boost.Beast, OpenSSL runtime 타입을 드러내지
@@ -231,9 +238,9 @@ auto client = zlink::http_client::client_t::create("https://matchmaking.internal
 HTTP 작업 실행 위치와 resume 위치를 모두 caller가 정해야 하면
 `.coroutines(execute_scheduler, resume_scheduler)`를 사용한다.
 
-| client 설정 | `submit<T>()` 실행 의미 |
-|-------------|-------------------------|
-| coroutine 설정 없음 | 호출 중 HTTP 작업을 동기 실행한다 |
+| client 설정 | `async<T>()` 실행 의미 |
+|-------------|------------------------|
+| coroutine 설정 없음 | 기본 execute scheduler가 HTTP 작업과 resume을 처리한다 |
 | `.coroutines()` | 내부 scheduler가 HTTP 작업과 resume을 모두 처리한다 |
 | `.coroutines(resume)` | 내부 scheduler가 HTTP 작업을 실행하고 custom scheduler가 resume한다 |
 | `.coroutines(execute, resume)` | custom scheduler들이 HTTP 작업과 resume을 처리한다 |
@@ -242,17 +249,17 @@ HTTP 작업 실행 위치와 resume 위치를 모두 caller가 정해야 하면
 `coroutine_resume_scheduler_t::resume(...)`은 완료된 continuation을 다시 실행한다.
 scheduler 인자가 `nullptr`이면 `invalid_operation`으로 실패한다.
 
-coroutine 설정이 있는 client에서 `submit_raw()` 또는 `submit<T>()`를 호출하면 request
-builder가 method, path, headers, body provider, timeout 같은 request state를 값으로
-복사한 뒤 scheduler에 작업을 등록한다. 임시 builder와 client 객체가 사라져도 등록된
+`async_raw()` 또는 `async<T>()`는 `.coroutines(...)` 설정 여부와 관계없이 request builder가 method,
+path, headers, body provider, timeout 같은 request state를 값으로 복사한 뒤 선택된 execute scheduler에
+작업을 등록한다. 임시 builder와 client 객체가 사라져도 등록된
 작업은 자신이 가진 request state와 runtime shared ownership으로 완료되어야 한다.
 
 request timeout은 scheduler queue 등록 시점을 시작점으로 둔다. worker가 HTTP 작업을
 시작하기 전에 deadline이 지났으면 HTTP 교환을 시작하지 않고 timeout 실패로 task를
 완료한다.
 
-`submit<T>()`는 raw HTTP 작업이 끝난 뒤 typed JSON decode를 수행한다. coroutine client에서는
-decode와 caller continuation이 resume scheduler 정책을 따른다. `submit<T>(callback)`도
+`async<T>()`는 raw HTTP 작업이 끝난 뒤 typed JSON decode를 수행한다. coroutine client에서는
+decode와 caller continuation이 resume scheduler 정책을 따른다. `async<T>(callback)`도
 coroutine 설정이 있으면 resume scheduler가 정한 위치에서 callback을 실행한다. callback에서
 예외가 나도 이미 완료된 task 결과를 바꾸지 않는다.
 
@@ -278,8 +285,8 @@ HTTP handler e2e 테스트는 외부 HTTP 도구나 sample-local client가 아�
 - public header boundary: runtime 구현 header와 Beast/Asio/OpenSSL 타입이 public header에
   드러나지 않는다
 - JSON request/response: typed DTO request를 JSON으로 보내고 reply DTO를 읽는다
-- coroutine submit: `co_await submit<T>()`가 typed response를 반환하고 내부 raw submit을
-  blocking wait로 기다리지 않는다
+- coroutine terminator: `co_await async<T>()`가 typed response를 반환하고 내부 raw 작업을
+  blocking wait로 기다리지 않는다. blocking `submit<T>()`는 runtime 실행 문맥에서 `invalid_operation`으로 실패한다
 - coroutine scheduler: `.coroutines()` 기본 scheduler, custom resume scheduler,
   custom execute/resume scheduler, framework queue adapter, scheduler 등록 실패,
   queue timeout을 검증한다
@@ -287,7 +294,7 @@ HTTP handler e2e 테스트는 외부 HTTP 도구나 sample-local client가 아�
   execute scheduler worker에서 호출된다
 - build 생략 shortcut: builder가 임시여도 `build()` 없이 `post(...)` 등으로 보낸 request가
   use-after-free 없이 완료된다
-- typed body fetch: `fetch<T>()`가 typed DTO를 직접 반환하고 실패 status를 예외로 던진다
+- typed body fetch: `co_await fetch<T>()`가 typed DTO를 직접 반환하고 실패 status를 예외로 던진다
 - method coverage: `PATCH`, `OPTIONS`가 전달되고 `HEAD`는 body 없이 status/header를 받는다
 - query encoding: `query(...)`가 percent-encoding된 query string으로 전달된다
 - body 소스: raw content-type, form-urlencoded, multipart 인코딩이 wire에 그대로 실리고,

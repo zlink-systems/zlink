@@ -44,34 +44,39 @@
 | streaming 업로드 | `body_stream(provider, ct)` — `std::function<std::optional<std::string>()>` | `BodyStream(Func<byte[]?>, ct)` | `bodyStream(Supplier<byte[]>, ct)` / kotlin `() -> ByteArray?` | `bodyStream(provider, ct)` — `() => Uint8Array \| null` |
 | form / multipart | `form` / `multipart` / `multipart_file` | `Form` / `Multipart` / `MultipartFile` | `form` / `multipart` / `multipartFile` | `form` / `multipart` / `multipartFile` |
 
-### 1.4 Messaging call terminator (목표 계약)
+### 1.4 종결자 (terminator)
 
-**HTTP request builder는 Messaging call builder다.** 비동기 완료 종결자는 .NET `Async`, Kotlin
-wrapper `await`, Java·C++ `submit`을 사용한다. Node는 raw response에 `submitRaw`, typed response와
-callback에 `async`, one-way에 `submit`을 사용한다.
-Awaitable을 사용하지 않는 호출자를 위한 callback
-완료 경로도 함께 제공한다([12 HTTP client](12-http-client.ko.md)).
-아래는 **목표 계약**이다. 현재 구현과의 차이와 수정 증거는 언어별 audit·실행 ledger가 소유한다.
+종결자 규칙은 세 층이 나눠 소유한다.
 
-| 개념 | cpp | dotnet | java | kotlin | node |
-| --- | --- | --- | --- | --- | --- |
-| **비동기 완료** (raw) | `submit_raw()` → `task_t<raw_http_response_t>` | `AsyncRaw(ct?)` → `ValueTask<RawHttpResponse>` | `submitRaw()` → `CompletionStage<RawHttpResponse>` | `awaitRaw()` (suspend) | `submitRaw()` → `Promise<RawHttpResponse>` |
-| **비동기 완료** (typed response) | `submit<T>()` → `task_t<http_response_t<T>>` | `Async<T>(ct?)` | `submit(Class<T>)` | `await(type)` / `await<T>()` (reified) | `async<T>()` |
-| **비동기 완료** (typed body) | `fetch<T>()` | `Fetch<T>(ct?)` → `ValueTask<T>` | `fetch(Class<T>)` | `fetch<T>()` (suspend) | `fetch<T>()` → `Promise<T>` |
-| **비동기 완료** (download) | `download(sink)` | `DownloadAsync(sink, ct?)` | `download(Consumer<byte[]>)` | `awaitDownload(sink)` | `download(sink)` |
-| **one-way** | `submit()` → `task_t<void>` | `Async(ct?)` → `ValueTask` | `submit()` → `CompletionStage<Void>` | `await()` → `Unit` (suspend) | `submit()` → `Promise<void>` |
-| **callback** | `submit<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | (suspend로 대체) | `async<T>(callback)` |
-| **gate 반납 완료** (서버 builder 전용) | `yield<T>()` | `Yield<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `yield(Class<T>)` | `yield<T>()` (suspend) | `yield<T>()` → `Promise<HttpResponse<T>>` |
-| blocking 언래핑 | **두지 않는다** | **두지 않는다** | **두지 않는다** | **두지 않는다** | **두지 않는다** |
+1. **언어별 stem과 `Yield`.** binding 정책
+   [async-coroutine-policy §6](../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)은
+   binding의 언어별 async stem(.NET `Async`, C++ `async`, Java·Node `submit`)과 blocking stem(.NET `Submit`,
+   C++ `submit`, Java·Node `submit_sync`)을 정한다. framework
+   [Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)는
+   이를 framework 표면에 투영하고 Kotlin wrapper `await`, gate 반납 terminal `Yield`, Node blocking 제외,
+   runtime 실행 문맥의 blocking 거부(`InvalidOperation`)를 정한다.
+2. **응답 형태 대응.** 이 절의 표가 HTTP 종결자의 **이름과 공통 실행 형태**를 소유한다. HTTP는 위 stem에
+   응답 형태(typed·raw·body만·download·callback)를 대응시키며, `Raw` 접미와 `fetch`·`download`는 HTTP가
+   정한 이름이다.
+3. **언어별 signature.** `languages/<lang>/`의 exact interface는 이 표를 그 언어의 정확한 parameter와
+   return type으로 투영한다. 이름을 다시 결정하지 않는다.
 
-- HTTP request builder에는 `Yield`·`yield`를 제공하지 않는다. Spot shared turn을 반납해야 하는
-  application은 HTTP call을 `RunIoWorker(...)`에 넣고 Worker call의 `Yield`를 사용한다.
-- one-way 완료 값은 전송 결과나 admission status를 포함하지 않는다. 반환형은 비동기 완료와 실패만 전달한다.
-- `.NET`의 비동기 종결자는 `Async`, Kotlin wrapper는 `await`, C++·Java는 `submit`을 사용한다.
-  Node는 raw response에 `submitRaw`, typed response와 callback에 `async`, one-way에 `submit`을 사용한다.
-- `fetch` 계열은 status·header가 필요 없는 호출자에게 decoded body를 직접 반환한다.
-  C++를 제외한 언어에서는 비동기로 완료된다. C++ `fetch<T>()`는 blocking client
-  시나리오에서만 사용한다.
+HTTP는 응답 없는 요청이 없으므로 one-way 종결자를 두지 않는다. 이 문장이 그 부재의 유일한 규범이다 — 다른
+문서는 이 절을 참조한다. 응답 값이 필요 없는 호출은 raw 종결자의 결과를 사용하지 않는다.
+
+| 응답 형태 | 규칙 | cpp | dotnet | java | kotlin | node |
+| --- | --- | --- | --- | --- | --- | --- |
+| typed response `HttpResponse<T>` | 비동기 stem, generic | `async<T>()` → `task_t<http_response_t<T>>` | `Async<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `submit(Class<T>)` → `CompletionStage<HttpResponse<T>>` | `await(type)` / `await<T>()` (suspend) | `submit<T>()` → `Promise<HttpResponse<T>>` |
+| raw response | 비동기 stem + `Raw` | `async_raw()` → `task_t<raw_http_response_t>` | `AsyncRaw(ct?)` → `ValueTask<RawHttpResponse>` | `submitRaw()` → `CompletionStage<RawHttpResponse>` | `awaitRaw()` (suspend) | `submitRaw()` → `Promise<RawHttpResponse>` |
+| decoded body `T`만 | `fetch` — 모든 언어에서 비동기 | `fetch<T>()` → `task_t<T>` | `Fetch<T>(ct?)` → `ValueTask<T>` | `fetch(Class<T>)` → `CompletionStage<T>` | `fetch<T>()` (suspend) | `fetch<T>()` → `Promise<T>` |
+| streaming download | `download` | `download(sink)` → `task_t<raw_http_response_t>` | `DownloadAsync(sink, ct?)` | `download(Consumer<byte[]>)` | `awaitDownload(sink)` | `download(sink)` |
+| callback 완료 | 비동기 stem + callback 인자 | `async<T>(callback)` | `Async<T>(callback)` | `submit(Class<T>, callback)` | (suspend로 대체) | `submit<T>(callback)` |
+| gate 반납 (DI server builder 전용) | `Yield` | `yield<T>()` | `Yield<T>(ct?)` → `ValueTask<HttpResponse<T>>` | `yield(Class<T>)` | `yield<T>()` (suspend) | `yield<T>()` → `Promise<HttpResponse<T>>` |
+| blocking (CLI·client 시나리오 전용) | blocking stem | `submit_raw()` → `result_t<raw_http_response_t>`, `submit<T>()` → `result_t<http_response_t<T>>` | 두지 않는다 | 두지 않는다 | 두지 않는다 | 두지 않는다 |
+
+- `Yield`가 있는 실행 문맥과 gate 반납의 의미는 [Submit과 완료 §2](../server/01-execution/01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)가,
+  DI server builder의 `Yield`와 I/O Worker + Worker `Yield`의 두 사용 형태는 [05 §5.2](05-execution-model.ko.md#52-외부-http-대기와-spot-실행-줄)가 소유한다.
+- `fetch<T>()`는 C++에서도 비동기다 — 같은 이름이 언어마다 다른 실행 의미를 갖지 않는다.
 
 ### 1.5 응답/보조 타입
 

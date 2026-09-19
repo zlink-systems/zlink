@@ -75,14 +75,10 @@ The public surface doesn't expose `System.Net.Http` types such as
   `BodyStream`, `Form`, `Multipart`, `MultipartFile`, `AsyncRaw`,
   `DownloadAsync`, `Async<T>`, `Fetch<T>` (directly returns the decoded
   body), and a callback overload.
-- `ZLinkHttpServerRequestBuilder` — includes the standalone surface and
-  adds the one-way `ValueTask Async(CancellationToken cancellationToken = default)`.
-  The returned `ValueTask` only delivers async completion and failure,
-  not the transport result or admission status. It also adds
-  `ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)`,
-  which returns the shared Spot gate and picks it back up on a new
-  turn. Used only in a `SpotWide` User Spot or Instance Spot, where
-  gate return is allowed.
+- `ZLinkHttpServerRequestBuilder` — adds to the standalone surface
+  `ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)`.
+  Its behavior follows [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators)
+  and the server execution contract.
 - `IZLinkHttpExecutionScheduler` / `IZLinkHttpExecutionTurn` — a public
   injection point where the DI integration captures the current Spot
   turn and places callback completion on the original execution
@@ -113,9 +109,6 @@ public delegate void ZLinkHttpCallback<T>(
 public ValueTask<T> Fetch<T>(
     CancellationToken cancellationToken = default);
 ```
-- The HTTP request builder doesn't provide `Yield<T>`. To return the
-  shared Spot gate, call `Async<T>` inside `RunIoWorker(...)` and wait
-  with the Worker call's `Yield`.
 - A callback overload doesn't return an awaitable. The completion
   callback is placed as a new turn on the execution queue of the Spot
   turn that made the request. In a standalone client, it's called

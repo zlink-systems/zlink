@@ -4,20 +4,19 @@
 
 ## 4.1 Terminator Axis (§5.1)
 
-| Form | Common Concept Name | Returns | Failure Condition |
+| Form | Terminator (names in [Language interfaces §1.4](language-interfaces.en.md#14-terminators)) | Returns | Failure Condition |
 | --- | --- | --- | --- |
-| raw | `submitRaw()` | `RawHttpResponse` | Only transport failure. **Status isn't failure** (4xx/5xx also return success) |
-| typed | `submit<T>()` | `HttpResponse<T>` | Transport failure + **status ≥ 400** + decode failure |
-| download | `download(sink)` | `RawHttpResponse` (empty body) | Transport failure. Status is treated the same as raw |
+| raw | raw response terminator | `RawHttpResponse` | Only transport failure. **Status isn't failure** (4xx/5xx also return success) |
+| typed | typed response terminator | `HttpResponse<T>` | Transport failure + **status ≥ 400** + decode failure |
+| download | download terminator | `RawHttpResponse` (empty body) | Transport failure. Status is treated the same as raw |
 
 - A typed submit's status ≥ 400 is reported as `InternalFailure`. Under
   the current contract, the response body isn't exposed in this case —
-  if the error payload is needed, use `submitRaw()` (revision candidate
+  if the error payload is needed, use the raw response terminator (revision candidate
   [R1](10-revision-candidates.en.md)).
-- A public terminator that synchronously unwraps the completion value
-  isn't provided. If only a typed response's body is needed, the caller
-  selects the body after completing the async typed terminator
-  ([Chapter 5](05-execution-model.en.md)).
+- Whether a blocking terminator exists, and under what name, is decided by
+  [Language interfaces §1.4](language-interfaces.en.md#14-terminators). If only
+  a typed response's body is needed, use the body-only terminator (`fetch`).
 
 ## 4.2 Response Types
 

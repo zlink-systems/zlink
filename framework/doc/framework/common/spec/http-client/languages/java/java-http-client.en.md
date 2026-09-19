@@ -51,10 +51,10 @@ The public surface doesn't expose `java.net.http`'s `HttpClient`/
   `submit(Class<T>)`, `fetch(Class<T>)`, callback. `fetch(Class<T>)`
   directly returns the decoded body as `CompletionStage<T>`, excluding
   status and header.
-- `ZLinkHttpServerRequestBuilder` — provides the standalone surface and
-  one-way `CompletionStage<Void> submit()`. One-way completion has no
-  transport result or admission status, and there's no method that
-  pulls the completion value synchronously.
+- `ZLinkHttpServerRequestBuilder` — adds to the standalone surface
+  `CompletionStage<HttpResponse<T>> yield(Class<T>)`. Its behavior follows
+  [Language interfaces §1.4](../../language-interfaces.en.md#14-terminators) and the
+  server execution contract.
 - `ZLinkHttpExecutionTurn` — the injection point where the framework
   wires in the current Spot execution turn's preservation/return.
 - `RawHttpResponse` (record) { `status`, `headers`, `body` }.
@@ -69,9 +69,7 @@ The public surface doesn't expose `java.net.http`'s `HttpClient`/
   also composed as a `CompletionStage` chain.
 - A `submit` that waits for a server request's response keeps the
   current Spot turn, and the callback enters the execution queue as a
-  new turn. The HTTP request builder has no `yield`. To return the
-  shared Spot gate, call `submit` inside `runIoWorker(...)` and wait
-  with the Worker call's `yield()`.
+  new turn.
 - A handler path only uses `CompletionStage` composition — `.get()`/
   `.join()` are prohibited.
 - The continuation resume location is specified with a

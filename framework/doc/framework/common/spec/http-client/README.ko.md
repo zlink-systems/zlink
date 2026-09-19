@@ -15,19 +15,19 @@ public type과 signature로 표현한다.
 
 | 장 | 문서 | 내용 |
 | --- | --- | --- |
-| **12** | [**HTTP client (framework 계약)**](12-http-client.ko.md) | **정본** — 정체성, fluent builder, terminator(`submit`/`async`/`yield` + callback), turn seam, DI 서버 표면 |
+| **12** | [**HTTP client (framework 계약)**](12-http-client.ko.md) | **정본** — 정체성, fluent builder, terminator(response completion·callback·`Yield`), turn seam, DI 서버 표면 |
 | 1 | [범위와 아키텍처](01-scope-and-architecture.ko.md) | 정체성, 산출물 경계, framework와의 관계 |
 | 2 | [Client builder 계약](02-client-builder.ko.md) | builder 옵션 전체와 **기본값 표** |
 | 3 | [Request 계약](03-request-builder.ko.md) | HTTP 메서드, 헤더/query, body 소스 5종과 배타 규칙 |
 | 4 | [Response 계약](04-response-model.ko.md) | raw/typed/download/fetch, status ≥ 400 정책 |
-| 5 | [실행 모델](05-execution-model.ko.md) | 비동기 계약, blocking 금지 규칙, client 수명 |
+| 5 | [실행 모델](05-execution-model.ko.md) | 비동기 계약, blocking 종결자의 runtime 거부, client 수명 |
 | 6 | [Redirect · Retry · Cookie](06-redirect-retry-cookie.ko.md) | rewrite 규칙 표, 재시도 계약, cookie 부분집합 |
 | 7 | [인증 · TLS · Proxy](07-auth-tls-proxy.ko.md) | Basic/Bearer, PEM 신뢰/mTLS, CONNECT tunnel |
 | 8 | [압축](08-compression.ko.md) | gzip/deflate 투명 해제 의미론 |
 | 9 | [에러 모델](09-error-model.ko.md) | error kind 공통 집합, 언어별 매핑과 구현 갭 |
 | 10 | [개정 후보](10-revision-candidates.ko.md) | **비계약** — 승격 전 검토 항목(R1~R14) |
 | 11 | [회귀 테스트 계약](11-regression-tests.ko.md) | 공통 계약 케이스 매트릭스, 게이트, 커버리지 갭 |
-| — | [언어별 인터페이스 대조표](language-interfaces.ko.md) | **비규범** — 5개 언어 표면을 나란히 보는 대조표. 계약을 고정하지 않는다 |
+| — | [언어별 인터페이스 정의](language-interfaces.ko.md) | 공통 개념의 **언어별 이름**을 소유한다(종결자는 §1.4). 정확한 parameter·return type은 `languages/<lang>/`이 이 표를 투영해 소유한다 |
 
 ## 언어별 public API
 
