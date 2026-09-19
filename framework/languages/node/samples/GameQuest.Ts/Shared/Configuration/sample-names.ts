@@ -7,11 +7,18 @@ const SampleNames = {
   clientTimeout: 20000
 } as const;
 
+const questMissionSpotIdPrefix = 'player-quest-';
+
 function questMissionSpotId(playerId: string): string {
-  return `player-quest-${playerId}`;
+  return `${questMissionSpotIdPrefix}${playerId}`;
+}
+
+function playerIdFromQuestMissionSpotId(spotId: string): string {
+  return spotId.slice(questMissionSpotIdPrefix.length);
 }
 
 export {
   SampleNames,
-  questMissionSpotId
+  questMissionSpotId,
+  playerIdFromQuestMissionSpotId
 };

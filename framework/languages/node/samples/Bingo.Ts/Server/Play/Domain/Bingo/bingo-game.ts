@@ -17,6 +17,13 @@ class BingoGame {
     this.winners = [];
   }
 
+  static restore(drawDeck: number[], drawnNumbers: readonly number[], winners: readonly string[]): BingoGame {
+    const game = new BingoGame(drawDeck.filter((number) => !drawnNumbers.includes(number)));
+    game.drawnNumbers.push(...drawnNumbers);
+    game.winners.push(...winners);
+    return game;
+  }
+
   submitCard(player: BingoPlayerGameState, cardNumbers: number[]): BingoCardType {
     if (player.card !== null) {
       throw new Error(`Actor '${player.actorId}' already submitted a Bingo card.`);

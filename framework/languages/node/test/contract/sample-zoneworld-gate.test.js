@@ -176,6 +176,11 @@ test('ZoneWorld applies the Node sample configuration policy without environment
     recursive: true,
     withFileTypes: true
   }).filter((entry) => entry.isFile() && /\.(?:ts|mjs|sh)$/.test(entry.name))
+    // The policy covers the sample's own server, client and runner sources. `scripts/`
+    // is the host tooling that deliberately owns process.env (bb82ed2953), and
+    // node_modules/dist exist only after a package-mode install or a build.
+    .filter((entry) => !/(?:^|[\\/])(?:node_modules|dist|scripts)(?:[\\/]|$)/.test(
+      path.relative(path.join(nodeRoot, 'samples/ZoneWorld'), entry.parentPath)))
     .map((entry) => read(path.join(entry.parentPath, entry.name).slice(nodeRoot.length + 1)))
     .join('\n');
 
@@ -262,4 +267,39 @@ test('ZoneWorld alert replay is bounded and begins only when WatchNodes is handl
   assert.match(registry, /const RECENT_ALERT_COUNT = 20/);
   assert.match(registry, /add\(context: ZLinkSessionContext\): void \{\s*this\.consoles\.set\(context\.sessionId, context\);\s*}/);
   assert.match(handlers, /reply\(new WatchNodesRes[\s\S]*?this\.consoles\.replayAlerts\(context\)/);
+});
+
+// #665: join completion has no OperationId dedupe (.NET reference has it; the general
+// rule is spec: 03-spot-actor/05-spot-actor-membership.ko.md "Public Actor Join
+// OperationId를 completion idempotency에만 사용한다", already applied by the Bingo
+// sample's contract §8). A repeated completion for the same OperationId must not repeat
+// its response, state change or notify, and the dedupe record must survive relocation.
+test('ZoneWorld PlayerActor dedupes join completion by OperationId and persists it across relocation', () => {
+  const actor = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Actors/player-actor.ts');
+  const adapter = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Actors/player-actor-relocation-adapter.ts');
+
+  const onJoinCompletedMatch = actor.match(/async onJoinCompleted\(completion: ZLinkActorJoinCompletion\): Promise<void> \{[\s\S]*?\n  \}\n  \/\/ --8<-- \[end:doc-zw-join-completed\]/);
+  assert.ok(onJoinCompletedMatch, 'onJoinCompleted not found in player-actor.ts');
+  const body = onJoinCompletedMatch[0];
+  assert.match(
+    body,
+    /completion\.operationId/,
+    'onJoinCompleted must read completion.operationId.'
+  );
+  assert.match(
+    body,
+    /processedJoinOperations\.has\(/,
+    'onJoinCompleted must check a previously-applied OperationId before repeating response/state/notify.'
+  );
+
+  assert.match(
+    adapter,
+    /captureProcessedJoinOperations\(\)/,
+    'the relocation adapter must capture the processed join operation record.'
+  );
+  assert.match(
+    adapter,
+    /restoreProcessedJoinOperations\(/,
+    'the relocation adapter must restore the processed join operation record.'
+  );
 });
