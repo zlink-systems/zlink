@@ -99,9 +99,10 @@ Claude도 추론 레벨을 정할 수 있으나 **호출 시점이 아니라 에
 
 #### 어느 도구를 쓸 것인가
 
-**Sub-agent는 codex만 사용한다.** Claude sub-agent는 codex가 접근할 수 없는 작업이나
-codex 쿼터가 소진된 뒤에만 쓰고, 그때도 사유를 결정 기록이나 작업 로그에 남긴다. Claude의
-세션·주간 한도는 codex보다 훨씬 빨리 닳아 작업자가 한꺼번에 멈춘다.
+**Sub-agent는 codex를 우선 사용한다.** codex를 쓸 수 있으면 sub-agent는 codex다. Claude
+sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 필터로 job이 죽음, 반복 실패,
+또는 codex가 접근할 수 없는 작업. Claude로 대체했으면 그 사유를 결정 기록이나 작업 로그에
+남긴다. Claude의 세션·주간 한도는 codex보다 훨씬 빨리 닳아 작업자가 한꺼번에 멈춘다.
 
 - 실행은 `codex exec -m <model id> -c model_reasoning_effort=<level> -C <worktree> …`로 하고,
   이어서 할 때는 `codex exec resume <session id> "<후속 지시>"`로 같은 세션을 잇는다 — 새
