@@ -204,55 +204,63 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Tutorial build (README's own 빌드/linux block, fallback — dotnet build Tutorial.sln)
+      - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux -- dotnet build Tutorial.sln -c Release
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
+      - name: Tutorial build (README's own 빌드/linux block)
+        working-directory: zlink-tutorial-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
-        run: docker run -d --rm --name tutorial-redis -p 6379:6379 redis:7
-
-      - name: Tutorial run smoke — server starts, one request succeeds
-        working-directory: zlink-tutorial-dotnet
-        shell: bash
         run: |
           set -euo pipefail
-          # `dotnet run` execs the built apphost, so its argv no longer contains
-          # "Server.csproj" once it is actually serving -- pattern-matching pkill
-          # would silently miss it. setsid + a saved pid + killing the whole
-          # process group survives any exec the child does.
-          setsid dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
-          echo $! > server.pid
-          setsid dotnet run --project Client/Client.csproj -c Release --no-build > client.log 2>&1 &
-          echo $! > client.pid
-          ok=0
-          for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:5080/players/p1/profile 2>/dev/null | grep -q '"playerId":"p1"'; then
-              ok=1; break
-            fi
-            sleep 1
-          done
-          if [ "${ok}" != 1 ]; then
-            echo "::error::tutorial did not answer within 60s"
-            echo '--- server.log ---'; cat server.log
-            echo '--- client.log ---'; cat client.log
-            exit 1
-          fi
-          echo "tutorial smoke OK: GET /players/p1/profile answered"
+          redis_name="zlink-redis-$$"
+          docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
+          printf '%s\n' "${redis_name}" > zlink-tutorial-dotnet/redis.container
+
+      - name: Tutorial run (README's own 실행/linux block)
+        working-directory: zlink-tutorial-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Tutorial verify (README's own 검증/linux block)
+        working-directory: zlink-tutorial-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-dotnet
         run: |
-          for f in server.pid client.pid; do
-            if [ -f "${f}" ]; then
-              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
-            fi
-          done
-          docker rm -f tutorial-redis 2>/dev/null || true
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
+          if [ -f redis.container ]; then
+            redis_name="$(cat redis.container)"
+            case "${redis_name}" in
+              zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
+            esac
+          fi
 
-      - name: Sample e2e — Bingo (README/14-samples §9 — run_sample.sh)
+      - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-dotnet
-        run: ./Bingo/run_sample.sh
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
+      - name: Sample build (README's own 빌드/linux block)
+        working-directory: zlink-samples-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Sample run (README's own 실행/linux block)
+        working-directory: zlink-samples-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Sample verify (README's own 검증/linux block)
+        working-directory: zlink-samples-dotnet
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
   zip-dotnet-windows:
     name: dotnet / windows-2022 (zip only)
@@ -286,10 +294,15 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Tutorial build (README's own 빌드/windows block, fallback — dotnet build Tutorial.sln)
+      - name: Tutorial install (README's own 내려받기와 설치/windows block)
         working-directory: zlink-tutorial-dotnet
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows -- dotnet build Tutorial.sln -c Release
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+
+      - name: Tutorial build (README's own 빌드/windows block)
+        working-directory: zlink-tutorial-dotnet
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
 
       # GitHub-hosted windows-2022 runners cannot run Linux Docker containers
       # (Docker there is Windows-container-only; switching to Linux containers
@@ -307,50 +320,54 @@ jobs:
         continue-on-error: true
         run: choco install memurai-developer -y --no-progress
 
-      - name: Tutorial run smoke — server starts, one request succeeds
+      - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-tutorial-dotnet
         shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          # `dotnet run` spawns the built apphost as a child process, so
-          # Get-Process dotnet later would miss it -- record the pids Start-Process
-          # itself gives us and kill each process *tree* on cleanup instead.
-          $serverProc = Start-Process dotnet -ArgumentList 'run','--project','Server/Server.csproj','-c','Release','--no-build' `
-            -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
-          $clientProc = Start-Process dotnet -ArgumentList 'run','--project','Client/Client.csproj','-c','Release','--no-build' `
-            -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
-          "$($serverProc.Id) $($clientProc.Id)" | Out-File -Encoding ascii tutorial.pids
-          $ok = $false
-          for ($i = 0; $i -lt 60; $i++) {
-            try {
-              $body = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/players/p1/profile' -TimeoutSec 5
-              if ($body.playerId -eq 'p1') { $ok = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 1
-          }
-          if (-not $ok) {
-            Get-Content server.log, server.err.log, client.log, client.err.log -ErrorAction SilentlyContinue
-            throw "tutorial did not answer within 60s"
-          }
-          Write-Host "tutorial smoke OK: GET /players/p1/profile answered"
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+
+      - name: Tutorial verify (README's own 검증/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-tutorial-dotnet
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
       - name: Stop tutorial processes
         if: always()
         working-directory: zlink-tutorial-dotnet
         shell: pwsh
         run: |
-          if (Test-Path tutorial.pids) {
-            foreach ($pid_ in (Get-Content tutorial.pids) -split ' ') {
-              if ($pid_) { taskkill /PID $pid_ /T /F 2>$null }
+          foreach ($file in @('server.pid', 'client.pid')) {
+            if (Test-Path $file) {
+              foreach ($pid_ in Get-Content $file) {
+                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null }
+              }
             }
           }
 
-      - name: Sample e2e — Bingo (README/14-samples §9 — run_sample.ps1)
+      - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-samples-dotnet
-        shell: pwsh
-        run: .\Bingo\run_sample.ps1
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+
+      - name: Sample build (README's own 빌드/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-dotnet
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+
+      - name: Sample run (README's own 실행/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-dotnet
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+
+      - name: Sample verify (README's own 검증/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-dotnet
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
   zip-node-linux:
     name: node / ubuntu-24.04 (zip only)
@@ -380,53 +397,50 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Tutorial install (README's own 내려받기와 설치/linux block)
+        working-directory: zlink-tutorial-node
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-node
-        run: npm install && bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
 
-      - name: Start Redis for the tutorial (README — redis://127.0.0.1:6379)
-        run: docker run -d --rm --name tutorial-redis -p 6379:6379 redis:7
-
-      - name: Tutorial run smoke — server starts, one request succeeds
+      - name: Tutorial run (README's own 실행/linux block)
         working-directory: zlink-tutorial-node
-        shell: bash
-        run: |
-          set -euo pipefail
-          # `npm run server` execs a child `node` whose argv has no directory name to
-          # pattern-match later, so track pids via process groups instead (setsid).
-          setsid npm run server > server.log 2>&1 &
-          echo $! > server.pid
-          setsid npm run client > client.log 2>&1 &
-          echo $! > client.pid
-          ok=0
-          for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:5480/players/p1/profile 2>/dev/null | grep -q '"playerId":"p1"'; then
-              ok=1; break
-            fi
-            sleep 1
-          done
-          if [ "${ok}" != 1 ]; then
-            echo "::error::tutorial did not answer within 60s"
-            echo '--- server.log ---'; cat server.log
-            echo '--- client.log ---'; cat client.log
-            exit 1
-          fi
-          echo "tutorial smoke OK: GET /players/p1/profile answered"
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Tutorial verify (README's own 검증/linux block)
+        working-directory: zlink-tutorial-node
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-node
         run: |
-          for f in server.pid client.pid; do
-            if [ -f "${f}" ]; then
-              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
-            fi
-          done
-          docker rm -f tutorial-redis 2>/dev/null || true
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
 
-      - name: Sample e2e — Bingo.Ts (README/14-samples §9 — run_sample.sh)
+      - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-node
-        run: ./Bingo.Ts/run_sample.sh
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
+      - name: Sample build (README's own 빌드/linux block)
+        working-directory: zlink-samples-node
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Sample run (README's own 실행/linux block)
+        working-directory: zlink-samples-node
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Sample verify (README's own 검증/linux block)
+        working-directory: zlink-samples-node
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
   zip-java-linux:
     name: java / ubuntu-24.04 (zip only)
@@ -460,54 +474,50 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Tutorial build (README's own 빌드/linux block, fallback — gradlew installDist)
+      - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux -- ./gradlew :java:Server:installDist :java:Client:installDist --no-daemon
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
 
-      - name: Start Redis for the tutorial (README — 127.0.0.1:6379)
-        run: docker run -d --rm --name tutorial-redis -p 6379:6379 redis:7
-
-      - name: Tutorial run smoke — server starts, one request succeeds
+      - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-java
-        shell: bash
-        run: |
-          set -euo pipefail
-          # installDist's start script execs java, replacing its own argv, so
-          # pattern-matching pkill on the script path would miss it -- track
-          # pids via process groups instead (setsid).
-          setsid ./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
-          echo $! > server.pid
-          setsid ./java/Client/build/install/Client/bin/Client > client.log 2>&1 &
-          echo $! > client.pid
-          ok=0
-          for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:5280/players/p1/profile 2>/dev/null | grep -q '"playerId":"p1"'; then
-              ok=1; break
-            fi
-            sleep 1
-          done
-          if [ "${ok}" != 1 ]; then
-            echo "::error::tutorial did not answer within 60s"
-            echo '--- server.log ---'; cat server.log
-            echo '--- client.log ---'; cat client.log
-            exit 1
-          fi
-          echo "tutorial smoke OK: GET /players/p1/profile answered"
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Tutorial run (README's own 실행/linux block)
+        working-directory: zlink-tutorial-java
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Tutorial verify (README's own 검증/linux block)
+        working-directory: zlink-tutorial-java
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-java
         run: |
-          for f in server.pid client.pid; do
-            if [ -f "${f}" ]; then
-              kill -TERM -- "-$(cat "${f}")" 2>/dev/null || true
-            fi
-          done
-          docker rm -f tutorial-redis 2>/dev/null || true
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
 
-      - name: Sample e2e — java/TicTacToe (README/14-samples §9 — run_sample.sh)
+      - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: zlink-samples-java
-        run: ./java/TicTacToe/run_sample.sh
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
+      - name: Sample build (README's own 빌드/linux block)
+        working-directory: zlink-samples-java
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Sample run (README's own 실행/linux block)
+        working-directory: zlink-samples-java
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Sample verify (README's own 검증/linux block)
+        working-directory: zlink-samples-java
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
   zip-java-windows:
     name: java / windows-2022 (zip only)
@@ -542,10 +552,15 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Tutorial build (README's own 빌드/windows block, fallback — gradlew.bat installDist)
+      - name: Tutorial install (README's own 내려받기와 설치/windows block)
         working-directory: zlink-tutorial-java
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows -- ./gradlew.bat :java:Server:installDist :java:Client:installDist --no-daemon
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+
+      - name: Tutorial build (README's own 빌드/windows block)
+        working-directory: zlink-tutorial-java
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
 
       # See the dotnet/windows-2022 job for why Docker Redis is unavailable
       # here and why Memurai substitutes for it. Same caveat: unverified.
@@ -554,52 +569,54 @@ jobs:
         continue-on-error: true
         run: choco install memurai-developer -y --no-progress
 
-      - name: Tutorial run smoke — server starts, one request succeeds
+      - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
-        continue-on-error: true
         working-directory: zlink-tutorial-java
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          # The .bat launches java as a child process, so the pid Start-Process
-          # gives us is not the process actually listening -- kill the whole tree
-          # on cleanup instead of matching by name (the name would be "java", not
-          # "Server"/"Client", for every sample and tutorial process alike).
-          $serverProc = Start-Process .\java\Server\build\install\Server\bin\Server.bat `
-            -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
-          $clientProc = Start-Process .\java\Client\build\install\Client\bin\Client.bat `
-            -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
-          "$($serverProc.Id) $($clientProc.Id)" | Out-File -Encoding ascii tutorial.pids
-          $ok = $false
-          for ($i = 0; $i -lt 60; $i++) {
-            try {
-              $body = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 5
-              if ($body.playerId -eq 'p1') { $ok = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 1
-          }
-          if (-not $ok) {
-            Get-Content server.log, server.err.log, client.log, client.err.log -ErrorAction SilentlyContinue
-            throw "tutorial did not answer within 60s"
-          }
-          Write-Host "tutorial smoke OK: GET /players/p1/profile answered"
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+
+      - name: Tutorial verify (README's own 검증/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-tutorial-java
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
       - name: Stop tutorial processes
         if: always()
         working-directory: zlink-tutorial-java
         shell: pwsh
         run: |
-          if (Test-Path tutorial.pids) {
-            foreach ($pid_ in (Get-Content tutorial.pids) -split ' ') {
-              if ($pid_) { taskkill /PID $pid_ /T /F 2>$null }
+          foreach ($file in @('server.pid', 'client.pid')) {
+            if (Test-Path $file) {
+              foreach ($pid_ in Get-Content $file) {
+                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null }
+              }
             }
           }
 
-      - name: Sample e2e — java/TicTacToe (README/14-samples §9 — run_sample.ps1)
+      - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: zlink-samples-java
-        shell: pwsh
-        run: .\java\TicTacToe\run_sample.ps1
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 windows
+
+      - name: Sample build (README's own 빌드/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-java
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+
+      - name: Sample run (README's own 실행/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-java
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+
+      - name: Sample verify (README's own 검증/windows block)
+        if: steps.memurai.outcome == 'success'
+        working-directory: zlink-samples-java
+        shell: bash
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
 
   zip-cpp-linux:
     name: cpp / ubuntu-24.04 (zip only)
@@ -619,36 +636,65 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
+      - name: Install C++ README prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y g++-13 cmake ninja-build git pkg-config curl
+          echo "CC=gcc-13" >> "$GITHUB_ENV"
+          echo "CXX=g++-13" >> "$GITHUB_ENV"
+          vcpkg_root="${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
+          test -x "${vcpkg_root}/vcpkg"
+          test -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
+          echo "VCPKG_ROOT=${vcpkg_root}" >> "$GITHUB_ENV"
+
       - name: Unzip tutorial and TicTacToe sample
         run: |
           set -euo pipefail
           unzip -q zips/zlink-tutorial-cpp.zip
           unzip -q zips/zlink-samples-cpp.zip
 
+      - name: Tutorial install (README's own 내려받기와 설치/linux block)
+        working-directory: zlink-tutorial-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
       - name: Tutorial build (README's own 빌드/linux block)
         working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Tutorial run (README's own 실행/linux block)
         working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux --
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
         working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux --
-
-      - name: Sample build (README's own 빌드/linux block)
-        working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux --
-
-      - name: Sample e2e — TicTacToe (README/14-samples §9 — run_sample.sh)
-        working-directory: zlink-samples-cpp
-        run: ./TicTacToe/run_sample.sh
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
 
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: zlink-tutorial-cpp
         run: |
-          pkill -f build/tutorial_server 2>/dev/null || true
-          pkill -f build/tutorial_client 2>/dev/null || true
-          docker rm -f zlink-tutorial-redis 2>/dev/null || true
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
+
+      - name: Sample install (README's own 내려받기와 설치/linux block)
+        working-directory: zlink-samples-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 내려받기와 설치 linux
+
+      - name: Sample build (README's own 빌드/linux block)
+        working-directory: zlink-samples-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Sample run (README's own 실행/linux block)
+        working-directory: zlink-samples-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Sample verify (README's own 검증/linux block)
+        working-directory: zlink-samples-cpp
+        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux

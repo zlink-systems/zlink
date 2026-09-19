@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""README의 빌드·실행·검증 절에서 플랫폼별 명령 블록을 그대로 뽑아 온다.
+"""README의 설치·빌드·실행·검증 절에서 플랫폼별 명령 블록을 그대로 뽑아 온다.
 
 #655 CI guard(.github/workflows/standalone-zips.yml)가 쓴다. 이 guard는 저장소를
 checkout하지 않고 배포된 zip만 받아 돌리므로, 무엇을 실행할지는 그 zip 안 README가
@@ -11,7 +11,8 @@ checkout하지 않고 배포된 zip만 받아 돌리므로, 무엇을 실행할�
 각 zip 루트의 `README.ko.md`(정본)는 다음 절 이름을 그대로 쓴다:
 전제 조건 / 내려받기와 설치 / 빌드 / 실행 / 검증 / 문제 해결
 
-`빌드`·`실행`·`검증` 절 안에서 이 script가 뽑아야 하는 명령마다, 여는 fence에
+`내려받기와 설치`·`빌드`·`실행`·`검증` 절 안에서 이 script가 뽑아야 하는 명령마다,
+여는 fence에
 `title="<platform>"`을 붙인다. `<platform>`은 `linux` 또는 `windows`다. 이미 이
 저장소의 문서 site(mkdocs-material)가 코드 block title을 렌더링하므로 사람이 읽을 때도
 그대로 쓸모 있다 — CI만 위한 표시가 아니다.
@@ -27,14 +28,14 @@ checkout하지 않고 배포된 zip만 받아 돌리므로, 무엇을 실행할�
     \x60\x60\x60
 
 절 하나에 같은 platform의 fence가 여럿이면 첫 번째만 쓴다. 다음 `## ` 제목이 나오면
-그 절은 끝난다.
+그 절은 끝난다. 영어 README는 `Download and install`, `Build`, `Run`, `Verify`라는
+제목을 그대로 넘겨 사용할 수 있다.
 
 사용:
     python3 scripts/tutorial/extract_readme_step.py <README 경로> <절 이름> <linux|windows>
 
 찾으면 그 블록의 내용을 그대로 stdout에 낸다. 절이나 platform을 찾지 못하면 exit 2와
-stderr 메시지 — 새 README 규칙이 아직 그 zip에 없다는 뜻이며, 호출자는 이를 오늘의
-결함이 아니라 "아직 없음"으로 다뤄야 한다(예: 기존 하드코딩 명령으로 fallback).
+stderr 메시지 — 문서가 CI 계약을 제공하지 않은 것이므로 호출자는 즉시 실패해야 한다.
 """
 from __future__ import annotations
 
@@ -46,6 +47,18 @@ FENCE_RE = re.compile(
     r'^```(?P<lang>\S+)\s+title="(?P<platform>[a-z]+)"\s*$'
 )
 SECTION_RE = re.compile(r'^##\s+(?P<title>.+?)\s*$')
+SECTIONS = frozenset(
+    {
+        "내려받기와 설치",
+        "빌드",
+        "실행",
+        "검증",
+        "Download and install",
+        "Build",
+        "Run",
+        "Verify",
+    }
+)
 
 
 def extract(text: str, section: str, platform: str) -> str | None:
@@ -79,6 +92,9 @@ def main() -> int:
     readme_path, section, platform = sys.argv[1], sys.argv[2], sys.argv[3]
     if platform not in ("linux", "windows"):
         print(f"::error::platform must be linux or windows, got {platform!r}", file=sys.stderr)
+        return 2
+    if section not in SECTIONS:
+        print(f"::error::unsupported README section: {section!r}", file=sys.stderr)
         return 2
 
     path = pathlib.Path(readme_path)
