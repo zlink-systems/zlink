@@ -67,21 +67,23 @@ There is no separate build step. Each sample's `npm run sample` (which `run_samp
 runs `npm run build` automatically before it runs. To pre-build several samples at once on
 Windows, use `build_samples.ps1`.
 
-```powershell
+```powershell title="windows"
 ./build_samples.ps1 Bingo.Ts TicTacToe.Ts
 # Omit the arguments to build all seven.
 ```
 
-## Running it
+Linux/WSL has no separate build step — `run_sample.sh` in "Run" below builds it before running.
+
+## Run
 
 Each sample has a `run_sample.sh` (Linux/WSL) and `run_sample.ps1` (Windows); one invocation runs
 one sample. Call it from this directory as-is.
 
-```bash
+```bash title="linux"
 ./Bingo.Ts/run_sample.sh
 ```
 
-```powershell
+```powershell title="windows"
 ./Bingo.Ts/run_sample.ps1
 ```
 
@@ -97,7 +99,7 @@ waits for readiness, runs the client self-check, and cleans up — you never sta
 For example, Bingo's full client flow can be seen in
 [`Bingo.Ts/Client/bingo-client-scenario.ts`](Bingo.Ts/Client/bingo-client-scenario.ts).
 
-## Verifying success
+## Verify
 
 Every runner prints `PASS <Sample>` as the last line of standard output and exits `0` on success.
 

@@ -67,21 +67,24 @@ npm run browser:install
 `npm run build`를 자동으로 호출한다. Windows에서 여러 샘플을 미리 한꺼번에 빌드해 두려면
 `build_samples.ps1`을 쓴다.
 
-```powershell
-.\build_samples.ps1 Bingo.Ts TicTacToe.Ts
+```powershell title="windows"
+./build_samples.ps1 Bingo.Ts TicTacToe.Ts
 # 인자를 생략하면 일곱 샘플을 모두 빌드한다.
 ```
+
+Linux·WSL에는 별도 빌드 단계가 없다 — 아래 「실행」의 `run_sample.sh`가 실행 전에 알아서
+빌드한다.
 
 ## 실행
 
 샘플마다 `run_sample.sh`(Linux·WSL)와 `run_sample.ps1`(Windows)이 있고, 한 번의 호출은 샘플
 하나를 실행한다. 이 디렉터리에서 그대로 호출한다.
 
-```bash
+```bash title="linux"
 ./Bingo.Ts/run_sample.sh
 ```
 
-```powershell
+```powershell title="windows"
 ./Bingo.Ts/run_sample.ps1
 ```
 

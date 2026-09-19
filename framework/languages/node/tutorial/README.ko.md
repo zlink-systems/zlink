@@ -49,7 +49,11 @@ npm install
 
 ## 빌드
 
-```bash
+```bash title="linux"
+npm run build
+```
+
+```powershell title="windows"
 npm run build
 ```
 
@@ -60,34 +64,33 @@ Session-Actor 연결" 참고).
 ## 실행
 
 Redis가 필요하다(Spot 단계가 쓴다). runner가 따로 없으므로 이 tutorial에서는 직접 하나
-띄운다 — 끝나면 직접 정리한다.
+띄운다 — 끝나면 직접 정리한다. 터미널을 두 개 열어 두고 따라가는 경우 Server를 먼저
+`npm run server`, Client를 `npm run client`로 각각 그대로 실행해도 된다. 아래 블록은 같은
+일을 자동으로 하도록 백그라운드로 띄우고 PID를 파일에 남긴다.
 
-```bash
+```bash title="linux"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
+sleep 1
+npm run server > server.log 2>&1 &
+echo $! > server.pid
+sleep 3
+npm run client > client.log 2>&1 &
+echo $! > client.pid
+sleep 3
 ```
 
-터미널 두 개에서 Server를 먼저 실행한다.
-
-```bash
-npm run server
+```powershell title="windows"
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
+Start-Sleep -Seconds 1
+$serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
+$serverProc.Id | Out-File server.pid
+Start-Sleep -Seconds 3
+$clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$clientProc.Id | Out-File client.pid
+Start-Sleep -Seconds 3
 ```
 
-```bash
-npm run client
-```
-
-두 프로세스 모두 살아 있으면 확인 호출을 넣는다.
-
-```bash
-curl http://127.0.0.1:5480/players/p1/profile
-```
-
-전체 기능은 아래 "단계"에서 하나씩 확인한다. 끝나면 두 프로세스를 멈추고 Redis container도
-정리한다.
-
-```bash
-docker rm -f zlink-tutorial-node-redis
-```
+전체 기능은 아래 "단계"에서 하나씩 확인한다.
 
 ## 검증
 
@@ -102,7 +105,22 @@ server admin listening on http://127.0.0.1:5481
 client listening on http://127.0.0.1:5480
 ```
 
-위 확인 호출은 아래 응답을 돌려준다.
+확인 호출을 넣고, 끝나면 두 프로세스와 Redis container를 정리한다.
+
+```bash title="linux"
+curl -sf http://127.0.0.1:5480/players/p1/profile
+kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
+docker rm -f zlink-tutorial-node-redis
+```
+
+```powershell title="windows"
+Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile
+Stop-Process -Id (Get-Content client.pid) -Force -ErrorAction SilentlyContinue
+Stop-Process -Id (Get-Content server.pid) -Force -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-node-redis
+```
+
+호출은 아래 값을 돌려준다.
 
 ```json
 {"playerId":"p1","nickname":"rookie","level":1}

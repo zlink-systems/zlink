@@ -50,7 +50,11 @@ only). They are never hand-edited.
 
 ## Build
 
-```bash
+```bash title="linux"
+npm run build
+```
+
+```powershell title="windows"
 npm run build
 ```
 
@@ -58,39 +62,38 @@ npm run build
 only while the tutorial itself is CommonJS, so they are not built under one tsconfig — it is
 built separately (see "10. STREAM and the Session-Actor Link" below).
 
-## Running it
+## Run
 
 Redis is required (the Spot stage uses it). There is no runner here, so this tutorial starts one
-itself — and you clean it up yourself when done.
+itself — and you clean it up yourself when done. Following along in two terminals, you can just
+run `npm run server` then `npm run client` directly. The block below does the same thing
+unattended, backgrounding both and leaving their PID in a file.
 
-```bash
+```bash title="linux"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
+sleep 1
+npm run server > server.log 2>&1 &
+echo $! > server.pid
+sleep 3
+npm run client > client.log 2>&1 &
+echo $! > client.pid
+sleep 3
 ```
 
-Two terminals. Start the server first.
-
-```bash
-npm run server
+```powershell title="windows"
+docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
+Start-Sleep -Seconds 1
+$serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
+$serverProc.Id | Out-File server.pid
+Start-Sleep -Seconds 3
+$clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$clientProc.Id | Out-File client.pid
+Start-Sleep -Seconds 3
 ```
 
-```bash
-npm run client
-```
+The full feature set is confirmed one step at a time below, under "Steps".
 
-Once both processes are up, send a confirming call.
-
-```bash
-curl http://127.0.0.1:5480/players/p1/profile
-```
-
-The full feature set is confirmed one step at a time below, under "Steps". When done, stop both
-processes and remove the Redis container.
-
-```bash
-docker rm -f zlink-tutorial-node-redis
-```
-
-## Verifying success
+## Verify
 
 The server and client each print a line like this on a healthy start.
 
@@ -103,7 +106,22 @@ server admin listening on http://127.0.0.1:5481
 client listening on http://127.0.0.1:5480
 ```
 
-The confirming call above returns:
+Send a confirming call, then stop both processes and remove the Redis container.
+
+```bash title="linux"
+curl -sf http://127.0.0.1:5480/players/p1/profile
+kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
+docker rm -f zlink-tutorial-node-redis
+```
+
+```powershell title="windows"
+Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile
+Stop-Process -Id (Get-Content client.pid) -Force -ErrorAction SilentlyContinue
+Stop-Process -Id (Get-Content server.pid) -Force -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-node-redis
+```
+
+The call returns:
 
 ```json
 {"playerId":"p1","nickname":"rookie","level":1}
