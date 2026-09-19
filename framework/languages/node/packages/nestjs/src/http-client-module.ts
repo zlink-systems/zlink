@@ -23,7 +23,6 @@ export interface ZLinkHttpClientModuleOptions {
 }
 
 export interface ZLinkServerHttpRequestBuilder extends ZLinkHttpRequestBuilder {
-  submit(): Promise<void>;
   yield<T>(): Promise<HttpResponse<T>>;
 }
 

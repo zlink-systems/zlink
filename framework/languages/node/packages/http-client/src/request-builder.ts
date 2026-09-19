@@ -8,7 +8,6 @@ import type {
   HttpResponse,
   RawHttpResponse,
   ZLinkHttpCallback,
-  ZLinkHttpExecutionScheduler,
   ZLinkHttpExecutionTurn,
   ZLinkHttpMethod
 } from './types';
@@ -39,7 +38,6 @@ export class ZLinkHttpRequestBuilder {
   private readonly clientFactory: ZLinkHttpClientBuilder | undefined;
   private readonly ownsClient: boolean;
   protected readonly executionTurn: ZLinkHttpExecutionTurn | undefined;
-  protected readonly executionScheduler: ZLinkHttpExecutionScheduler | undefined;
   private consumed = false;
 
   constructor(
@@ -53,7 +51,6 @@ export class ZLinkHttpRequestBuilder {
     // A one-shot request (builder verb shortcut) owns the lazily-built client and closes it once the
     // request completes.
     this.ownsClient = clientFactory !== undefined;
-    this.executionScheduler = client?.executionScheduler;
     this.executionTurn = client?.executionScheduler?.capture()
       ?? clientFactory?.captureExecutionTurn();
     if (path.length === 0 || path[0] !== '/') {
@@ -200,9 +197,9 @@ export class ZLinkHttpRequestBuilder {
     }
   }
 
-  async async<T>(): Promise<HttpResponse<T>>;
-  async<T>(callback: ZLinkHttpCallback<T>): void;
-  async<T>(callback?: ZLinkHttpCallback<T>): Promise<HttpResponse<T>> | void {
+  submit<T>(): Promise<HttpResponse<T>>;
+  submit<T>(callback: ZLinkHttpCallback<T>): void;
+  submit<T>(callback?: ZLinkHttpCallback<T>): Promise<HttpResponse<T>> | void {
     const pending = this.executeTyped<T>();
     if (callback === undefined) {
       return pending;
@@ -341,17 +338,6 @@ export class ZLinkHttpRequestBuilder {
 }
 
 class ZLinkFrameworkHttpRequestBuilder extends ZLinkHttpRequestBuilder {
-  /** Starts a server-side one-way request and ignores its response body. */
-  async submit(): Promise<void> {
-    if (this.executionScheduler === undefined) {
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP submit requires a framework server client'
-      );
-    }
-    await this.submitRaw();
-  }
-
   /** Executes a typed request while yielding the current Spot turn. */
   yield<T>(): Promise<HttpResponse<T>> {
     if (this.executionTurn === undefined) {

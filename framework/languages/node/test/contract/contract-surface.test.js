@@ -874,7 +874,7 @@ test('one-way call declarations complete without exposing transport admission re
   }
 });
 
-test('stream connector and server HTTP one-way calls expose Promise<void>', () => {
+test('stream connector one-way calls and server HTTP typed calls expose their terminal contracts', () => {
   const streamCalls = fs.readFileSync(
     path.join(workspaceRoot, 'packages', 'stream-connector', 'dist', 'Contracts', 'Calls', 'ZlinkStreamCalls.d.ts'),
     'utf8'
@@ -889,6 +889,10 @@ test('stream connector and server HTTP one-way calls expose Promise<void>', () =
     /submit\(\): Promise<void>/
   );
   assert.match(
+    declarationBody(serverHttp, 'ZLinkServerHttpRequestBuilder'),
+    /yield<T>\(\): Promise<HttpResponse<T>>/
+  );
+  assert.doesNotMatch(
     declarationBody(serverHttp, 'ZLinkServerHttpRequestBuilder'),
     /submit\(\): Promise<void>/
   );
