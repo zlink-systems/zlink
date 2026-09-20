@@ -36,7 +36,6 @@ class play_server_host_factory_t
     {
         app.logging ().use_console ().set_min_level (log_level_t::info);
         app.logging ().use_file (flow_log_path (topology.log_dir, "play-" + topology.play_node));
-        observe_runtime_metrics (app, topology.log_dir, "play-" + topology.play_node);
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         options.codecs ().use (zlink::framework_codecs::protobuf ());
