@@ -22,6 +22,14 @@ struct outcome {
     codec::error_code error{codec::error_code::ok};
 };
 
+codec::decoder_context_t maximum_decoder_context()
+{
+    codec::decoder_context_t context{};
+    context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead = 4294966774ull;
+    context.effectiveCompleteMessageBytes = 4294967295ull;
+    return context;
+}
+
 std::vector<std::uint8_t> from_hex(std::string_view hex)
 {
     const auto digit = [](char value) -> std::uint8_t {
@@ -104,15 +112,18 @@ outcome exact_frames(Result decoded, Encode encode, const std::vector<std::vecto
     return {encoded.value == input, encoded.value == input ? codec::error_code::ok : codec::error_code::constraint};
 }
 
-outcome command(std::uint8_t id, const std::vector<std::vector<std::uint8_t>>& frames)
+outcome command(
+  std::uint8_t id,
+  const std::vector<std::vector<std::uint8_t>>& frames,
+  const codec::decoder_context_t& context)
 {
     switch (id) {
         case 16:
-            return exact_frames(codec::decode_nodeSend_16_frames(frames), codec::encode_nodeSend_16_frames, frames);
+            return exact_frames(codec::decode_nodeSend_16_frames(frames, context), codec::encode_nodeSend_16_frames, frames);
         case 24:
-            return exact_frames(codec::decode_actorSend_24_frames(frames), codec::encode_actorSend_24_frames, frames);
+            return exact_frames(codec::decode_actorSend_24_frames(frames, context), codec::encode_actorSend_24_frames, frames);
         case 28:
-            return exact_frames(codec::decode_actorJoin_28_frames(frames), codec::encode_actorJoin_28_frames, frames);
+            return exact_frames(codec::decode_actorJoin_28_frames(frames, context), codec::encode_actorJoin_28_frames, frames);
         case 47:
             return exact_frames(codec::decode_userSpotCreate_47_frames(frames), codec::encode_userSpotCreate_47_frames, frames);
         case 48:
@@ -124,22 +135,29 @@ outcome command(std::uint8_t id, const std::vector<std::vector<std::uint8_t>>& f
     }
 }
 
-outcome type(std::string_view name, const std::vector<std::uint8_t>& input)
+outcome type(
+  std::string_view name,
+  const std::vector<std::uint8_t>& input,
+  const codec::decoder_context_t& context)
 {
     if (name == "authority-payload-v1")
         return exact(codec::decode_durable_authority_payload_v1(input), codec::encode_durable_authority_payload_v1, input);
     if (name == "instance-activation-recovery-v1")
-        return exact(codec::decode_durable_instance_activation_recovery_v1(input), codec::encode_durable_instance_activation_recovery_v1, input);
+        return exact(codec::decode_durable_instance_activation_recovery_v1(input, context), codec::encode_durable_instance_activation_recovery_v1, input);
     if (name == "relocation-data-chunk-v1")
         return exact(codec::decode_durable_relocation_data_chunk_v1(input), codec::encode_durable_relocation_data_chunk_v1, input);
     if (name == "relocation-manifest-v1")
         return exact(codec::decode_durable_relocation_manifest_v1(input), codec::encode_durable_relocation_manifest_v1, input);
     if (name == "relocation-envelope-v1")
-        return exact(codec::decode_relocation_envelope_v1(input), codec::encode_relocation_envelope_v1, input);
+        return exact(codec::decode_relocation_envelope_v1(input, context), codec::encode_relocation_envelope_v1, input);
     if (name == "descriptor-extension")
         return exact(codec::decode_descriptor_extension(input), codec::encode_descriptor_extension, input);
     if (name == "text8")
         return exact(codec::decode_text8(input), codec::encode_text8, input);
+    if (name == "application-payload-bytes")
+        return exact(codec::decode_application_payload_bytes(input, context), codec::encode_application_payload_bytes, input);
+    if (name == "application-payload-envelope-v1")
+        return exact(codec::decode_application_payload_envelope_v1(input, context), codec::encode_application_payload_envelope_v1, input);
     return {false, codec::error_code::header};
 }
 
@@ -183,10 +201,20 @@ outcome operation_case(const nlohmann::json& item)
     }
     const auto frames = bytes(nlohmann::json::object(), item);
     const auto& surface = item.at("surface");
+    auto context = maximum_decoder_context();
+    if (item.contains("decodeContext")) {
+        const auto& values = item.at("decodeContext");
+        if (values.contains("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead"))
+            context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead =
+              values.at("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead").get<std::uint64_t>();
+        if (values.contains("effectiveCompleteMessageBytes"))
+            context.effectiveCompleteMessageBytes =
+              values.at("effectiveCompleteMessageBytes").get<std::uint64_t>();
+    }
     if (surface.at("format") == "command")
-        return command(surface.at("commandId").get<std::uint8_t>(), frames);
+        return command(surface.at("commandId").get<std::uint8_t>(), frames, context);
     return frames.size() == 1
-      ? type(surface.at("type").get<std::string>(), frames.front())
+      ? type(surface.at("type").get<std::string>(), frames.front(), context)
       : outcome{false, codec::error_code::trailing};
 }
 
@@ -198,6 +226,7 @@ int main()
     const auto index = load_json(indexPath);
     const auto protocolRoot = indexPath.parent_path().parent_path().parent_path();
     bool passed = true;
+    const auto context = maximum_decoder_context();
 
     for (const auto& entry : index.at("fixtures")) {
         const auto fixture = load_json(protocolRoot / entry.at("goldenFixture").get<std::string>());
@@ -206,9 +235,9 @@ int main()
         const auto verify = [&](const nlohmann::json& item, bool expected) {
             const auto input = bytes(fixture, item);
             const auto result = kind == "command"
-              ? command(surface.at("commandId").get<std::uint8_t>(), input)
+              ? command(surface.at("commandId").get<std::uint8_t>(), input, context)
               : (input.size() == 1
-                  ? type(surface.at("type").get<std::string>(), input.front())
+                  ? type(surface.at("type").get<std::string>(), input.front(), context)
                   : outcome{false, codec::error_code::trailing});
             if (result.accepted != expected) {
                 std::cerr << kind << ':' << surface.at("format").get<std::string>() << ':'
