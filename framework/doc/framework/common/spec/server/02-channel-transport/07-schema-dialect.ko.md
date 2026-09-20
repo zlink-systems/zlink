@@ -44,7 +44,7 @@ schema를 읽는 소비자는 셋이다.
 | 소비자 | 무엇을 읽는가 | 어디에 있는가 |
 |---|---|---|
 | Validator | schema 전체. 참조 무결성, 길이 용량, closed union, TLV 순서, durable checksum, semantic 선언의 literal 일치를 검사한다 | `validate-service-wire-schema.mjs` |
-| Generator | `commands`·`flags`·일부 `types`(enum)·`bounds`·`frameworkMultipartV1Profile`·`terminal-failure-integrity`. 네 언어의 상수 표와 공통 decoder fixture를 낸다 | `generate-service-wire-assets.mjs`, `generate-service-wire-pilot-codecs.mjs` |
+| Generator | Validator가 통과시킨 schema 전체. lowering이 이 장의 읽기 규칙을 언어 중립 operation IR로 한 번 내리고, 언어별 renderer는 그 operation의 문법만 낸다. 상수 표·codec·fixture index를 한 manifest로 생성하고 drift를 검사한다 | `service-wire-lowering.mjs`, `render-service-wire-*.mjs`, `generate-service-wire-{assets,fixtures,codecs}.mjs`, `service-wire-output-manifest.mjs` |
 | Runtime codec | `types`·`commands`·`durableFormats`·`relocationLogicalStreamFormat`의 layout. 생성되었든 손으로 썼든 이 장의 규칙으로 bytes를 만들고 읽는다 | 각 언어 runtime |
 
 Validator가 통과시킨 schema만 기준이다. 통과하지 못한 schema로 만든 codec·fixture는 계약이

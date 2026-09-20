@@ -405,6 +405,65 @@
       ]
     },
     {
+      "name": "conditional-union-case-constraint",
+      "operation": "constraint",
+      "rule": "field-less-than-or-equal:replayCursor:inboxSequence",
+      "expect": "reject",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af00000000000000010000000000000002d1a802f9"
+    },
+    {
+      "name": "metadata-nonadjacent-duplicate-key",
+      "operation": "constraint",
+      "rule": "unique:key:utf-8-bytes",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "metadata-frame",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0103014100056669727374014200067365636f6e64014100057468697264"
+    },
+    {
+      "name": "client-server-negotiated-payload-bound",
+      "operation": "negotiated-bound",
+      "rule": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "decodeContext": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 3
+      }
+    },
+    {
+      "name": "client-server-negotiated-envelope-bound",
+      "operation": "negotiated-bound",
+      "rule": "effectiveCompleteMessageBytes",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f",
+      "decodeContext": {
+        "effectiveCompleteMessageBytes": 49,
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 1
+      }
+    },
+    {
       "name": "terminal-predicate",
       "operation": "runtime-predicate",
       "rule": "terminal-failure-integrity",

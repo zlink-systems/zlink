@@ -16,8 +16,8 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   legacy pilot 산출물의 단일 output manifest
 - `generate-service-wire-codecs.mjs`: lowering부터 네 renderer, fixture index, 상수 asset과 legacy pilot을
   순서대로 생성하고 전체 drift·orphan을 확인하는 통합 진입점
-- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: 언어 중립 IR을 언어별 source로 변환하는 renderer.
-  operation IR을 직접 정적 함수로 변환하는 작업은 후속 renderer 재작성 단계가 담당한다.
+- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: operation IR의 검증·직렬화 의미를 추가로
+  해석하지 않고 각 언어의 정적 codec 문법으로 내는 emitter
 - `generate-service-wire-pilot-codecs.mjs`: 기존 runtime adapter가 소비하며 4단계 adapter 교체 뒤 제거하는
   legacy codec generator
 - `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden과 operation별
@@ -68,15 +68,18 @@ Operation IR은 검증·직렬화 의미의 단일 소유자다. Renderer는 다
 - 선택 layout과 TLV: `discriminator`, `conditional-union`, `tlv32`, `constraint`
 - command frame: `command-header`, `flags`, `flag-constraint`, `metadata-flag-frame`, `payload`
 - durable·logical: `durable-header`, `checksum`, `encoded-limit`, `logical-stream`
-- runtime 연계: `runtime-predicate`
+- runtime 연계: `negotiated-bound`, `runtime-predicate`
 
 각 type·command·durable format·logical stream은 비어 있지 않은 `operations` 배열을 가진다. Lowering
-self-test는 위 24개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
+self-test는 위 25개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
 검사한다. Field condition은 `when`과 encoder·decoder의 `whenFalse` 동작을 함께 보존한다.
+Conditional-union case는 field operation 뒤에 owner path가 있는 `constraint`를 실행한다.
+`negotiated-bound`의 상한 operand는 decoder의 명시적 context parameter이며 ClientServer 협상값과
+실제 content 또는 encoded byte 수를 비교한다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
-contract amendment fixture 1개와 255가지 invalid mutation이 실제로
+contract amendment fixture 1개와 257가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline

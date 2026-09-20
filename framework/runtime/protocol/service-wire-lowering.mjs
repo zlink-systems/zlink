@@ -122,6 +122,7 @@ const OPERATION_KINDS = Object.freeze([
   "durable-header",
   "checksum",
   "encoded-limit",
+  "negotiated-bound",
   "logical-stream",
   "runtime-predicate",
 ]);
@@ -225,6 +226,29 @@ function lowerCondition(condition, model) {
 
 function constraintOperation(constraint) {
   return { op: "constraint", ...constraint };
+}
+
+function unionCaseOwner(typeName, signature) {
+  return {
+    kind: "conditional-union-case",
+    path: ["types", typeName, "cases", signature],
+  };
+}
+
+function negotiatedBoundOperation(runtimeMaximum, measured) {
+  const clientServer = runtimeMaximum.clientServer;
+  return {
+    op: "negotiated-bound",
+    topology: "clientServer",
+    maximum: {
+      kind: "decoder-context",
+      name: clientServer.$negotiatedBound,
+    },
+    absoluteMaximum: clientServer.absoluteMaximum,
+    measured,
+    comparison: "less-than-or-equal",
+    direction: "decode",
+  };
 }
 
 function fieldOperation(field, model) {
@@ -364,13 +388,13 @@ function typeOperations(type, node, model, runtimePredicates) {
       content: type.kind === "length-prefixed-text" ? "text" : "bytes",
       minimumBytes: node.minimumBytes,
       maximumBytes: node.maximumBytes,
-      ...(hasOwn(node, "runtimeMaximumBytes")
-        ? { runtimeMaximumBytes: node.runtimeMaximumBytes }
-        : {}),
       ...(hasOwn(node, "zeroLengthMeaning")
         ? { zeroLengthMeaning: node.zeroLengthMeaning }
         : {}),
     }];
+    if (hasOwn(node, "runtimeMaximumBytes")) {
+      operations.push(negotiatedBoundOperation(node.runtimeMaximumBytes, "content-bytes"));
+    }
     if (type.kind === "length-prefixed-text") {
       operations.push({
         op: "text-validation",
@@ -413,7 +437,7 @@ function typeOperations(type, node, model, runtimePredicates) {
     }, ...predicates];
   }
   if (type.kind === "versioned-length-delimited") {
-    return [{
+    const operations = [{
       op: "versioned-length-delimited",
       version: node.version,
       length: node.length,
@@ -427,13 +451,17 @@ function typeOperations(type, node, model, runtimePredicates) {
       ...(hasOwn(node, "maximumEncodedBytes")
         ? { maximumEncodedBytes: node.maximumEncodedBytes }
         : {}),
-      ...(hasOwn(node, "runtimeMaximumEncodedBytes")
-        ? { runtimeMaximumEncodedBytes: node.runtimeMaximumEncodedBytes }
-        : {}),
-    }, ...predicates];
+    }];
+    if (hasOwn(node, "runtimeMaximumEncodedBytes")) {
+      operations.push(negotiatedBoundOperation(
+        node.runtimeMaximumEncodedBytes,
+        "encoded-bytes",
+      ));
+    }
+    return [...operations, ...predicates];
   }
   if (type.kind === "conditional-union") {
-    return [{
+    const operations = [{
       op: "conditional-union",
       discriminators: node.discriminators.map((discriminator) => ({
         op: "discriminator",
@@ -448,25 +476,35 @@ function typeOperations(type, node, model, runtimePredicates) {
         boundary: node.bodyLengthCovers,
         trailingBytes: node.trailingBytes,
       },
-      cases: Object.fromEntries(type.cases.map((entry) => [
-        conditionSignature(entry.when),
-        {
-          fields: fieldOperations(entry.fields, model),
-          ...(hasOwn(entry, "constraints") ? {
-            constraints: entry.constraints.map((constraint) => constraintOperation(
-              lowerConstraint(
+      cases: Object.fromEntries(type.cases.map((entry) => {
+        const signature = conditionSignature(entry.when);
+        return [signature, {
+          operations: [
+            ...fieldOperations(entry.fields, model),
+            ...(entry.constraints ?? []).map((constraint) => ({
+              ...constraintOperation(lowerConstraint(
                 constraint,
                 { kind: "struct", fields: entry.fields },
                 model,
-              ),
-            )),
-          } : {}),
-        },
-      ])),
+              )),
+              owner: unionCaseOwner(type.name, signature),
+            })),
+          ],
+        }];
+      })),
       otherwise: type.otherwise === "protocol-error"
         ? { kind: "protocol-error" }
         : { kind: "fields", fields: fieldOperations(type.otherwise.fields, model) },
-    }, ...predicates];
+    }];
+    if (hasOwn(node, "maximumEncodedBytes")) {
+      operations.push({
+        op: "encoded-limit",
+        maximumEncodedBytes: node.maximumEncodedBytes,
+        boundary: "complete-value",
+        trailingBytes: node.trailingBytes,
+      });
+    }
+    return [...operations, ...predicates];
   }
   if (type.kind === "tlv32") {
     return [{
@@ -858,6 +896,46 @@ function assertLoweringCoverage(schema, ir) {
         || Object.keys(lowered.cases).length !== source.cases.length
         || lowered.discriminators.length !== source.discriminators.length) {
       errors.push(`type:${source.name}: conditional-union cases or discriminators did not reach the IR`);
+      continue;
+    }
+    const unionOperation = lowered.operations.find((operation) => operation.op === "conditional-union");
+    for (const sourceCase of source.cases) {
+      const signature = conditionSignature(sourceCase.when);
+      const caseOperations = unionOperation?.cases?.[signature]?.operations;
+      const expectedConstraints = (lowered.cases[signature].constraints ?? []).map(
+        (constraint) => ({
+          ...constraintOperation(constraint),
+          owner: unionCaseOwner(source.name, signature),
+        }),
+      );
+      const constraintOffset = sourceCase.fields.length;
+      const constraints = (caseOperations ?? []).slice(constraintOffset);
+      if (!Array.isArray(caseOperations)
+          || caseOperations.slice(0, constraintOffset).some((operation) => operation.op !== "field")
+          || JSON.stringify(constraints) !== JSON.stringify(expectedConstraints)) {
+        errors.push(`type:${source.name}: case ${signature} constraints did not reach ordered operations`);
+      }
+    }
+    if (hasOwn(source, "maximumEncodedBytes")) {
+      const limit = lowered.operations.find((operation) => operation.op === "encoded-limit");
+      if (limit?.maximumEncodedBytes !== lowered.maximumEncodedBytes
+          || limit.boundary !== "complete-value"
+          || limit.trailingBytes !== lowered.trailingBytes) {
+        errors.push(`type:${source.name}: encoded limit or trailing contract did not reach operations`);
+      }
+    }
+  }
+  for (const source of schema.types.filter((type) => (
+    hasOwn(type, "runtimeMaximumBytes") || hasOwn(type, "runtimeMaximumEncodedBytes")
+  ))) {
+    const lowered = ir.types.find((type) => type.name === source.name);
+    const runtimeMaximum = lowered.runtimeMaximumBytes ?? lowered.runtimeMaximumEncodedBytes;
+    const negotiated = lowered.operations.find((operation) => operation.op === "negotiated-bound");
+    if (negotiated?.maximum?.kind !== "decoder-context"
+        || negotiated.maximum.name !== runtimeMaximum.clientServer.$negotiatedBound
+        || negotiated.absoluteMaximum !== runtimeMaximum.clientServer.absoluteMaximum
+        || negotiated.direction !== "decode") {
+      errors.push(`type:${source.name}: ClientServer negotiated bound did not reach operations`);
     }
   }
   const sourceDurableNames = schema.durableFormats.map((format) => format.name);
@@ -1078,13 +1156,65 @@ function runSelfTests(schemaPath) {
     right: fieldOperand("inboxSequence"),
   }]);
   assert.deepEqual(
-    activationRecovery.operations[0].cases['{"hasActivationRecovery":"true"}'].constraints,
+    activationRecovery.operations[0].cases['{"hasActivationRecovery":"true"}'].operations.slice(-1),
     [{
       op: "constraint",
       kind: "field-less-than-or-equal",
       left: fieldOperand("replayCursor"),
       right: fieldOperand("inboxSequence"),
+      owner: {
+        kind: "conditional-union-case",
+        path: [
+          "types",
+          "authority-activation-recovery-state",
+          "cases",
+          '{"hasActivationRecovery":"true"}',
+        ],
+      },
     }],
+  );
+  assert.deepEqual(
+    types.get("generic-object-reservation-v1").operations.at(-1),
+    {
+      op: "encoded-limit",
+      maximumEncodedBytes: 1048576,
+      boundary: "complete-value",
+      trailingBytes: "forbidden",
+    },
+  );
+  assert.deepEqual(
+    types.get("application-payload-bytes").operations.find(
+      (operation) => operation.op === "negotiated-bound",
+    ),
+    {
+      op: "negotiated-bound",
+      topology: "clientServer",
+      maximum: {
+        kind: "decoder-context",
+        name: "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+      },
+      absoluteMaximum: 4294966774,
+      measured: "content-bytes",
+      comparison: "less-than-or-equal",
+      direction: "decode",
+    },
+  );
+  assert.deepEqual(
+    types.get("application-payload-envelope-v1").operations.find(
+      (operation) => operation.op === "negotiated-bound",
+    ),
+    {
+      op: "negotiated-bound",
+      topology: "clientServer",
+      maximum: {
+        kind: "decoder-context",
+        name: "effectiveCompleteMessageBytes",
+      },
+      absoluteMaximum: 4294967295,
+      measured: "encoded-bytes",
+      comparison: "less-than-or-equal",
+      direction: "decode",
+    },
   );
 
   assert(ir.semanticContexts.every((context) => context.parameter === "decoder-context"));

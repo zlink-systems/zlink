@@ -48,7 +48,7 @@ Three consumers read the schema.
 | Consumer | What it reads | Where |
 |---|---|---|
 | Validator | The whole schema. Checks reference integrity, length capacity, closed unions, TLV order, durable checksums, and literal equality of semantic declarations | `validate-service-wire-schema.mjs` |
-| Generator | `commands`, `flags`, some `types` (enums), `bounds`, `frameworkMultipartV1Profile`, `terminal-failure-integrity`. Emits constant tables for the four languages and the shared decoder fixtures | `generate-service-wire-assets.mjs`, `generate-service-wire-pilot-codecs.mjs` |
+| Generator | The whole schema the validator accepted. Lowering turns this chapter's reading rules into a language-neutral operation IR once; each language renderer emits only that operation's syntax. Constant tables, codecs and the fixture index are produced from one manifest, with drift checks | `service-wire-lowering.mjs`, `render-service-wire-*.mjs`, `generate-service-wire-{assets,fixtures,codecs}.mjs`, `service-wire-output-manifest.mjs` |
 | Runtime codec | The layouts in `types`, `commands`, `durableFormats`, and `relocationLogicalStreamFormat`. Generated or handwritten, it produces and reads bytes by the rules in this chapter | each language runtime |
 
 Only a schema that the validator accepts is the reference. Codecs and fixtures built from a

@@ -163,11 +163,32 @@ function encodeSchemaValue(schema, typeName, value) {
   if (type.kind === "length-prefixed-text") {
     return prefixedText(schema, typeName, value);
   }
+  if (type.kind === "length-prefixed-bytes") {
+    const bytes = Buffer.from(value);
+    return Buffer.concat([
+      unsignedBytes(schema, type.lengthType.$ref, bytes.length),
+      bytes,
+    ]);
+  }
+  if (type.kind === "struct") {
+    return Buffer.concat(type.fields.map((field) => (
+      encodeSchemaValue(schema, field.$ref, value[field.name])
+    )));
+  }
   if (type.kind === "vector") {
     return Buffer.concat([
       unsignedBytes(schema, type.countType.$ref, value.length),
       ...value.map((entry) => encodeSchemaValue(schema, type.item.$ref, entry)),
     ]);
+  }
+  if (type.kind === "versioned-vector") {
+    return Buffer.concat(type.layout.flatMap((field) => {
+      if (field.kind === "repeat") {
+        return value.map((entry) => encodeSchemaValue(schema, field.item.$ref, entry));
+      }
+      const fieldValue = Object.hasOwn(field, "constant") ? field.constant : value.length;
+      return [encodeSchemaValue(schema, field.$ref, fieldValue)];
+    }));
   }
   throw new Error(`operation fixture schema encoder does not support ${typeName}:${type.kind}`);
 }
@@ -199,7 +220,7 @@ function applicationPayloadBytes(schema) {
   return Buffer.concat([Buffer.from([1]), unsignedBytes(schema, "u32", body.length), body]);
 }
 
-function operationCase(name, operation, rule, expect, caseSurface, bytes) {
+function operationCase(name, operation, rule, expect, caseSurface, bytes, details = {}) {
   return {
     name,
     operation,
@@ -209,6 +230,7 @@ function operationCase(name, operation, rule, expect, caseSurface, bytes) {
     ...(Array.isArray(bytes)
       ? { framesHex: bytes.map((entry) => entry.toString("hex")) }
       : { hex: bytes.toString("hex") }),
+    ...details,
   };
 }
 
@@ -276,6 +298,22 @@ function buildOperationCases(schema) {
   const invalidChecksum = Buffer.from(envelope);
   invalidChecksum[invalidChecksum.length - 1] ^= 1;
   const trailing = Buffer.concat([envelope, Buffer.from([0])]);
+  const invalidReplayCursor = structuredClone(durableFixture.decoded);
+  invalidReplayCursor.activationRecoveryState.replayCursor = (
+    BigInt(invalidReplayCursor.activationRecoveryState.inboxSequence) + 1n
+  ).toString();
+  const invalidActivationRecovery = encodeGoldenEnvelope(durable, invalidReplayCursor);
+  const duplicateMetadataKeys = encodeSchemaValue(schema, "metadata-frame", [
+    { key: "A", value: "first" },
+    { key: "B", value: "second" },
+    { key: "A", value: "third" },
+  ]);
+  const negotiatedPayload = encodeSchemaValue(
+    schema,
+    "application-payload-bytes",
+    Buffer.from([0x01, 0x02, 0x03, 0x04]),
+  );
+  const negotiatedEnvelope = applicationPayloadBytes(schema);
   return [
     operationCase(
       "vector-ordering",
@@ -328,6 +366,49 @@ function buildOperationCases(schema) {
       "reject",
       surface("command", null, "nodeSend", 16),
       [commandHeader(schema, "nodeSend", flags.get("metadata")), applicationPayloadBytes(schema)],
+    ),
+    operationCase(
+      "conditional-union-case-constraint",
+      "constraint",
+      "field-less-than-or-equal:replayCursor:inboxSequence",
+      "reject",
+      surface(durable.name, durable.body.$ref),
+      invalidActivationRecovery,
+    ),
+    operationCase(
+      "metadata-nonadjacent-duplicate-key",
+      "constraint",
+      "unique:key:utf-8-bytes",
+      "reject",
+      surface("type", "metadata-frame"),
+      duplicateMetadataKeys,
+    ),
+    operationCase(
+      "client-server-negotiated-payload-bound",
+      "negotiated-bound",
+      "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+      "reject",
+      surface("type", "application-payload-bytes"),
+      negotiatedPayload,
+      {
+        decodeContext: {
+          effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 3,
+        },
+      },
+    ),
+    operationCase(
+      "client-server-negotiated-envelope-bound",
+      "negotiated-bound",
+      "effectiveCompleteMessageBytes",
+      "reject",
+      surface("type", "application-payload-envelope-v1"),
+      negotiatedEnvelope,
+      {
+        decodeContext: {
+          effectiveCompleteMessageBytes: negotiatedEnvelope.length - 1,
+          effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 1,
+        },
+      },
     ),
     {
       name: "terminal-predicate",
