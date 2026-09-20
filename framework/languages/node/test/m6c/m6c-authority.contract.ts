@@ -402,29 +402,39 @@ test('Actor creation operation ID replaces the all-zero random value', () => {
   );
 });
 
-test('creation terminal codec round-trips failure and rejects malformed envelopes', () => {
-  const failure = {
-    terminalResult: 'timedOut' as const,
-    failureCode: 'requestFailed' as const,
-    hasCreation: 'false' as const,
-    hasApplicationPayload: 'false' as const
-  };
-  const encoded = Buffer.from(encodeCreationOperationTerminalV1(
+test('creation terminal codec round-trips taxonomy failures and rejects malformed envelopes', () => {
+  const failures = [
+    {
+      terminalResult: 'timedOut' as const,
+      failureCode: 'none' as const,
+      hasCreation: 'false' as const,
+      hasApplicationPayload: 'false' as const
+    },
+    {
+      terminalResult: 'internalError' as const,
+      failureCode: 'actorCreateFailed' as const,
+      hasCreation: 'false' as const,
+      hasApplicationPayload: 'false' as const
+    }
+  ];
+  const encoded = failures.map((failure) => Buffer.from(encodeCreationOperationTerminalV1(
     failure,
     { runtimePredicates: {} }
-  ));
-  assert.deepEqual(
-    decodeCreationOperationTerminalV1(encoded, { runtimePredicates: {} }),
-    failure
-  );
+  )));
+  for (let index = 0; index < failures.length; index++) {
+    assert.deepEqual(
+      decodeCreationOperationTerminalV1(encoded[index]!, { runtimePredicates: {} }),
+      failures[index]
+    );
+  }
   assert.throws(
     () => decodeCreationOperationTerminalV1(
-      Buffer.concat([encoded, Buffer.from([0])]),
+      Buffer.concat([encoded[0]!, Buffer.from([0])]),
       { runtimePredicates: {} }
     ),
     /trailing/
   );
-  const wrongVersion = Buffer.from(encoded);
+  const wrongVersion = Buffer.from(encoded[0]!);
   wrongVersion[0] = 2;
   assert.throws(
     () => decodeCreationOperationTerminalV1(wrongVersion, { runtimePredicates: {} }),
