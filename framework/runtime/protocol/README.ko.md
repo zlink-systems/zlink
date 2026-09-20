@@ -12,6 +12,7 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   condition signature 모델
 - `service-wire-lowering.mjs`: 검증된 schema의 type·command·flag·semantic 선언을 언어 중립 JSON IR로
   변환하고 coverage를 확인하는 도구
+- `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden fixture catalog를 생성하고 drift를 확인하는 도구
 - `golden/durable-authority-v1.json`: 네 runtime이 Ready Instance cold activation recovery pointer를
   읽고 쓰는 golden fixture
 - `golden/instance-activation-recovery-v1.json`: target-owned cold activation의 source·target lifecycle,

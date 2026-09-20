@@ -1,0 +1,297 @@
+{
+  "schema": "service-wire-v1",
+  "version": 1,
+  "fixtures": [
+    {
+      "kind": "durable",
+      "goldenFixture": "golden/durable-authority-v1.json",
+      "goldenSha256": "05639baf414186418c53e52d79e0f4cdade661a0ecfb1d99bbeb9e7eea08f098",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "canonical": [
+        {
+          "name": "canonical",
+          "pointers": {
+            "encodedHex": "/encodedHex",
+            "decoded": "/decoded"
+          }
+        }
+      ],
+      "malformed": []
+    },
+    {
+      "kind": "durable",
+      "goldenFixture": "golden/instance-activation-recovery-v1.json",
+      "goldenSha256": "1198bf6c82fa7c33b959cf17970f0de4e46fc7a3217414e95f4e3ace60911a61",
+      "surface": {
+        "format": "instance-activation-recovery-v1",
+        "type": "instance-activation-recovery-v1",
+        "command": null,
+        "commandId": null
+      },
+      "canonical": [
+        {
+          "name": "canonical",
+          "pointers": {
+            "encodedHex": "/encodedHex",
+            "decoded": "/decoded"
+          }
+        }
+      ],
+      "malformed": []
+    },
+    {
+      "kind": "durable",
+      "goldenFixture": "golden/relocation-data-chunk-v1.json",
+      "goldenSha256": "1d1b77d887ec51af19162a531e422313be1726911285b39ddc28717a52ce66aa",
+      "surface": {
+        "format": "relocation-data-chunk-v1",
+        "type": "relocation-data-chunk-v1",
+        "command": null,
+        "commandId": null
+      },
+      "canonical": [
+        {
+          "name": "canonical",
+          "pointers": {
+            "encodedHex": "/encodedHex",
+            "decoded": "/decoded"
+          }
+        }
+      ],
+      "malformed": []
+    },
+    {
+      "kind": "durable",
+      "goldenFixture": "golden/relocation-manifest-v1.json",
+      "goldenSha256": "d33cd0e67fb5185fb8788d60cf5ce3af59cec3556683ddb8312d6f93e8e4ecc4",
+      "surface": {
+        "format": "relocation-manifest-v1",
+        "type": "relocation-manifest-v1",
+        "command": null,
+        "commandId": null
+      },
+      "canonical": [
+        {
+          "name": "canonical",
+          "pointers": {
+            "encodedHex": "/encodedHex",
+            "decoded": "/decoded"
+          }
+        }
+      ],
+      "malformed": []
+    },
+    {
+      "kind": "logical",
+      "goldenFixture": "golden/relocation-envelope-v1.json",
+      "goldenSha256": "1c43d7be11f17bc31f887a79b074c2ac55e138dd77c0a735c341110f94ab5798",
+      "surface": {
+        "format": "relocation-envelope-v1",
+        "type": "relocation-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "canonical": [
+        {
+          "name": "canonical",
+          "pointers": {
+            "logicalHex": "/logicalHex",
+            "decoded": "/decoded"
+          }
+        }
+      ],
+      "malformed": []
+    },
+    {
+      "kind": "command",
+      "goldenFixture": "golden/actor-join-request-v1.json",
+      "goldenSha256": "cec63ade48e2cc49aaf54105ae67584733f9b5e8865625c9e42b511d8397455a",
+      "surface": {
+        "format": "actor-join-request-v1",
+        "type": null,
+        "command": "actorJoin",
+        "commandId": 28
+      },
+      "canonical": [
+        {
+          "name": "no-payload",
+          "pointers": {
+            "input": "/valid/0/input",
+            "framesHex": "/valid/0/framesHex"
+          }
+        },
+        {
+          "name": "json-payload",
+          "pointers": {
+            "input": "/valid/1/input",
+            "framesHex": "/valid/1/framesHex"
+          }
+        },
+        {
+          "name": "non-json-payload",
+          "pointers": {
+            "input": "/valid/2/input",
+            "framesHex": "/valid/2/framesHex"
+          }
+        }
+      ],
+      "malformed": [
+        {
+          "name": "truncated-envelope",
+          "error": "payload length",
+          "pointers": {
+            "framesHex": "/invalid/0/framesHex"
+          }
+        },
+        {
+          "name": "extra-frame",
+          "error": "actorJoin frames",
+          "pointers": {
+            "framesHex": "/invalid/1/framesHex"
+          }
+        },
+        {
+          "name": "malformed-fence",
+          "error": "invalid fence",
+          "pointers": {
+            "framesHex": "/invalid/2/framesHex"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "command",
+      "goldenFixture": "golden/user-spot-create-v1.json",
+      "goldenSha256": "5f1f059fd56967ca11c4446c8108bff4b6c7b60c8bb651b355c68012e1d0e852",
+      "surface": {
+        "format": "user-spot-create-v1",
+        "type": null,
+        "command": "userSpotCreate",
+        "commandId": 47
+      },
+      "canonical": [
+        {
+          "name": "userSpotCreate",
+          "pointers": {
+            "hex": "/canonical/hex",
+            "decoded": "/canonical/decoded"
+          }
+        }
+      ],
+      "malformed": [
+        {
+          "name": "zeroCorrelation",
+          "error": "invalid-field",
+          "pointers": {
+            "hex": "/malformed/0/hex"
+          }
+        },
+        {
+          "name": "truncatedDeadline",
+          "error": "truncated-field",
+          "pointers": {
+            "hex": "/malformed/1/hex"
+          }
+        },
+        {
+          "name": "trailingByte",
+          "error": "trailing-byte",
+          "pointers": {
+            "hex": "/malformed/2/hex"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "command",
+      "goldenFixture": "golden/user-spot-close-v1.json",
+      "goldenSha256": "6eca051989fcfeb9a170d2a665126faa956fcc05d2e2ead516d5f2f5c2e777f7",
+      "surface": {
+        "format": "user-spot-close-v1",
+        "type": null,
+        "command": "userSpotClose",
+        "commandId": 48
+      },
+      "canonical": [
+        {
+          "name": "userSpotClose",
+          "pointers": {
+            "hex": "/canonical/hex",
+            "decoded": "/canonical/decoded"
+          }
+        }
+      ],
+      "malformed": [
+        {
+          "name": "shortTargetBodyLength",
+          "error": "invalid-body-length",
+          "pointers": {
+            "hex": "/malformed/0/hex"
+          }
+        },
+        {
+          "name": "zeroTargetNodeGeneration",
+          "error": "invalid-field",
+          "pointers": {
+            "hex": "/malformed/1/hex"
+          }
+        },
+        {
+          "name": "trailingByte",
+          "error": "trailing-byte",
+          "pointers": {
+            "hex": "/malformed/2/hex"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "command",
+      "goldenFixture": "golden/actor-create-v1.json",
+      "goldenSha256": "8373dd0c811ab0e173bb944a882e29faf4dd9e438e78e6af7321b4bed37f5e5c",
+      "surface": {
+        "format": "actor-create-v1",
+        "type": null,
+        "command": "actorCreate",
+        "commandId": 49
+      },
+      "canonical": [
+        {
+          "name": "actorCreate",
+          "pointers": {
+            "hex": "/canonical/hex",
+            "decoded": "/canonical/decoded"
+          }
+        }
+      ],
+      "malformed": [
+        {
+          "name": "zeroOperationId",
+          "error": "invalid-field",
+          "pointers": {
+            "hex": "/malformed/0/hex"
+          }
+        },
+        {
+          "name": "truncatedDeadline",
+          "error": "truncated-field",
+          "pointers": {
+            "hex": "/malformed/1/hex"
+          }
+        },
+        {
+          "name": "trailingByte",
+          "error": "trailing-byte",
+          "pointers": {
+            "hex": "/malformed/2/hex"
+          }
+        }
+      ]
+    }
+  ]
+}

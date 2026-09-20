@@ -3638,6 +3638,37 @@ function validateCommandByteOracleFixtures(schema, schemaPath) {
   return count;
 }
 
+function validateServiceWireFixtureOracles(schema, schemaPath) {
+  validateRelocationLogicalFixture(schema, schemaPath);
+  validateActorJoinRequestFixture(schema, schemaPath);
+  validateCommandByteOracleFixtures(schema, schemaPath);
+
+  const actorJoin = schema.commands.find((entry) => entry.id === 28 && entry.name === "actorJoin");
+  return {
+    logical: {
+      format: schema.relocationLogicalStreamFormat.name,
+      type: schema.relocationLogicalStreamFormat.body.$ref,
+      goldenFixture: schema.relocationLogicalStreamFormat.goldenFixture,
+    },
+    commands: [
+      {
+        format: "actor-join-request-v1",
+        command: actorJoin.name,
+        commandId: actorJoin.id,
+        goldenFixture: "golden/actor-join-request-v1.json",
+        framing: "frames",
+      },
+      ...COMMAND_BYTE_ORACLES.map(([format, commandName, commandId]) => ({
+        format,
+        command: commandName,
+        commandId,
+        goldenFixture: `golden/${format}.json`,
+        framing: "single-frame",
+      })),
+    ],
+  };
+}
+
 function validateZljrSchemaShape(schema) {
   const types = new Map(schema.types.map((type) => [type.name, type]));
   const frozenFields = types.get("frozen-record")?.fields?.map((field) => [field.name, field.$ref]);
@@ -8057,6 +8088,7 @@ export {
   SchemaValidationError,
   crc32c,
   encodeGoldenBody,
+  validateServiceWireFixtureOracles,
   validateGoldenFixtures,
   validateSchema,
 };
