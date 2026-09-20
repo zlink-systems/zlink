@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
@@ -1020,6 +1021,104 @@ test('redis-backed repository writes the golden canonical authority allocation e
     assert.match(stored.ownerLeaseGeneration, /^\d+$/);
     assert.equal('target' in stored.allocation, false);
     assert.equal('capacityBundle' in stored.allocation, false);
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
+test('redis-backed repository completes Actor creation from a canonical authority row', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('canonical-creation-completion');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  try {
+    const owner = await repository.claimOwnerLease('owner-a', 60_000);
+    assert.equal(owner.kind, 'claimed');
+    if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
+    const target = {
+      meshName: 'main',
+      nodeRid: 'actor-node',
+      nodeLifecycleGeneration: 1n,
+      owner: owner.token
+    };
+    const descriptor = aggregateDescriptor(target, 0);
+    descriptor.populationCapacity.actors.limit = 1;
+    descriptor.objectCapabilities = [{
+      objectKind: 'actor',
+      stableType: 'player',
+      policy: 'snapshot',
+      hasSnapshotAdapter: true,
+      limit: 1
+    }];
+    assert.equal(
+      (await repository.updateMeshNode(
+        descriptor,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      )).status,
+      frameworkInternal.ZLinkLocationWriteStatus.Stored
+    );
+
+    const reserved = await repository.reserve({
+      key: { kind: 'actor', globalId: 'actor-canonical' },
+      intent: {
+        stableType: 'player',
+        requestContentReference: 'inline-v1:creation-request',
+        requestSha256: Buffer.alloc(32, 1),
+        requestEncodedSize: 16n
+      },
+      target,
+      creatingPayload: Buffer.from('creating'),
+      capacity: { actors: 1, spots: 0 }
+    });
+    assert.equal(reserved.kind, 'reserved');
+    if (reserved.kind !== 'reserved') throw new Error('authority reserve failed');
+
+    const authorityKey = encodeAuthorityKey('actor', 'actor-canonical');
+    const rowKey = key(authorityPreimage(authorityKey));
+    const before = await store.read(rowKey);
+    assert.equal(before.kind, 'found');
+    if (before.kind !== 'found') throw new Error('authority row is missing');
+    const canonical = JSON.parse(Buffer.from(before.value.bytes).toString('utf8'));
+    delete canonical.reservationId;
+    const rewritten = await store.write({
+      conditions: [{ kind: 'version', key: rowKey, expected: before.value.version }],
+      mutations: [{ kind: 'put', key: rowKey, bytes: Buffer.from(JSON.stringify(canonical)) }]
+    });
+    assert.equal(rewritten.kind, 'applied');
+    if (rewritten.kind !== 'applied') throw new Error('canonical authority row rewrite failed');
+    const expectedStoreVersion = rewritten.putVersions.find(
+      item => item.key.value === rowKey.value
+    )?.version.value;
+    assert.ok(expectedStoreVersion);
+
+    const terminalEnvelope = Buffer.from('creation-operation-terminal-v1:created');
+    const completed = await repository.completeCreation({
+      key: { kind: 'actor', globalId: 'actor-canonical' },
+      reservationId: reserved.reservationId,
+      expectedStoreVersion,
+      target,
+      completion: {
+        kind: 'created',
+        readyPayload: Buffer.from('ready'),
+        terminal: {
+          operation: {
+            sourceNodeRid: 'source-node',
+            sourceNodeGeneration: 1n,
+            operationId: { high: 0n, low: 1n }
+          },
+          terminalEnvelope,
+          terminalEnvelopeSha256: createHash('sha256').update(terminalEnvelope).digest(),
+          operationDeadline: new Date(Date.now() + 60_000)
+        }
+      }
+    });
+    assert.equal(completed.kind, 'created');
+    if (completed.kind !== 'created') throw new Error('canonical creation completion was rejected');
+    assert.equal(completed.ready.allocation.state, 'active');
+    assert.equal(completed.ready.pendingCreation, undefined);
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);
