@@ -42,8 +42,9 @@ public static class ServiceCollectionExtensions
 한 `IServiceCollection`에 framework root를 한 번 등록한다. `IZLinkFrameworkOptions`의 정확한 멤버는
 [Topology configuration §2](03-configuration-topology.ko.md#2-등록-인터페이스)가 소유한다.
 
-Host startup은 구성 검증과 public listener 준비가 완료되어 application callback을 받을 수 있을 때
-정상 완료한다. Application callback은 handler와 owner queue가 준비된 뒤에만 실행한다. Hosting stop은
+Host startup은 구성 검증과 public listener 준비가 완료되면 정상 완료한다. Location admission이
+열리는 시점은 [Location runtime §5](../../../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)가
+정한다. Application callback은 handler와 owner queue가 준비된 뒤에만 실행한다. Hosting stop은
 `IZLinkFrameworkRuntime.ShutdownAsync(...)`를 호출한다. Application이 logical continuity를 요구하면 stop 전에
 `RelocateAsync(...)`의 `Relocated` 결과를 확인한 뒤 `ShutdownAsync(...)`를 호출한다.
 

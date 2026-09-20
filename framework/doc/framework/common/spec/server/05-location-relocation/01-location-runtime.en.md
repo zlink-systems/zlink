@@ -773,6 +773,18 @@ Processing and cleanup of results from work already accepted into the local queu
 proceed within a separate deadline. But no new Store change is made with expired owner
 eligibility.
 
+The initial owner-lease claim at startup is a Store request like a renewal and
+finishes within the renew timeout. If a timeout or provider error happens after the
+request started, the Framework re-reads the same key to confirm the result, as in §10,
+and that confirmation also stays within the same renew timeout. A host that has not
+confirmed its lease by the renew timeout finishes startup as a host without a deadline:
+it blocks every target above, keeps claiming at each renew interval, and once it holds
+the lease computes the deadline and publishes descriptors as after a first renewal. The
+claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
+cancels startup, startup ends as cancelled; this rule does not turn it into a success.
+A claim that already started is confirmed by re-reading the same key as in §10; a
+confirmed lease is released normally and no heartbeat starts.
+
 ## 6. Reading and Changing the Current Location Record
 
 `Reserve`, `Preserve`, `NewOwner`, `Commit`, and `Abort` are names of the operations the
@@ -1494,8 +1506,9 @@ The following is confirmed using only the public surface — the results of the 
 Store SPI (`ReadAsync`/`WriteAsync`/`ScanAsync`) and the Relocation Store SPI
 ([03 §2](03-relocation-store-redis.en.md#2-public-spi-and-responsibility-boundary)), the
 results of the Manager's `Create`/`GetOrCreate`/`Find`/`Destroy`/`Close`, the responses of
-remote commands 20/47/48/49, and the key/value bytes a provider conformance test observes
-against the store record golden fixture. Each item maps to one test.
+remote commands 20/47/48/49, the result of host startup (success, startup error or
+cancelled), and the key/value bytes a provider conformance test observes against the
+store record golden fixture. Each item maps to one test.
 
 **Generation And Owner Lease**
 
@@ -1508,6 +1521,13 @@ against the store record golden fixture. Each item maps to one test.
   error.
 - Once the last time it can accept new work passes, descriptor publishing, starting
   object messages/timers, and relocation changes are all blocked together.
+- If the initial owner-lease claim has not confirmed a lease by the renew timeout,
+  startup succeeds and the four targets above are blocked.
+- A host that finished startup without a lease claims at each renew interval and
+  publishes descriptors only after the lease is held.
+- The claim results `Conflict` and `GenerationExhausted` are startup errors.
+- Cancelling startup ends it as cancelled; an already committed claim is released and
+  no heartbeat starts.
 
 **Descriptor And Location Lookup**
 
