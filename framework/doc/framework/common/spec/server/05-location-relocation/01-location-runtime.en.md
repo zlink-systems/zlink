@@ -773,13 +773,15 @@ Processing and cleanup of results from work already accepted into the local queu
 proceed within a separate deadline. But no new Store change is made with expired owner
 eligibility.
 
-The initial owner-lease claim at startup is a Store request like a renewal. If a
-transport error happens after the request started, the Framework re-reads the same key
-to confirm the result, as in §10. A host that could not confirm its lease finishes
-startup as a host without a deadline: it blocks every target above, keeps claiming at
-each renew interval, and once it holds the lease computes the deadline and publishes
-descriptors as after a first renewal. A closed failure result such as
-`GenerationExhausted` is a startup error.
+The initial owner-lease claim at startup is a Store request like a renewal and
+finishes within the renew timeout. If a timeout or provider error happens after the
+request started, the Framework re-reads the same key to confirm the result, as in §10,
+and that confirmation also stays within the same renew timeout. A host that has not
+confirmed its lease by the renew timeout finishes startup as a host without a deadline:
+it blocks every target above, keeps claiming at each renew interval, and once it holds
+the lease computes the deadline and publishes descriptors as after a first renewal. The
+claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
+cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 
 ## 6. Reading and Changing the Current Location Record
 
@@ -1516,6 +1518,10 @@ against the store record golden fixture. Each item maps to one test.
   error.
 - Once the last time it can accept new work passes, descriptor publishing, starting
   object messages/timers, and relocation changes are all blocked together.
+- If the initial owner-lease claim has not confirmed a lease by the renew timeout,
+  startup succeeds with the four targets above blocked, the claim continues at each
+  renew interval, and descriptors are published only after the lease is held. The claim
+  results `Conflict` and `GenerationExhausted` are startup errors.
 
 **Descriptor And Location Lookup**
 

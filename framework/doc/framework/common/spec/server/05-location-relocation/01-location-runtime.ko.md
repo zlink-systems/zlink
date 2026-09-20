@@ -694,11 +694,13 @@ Deadline을 넘거나 현재 host 실행 조합이 Store 값과 다르면 다음
 이미 local queue가 받은 작업의 결과 처리와 정리는 별도 deadline 안에서 진행할 수 있다.
 하지만 만료된 owner 자격으로 새 Store 변경을 만들지 않는다.
 
-Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이다. 요청을 시작한 뒤 transport
-error를 받으면 §10대로 같은 key를 다시 읽어 결과를 확인한다. Lease를 확정하지 못한 host는
-deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew interval마다
-claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를 게시한다.
-`GenerationExhausted`처럼 닫힌 실패 결과는 startup error다.
+Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이며 renew timeout 안에 끝낸다.
+요청을 시작한 뒤 timeout이나 provider error를 받으면 §10대로 같은 key를 다시 읽어 결과를
+확인하되, 이 확인도 같은 renew timeout 안에서 한다. Renew timeout까지 lease를 확인하지
+못한 host는 deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew
+interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를
+게시한다. Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
+cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다.
 
 ## 6. 현재 위치 record를 읽고 변경한다
 
@@ -1369,6 +1371,9 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 모든 Location host가 startup에서 §5의 시간 관계를 검사하며, 위반하면 startup error다.
 - 새 작업을 받을 수 있는 마지막 시각을 넘으면 descriptor 게시, object message·timer 시작과
   relocation 변경이 함께 막힌다.
+- 최초 owner lease claim이 renew timeout까지 lease를 확인하지 못하면 startup은 성공하되 위
+  네 대상이 막히고, renew interval마다 claim이 이어지며, 확보한 뒤에야 descriptor가 게시된다.
+  Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
 
 **Descriptor와 위치 조회**
 

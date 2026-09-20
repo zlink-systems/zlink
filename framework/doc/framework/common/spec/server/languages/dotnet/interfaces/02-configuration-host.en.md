@@ -47,7 +47,8 @@ The framework root is registered once on one `IServiceCollection`. The
 [Topology Configuration §2](03-configuration-topology.en.md#2-registration-interface).
 
 Host startup completes normally once configuration validation and public
-listener preparation finish and it can accept application callbacks. An
+listener preparation finish. When Location admission opens is defined by
+[Location runtime §5](../../../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops). An
 application callback only runs after the handler and owner queue are
 ready. Hosting stop calls `IZLinkFrameworkRuntime.ShutdownAsync(...)`. If
 the application needs logical continuity, it confirms the `Relocated`
