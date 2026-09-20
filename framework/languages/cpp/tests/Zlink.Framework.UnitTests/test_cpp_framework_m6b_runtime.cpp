@@ -6663,7 +6663,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
       std::make_shared<memory_relocation_repository_t> ();
     const std::weak_ptr<host::public_host_runtime_t> weak_target = target;
     target->configure_instance_spot_operations (
-      store, instance_relocations, owner->token,
+      store, instance_relocations, [owner] { return owner->token; },
       host::instance_spot_activation_materializer_t{
         [&instance_prepare_count] (
           const protocol::instance_spot_activation_header_t &activation) {
