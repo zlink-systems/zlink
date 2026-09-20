@@ -14,11 +14,12 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.protocol.ServiceWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 final class GeneratedServiceWireCommandCodecConformanceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ServiceWireCodec.DecoderContext CONTEXT =
+        new ServiceWireCodec.DecoderContext(null, null, null);
 
     @Test
     void batch3RuntimeAndGeneratedCodecsMatchCanonicalGoldens()
@@ -126,26 +127,25 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                         byte[] bytes = pointedHex(golden, pointers, "encodedHex");
                         String format = indexed.path("surface").path("format").asText();
                         assertArrayEquals(bytes, ServiceWireCodec.encodeDurable(format,
-                            ServiceWireCodec.decodeDurable(format, bytes)), file);
+                            ServiceWireCodec.decodeDurable(format, bytes, CONTEXT), CONTEXT), file);
                         byte[] malformed = Arrays.copyOf(bytes, bytes.length);
                         malformed[malformed.length - 1] ^= 1;
                         assertThrows(Exception.class,
-                            () -> ServiceWireCodec.decodeDurable(format, malformed), file);
+                            () -> ServiceWireCodec.decodeDurable(format, malformed, CONTEXT), file);
                     }
                     case "logical" -> {
                         byte[] bytes = pointedHex(golden, pointers, "logicalHex");
-                        var context = new ServiceWireCodec.DecoderContext(null, null, null);
-                        assertArrayEquals(bytes, ServiceWireCodec.encodeRelocationEnvelopeV1(
-                            ServiceWireCodec.decodeRelocationEnvelopeV1(bytes, context), context),
+                        assertArrayEquals(bytes, ServiceWireCodec.encodeLogicalRelocationEnvelopeV1(
+                            ServiceWireCodec.decodeLogicalRelocationEnvelopeV1(bytes, CONTEXT), CONTEXT),
                             file);
                         byte[] malformed = Arrays.copyOf(bytes, bytes.length + 1);
                         assertThrows(Exception.class, () -> ServiceWireCodec
-                            .decodeRelocationEnvelopeV1(malformed, context), file);
+                            .decodeLogicalRelocationEnvelopeV1(malformed, CONTEXT), file);
                     }
                     case "command" -> {
                         List<byte[]> frames = pointedFrames(golden, pointers);
                         assertFramesEqual(frames, ServiceWireCodec.encodeCommandFrames(
-                            ServiceWireCodec.decodeCommand(frames)));
+                            ServiceWireCodec.decodeCommand(frames, CONTEXT), CONTEXT));
                     }
                     default -> throw new IllegalStateException("unknown fixture kind: " + kind);
                 }
@@ -154,11 +154,72 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 for (JsonNode malformed : indexed.path("malformed")) {
                     List<byte[]> frames = pointedFrames(golden, malformed.path("pointers"));
                     assertThrows(Exception.class,
-                        () -> ServiceWireCodec.decodeCommand(frames),
+                        () -> ServiceWireCodec.decodeCommand(frames, CONTEXT),
                         file + ":" + malformed.path("name").asText());
                 }
             }
         }
+        for (JsonNode operationCase : fixtureIndex().path("operationCases")) {
+            String operation = operationCase.path("operation").asText();
+            String message = operation + ":" + operationCase.path("name").asText();
+            if (operationCase.path("expect").asText().equals("accept")) {
+                assertOperationCaseAccepted(operationCase, message);
+            } else {
+                assertThrows(Exception.class,
+                    () -> decodeOperationCase(operationCase), message);
+            }
+        }
+    }
+
+    private static void assertOperationCaseAccepted(JsonNode operationCase,
+        String message) throws Exception {
+        try {
+            decodeOperationCase(operationCase);
+        } catch (Exception failure) {
+            throw new AssertionError(message, failure);
+        }
+    }
+
+    private static void decodeOperationCase(JsonNode operationCase)
+        throws Exception {
+        JsonNode surface = operationCase.path("surface");
+        switch (surface.path("format").asText()) {
+            case "type" -> {
+                byte[] bytes = HexFormat.of().parseHex(operationCase.path("hex").asText());
+                switch (surface.path("type").asText()) {
+                    case "descriptor-extension" ->
+                        ServiceWireCodec.decodeDescriptorExtension(bytes, CONTEXT);
+                    case "text8" -> ServiceWireCodec.decodeText8(bytes, CONTEXT);
+                    default -> throw new IllegalStateException("unknown type operation case");
+                }
+            }
+            case "command" -> ServiceWireCodec.decodeCommand(
+                hexFrames(operationCase.path("framesHex")), CONTEXT);
+            case "semantic" -> ServiceWireCodec.validateReplyPredicate(
+                ServiceWireCodec.RequestTerminalResult.valueOf(
+                    enumName(operationCase.path("input").path("terminalResult").asText())),
+                ServiceWireCodec.FrameworkErrorCode.valueOf(
+                    enumName(operationCase.path("input").path("failureCode").asText())));
+            case "relocation-envelope-v1" -> ServiceWireCodec
+                .decodeLogicalRelocationEnvelopeV1(
+                    HexFormat.of().parseHex(operationCase.path("hex").asText()), CONTEXT);
+            case "authority-payload-v1" -> ServiceWireCodec.decodeDurable(
+                "authority-payload-v1",
+                HexFormat.of().parseHex(operationCase.path("hex").asText()), CONTEXT);
+            default -> throw new IllegalStateException("unknown operation case surface");
+        }
+    }
+
+    private static List<byte[]> hexFrames(JsonNode frames) {
+        List<byte[]> result = new ArrayList<>();
+        for (JsonNode frame : frames) {
+            result.add(HexFormat.of().parseHex(frame.asText()));
+        }
+        return result;
+    }
+
+    private static String enumName(String value) {
+        return value.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toUpperCase();
     }
 
     private static byte[] runtimeCommandRoundTrip(byte[] bytes) {
