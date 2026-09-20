@@ -399,8 +399,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
   std::string stable_type,
   object_creation_key_t reserve_key,
   object_reservation_fence_t fence,
-  creation_operation_identity_t operation,
-  std::chrono::system_clock::time_point operation_deadline)
+  creation_operation_identity_t operation)
 {
     struct remote_actor_create_completion_t
     {
@@ -411,15 +410,14 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
     };
     auto remote =
       std::make_shared<detail::task_completion_source_t<remote_actor_create_completion_t>> ();
-    const auto fail_creation = [&] {
-        const auto failed_envelope = actor_terminal_envelope (
-          creation_terminal_state_t::failed, std::nullopt, std::nullopt, *_serializers);
-        return _location_store
-          ->complete_creation (
-            {reserve_key, fence,
-             object_creation_failed_t{
-               {operation, failed_envelope, sha256 (failed_envelope), operation_deadline}}})
-          .result ();
+    const auto read_stored_terminal = [&] () -> std::optional<actor_create_result_t> {
+        const auto terminal =
+          _location_store->read_creation_terminal (operation).result ().value ();
+        if (!terminal)
+            return std::nullopt;
+        return actor_result_from_terminal (*terminal, [this] (zlink::message_t raw) {
+            return message_t::from_raw (std::move (raw), _serializers);
+        });
     };
     try {
         const auto accepted = co_await source->native_node ().create_actor_remote (
@@ -430,7 +428,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
                 {terminal, std::move (reply), std::move (application_reply)}));
           });
         if (!accepted) {
-            (void) fail_creation ();
+            (void) _location_store->abort ({reserve_key, fence}).result ();
             co_return result_t<actor_create_result_t>::failure (
               framework_error_kind_t::rejected, "Actor creation operation was not admitted");
         }
@@ -439,7 +437,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
         //  Spec 32-framework-error-model:87-120 — classify the remote creation
         //  outcome instead of collapsing every failure to InternalFailure.
         if (completed_remote.terminal != foundation::operation_terminal_t::completed) {
-            (void) fail_creation ();
+            if (auto stored = read_stored_terminal ())
+                co_return result_t<actor_create_result_t>::success (std::move (*stored));
             //  Non-completed local operation terminals classify exactly like
             //  the sibling User Spot lifecycle path (timed_out ->
             //  DeadlineExceeded, transport_failed -> Unavailable, cancelled ->
@@ -450,7 +449,6 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
               "Remote Actor creation transport did not complete");
         }
         if (completed_remote.reply.header.terminal_result != 0) {
-            (void) fail_creation ();
             //  A carried wire terminal + fine failure code classifies via the
             //  shared ownership-aware remote-reply mapper (spec 32:83-118,
             //  99-108) — e.g. Busy+None -> Unavailable and workerTimedOut ->
@@ -464,45 +462,29 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
               "Remote Actor creation target rejected the operation");
         }
         if (completed_remote.reply.result == protocol::actor_create_result_t::rejected) {
-            //  Spec 32:129-136 — an Application rejection is a typed
-            //  Actor-create result, not a framework failure. Persist the
-            //  rejected terminal exactly like the local creation path.
             std::optional<message_t> rejected_reply;
             if (completed_remote.application_reply)
                 rejected_reply = message_t::from_raw (
                   zlink::message_t::from (completed_remote.application_reply->payload_bytes ()),
                   _serializers);
-            const auto rejected_envelope = actor_terminal_envelope (
-              creation_terminal_state_t::rejected, std::nullopt, rejected_reply, *_serializers);
-            const auto rejected_completed =
-              _location_store
-                ->complete_creation (
-                  {reserve_key, fence,
-                   object_creation_rejected_t{{operation, rejected_envelope,
-                                               sha256 (rejected_envelope), operation_deadline}}})
-                .result ();
-            if (!rejected_completed)
-                co_return result_t<actor_create_result_t>::failure (
-                  rejected_completed.error_kind (),
-                  rejected_completed.error () ? rejected_completed.error ()->what ()
-                                              : "Actor creation rejection completion failed");
             co_return result_t<actor_create_result_t>::success (
               actor_create_rejected_t{std::move (rejected_reply)});
         }
         if (completed_remote.reply.result == protocol::actor_create_result_t::existing) {
-            //  A peer reporting an existing Actor is a typed result carrying
-            //  the existing ref; the local reservation is stale, so release it.
-            (void) fail_creation ();
+            if (completed_remote.reply.actor_id != actor_id.value ()
+                || completed_remote.reply.node_routing_id != target.rid.to_bytes ())
+                co_return result_t<actor_create_result_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "Remote Actor creation returned a malformed existing reply");
             co_return result_t<actor_create_result_t>::success (
               actor_create_existing_t{::zlink::framework::detail::actor_ref_access_t::make (
                 node_rid_t::from_string (target.rid.to_string ()), stable_type,
-                std::string (actor_id.value ()), completed_remote.reply.object_generation)});
+                completed_remote.reply.actor_id, completed_remote.reply.object_generation)});
         }
         if (completed_remote.reply.result != protocol::actor_create_result_t::created
             || completed_remote.reply.actor_id != actor_id.value ()
             || completed_remote.reply.node_routing_id != target.rid.to_bytes ()
             || completed_remote.reply.object_generation != fence.object_generation) {
-            (void) fail_creation ();
             //  Spec 32:91-92 — a reply that cannot be processed (unknown
             //  result discriminator or fields disagreeing with the request)
             //  is a ProtocolError, not InternalFailure.
@@ -513,53 +495,18 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
 
         const auto created = ::zlink::framework::detail::actor_ref_access_t::make (
           node_rid_t::from_string (target.rid.to_string ()), stable_type,
-          std::string (actor_id.value ()), completed_remote.reply.object_generation);
+          completed_remote.reply.actor_id, completed_remote.reply.object_generation);
         std::optional<message_t> reply;
         if (completed_remote.application_reply)
             reply = message_t::from_raw (
               zlink::message_t::from (completed_remote.application_reply->payload_bytes ()), _serializers);
-        const auto envelope = actor_terminal_envelope (creation_terminal_state_t::created, created,
-                                                       reply, *_serializers);
-        const creation_terminal_publication_t publication{operation, envelope, sha256 (envelope),
-                                                          operation_deadline};
-        const auto completed =
-          _location_store
-            ->complete_creation (
-              {reserve_key, fence,
-               object_creation_completed_t{
-                 target_actor_authority_payload (actor_authority_state_t::ready, stable_type,
-                                                 actor_id, target),
-                 publication}})
-            .result ();
-        if (!completed)
-            co_return result_t<actor_create_result_t>::failure (
-              completed.error_kind (), completed.error () ? completed.error ()->what ()
-                                                          : "Actor creation completion failed");
-        if (const auto *done =
-              std::get_if<object_creation_completed_result_t> (&completed.value ())) {
-            if (!done->ready
-                || done->ready->allocation.state != placement_allocation_state_t::active)
-                co_return result_t<actor_create_result_t>::failure (
-                  framework_error_kind_t::unavailable, "Actor creation did not reach active state");
-        } else if (const auto *already = std::get_if<object_creation_already_completed_result_t> (
-                     &completed.value ())) {
-            co_return result_t<actor_create_result_t>::success (
-              actor_result_from_terminal (already->terminal, [this] (zlink::message_t raw) {
-                  return message_t::from_raw (std::move (raw), _serializers);
-              }));
-        } else {
-            co_return result_t<actor_create_result_t>::failure (
-              framework_error_kind_t::unavailable, "Actor creation completion was fenced");
-        }
         co_return result_t<actor_create_result_t>::success (
           actor_create_created_t{created, std::move (reply)});
     }
     catch (const framework_exception_t &error) {
-        (void) fail_creation ();
         co_return detail::result_access_t::failure<actor_create_result_t> (error);
     }
     catch (const std::exception &error) {
-        (void) fail_creation ();
         co_return result_t<actor_create_result_t>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
@@ -889,16 +836,6 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             continue;
         }
         if (const auto *winner = std::get_if<object_reserved_t> (&reserved)) {
-            const auto fail_creation = [&] {
-                const auto failed_envelope = actor_terminal_envelope (
-                  creation_terminal_state_t::failed, std::nullopt, std::nullopt, *_serializers);
-                const creation_terminal_publication_t failed_publication{
-                  operation, failed_envelope, sha256 (failed_envelope), operation_deadline};
-                return _location_store
-                  ->complete_creation (
-                    {reserve.key, winner->fence, object_creation_failed_t{failed_publication}})
-                  .result ();
-            };
             if (target_runtime == _nodes.end ()) {
                 const auto peer_epoch =
                   (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
@@ -956,8 +893,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                     .count ());
                 return complete_remote_actor_creation (
                   *source_runtime, target, std::move (command), timeout, std::move (actor_id),
-                  std::move (stable_type), reserve.key, winner->fence, operation,
-                  operation_deadline);
+                  std::move (stable_type), reserve.key, winner->fence, operation);
             }
             std::optional<zlink::message_t> raw_request;
             if (request)
@@ -2029,8 +1965,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
               };
             node->configure_actor_create_operations (
-              [node, store] (const protocol::actor_create_header_t &request,
-                             host::actor_create_operation_target_completion_t completion) {
+              [node, store, serializers = _serializers] (
+                const protocol::actor_create_header_t &request,
+                host::actor_create_operation_target_completion_t completion) {
                   const auto failed = [&] {
                       host::actor_create_operation_result_t result;
                       result.reply.header = {request.correlation, 105u,
@@ -2045,10 +1982,69 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       completion (failed ());
                       return;
                   }
+                  const auto publish = [request, node, serializers, status, store] (
+                                         creation_terminal_state_t state,
+                                         std::optional<actor_ref_t> actor,
+                                         const std::optional<message_t> &application_reply) {
+                      const auto envelope = actor_terminal_envelope (
+                        state, actor, application_reply, *serializers);
+                      const auto deadline = std::chrono::system_clock::time_point (
+                        std::chrono::milliseconds (request.deadline_unix_ms));
+                      const creation_operation_identity_t operation{
+                        node_rid_t::from_string (
+                          zlink::routing_id_t::from (request.source_node_routing_id).to_string ()),
+                        request.source_node_generation,
+                        {request.operation.high, request.operation.low}};
+                      mesh_node_descriptor_t target;
+                      target.mesh_name = node->mesh_name ();
+                      target.rid = status.routing_id ();
+                      target.lifecycle_generation = status.lifecycle_generation ();
+                      target.owner_id = request.reservation.target_owner_id;
+                      target.lease_generation = static_cast<std::int64_t> (
+                        request.reservation.target_owner_lease_generation);
+                      const object_reservation_fence_t fence{
+                        request.reservation.reservation_id,
+                        request.reservation.expected_store_version,
+                        request.reservation.object_generation,
+                        request.reservation.authority_owner_generation,
+                        {target.mesh_name,
+                         node_rid_t::from_string (status.routing_id ().to_string ()),
+                         target.lifecycle_generation,
+                         {target.owner_id, target.lease_generation}},
+                        {.actor_slots = request.reservation.pending_capacity_delta}};
+                      const creation_terminal_publication_t terminal{
+                        operation, envelope, sha256 (envelope), deadline};
+                      object_creation_completion_t target_completion;
+                      if (state == creation_terminal_state_t::created) {
+                          target_completion = object_creation_completed_t{
+                            target_actor_authority_payload (
+                              actor_authority_state_t::ready, request.stable_type,
+                              actor_id_t (request.actor_id), target),
+                            terminal};
+                      } else if (state == creation_terminal_state_t::rejected) {
+                          target_completion = object_creation_rejected_t{terminal};
+                      } else {
+                          target_completion = object_creation_failed_t{terminal};
+                      }
+                      const auto published =
+                        store
+                          ->complete_creation (
+                            {{placement_object_kind_t::actor, request.actor_id}, fence,
+                             std::move (target_completion)})
+                          .result ();
+                      return published
+                             && (std::holds_alternative<object_creation_completed_result_t> (
+                                   published.value ())
+                                 || std::holds_alternative<
+                                   object_creation_already_completed_result_t> (
+                                   published.value ()));
+                  };
                   const auto now = std::chrono::system_clock::now ();
                   const auto deadline = std::chrono::system_clock::time_point (
                     std::chrono::milliseconds (request.deadline_unix_ms));
                   if (deadline <= now) {
+                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
+                                      std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2056,6 +2052,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
                   const auto creation_bytes = read_actor_creation_request (store, request);
                   if (!creation_bytes) {
+                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
+                                      std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2065,6 +2063,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     request.reservation.object_generation,
                     request.reservation.authority_owner_generation, timeout);
                   if (!created) {
+                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
+                                      std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2072,27 +2072,52 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto joined = node->submit_application_actor_entry_spot_join (
                     actor, node_rid_t::from_string (status.routing_id ().to_string ()),
                     creation_request, timeout,
-                    [request, actor,
-                     completion] (result_t<detail::actor_join_reply_t> joined) mutable {
+                    [request, actor, completion, publish, serializers] (
+                      result_t<detail::actor_join_reply_t> joined) mutable {
                         host::actor_create_operation_result_t result;
                         result.reply.header = {
                           request.correlation, 105u,
                           static_cast<std::uint32_t> (
                             protocol::framework_error_code::actorCreateFailed)};
-                        if (!joined || joined.value ().result_code != 0) {
+                        if (!joined) {
+                            (void) publish (creation_terminal_state_t::failed, std::nullopt,
+                                            std::nullopt);
                             completion (std::move (result));
                             return;
                         }
+                        std::optional<message_t> application_reply;
+                        if (!joined.value ().reply.is_empty ()) {
+                            application_reply = message_t::from_raw (
+                              joined.value ().reply, serializers);
+                            result.application_reply = protocol::application_payload_t{
+                              request.stable_type, "application/octet-stream",
+                              joined.value ().reply.to_bytes ()};
+                        }
                         result.reply.header = {request.correlation, 0u, 0u};
-                        result.reply.result = protocol::actor_create_result_t::created;
+                        const auto accepted = joined.value ().result_code == 0;
+                        result.reply.result = accepted
+                          ? protocol::actor_create_result_t::created
+                          : protocol::actor_create_result_t::rejected;
                         result.reply.node_routing_id =
                           zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
                             .to_bytes ();
                         result.reply.actor_id = std::string (actor.actor_id ().value ());
                         result.reply.object_generation = actor.object_generation ();
+                        const auto state = accepted ? creation_terminal_state_t::created
+                                                    : creation_terminal_state_t::rejected;
+                        if (!publish (state, accepted ? std::make_optional (actor) : std::nullopt,
+                                      application_reply)) {
+                            result.reply.header = {
+                              request.correlation, 105u,
+                              static_cast<std::uint32_t> (
+                                protocol::framework_error_code::actorCreateFailed)};
+                            result.application_reply.reset ();
+                        }
                         completion (std::move (result));
                     });
                   if (!joined) {
+                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
+                                      std::nullopt);
                       completion (failed ());
                       return;
                   }

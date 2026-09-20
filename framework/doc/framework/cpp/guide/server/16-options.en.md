@@ -146,7 +146,7 @@ rather than the number of objects.
 | Option | What it sets | Default |
 | --- | --- | --- |
 | `send_timeout` | How long a send waits for room | 1 second |
-| `ReceiveTimeout` | Wait limit in the receive direction | Not set |
+| `receive_timeout` | Wait limit in the receive direction | Not set |
 | `SendHighWaterMark` · `ReceiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
 
 Once a limit is reached, the sender waits up to `send_timeout`, and the call ends as a deadline

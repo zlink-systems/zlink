@@ -11,6 +11,22 @@ on:
       - 'core/doc/**'
       - 'bindings/doc/**'
       - '.github/workflows/docs.yml'
+  # PR에서는 build job만 돈다(deploy는 push 전용). main에 들어간 뒤에야 생성물 드리프트가
+  # 잡히면 그 사이 배포가 멈춘다 — 27991265d1이 cpp 16-options 생성물을 빠뜨려 두 배포가
+  # 첫 단계에서 죽었다(#775). 가이드가 `--8<--`로 발췌하는 tutorial·samples 소스도 포함한다:
+  # 소스 줄바꿈이 곧 문서 모양이다(doc/principal/dev/source-formatting.ko.md).
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'doc/site/**'
+      - 'framework/doc/framework/**'
+      - 'core/doc/**'
+      - 'bindings/doc/**'
+      - 'framework/languages/*/tutorial/**'
+      - 'framework/languages/*/samples/**'
+      - 'framework/languages/*/quickstart/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -18,9 +34,10 @@ permissions:
   pages: write
   id-token: write
 
+# PR 검증은 서로·배포와 직렬화할 이유가 없다. 배포만 "pages" 그룹 하나를 쓴다.
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -105,11 +122,13 @@ jobs:
         run: python3 doc/site/scripts/make_core_redirects.py doc/site/site
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
           path: doc/site/site
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

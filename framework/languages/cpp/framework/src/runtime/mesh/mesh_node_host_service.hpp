@@ -133,8 +133,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
       std::string stable_type,
       object_creation_key_t reserve_key,
       object_reservation_fence_t fence,
-      creation_operation_identity_t operation,
-      std::chrono::system_clock::time_point operation_deadline);
+      creation_operation_identity_t operation);
     task_t<std::optional<actor_ref_t>> find_actor (
       actor_id_t actor_id);
     task_t<std::optional<spot_ref_t>> find_actor_spot (
