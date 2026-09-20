@@ -30,8 +30,10 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <coroutine>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <future>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -616,6 +618,96 @@ zlink::stream_e2e_client::task_t<int> await_delayed_coroutine_child ()
     co_return value + 1;
 }
 
+struct continuation_probe_t
+{
+    struct promise_type;
+    using handle_t = std::coroutine_handle<promise_type>;
+
+    struct promise_type
+    {
+        continuation_probe_t get_return_object () noexcept
+        {
+            return continuation_probe_t{handle_t::from_promise (*this)};
+        }
+
+        std::suspend_always initial_suspend () const noexcept { return {}; }
+        std::suspend_always final_suspend () const noexcept { return {}; }
+        void return_void () const noexcept {}
+        void unhandled_exception () const noexcept { std::terminate (); }
+    };
+
+    explicit continuation_probe_t (handle_t handle) : handle (handle) {}
+    continuation_probe_t (continuation_probe_t &&other) noexcept : handle (other.handle)
+    {
+        other.handle = {};
+    }
+    continuation_probe_t (const continuation_probe_t &) = delete;
+    continuation_probe_t &operator= (const continuation_probe_t &) = delete;
+    ~continuation_probe_t ()
+    {
+        if (handle) {
+            handle.destroy ();
+        }
+    }
+
+    handle_t handle;
+};
+
+continuation_probe_t make_continuation_probe (std::atomic_bool &resumed)
+{
+    resumed.store (true);
+    co_return;
+}
+
+// The awaiter contract: a completed task reports `false` from await_suspend so the
+// caller resumes at once instead of parking a continuation nobody will wake.
+template <typename Task>
+bool resume_if_await_suspend_reports_ready (Task &task,
+                                            std::coroutine_handle<> continuation)
+{
+    if (task.await_suspend (continuation)) {
+        return false;
+    }
+    continuation.resume ();
+    return true;
+}
+
+bool task_completion_before_suspend_resumes_value_task ()
+{
+    using task_t = zlink::stream_e2e_client::task_t<int>;
+    task_t::callback_t complete;
+    task_t task ([&complete] (task_t::callback_t callback) {
+        complete = std::move (callback);
+    });
+    if (task.await_ready () || !complete) {
+        return false;
+    }
+
+    complete (zlink::stream_connector::result_t<int>::success (7));
+    std::atomic_bool resumed{false};
+    auto probe = make_continuation_probe (resumed);
+    return resume_if_await_suspend_reports_ready (task, probe.handle)
+           && resumed.load ();
+}
+
+bool task_completion_before_suspend_resumes_void_task ()
+{
+    using task_t = zlink::stream_e2e_client::task_t<void>;
+    task_t::callback_t complete;
+    task_t task ([&complete] (task_t::callback_t callback) {
+        complete = std::move (callback);
+    });
+    if (task.await_ready () || !complete) {
+        return false;
+    }
+
+    complete (zlink::stream_connector::result_t<void>::success ());
+    std::atomic_bool resumed{false};
+    auto probe = make_continuation_probe (resumed);
+    return resume_if_await_suspend_reports_ready (task, probe.handle)
+           && resumed.load ();
+}
+
 zlink::stream_e2e_client::task_t<bool>
 result_waits_for_coroutine_frame_cleanup (std::atomic_bool &cleaned)
 {
@@ -842,6 +934,13 @@ int main ()
     using zlink::stream_connector::message_kind_t;
     using zlink::stream_connector::detail::header_codec_t;
     using zlink::stream_connector::detail::stream_header_t;
+
+    if (!task_completion_before_suspend_resumes_value_task ()) {
+        return 261;
+    }
+    if (!task_completion_before_suspend_resumes_void_task ()) {
+        return 262;
+    }
 
     for (const auto kind : {message_kind_t::response, message_kind_t::error}) {
         stream_header_t reply;
@@ -1430,7 +1529,7 @@ int main ()
         too_large_metadata.with ("key", std::string (65536, 'v'));
         if (metadata_codec.encode (too_large_metadata).error_code ()
             != zlink::stream_connector::error_code_t::validation_failed) {
-            return 72;
+            return 260;
         }
         zlink::stream_connector::metadata_t boundary_metadata;
         boundary_metadata.with ("k", std::string (1019, 'v'));

@@ -189,13 +189,17 @@ template <typename T> class task_t
         return _state->result.has_value ();
     }
 
-    void await_suspend (std::coroutine_handle<> continuation)
+    bool await_suspend (std::coroutine_handle<> continuation)
     {
         {
             std::lock_guard<std::mutex> lock (_state->mutex);
+            if (_state->result.has_value ()) {
+                return false;
+            }
             _state->continuation = continuation;
         }
         start ();
+        return true;
     }
 
     T await_resume ()
@@ -308,13 +312,17 @@ template <> class task_t<void>
         return _state->result.has_value ();
     }
 
-    void await_suspend (std::coroutine_handle<> continuation)
+    bool await_suspend (std::coroutine_handle<> continuation)
     {
         {
             std::lock_guard<std::mutex> lock (_state->mutex);
+            if (_state->result.has_value ()) {
+                return false;
+            }
             _state->continuation = continuation;
         }
         start ();
+        return true;
     }
 
     void await_resume ()
