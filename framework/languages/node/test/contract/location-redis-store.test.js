@@ -1094,7 +1094,24 @@ test('redis-backed repository completes Actor creation from a canonical authorit
     )?.version.value;
     assert.ok(expectedStoreVersion);
 
-    const terminalEnvelope = Buffer.from('creation-operation-terminal-v1:created');
+    const terminalEnvelope = Buffer.from(fs.readFileSync(path.resolve(
+      __dirname,
+      'fixtures/creation-terminal-node.hex'
+    ), 'utf8').trim(), 'hex');
+    const operation = {
+      sourceNodeRid: {
+        toHex: () => '00ff10',
+        toString: () => 'source-node'
+      },
+      sourceNodeGeneration: 7n,
+      operationId: { high: 0x1n, low: 0xabcdefn }
+    };
+    const terminalKey = key([
+      'creation-terminal',
+      '00ff10',
+      '7',
+      '00000000000000010000000000abcdef'
+    ].join('\0'));
     const completed = await repository.completeCreation({
       key: { kind: 'actor', globalId: 'actor-canonical' },
       reservationId: reserved.reservationId,
@@ -1104,13 +1121,8 @@ test('redis-backed repository completes Actor creation from a canonical authorit
         kind: 'created',
         readyPayload: Buffer.from('ready'),
         terminal: {
-          operation: {
-            sourceNodeRid: 'source-node',
-            sourceNodeGeneration: 1n,
-            operationId: { high: 0n, low: 1n }
-          },
+          operation,
           terminalEnvelope,
-          terminalEnvelopeSha256: createHash('sha256').update(terminalEnvelope).digest(),
           operationDeadline: new Date(Date.now() + 60_000)
         }
       }
@@ -1119,6 +1131,17 @@ test('redis-backed repository completes Actor creation from a canonical authorit
     if (completed.kind !== 'created') throw new Error('canonical creation completion was rejected');
     assert.equal(completed.ready.allocation.state, 'active');
     assert.equal(completed.ready.pendingCreation, undefined);
+    const storedTerminal = await store.read(terminalKey);
+    assert.equal(storedTerminal.kind, 'found');
+    if (storedTerminal.kind === 'found') {
+      assert.deepEqual(Buffer.from(storedTerminal.value.bytes), terminalEnvelope);
+    }
+    const terminalRows = await store.scan({ prefix: terminalKey.value, limit: 10 });
+    assert.equal(terminalRows.kind, 'page');
+    if (terminalRows.kind === 'page') assert.equal(terminalRows.value.items.length, 1);
+    const reread = await repository.readCreationTerminal(operation);
+    assert.equal(reread.kind, 'found');
+    if (reread.kind === 'found') assert.deepEqual(reread.terminalEnvelope, terminalEnvelope);
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);

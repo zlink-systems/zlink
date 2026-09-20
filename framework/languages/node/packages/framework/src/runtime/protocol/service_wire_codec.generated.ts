@@ -152,7 +152,7 @@ export function decodeApplicationVersion(bytes: Uint8Array, context: ServiceWire
 export function encodeApplicationVersion(value: ApplicationVersion, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationVersion(value, writer, context, {}, 0); return writer.result(); }
 
 export type Bool8 = "false" | "true";
-function enumWireBool8(value: Bool8): number { switch (value) {
+export function enumWireBool8(value: Bool8): number { switch (value) {
   case "false": return 0;
   case "true": return 1;
 } }
@@ -475,7 +475,7 @@ export function decodeMetadataFrame(bytes: Uint8Array, context: ServiceWireDecod
 export function encodeMetadataFrame(value: MetadataFrame, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMetadataFrame(value, writer, context, {}, 0); return writer.result(); }
 
 export type RuntimeState = "preparing" | "serving" | "draining" | "stopped" | "error";
-function enumWireRuntimeState(value: RuntimeState): number { switch (value) {
+export function enumWireRuntimeState(value: RuntimeState): number { switch (value) {
   case "preparing": return 0;
   case "serving": return 1;
   case "draining": return 2;
@@ -501,7 +501,7 @@ export function decodeRuntimeState(bytes: Uint8Array, context: ServiceWireDecode
 export function encodeRuntimeState(value: RuntimeState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRuntimeState(value, writer, context, {}, 0); return writer.result(); }
 
 export type StatefulObjectKind = "actor" | "userSpot" | "instanceSpot";
-function enumWireStatefulObjectKind(value: StatefulObjectKind): number { switch (value) {
+export function enumWireStatefulObjectKind(value: StatefulObjectKind): number { switch (value) {
   case "actor": return 1;
   case "userSpot": return 2;
   case "instanceSpot": return 3;
@@ -523,7 +523,7 @@ export function decodeStatefulObjectKind(bytes: Uint8Array, context: ServiceWire
 export function encodeStatefulObjectKind(value: StatefulObjectKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeStatefulObjectKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type ObjectRole = "none" | "client" | "server";
-function enumWireObjectRole(value: ObjectRole): number { switch (value) {
+export function enumWireObjectRole(value: ObjectRole): number { switch (value) {
   case "none": return 0;
   case "client": return 1;
   case "server": return 2;
@@ -571,7 +571,7 @@ export function decodeObjectPendingCapacityLimit(bytes: Uint8Array, context: Ser
 export function encodeObjectPendingCapacityLimit(value: ObjectPendingCapacityLimit, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectPendingCapacityLimit(value, writer, context, {}, 0); return writer.result(); }
 
 export type AuthorityObjectKind = "actor" | "spot";
-function enumWireAuthorityObjectKind(value: AuthorityObjectKind): number { switch (value) {
+export function enumWireAuthorityObjectKind(value: AuthorityObjectKind): number { switch (value) {
   case "actor": return 1;
   case "spot": return 2;
 } }
@@ -591,7 +591,7 @@ export function decodeAuthorityObjectKind(bytes: Uint8Array, context: ServiceWir
 export function encodeAuthorityObjectKind(value: AuthorityObjectKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityObjectKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type SpotKind = "entry" | "user" | "instance";
-function enumWireSpotKind(value: SpotKind): number { switch (value) {
+export function enumWireSpotKind(value: SpotKind): number { switch (value) {
   case "entry": return 1;
   case "user": return 2;
   case "instance": return 3;
@@ -613,7 +613,7 @@ export function decodeSpotKind(bytes: Uint8Array, context: ServiceWireDecoderCon
 export function encodeSpotKind(value: SpotKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSpotKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type EntryUserSpotAuthorityState = "creating" | "ready" | "closing" | "relocating";
-function enumWireEntryUserSpotAuthorityState(value: EntryUserSpotAuthorityState): number { switch (value) {
+export function enumWireEntryUserSpotAuthorityState(value: EntryUserSpotAuthorityState): number { switch (value) {
   case "creating": return 0;
   case "ready": return 1;
   case "closing": return 2;
@@ -637,7 +637,7 @@ export function decodeEntryUserSpotAuthorityState(bytes: Uint8Array, context: Se
 export function encodeEntryUserSpotAuthorityState(value: EntryUserSpotAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeEntryUserSpotAuthorityState(value, writer, context, {}, 0); return writer.result(); }
 
 export type ActorAuthorityState = "creating" | "ready";
-function enumWireActorAuthorityState(value: ActorAuthorityState): number { switch (value) {
+export function enumWireActorAuthorityState(value: ActorAuthorityState): number { switch (value) {
   case "creating": return 0;
   case "ready": return 1;
 } }
@@ -657,7 +657,7 @@ export function decodeActorAuthorityState(bytes: Uint8Array, context: ServiceWir
 export function encodeActorAuthorityState(value: ActorAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorAuthorityState(value, writer, context, {}, 0); return writer.result(); }
 
 export type RelocationPolicyKind = "disabled" | "recreate" | "snapshot";
-function enumWireRelocationPolicyKind(value: RelocationPolicyKind): number { switch (value) {
+export function enumWireRelocationPolicyKind(value: RelocationPolicyKind): number { switch (value) {
   case "disabled": return 0;
   case "recreate": return 1;
   case "snapshot": return 2;
@@ -679,7 +679,7 @@ export function decodeRelocationPolicyKind(bytes: Uint8Array, context: ServiceWi
 export function encodeRelocationPolicyKind(value: RelocationPolicyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationPolicyKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type TimerOverrunPolicyKind = "skipLateTicks" | "catchUpBounded" | "delayNextTick";
-function enumWireTimerOverrunPolicyKind(value: TimerOverrunPolicyKind): number { switch (value) {
+export function enumWireTimerOverrunPolicyKind(value: TimerOverrunPolicyKind): number { switch (value) {
   case "skipLateTicks": return 1;
   case "catchUpBounded": return 2;
   case "delayNextTick": return 3;
@@ -701,7 +701,7 @@ export function decodeTimerOverrunPolicyKind(bytes: Uint8Array, context: Service
 export function encodeTimerOverrunPolicyKind(value: TimerOverrunPolicyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeTimerOverrunPolicyKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type ActorSpotKind = "entry" | "user";
-function enumWireActorSpotKind(value: ActorSpotKind): number { switch (value) {
+export function enumWireActorSpotKind(value: ActorSpotKind): number { switch (value) {
   case "entry": return 1;
   case "user": return 2;
 } }
@@ -721,7 +721,7 @@ export function decodeActorSpotKind(bytes: Uint8Array, context: ServiceWireDecod
 export function encodeActorSpotKind(value: ActorSpotKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorSpotKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type RelocationRole = "source" | "target" | "coordinator";
-function enumWireRelocationRole(value: RelocationRole): number { switch (value) {
+export function enumWireRelocationRole(value: RelocationRole): number { switch (value) {
   case "source": return 1;
   case "target": return 2;
   case "coordinator": return 3;
@@ -743,7 +743,7 @@ export function decodeRelocationRole(bytes: Uint8Array, context: ServiceWireDeco
 export function encodeRelocationRole(value: RelocationRole, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationRole(value, writer, context, {}, 0); return writer.result(); }
 
 export type ActorJoinResult = "accepted" | "rejected";
-function enumWireActorJoinResult(value: ActorJoinResult): number { switch (value) {
+export function enumWireActorJoinResult(value: ActorJoinResult): number { switch (value) {
   case "accepted": return 0;
   case "rejected": return 1;
 } }
@@ -820,7 +820,7 @@ export function decodeActorJoinReplyTail(bytes: Uint8Array, context: ServiceWire
 export function encodeActorJoinReplyTail(value: ActorJoinReplyTail, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorJoinReplyTail(value, writer, context, {}, 0); return writer.result(); }
 
 export type MeshRecordKind = "nodeSend" | "nodeRequest" | "channelSend" | "channelRequest" | "spotSend" | "spotRequest" | "spotMulticast" | "spotControl" | "actorSend" | "actorRequest" | "completion" | "sendReady" | "relocationControl" | "instanceSpotActivation";
-function enumWireMeshRecordKind(value: MeshRecordKind): number { switch (value) {
+export function enumWireMeshRecordKind(value: MeshRecordKind): number { switch (value) {
   case "nodeSend": return 1;
   case "nodeRequest": return 2;
   case "channelSend": return 3;
@@ -864,7 +864,7 @@ export function decodeMeshRecordKind(bytes: Uint8Array, context: ServiceWireDeco
 export function encodeMeshRecordKind(value: MeshRecordKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshRecordKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type FrozenSourceKind = "node" | "spot" | "actor" | "boundSession";
-function enumWireFrozenSourceKind(value: FrozenSourceKind): number { switch (value) {
+export function enumWireFrozenSourceKind(value: FrozenSourceKind): number { switch (value) {
   case "node": return 1;
   case "spot": return 2;
   case "actor": return 3;
@@ -888,7 +888,7 @@ export function decodeFrozenSourceKind(bytes: Uint8Array, context: ServiceWireDe
 export function encodeFrozenSourceKind(value: FrozenSourceKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenSourceKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type MeshDestinationKind = "node" | "channel" | "spot" | "actor" | "boundSession";
-function enumWireMeshDestinationKind(value: MeshDestinationKind): number { switch (value) {
+export function enumWireMeshDestinationKind(value: MeshDestinationKind): number { switch (value) {
   case "node": return 1;
   case "channel": return 2;
   case "spot": return 3;
@@ -914,7 +914,7 @@ export function decodeMeshDestinationKind(bytes: Uint8Array, context: ServiceWir
 export function encodeMeshDestinationKind(value: MeshDestinationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshDestinationKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type ServiceTopologyKind = "routeMesh" | "clientServer";
-function enumWireServiceTopologyKind(value: ServiceTopologyKind): number { switch (value) {
+export function enumWireServiceTopologyKind(value: ServiceTopologyKind): number { switch (value) {
   case "routeMesh": return 1;
   case "clientServer": return 2;
 } }
@@ -934,7 +934,7 @@ export function decodeServiceTopologyKind(bytes: Uint8Array, context: ServiceWir
 export function encodeServiceTopologyKind(value: ServiceTopologyKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeServiceTopologyKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type ClientServerRole = "client" | "server";
-function enumWireClientServerRole(value: ClientServerRole): number { switch (value) {
+export function enumWireClientServerRole(value: ClientServerRole): number { switch (value) {
   case "client": return 1;
   case "server": return 2;
 } }
@@ -954,7 +954,7 @@ export function decodeClientServerRole(bytes: Uint8Array, context: ServiceWireDe
 export function encodeClientServerRole(value: ClientServerRole, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerRole(value, writer, context, {}, 0); return writer.result(); }
 
 export type ClientServerDirection = "clientToServer";
-function enumWireClientServerDirection(value: ClientServerDirection): number { switch (value) {
+export function enumWireClientServerDirection(value: ClientServerDirection): number { switch (value) {
   case "clientToServer": return 1;
 } }
 function readClientServerDirection(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ClientServerDirection {
@@ -972,7 +972,7 @@ export function decodeClientServerDirection(bytes: Uint8Array, context: ServiceW
 export function encodeClientServerDirection(value: ClientServerDirection, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerDirection(value, writer, context, {}, 0); return writer.result(); }
 
 export type ActorLifecycleKind = "created" | "joined" | "left" | "disconnected" | "destroyed";
-function enumWireActorLifecycleKind(value: ActorLifecycleKind): number { switch (value) {
+export function enumWireActorLifecycleKind(value: ActorLifecycleKind): number { switch (value) {
   case "created": return 1;
   case "joined": return 2;
   case "left": return 3;
@@ -998,7 +998,7 @@ export function decodeActorLifecycleKind(bytes: Uint8Array, context: ServiceWire
 export function encodeActorLifecycleKind(value: ActorLifecycleKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorLifecycleKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type BoundSessionBindingState = "active" | "tombstone";
-function enumWireBoundSessionBindingState(value: BoundSessionBindingState): number { switch (value) {
+export function enumWireBoundSessionBindingState(value: BoundSessionBindingState): number { switch (value) {
   case "active": return 1;
   case "tombstone": return 2;
 } }
@@ -1018,7 +1018,7 @@ export function decodeBoundSessionBindingState(bytes: Uint8Array, context: Servi
 export function encodeBoundSessionBindingState(value: BoundSessionBindingState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBoundSessionBindingState(value, writer, context, {}, 0); return writer.result(); }
 
 export type SessionRelocationRouteAction = "commit" | "abort";
-function enumWireSessionRelocationRouteAction(value: SessionRelocationRouteAction): number { switch (value) {
+export function enumWireSessionRelocationRouteAction(value: SessionRelocationRouteAction): number { switch (value) {
   case "commit": return 1;
   case "abort": return 2;
 } }
@@ -1038,7 +1038,7 @@ export function decodeSessionRelocationRouteAction(bytes: Uint8Array, context: S
 export function encodeSessionRelocationRouteAction(value: SessionRelocationRouteAction, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionRelocationRouteAction(value, writer, context, {}, 0); return writer.result(); }
 
 export type RelocationPhase = "none" | "preparing" | "captured" | "prepared" | "committed" | "activating" | "activated" | "cleaning" | "completed" | "aborted";
-function enumWireRelocationPhase(value: RelocationPhase): number { switch (value) {
+export function enumWireRelocationPhase(value: RelocationPhase): number { switch (value) {
   case "none": return 0;
   case "preparing": return 1;
   case "captured": return 2;
@@ -1074,7 +1074,7 @@ export function decodeRelocationPhase(bytes: Uint8Array, context: ServiceWireDec
 export function encodeRelocationPhase(value: RelocationPhase, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationPhase(value, writer, context, {}, 0); return writer.result(); }
 
 export type SourceCleanupState = "pending" | "completed" | "sourceLeaseExpired";
-function enumWireSourceCleanupState(value: SourceCleanupState): number { switch (value) {
+export function enumWireSourceCleanupState(value: SourceCleanupState): number { switch (value) {
   case "pending": return 0;
   case "completed": return 1;
   case "sourceLeaseExpired": return 2;
@@ -1096,7 +1096,7 @@ export function decodeSourceCleanupState(bytes: Uint8Array, context: ServiceWire
 export function encodeSourceCleanupState(value: SourceCleanupState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSourceCleanupState(value, writer, context, {}, 0); return writer.result(); }
 
 export type ReplyRelayAckStatus = "terminalReceived" | "alreadyTerminal";
-function enumWireReplyRelayAckStatus(value: ReplyRelayAckStatus): number { switch (value) {
+export function enumWireReplyRelayAckStatus(value: ReplyRelayAckStatus): number { switch (value) {
   case "terminalReceived": return 1;
   case "alreadyTerminal": return 2;
 } }
@@ -1116,7 +1116,7 @@ export function decodeReplyRelayAckStatus(bytes: Uint8Array, context: ServiceWir
 export function encodeReplyRelayAckStatus(value: ReplyRelayAckStatus, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayAckStatus(value, writer, context, {}, 0); return writer.result(); }
 
 export type AuthorityOperationKind = "steady" | "coldActivation" | "maintenanceRelocation" | "close";
-function enumWireAuthorityOperationKind(value: AuthorityOperationKind): number { switch (value) {
+export function enumWireAuthorityOperationKind(value: AuthorityOperationKind): number { switch (value) {
   case "steady": return 0;
   case "coldActivation": return 1;
   case "maintenanceRelocation": return 2;
@@ -1140,7 +1140,7 @@ export function decodeAuthorityOperationKind(bytes: Uint8Array, context: Service
 export function encodeAuthorityOperationKind(value: AuthorityOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityOperationKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type MeshOperationKind = "none" | "nodeRequest" | "channelRequest" | "spotRequest" | "actorRequest" | "actorLookup" | "actorDestroy" | "actorJoin" | "actorLeave" | "streamBind" | "streamUnbind" | "streamClose" | "instanceSpotRequest" | "userSpotCreate" | "userSpotClose" | "actorCreate";
-function enumWireMeshOperationKind(value: MeshOperationKind): number { switch (value) {
+export function enumWireMeshOperationKind(value: MeshOperationKind): number { switch (value) {
   case "none": return 0;
   case "nodeRequest": return 1;
   case "channelRequest": return 2;
@@ -1188,7 +1188,7 @@ export function decodeMeshOperationKind(bytes: Uint8Array, context: ServiceWireD
 export function encodeMeshOperationKind(value: MeshOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMeshOperationKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type RequestTerminalResult = "ok" | "timedOut" | "notFound" | "terminated" | "protocolError" | "internalError" | "rejected" | "conflict" | "busy" | "notConnected" | "invalidArgument" | "invalidState" | "notSupported" | "backpressured";
-function enumWireRequestTerminalResult(value: RequestTerminalResult): number { switch (value) {
+export function enumWireRequestTerminalResult(value: RequestTerminalResult): number { switch (value) {
   case "ok": return 0;
   case "timedOut": return 101;
   case "notFound": return 102;
@@ -1232,7 +1232,7 @@ export function decodeRequestTerminalResult(bytes: Uint8Array, context: ServiceW
 export function encodeRequestTerminalResult(value: RequestTerminalResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRequestTerminalResult(value, writer, context, {}, 0); return writer.result(); }
 
 export type FrameworkErrorCode = "none" | "actorRouteNotFound" | "actorCreateFailed" | "actorAlreadyExists" | "actorTypeMismatch" | "spotCreateFailed" | "spotRouteNotFound" | "spotTypeMismatch" | "actorSessionNotBound" | "handlerNotFound" | "routeHandlerNotFound" | "actorDispatchHandlerNotFound" | "payloadDecodeFailed" | "routeNotConnected" | "requestTargetNotFound" | "requestRejected" | "requestProtocolError" | "requestFailed" | "workerQueueFull" | "workerTimedOut" | "workerFailed" | "actorLocationStale" | "actorCreateRejected" | "spotGenerationStale" | "spotMoving" | "relocationDataLost";
-function enumWireFrameworkErrorCode(value: FrameworkErrorCode): number { switch (value) {
+export function enumWireFrameworkErrorCode(value: FrameworkErrorCode): number { switch (value) {
   case "none": return 0;
   case "actorRouteNotFound": return 1;
   case "actorCreateFailed": return 2;
@@ -1300,7 +1300,7 @@ export function decodeFrameworkErrorCode(bytes: Uint8Array, context: ServiceWire
 export function encodeFrameworkErrorCode(value: FrameworkErrorCode, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrameworkErrorCode(value, writer, context, {}, 0); return writer.result(); }
 
 export type InstanceOperationKind = "send" | "request";
-function enumWireInstanceOperationKind(value: InstanceOperationKind): number { switch (value) {
+export function enumWireInstanceOperationKind(value: InstanceOperationKind): number { switch (value) {
   case "send": return 1;
   case "request": return 2;
 } }
@@ -1320,7 +1320,7 @@ export function decodeInstanceOperationKind(bytes: Uint8Array, context: ServiceW
 export function encodeInstanceOperationKind(value: InstanceOperationKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceOperationKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type InstanceRouteKind = "ready" | "coldActivation";
-function enumWireInstanceRouteKind(value: InstanceRouteKind): number { switch (value) {
+export function enumWireInstanceRouteKind(value: InstanceRouteKind): number { switch (value) {
   case "ready": return 1;
   case "coldActivation": return 2;
 } }
@@ -1340,7 +1340,7 @@ export function decodeInstanceRouteKind(bytes: Uint8Array, context: ServiceWireD
 export function encodeInstanceRouteKind(value: InstanceRouteKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceRouteKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type UserSpotCreateResult = "existing" | "created" | "rejected";
-function enumWireUserSpotCreateResult(value: UserSpotCreateResult): number { switch (value) {
+export function enumWireUserSpotCreateResult(value: UserSpotCreateResult): number { switch (value) {
   case "existing": return 1;
   case "created": return 2;
   case "rejected": return 3;
@@ -1362,7 +1362,7 @@ export function decodeUserSpotCreateResult(bytes: Uint8Array, context: ServiceWi
 export function encodeUserSpotCreateResult(value: UserSpotCreateResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeUserSpotCreateResult(value, writer, context, {}, 0); return writer.result(); }
 
 export type ActorCreateResult = "existing" | "created" | "rejected";
-function enumWireActorCreateResult(value: ActorCreateResult): number { switch (value) {
+export function enumWireActorCreateResult(value: ActorCreateResult): number { switch (value) {
   case "existing": return 1;
   case "created": return 2;
   case "rejected": return 3;
@@ -1384,7 +1384,7 @@ export function decodeActorCreateResult(bytes: Uint8Array, context: ServiceWireD
 export function encodeActorCreateResult(value: ActorCreateResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorCreateResult(value, writer, context, {}, 0); return writer.result(); }
 
 export type InstanceAuthorityState = "coldActivating" | "ready" | "closing" | "relocating";
-function enumWireInstanceAuthorityState(value: InstanceAuthorityState): number { switch (value) {
+export function enumWireInstanceAuthorityState(value: InstanceAuthorityState): number { switch (value) {
   case "coldActivating": return 1;
   case "ready": return 2;
   case "closing": return 3;
@@ -1408,7 +1408,7 @@ export function decodeInstanceAuthorityState(bytes: Uint8Array, context: Service
 export function encodeInstanceAuthorityState(value: InstanceAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceAuthorityState(value, writer, context, {}, 0); return writer.result(); }
 
 export type ReplyRelayContextKind = "coldActivation" | "maintenanceRelocation";
-function enumWireReplyRelayContextKind(value: ReplyRelayContextKind): number { switch (value) {
+export function enumWireReplyRelayContextKind(value: ReplyRelayContextKind): number { switch (value) {
   case "coldActivation": return 1;
   case "maintenanceRelocation": return 2;
 } }
@@ -1428,7 +1428,7 @@ export function decodeReplyRelayContextKind(bytes: Uint8Array, context: ServiceW
 export function encodeReplyRelayContextKind(value: ReplyRelayContextKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayContextKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type ColdActivationCompletionKind = "readyBarrier" | "activationFailure";
-function enumWireColdActivationCompletionKind(value: ColdActivationCompletionKind): number { switch (value) {
+export function enumWireColdActivationCompletionKind(value: ColdActivationCompletionKind): number { switch (value) {
   case "readyBarrier": return 1;
   case "activationFailure": return 2;
 } }
@@ -1448,7 +1448,7 @@ export function decodeColdActivationCompletionKind(bytes: Uint8Array, context: S
 export function encodeColdActivationCompletionKind(value: ColdActivationCompletionKind, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeColdActivationCompletionKind(value, writer, context, {}, 0); return writer.result(); }
 
 export type RejectReason = "protocolVersionUnsupported" | "topologyMismatch" | "identityMismatch" | "securityIdentityMismatch" | "channelMismatch" | "lifecycleGenerationStale" | "descriptorRevisionStale" | "capabilityMismatch" | "runtimeNotServing" | "duplicateConnection" | "invalidDescriptor" | "resourceLimit";
-function enumWireRejectReason(value: RejectReason): number { switch (value) {
+export function enumWireRejectReason(value: RejectReason): number { switch (value) {
   case "protocolVersionUnsupported": return 1;
   case "topologyMismatch": return 2;
   case "identityMismatch": return 3;
@@ -1629,7 +1629,7 @@ function readCreationOperationTerminalV1(reader: Reader, context: ServiceWireDec
 
     if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
     if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
-    if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
+    if (value["creation"] !== undefined && same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
 
     return value;
   })();
@@ -1641,7 +1641,7 @@ function writeCreationOperationTerminalV1(input: CreationOperationTerminalV1, wr
   const limitStart = writer.length;
   if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
   if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
-  if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
+  if (value["creation"] !== undefined && same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
   if (value["terminalResult"] === undefined) fail("terminalResult required");
@@ -2396,7 +2396,7 @@ export function decodeObjectReservationFence(bytes: Uint8Array, context: Service
 export function encodeObjectReservationFence(value: ObjectReservationFence, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectReservationFence(value, writer, context, {}, 0); return writer.result(); }
 
 export type GenericReservationOperationKind = "reserve" | "commit" | "abort";
-function enumWireGenericReservationOperationKind(value: GenericReservationOperationKind): number { switch (value) {
+export function enumWireGenericReservationOperationKind(value: GenericReservationOperationKind): number { switch (value) {
   case "reserve": return 1;
   case "commit": return 2;
   case "abort": return 3;

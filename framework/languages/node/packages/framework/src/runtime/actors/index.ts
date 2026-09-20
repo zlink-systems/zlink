@@ -379,6 +379,9 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         ? { status: 'rejected' }
         : { status: 'rejected', reply: result.reply };
     }
+    if (result.status === 'failed') {
+      throw actorApplicationFailure(actorId, result.error);
+    }
     return result.reply === undefined
       ? { status: result.status, actor: result.actorRef }
       : { status: result.status, actor: result.actorRef, reply: result.reply };
@@ -720,12 +723,19 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       const operation = state.getOrStartCreation(
         actorType,
         failIfExists,
-        () => this.creation.createActor(actorId, actorType, state, createRequest, claimLocation, signal)
+        () => this.creation.createActor(
+          actorId,
+          actorType,
+          state,
+          createRequest,
+          claimLocation,
+          signal
+        )
       );
       if (operation.created) {
         void operation.task.then(
           (result) => {
-            if (result.status === 'rejected') {
+            if (result.status !== 'created') {
               this.discardFailedState(actorId, state, operation.task);
             }
           },
@@ -745,7 +755,9 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
           };
         }
         if (operation.created) {
-          return { status: 'rejected', reply: result.reply };
+          return result.status === 'failed'
+            ? { status: 'failed', error: result.error }
+            : { status: 'rejected', reply: result.reply };
         }
       } catch (error) {
         if (operation.created) {
@@ -936,13 +948,29 @@ export type ZLinkActorLocalCreateResult =
   | {
       readonly status: 'rejected';
       readonly reply?: unknown;
+    }
+  | {
+      readonly status: 'failed';
+      readonly error: unknown;
     };
 
 function requireCreatedActor(result: ZLinkActorLocalCreateResult, actorId: string): ZLinkActor {
-  if (result.status !== 'rejected') return result.actor;
+  if (result.status === 'existing' || result.status === 'created') return result.actor;
+  if (result.status === 'failed') {
+    throw actorApplicationFailure(actorId, result.error);
+  }
   throw createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.ActorCreateRejected,
     `Actor '${actorId}' create request was rejected.`
+  );
+}
+
+function actorApplicationFailure(actorId: string, error: unknown): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
+    `Actor '${actorId}' creation failed: ${error instanceof Error ? error.message : String(error)}`,
+    false,
+    error
   );
 }
 

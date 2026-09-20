@@ -83,6 +83,13 @@ function fieldsType(value) {
 
 const pathValue = (base, pathValueString) => pathValueString.split(".")
   .reduce((value, segment) => at(value, segment), base);
+const pathCondition = (base, pathValueString, expected, negate = false) => {
+  const segments = pathValueString.split(".");
+  const parents = segments.slice(0, -1).map((_, index) =>
+    `${pathValue(base, segments.slice(0, index + 1).join("."))} !== undefined`);
+  const comparison = `same(${pathValue(base, pathValueString)}, ${literal(expected)})`;
+  return [...parents, negate ? `!${comparison}` : comparison].join(" && ");
+};
 function constraintRootType(owner) {
   const operation = root(owner);
   if (operation.op === "vector") return types.get(operation.item.$ref);
@@ -147,10 +154,10 @@ function objectChecks(owner, constraints, value = "value") {
     if (constraint.kind === "not-both-zero") return `if (${constraint.fields.map((field) => `numeric(${at(value, field.name)}) === 0n`).join(" && ")}) fail(${JSON.stringify(owner.name + " all zero")});`;
     if (constraint.kind === "field-less-than-or-equal") return `if (numeric(${at(value, constraint.left.name)}) > numeric(${at(value, constraint.right.name)})) fail(${JSON.stringify(owner.name + " field order")});`;
     const when = Object.entries(constraint.when ?? {}).map(([name, expected]) => {
-      if (name.endsWith("Not")) return `!same(${pathValue(value, name.slice(0, -3))}, ${literal(expected)})`;
-      return `same(${pathValue(value, name)}, ${literal(expected)})`;
+      if (name.endsWith("Not")) return pathCondition(value, name.slice(0, -3), expected, true);
+      return pathCondition(value, name, expected);
     }).join(" && ");
-    const requires = Object.entries(constraint.requires ?? {}).map(([name, expected]) => `same(${pathValue(value, name)}, ${literal(expected)})`).join(" && ");
+    const requires = Object.entries(constraint.requires ?? {}).map(([name, expected]) => pathCondition(value, name, expected)).join(" && ");
     if (["terminal-success-shape", "terminal-failure-shape", "existing-has-no-application-payload"].includes(constraint.kind)) return `if (${when} && !(${requires})) fail(${JSON.stringify(owner.name + " " + constraint.kind)});`;
     throw new Error(`${owner.name}: unsupported object constraint ${constraint.kind}`);
   }).join("\n");
@@ -230,7 +237,7 @@ function enumeration(owner, operation) {
   const values = operation.values.map((entry) => JSON.stringify(entry.name)).join(" | ");
   const decode = operation.values.map((entry) => `case ${wide ? `${entry.value}n` : entry.value}: return ${JSON.stringify(entry.name)};`).join("\n");
   const encode = operation.values.map((entry) => `case ${JSON.stringify(entry.name)}: return ${wide ? `${entry.value}n` : entry.value};`).join("\n");
-  return { type: `export type ${name} = ${values};`, extra: `function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
+  return { type: `export type ${name} = ${values};`, extra: `export function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
     read: `const raw = ${operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`}; switch (${wide ? "raw" : "Number(raw)"}) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
     write: `${operation.encoding === "i64" ? "writer.i64" : "writer.u"}(numeric(enumWire${name}(value))${operation.encoding === "i64" ? "" : `, ${operation.width}`});` };
 }

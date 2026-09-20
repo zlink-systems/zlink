@@ -257,6 +257,10 @@ export type ZLinkActorCreationAttemptResult =
   | {
       readonly status: 'rejected';
       readonly reply?: unknown;
+    }
+  | {
+      readonly status: 'failed';
+      readonly error: unknown;
     };
 
 export class ZLinkActorRuntimeState {

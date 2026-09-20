@@ -1008,7 +1008,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   requestActorCreate(
     targetNodeRid: string,
-    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation' | 'operation'>,
+    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
     return this.requireStateful().requestActorCreate(targetNodeRid, request, timeoutMs);

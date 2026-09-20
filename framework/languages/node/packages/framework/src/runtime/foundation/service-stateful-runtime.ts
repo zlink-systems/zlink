@@ -750,14 +750,10 @@ export class ServiceStatefulRuntime {
 
   requestActorCreate(
     targetNodeRid: string,
-    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation' | 'operation'>,
+    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
     const correlation = this.nextUserSpotOperation++;
-    const operation = {
-      high: this.nodeGeneration,
-      low: correlation
-    };
     return this.requestUserSpotOperation(
       targetNodeRid,
       encodeActorCreateHeader({
@@ -765,7 +761,7 @@ export class ServiceStatefulRuntime {
         sourceNodeRid: this.nodeRid,
         sourceNodeGeneration: this.nodeGeneration,
         correlation,
-        operation
+        operation: request.operation
       }),
       correlation,
       'actorCreate',

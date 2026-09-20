@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   ZLinkLocationStore,
   ZLinkLocationPage,
@@ -74,6 +74,11 @@ import {
 import { ZLinkLocationWriteStatus as WriteStatus } from '../../contracts/Locations';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { storeKey } from './in-memory-provider-location-store';
+import {
+  creationTerminalPreimage,
+  opaqueRecordPreimage,
+  routingIdHexSegment
+} from './opaque-record-key';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
 import type { RoutingId } from '../../contracts/Common/CoreTypes';
@@ -1401,8 +1406,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (existingTerminal.kind === 'found') {
         return {
           kind: 'alreadyCompleted',
-          terminal: reviveCreationTerminal(
-            decodeJson<ZLinkCreationTerminalRecord>(existingTerminal.value.bytes)
+          terminal: retainedCreationTerminal(
+            terminal.operation,
+            existingTerminal.value.bytes,
+            existingTerminal.value.expiresAt,
+            existingTerminal.value.storeNow
           )
         };
       }
@@ -1489,7 +1497,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           {
             kind: 'put',
             key: terminalRowKey,
-            bytes: encodeJson(terminalAtStore),
+            bytes: terminalAtStore.terminalEnvelope,
             retentionMs
           }
         ]
@@ -1536,9 +1544,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       ? { kind: 'missing', storeNow: result.storeNow }
       : {
           kind: 'found',
-          record: reviveCreationTerminal(
-            decodeJson<ZLinkCreationTerminalRecord>(result.value.bytes)
-          )
+          terminalEnvelope: Buffer.from(result.value.bytes)
         };
   }
 
@@ -3137,13 +3143,13 @@ function sha256Hex(bytes: Uint8Array): string {
 // literal NUL bytes -- the same scheme the opaque record store hashes with
 // SHA-256 to derive the Redis key -- so a runtime in one language can read a
 // record another language wrote. Not used for framework-internal-only rows
-// (aggregate/capacity/creation-terminal/spot/actor/route), which stay on the
-// legacy PREFIX scheme since they aren't part of the public opaque contract.
+// (aggregate/capacity/spot/actor/route), which stay on the legacy PREFIX
+// scheme since they aren't part of the public opaque contract.
 function ownerKey(ownerId: string) {
-  return storeKey(`owner-lease\0${requireNoNul(ownerId, 'OwnerId')}`);
+  return storeKey(opaqueRecordPreimage('owner-lease', requireNoNul(ownerId, 'OwnerId')));
 }
 
-const AUTHORITY_PREIMAGE_PREFIX = 'authority\0';
+const AUTHORITY_PREIMAGE_PREFIX = `${opaqueRecordPreimage('authority')}\0`;
 
 function authorityKey(value: string) {
   return storeKey(authorityPreimage(value));
@@ -3154,7 +3160,11 @@ function authorityPreimage(value: string): string {
   // §2.3: Entry|User|Instance Spot kinds share one segment ("spot") -- one
   // Id has exactly one authority row regardless of spot kind.
   const segment = decoded.kind === 'actor' ? 'actor' : 'spot';
-  return `${AUTHORITY_PREIMAGE_PREFIX}${segment}\0${requireNoNul(decoded.globalId, 'Authority Id')}`;
+  return opaqueRecordPreimage(
+    'authority',
+    segment,
+    requireNoNul(decoded.globalId, 'Authority Id')
+  );
 }
 
 // Reverses authorityPreimage(): recovers the framework-internal zla1-encoded
@@ -3231,42 +3241,49 @@ function capacityKey(meshName: string, nodeRid: string) {
 
 function creationTerminalKey(operation: ZLinkCreationOperationIdentity) {
   validateCreationOperation(operation);
-  return storeKey(`${PREFIX}creation-terminal:${[
-    String(operation.sourceNodeRid),
-    operation.sourceNodeGeneration.toString(),
-    operation.operationId.high.toString(16).padStart(16, '0'),
-    operation.operationId.low.toString(16).padStart(16, '0')
-  ].map(encodeURIComponent).join(':')}`);
+  return storeKey(creationTerminalPreimage(operation));
 }
 
 function meshPrefix(meshName: string): string {
-  return `mesh-node\0${requireNoNul(meshName, 'MeshName')}\0`;
+  return `${opaqueRecordPreimage('mesh-node', requireNoNul(meshName, 'MeshName'))}\0`;
 }
 
 function meshKey(meshName: string, nodeRid: RoutingId) {
-  return storeKey(`${meshPrefix(meshName)}${routingIdHexSegment(nodeRid)}`);
+  return storeKey(opaqueRecordPreimage(
+    'mesh-node',
+    requireNoNul(meshName, 'MeshName'),
+    routingIdHexSegment(nodeRid)
+  ));
 }
 
 function clientServerPrefix(channelName: string): string {
-  return `client-server\0${requireNoNul(channelName, 'ChannelName')}\0`;
+  return `${opaqueRecordPreimage(
+    'client-server',
+    requireNoNul(channelName, 'ChannelName')
+  )}\0`;
 }
 
 function clientServerKey(channelName: string, serverRid: RoutingId) {
-  return storeKey(`${clientServerPrefix(channelName)}${routingIdHexSegment(serverRid)}`);
-}
-
-// {hex(RoutingId)}: lowercase hex of the RoutingId's raw bytes
-// (21-location-runtime.md#2.4).
-function routingIdHexSegment(rid: RoutingId): string {
-  return encodeRoutingIdStorageHex(rid).toLowerCase();
+  return storeKey(opaqueRecordPreimage(
+    'client-server',
+    requireNoNul(channelName, 'ChannelName'),
+    routingIdHexSegment(serverRid)
+  ));
 }
 
 function fanoutPrefix(channelName: string): string {
-  return `fanout-publisher\0${requireNoNul(channelName, 'ChannelName')}\0`;
+  return `${opaqueRecordPreimage(
+    'fanout-publisher',
+    requireNoNul(channelName, 'ChannelName')
+  )}\0`;
 }
 
 function fanoutKey(channelName: string, publisherRid: RoutingId) {
-  return storeKey(`${fanoutPrefix(channelName)}${routingIdHexSegment(publisherRid)}`);
+  return storeKey(opaqueRecordPreimage(
+    'fanout-publisher',
+    requireNoNul(channelName, 'ChannelName'),
+    routingIdHexSegment(publisherRid)
+  ));
 }
 
 function spotKey(meshName: string, spotId: string) {
@@ -3676,17 +3693,8 @@ function createTerminalRecord(
 ): ZLinkCreationTerminalRecord {
   const publication = request.completion.terminal;
   validateCreationOperation(publication.operation);
-  if (
-    publication.terminalEnvelope.byteLength > MAX_CREATION_TERMINAL_BYTES
-    || publication.terminalEnvelopeSha256.byteLength !== 32
-  ) {
-    throw new RangeError(
-      'Creation terminal envelope must not exceed 1 MiB and requires a SHA-256 digest.'
-    );
-  }
-  const actualSha = createHash('sha256').update(publication.terminalEnvelope).digest();
-  if (!timingSafeEqual(actualSha, Buffer.from(publication.terminalEnvelopeSha256))) {
-    throw new TypeError('Creation terminal envelope SHA-256 does not match its bytes.');
+  if (publication.terminalEnvelope.byteLength > MAX_CREATION_TERMINAL_BYTES) {
+    throw new RangeError('Creation terminal envelope must not exceed 1 MiB.');
   }
   const deadlineMs = publication.operationDeadline.getTime();
   const expiresAtMs = deadlineMs + CREATION_TERMINAL_RETENTION_MS;
@@ -3703,35 +3711,35 @@ function createTerminalRecord(
     validatePayloadSize(request.completion.readyPayload, 'Actor ready payload');
   }
   return {
-    state: request.completion.kind,
     operation: {
       sourceNodeRid: publication.operation.sourceNodeRid,
       sourceNodeGeneration: publication.operation.sourceNodeGeneration,
       operationId: { ...publication.operation.operationId }
     },
-    reservationId: requireText(request.reservationId, 'creation reservation ID'),
-    objectKind: request.key.kind,
     terminalEnvelope: Buffer.from(publication.terminalEnvelope),
-    terminalEnvelopeSha256: Buffer.from(publication.terminalEnvelopeSha256),
     expiresAt: new Date(expiresAtMs),
     storeNow: new Date(now)
   };
 }
 
-function reviveCreationTerminal(
-  record: ZLinkCreationTerminalRecord
+function retainedCreationTerminal(
+  operation: ZLinkCreationOperationIdentity,
+  terminalEnvelope: Uint8Array,
+  expiresAt: Date | undefined,
+  storeNow: Date
 ): ZLinkCreationTerminalRecord {
+  if (expiresAt === undefined) {
+    throw new Error('Retained creation terminal is missing its expiration.');
+  }
   return {
-    ...record,
     operation: {
-      ...record.operation,
-      sourceNodeRid: String(record.operation.sourceNodeRid),
-      operationId: { ...record.operation.operationId }
+      sourceNodeRid: operation.sourceNodeRid,
+      sourceNodeGeneration: operation.sourceNodeGeneration,
+      operationId: { ...operation.operationId }
     },
-    terminalEnvelope: Buffer.from(record.terminalEnvelope),
-    terminalEnvelopeSha256: Buffer.from(record.terminalEnvelopeSha256),
-    expiresAt: reviveDate(record.expiresAt),
-    storeNow: reviveDate(record.storeNow)
+    terminalEnvelope: Buffer.from(terminalEnvelope),
+    expiresAt: new Date(expiresAt),
+    storeNow: new Date(storeNow)
   };
 }
 
@@ -3745,7 +3753,7 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
   }
   if (
     operation.sourceNodeGeneration < 1n
-    || operation.sourceNodeGeneration > MAX_GENERATION
+    || operation.sourceNodeGeneration > MAX_U64
     || operation.operationId.high < 0n
     || operation.operationId.high > MAX_U64
     || operation.operationId.low < 0n

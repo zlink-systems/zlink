@@ -1555,14 +1555,74 @@ test('reserved Actor factory failure destroys native staging before capacity is 
   });
   const nativeRef = { nodeRid: zlink.RoutingId.from('node-a'), actorId: 'failed', generation: 7n };
 
-  await assert.rejects(
-    () => manager.createReservedActorResult('failed', 'player', {}, undefined, nativeRef),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
+  const failed = await manager.createReservedActorResult(
+    'failed',
+    'player',
+    {},
+    undefined,
+    nativeRef
   );
+  assert.equal(failed.status, 'failed');
+  if (failed.status === 'failed') {
+    assert.equal(failed.error.message, 'injected reserved factory failure');
+  }
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(destroyed, [nativeRef]);
   assert.equal(manager.activeActorCount('play-mesh'), 0);
+});
+
+test('reserved Actor onCreateActor failure is tagged as an application failure', async () => {
+  const callbackFailure = new Error('injected onCreateActor failure');
+  class PlayerFactory {
+    create(context) {
+      return { context };
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    actorCreatedNodeRidProvider: () => zlink.RoutingId.from('node-a'),
+    async actorCreatedNotifier() {
+      throw callbackFailure;
+    }
+  });
+
+  const failed = await manager.createReservedActorResult(
+    'callback-failed',
+    'player',
+    undefined
+  );
+
+  assert.equal(failed.status, 'failed');
+  if (failed.status === 'failed') {
+    assert.equal(failed.error, callbackFailure);
+  }
+  assert.equal(manager.activeActorCount('play-mesh'), 0);
+});
+
+test('reserved Actor admission failure is not tagged as an application failure', async () => {
+  const admissionFailure = new Error('actor admission denied');
+  let factoryCalls = 0;
+  class PlayerFactory {
+    create() {
+      factoryCalls++;
+      throw new Error('factory must not run');
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    admission: {
+      requireActorCreate() {
+        throw admissionFailure;
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => manager.createReservedActorResult('admission-failed', 'player', {}),
+    admissionFailure
+  );
+  assert.equal(factoryCalls, 0);
 });
 
 test('ZLinkActorContext joinSpot uses configured custom serializer without raw request code', async () => {
