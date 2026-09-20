@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -527,7 +528,7 @@ int main ()
         assert (claim->token.owner_id == "owner-a");
         assert (claim->token.lease_generation == 5);
 
-        // key_owner(owner_id) == preimage2("owner-lease", owner_id) ==
+        // key_owner(owner_id) == preimage({"owner-lease", owner_id}) ==
         // "owner-lease\0" + owner_id -- exactly the golden's own "owner-lease"
         // keyDerivation preimage, so this is not a guess at the provider's
         // private key scheme.
@@ -634,9 +635,9 @@ int main ()
             .value ();
         assert (stored_descriptor.status == location_write_status_t::stored);
 
-        // key_mesh(mesh_name, rid) == preimage2("mesh-node", mesh_name) +
-        // '\0' + rid.to_hex() -- exactly the golden's own "mesh-node"
-        // keyDerivation preimage.
+        // key_mesh(mesh_name, rid) ==
+        // preimage({"mesh-node", mesh_name, rid.to_hex()}) -- exactly the
+        // golden's own "mesh-node" keyDerivation preimage.
         const std::string mesh_key_value =
           std::string ("mesh-node") + '\0' + "main" + '\0' + "01020304";
         const auto mesh_stored = store.read ({mesh_key_value}).result ().value ();
@@ -708,6 +709,60 @@ int main ()
           std::string (reinterpret_cast<const char *> (actor_found->value.bytes.data ()),
                        actor_found->value.bytes.size ()));
         assert (authority_produced == authority_vector.at ("decoded"));
+
+        // The sixth opaque key uses the same NUL-delimited preimage builder
+        // as the records above. Its value is the terminal envelope itself.
+        object_reserve_request_t terminal_request = actor_request;
+        terminal_request.key.global_id = "user:43";
+        const auto terminal_reserve = repository.reserve (terminal_request).result ().value ();
+        const auto *terminal_fence = std::get_if<object_reserved_t> (&terminal_reserve);
+        if (terminal_fence == nullptr) {
+            std::cerr << "creation terminal golden reservation failed\n";
+            return 1;
+        }
+        const auto node_terminal_raw = from_hex (
+          "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+          "000000000000000100");
+        std::vector<std::byte> node_terminal;
+        node_terminal.reserve (node_terminal_raw.size ());
+        for (const auto byte : node_terminal_raw)
+            node_terminal.push_back (static_cast<std::byte> (byte));
+        const creation_operation_identity_t terminal_operation{
+          node_rid_t::from_string (rid_raw), 7, {0x2a, 1}};
+        const creation_terminal_publication_t terminal_publication{
+          terminal_operation, node_terminal,
+          std::chrono::system_clock::now () + std::chrono::minutes (1)};
+        const auto terminal_result = repository.complete_creation (
+          {terminal_request.key, terminal_fence->fence,
+           object_creation_completed_t{ready_payload, terminal_publication}})
+          .result ().value ();
+        if (!std::holds_alternative<object_creation_completed_result_t> (terminal_result)) {
+            std::cerr << "creation terminal golden publication failed\n";
+            return 1;
+        }
+        const auto &key_derivations = root.at ("keyDerivation");
+        const auto terminal_key_vector = std::find_if (
+          key_derivations.begin (), key_derivations.end (), [] (const auto &vector) {
+              return vector.at ("record").template get<std::string> () == "creation-terminal";
+          });
+        if (terminal_key_vector == key_derivations.end ()) {
+            std::cerr << "creation terminal golden key vector is missing\n";
+            return 1;
+        }
+        const auto terminal_key_raw =
+          from_hex (terminal_key_vector->at ("preimageHex").template get<std::string> ());
+        const std::string terminal_key_value (
+          reinterpret_cast<const char *> (terminal_key_raw.data ()), terminal_key_raw.size ());
+        const auto terminal_stored = store.read ({terminal_key_value}).result ().value ();
+        const auto *terminal_found = std::get_if<store_found_t> (&terminal_stored);
+        if (terminal_found == nullptr) {
+            std::cerr << "creation terminal golden key does not match production\n";
+            return 1;
+        }
+        if (terminal_found->value.bytes != node_terminal) {
+            std::cerr << "creation terminal golden value is not the envelope bytes\n";
+            return 1;
+        }
 
         // authority-spot-normal (index 6) is NOT driven through the real
         // writer here: its reservationId "reservation-1" has no "-<owner

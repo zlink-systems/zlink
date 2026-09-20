@@ -6,7 +6,6 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/pending_creation_projection.hpp"
-#include "runtime/locations/sha256.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
@@ -847,11 +846,9 @@ class in_memory_location_repository_t : public location_repository_t
               return value.terminal;
           },
           request.completion);
-        if (publication.terminal_envelope.size () > 1024u * 1024u
-            || sha256 (publication.terminal_envelope)
-                 != publication.sha256)
+        if (publication.terminal_envelope.size () > 1024u * 1024u)
             throw std::invalid_argument (
-              "creation terminal envelope or SHA-256 is invalid");
+              "creation terminal envelope is too large");
         const auto expires_at =
           publication.operation_deadline + std::chrono::minutes (5);
         return _lane.run ([&] {
@@ -893,17 +890,7 @@ class in_memory_location_repository_t : public location_repository_t
 
         creation_terminal_record_t terminal{
           publication.operation,
-          request.key,
-          request.fence,
-          std::holds_alternative<object_creation_completed_t> (
-            request.completion)
-            ? creation_terminal_state_t::created
-            : (std::holds_alternative<object_creation_rejected_t> (
-                 request.completion)
-                 ? creation_terminal_state_t::rejected
-                 : creation_terminal_state_t::failed),
           publication.terminal_envelope,
-          publication.sha256,
           expires_at};
         std::optional<authority_snapshot_t> ready;
         if (const auto *created =

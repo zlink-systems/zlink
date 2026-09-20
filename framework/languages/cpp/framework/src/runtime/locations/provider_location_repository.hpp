@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -490,8 +491,11 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&result);
         if (!found)
             return completed (std::optional<creation_terminal_record_t>{});
-        return completed (std::optional<creation_terminal_record_t>{
-          decode_terminal (parse_json (found->value.bytes))});
+        if (!found->value.expires_at)
+            throw std::invalid_argument ("creation terminal record is missing expiry");
+        return completed (std::optional<creation_terminal_record_t>{creation_terminal_record_t{
+          operation, found->value.bytes,
+          std::chrono::time_point_cast<std::chrono::milliseconds> (*found->value.expires_at)}});
     }
 
     task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
@@ -718,16 +722,21 @@ class provider_location_repository_t final : public location_repository_t
             return cancelled<object_complete_creation_result_t> ();
         const auto publication =
           std::visit ([] (const auto &value) { return value.terminal; }, request.completion);
-        if (publication.terminal_envelope.size () > 1024u * 1024u
-            || sha256 (publication.terminal_envelope) != publication.sha256)
-            throw std::invalid_argument ("creation terminal envelope or SHA-256 is invalid");
+        if (publication.terminal_envelope.size () > 1024u * 1024u)
+            throw std::invalid_argument ("creation terminal envelope is too large");
         const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
         const auto terminal_key = key_creation_terminal (publication.operation);
         auto existing = read (terminal_key);
-        if (const auto *found = std::get_if<store_found_t> (&existing))
+        if (const auto *found = std::get_if<store_found_t> (&existing)) {
+            if (!found->value.expires_at)
+                throw std::invalid_argument ("creation terminal record is missing expiry");
             return completed (
               object_complete_creation_result_t{object_creation_already_completed_result_t{
-                decode_terminal (parse_json (found->value.bytes))}});
+                creation_terminal_record_t{
+                  publication.operation, found->value.bytes,
+                  std::chrono::time_point_cast<std::chrono::milliseconds> (
+                    *found->value.expires_at)}}});
+        }
 
         const auto store_now = std::get<store_missing_t> (existing).store_now;
         if (expires_at <= store_now)
@@ -738,15 +747,7 @@ class provider_location_repository_t final : public location_repository_t
           + (expires_at - store_now);
         creation_terminal_record_t terminal{
           publication.operation,
-          request.key,
-          request.fence,
-          std::holds_alternative<object_creation_completed_t> (request.completion)
-            ? creation_terminal_state_t::created
-            : (std::holds_alternative<object_creation_rejected_t> (request.completion)
-                 ? creation_terminal_state_t::rejected
-                 : creation_terminal_state_t::failed),
           publication.terminal_envelope,
-          publication.sha256,
           expires_at};
         object_complete_creation_result_t result{object_creation_completion_stale_t{}};
         if (const auto *created = std::get_if<object_creation_completed_t> (&request.completion)) {
@@ -773,10 +774,16 @@ class provider_location_repository_t final : public location_repository_t
         // A competing completion may have won the same conditional write.
         // Only its stored terminal can resolve replay; Ready alone cannot.
         auto concurrent = read (terminal_key);
-        if (const auto *found = std::get_if<store_found_t> (&concurrent))
+        if (const auto *found = std::get_if<store_found_t> (&concurrent)) {
+            if (!found->value.expires_at)
+                throw std::invalid_argument ("creation terminal record is missing expiry");
             return completed (object_complete_creation_result_t{
               object_creation_already_completed_result_t{
-                decode_terminal (parse_json (found->value.bytes))}});
+                creation_terminal_record_t{
+                  publication.operation, found->value.bytes,
+                  std::chrono::time_point_cast<std::chrono::milliseconds> (
+                    *found->value.expires_at)}}});
+        }
         return completed (std::move (result));
     }
 
@@ -2051,7 +2058,7 @@ class provider_location_repository_t final : public location_repository_t
             const auto terminal_key = key_creation_terminal (terminal->operation);
             request.conditions.push_back (missing_condition (terminal_key));
             request.mutations.push_back (store_put_t{
-              terminal_key, to_bytes (encode_terminal (*terminal).dump ()), retention});
+              terminal_key, terminal->terminal_envelope, retention});
         }
         auto first = _store->write (request).result ();
         if (first)
@@ -2246,44 +2253,41 @@ class provider_location_repository_t final : public location_repository_t
         return std::to_string (value.size ()) + ":" + std::string (value) + ":";
     }
 
-    // NUL-delimited logical-key preimages, 21-location-runtime.md#2.4. These
+    // NUL-delimited logical-key preimages, 21-location-runtime.md#3.4. These
     // preimages -- not the internal "zlink:v11:..." scheme below -- are the
-    // cross-language public contract for the five opaque records (MeshNode,
-    // owner lease, ClientServer, fanout publisher, authority). The Redis
-    // provider hashes whatever store_key_t it receives with SHA-256, so
-    // provider-private keys (reservation, aggregate, lock, terminal, ...)
-    // keep the existing "zlink:v11:" scheme unchanged -- only these five
+    // cross-language public contract for the opaque records (MeshNode, owner
+    // lease, ClientServer, fanout publisher, authority, creation terminal).
+    // The provider hashes whatever store_key_t it receives with SHA-256, so
+    // provider-private keys (reservation, aggregate, lock, ...)
+    // keep the existing "zlink:v11:" scheme unchanged -- only these records
     // need a byte-exact, cross-language preimage.
-    static std::string preimage2 (std::string_view a, std::string_view b)
+    static std::string preimage (std::initializer_list<std::string_view> segments)
     {
         std::string result;
-        result.reserve (a.size () + b.size () + 1);
-        result.append (a);
-        result.push_back ('\0');
-        result.append (b);
+        std::size_t size = segments.size () == 0 ? 0 : segments.size () - 1;
+        for (const auto segment : segments)
+            size += segment.size ();
+        result.reserve (size);
+        bool first = true;
+        for (const auto segment : segments) {
+            if (!first)
+                result.push_back ('\0');
+            result.append (segment);
+            first = false;
+        }
         return result;
     }
 
     static store_key_t key_owner (std::string_view owner_id)
     {
-        return {preimage2 ("owner-lease", owner_id)};
+        return {preimage ({"owner-lease", owner_id})};
     }
 
     static constexpr std::string_view authority_domain = "authority";
 
-    static std::string preimage_authority (char kind, std::string_view object_id)
-    {
-        std::string result (authority_domain);
-        result.push_back ('\0');
-        result.append (kind == 'a' ? "actor" : "spot");
-        result.push_back ('\0');
-        result.append (object_id);
-        return result;
-    }
-
     static std::string prefix_authority ()
     {
-        return std::string (authority_domain) + '\0';
+        return preimage ({authority_domain, ""});
     }
 
     static store_key_t key_authority (std::string_view value)
@@ -2291,16 +2295,26 @@ class provider_location_repository_t final : public location_repository_t
         const auto decoded = authority_key_codec_detail::decode_authority_key (value);
         if (!decoded)
             throw std::invalid_argument ("authority store key requires a valid identity");
-        return {preimage_authority (decoded->kind, decoded->object_id)};
+        return {preimage (
+          {authority_domain, decoded->kind == 'a' ? "actor" : "spot", decoded->object_id})};
     }
 
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation)
     {
-        return {std::string (prefix)
-                + "creation-terminal:" + segment (operation.source_node_rid.value ())
-                + std::to_string (operation.source_node_generation) + ":"
-                + std::to_string (operation.operation_id.high) + ":"
-                + std::to_string (operation.operation_id.low)};
+        static constexpr char digits[] = "0123456789abcdef";
+        const auto fixed_hex = [] (std::uint64_t value) {
+            std::string result;
+            result.reserve (16);
+            for (int shift = 60; shift >= 0; shift -= 4)
+                result.push_back (digits[(value >> shift) & 0x0f]);
+            return result;
+        };
+        const auto source_rid = hex (to_bytes (operation.source_node_rid.value ()));
+        const auto source_generation = std::to_string (operation.source_node_generation);
+        const auto operation_id = fixed_hex (operation.operation_id.high)
+          + fixed_hex (operation.operation_id.low);
+        return {preimage (
+          {"creation-terminal", source_rid, source_generation, operation_id})};
     }
 
     static store_key_t key_aggregate (const aggregate_id_t &id)
@@ -2408,12 +2422,13 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string prefix_mesh (std::string_view mesh_name)
     {
-        return preimage2 ("mesh-node", mesh_name) + '\0';
+        return preimage ({"mesh-node", mesh_name, ""});
     }
 
     static store_key_t key_mesh (std::string_view mesh_name, const zlink::routing_id_t &rid)
     {
-        return {prefix_mesh (mesh_name) + rid.to_hex ()};
+        const auto rid_hex = rid.to_hex ();
+        return {preimage ({"mesh-node", mesh_name, rid_hex})};
     }
 
     static store_key_t key_capacity (std::string_view mesh_name,
@@ -2454,23 +2469,25 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string prefix_client_server (std::string_view channel_name)
     {
-        return preimage2 ("client-server", channel_name) + '\0';
+        return preimage ({"client-server", channel_name, ""});
     }
 
     static store_key_t key_client_server (std::string_view channel_name,
                                           const zlink::routing_id_t &rid)
     {
-        return {prefix_client_server (channel_name) + rid.to_hex ()};
+        const auto rid_hex = rid.to_hex ();
+        return {preimage ({"client-server", channel_name, rid_hex})};
     }
 
     static std::string prefix_fanout (std::string_view channel_name)
     {
-        return preimage2 ("fanout-publisher", channel_name) + '\0';
+        return preimage ({"fanout-publisher", channel_name, ""});
     }
 
     static store_key_t key_fanout (std::string_view channel_name, const zlink::routing_id_t &rid)
     {
-        return {prefix_fanout (channel_name) + rid.to_hex ()};
+        const auto rid_hex = rid.to_hex ();
+        return {preimage ({"fanout-publisher", channel_name, rid_hex})};
     }
 
     template <typename TImmutable>
@@ -2951,53 +2968,6 @@ class provider_location_repository_t final : public location_repository_t
           bytes, provider_version.value, store_now);
     }
 
-    static json_t encode_creation_key (const object_creation_key_t &value)
-    {
-        return {{"kind", static_cast<int> (value.kind)}, {"globalId", value.global_id}};
-    }
-
-    static object_creation_key_t decode_creation_key (const json_t &value)
-    {
-        return {static_cast<placement_object_kind_t> (value.at ("kind").get<int> ()),
-                value.at ("globalId").get<std::string> ()};
-    }
-
-    static json_t encode_operation (const creation_operation_identity_t &value)
-    {
-        return {{"sourceNodeRid", value.source_node_rid.value ()},
-                {"sourceNodeGeneration", value.source_node_generation},
-                {"operationHigh", value.operation_id.high},
-                {"operationLow", value.operation_id.low}};
-    }
-
-    static creation_operation_identity_t decode_operation (const json_t &value)
-    {
-        return {node_rid_t::from_string (value.at ("sourceNodeRid").get<std::string> ()),
-                value.at ("sourceNodeGeneration").get<std::uint64_t> (),
-                {value.at ("operationHigh").get<std::uint64_t> (),
-                 value.at ("operationLow").get<std::uint64_t> ()}};
-    }
-
-    static json_t encode_fence (const object_reservation_fence_t &value)
-    {
-        return {{"reservationId", value.reservation_id},
-                {"expectedStoreVersion", value.expected_store_version},
-                {"objectGeneration", value.object_generation},
-                {"authorityOwnerGeneration", value.authority_owner_generation},
-                {"target", encode_target (value.target)},
-                {"capacityBundle", encode_bundle (value.capacity_bundle)}};
-    }
-
-    static object_reservation_fence_t decode_fence (const json_t &value)
-    {
-        return {value.at ("reservationId").get<std::string> (),
-                value.at ("expectedStoreVersion").get<std::string> (),
-                value.at ("objectGeneration").get<std::uint64_t> (),
-                value.at ("authorityOwnerGeneration").get<std::uint64_t> (),
-                decode_target (value.at ("target")),
-                decode_bundle (value.at ("capacityBundle"))};
-    }
-
     // checklist C-4d's matches_reservation(): identifies a reservation by
     // reservation_id (already unique per attempt -- derived from
     // object_generation/authority_owner_generation, both also compared
@@ -3015,28 +2985,6 @@ class provider_location_repository_t final : public location_repository_t
                && left.target.node_lifecycle_generation == right.target.node_lifecycle_generation
                && same_owner (left.target.owner, right.target.owner)
                && encode_bundle (left.capacity_bundle) == encode_bundle (right.capacity_bundle);
-    }
-
-    static json_t encode_terminal (const creation_terminal_record_t &value)
-    {
-        return {{"operation", encode_operation (value.operation)},
-                {"object", encode_creation_key (value.object)},
-                {"reservation", encode_fence (value.reservation)},
-                {"state", static_cast<int> (value.state)},
-                {"terminalEnvelope", hex (value.terminal_envelope)},
-                {"sha256", hex (value.sha256)},
-                {"expiresAt", unix_ms (value.expires_at)}};
-    }
-
-    static creation_terminal_record_t decode_terminal (const json_t &value)
-    {
-        return {decode_operation (value.at ("operation")),
-                decode_creation_key (value.at ("object")),
-                decode_fence (value.at ("reservation")),
-                static_cast<creation_terminal_state_t> (value.at ("state").get<int> ()),
-                unhex (value.at ("terminalEnvelope").get<std::string> ()),
-                unhex_array<32> (value.at ("sha256").get<std::string> ()),
-                from_unix_ms (value.at ("expiresAt").get<std::int64_t> ())};
     }
 
     task_t<authority_compare_exchange_result_t> authority_conflict (store_read_result_t current)

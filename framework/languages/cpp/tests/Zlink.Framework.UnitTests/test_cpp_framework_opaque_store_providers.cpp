@@ -32,6 +32,28 @@ std::vector<std::byte> bytes (std::string_view value)
     return result;
 }
 
+enum class completion_kind_t
+{
+    created,
+    rejected,
+    failed
+};
+
+std::vector<std::byte> from_hex (std::string_view value)
+{
+    const auto digit = [] (char value) -> unsigned char {
+        if (value >= '0' && value <= '9')
+            return static_cast<unsigned char> (value - '0');
+        return static_cast<unsigned char> (value - 'a' + 10);
+    };
+    std::vector<std::byte> result;
+    result.reserve (value.size () / 2);
+    for (std::size_t index = 0; index < value.size (); index += 2)
+        result.push_back (static_cast<std::byte> (
+          (digit (value[index]) << 4) | digit (value[index + 1])));
+    return result;
+}
+
 std::string segment (std::string_view value)
 {
     return std::to_string (value.size ()) + ":" + std::string (value) + ":";
@@ -97,7 +119,7 @@ class creation_terminal_failure_store_t final : public location_store_t
     std::optional<store_write_request_t> attempted;
 };
 
-class CreationTerminalTest : public ::testing::TestWithParam<creation_terminal_state_t>
+class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {
   protected:
     void SetUp () override
@@ -129,24 +151,30 @@ class CreationTerminalTest : public ::testing::TestWithParam<creation_terminal_s
         const auto *reservation = std::get_if<object_reserved_t> (&reserved);
         ASSERT_NE (reservation, nullptr);
         fence = reservation->fence;
-        publication.operation = {node_rid_t::from_string ("terminal-source"),
-                                 0x8000000000000001ULL, {17, 19}};
-        publication.terminal_envelope = bytes ("original terminal with application reply");
-        publication.sha256 = sha256 (publication.terminal_envelope);
-        publication.operation_deadline = std::chrono::system_clock::now () + 2s;
+        publication.operation = {node_rid_t::from_string (std::string{"\0\xff\x10", 3}),
+                                 7, {1, 0xabcdef}};
+        publication.terminal_envelope = bytes (
+          GetParam () == completion_kind_t::created
+            ? "created-terminal"
+            : (GetParam () == completion_kind_t::rejected ? "rejected-terminal"
+                                                           : "failed-terminal"));
+        publication.operation_deadline =
+          std::chrono::time_point_cast<std::chrono::milliseconds> (
+            std::chrono::system_clock::now ())
+          + 2s;
     }
 
     object_complete_creation_request_t request () const
     {
         object_creation_completion_t completion;
         switch (GetParam ()) {
-            case creation_terminal_state_t::created:
+            case completion_kind_t::created:
                 completion = object_creation_completed_t{bytes ("ready"), publication};
                 break;
-            case creation_terminal_state_t::rejected:
+            case completion_kind_t::rejected:
                 completion = object_creation_rejected_t{publication};
                 break;
-            case creation_terminal_state_t::failed:
+            case completion_kind_t::failed:
                 completion = object_creation_failed_t{publication};
                 break;
         }
@@ -157,32 +185,45 @@ class CreationTerminalTest : public ::testing::TestWithParam<creation_terminal_s
     {
         ASSERT_EQ (provider.writes, 1u);
         ASSERT_TRUE (provider.attempted);
-        bool authority = false, capacity = false, terminal = false, terminal_condition = false;
+        const std::string terminal_key = std::string ("creation-terminal") + '\0' + "00ff10"
+          + '\0' + "7" + '\0' + "00000000000000010000000000abcdef";
+        bool authority = false, capacity = false, terminal_condition = false;
+        const store_put_t *terminal = nullptr;
+        unsigned terminal_mutations = 0;
         for (const auto &mutation : provider.attempted->mutations) {
             const auto &key = std::visit ([] (const auto &value) -> const store_key_t & {
                 return value.key;
             }, mutation).value;
             authority |= key.starts_with (std::string ("authority") + '\0');
             capacity |= key.starts_with ("zlink:v11:capacity:");
-            terminal |= key.starts_with ("zlink:v11:creation-terminal:");
+            if (key.starts_with (std::string ("creation-terminal") + '\0')) {
+                ++terminal_mutations;
+                if (const auto *put = std::get_if<store_put_t> (&mutation); put && key == terminal_key)
+                    terminal = put;
+            }
         }
         for (const auto &condition : provider.attempted->conditions)
             if (const auto *missing = std::get_if<store_missing_condition_t> (&condition))
-                terminal_condition |= missing->key.value.starts_with ("zlink:v11:creation-terminal:");
-        EXPECT_TRUE (authority && capacity && terminal && terminal_condition);
+                terminal_condition |= missing->key.value == terminal_key;
+        ASSERT_NE (terminal, nullptr);
+        EXPECT_EQ (terminal_mutations, 1u);
+        EXPECT_EQ (terminal->bytes, publication.terminal_envelope);
+        EXPECT_TRUE (authority && capacity && terminal_condition);
+        const auto raw = provider.inner.read ({terminal_key}).result ().value ();
+        const auto *raw_terminal = std::get_if<store_found_t> (&raw);
+        ASSERT_NE (raw_terminal, nullptr);
+        EXPECT_EQ (raw_terminal->value.bytes, publication.terminal_envelope);
         provider_location_repository_t reopened (provider);
         const auto stored = reopened.read_creation_terminal (publication.operation).result ().value ();
         ASSERT_TRUE (stored);
-        EXPECT_EQ (stored->state, GetParam ());
         EXPECT_EQ (stored->terminal_envelope, publication.terminal_envelope);
-        EXPECT_EQ (stored->sha256, publication.sha256);
         EXPECT_EQ (stored->expires_at, std::chrono::time_point_cast<std::chrono::milliseconds> (
           publication.operation_deadline + 5min));
         const auto authority_result = reopened.read_authority (
           actor_authority_key (reserve_request.key.global_id)).result ().value ();
         const auto counts = capacity_record (provider, descriptor);
         EXPECT_EQ (counts.at ("actorsPending"), 0);
-        if (GetParam () == creation_terminal_state_t::created) {
+        if (GetParam () == completion_kind_t::created) {
             const auto *ready = std::get_if<authority_snapshot_t> (&authority_result);
             ASSERT_NE (ready, nullptr);
             EXPECT_EQ (ready->allocation.state, placement_allocation_state_t::active);
@@ -198,7 +239,6 @@ class CreationTerminalTest : public ::testing::TestWithParam<creation_terminal_s
         const auto replay = reopened.complete_creation (request ()).result ().value ();
         const auto *retained = std::get_if<object_creation_already_completed_result_t> (&replay);
         ASSERT_NE (retained, nullptr);
-        EXPECT_EQ (retained->terminal.state, stored->state);
         EXPECT_EQ (retained->terminal.terminal_envelope, stored->terminal_envelope);
         EXPECT_EQ (retained->terminal.expires_at, stored->expires_at);
         EXPECT_EQ (provider.writes, 1u);
@@ -254,8 +294,30 @@ TEST_P (CreationTerminalTest, ConditionalConflictLeavesReservationAndCapacityUnc
 }
 
 INSTANTIATE_TEST_SUITE_P (CreationTerminalStates, CreationTerminalTest,
-  ::testing::Values (creation_terminal_state_t::created, creation_terminal_state_t::rejected,
-                    creation_terminal_state_t::failed));
+  ::testing::Values (completion_kind_t::created, completion_kind_t::rejected,
+                    completion_kind_t::failed));
+
+TEST (CreationTerminalStoreRecord, ReadsNodeTerminalEnvelopeAtCanonicalKey)
+{
+    const creation_operation_identity_t operation{
+      node_rid_t::from_string (std::string{"\0\xff\x10", 3}), 7, {1, 0xabcdef}};
+    const std::string key = std::string ("creation-terminal") + '\0' + "00ff10" + '\0' + "7"
+      + '\0' + "00000000000000010000000000abcdef";
+    // Generated by the Node production schema codec for a created terminal.
+    const auto node_terminal = from_hex (
+      "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+      "000000000000000100");
+    in_memory_location_store_t provider;
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write ({.conditions = {store_missing_condition_t{{key}}},
+                       .mutations = {store_put_t{{key}, node_terminal, 1min}}})
+        .result ().value ()));
+
+    provider_location_repository_t repository{provider};
+    const auto stored = repository.read_creation_terminal (operation).result ().value ();
+    ASSERT_TRUE (stored);
+    EXPECT_EQ (stored->terminal_envelope, node_terminal);
+}
 
 class post_commit_failure_location_store_t final :
     public location_store_t
