@@ -42,6 +42,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private readonly ZLinkStateLane _lane = new();
     private ZLinkClientServerDiscovery? _clientServerDiscovery;
     private ZLinkFanoutDiscovery? _fanoutDiscovery;
+    private ZLinkFrameworkComponentState? _deferredStartState;
     private int _disposed;
     private Task? _disposeTask;
 
@@ -61,6 +62,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         _watchStore = watchStore;
         _leaseTracker = leaseTracker;
         _time = timeProvider ?? TimeProvider.System;
+        _runtime.OwnerLeaseRenewed += OnOwnerLeaseRenewed;
     }
 
     internal async ValueTask StartAsync(
@@ -71,7 +73,18 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_loops.Count != 0) return;
+            if (_loops.Count != 0
+                || _clientServerDiscovery is not null
+                || _fanoutDiscovery is not null)
+                return;
+            if (!_runtime.IsOwnerAdmissionOpen)
+            {
+                Interlocked.Exchange(ref _deferredStartState, state);
+                if (_runtime.IsOwnerAdmissionOpen)
+                    ResumeDeferredDescriptorPublication();
+                return;
+            }
+            Interlocked.Exchange(ref _deferredStartState, null);
             var registration = state.Registration;
             if (registration.Channels.Values.Any(static channel =>
                     channel.ClientServerRole is not null))
@@ -359,6 +372,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private async Task DisposeCoreAsync(Task started)
     {
         await started.ConfigureAwait(false);
+        _runtime.OwnerLeaseRenewed -= OnOwnerLeaseRenewed;
         await _lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
@@ -373,6 +387,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     private async ValueTask DisposeGenerationAsync()
     {
+        Interlocked.Exchange(ref _deferredStartState, null);
         var clientServerDiscovery = _clientServerDiscovery;
         _clientServerDiscovery = null;
         var fanoutDiscovery = _fanoutDiscovery;
@@ -421,6 +436,34 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         if (failures is { Count: 1 })
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures is { Count: > 1 }) throw new AggregateException(failures);
+    }
+
+    private void OnOwnerLeaseRenewed(ZLinkOwnerLeaseRenewal _renewal)
+        => ResumeDeferredDescriptorPublication();
+
+    private void ResumeDeferredDescriptorPublication()
+    {
+        var state = Interlocked.Exchange(ref _deferredStartState, null);
+        if (state is null || Volatile.Read(ref _disposed) != 0)
+            return;
+        _ = ResumeDescriptorPublicationAsync(state);
+    }
+
+    private async Task ResumeDescriptorPublicationAsync(
+        ZLinkFrameworkComponentState state)
+    {
+        try
+        {
+            await StartAsync(state, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+                Interlocked.CompareExchange(ref _deferredStartState, state, null);
+            state.ErrorSink.ReportRuntimeTaskException(
+                "location-descriptor-publication",
+                exception);
+        }
     }
 
     private void AddLoop(

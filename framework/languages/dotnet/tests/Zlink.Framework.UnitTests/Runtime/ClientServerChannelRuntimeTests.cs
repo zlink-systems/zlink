@@ -904,6 +904,65 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
+    public async Task AutoConnectHost_PublishesDescriptorAfterDegradedStartupClaimsLease()
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var failing = new SwitchableWriteFailureLocationStore(inner) { FailWrites = true };
+        var services = new ServiceCollection();
+        services.AddSingleton<EchoProbe>();
+        services.AddSingleton(new ServerIdentity("recovered"));
+        services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(failing);
+            var locations = options.ConfigureLocations();
+            locations.OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(10);
+            locations.OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(20);
+            locations.OwnerLeaseTtl = TimeSpan.FromSeconds(2);
+            locations.OwnerLeaseFencingMargin = TimeSpan.FromMilliseconds(100);
+            options.AddClientServerChannel("work")
+                .Server()
+                .Listen(0)
+                .AddSendHandler<EchoSendHandler, EchoSend>()
+                .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var store = new ZLinkProviderLocationRepository(inner);
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var autoConnect = provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+
+        await locations.StartAsync(RoutingId.From("degraded-owner"));
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            await autoConnect.StartAsync(
+                await runtime.EnsureStartedStateAsync(CancellationToken.None));
+            Assert.Empty((await store.ListClientServersAsync(
+                "work", new ZLinkPageRequest(16))).Items);
+
+            failing.FailWrites = false;
+            ZLinkClientServerServerDescriptor? descriptor = null;
+            var startedAt = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromSeconds(1))
+            {
+                descriptor = (await store.ListClientServersAsync(
+                    "work", new ZLinkPageRequest(16))).Items.SingleOrDefault();
+                if (descriptor is not null) break;
+                await Task.Delay(5);
+            }
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(locations.OwnerId, descriptor.OwnerId);
+        }
+        finally
+        {
+            await autoConnect.StopAsync();
+            await runtime.StopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task AutomaticClient_SelectsAcrossPositiveWeightReadyServers()
     {
         var locationProvider = new ZLinkInMemoryProviderLocationStore();
@@ -2433,6 +2492,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
         });
         return services.BuildServiceProvider();
+    }
+
+    private sealed class SwitchableWriteFailureLocationStore(IZLinkLocationStore inner)
+        : IZLinkLocationStore
+    {
+        public bool FailWrites { get; set; }
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default) =>
+            FailWrites
+                ? ValueTask.FromException<ZLinkStoreWriteResult>(
+                    new InvalidOperationException("store unavailable"))
+                : inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 
     private static int ReservePort()
