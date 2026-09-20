@@ -74,7 +74,9 @@ class location_runtime_t
     std::optional<location_owner_token_t> current_owner_token () const
     {
         return _lane.run ([this] {
-            return _owner_token;
+            return owner_lease_usable_on_lane ()
+                     ? _owner_token
+                     : std::optional<location_owner_token_t>{};
         }).get ();
     }
 
@@ -113,6 +115,13 @@ class location_runtime_t
         }).get ();
     }
 
+    bool owner_lease_usable () const noexcept
+    {
+        return _lane.run ([this] {
+            return owner_lease_usable_on_lane ();
+        }).get ();
+    }
+
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
         return _lane.run ([this] {
@@ -141,7 +150,7 @@ class location_runtime_t
                   "location runtime startup was cancelled");
             renew_owner_lease_once ();
             if (cancellation.stop_requested ()) {
-                const auto token = current_owner_token ();
+                const auto token = current_owner_token_unchecked ();
                 if (token) {
                     try {
                         _store->release_owner_lease (*token).result ().value ();
@@ -151,6 +160,7 @@ class location_runtime_t
                     }
                     _lane.run ([this] {
                         _owner_token.reset ();
+                        _owner_lease_admission_deadline.reset ();
                     }).get ();
                 }
                 throw detail::make_boundary_exception (
@@ -177,7 +187,7 @@ class location_runtime_t
             _heartbeat.join ();
         }
         try {
-            const auto token = current_owner_token ();
+            const auto token = current_owner_token_unchecked ();
             if (token) {
                 _store->remove_all_by_owner (*token)
                   .result ()
@@ -187,6 +197,7 @@ class location_runtime_t
                   .value ();
                 _lane.run ([this] {
                     _owner_token.reset ();
+                    _owner_lease_admission_deadline.reset ();
                 }).get ();
             }
         }
@@ -210,7 +221,7 @@ class location_runtime_t
             }
         }
         try {
-            const auto token = current_owner_token ();
+            const auto token = current_owner_token_unchecked ();
             if (token) {
                 _store->remove_all_by_owner (*token)
                   .result ()
@@ -220,6 +231,7 @@ class location_runtime_t
                   .value ();
                 _lane.run ([this] {
                     _owner_token.reset ();
+                    _owner_lease_admission_deadline.reset ();
                 }).get ();
             }
             return true;
@@ -277,17 +289,25 @@ class location_runtime_t
         const auto accept_lease = [&] (const location_owner_token_t &owner,
                                        std::chrono::system_clock::time_point expires_at,
                                        std::chrono::system_clock::time_point store_now) {
+            const auto admission_lifetime =
+              expires_at > store_now + _options.owner_lease_fencing_margin
+                ? expires_at - store_now - _options.owner_lease_fencing_margin
+                : std::chrono::system_clock::duration::zero ();
             _lane.run ([&] {
                 _owner_token = owner;
                 _owner_lease_healthy = true;
                 _owner_lease_renewed_at = store_now;
+                _owner_lease_admission_deadline =
+                  started_at
+                  + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                    admission_lifetime);
                 _last_error.reset ();
             }).get ();
             return owner_lease_renew_result_t{
               owner_lease_renewed_t{expires_at, store_now}};
         };
 
-        const auto token = current_owner_token ();
+        const auto token = current_owner_token_unchecked ();
         if (token) {
             std::optional<owner_lease_renew_result_t> result;
             std::string failure = "owner lease renewal timed out";
@@ -322,6 +342,7 @@ class location_runtime_t
                 }
                 _lane.run ([this] {
                     _owner_token.reset ();
+                    _owner_lease_admission_deadline.reset ();
                 }).get ();
             } else {
                 if (const auto confirmed = confirm_claim ();
@@ -381,6 +402,11 @@ class location_runtime_t
         }
     }
 
+    void record_runtime_failure (std::string message) const
+    {
+        record_failure (std::move (message));
+    }
+
     /* Discovered peer total observed on the auto-connect polling tick
      * (runtime-metrics §7.2: the polling diff doubles as the gauge source, so
      * observable freshness follows the tick cadence). */
@@ -394,6 +420,19 @@ class location_runtime_t
     }
 
   private:
+    bool owner_lease_usable_on_lane () const noexcept
+    {
+        return _owner_token.has_value () && _owner_lease_admission_deadline.has_value ()
+               && std::chrono::steady_clock::now () < *_owner_lease_admission_deadline;
+    }
+
+    std::optional<location_owner_token_t> current_owner_token_unchecked () const
+    {
+        return _lane.run ([this] {
+            return _owner_token;
+        }).get ();
+    }
+
     static std::chrono::milliseconds remaining_until (
       std::chrono::steady_clock::time_point deadline_at)
     {
@@ -479,6 +518,8 @@ class location_runtime_t
     mutable state_lane_t _lane{_lane_executor};
     mutable bool _owner_lease_healthy = false;
     mutable std::optional<std::chrono::system_clock::time_point> _owner_lease_renewed_at;
+    mutable std::optional<std::chrono::steady_clock::time_point>
+      _owner_lease_admission_deadline;
     mutable std::optional<location_owner_token_t> _owner_token;
     mutable std::optional<std::string> _last_error;
 };

@@ -3,6 +3,7 @@
 #include <zlink/framework.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_repository.hpp"
 #include "runtime/locations/location_records.hpp"
 #include "runtime/host/relocation_target_eligibility.hpp"
 
@@ -24,6 +25,17 @@
 
 namespace
 {
+
+struct degraded_channel_message_t
+{
+};
+
+struct degraded_channel_handler_t
+{
+    using message_type = degraded_channel_message_t;
+
+    void handle (const degraded_channel_message_t &) {}
+};
 
 struct relocation_ready_message_t
 {
@@ -607,6 +619,171 @@ class mesh_started_probe_service_t final : public zlink::framework::hosted_servi
     zlink::framework::app_t &_app;
     std::string _mesh_name;
 };
+
+class recovering_location_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        if (!_available.load (std::memory_order_acquire))
+            return failed<zlink::framework::store_read_result_t> ();
+        return _inner->read (std::move (key));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        if (!_available.load (std::memory_order_acquire))
+            return failed<zlink::framework::store_write_result_t> ();
+        return _inner->write (std::move (request));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        return _inner->scan (std::move (request));
+    }
+
+    void recover () noexcept { _available.store (true, std::memory_order_release); }
+
+  private:
+    template <typename T>
+    static zlink::framework::task_t<T> failed ()
+    {
+        return zlink::framework::task_t<T> (
+          zlink::framework::result_t<T>::failure (
+            zlink::framework::framework_error_kind_t::unavailable,
+            "injected Location Store outage"));
+    }
+
+    std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> _inner =
+      std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+    std::atomic_bool _available{false};
+};
+
+class degraded_location_host_probe_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    degraded_location_host_probe_t (
+      zlink::framework::app_t &app,
+      std::shared_ptr<recovering_location_store_t> store,
+      std::chrono::steady_clock::time_point started_at,
+      std::chrono::milliseconds renew_timeout) :
+        _app (app), _store (std::move (store)), _started_at (started_at),
+        _renew_timeout (renew_timeout)
+    {
+    }
+
+    zlink::framework::task_t<void> start (
+      zlink::framework::service_provider_t &services) override
+    {
+        auto &locations =
+          services.get_required<zlink::framework::location_repository_t> ();
+        started_within_timeout =
+          std::chrono::steady_clock::now () - _started_at < _renew_timeout;
+        descriptor_blocked =
+          locations.list_mesh_nodes ("degraded-location-host")
+            .result ()
+            .value ()
+            .items.empty ()
+          && locations.list_client_servers ("degraded-client-server")
+               .result ()
+               .value ()
+               .items.empty ()
+          && locations.list_fanout_publishers ("degraded-fanout")
+               .result ()
+               .value ()
+               .items.empty ();
+
+        _store->recover ();
+        const auto deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while (std::chrono::steady_clock::now () < deadline) {
+            try {
+                mesh_republished = !locations.list_mesh_nodes ("degraded-location-host")
+                                      .result ().value ().items.empty ();
+                client_server_republished =
+                  !locations.list_client_servers ("degraded-client-server")
+                     .result ().value ().items.empty ();
+                fanout_republished =
+                  !locations.list_fanout_publishers ("degraded-fanout")
+                     .result ().value ().items.empty ();
+                if (mesh_republished && client_server_republished
+                    && fanout_republished) {
+                    descriptor_republished = true;
+                    break;
+                }
+            }
+            catch (...) {
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        _app.stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    bool started_within_timeout = false;
+    bool descriptor_blocked = false;
+    bool descriptor_republished = false;
+    bool mesh_republished = false;
+    bool client_server_republished = false;
+    bool fanout_republished = false;
+
+  private:
+    zlink::framework::app_t &_app;
+    std::shared_ptr<recovering_location_store_t> _store;
+    std::chrono::steady_clock::time_point _started_at;
+    std::chrono::milliseconds _renew_timeout;
+};
+
+bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
+{
+    auto app = zlink::framework::app_t::create ();
+    auto store = std::make_shared<recovering_location_store_t> ();
+    constexpr auto renew_timeout = std::chrono::seconds (1);
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store (store);
+    auto &locations = options.configure_locations ();
+    locations.owner_lease_renew_interval = std::chrono::milliseconds (10);
+    locations.owner_lease_renew_timeout = renew_timeout;
+    locations.owner_lease_ttl = std::chrono::seconds (3);
+    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.polling_interval = std::chrono::milliseconds (5);
+    options.add_route_mesh ("degraded-location-host")
+      .set_object_role (zlink::framework::object_role_t::none)
+      .set_routing_id (zlink::routing_id_t::from ("degraded-location-host-node"))
+      .listen ("inproc://degraded-location-host-node");
+    options.add_client_server_channel ("degraded-client-server")
+      .server ().listen (0)
+      .add_send_handler<degraded_channel_handler_t, degraded_channel_message_t> ();
+    options.add_fanout_channel ("degraded-fanout")
+      .enable_publisher (0)
+      .set_routing_id (zlink::routing_id_t::from ("degraded-fanout-publisher"));
+
+    const auto started_at = std::chrono::steady_clock::now ();
+    auto probe = std::make_unique<degraded_location_host_probe_t> (
+      app, store, started_at, renew_timeout);
+    auto *probe_view = probe.get ();
+    app.add_hosted_service (std::move (probe));
+    char program[] = "degraded-location-host";
+    char *arguments[] = {program, nullptr};
+    const auto exit_code = app.run (1, arguments);
+    if (exit_code == 0 && probe_view->started_within_timeout
+        && probe_view->descriptor_blocked
+        && probe_view->descriptor_republished)
+        return true;
+    std::cerr << "degraded Location host did not gate and republish its descriptor"
+              << " started-within-timeout=" << probe_view->started_within_timeout
+              << " blocked=" << probe_view->descriptor_blocked
+              << " republished=" << probe_view->descriptor_republished
+              << " mesh=" << probe_view->mesh_republished
+              << " client-server=" << probe_view->client_server_republished
+              << " fanout=" << probe_view->fanout_republished << '\n';
+    return false;
+}
 
 bool verify_deferred_framework_apply_preserves_hosted_service_order ()
 {
@@ -1525,6 +1702,9 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main ()
 {
+    if (!verify_degraded_host_republishes_descriptor_after_owner_claim ())
+        return EXIT_FAILURE;
+
     if (!verify_deferred_framework_apply_preserves_hosted_service_order ())
         return EXIT_FAILURE;
 

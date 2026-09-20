@@ -599,7 +599,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_instance_spot_operations (
       std::shared_ptr<zlink::framework::location_repository_t> store,
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
-      location_owner_token_t owner,
+      std::function<std::optional<location_owner_token_t> ()> owner,
       instance_spot_activation_materializer_t materializer);
     std::optional<instance_spot_close_completion_t>
     begin_instance_spot_close (const std::string &stable_type,
@@ -849,7 +849,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_join_committed_authority_adopter_t _actor_join_committed_authority_adopter;
     instance_spot_activation_materializer_t _instance_spot_materializer;
     std::shared_ptr<stateful::relocation_store_port_t> _instance_spot_relocations;
-    location_owner_token_t _instance_spot_owner;
+    std::function<std::optional<location_owner_token_t> ()> _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
     std::function<void (const protocol::message_follow_notice_t &)> _message_follow_handler;
     bound_session_operations_t _bound_session_operations;

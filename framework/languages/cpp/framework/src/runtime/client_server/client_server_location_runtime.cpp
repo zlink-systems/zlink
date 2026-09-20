@@ -582,15 +582,7 @@ void client_server_location_runtime_t::start ()
 {
     if (empty ())
         return;
-    const bool publishes_server =
-      std::any_of (
-        _channels.begin (), _channels.end (), [] (const auto &channel) {
-            return channel.server.enabled && channel.server.discovery;
-        });
     auto owner = _locations->current_owner_token ();
-    if (publishes_server && !owner)
-        throw std::runtime_error (
-          "ClientServer publication requires an active owner lease");
 
     _stop.store (false, std::memory_order_release);
     try {
@@ -602,9 +594,7 @@ void client_server_location_runtime_t::start ()
         for (const auto &channel : _channels) {
             if (channel.server.enabled
                 && !channel.server.bind_endpoints.empty ())
-                start_server (
-                  channel,
-                  channel.server.discovery ? owner : std::nullopt);
+                start_server (channel, owner);
             if (channel.client.enabled
                 && (channel.client.discovery
                     || !channel.client.connect_endpoints.empty ()))
@@ -736,6 +726,11 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     return _descriptor_publish_result;
 }
 
+bool client_server_location_runtime_t::republish_after_store_recovery ()
+{
+    return publish_servers ();
+}
+
 void client_server_location_runtime_t::run ()
 {
     auto next_reconcile = std::chrono::steady_clock::now ();
@@ -833,6 +828,7 @@ void client_server_location_runtime_t::run ()
 
 bool client_server_location_runtime_t::publish_servers ()
 {
+    std::lock_guard publish_lock (_descriptor_publish_mutex);
     const auto owner = _locations->current_owner_token ();
     if (!owner) {
         return std::none_of (
@@ -842,8 +838,6 @@ bool client_server_location_runtime_t::publish_servers ()
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        if (!server->published_descriptor)
-            continue;
         const auto weight_override =
           _channel_runtime.server_peer_weight_override (channel_name);
         const auto weight =
@@ -851,7 +845,8 @@ bool client_server_location_runtime_t::publish_servers ()
             server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =
-          server->published_descriptor->owner_id != owner->owner_id
+          !server->published_descriptor
+          || server->published_descriptor->owner_id != owner->owner_id
           || server->published_descriptor->lease_generation
                != owner->lease_generation;
         if (!new_owner
@@ -864,10 +859,14 @@ bool client_server_location_runtime_t::publish_servers ()
             == std::numeric_limits<std::uint64_t>::max ())
             throw std::overflow_error (
               "ClientServer descriptor revision is exhausted");
-        ++admission.descriptor_revision;
+        if (server->published_descriptor) {
+            ++admission.descriptor_revision;
+            admission.weight = static_cast<std::uint32_t> (weight);
+            admission.state = client_server_service_state (state);
+            server->owner->update_descriptor (admission);
+        }
         admission.weight = static_cast<std::uint32_t> (weight);
         admission.state = client_server_service_state (state);
-        server->owner->update_descriptor (admission);
         auto descriptor = to_descriptor (admission, *owner);
         const auto written =
           _store
