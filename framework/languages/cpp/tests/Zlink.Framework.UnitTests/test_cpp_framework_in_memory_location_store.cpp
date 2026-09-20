@@ -414,7 +414,6 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     creation_terminal_publication_t publication{
       first_operation,
       envelope,
-      zlink::framework::runtime::sha256 (envelope),
       std::chrono::system_clock::now ()
         + std::chrono::seconds (30)};
     const auto completed =
@@ -432,9 +431,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
         .result ()
         .value ();
     ASSERT_TRUE (terminal);
-    EXPECT_EQ (
-      creation_terminal_state_t::rejected,
-      terminal->state);
+    EXPECT_EQ (envelope, terminal->terminal_envelope);
 
     auto second = request;
     EXPECT_NE (

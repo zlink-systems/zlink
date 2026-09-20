@@ -309,6 +309,20 @@ bool wait_until (const std::function<bool ()> &condition, std::chrono::milliseco
     return condition ();
 }
 
+std::vector<std::byte> bytes_from_hex (std::string_view value)
+{
+    const auto digit = [] (char character) -> unsigned char {
+        return character <= '9' ? static_cast<unsigned char> (character - '0')
+                                : static_cast<unsigned char> (character - 'a' + 10);
+    };
+    std::vector<std::byte> result;
+    result.reserve (value.size () / 2);
+    for (std::size_t index = 0; index < value.size (); index += 2)
+        result.push_back (static_cast<std::byte> (
+          (digit (value[index]) << 4) | digit (value[index + 1])));
+    return result;
+}
+
 class observing_actor_creation_store_t final : public zlink::framework::location_store_t
 {
   public:
@@ -321,14 +335,30 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     zlink::framework::task_t<zlink::framework::store_read_result_t>
     read (zlink::framework::store_key_t key) override
     {
-        if (key.value.starts_with ("zlink:v11:creation-terminal:"))
+        if (key.value.starts_with (std::string ("creation-terminal") + '\0')) {
             terminal_reads.fetch_add (1, std::memory_order_acq_rel);
+            if (terminal_override) {
+                const auto now = std::chrono::system_clock::now ();
+                return zlink::framework::task_t<zlink::framework::store_read_result_t> (
+                  zlink::framework::result_t<zlink::framework::store_read_result_t>::success (
+                    zlink::framework::store_found_t{{*terminal_override,
+                                                     {"node-production-schema"},
+                                                     now + std::chrono::minutes (1), now}}));
+            }
+        }
         return inner->read (std::move (key));
     }
 
     zlink::framework::task_t<zlink::framework::store_write_result_t>
     write (zlink::framework::store_write_request_t request) override
     {
+        for (const auto &mutation : request.mutations) {
+            if (const auto *put = std::get_if<zlink::framework::store_put_t> (&mutation);
+                put && put->key.value.starts_with (std::string ("creation-terminal") + '\0')) {
+                std::lock_guard lock (terminal_mutex);
+                published_terminal = put->bytes;
+            }
+        }
         return inner->write (std::move (request));
     }
 
@@ -340,6 +370,9 @@ class observing_actor_creation_store_t final : public zlink::framework::location
 
     std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner;
     std::atomic_size_t terminal_reads{0};
+    std::optional<std::vector<std::byte>> terminal_override;
+    std::mutex terminal_mutex;
+    std::vector<std::byte> published_terminal;
 };
 
 void configure_remote_actor_create_app (
@@ -419,7 +452,7 @@ bool verify_remote_actor_create_target_owns_completion ()
     auto &actors = source_services.get_required<zlink::framework::actor_manager_t> ();
     const auto created =
       actors
-        .get_or_create (zlink::framework::actor_id_t ("host-remote-created-actor"),
+        .get_or_create (zlink::framework::actor_id_t ("actor-canonical"),
                         "remote-create-actor")
         .timeout (std::chrono::seconds (5))
         .async ()
@@ -428,7 +461,7 @@ bool verify_remote_actor_create_target_owns_completion ()
       source_services.get_required<zlink::framework::location_repository_t> ();
     const auto authority = location_repository
                              .read_authority (zlink::framework::runtime::actor_authority_key (
-                               "host-remote-created-actor"))
+                               "actor-canonical"))
                              .result ()
                              .value ();
     const auto *authority_snapshot =
@@ -443,6 +476,29 @@ bool verify_remote_actor_create_target_owns_completion ()
     // mean it tried to complete the target-owned reservation after the reply.
     const auto source_terminal_reads =
       source_location_store->terminal_reads.load (std::memory_order_acquire);
+    const auto node_terminal = bytes_from_hex (
+      "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+      "000000000000000100");
+    bool cpp_schema_encoded = false;
+    {
+        std::lock_guard lock (target_location_store->terminal_mutex);
+        cpp_schema_encoded = target_location_store->published_terminal == node_terminal;
+    }
+    source_location_store->terminal_override = node_terminal;
+    const auto node_terminal_replay =
+      actors
+        .get_or_create (zlink::framework::actor_id_t ("actor-canonical"),
+                        "remote-create-actor")
+        .timeout (std::chrono::seconds (5))
+        .async ()
+        .result ();
+    const auto *node_created =
+      node_terminal_replay
+        ? std::get_if<zlink::framework::actor_create_created_t> (&node_terminal_replay.value ())
+        : nullptr;
+    const bool node_schema_decoded =
+      node_created && node_created->actor.actor_id ().value () == "actor-canonical"
+      && node_created->actor.object_generation () == 1;
 
     const auto source_stopped = source.shutdown (std::chrono::seconds (2)).result ().value ();
     const auto target_stopped = target.shutdown (std::chrono::seconds (2)).result ().value ();
@@ -450,7 +506,7 @@ bool verify_remote_actor_create_target_owns_completion ()
     target_thread.join ();
 
     const bool passed =
-      route_ready && created && authority_active
+      route_ready && created && authority_active && cpp_schema_encoded && node_schema_decoded
       && source_terminal_reads == 1
       && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ())
       && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 1
@@ -466,6 +522,8 @@ bool verify_remote_actor_create_target_owns_completion ()
                   << " joined-callback=" << remote_create_entry_spot_t::joined_count.load ()
                   << " created=" << static_cast<bool> (created)
                   << " authority-active=" << authority_active
+                  << " cpp-schema-encoded=" << cpp_schema_encoded
+                  << " node-schema-decoded=" << node_schema_decoded
                   << " source-terminal-reads=" << source_terminal_reads
                   << " error=" << (created.error () ? created.error ()->what () : "-") << '\n';
     }

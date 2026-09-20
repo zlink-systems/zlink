@@ -27,6 +27,8 @@
 #include "runtime/locations/source_creation_cleanup.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
+#include <service_wire_codec.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -129,6 +131,8 @@ void application_dispatch_terminal_owner_t::invoke (const std::function<void ()>
 
 namespace
 {
+namespace terminal_codec = zlink::framework::runtime::protocol::generated::detail;
+
 std::atomic_uint64_t next_user_spot_operation{1};
 
 class terminal_callback_guard_t final
@@ -262,104 +266,109 @@ bool placement_capacity_available (const mesh_node_descriptor_t &descriptor,
     return typed == descriptor.capacity.spot_types.end () || capacity_available (typed->usage);
 }
 
-std::vector<std::byte> actor_terminal_envelope (creation_terminal_state_t state,
-                                                const std::optional<actor_ref_t> &actor,
-                                                const std::optional<message_t> &reply,
-                                                serializer_registry_t &serializers)
+std::vector<std::byte> actor_terminal_envelope (
+  terminal_codec::request_terminal_result_t terminal_result,
+  terminal_codec::framework_error_code_t failure_code,
+  std::optional<terminal_codec::actor_create_result_t> creation_result,
+  const std::optional<actor_ref_t> &actor,
+  const std::optional<protocol::application_payload_t> &reply)
 {
-    static constexpr std::string_view magic = "creation-operation-terminal-v1";
-    std::vector<std::byte> result;
-    auto append_u32 = [&] (std::uint32_t value) {
-        for (int shift = 24; shift >= 0; shift -= 8)
-            result.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
-    };
-    auto append_u64 = [&] (std::uint64_t value) {
-        for (int shift = 56; shift >= 0; shift -= 8)
-            result.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
-    };
-    auto append_text = [&] (std::string_view value) {
-        append_u32 (static_cast<std::uint32_t> (value.size ()));
-        for (const auto byte : value)
-            result.push_back (static_cast<std::byte> (static_cast<unsigned char> (byte)));
-    };
-    append_text (magic);
-    append_u32 (static_cast<std::uint32_t> (state));
-    append_u32 (state == creation_terminal_state_t::failed ? 1u : 0u);
-    append_text (actor ? actor->node_rid ().value () : std::string_view{});
-    append_text (actor ? ::zlink::framework::detail::actor_ref_access_t::actor_type (*actor)
-                       : std::string_view{});
-    append_text (actor ? actor->actor_id ().value () : std::string_view{});
-    append_u64 (actor ? actor->object_generation () : 0);
-    if (reply) {
-        const auto raw = detail::message_to_raw (*reply, serializers);
-        const auto bytes = raw.bytes ();
-        append_u32 (static_cast<std::uint32_t> (bytes.size ()));
-        result.insert (result.end (), bytes.begin (), bytes.end ());
-    } else {
-        append_u32 (0);
+    terminal_codec::creation_operation_terminal_v1_t terminal{
+      .terminalResult = terminal_result,
+      .failureCode = failure_code,
+      .hasCreation = creation_result ? terminal_codec::bool8_t::true_
+                                     : terminal_codec::bool8_t::false_,
+      .hasApplicationPayload = reply ? terminal_codec::bool8_t::true_
+                                     : terminal_codec::bool8_t::false_};
+    if (creation_result) {
+        if ((*creation_result == terminal_codec::actor_create_result_t::existing
+             || *creation_result == terminal_codec::actor_create_result_t::created)
+            && !actor)
+            throw std::invalid_argument ("creation terminal actor is required");
+        terminal_codec::actor_create_terminal_t creation;
+        creation.createResult = *creation_result;
+        if (*creation_result == terminal_codec::actor_create_result_t::existing) {
+            creation.tag = terminal_codec::actor_create_terminal_t::tag_t::case_0;
+            creation.value.emplace<terminal_codec::actor_create_terminal_t::case_0_t> (
+              terminal_codec::actor_create_terminal_t::case_0_t{
+                {terminal_codec::text8_t{std::string (actor->actor_id ().value ())},
+                 terminal_codec::nonzero_u64_t{actor->object_generation ()}}});
+        } else if (*creation_result == terminal_codec::actor_create_result_t::created) {
+            creation.tag = terminal_codec::actor_create_terminal_t::tag_t::case_1;
+            creation.value.emplace<terminal_codec::actor_create_terminal_t::case_1_t> (
+              terminal_codec::actor_create_terminal_t::case_1_t{
+                {terminal_codec::text8_t{std::string (actor->actor_id ().value ())},
+                 terminal_codec::nonzero_u64_t{actor->object_generation ()}}});
+        } else {
+            creation.tag = terminal_codec::actor_create_terminal_t::tag_t::case_2;
+            creation.value.emplace<terminal_codec::actor_create_terminal_t::case_2_t> ();
+        }
+        terminal.creation = std::move (creation);
     }
+    if (reply) {
+        terminal.applicationPayload = terminal_codec::application_payload_envelope_v1_t{
+          terminal_codec::packet_name_t{reply->packet_name},
+          terminal_codec::content_type_t{reply->content_type},
+          terminal_codec::application_payload_bytes_t{reply->payload_bytes ()}};
+    }
+    const terminal_codec::codec_context_t context{1024 * 1024, 1024 * 1024};
+    terminal_codec::writer_t writer;
+    if (terminal_codec::encode_value_creation_operation_terminal_v1 (
+          writer, terminal, context)
+        != terminal_codec::error_code::ok)
+        throw std::invalid_argument ("creation terminal schema encoding failed");
+    std::vector<std::byte> result;
+    result.reserve (writer.data.size ());
+    for (const auto byte : writer.data)
+        result.push_back (static_cast<std::byte> (byte));
     return result;
 }
 
 actor_create_result_t actor_result_from_terminal (const creation_terminal_record_t &terminal,
+                                                  const node_rid_t &target_node_rid,
+                                                  const std::string &stable_type,
                                                   auto &&wrap_message)
 {
-    const auto &bytes = terminal.terminal_envelope;
-    std::size_t offset = 0;
-    auto read_u32 = [&] {
-        if (offset + 4 > bytes.size ())
-            throw std::invalid_argument ("creation terminal envelope is truncated");
-        std::uint32_t value = 0;
-        for (int index = 0; index < 4; ++index)
-            value = (value << 8) | std::to_integer<std::uint8_t> (bytes[offset++]);
-        return value;
-    };
-    auto read_u64 = [&] {
-        if (offset + 8 > bytes.size ())
-            throw std::invalid_argument ("creation terminal envelope is truncated");
-        std::uint64_t value = 0;
-        for (int index = 0; index < 8; ++index)
-            value = (value << 8) | std::to_integer<std::uint8_t> (bytes[offset++]);
-        return value;
-    };
-    auto read_text = [&] {
-        const auto size = read_u32 ();
-        if (offset + size > bytes.size ())
-            throw std::invalid_argument ("creation terminal envelope is truncated");
-        std::string value;
-        value.reserve (size);
-        for (std::uint32_t index = 0; index < size; ++index)
-            value.push_back (static_cast<char> (std::to_integer<unsigned char> (bytes[offset++])));
-        return value;
-    };
-    if (read_text () != "creation-operation-terminal-v1")
-        throw std::invalid_argument ("creation terminal envelope version is invalid");
-    const auto state = static_cast<creation_terminal_state_t> (read_u32 ());
-    (void) read_u32 ();
-    const auto node = read_text ();
-    const auto type = read_text ();
-    const auto id = read_text ();
-    const auto generation = read_u64 ();
-    const auto reply_size = read_u32 ();
-    if (offset + reply_size != bytes.size ())
-        throw std::invalid_argument ("creation terminal envelope has trailing data");
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve (terminal.terminal_envelope.size ());
+    for (const auto byte : terminal.terminal_envelope)
+        bytes.push_back (std::to_integer<std::uint8_t> (byte));
+    const terminal_codec::codec_context_t context{1024 * 1024, 1024 * 1024};
+    terminal_codec::reader_t reader{bytes};
+    terminal_codec::creation_operation_terminal_v1_t decoded;
+    if (terminal_codec::decode_value_creation_operation_terminal_v1 (
+          reader, decoded, context)
+          != terminal_codec::error_code::ok
+        || !reader.empty ())
+        throw std::invalid_argument ("creation terminal schema decoding failed");
+    if (decoded.terminalResult != terminal_codec::request_terminal_result_t::ok)
+        throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                     "Actor creation operation previously failed");
+    if (!decoded.creation)
+        throw std::invalid_argument ("creation terminal schema has no creation result");
     std::optional<message_t> reply;
-    if (reply_size != 0) {
-        std::vector<std::uint8_t> raw;
-        raw.reserve (reply_size);
-        for (std::uint32_t index = 0; index < reply_size; ++index)
-            raw.push_back (std::to_integer<std::uint8_t> (bytes[offset++]));
-        reply = wrap_message (zlink::message_t::from (raw));
+    if (decoded.applicationPayload) {
+        reply = wrap_message (
+          zlink::message_t::from (decoded.applicationPayload->payload.value));
     }
-    if (state == creation_terminal_state_t::created) {
+    const auto &creation = *decoded.creation;
+    if (creation.createResult == terminal_codec::actor_create_result_t::existing) {
+        const auto &actor = std::get<terminal_codec::actor_create_terminal_t::case_0_t> (
+          creation.value).actor;
+        return actor_create_existing_t{::zlink::framework::detail::actor_ref_access_t::make (
+          target_node_rid, stable_type, actor.actorId.value, actor.objectGeneration.value)};
+    }
+    if (creation.createResult == terminal_codec::actor_create_result_t::created) {
+        const auto &actor = std::get<terminal_codec::actor_create_terminal_t::case_1_t> (
+          creation.value).actor;
         return actor_create_created_t{::zlink::framework::detail::actor_ref_access_t::make (
-                                        node_rid_t::from_string (node), type, id, generation),
+                                        target_node_rid, stable_type, actor.actorId.value,
+                                        actor.objectGeneration.value),
                                       std::move (reply)};
     }
-    if (state == creation_terminal_state_t::rejected)
+    if (creation.createResult == terminal_codec::actor_create_result_t::rejected)
         return actor_create_rejected_t{std::move (reply)};
-    throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                 "Actor creation operation previously failed");
+    throw std::invalid_argument ("creation terminal schema has an invalid creation result");
 }
 
 /* The Location Store reservation record keeps the Application's creation
@@ -415,9 +424,11 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
           _location_store->read_creation_terminal (operation).result ().value ();
         if (!terminal)
             return std::nullopt;
-        return actor_result_from_terminal (*terminal, [this] (zlink::message_t raw) {
-            return message_t::from_raw (std::move (raw), _serializers);
-        });
+        return actor_result_from_terminal (
+          *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
+          [this] (zlink::message_t raw) {
+              return message_t::from_raw (std::move (raw), _serializers);
+          });
     };
     try {
         const auto accepted = co_await source->native_node ().create_actor_remote (
@@ -669,13 +680,6 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           framework_error_kind_t::not_configured, "No object Client or Server Mesh is registered"));
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     const auto operation_deadline = std::chrono::system_clock::now () + timeout;
-    if (const auto terminal =
-          _location_store->read_creation_terminal (operation).result ().value ())
-        return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
-          actor_result_from_terminal (*terminal, [this] (zlink::message_t raw) {
-              return message_t::from_raw (std::move (raw), _serializers);
-          })));
-
     const auto selected_mesh = mesh_name.value_or (_nodes.front ()->mesh_name ());
     const auto source_runtime =
       std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
@@ -751,6 +755,14 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         return selected;
     };
     auto target = choose_target ();
+    if (const auto terminal =
+          _location_store->read_creation_terminal (operation).result ().value ())
+        return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
+          actor_result_from_terminal (
+            *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
+            [this] (zlink::message_t raw) {
+                return message_t::from_raw (std::move (raw), _serializers);
+            })));
     const auto find_target_runtime = [&] {
         return std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
             const auto rid = node->routing_id ();
@@ -905,9 +917,11 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                             winner->fence.authority_owner_generation, timeout);
             if (!created) {
                 const auto failed_envelope = actor_terminal_envelope (
-                  creation_terminal_state_t::failed, std::nullopt, std::nullopt, *_serializers);
+                  terminal_codec::request_terminal_result_t::internalError,
+                  terminal_codec::framework_error_code_t::actorCreateFailed, std::nullopt,
+                  std::nullopt, std::nullopt);
                 const creation_terminal_publication_t failed_publication{
-                  operation, failed_envelope, sha256 (failed_envelope), operation_deadline};
+                  operation, failed_envelope, operation_deadline};
                 (void) _location_store
                   ->complete_creation (
                     {reserve.key, winner->fence, object_creation_failed_t{failed_publication}})
@@ -923,9 +937,11 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   raw_request.value_or (zlink::message_t{}), timeout);
             if (!joined) {
                 const auto failed_envelope = actor_terminal_envelope (
-                  creation_terminal_state_t::failed, std::nullopt, std::nullopt, *_serializers);
+                  terminal_codec::request_terminal_result_t::internalError,
+                  terminal_codec::framework_error_code_t::actorCreateFailed, std::nullopt,
+                  std::nullopt, std::nullopt);
                 const creation_terminal_publication_t failed_publication{
-                  operation, failed_envelope, sha256 (failed_envelope), operation_deadline};
+                  operation, failed_envelope, operation_deadline};
                 (void) _location_store
                   ->complete_creation (
                     {reserve.key, winner->fence, object_creation_failed_t{failed_publication}})
@@ -938,13 +954,18 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             std::optional<message_t> reply;
             if (!joined.value ().reply.is_empty ())
                 reply = message_t::from_raw (joined.value ().reply, _serializers);
-            const auto state =
-              accepted ? creation_terminal_state_t::created : creation_terminal_state_t::rejected;
+            std::optional<protocol::application_payload_t> terminal_reply;
+            if (!joined.value ().reply.is_empty ())
+                terminal_reply = protocol::application_payload_t{
+                  stable_type, "application/octet-stream", joined.value ().reply.to_bytes ()};
             const auto envelope = actor_terminal_envelope (
-              state, accepted ? std::make_optional (created.value ()) : std::nullopt, reply,
-              *_serializers);
+              terminal_codec::request_terminal_result_t::ok,
+              terminal_codec::framework_error_code_t::none,
+              accepted ? terminal_codec::actor_create_result_t::created
+                       : terminal_codec::actor_create_result_t::rejected,
+              accepted ? std::make_optional (created.value ()) : std::nullopt, terminal_reply);
             const creation_terminal_publication_t publication{
-              operation, envelope, sha256 (envelope), operation_deadline};
+              operation, envelope, operation_deadline};
             object_creation_completion_t completion;
             if (accepted)
                 completion = object_creation_completed_t{
@@ -973,9 +994,11 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                          std::get_if<object_creation_already_completed_result_t> (
                            &completed.value ())) {
                 return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
-                  actor_result_from_terminal (already->terminal, [this] (zlink::message_t raw) {
-                      return message_t::from_raw (std::move (raw), _serializers);
-                  })));
+                  actor_result_from_terminal (
+                    already->terminal, node_rid_t::from_string (target.rid.to_string ()),
+                    stable_type, [this] (zlink::message_t raw) {
+                        return message_t::from_raw (std::move (raw), _serializers);
+                    })));
             } else {
                 return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
                   framework_error_kind_t::unavailable, "Actor creation completion was fenced"));
@@ -989,9 +1012,11 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         if (const auto terminal =
               _location_store->read_creation_terminal (operation).result ().value ())
             return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
-              actor_result_from_terminal (*terminal, [this] (zlink::message_t raw) {
-                  return message_t::from_raw (std::move (raw), _serializers);
-              })));
+              actor_result_from_terminal (
+                *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
+                [this] (zlink::message_t raw) {
+                    return message_t::from_raw (std::move (raw), _serializers);
+                })));
         zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     }
     return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
@@ -1965,7 +1990,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
               };
             node->configure_actor_create_operations (
-              [node, store, serializers = _serializers] (
+              [node, store] (
                 const protocol::actor_create_header_t &request,
                 host::actor_create_operation_target_completion_t completion) {
                   const auto failed = [&] {
@@ -1982,12 +2007,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       completion (failed ());
                       return;
                   }
-                  const auto publish = [request, node, serializers, status, store] (
-                                         creation_terminal_state_t state,
+                  const auto publish = [request, node, status, store] (
+                                         std::optional<terminal_codec::actor_create_result_t>
+                                           creation_result,
                                          std::optional<actor_ref_t> actor,
-                                         const std::optional<message_t> &application_reply) {
+                                         const std::optional<protocol::application_payload_t>
+                                           &application_reply) {
                       const auto envelope = actor_terminal_envelope (
-                        state, actor, application_reply, *serializers);
+                        creation_result ? terminal_codec::request_terminal_result_t::ok
+                                        : terminal_codec::request_terminal_result_t::internalError,
+                        creation_result ? terminal_codec::framework_error_code_t::none
+                                        : terminal_codec::framework_error_code_t::actorCreateFailed,
+                        creation_result, actor, application_reply);
                       const auto deadline = std::chrono::system_clock::time_point (
                         std::chrono::milliseconds (request.deadline_unix_ms));
                       const creation_operation_identity_t operation{
@@ -2013,15 +2044,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                          {target.owner_id, target.lease_generation}},
                         {.actor_slots = request.reservation.pending_capacity_delta}};
                       const creation_terminal_publication_t terminal{
-                        operation, envelope, sha256 (envelope), deadline};
+                        operation, envelope, deadline};
                       object_creation_completion_t target_completion;
-                      if (state == creation_terminal_state_t::created) {
+                      if (creation_result == terminal_codec::actor_create_result_t::created) {
                           target_completion = object_creation_completed_t{
                             target_actor_authority_payload (
                               actor_authority_state_t::ready, request.stable_type,
                               actor_id_t (request.actor_id), target),
                             terminal};
-                      } else if (state == creation_terminal_state_t::rejected) {
+                      } else if (creation_result
+                                 == terminal_codec::actor_create_result_t::rejected) {
                           target_completion = object_creation_rejected_t{terminal};
                       } else {
                           target_completion = object_creation_failed_t{terminal};
@@ -2043,8 +2075,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto deadline = std::chrono::system_clock::time_point (
                     std::chrono::milliseconds (request.deadline_unix_ms));
                   if (deadline <= now) {
-                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
-                                      std::nullopt);
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2052,8 +2083,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
                   const auto creation_bytes = read_actor_creation_request (store, request);
                   if (!creation_bytes) {
-                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
-                                      std::nullopt);
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2063,8 +2093,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     request.reservation.object_generation,
                     request.reservation.authority_owner_generation, timeout);
                   if (!created) {
-                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
-                                      std::nullopt);
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
                       completion (failed ());
                       return;
                   }
@@ -2072,7 +2101,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto joined = node->submit_application_actor_entry_spot_join (
                     actor, node_rid_t::from_string (status.routing_id ().to_string ()),
                     creation_request, timeout,
-                    [request, actor, completion, publish, serializers] (
+                    [request, actor, completion, publish] (
                       result_t<detail::actor_join_reply_t> joined) mutable {
                         host::actor_create_operation_result_t result;
                         result.reply.header = {
@@ -2080,18 +2109,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           static_cast<std::uint32_t> (
                             protocol::framework_error_code::actorCreateFailed)};
                         if (!joined) {
-                            (void) publish (creation_terminal_state_t::failed, std::nullopt,
-                                            std::nullopt);
+                            (void) publish (std::nullopt, std::nullopt, std::nullopt);
                             completion (std::move (result));
                             return;
                         }
-                        std::optional<message_t> application_reply;
+                        std::optional<protocol::application_payload_t> application_reply;
                         if (!joined.value ().reply.is_empty ()) {
-                            application_reply = message_t::from_raw (
-                              joined.value ().reply, serializers);
-                            result.application_reply = protocol::application_payload_t{
+                            application_reply = protocol::application_payload_t{
                               request.stable_type, "application/octet-stream",
                               joined.value ().reply.to_bytes ()};
+                            result.application_reply = application_reply;
                         }
                         result.reply.header = {request.correlation, 0u, 0u};
                         const auto accepted = joined.value ().result_code == 0;
@@ -2103,9 +2130,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             .to_bytes ();
                         result.reply.actor_id = std::string (actor.actor_id ().value ());
                         result.reply.object_generation = actor.object_generation ();
-                        const auto state = accepted ? creation_terminal_state_t::created
-                                                    : creation_terminal_state_t::rejected;
-                        if (!publish (state, accepted ? std::make_optional (actor) : std::nullopt,
+                        const auto creation_result =
+                          accepted ? terminal_codec::actor_create_result_t::created
+                                   : terminal_codec::actor_create_result_t::rejected;
+                        if (!publish (creation_result,
+                                      accepted ? std::make_optional (actor) : std::nullopt,
                                       application_reply)) {
                             result.reply.header = {
                               request.correlation, 105u,
@@ -2116,8 +2145,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         completion (std::move (result));
                     });
                   if (!joined) {
-                      (void) publish (creation_terminal_state_t::failed, std::nullopt,
-                                      std::nullopt);
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
                       completion (failed ());
                       return;
                   }

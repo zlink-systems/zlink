@@ -2433,7 +2433,6 @@ void verify_creation_terminal_operation_isolation ()
     const creation_terminal_publication_t publication{
       first,
       envelope,
-      zlink::framework::runtime::sha256 (envelope),
       std::chrono::system_clock::now ()
         + std::chrono::seconds (30)};
     assert (

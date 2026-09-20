@@ -246,30 +246,17 @@ struct object_reserve_conflict_t
     authority_read_result_t current;
 };
 
-enum class creation_terminal_state_t : std::uint8_t
-{
-    created = 1,
-    rejected = 2,
-    failed = 3
-};
-
 struct creation_terminal_publication_t
 {
     creation_operation_identity_t operation;
     std::vector<std::byte> terminal_envelope;
-    std::array<std::byte, 32> sha256{};
     std::chrono::system_clock::time_point operation_deadline{};
 };
 
 struct creation_terminal_record_t
 {
     creation_operation_identity_t operation;
-    object_creation_key_t object;
-    object_reservation_fence_t reservation;
-    creation_terminal_state_t state =
-      creation_terminal_state_t::created;
     std::vector<std::byte> terminal_envelope;
-    std::array<std::byte, 32> sha256{};
     std::chrono::system_clock::time_point expires_at{};
 };
 
