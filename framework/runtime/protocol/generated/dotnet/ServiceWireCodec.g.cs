@@ -9,7 +9,7 @@ using System.Text;
 namespace Systems.Zlink.Framework.Runtime.Protocol;
 internal static class ServiceWireCodec
 {
-    internal sealed record DecodeContext(MeshOperationKind? OriginalOperationKind,bool? DurableRelocationPresent,bool? ApplicationSnapshotPresent,ulong? EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead,ulong? EffectiveCompleteMessageBytes){internal static readonly DecodeContext Empty=new(null,null,null,null,null);}
+    internal sealed record DecodeContext(MeshOperationKind? OriginalOperationKind,bool? DurableRelocationPresent,bool? ApplicationSnapshotPresent,long? EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead,long? EffectiveCompleteMessageBytes){internal static readonly DecodeContext Empty=new(null,null,null,null,null);}
 
     internal sealed record U8(byte Value);
 
@@ -1153,14 +1153,16 @@ internal static class ServiceWireCodec
         var length = checked((int)ReadU32(reader, context).Value);
         if ((ulong)length < 0UL || (ulong)length > 4294966774UL) throw Error("application-payload-bytes: length");
         var bytes = reader.Bytes(length);
-        if (negotiatedMaximum > 4294966774UL || (ulong)(bytes.LongLength) > negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes);
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes);
     }
     private static void WriteApplicationPayloadBytes(Writer writer, ApplicationPayloadBytes value, DecodeContext context)
     {
+        var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
         var bytes = value.Value ?? Array.Empty<byte>();
         if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 4294966774UL) throw Error("application-payload-bytes: length");
         WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
         writer.Bytes(bytes);
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound");
     }
 
     internal static ApplicationPayloadEnvelopeV1 DecodeApplicationPayloadEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationPayloadEnvelopeV1(reader, context); reader.End("application-payload-envelope-v1"); return value; }
@@ -1178,11 +1180,13 @@ internal static class ServiceWireCodec
         var Payload = ReadApplicationPayloadBytes(body, context);
         var value = new ApplicationPayloadEnvelopeV1(PacketName, ContentType, Payload);
         body.End("application-payload-envelope-v1");
-        if (negotiatedMaximum > 4294967295UL || (ulong)(negotiatedStart - reader.Remaining) > negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound"); if ((ulong)(encodedStart - reader.Remaining) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit"); return value;
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294967295L || (ulong)(negotiatedStart - reader.Remaining) > (ulong)negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound"); if ((ulong)(encodedStart - reader.Remaining) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit"); return value;
     }
     private static void WriteApplicationPayloadEnvelopeV1(Writer writer, ApplicationPayloadEnvelopeV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
+        var negotiatedMaximum = context.EffectiveCompleteMessageBytes ?? throw Error("missing context effectiveCompleteMessageBytes");
+        var negotiatedStart = writer.Length;
         var body = new Writer();
         WritePacketName(body, value.PacketName, context);
         WriteContentType(body, value.ContentType, context);
@@ -1190,6 +1194,7 @@ internal static class ServiceWireCodec
         WriteU8(writer, new U8(1), context);
         WriteU32(writer, new U32(checked((uint)body.Length)), context);
         writer.Bytes(body.ToArray());
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294967295L || (ulong)(writer.Length - negotiatedStart) > (ulong)negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound");
         if ((ulong)(writer.Length - encodedStart) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit");
     }
 

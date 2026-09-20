@@ -6,7 +6,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class GeneratedServiceWireCommandCodecConformanceTests
 {
     private static readonly ServiceWireCodec.DecodeContext Context =
-        new(null, null, null, 4294966774UL, uint.MaxValue);
+        new(null, null, null, 4294966774L, uint.MaxValue);
 
     [Fact]
     public void Generated_codec_conforms_to_every_indexed_vector()
@@ -51,7 +51,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(39, cases.Count);
+        Assert.Equal(42, cases.Count);
         foreach (var testCase in cases)
         {
             Assert.True(testCase.Expect is "accept" or "reject", testCase.Label);
@@ -117,7 +117,6 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         var bytes = Convert.FromHexString(vector.TryGetProperty("hex", out var hex)
             ? hex.GetString()!
             : vector.GetProperty("framesHex")[0].GetString()!);
-        var context = DecodeContextFor(vector);
         switch (name)
         {
             case "vector-ordering":
@@ -141,16 +140,17 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                         .Select(item => Convert.FromHexString(item.GetString()!)).ToArray(), Context);
                 break;
             case "conditional-union-case-constraint":
-                ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, context);
+                ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, Context);
                 break;
             case "metadata-nonadjacent-duplicate-key":
-                ServiceWireCodec.DecodeMetadataFrame(bytes, context);
+                ServiceWireCodec.DecodeMetadataFrame(bytes, Context);
                 break;
             case "client-server-negotiated-payload-bound":
-                ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context);
-                break;
             case "client-server-negotiated-envelope-bound":
-                ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context);
+            case "client-server-negotiated-context-missing":
+            case "client-server-negotiated-context-negative":
+            case "client-server-negotiated-context-above-absolute-maximum":
+                ExerciseNegotiatedBound(vector, bytes);
                 break;
             case "durable-flags":
             case "durable-checksum":
@@ -162,19 +162,63 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         }
     }
 
-    private static ServiceWireCodec.DecodeContext DecodeContextFor(JsonElement vector)
+    private static void ExerciseNegotiatedBound(JsonElement vector, byte[] bytes)
     {
-        if (!vector.TryGetProperty("decodeContext", out var values))
-            return Context;
+        var name = vector.GetProperty("name").GetString()!;
+        var context = NegotiatedContextFor(vector);
+        foreach (var direction in vector.GetProperty("directions").EnumerateArray()
+                     .Select(item => item.GetString()!))
+        {
+            var exception = Record.Exception(() => (name, direction) switch
+            {
+                ("client-server-negotiated-envelope-bound", "decode") =>
+                    ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context),
+                ("client-server-negotiated-envelope-bound", "encode") =>
+                    EncodeApplicationPayloadEnvelope(bytes, context),
+                (_, "decode") => ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context),
+                (_, "encode") => EncodeApplicationPayload(bytes, context),
+                _ => throw new ConformanceHarnessException(
+                    $"unhandled negotiated-bound direction {name}:{direction}")
+            });
+            if (exception is null)
+                throw new ConformanceHarnessException(
+                    $"negotiated-bound direction accepted {name}:{direction}");
+            if (exception is ConformanceHarnessException)
+                throw exception;
+        }
+
+        throw new InvalidDataException("all negotiated-bound directions rejected");
+    }
+
+    private static ServiceWireCodec.ApplicationPayloadBytes EncodeApplicationPayload(
+        byte[] bytes, ServiceWireCodec.DecodeContext context)
+    {
+        var value = ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, Context);
+        ServiceWireCodec.EncodeApplicationPayloadBytes(value, context);
+        return value;
+    }
+
+    private static ServiceWireCodec.ApplicationPayloadEnvelopeV1 EncodeApplicationPayloadEnvelope(
+        byte[] bytes, ServiceWireCodec.DecodeContext context)
+    {
+        var value = ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, Context);
+        ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1(value, context);
+        return value;
+    }
+
+    private static ServiceWireCodec.DecodeContext NegotiatedContextFor(JsonElement vector)
+    {
+        if (!vector.TryGetProperty("context", out var values))
+            return ServiceWireCodec.DecodeContext.Empty;
 
         var payloadMaximum = values.TryGetProperty(
             "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead", out var payload)
-            ? payload.GetUInt64()
-            : 4294966774UL;
-        var envelopeMaximum = values.TryGetProperty(
+            ? payload.GetInt64()
+            : (long?)null;
+        long? envelopeMaximum = values.TryGetProperty(
             "effectiveCompleteMessageBytes", out var envelope)
-            ? envelope.GetUInt64()
-            : uint.MaxValue;
+            ? envelope.GetInt64()
+            : null;
         return new(null, null, null, payloadMaximum, envelopeMaximum);
     }
 
