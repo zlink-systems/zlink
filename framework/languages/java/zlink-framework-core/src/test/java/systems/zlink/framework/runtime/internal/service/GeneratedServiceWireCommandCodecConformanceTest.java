@@ -167,30 +167,51 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(16, operationCases.size());
+        assertEquals(19, operationCases.size());
+        int negotiatedBoundCases = 0;
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
-            String message = operation + ":" + operationCase.path("name").asText();
-            if (operationCase.path("expect").asText().equals("accept")) {
-                assertOperationCaseAccepted(operationCase, message);
-            } else {
-                assertThrows(Exception.class,
-                    () -> decodeOperationCase(operationCase), message);
+            if (operation.equals("negotiated-bound")) {
+                negotiatedBoundCases++;
+            }
+            for (String direction : directions(operationCase)) {
+                String message = operation + ":"
+                    + operationCase.path("name").asText() + ":" + direction;
+                if (operationCase.path("expect").asText().equals("accept")) {
+                    assertOperationCaseAccepted(
+                        operationCase, direction, message);
+                } else {
+                    assertThrows(Exception.class,
+                        () -> applyOperationCase(operationCase, direction), message);
+                }
             }
         }
+        assertEquals(5, negotiatedBoundCases);
     }
 
     private static void assertOperationCaseAccepted(JsonNode operationCase,
-        String message) throws Exception {
+        String direction, String message) throws Exception {
         try {
-            decodeOperationCase(operationCase);
+            applyOperationCase(operationCase, direction);
         } catch (Exception failure) {
             throw new AssertionError(message, failure);
         }
     }
 
-    private static void decodeOperationCase(JsonNode operationCase)
+    private static List<String> directions(JsonNode operationCase) {
+        List<String> result = new ArrayList<>();
+        for (JsonNode direction : operationCase.path("directions")) {
+            result.add(direction.asText());
+        }
+        return result.isEmpty() ? List.of("decode") : result;
+    }
+
+    private static void applyOperationCase(JsonNode operationCase,
+        String direction)
         throws Exception {
+        if (!direction.equals("encode") && !direction.equals("decode")) {
+            throw new IllegalStateException("unknown operation direction: " + direction);
+        }
         JsonNode surface = operationCase.path("surface");
         ServiceWireCodec.DecoderContext context = context(operationCase);
         switch (surface.path("format").asText()) {
@@ -202,10 +223,26 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     case "text8" -> ServiceWireCodec.decodeText8(bytes, context);
                     case "metadata-frame" ->
                         ServiceWireCodec.decodeMetadataFrame(bytes, context);
-                    case "application-payload-bytes" ->
-                        ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
-                    case "application-payload-envelope-v1" ->
-                        ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(bytes, context);
+                    case "application-payload-bytes" -> {
+                        if (direction.equals("decode")) {
+                            ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
+                        } else {
+                            var value = ServiceWireCodec.decodeApplicationPayloadBytes(
+                                bytes, CONTEXT);
+                            ServiceWireCodec.encodeApplicationPayloadBytes(value, context);
+                        }
+                    }
+                    case "application-payload-envelope-v1" -> {
+                        if (direction.equals("decode")) {
+                            ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(
+                                bytes, context);
+                        } else {
+                            var value = ServiceWireCodec
+                                .decodeApplicationPayloadEnvelopeV1(bytes, CONTEXT);
+                            ServiceWireCodec.encodeApplicationPayloadEnvelopeV1(
+                                value, context);
+                        }
+                    }
                     default -> throw new IllegalStateException("unknown type operation case");
                 }
             }
@@ -227,15 +264,17 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     }
 
     private static ServiceWireCodec.DecoderContext context(JsonNode operationCase) {
-        JsonNode values = operationCase.path("decodeContext");
-        long messageBytes = values.has("effectiveCompleteMessageBytes")
+        JsonNode values = operationCase.path("context");
+        boolean missing = operationCase.path("operation").asText()
+            .equals("negotiated-bound") && values.isMissingNode();
+        Long messageBytes = values.has("effectiveCompleteMessageBytes")
             ? values.path("effectiveCompleteMessageBytes").asLong()
-            : 0xffff_ffffL;
-        long payloadBytes = values.has(
+            : missing ? null : 0xffff_ffffL;
+        Long payloadBytes = values.has(
             "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")
             ? values.path(
                 "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead").asLong()
-            : 4_294_966_774L;
+            : missing ? null : 4_294_966_774L;
         return new ServiceWireCodec.DecoderContext(
             null, null, null, messageBytes, payloadBytes);
     }
