@@ -218,7 +218,7 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
   assert.equal(catalog.fixtures.length, 9);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
-  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 28);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 29);
   assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 49);
   const boundaryPairs = new Map();
   for (const entry of catalog.operationCases.filter((candidate) =>

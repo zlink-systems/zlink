@@ -167,6 +167,22 @@ function encodedLimit(owner, operation, measurements) {
     return [application, `if (${measured} > ${operation.maximumEncodedBytes}) fail(${JSON.stringify(owner.name + " maximum")});`];
   }));
 }
+function encodeCapacity(owner, policy, measurements) {
+  if (!Number.isSafeInteger(policy?.declaredMaximumBytes)
+      || !Number.isSafeInteger(policy.representationCeiling)
+      || !Number.isSafeInteger(policy.requiredThroughBytes)
+      || !Array.isArray(policy.applications)) throw new Error(`${owner.name}: invalid encode capacity`);
+  const rejection = (kind, message) => {
+    if (kind === "protocol-error") return `fail(${JSON.stringify(message)})`;
+    if (kind === "capacity-error") return `capacityFail(${JSON.stringify(message)})`;
+    throw new Error(`${owner.name}: unsupported encode capacity rejection ${kind}`);
+  };
+  return Object.fromEntries(policy.applications.map((application) => {
+    const measured = measurements[application];
+    if (!measured) throw new Error(`${owner.name}: missing encode capacity ${application} measurement`);
+    return [application, `if (${measured} > ${policy.declaredMaximumBytes}) ${rejection(policy.aboveDeclaredMaximum, owner.name + " length")}; if (${measured} > ${policy.representationCeiling}) ${rejection(policy.aboveRepresentationCeiling, owner.name + " capacity")};`];
+  }));
+}
 function negotiatedBound(owner, operation, measurements) {
   if (operation.topology !== "clientServer" || operation.comparison !== "less-than-or-equal"
       || operation.context?.missing !== "protocol-error" || operation.context?.negative !== "protocol-error"
@@ -221,7 +237,7 @@ function enumeration(owner, operation) {
 function lengthPrefixed(owner, operation) {
   const name = id(owner.name); const nullable = operation.zeroLengthMeaning === "absent";
   const text = operation.content === "text"; const validation = owner.operations.find((entry) => entry.op === "text-validation");
-  if (operation.encodeCapacity?.throughMaximumBytes !== operation.maximumBytes || operation.encodeCapacity.implementationLimitBelowMaximum !== "forbidden") throw new Error(`${owner.name}: unsupported encode capacity`);
+  const capacity = encodeCapacity(owner, operation.encodeCapacity, { encode: "bytes.length", decode: "length" });
   if (text && (validation?.encoding !== "utf-8" || validation.malformed !== "protocol-error"
       || validation.decode?.bom !== "preserve" || validation.decode.overlong !== "protocol-error"
       || validation.decode.surrogateCodePoint !== "protocol-error" || validation.encode?.loneSurrogate !== "protocol-error")) throw new Error(`${owner.name}: unsupported text validation`);
@@ -234,8 +250,8 @@ function lengthPrefixed(owner, operation) {
   const encodeNegotiated = negotiated.map((entry) => entry.encode).join("\n");
   const encodeCheck = encodeNegotiated ? ` ${encodeNegotiated}` : "";
   return { type: `export type ${name} = ${text ? "string" : "Uint8Array"}${nullable ? " | null" : ""};`,
-    read: `const length = Number(${readRef(operation.lengthType)}); ${nullable ? "if (length === 0) return null;" : ""} if (length < ${operation.minimumBytes} || length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${decodeNegotiated} ${decode}`,
-    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} if (bytes.length < ${operation.minimumBytes} || bytes.length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);${encodeCheck}` };
+    read: `const length = Number(${readRef(operation.lengthType)}); ${nullable ? "if (length === 0) return null;" : ""} ${capacity.decode} if (length < ${operation.minimumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${decodeNegotiated} ${decode}`,
+    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} ${capacity.encode} if (bytes.length < ${operation.minimumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);${encodeCheck}` };
 }
 function structure(owner, operation) {
   const checks = objectChecks(owner, operation.constraints);
@@ -438,6 +454,8 @@ function renderRuntime() {
 export type ServiceWireRuntimePredicate = (terminalResult: number, failureCode: number) => boolean;
 export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; ${negotiatedContext} runtimePredicates: Readonly<Record<string, ServiceWireRuntimePredicate>> }>;
 function fail(message: string): never { throw new RangeError(message); }
+class ServiceWireCapacityError extends RangeError { constructor(message: string) { super(message); this.name = "ServiceWireCapacityError"; } }
+function capacityFail(message: string): never { throw new ServiceWireCapacityError(message); }
 function numeric(value: unknown): bigint { return typeof value === "bigint" ? value : BigInt(value as number); }
 function same(left: unknown, right: unknown): boolean { return typeof left === "bigint" || typeof right === "bigint" ? numeric(left) === numeric(right) : left === right; }
 function requireContext(context: ServiceWireDecoderContext, name: string): unknown { const value = (context as any)[name]; if (value === undefined) fail("missing decoder context " + name); return value; }
@@ -445,8 +463,8 @@ function runtimePredicate(context: ServiceWireDecoderContext, name: string, term
 const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
-class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.slice(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
-class Writer { readonly bytes: number[] = []; get length(): number { return this.bytes.length; } put(bytes: Iterable<number>): void { for (const byte of bytes) this.bytes.push(byte); } u(value: bigint, width: number): void { const bytes = new Array<number>(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { return Uint8Array.from(this.bytes); } }
+class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
+class Writer { readonly chunks: Uint8Array[] = []; length = 0; put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; } u(value: bigint, width: number): void { const bytes = new Uint8Array(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; } }
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
 function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
 function compareResults(results: readonly number[]): number { for (const result of results) if (result) return result; return 0; }

@@ -4,6 +4,8 @@
 export type ServiceWireRuntimePredicate = (terminalResult: number, failureCode: number) => boolean;
 export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; readonly effectiveCompleteMessageBytesMinusActualEnvelopeOverhead?: number | bigint; readonly effectiveCompleteMessageBytes?: number | bigint; runtimePredicates: Readonly<Record<string, ServiceWireRuntimePredicate>> }>;
 function fail(message: string): never { throw new RangeError(message); }
+class ServiceWireCapacityError extends RangeError { constructor(message: string) { super(message); this.name = "ServiceWireCapacityError"; } }
+function capacityFail(message: string): never { throw new ServiceWireCapacityError(message); }
 function numeric(value: unknown): bigint { return typeof value === "bigint" ? value : BigInt(value as number); }
 function same(left: unknown, right: unknown): boolean { return typeof left === "bigint" || typeof right === "bigint" ? numeric(left) === numeric(right) : left === right; }
 function requireContext(context: ServiceWireDecoderContext, name: string): unknown { const value = (context as any)[name]; if (value === undefined) fail("missing decoder context " + name); return value; }
@@ -11,8 +13,8 @@ function runtimePredicate(context: ServiceWireDecoderContext, name: string, term
 const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
-class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.slice(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
-class Writer { readonly bytes: number[] = []; get length(): number { return this.bytes.length; } put(bytes: Iterable<number>): void { for (const byte of bytes) this.bytes.push(byte); } u(value: bigint, width: number): void { const bytes = new Array<number>(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { return Uint8Array.from(this.bytes); } }
+class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
+class Writer { readonly chunks: Uint8Array[] = []; length = 0; put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; } u(value: bigint, width: number): void { const bytes = new Uint8Array(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; } }
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
 function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
 function compareResults(results: readonly number[]): number { for (const result of results) if (result) return result; return 0; }
@@ -173,11 +175,11 @@ export type Rid = Uint8Array;
 
 function readRid(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Rid {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("rid length");  return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length > 255) fail("rid length"); if (length > 2147483647) capacityFail("rid capacity"); if (length < 1) fail("rid length");  return reader.take(length);
 }
 function writeRid(input: Rid, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 1 || bytes.length > 255) fail("rid length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 255) fail("rid length"); if (bytes.length > 2147483647) capacityFail("rid capacity"); if (bytes.length < 1) fail("rid length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeRid(bytes: Uint8Array, context: ServiceWireDecoderContext): Rid { const reader = new Reader(bytes); const value = readRid(reader, context, {}, 0); reader.done("rid"); return value; }
 export function encodeRid(value: Rid, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRid(value, writer, context, {}, 0); return writer.result(); }
@@ -186,11 +188,11 @@ export type OptionalRid = Uint8Array | null;
 
 function readOptionalRid(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): OptionalRid {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-rid length");  return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length > 255) fail("optional-rid length"); if (length > 2147483647) capacityFail("optional-rid capacity"); if (length < 0) fail("optional-rid length");  return reader.take(length);
 }
 function writeOptionalRid(input: OptionalRid, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  if (value === null) { writeU8(0, writer, context, enclosing, flags); return; } const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 255) fail("optional-rid length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (value === null) { writeU8(0, writer, context, enclosing, flags); return; } const bytes = value as Uint8Array;  if (bytes.length > 255) fail("optional-rid length"); if (bytes.length > 2147483647) capacityFail("optional-rid capacity"); if (bytes.length < 0) fail("optional-rid length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeOptionalRid(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalRid { const reader = new Reader(bytes); const value = readOptionalRid(reader, context, {}, 0); reader.done("optional-rid"); return value; }
 export function encodeOptionalRid(value: OptionalRid, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalRid(value, writer, context, {}, 0); return writer.result(); }
@@ -199,11 +201,11 @@ export type Text8 = string;
 
 function readText8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Text8 {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text8 NUL"); return decodeUtf8(bytes, "text8");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length > 255) fail("text8 length"); if (length > 2147483647) capacityFail("text8 capacity"); if (length < 1) fail("text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text8 NUL"); return decodeUtf8(bytes, "text8");
 }
 function writeText8(input: Text8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("text8 NUL"); if (bytes.length < 1 || bytes.length > 255) fail("text8 length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("text8 NUL"); if (bytes.length > 255) fail("text8 length"); if (bytes.length > 2147483647) capacityFail("text8 capacity"); if (bytes.length < 1) fail("text8 length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeText8(bytes: Uint8Array, context: ServiceWireDecoderContext): Text8 { const reader = new Reader(bytes); const value = readText8(reader, context, {}, 0); reader.done("text8"); return value; }
 export function encodeText8(value: Text8, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeText8(value, writer, context, {}, 0); return writer.result(); }
@@ -212,11 +214,11 @@ export type OptionalText8 = string | null;
 
 function readOptionalText8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): OptionalText8 {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("optional-text8 NUL"); return decodeUtf8(bytes, "optional-text8");
+  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length > 255) fail("optional-text8 length"); if (length > 2147483647) capacityFail("optional-text8 capacity"); if (length < 0) fail("optional-text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("optional-text8 NUL"); return decodeUtf8(bytes, "optional-text8");
 }
 function writeOptionalText8(input: OptionalText8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  if (value === null) { writeU8(0, writer, context, enclosing, flags); return; } const bytes = utf8(value); if (bytes.includes(0)) fail("optional-text8 NUL"); if (bytes.length < 0 || bytes.length > 255) fail("optional-text8 length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (value === null) { writeU8(0, writer, context, enclosing, flags); return; } const bytes = utf8(value); if (bytes.includes(0)) fail("optional-text8 NUL"); if (bytes.length > 255) fail("optional-text8 length"); if (bytes.length > 2147483647) capacityFail("optional-text8 capacity"); if (bytes.length < 0) fail("optional-text8 length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeOptionalText8(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalText8 { const reader = new Reader(bytes); const value = readOptionalText8(reader, context, {}, 0); reader.done("optional-text8"); return value; }
 export function encodeOptionalText8(value: OptionalText8, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalText8(value, writer, context, {}, 0); return writer.result(); }
@@ -225,11 +227,11 @@ export type Sha256Bytes = Uint8Array;
 
 function readSha256Bytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Sha256Bytes {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 32 || length > 32) fail("sha256-bytes length");  return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length > 32) fail("sha256-bytes length"); if (length > 2147483647) capacityFail("sha256-bytes capacity"); if (length < 32) fail("sha256-bytes length");  return reader.take(length);
 }
 function writeSha256Bytes(input: Sha256Bytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 32 || bytes.length > 32) fail("sha256-bytes length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 32) fail("sha256-bytes length"); if (bytes.length > 2147483647) capacityFail("sha256-bytes capacity"); if (bytes.length < 32) fail("sha256-bytes length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeSha256Bytes(bytes: Uint8Array, context: ServiceWireDecoderContext): Sha256Bytes { const reader = new Reader(bytes); const value = readSha256Bytes(reader, context, {}, 0); reader.done("sha256-bytes"); return value; }
 export function encodeSha256Bytes(value: Sha256Bytes, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSha256Bytes(value, writer, context, {}, 0); return writer.result(); }
@@ -251,11 +253,11 @@ export type Text16 = string;
 
 function readText16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Text16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text16 NUL"); return decodeUtf8(bytes, "text16");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 65535) fail("text16 length"); if (length > 2147483647) capacityFail("text16 capacity"); if (length < 0) fail("text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text16 NUL"); return decodeUtf8(bytes, "text16");
 }
 function writeText16(input: Text16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("text16 NUL"); if (bytes.length < 0 || bytes.length > 65535) fail("text16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("text16 NUL"); if (bytes.length > 65535) fail("text16 length"); if (bytes.length > 2147483647) capacityFail("text16 capacity"); if (bytes.length < 0) fail("text16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeText16(bytes: Uint8Array, context: ServiceWireDecoderContext): Text16 { const reader = new Reader(bytes); const value = readText16(reader, context, {}, 0); reader.done("text16"); return value; }
 export function encodeText16(value: Text16, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeText16(value, writer, context, {}, 0); return writer.result(); }
@@ -264,11 +266,11 @@ export type NonemptyText16 = string;
 
 function readNonemptyText16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonemptyText16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("nonempty-text16 NUL"); return decodeUtf8(bytes, "nonempty-text16");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 65535) fail("nonempty-text16 length"); if (length > 2147483647) capacityFail("nonempty-text16 capacity"); if (length < 1) fail("nonempty-text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("nonempty-text16 NUL"); return decodeUtf8(bytes, "nonempty-text16");
 }
 function writeNonemptyText16(input: NonemptyText16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("nonempty-text16 NUL"); if (bytes.length < 1 || bytes.length > 65535) fail("nonempty-text16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("nonempty-text16 NUL"); if (bytes.length > 65535) fail("nonempty-text16 length"); if (bytes.length > 2147483647) capacityFail("nonempty-text16 capacity"); if (bytes.length < 1) fail("nonempty-text16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeNonemptyText16(bytes: Uint8Array, context: ServiceWireDecoderContext): NonemptyText16 { const reader = new Reader(bytes); const value = readNonemptyText16(reader, context, {}, 0); reader.done("nonempty-text16"); return value; }
 export function encodeNonemptyText16(value: NonemptyText16, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeNonemptyText16(value, writer, context, {}, 0); return writer.result(); }
@@ -277,11 +279,11 @@ export type Endpoint = string;
 
 function readEndpoint(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Endpoint {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("endpoint length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("endpoint NUL"); return decodeUtf8(bytes, "endpoint");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 4096) fail("endpoint length"); if (length > 2147483647) capacityFail("endpoint capacity"); if (length < 1) fail("endpoint length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("endpoint NUL"); return decodeUtf8(bytes, "endpoint");
 }
 function writeEndpoint(input: Endpoint, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("endpoint NUL"); if (bytes.length < 1 || bytes.length > 4096) fail("endpoint length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("endpoint NUL"); if (bytes.length > 4096) fail("endpoint length"); if (bytes.length > 2147483647) capacityFail("endpoint capacity"); if (bytes.length < 1) fail("endpoint length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeEndpoint(bytes: Uint8Array, context: ServiceWireDecoderContext): Endpoint { const reader = new Reader(bytes); const value = readEndpoint(reader, context, {}, 0); reader.done("endpoint"); return value; }
 export function encodeEndpoint(value: Endpoint, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeEndpoint(value, writer, context, {}, 0); return writer.result(); }
@@ -290,11 +292,11 @@ export type Blob16 = Uint8Array;
 
 function readBlob16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Blob16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("blob16 length");  return reader.take(length);
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 65535) fail("blob16 length"); if (length > 2147483647) capacityFail("blob16 capacity"); if (length < 0) fail("blob16 length");  return reader.take(length);
 }
 function writeBlob16(input: Blob16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 65535) fail("blob16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 65535) fail("blob16 length"); if (bytes.length > 2147483647) capacityFail("blob16 capacity"); if (bytes.length < 0) fail("blob16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeBlob16(bytes: Uint8Array, context: ServiceWireDecoderContext): Blob16 { const reader = new Reader(bytes); const value = readBlob16(reader, context, {}, 0); reader.done("blob16"); return value; }
 export function encodeBlob16(value: Blob16, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBlob16(value, writer, context, {}, 0); return writer.result(); }
@@ -303,11 +305,11 @@ export type NonemptyBlob16 = Uint8Array;
 
 function readNonemptyBlob16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonemptyBlob16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-blob16 length");  return reader.take(length);
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 65535) fail("nonempty-blob16 length"); if (length > 2147483647) capacityFail("nonempty-blob16 capacity"); if (length < 1) fail("nonempty-blob16 length");  return reader.take(length);
 }
 function writeNonemptyBlob16(input: NonemptyBlob16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 1 || bytes.length > 65535) fail("nonempty-blob16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 65535) fail("nonempty-blob16 length"); if (bytes.length > 2147483647) capacityFail("nonempty-blob16 capacity"); if (bytes.length < 1) fail("nonempty-blob16 length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeNonemptyBlob16(bytes: Uint8Array, context: ServiceWireDecoderContext): NonemptyBlob16 { const reader = new Reader(bytes); const value = readNonemptyBlob16(reader, context, {}, 0); reader.done("nonempty-blob16"); return value; }
 export function encodeNonemptyBlob16(value: NonemptyBlob16, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeNonemptyBlob16(value, writer, context, {}, 0); return writer.result(); }
@@ -316,11 +318,11 @@ export type PacketName = string;
 
 function readPacketName(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): PacketName {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("packet-name length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("packet-name NUL"); return decodeUtf8(bytes, "packet-name");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length > 255) fail("packet-name length"); if (length > 2147483647) capacityFail("packet-name capacity"); if (length < 1) fail("packet-name length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("packet-name NUL"); return decodeUtf8(bytes, "packet-name");
 }
 function writePacketName(input: PacketName, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("packet-name NUL"); if (bytes.length < 1 || bytes.length > 255) fail("packet-name length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("packet-name NUL"); if (bytes.length > 255) fail("packet-name length"); if (bytes.length > 2147483647) capacityFail("packet-name capacity"); if (bytes.length < 1) fail("packet-name length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodePacketName(bytes: Uint8Array, context: ServiceWireDecoderContext): PacketName { const reader = new Reader(bytes); const value = readPacketName(reader, context, {}, 0); reader.done("packet-name"); return value; }
 export function encodePacketName(value: PacketName, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writePacketName(value, writer, context, {}, 0); return writer.result(); }
@@ -329,11 +331,11 @@ export type ContentType = string;
 
 function readContentType(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ContentType {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("content-type length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("content-type NUL"); return decodeUtf8(bytes, "content-type");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length > 255) fail("content-type length"); if (length > 2147483647) capacityFail("content-type capacity"); if (length < 1) fail("content-type length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("content-type NUL"); return decodeUtf8(bytes, "content-type");
 }
 function writeContentType(input: ContentType, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("content-type NUL"); if (bytes.length < 1 || bytes.length > 255) fail("content-type length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("content-type NUL"); if (bytes.length > 255) fail("content-type length"); if (bytes.length > 2147483647) capacityFail("content-type capacity"); if (bytes.length < 1) fail("content-type length"); writeU8(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeContentType(bytes: Uint8Array, context: ServiceWireDecoderContext): ContentType { const reader = new Reader(bytes); const value = readContentType(reader, context, {}, 0); reader.done("content-type"); return value; }
 export function encodeContentType(value: ContentType, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeContentType(value, writer, context, {}, 0); return writer.result(); }
@@ -342,11 +344,11 @@ export type ApplicationPayloadBytes = Uint8Array;
 
 function readApplicationPayloadBytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ApplicationPayloadBytes {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 4294966774) fail("application-payload-bytes length"); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum"); return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length > 4294966774) fail("application-payload-bytes length"); if (length > 2147483647) capacityFail("application-payload-bytes capacity"); if (length < 0) fail("application-payload-bytes length"); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum"); return reader.take(length);
 }
 function writeApplicationPayloadBytes(input: ApplicationPayloadBytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 4294966774) fail("application-payload-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(bytes.length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum");
+   const bytes = value as Uint8Array;  if (bytes.length > 4294966774) fail("application-payload-bytes length"); if (bytes.length > 2147483647) capacityFail("application-payload-bytes capacity"); if (bytes.length < 0) fail("application-payload-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(bytes.length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum");
 }
 export function decodeApplicationPayloadBytes(bytes: Uint8Array, context: ServiceWireDecoderContext): ApplicationPayloadBytes { const reader = new Reader(bytes); const value = readApplicationPayloadBytes(reader, context, {}, 0); reader.done("application-payload-bytes"); return value; }
 export function encodeApplicationPayloadBytes(value: ApplicationPayloadBytes, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationPayloadBytes(value, writer, context, {}, 0); return writer.result(); }
@@ -405,11 +407,11 @@ export type MetadataValue = string;
 
 function readMetadataValue(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MetadataValue {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 1024) fail("metadata-value length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("metadata-value NUL"); return decodeUtf8(bytes, "metadata-value");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 1024) fail("metadata-value length"); if (length > 2147483647) capacityFail("metadata-value capacity"); if (length < 0) fail("metadata-value length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("metadata-value NUL"); return decodeUtf8(bytes, "metadata-value");
 }
 function writeMetadataValue(input: MetadataValue, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("metadata-value NUL"); if (bytes.length < 0 || bytes.length > 1024) fail("metadata-value length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("metadata-value NUL"); if (bytes.length > 1024) fail("metadata-value length"); if (bytes.length > 2147483647) capacityFail("metadata-value capacity"); if (bytes.length < 0) fail("metadata-value length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeMetadataValue(bytes: Uint8Array, context: ServiceWireDecoderContext): MetadataValue { const reader = new Reader(bytes); const value = readMetadataValue(reader, context, {}, 0); reader.done("metadata-value"); return value; }
 export function encodeMetadataValue(value: MetadataValue, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMetadataValue(value, writer, context, {}, 0); return writer.result(); }
@@ -2544,11 +2546,11 @@ export type AggregateParticipantMutationBytes = Uint8Array;
 
 function readAggregateParticipantMutationBytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AggregateParticipantMutationBytes {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 1 || length > 1048576) fail("aggregate-participant-mutation-bytes length");  return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length > 1048576) fail("aggregate-participant-mutation-bytes length"); if (length > 2147483647) capacityFail("aggregate-participant-mutation-bytes capacity"); if (length < 1) fail("aggregate-participant-mutation-bytes length");  return reader.take(length);
 }
 function writeAggregateParticipantMutationBytes(input: AggregateParticipantMutationBytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 1 || bytes.length > 1048576) fail("aggregate-participant-mutation-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 1048576) fail("aggregate-participant-mutation-bytes length"); if (bytes.length > 2147483647) capacityFail("aggregate-participant-mutation-bytes capacity"); if (bytes.length < 1) fail("aggregate-participant-mutation-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeAggregateParticipantMutationBytes(bytes: Uint8Array, context: ServiceWireDecoderContext): AggregateParticipantMutationBytes { const reader = new Reader(bytes); const value = readAggregateParticipantMutationBytes(reader, context, {}, 0); reader.done("aggregate-participant-mutation-bytes"); return value; }
 export function encodeAggregateParticipantMutationBytes(value: AggregateParticipantMutationBytes, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAggregateParticipantMutationBytes(value, writer, context, {}, 0); return writer.result(); }
@@ -3368,11 +3370,11 @@ export type CreationContentReference = string;
 
 function readCreationContentReference(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): CreationContentReference {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("creation-content-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("creation-content-reference NUL"); return decodeUtf8(bytes, "creation-content-reference");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 4096) fail("creation-content-reference length"); if (length > 2147483647) capacityFail("creation-content-reference capacity"); if (length < 1) fail("creation-content-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("creation-content-reference NUL"); return decodeUtf8(bytes, "creation-content-reference");
 }
 function writeCreationContentReference(input: CreationContentReference, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("creation-content-reference NUL"); if (bytes.length < 1 || bytes.length > 4096) fail("creation-content-reference length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("creation-content-reference NUL"); if (bytes.length > 4096) fail("creation-content-reference length"); if (bytes.length > 2147483647) capacityFail("creation-content-reference capacity"); if (bytes.length < 1) fail("creation-content-reference length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeCreationContentReference(bytes: Uint8Array, context: ServiceWireDecoderContext): CreationContentReference { const reader = new Reader(bytes); const value = readCreationContentReference(reader, context, {}, 0); reader.done("creation-content-reference"); return value; }
 export function encodeCreationContentReference(value: CreationContentReference, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeCreationContentReference(value, writer, context, {}, 0); return writer.result(); }
@@ -3381,11 +3383,11 @@ export type RelocationReference = string;
 
 function readRelocationReference(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationReference {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("relocation-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("relocation-reference NUL"); return decodeUtf8(bytes, "relocation-reference");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 4096) fail("relocation-reference length"); if (length > 2147483647) capacityFail("relocation-reference capacity"); if (length < 1) fail("relocation-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("relocation-reference NUL"); return decodeUtf8(bytes, "relocation-reference");
 }
 function writeRelocationReference(input: RelocationReference, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("relocation-reference NUL"); if (bytes.length < 1 || bytes.length > 4096) fail("relocation-reference length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("relocation-reference NUL"); if (bytes.length > 4096) fail("relocation-reference length"); if (bytes.length > 2147483647) capacityFail("relocation-reference capacity"); if (bytes.length < 1) fail("relocation-reference length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeRelocationReference(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationReference { const reader = new Reader(bytes); const value = readRelocationReference(reader, context, {}, 0); reader.done("relocation-reference"); return value; }
 export function encodeRelocationReference(value: RelocationReference, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationReference(value, writer, context, {}, 0); return writer.result(); }
@@ -3394,11 +3396,11 @@ export type AuthorityStoreVersion = string;
 
 function readAuthorityStoreVersion(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityStoreVersion {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("authority-store-version length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("authority-store-version NUL"); return decodeUtf8(bytes, "authority-store-version");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length > 4096) fail("authority-store-version length"); if (length > 2147483647) capacityFail("authority-store-version capacity"); if (length < 1) fail("authority-store-version length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("authority-store-version NUL"); return decodeUtf8(bytes, "authority-store-version");
 }
 function writeAuthorityStoreVersion(input: AuthorityStoreVersion, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = utf8(value); if (bytes.includes(0)) fail("authority-store-version NUL"); if (bytes.length < 1 || bytes.length > 4096) fail("authority-store-version length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = utf8(value); if (bytes.includes(0)) fail("authority-store-version NUL"); if (bytes.length > 4096) fail("authority-store-version length"); if (bytes.length > 2147483647) capacityFail("authority-store-version capacity"); if (bytes.length < 1) fail("authority-store-version length"); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeAuthorityStoreVersion(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityStoreVersion { const reader = new Reader(bytes); const value = readAuthorityStoreVersion(reader, context, {}, 0); reader.done("authority-store-version"); return value; }
 export function encodeAuthorityStoreVersion(value: AuthorityStoreVersion, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityStoreVersion(value, writer, context, {}, 0); return writer.result(); }
@@ -5976,11 +5978,11 @@ export type DurableBlob = Uint8Array;
 
 function readDurableBlob(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DurableBlob {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-blob length");  return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length > 67108864) fail("durable-blob length"); if (length > 2147483647) capacityFail("durable-blob capacity"); if (length < 0) fail("durable-blob length");  return reader.take(length);
 }
 function writeDurableBlob(input: DurableBlob, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 67108864) fail("durable-blob length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 67108864) fail("durable-blob length"); if (bytes.length > 2147483647) capacityFail("durable-blob capacity"); if (bytes.length < 0) fail("durable-blob length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeDurableBlob(bytes: Uint8Array, context: ServiceWireDecoderContext): DurableBlob { const reader = new Reader(bytes); const value = readDurableBlob(reader, context, {}, 0); reader.done("durable-blob"); return value; }
 export function encodeDurableBlob(value: DurableBlob, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeDurableBlob(value, writer, context, {}, 0); return writer.result(); }
@@ -5989,11 +5991,11 @@ export type DurableStateBlob = Uint8Array;
 
 function readDurableStateBlob(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DurableStateBlob {
   void context; void enclosing; void flags;
-  const length = Number(readU64(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-state-blob length");  return reader.take(length);
+  const length = Number(readU64(reader, context, enclosing, flags));  if (length > 67108864) fail("durable-state-blob length"); if (length > 2147483647) capacityFail("durable-state-blob capacity"); if (length < 0) fail("durable-state-blob length");  return reader.take(length);
 }
 function writeDurableStateBlob(input: DurableStateBlob, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 67108864) fail("durable-state-blob length"); writeU64(numeric(bytes.length), writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length > 67108864) fail("durable-state-blob length"); if (bytes.length > 2147483647) capacityFail("durable-state-blob capacity"); if (bytes.length < 0) fail("durable-state-blob length"); writeU64(numeric(bytes.length), writer, context, enclosing, flags); writer.put(bytes);
 }
 export function decodeDurableStateBlob(bytes: Uint8Array, context: ServiceWireDecoderContext): DurableStateBlob { const reader = new Reader(bytes); const value = readDurableStateBlob(reader, context, {}, 0); reader.done("durable-state-blob"); return value; }
 export function encodeDurableStateBlob(value: DurableStateBlob, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeDurableStateBlob(value, writer, context, {}, 0); return writer.result(); }
