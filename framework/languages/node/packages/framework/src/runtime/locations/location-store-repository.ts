@@ -101,7 +101,6 @@ type StoredAuthoritySnapshot = Omit<
 
 interface AuthorityRecord {
   readonly snapshot: StoredAuthoritySnapshot;
-  readonly reservationId?: string;
   readonly terminal?: 'committed' | 'rejected' | 'failed' | 'aborted';
   readonly aggregate?: AggregateParticipantFenceRecord;
   readonly visibleStoreVersion?: string;
@@ -1174,7 +1173,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         capacity: cloneCapacity(request.capacity)
       };
       const record: AuthorityRecord = {
-        reservationId,
         snapshot: {
           payload: Buffer.from(request.creatingPayload),
           objectGeneration: generation,
@@ -1246,7 +1244,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.terminal === 'committed'
-        && record.reservationId === request.reservationId
+        && record.snapshot.pendingCreation === undefined
         && record.snapshot.allocation.state === 'active'
       ) {
         return {
@@ -1255,7 +1253,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (
-        record.reservationId !== request.reservationId
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId
         || current.value.version.value !== request.expectedStoreVersion
         || record.snapshot.allocation.state !== 'reserved'
         || !sameCreationTarget(record.snapshot, request.target)
@@ -1277,7 +1275,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         ? emptyCapacityRecord()
         : decodeJson<CapacityRecord>(capacityRead.value.bytes);
       const ready: AuthorityRecord = {
-        reservationId: request.reservationId,
         terminal: 'committed',
         snapshot: {
           ...record.snapshot,
@@ -1328,7 +1325,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.reservationId !== request.reservationId
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId
         || current.value.version.value !== request.expectedStoreVersion
         || record.snapshot.allocation.state !== 'reserved'
         || !sameCreationTarget(record.snapshot, request.target)
@@ -1412,7 +1409,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.reservationId !== request.reservationId
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId
         || current.value.version.value !== request.expectedStoreVersion
         || record.snapshot.allocation.state !== 'reserved'
         || !sameCreationTarget(record.snapshot, request.target)
@@ -1450,7 +1447,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               kind: 'put' as const,
               key: rowKey,
               bytes: encodeAuthorityRecord({
-                reservationId: request.reservationId,
                 terminal: 'committed',
                 snapshot: {
                   ...record.snapshot,
@@ -1513,7 +1509,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       const readyRecord = decodeAuthorityRecord(
         encodeAuthorityRecord({
-          reservationId: request.reservationId,
           terminal: 'committed',
           snapshot: {
             ...record.snapshot,
@@ -2152,10 +2147,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (result.kind === 'deleted') removed += 1n;
         continue;
       }
-      if (record.reservationId === undefined) continue;
+      const reservationId = record.snapshot.pendingCreation?.reservationId;
+      if (reservationId === undefined) continue;
       const aborted = await this.abort({
         key: identity,
-        reservationId: record.reservationId,
+        reservationId,
         expectedStoreVersion: current.value.version.value,
         target: {
           meshName: record.snapshot.allocation.descriptor.meshName,
@@ -3567,7 +3563,6 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
   // These fields gate Node-only creation/aggregate recovery.  They are absent
   // from normal authority values (including the golden vector), while the
   // interoperable envelope above remains byte-canonical.
-  if (record.reservationId !== undefined) envelope.reservationId = record.reservationId;
   if (record.terminal !== undefined) envelope.terminal = record.terminal;
   if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
   if (record.visibleStoreVersion !== undefined) envelope.visibleStoreVersion = record.visibleStoreVersion;
@@ -3583,7 +3578,6 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
   const pending = value.pendingCreation as Record<string, unknown> | null;
   const objectKind = runtimePlacementObjectKind(String(allocation.objectKind));
   return {
-    reservationId: typeof value.reservationId === 'string' ? value.reservationId : undefined,
     terminal: value.terminal as AuthorityRecord['terminal'],
     aggregate: value.aggregate === undefined
       ? undefined
