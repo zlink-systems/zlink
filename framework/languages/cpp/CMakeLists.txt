@@ -19,6 +19,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   endif()
 endif()
 
+if(MSVC)
+  add_compile_definitions(NOMINMAX)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+endif()
+
 include(GNUInstallDirs)
 include(FetchContent)
 include(CMakePackageConfigHelpers)
@@ -131,8 +136,12 @@ if(NOT TARGET zlink::cpp)
     endif()
     set(ZLINK_CPP_CORE_PACKAGE_PREFIX "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" CACHE PATH
       "Core package used by the workspace binding")
+    # The binding resolves Core in its subdirectory, while framework test
+    # registration references the resulting imported target from this directory.
+    set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
     add_subdirectory("${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp"
       "${CMAKE_CURRENT_BINARY_DIR}/bindings-cpp")
+    unset(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL)
   else()
     find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
   endif()
@@ -258,7 +267,6 @@ set(ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES
 # stays the only exported target).
 function(zlink_framework_cpp_configure_msvc_target target_name)
   if(MSVC)
-    target_compile_definitions(${target_name} PUBLIC NOMINMAX)
     target_compile_options(${target_name} PUBLIC /bigobj)
   endif()
 endfunction()

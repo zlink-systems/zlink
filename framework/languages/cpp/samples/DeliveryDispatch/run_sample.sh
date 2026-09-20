@@ -84,12 +84,12 @@ if [[ -z "$RESERVED_PORT" || -z "$COURIER_NODE2" ]]; then
   exit 1
 fi
 cmake --build "$BUILD_DIR" --parallel 2 --target \
-  sample_cpp_framework_deliverydispatch_dispatch \
-  sample_cpp_framework_deliverydispatch_courier_actor_node \
-  sample_cpp_framework_deliverydispatch_customer_gateway \
-  sample_cpp_framework_deliverydispatch_courier_session \
-  sample_cpp_framework_deliverydispatch_tracking \
-  sample_cpp_framework_deliverydispatch_client >/dev/null
+  zdd_dispatch \
+  zdd_courier_actor_node \
+  zdd_customer_gateway \
+  zdd_courier_session \
+  zdd_tracking \
+  zdd_client >/dev/null
 
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port \
   "zlink-redis-cpp-sample-deliverydispatch" "redis:7-alpine"

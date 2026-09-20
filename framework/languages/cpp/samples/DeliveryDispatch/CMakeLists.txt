@@ -35,28 +35,40 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "Zlink sample package mode: ${ZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE}")
 endif()
 
-add_executable(sample_cpp_framework_deliverydispatch_dispatch Server/Dispatch/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_dispatch PRIVATE
+add_executable(zdd_dispatch Server/Dispatch/main.cpp)
+set_target_properties(zdd_dispatch PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_dispatch)
+target_link_libraries(zdd_dispatch PRIVATE
   zlink::framework zlink::framework_locations_redis zlink::http_client)
 
-add_executable(sample_cpp_framework_deliverydispatch_courier_actor_node Server/CourierActorNode/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_courier_actor_node PRIVATE
+add_executable(zdd_courier_actor_node Server/CourierActorNode/main.cpp)
+set_target_properties(zdd_courier_actor_node PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_courier_actor_node)
+target_link_libraries(zdd_courier_actor_node PRIVATE
   zlink::framework zlink::framework_locations_redis)
 
-add_executable(sample_cpp_framework_deliverydispatch_customer_gateway Server/CustomerGateway/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_customer_gateway PRIVATE
+add_executable(zdd_customer_gateway Server/CustomerGateway/main.cpp)
+set_target_properties(zdd_customer_gateway PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_customer_gateway)
+target_link_libraries(zdd_customer_gateway PRIVATE
   zlink::framework zlink::framework_locations_redis)
 
-add_executable(sample_cpp_framework_deliverydispatch_courier_session Server/CourierSession/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_courier_session PRIVATE
+add_executable(zdd_courier_session Server/CourierSession/main.cpp)
+set_target_properties(zdd_courier_session PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_courier_session)
+target_link_libraries(zdd_courier_session PRIVATE
   zlink::framework zlink::framework_locations_redis)
 
-add_executable(sample_cpp_framework_deliverydispatch_tracking Server/Tracking/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_tracking PRIVATE
+add_executable(zdd_tracking Server/Tracking/main.cpp)
+set_target_properties(zdd_tracking PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_tracking)
+target_link_libraries(zdd_tracking PRIVATE
   zlink::framework zlink::framework_locations_redis)
 
-add_executable(sample_cpp_framework_deliverydispatch_client Client/main.cpp)
-target_link_libraries(sample_cpp_framework_deliverydispatch_client PRIVATE
+add_executable(zdd_client Client/main.cpp)
+set_target_properties(zdd_client PROPERTIES
+  OUTPUT_NAME sample_cpp_framework_deliverydispatch_client)
+target_link_libraries(zdd_client PRIVATE
   zlink::framework zlink::http_client zlink::stream_connector zlink::stream_e2e_client)
 
 get_property(_sample_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
