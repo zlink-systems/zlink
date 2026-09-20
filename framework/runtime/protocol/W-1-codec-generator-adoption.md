@@ -1,5 +1,8 @@
 # W-1 codec-generator pilot adoption
 
+W-2 and W-3 progress is tracked in issue #736; the wire spec states only the
+rule (no private syntax, no handwritten codec exceptions) and not this plan.
+
 W-2 replaces each runtime's actorJoin(28) byte-layer call with the generated
 module only after its language-local equivalence fixture is green.  The public
 runtime types remain the adapter boundary; no generated type leaks through a

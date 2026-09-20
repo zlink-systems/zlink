@@ -84,12 +84,10 @@ evaluation rules of keywords such as `$ref`, `$bound`, `when`, and
 [07. Service Wire Schema Dialect](07-schema-dialect.en.md). This chapter does
 not restate them.
 
-The schema does not yet give every existing layout a uniform generator-ready
-lowering rule or per-language output mapping. W-2 must fill those missing
-generator-input details, including complete lowering coverage for every layout
-kind, conditional/semantic constraint handling, and the generated asset and
-fixture mapping. It must extend the schema rather than introduce private syntax
-or handwritten codec exceptions.
+The generator produces, from the schema, the encoder and decoder of every layout kind, the
+conditional and semantic constraint checks, and the generated assets and fixtures. Where a layout is
+not yet generated, no private syntax or handwritten codec exception is introduced — the schema is
+extended and the generator is brought up to it.
 
 ### Validator
 
