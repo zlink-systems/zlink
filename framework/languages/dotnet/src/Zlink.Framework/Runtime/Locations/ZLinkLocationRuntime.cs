@@ -540,7 +540,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                             _options.OwnerLeaseTtl,
                             operation.Token)
                         .AsTask()
-                        .WaitAsync(deadlineToken)
+                        .WaitAsync(operation.Token)
                         .ConfigureAwait(false);
                     if (claim is ZLinkOwnerLeaseClaimResult.Claimed claimed)
                     {
@@ -597,14 +597,13 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             }
             catch (OperationCanceledException exception)
             {
-                if (claimStarted && owner.Token is null
+                if (!deadlineToken.IsCancellationRequested
+                    && claimStarted && owner.Token is null
                     && claimFailure is null && rejectedClaim is null)
                 {
                     claimFailure = exception;
                     continue;
                 }
-                if (rejectedClaim is not null)
-                    throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
 
                 RecordLeaseFailure(
                     $"Owner lease renewal timeout after {_options.OwnerLeaseRenewTimeout}.");
@@ -665,6 +664,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         string ownerId,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var owner = await _store.ReadOwnerLeaseAsync(ownerId, cancellationToken)
             .AsTask()
             .WaitAsync(cancellationToken)
@@ -694,6 +694,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         string ownerId,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var owner = await _store.ReadOwnerLeaseAsync(ownerId, cancellationToken)
             .AsTask()
             .WaitAsync(cancellationToken)

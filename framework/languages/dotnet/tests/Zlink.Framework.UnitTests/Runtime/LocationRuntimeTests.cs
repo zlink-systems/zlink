@@ -90,10 +90,9 @@ public sealed class LocationRuntimeTests
     }
 
     [Fact]
-    public async Task NonCooperativeConfirmationRead_IsBoundedByTheOriginalRenewDeadline()
+    public async Task ClaimExhaustingTheRenewDeadline_DoesNotStartConfirmationRead()
     {
-        var store = new NonCooperativeConfirmationStore(
-            new ZLinkInMemoryLocationStore());
+        var store = new NonCooperativeClaimStore();
         var runtime = new ZLinkLocationRuntime(
             new ZLinkLocationOptions
             {
@@ -106,7 +105,7 @@ public sealed class LocationRuntimeTests
             .WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.False(renewed);
-        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(0, store.ReadCalls);
         Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromMilliseconds(500));
     }
 
@@ -394,15 +393,25 @@ public sealed class LocationRuntimeTests
     {
         var inner = new ZLinkInMemoryLocationStore();
         var store = new CancelAfterCommittedClaimStore(inner);
-        var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), store);
+        var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions
+            {
+                OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(1),
+                OwnerLeaseRenewInterval = TimeSpan.FromHours(1)
+            },
+            store);
         using var cancellation = new CancellationTokenSource();
 
         var start = runtime.StartAsync(
             RoutingId.From("cancelled-claim-node"), cancellation.Token).AsTask();
         await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var startedAt = Stopwatch.GetTimestamp();
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => start.WaitAsync(TimeSpan.FromMilliseconds(500)));
+        Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromMilliseconds(500));
+        Assert.Equal(1, store.ReadCalls);
         Assert.Equal(1, store.ReleaseCalls);
         Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
             await inner.ReadOwnerLeaseAsync(store.ClaimOwnerId!));
@@ -432,7 +441,7 @@ public sealed class LocationRuntimeTests
 
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => start.WaitAsync(TimeSpan.FromSeconds(1)));
-        Assert.Same(store.ClaimCancellation, error);
+        Assert.True(error.CancellationToken.IsCancellationRequested);
         Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromMilliseconds(500));
         Assert.Equal(1, store.ReleaseCalls);
         Assert.Contains("cleanup failed", runtime.LastError, StringComparison.OrdinalIgnoreCase);
@@ -703,6 +712,9 @@ public sealed class LocationRuntimeTests
     private sealed class CancelAfterCommittedClaimStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
+        private readonly TaskCompletionSource<ZLinkOwnerLeaseClaimResult> _claim =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCalls;
         private int _releaseCalls;
         private int _renewCalls;
 
@@ -713,6 +725,8 @@ public sealed class LocationRuntimeTests
 
         public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
 
+        public int ReadCalls => Volatile.Read(ref _readCalls);
+
         public int RenewCalls => Volatile.Read(ref _renewCalls);
 
         public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
@@ -721,24 +735,18 @@ public sealed class LocationRuntimeTests
             CancellationToken cancellationToken = default)
         {
             ClaimOwnerId = ownerId;
+            _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
             ClaimStarted.TrySetResult();
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
-                throw;
-            }
-
-            throw new InvalidOperationException("The claim wait completed unexpectedly.");
+            return await _claim.Task;
         }
 
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
             string ownerId,
-            CancellationToken cancellationToken = default) =>
-            inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _readCalls);
+            return inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+        }
 
         public override ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
             ZLinkLocationOwnerToken token,
@@ -786,23 +794,20 @@ public sealed class LocationRuntimeTests
             inner.ReleaseOwnerLeaseAsync(token, cancellationToken);
     }
 
-    private sealed class NonCooperativeConfirmationStore(
-        IZLinkLocationRepository inner) : ZLinkLocationStoreTestDouble
+    private sealed class NonCooperativeClaimStore : ZLinkLocationStoreTestDouble
     {
+        private readonly TaskCompletionSource<ZLinkOwnerLeaseClaimResult> _claim =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<ZLinkOwnerLeaseReadResult> _read =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _readCalls;
 
         public int ReadCalls => Volatile.Read(ref _readCalls);
 
-        public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+        public override ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
             string ownerId,
             TimeSpan leaseTtl,
-            CancellationToken cancellationToken = default)
-        {
-            _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
-            throw new TimeoutException("claim response was lost");
-        }
+            CancellationToken cancellationToken = default) => new(_claim.Task);
 
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
             string ownerId,
@@ -816,6 +821,8 @@ public sealed class LocationRuntimeTests
     private sealed class CancelAfterCommittedClaimWithHangingReleaseStore(
         IZLinkLocationRepository inner) : ZLinkLocationStoreTestDouble
     {
+        private readonly TaskCompletionSource<ZLinkOwnerLeaseClaimResult> _claim =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<ZLinkOwnerLeaseReleaseResult> _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _releaseCalls;
@@ -825,8 +832,6 @@ public sealed class LocationRuntimeTests
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         public string? ClaimOwnerId { get; private set; }
-
-        public OperationCanceledException? ClaimCancellation { get; private set; }
 
         public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
 
@@ -838,21 +843,9 @@ public sealed class LocationRuntimeTests
             CancellationToken cancellationToken = default)
         {
             ClaimOwnerId = ownerId;
+            _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
             ClaimStarted.TrySetResult();
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
-                ClaimCancellation = new OperationCanceledException(
-                    "original claim cancellation",
-                    cancellationToken);
-                throw ClaimCancellation;
-            }
-
-            throw new InvalidOperationException("The claim wait completed unexpectedly.");
+            return await _claim.Task;
         }
 
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
