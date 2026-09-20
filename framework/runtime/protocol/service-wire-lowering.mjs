@@ -99,6 +99,7 @@ const CONDITIONAL_FALSE_BEHAVIOR = {
   decoder: "consume-no-bytes",
 };
 const INTEGER_WIDTHS = Object.freeze({ u8: 1, u16: 2, u32: 4, u64: 8, i64: 8 });
+const SINGLE_ARRAY_REPRESENTATION_CEILING = 2 ** 31 - 1;
 const OPERATION_KINDS = Object.freeze([
   "integer",
   "enum",
@@ -298,6 +299,20 @@ function encodedLimitOperation(maximumEncodedBytes, kind) {
     includes,
     applications: ["encode", "decode"],
     exceeded: "protocol-error",
+  };
+}
+
+function representationCapacity(declaredMaximumBytes) {
+  return {
+    declaredMaximumBytes,
+    representationCeiling: SINGLE_ARRAY_REPRESENTATION_CEILING,
+    requiredThroughBytes: Math.min(
+      declaredMaximumBytes,
+      SINGLE_ARRAY_REPRESENTATION_CEILING,
+    ),
+    applications: ["encode", "decode"],
+    aboveDeclaredMaximum: "protocol-error",
+    aboveRepresentationCeiling: "capacity-error",
   };
 }
 
@@ -535,10 +550,7 @@ function typeOperations(type, node, model, runtimePredicates) {
       ...(hasOwn(node, "zeroLengthMeaning")
         ? { zeroLengthMeaning: node.zeroLengthMeaning }
         : {}),
-      encodeCapacity: {
-        throughMaximumBytes: node.maximumBytes,
-        implementationLimitBelowMaximum: "forbidden",
-      },
+      encodeCapacity: representationCapacity(node.maximumBytes),
     }];
     if (hasOwn(node, "runtimeMaximumBytes")) {
       operations.push(negotiatedBoundOperation(node.runtimeMaximumBytes, "content-bytes"));
@@ -1108,6 +1120,15 @@ function assertLoweringCoverage(schema, ir) {
         errors.push(`type:${source.name}: strict UTF-8 rules did not reach operations`);
       }
     }
+    if (source.kind === "length-prefixed-text" || source.kind === "length-prefixed-bytes") {
+      const lengthPrefixed = lowered.operations.find(
+        (operation) => operation.op === "length-prefixed",
+      );
+      if (JSON.stringify(lengthPrefixed?.encodeCapacity)
+          !== JSON.stringify(representationCapacity(lowered.maximumBytes))) {
+        errors.push(`type:${source.name}: representation capacity did not reach operations`);
+      }
+    }
     if (source.kind === "conditional-union") {
       const union = lowered.operations.find((operation) => operation.op === "conditional-union");
       if (union?.encode?.discriminatorAgreement !== "required"
@@ -1599,8 +1620,12 @@ function runSelfTests(schemaPath) {
   assert.deepEqual(
     types.get("application-payload-bytes").operations[0].encodeCapacity,
     {
-      throughMaximumBytes: 4294966774,
-      implementationLimitBelowMaximum: "forbidden",
+      declaredMaximumBytes: 4294966774,
+      representationCeiling: 2147483647,
+      requiredThroughBytes: 2147483647,
+      applications: ["encode", "decode"],
+      aboveDeclaredMaximum: "protocol-error",
+      aboveRepresentationCeiling: "capacity-error",
     },
   );
   assert.deepEqual(

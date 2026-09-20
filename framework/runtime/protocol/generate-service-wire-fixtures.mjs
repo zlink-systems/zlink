@@ -578,10 +578,13 @@ function buildOperationCases(schema) {
     ]);
   };
   const payloadMiB = 1024 * 1024;
-  const largePayloadRecipe = byteRecipe([
-    unsignedBytes(schema, "u32", payloadMiB),
-    { byte: 0x7f, count: payloadMiB },
+  const payload16MiB = 16 * payloadMiB;
+  const payloadRecipe = (payloadBytes) => byteRecipe([
+    unsignedBytes(schema, "u32", payloadBytes),
+    { byte: 0x7f, count: payloadBytes },
   ]);
+  const largePayloadRecipe = payloadRecipe(payloadMiB);
+  const largerPayloadRecipe = payloadRecipe(payload16MiB);
   const logicalBytes = encodeGoldenBody(logical.name, logicalFixture.decoded);
   const splitPoints = [1, Math.floor(logicalBytes.length / 2), logicalBytes.length - 1];
   const logicalChunks = splitPoints.reduce((result, point, index) => {
@@ -653,13 +656,24 @@ function buildOperationCases(schema) {
     {
       name: "length-prefixed-large-payload",
       operation: "length-prefixed",
-      rule: "encode-through-declared-maximum",
+      rule: "within-representation-capacity",
       expect: "accept",
       surface: surface("type", "application-payload-bytes"),
       byteRecipe: largePayloadRecipe,
       directions: ["encode", "decode"],
       context: { effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: payloadMiB },
       input: { repeatByte: 0x7f, count: payloadMiB },
+    },
+    {
+      name: "length-prefixed-16mib-payload",
+      operation: "length-prefixed",
+      rule: "within-representation-capacity",
+      expect: "accept",
+      surface: surface("type", "application-payload-bytes"),
+      byteRecipe: largerPayloadRecipe,
+      directions: ["encode", "decode"],
+      context: { effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: payload16MiB },
+      input: { repeatByte: 0x7f, count: payload16MiB },
     },
   ];
   return [

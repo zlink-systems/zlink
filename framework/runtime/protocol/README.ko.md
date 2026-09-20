@@ -78,6 +78,8 @@ Conditional-union case는 field operation 뒤에 owner path가 있는 `constrain
 `sorted`·`unique` 제약은 comparison별 key를 명시하며 UTF-8 key에서는 length prefix를 제외하고,
 authority key에서는 generation과 객체 wire prefix를 제외한 canonical authority key를 사용한다.
 `encoded-limit`는 전체 encoded value를 측정하며 TLV에서는 `totalLength` 자체를 포함한다.
+`encodeCapacity`는 선언 상한과 단일 배열 표현 상한 `2^31-1` 중 작은 값까지 encode·decode하도록
+요구한다. 선언 상한 초과는 protocol error이고 표현 상한 초과는 capacity error이다.
 Conditional-union encoder는 선택한 variant와 wire·enclosing·context discriminator의 일치를 검사한다.
 Text validation은 BOM을 보존하고 overlong UTF-8·surrogate code point와 encode 입력의 lone surrogate를
 거부한다. Durable operation 순서는 checksum 검증 뒤에만 body를 해석하도록 고정한다.
@@ -86,6 +88,8 @@ Text validation은 BOM을 보존하고 overlong UTF-8·surrogate code point와 e
 유효한 협상값과 실제 content 또는 encoded byte 수를 비교한다.
 Fixture catalog v3는 닫힌 25개 operation마다 정상 경계 accept와 단일 규칙 위반 reject를 한 쌍 이상
 포함하며, encode 전용 invalid DTO와 큰 입력은 `directions`와 compact byte recipe로 표현한다.
+현재 생성되는 logical-stream API는 완성된 단일 배열을 받는다. Chunk 단위 incremental decode는
+#778에서 구현하며 W-3 adapter 교체의 선행 조건이다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는

@@ -14,6 +14,9 @@ encoder/decoder for durable logical-stream bytes, then retain the current
 chunking, checksum, and storage layers unchanged.  Keep the hand codec as the
 byte-equivalence oracle until all language fixtures pass.
 
+The currently generated logical-stream API accepts one complete array.  Chunk-level
+incremental decoding is deferred to #778 and is a prerequisite for W-3 adapter replacement.
+
 Stage 4 replaces adapters only after the final renderer output is present and
 its language-local conformance fixture is green.  Replace `actorJoin(28)` first,
 then `relocation-envelope-v1`, and only then move the remaining command and

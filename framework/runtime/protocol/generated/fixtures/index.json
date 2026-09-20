@@ -1558,7 +1558,7 @@
     {
       "name": "length-prefixed-large-payload",
       "operation": "length-prefixed",
-      "rule": "encode-through-declared-maximum",
+      "rule": "within-representation-capacity",
       "expect": "accept",
       "surface": {
         "format": "type",
@@ -1589,6 +1589,42 @@
       "input": {
         "repeatByte": 127,
         "count": 1048576
+      }
+    },
+    {
+      "name": "length-prefixed-16mib-payload",
+      "operation": "length-prefixed",
+      "rule": "within-representation-capacity",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "byteRecipe": {
+        "segments": [
+          {
+            "hex": "01000000"
+          },
+          {
+            "repeatByte": 127,
+            "count": 16777216
+          }
+        ],
+        "encodedBytes": 16777220,
+        "sha256": "d2acca68f8db47c2825d7c5920ad94e8ecca8a16fe191fd97167fb34272f4fc1"
+      },
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 16777216
+      },
+      "input": {
+        "repeatByte": 127,
+        "count": 16777216
       }
     },
     {
