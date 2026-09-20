@@ -103,7 +103,9 @@ std::vector<std::vector<std::uint8_t>> bytes(
         }
         if (result.size() != recipe.at("encodedBytes").get<std::size_t>())
             throw std::runtime_error("byte recipe size mismatch");
-        return {std::move(result)};
+        std::vector<std::vector<std::uint8_t>> frames;
+        frames.emplace_back(std::move(result));
+        return frames;
     }
     if (item.contains("chunksHex")) {
         std::vector<std::uint8_t> result;
@@ -111,7 +113,9 @@ std::vector<std::vector<std::uint8_t>> bytes(
             const auto part = from_hex(chunk.get<std::string>());
             result.insert(result.end(), part.begin(), part.end());
         }
-        return {std::move(result)};
+        std::vector<std::vector<std::uint8_t>> frames;
+        frames.emplace_back(std::move(result));
+        return frames;
     }
     if (item.contains("hex"))
         return {from_hex(item.at("hex").get<std::string>())};
@@ -478,7 +482,7 @@ int main()
             }
         }
     }
-    if (index.at("version") != 3 || acceptedCases != 28 || rejectedCases != 49
+    if (index.at("version") != 3 || acceptedCases != 29 || rejectedCases != 49
         || boundaryPairs.size() != 25) {
         std::cerr << "fixture catalog v3 coverage mismatch: accept=" << acceptedCases
                   << ", reject=" << rejectedCases << ", boundary-pairs=" << boundaryPairs.size() << '\n';

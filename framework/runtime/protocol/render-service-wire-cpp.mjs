@@ -637,8 +637,15 @@ function emitEnumCodec(owner, operation) {
 function emitLengthCodec(owner, operation) {
   const n = identifier(owner.name);
   const validateText = owner.operations.find((entry) => entry.op === "text-validation");
-  if (operation.encodeCapacity.throughMaximumBytes !== operation.maximumBytes
-      || operation.encodeCapacity.implementationLimitBelowMaximum !== "forbidden") {
+  const capacity = operation.encodeCapacity;
+  if (capacity.declaredMaximumBytes !== operation.maximumBytes
+      || typeof capacity.representationCeiling !== "number"
+      || typeof capacity.requiredThroughBytes !== "number"
+      || capacity.applications.length !== 2
+      || !capacity.applications.includes("encode")
+      || !capacity.applications.includes("decode")
+      || capacity.aboveDeclaredMaximum !== "protocol-error"
+      || capacity.aboveRepresentationCeiling !== "capacity-error") {
     throw new Error(`${owner.name}: unsupported length-prefixed encode capacity`);
   }
   if (validateText && (validateText.encoding !== "utf-8"
@@ -663,7 +670,9 @@ function emitLengthCodec(owner, operation) {
     : `std::span<const std::uint8_t>(${encodedValue})`;
   const decodeNegotiated = negotiatedBoundChecks(owner, "decode", { "content-bytes": "size" });
   const encodeNegotiated = negotiatedBoundChecks(owner, "encode", { "content-bytes": "size" });
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.lengthType)} length{};\nif (const auto error = ${internalDecode(operation.lengthType)}(reader, length); error != error_code::ok) return error;\nconst auto size = static_cast<std::uint64_t>(length.value);\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${decodeNegotiated}\n${absent ? "if (size == 0) { out.value.reset(); return error_code::ok; }" : ""}\nstd::span<const std::uint8_t> bytes;\nif (const auto error = reader.take(size, bytes); error != error_code::ok) return error;\n${assign}\n${validateText ? `if (!validUtf8(${decodedValue}, ${validateText.nul === "forbidden" ? "true" : "false"})) return error_code::utf8;` : ""}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto size = static_cast<std::uint64_t>(${absent ? "value.value ? value.value->size() : 0" : "value.value.size()"});\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${encodeNegotiated}\n${textCheck}\n${typeName(operation.lengthType)} length{static_cast<${valueCppType(operation.lengthType)}>(size)};\nif (const auto error = ${internalEncode(operation.lengthType)}(writer, length); error != error_code::ok) return error;\n${absent ? "if (!value.value) return error_code::ok;" : ""}\nwriter.bytes(${byteView});\nreturn error_code::ok;\n}`;
+  const lengthWidth = primaryOperation(types.get(operation.lengthType.$ref)).width;
+  const capacityCheck = `if (size > ${unsignedLiteral(capacity.requiredThroughBytes)}) {\nif (size > ${unsignedLiteral(capacity.declaredMaximumBytes)}) return error_code::range;\nif (size > ${unsignedLiteral(capacity.representationCeiling)}) return error_code::capacity;\n}`;
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.lengthType)} length{};\nif (const auto error = ${internalDecode(operation.lengthType)}(reader, length); error != error_code::ok) return error;\nconst auto size = static_cast<std::uint64_t>(length.value);\nif (size < ${unsignedLiteral(operation.minimumBytes)}) return error_code::range;\n${capacityCheck}\n${decodeNegotiated}\n${absent ? "if (size == 0) { out.value.reset(); return error_code::ok; }" : ""}\nstd::span<const std::uint8_t> bytes;\nif (const auto error = reader.take(size, bytes); error != error_code::ok) return error;\n${assign}\n${validateText ? `if (!validUtf8(${decodedValue}, ${validateText.nul === "forbidden" ? "true" : "false"})) return error_code::utf8;` : ""}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto size = static_cast<std::uint64_t>(${absent ? "value.value ? value.value->size() : 0" : "value.value.size()"});\nif (size < ${unsignedLiteral(operation.minimumBytes)}) return error_code::range;\n${capacityCheck}\n${encodeNegotiated}\n${textCheck}\nwriter.data.reserve(writer.data.size() + ${lengthWidth}u + static_cast<std::size_t>(size));\n${typeName(operation.lengthType)} length{static_cast<${valueCppType(operation.lengthType)}>(size)};\nif (const auto error = ${internalEncode(operation.lengthType)}(writer, length); error != error_code::ok) return error;\n${absent ? "if (!value.value) return error_code::ok;" : ""}\nwriter.bytes(${byteView});\nreturn error_code::ok;\n}`;
 }
 
 function emitStructCodec(owner, operation) {
@@ -1045,6 +1054,7 @@ enum class error_code : std::uint8_t {
     predicate,
     checksum,
     limit,
+    capacity,
     context,
 };
 
