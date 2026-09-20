@@ -11,6 +11,7 @@ const { SERVICE_WIRE_REQUIRED_CAPABILITY } = require('../../packages/framework/d
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const meshWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const { decodeActorJoin28 } = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
+const { randomOperationId } = require('../../packages/framework/dist/runtime/locations/creation-operation-id');
 
 const operationKinds = ['userSpotCreate', 'userSpotClose', 'actorCreate', 'streamBind', 'actorJoin'];
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -83,7 +84,7 @@ function fixture(request) {
       if (kind === 'userSpotCreate') return runtime.requestUserSpotCreate('target-node',
         { ...common, spotId: 'spot', stableType: 'Room', reservation }, timeoutMs);
       if (kind === 'actorCreate') return runtime.requestActorCreate('target-node',
-        { ...common, actorId: 'actor', stableType: 'Player', reservation }, timeoutMs);
+        { ...common, operation: randomOperationId(), actorId: 'actor', stableType: 'Player', reservation }, timeoutMs);
       if (kind === 'userSpotClose') return runtime.requestUserSpotClose('target-node', { ...common,
         target: { spotId: 'spot', objectGeneration: 3n, targetNodeRid: 'target-node',
           targetNodeGeneration: 7n, authorityOwnerGeneration: 5n, expectedStoreVersion: 'version' }
