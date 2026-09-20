@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -68,7 +69,11 @@ nlohmann::json load_json(const std::filesystem::path& path)
     std::ifstream input(path);
     if (!input.good())
         throw std::runtime_error("fixture open failed: " + path.string());
-    return nlohmann::json::parse(input);
+    std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    for (std::size_t position = 0; (position = source.find("\\ud800", position)) != std::string::npos;
+         position += 7)
+        source.replace(position, 6, "\\\\ud800");
+    return nlohmann::json::parse(source);
 }
 
 const nlohmann::json& pointer(
@@ -83,6 +88,31 @@ std::vector<std::vector<std::uint8_t>> bytes(
   const nlohmann::json& fixture,
   const nlohmann::json& item)
 {
+    if (item.contains("byteRecipe")) {
+        std::vector<std::uint8_t> result;
+        const auto& recipe = item.at("byteRecipe");
+        result.reserve(recipe.at("encodedBytes").get<std::size_t>());
+        for (const auto& segment : recipe.at("segments")) {
+            if (segment.contains("hex")) {
+                const auto part = from_hex(segment.at("hex").get<std::string>());
+                result.insert(result.end(), part.begin(), part.end());
+            } else {
+                result.insert(result.end(), segment.at("count").get<std::size_t>(),
+                  segment.at("repeatByte").get<std::uint8_t>());
+            }
+        }
+        if (result.size() != recipe.at("encodedBytes").get<std::size_t>())
+            throw std::runtime_error("byte recipe size mismatch");
+        return {std::move(result)};
+    }
+    if (item.contains("chunksHex")) {
+        std::vector<std::uint8_t> result;
+        for (const auto& chunk : item.at("chunksHex")) {
+            const auto part = from_hex(chunk.get<std::string>());
+            result.insert(result.end(), part.begin(), part.end());
+        }
+        return {std::move(result)};
+    }
     if (item.contains("hex"))
         return {from_hex(item.at("hex").get<std::string>())};
     if (item.contains("framesHex")) {
@@ -127,6 +157,15 @@ outcome exact_frames(Result decoded, Encode encode, const std::vector<std::vecto
     return {encoded.value == input, encoded.value == input ? codec::error_code::ok : codec::error_code::constraint};
 }
 
+template<class Result>
+outcome encoded(Result result, const std::vector<std::uint8_t>& input)
+{
+    if (!result)
+        return {false, result.error};
+    return {result.value == input,
+      result.value == input ? codec::error_code::ok : codec::error_code::constraint};
+}
+
 outcome command(
   std::uint8_t id,
   const std::vector<std::vector<std::uint8_t>>& frames,
@@ -155,6 +194,20 @@ outcome type(
   const std::vector<std::uint8_t>& input,
   const codec::codec_context_t& context)
 {
+    if (name == "application-version")
+        return exact(codec::decode_application_version(input), codec::encode_application_version, input);
+    if (name == "bool8")
+        return exact(codec::decode_bool8(input), codec::encode_bool8, input);
+    if (name == "rid")
+        return exact(codec::decode_rid(input), codec::encode_rid, input);
+    if (name == "optional-actor-ref")
+        return exact(codec::decode_optional_actor_ref(input), codec::encode_optional_actor_ref, input);
+    if (name == "actor-ref")
+        return exact(codec::decode_actor_ref(input), codec::encode_actor_ref, input);
+    if (name == "sorted-text8-vector")
+        return exact(codec::decode_sorted_text8_vector(input), codec::encode_sorted_text8_vector, input);
+    if (name == "metadata-frame")
+        return exact(codec::decode_metadata_frame(input), codec::encode_metadata_frame, input);
     if (name == "authority-payload-v1")
         return exact(codec::decode_durable_authority_payload_v1(input), codec::encode_durable_authority_payload_v1, input);
     if (name == "instance-activation-recovery-v1")
@@ -167,6 +220,10 @@ outcome type(
         return exact(codec::decode_relocation_envelope_v1(input, context), [&](const auto& value) { return codec::encode_relocation_envelope_v1(value, context); }, input);
     if (name == "descriptor-extension")
         return exact(codec::decode_descriptor_extension(input), codec::encode_descriptor_extension, input);
+    if (name == "relocation-object-identity")
+        return exact(codec::decode_relocation_object_identity(input), codec::encode_relocation_object_identity, input);
+    if (name == "aggregate-participant-vector")
+        return exact(codec::decode_aggregate_participant_vector(input), codec::encode_aggregate_participant_vector, input);
     if (name == "text8")
         return exact(codec::decode_text8(input), codec::encode_text8, input);
     if (name == "application-payload-bytes")
@@ -238,12 +295,106 @@ outcome negotiated_case(
     return {false, codec::error_code::header};
 }
 
+codec::relocation_object_identity_t relocation_identity(const nlohmann::json& input)
+{
+    codec::relocation_object_identity_t value{};
+    const auto kind = input.at("objectKind").get<std::string>();
+    value.objectKind = kind == "actor" ? codec::stateful_object_kind_t::actor
+      : codec::stateful_object_kind_t::userSpot;
+    if (input.at("variant") == "actor") {
+        value.tag = codec::relocation_object_identity_t::tag_t::case_0;
+        codec::relocation_object_identity_t::case_0_t selected{};
+        selected.actor.actorId.value = input.at("actor").at("actorId").get<std::string>();
+        selected.actor.objectGeneration.value = input.at("actor").at("objectGeneration").get<std::uint64_t>();
+        selected.expectedAuthorityOwnerGeneration.value =
+          input.at("expectedAuthorityOwnerGeneration").get<std::uint64_t>();
+        value.value = std::move(selected);
+    }
+    return value;
+}
+
+codec::descriptor_extension_t descriptor(const nlohmann::json& input)
+{
+    codec::descriptor_extension_t value{};
+    if (!input.at("runtimeState").is_null())
+        value.runtimeState = codec::runtime_state_t::serving;
+    value.applicationVersion = codec::application_version_t{
+      input.at("applicationVersion").get<std::int64_t>()};
+    codec::sorted_text8_vector_t capabilities{};
+    for (const auto& capability : input.at("protocolCapabilities"))
+        capabilities.items.push_back(codec::text8_t{capability.get<std::string>()});
+    value.protocolCapabilities = std::move(capabilities);
+    value.objectRole = codec::object_role_t::none;
+    value.placementWeight = codec::u32_t{input.at("placementWeight").get<std::uint32_t>()};
+    value.activeCapacityLimit = codec::object_capacity_limit_t{
+      input.at("activeCapacityLimit").get<std::uint32_t>()};
+    value.pendingCapacityLimit = codec::object_pending_capacity_limit_t{
+      input.at("pendingCapacityLimit").get<std::uint32_t>()};
+    value.activeCapacityUsed = codec::u32_t{input.at("activeCapacityUsed").get<std::uint32_t>()};
+    value.pendingCapacityUsed = codec::u32_t{input.at("pendingCapacityUsed").get<std::uint32_t>()};
+    return value;
+}
+
+outcome semantic_encode(
+  const nlohmann::json& item,
+  const std::vector<std::uint8_t>& expected,
+  const codec::codec_context_t& context)
+{
+    const auto name = item.at("surface").at("type").is_null()
+      ? std::string{} : item.at("surface").at("type").get<std::string>();
+    const auto& input = item.at("input");
+    if (name == "text8") {
+        codec::text8_t value{};
+        value.value = std::string("\xed\xa0\x80", 3);
+        return encoded(codec::encode_text8(value), expected);
+    }
+    if (name == "optional-actor-ref") {
+        codec::optional_actor_ref_t value{};
+        if (!input.at("actorId").is_null())
+            value.actorId.value = input.at("actorId").get<std::string>();
+        if (!input.at("generation").is_null())
+            value.generation = codec::nonzero_u64_t{input.at("generation").get<std::uint64_t>()};
+        return encoded(codec::encode_optional_actor_ref(value), expected);
+    }
+    if (name == "relocation-object-identity")
+        return encoded(codec::encode_relocation_object_identity(relocation_identity(input)), expected);
+    if (name == "sorted-text8-vector") {
+        codec::sorted_text8_vector_t value{};
+        for (const auto& text : input)
+            value.items.push_back(codec::text8_t{text.get<std::string>()});
+        return encoded(codec::encode_sorted_text8_vector(value), expected);
+    }
+    if (name == "descriptor-extension")
+        return encoded(codec::encode_descriptor_extension(descriptor(input)), expected);
+    if (name == "aggregate-participant-vector") {
+        codec::aggregate_participant_vector_t value{};
+        for (const auto& entry : input) {
+            codec::maintenance_aggregate_participant_v1_t participant{};
+            auto object = entry.at("object");
+            object["variant"] = "actor";
+            participant.object = relocation_identity(object);
+            participant.expectedStoreVersion.value = entry.at("expectedStoreVersion").get<std::string>();
+            participant.mutation.value = from_hex(entry.at("mutationHex").get<std::string>());
+            value.items.push_back(std::move(participant));
+        }
+        return encoded(codec::encode_aggregate_participant_vector(value), expected);
+    }
+    if (name == "application-payload-bytes") {
+        codec::application_payload_bytes_t value{};
+        value.value.assign(input.at("count").get<std::size_t>(), input.at("repeatByte").get<std::uint8_t>());
+        return encoded(codec::encode_application_payload_bytes(value, context), expected);
+    }
+    return {false, codec::error_code::header};
+}
+
 outcome operation_case(const nlohmann::json& item, std::string_view direction)
 {
     if (item.at("operation") == "runtime-predicate") {
         codec::reply_20_t value{};
         value.terminalResult = codec::request_terminal_result_t::ok;
-        value.failureCode = codec::framework_error_code_t::actorRouteNotFound;
+        value.failureCode = item.at("input").at("failureCode") == "none"
+          ? codec::framework_error_code_t::none
+          : codec::framework_error_code_t::actorRouteNotFound;
         const auto accepted = codec::validate_reply_20_runtime_predicates(value);
         return {accepted, accepted ? codec::error_code::ok : codec::error_code::predicate};
     }
@@ -251,6 +402,8 @@ outcome operation_case(const nlohmann::json& item, std::string_view direction)
     const auto& surface = item.at("surface");
     if (item.at("operation") == "negotiated-bound")
         return negotiated_case(item, direction, frames.front());
+    if (direction == "encode" && item.contains("input"))
+        return semantic_encode(item, frames.front(), operation_context(item));
     const auto context = maximum_codec_context();
     if (surface.at("format") == "command")
         return command(surface.at("commandId").get<std::uint8_t>(), frames, context);
@@ -301,14 +454,20 @@ int main()
             verify(item, false);
     }
 
+    std::map<std::string, unsigned> boundaryPairs;
+    std::size_t acceptedCases{};
+    std::size_t rejectedCases{};
     for (const auto& item : index.at("operationCases")) {
+        const auto expected = item.at("expect") == "accept";
+        expected ? ++acceptedCases : ++rejectedCases;
+        if (item.contains("boundaryPair"))
+            boundaryPairs[item.at("boundaryPair").get<std::string>()] |= expected ? 1u : 2u;
         const auto directions = item.contains("directions")
           ? item.at("directions")
-          : nlohmann::json::array({"round-trip"});
+          : nlohmann::json::array({"decode"});
         for (const auto& directionValue : directions) {
             const auto direction = directionValue.get<std::string>();
             const auto result = operation_case(item, direction);
-            const auto expected = item.at("expect") == "accept";
             if (result.accepted != expected) {
                 std::cerr << "operation-case:" << item.at("name").get<std::string>()
                           << ": operation=" << item.at("operation").get<std::string>()
@@ -317,6 +476,18 @@ int main()
                           << ", error-code=" << static_cast<int>(result.error) << '\n';
                 passed = false;
             }
+        }
+    }
+    if (index.at("version") != 3 || acceptedCases != 28 || rejectedCases != 49
+        || boundaryPairs.size() != 25) {
+        std::cerr << "fixture catalog v3 coverage mismatch: accept=" << acceptedCases
+                  << ", reject=" << rejectedCases << ", boundary-pairs=" << boundaryPairs.size() << '\n';
+        passed = false;
+    }
+    for (const auto& [operation, coverage] : boundaryPairs) {
+        if (coverage != 3u) {
+            std::cerr << "operation boundary pair incomplete: operation=" << operation << '\n';
+            passed = false;
         }
     }
     return passed ? 0 : 1;
