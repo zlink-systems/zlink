@@ -409,9 +409,27 @@ class other_test_location_repository_t : public test_location_repository_t
 {
 };
 
-class failing_owner_lease_store_t final : public test_location_repository_t
+enum class owner_lease_confirmation_mode_t
+{
+    same_lease,
+    missing,
+    transport_failure
+};
+
+class renew_failure_owner_lease_store_t final : public test_location_repository_t
 {
   public:
+    explicit renew_failure_owner_lease_store_t (
+      owner_lease_confirmation_mode_t confirmation_mode) :
+        _confirmation_mode (confirmation_mode)
+    {
+    }
+
+    std::size_t confirmation_read_count () const noexcept
+    {
+        return _confirmation_read_count.load (std::memory_order_relaxed);
+    }
+
     zlink::framework::task_t<
       zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (
@@ -425,6 +443,29 @@ class failing_owner_lease_store_t final : public test_location_repository_t
             zlink::framework::framework_error_kind_t::internal_failure,
             "owner lease renewal failed"));
     }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        _confirmation_read_count.fetch_add (1, std::memory_order_relaxed);
+        if (_confirmation_mode == owner_lease_confirmation_mode_t::missing) {
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::success (
+                zlink::framework::owner_lease_read_result_t{
+                  zlink::framework::owner_lease_missing_t{}}));
+        }
+        if (_confirmation_mode == owner_lease_confirmation_mode_t::transport_failure) {
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable,
+                "owner lease confirmation read failed"));
+        }
+        return test_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
+
+  private:
+    owner_lease_confirmation_mode_t _confirmation_mode;
+    std::atomic_size_t _confirmation_read_count{0};
 };
 
 class fake_location_runtime_query_t final : public location_runtime_query_t
@@ -2473,9 +2514,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsHealthyStoreStatu
     EXPECT_FALSE (status.last_error.has_value ());
 }
 
-TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsStoreFailureAsStatus)
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      RuntimeQueryConvergesHealthyWhenRenewFailureConfirmsSameLease)
 {
-    failing_owner_lease_store_t store;
+    renew_failure_owner_lease_store_t store (
+      owner_lease_confirmation_mode_t::same_lease);
     location_options_t options;
     location_runtime_t runtime (store, options, "owner-a");
     runtime.start (zlink::routing_id_t::from ("node-a"));
@@ -2484,11 +2527,41 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsStoreFailureAsSta
 
     const auto status = query.get_status ().result ().value ();
 
-    EXPECT_FALSE (status.store_healthy);
-    EXPECT_FALSE (status.owner_lease_healthy);
-    ASSERT_TRUE (status.last_error.has_value ());
-    EXPECT_NE (std::string::npos, status.last_error->find ("owner lease renewal failed"));
+    EXPECT_TRUE (status.store_healthy);
+    EXPECT_TRUE (status.owner_lease_healthy);
+    EXPECT_FALSE (status.last_error.has_value ());
+    EXPECT_EQ (1u, store.confirmation_read_count ());
     runtime.stop ();
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      RuntimeQueryReportsStoreFailureWhenRenewConfirmationFails)
+{
+    for (const auto mode : {owner_lease_confirmation_mode_t::missing,
+                            owner_lease_confirmation_mode_t::transport_failure}) {
+        SCOPED_TRACE (mode == owner_lease_confirmation_mode_t::missing
+                        ? "confirmation missing"
+                        : "confirmation transport failure");
+        renew_failure_owner_lease_store_t store (mode);
+        location_options_t options;
+        location_runtime_t runtime (store, options, "owner-a");
+        runtime.start (zlink::routing_id_t::from ("node-a"));
+        runtime.renew_owner_lease_once ();
+        store_location_runtime_query_t query (store, runtime, options);
+
+        const auto status = query.get_status ().result ().value ();
+
+        EXPECT_FALSE (status.store_healthy);
+        EXPECT_FALSE (status.owner_lease_healthy);
+        EXPECT_EQ (1u, store.confirmation_read_count ());
+        ASSERT_TRUE (status.last_error.has_value ());
+        EXPECT_NE (std::string::npos,
+                   status.last_error->find (
+                     mode == owner_lease_confirmation_mode_t::missing
+                       ? "owner lease renewal failed"
+                       : "owner lease confirmation read failed"));
+        runtime.stop ();
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescriptors)
