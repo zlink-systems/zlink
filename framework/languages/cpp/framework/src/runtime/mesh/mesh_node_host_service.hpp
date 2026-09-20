@@ -98,7 +98,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
       const std::function<void (
         const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
       const override;
-    bool republish_after_store_recovery () noexcept;
+    bool republish_after_store_recovery ();
 
   private:
     struct actor_destroy_callback_gate_t;

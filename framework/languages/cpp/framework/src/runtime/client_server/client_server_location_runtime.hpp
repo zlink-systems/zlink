@@ -62,6 +62,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void stop () noexcept;
     bool empty () const noexcept;
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
+    bool republish_after_store_recovery ();
 
     client_server_channel_snapshot_t snapshot (
       std::string channel_name) const override;

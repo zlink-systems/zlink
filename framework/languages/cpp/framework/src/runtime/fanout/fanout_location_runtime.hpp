@@ -54,6 +54,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 
     void start ();
     void stop () noexcept;
+    bool republish_after_store_recovery ();
     bool empty () const noexcept;
 
     fanout_channel_snapshot_t snapshot (
@@ -74,7 +75,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 
     void start_publisher (
       const channel_snapshot_t &channel,
-      const location_owner_token_t &owner);
+      const std::optional<location_owner_token_t> &owner);
     void start_subscriber (
       const channel_snapshot_t &channel);
     void run ();
@@ -120,6 +121,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
     eventing::runtime_wake_timer_t _wake_timer;
     mutable std::mutex _gate;
+    std::mutex _descriptor_publish_mutex;
     std::map<std::string, std::unique_ptr<publisher_entry_t>>
       _publishers;
     std::map<std::string, std::unique_ptr<subscriber_entry_t>>

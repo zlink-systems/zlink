@@ -1280,13 +1280,12 @@ void public_host_runtime_t::configure_actor_join_operations (actor_join_operatio
 void public_host_runtime_t::configure_instance_spot_operations (
   std::shared_ptr<zlink::framework::location_repository_t> store,
   std::shared_ptr<stateful::relocation_store_port_t> relocations,
-  location_owner_token_t owner,
+  std::function<std::optional<location_owner_token_t> ()> owner,
   instance_spot_activation_materializer_t materializer)
 {
-    if (!store || !relocations || owner.owner_id.empty () || owner.lease_generation <= 0
-        || !materializer)
+    if (!store || !relocations || !owner || !materializer)
         throw std::invalid_argument ("Instance Spot operations require Location and Relocation "
-                                     "Stores, an owner lease, and a materializer");
+                                     "Stores, an owner lease resolver, and a materializer");
     _lifecycle_configuration_lane
       .run ([&] {
           if (_started)
@@ -1311,14 +1310,16 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
         return std::nullopt;
 
     std::shared_ptr<zlink::framework::location_repository_t> store;
-    location_owner_token_t instance_owner;
+    std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
     _lifecycle_configuration_lane
       .run ([&] {
           store = _user_spot_store;
-          instance_owner = _instance_spot_owner;
+          instance_owner_resolver = _instance_spot_owner;
       })
       .get ();
-    if (!store || instance_owner.owner_id.empty () || instance_owner.lease_generation <= 0)
+    const auto instance_owner =
+      instance_owner_resolver ? instance_owner_resolver () : std::nullopt;
+    if (!store || !instance_owner)
         return std::nullopt;
 
     const auto authority_key = spot_authority_key (spot_id);
@@ -1329,8 +1330,8 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
         || snapshot->allocation.stable_type != stable_type
         || snapshot->object_generation != object_generation
         || snapshot->authority_owner_generation != authority_owner_generation
-        || snapshot->allocation.target.owner.owner_id != instance_owner.owner_id
-        || snapshot->allocation.target.owner.lease_generation != instance_owner.lease_generation)
+        || snapshot->allocation.target.owner.owner_id != instance_owner->owner_id
+        || snapshot->allocation.target.owner.lease_generation != instance_owner->lease_generation)
         return std::nullopt;
 
     const auto local = status ();
@@ -1343,9 +1344,9 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
     const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
     if (!ready || ready->state != instance_spot_authority_state_t::ready
         || ready->stable_type != stable_type || ready->spot_id != spot_id
-        || ready->owner_id != instance_owner.owner_id
+        || ready->owner_id != instance_owner->owner_id
         || ready->owner_lease_generation
-             != static_cast<std::uint64_t> (instance_owner.lease_generation)
+             != static_cast<std::uint64_t> (instance_owner->lease_generation)
         || ready->mesh_name != snapshot->allocation.target.mesh_name
         || ready->node_rid.value () != snapshot->allocation.target.node_rid.value ()
         || ready->node_generation
@@ -3849,7 +3850,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     actor_join_operation_target_t actor_join_target;
     instance_spot_activation_materializer_t instance_materializer;
     std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
-    location_owner_token_t instance_owner;
+    std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
     std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver;
     std::function<void (const protocol::message_follow_notice_t &)> message_follow_handler;
     bound_session_operations_t bound_session_operations;
@@ -3863,7 +3864,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
           actor_join_target = _actor_join_target;
           instance_materializer = _instance_spot_materializer;
           instance_relocations = _instance_spot_relocations;
-          instance_owner = _instance_spot_owner;
+          instance_owner_resolver = _instance_spot_owner;
           session_route_owner_resolver = _session_route_owner_resolver;
           message_follow_handler = _message_follow_handler;
           bound_session_operations = _bound_session_operations;
@@ -4534,7 +4535,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (mailbox_record.parts.size () != expected_parts)
                         throw protocol::service_wire_error_t (
                           "Instance Spot activation has an invalid part count");
-                    if (!store || !instance_relocations || !instance_materializer) {
+                    const auto instance_owner =
+                      instance_owner_resolver ? instance_owner_resolver () : std::nullopt;
+                    if (!store || !instance_relocations || !instance_materializer
+                        || !instance_owner) {
                         (void) _transport->reply_instance_spot_activation (
                           mailbox_record, 105,
                           static_cast<std::uint32_t> (
@@ -4754,7 +4758,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (request.target.target_node_routing_id)
                           .to_string ()),
-                      request.target.target_node_generation, instance_owner};
+                      request.target.target_node_generation, *instance_owner};
                     const std::string creating = "zlink:instance-spot:creating:v1";
                     for (const auto value : creating)
                         reserve.creating_payload.push_back (
@@ -4802,9 +4806,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       .state = instance_spot_authority_state_t::ready,
                       .stable_type = request.target.stable_type,
                       .spot_id = request.target.spot_id,
-                      .owner_id = instance_owner.owner_id,
+                      .owner_id = instance_owner->owner_id,
                       .owner_lease_generation = static_cast<std::uint64_t> (
-                        instance_owner.lease_generation),
+                        instance_owner->lease_generation),
                       .mesh_name = request.target.mesh_name,
                       .node_rid = node_rid_t::from_string (
                         zlink::routing_id_t::from (

@@ -5,12 +5,14 @@
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <coroutine>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -347,6 +349,25 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return *_result;
     }
 
+    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout)
+    {
+        return result_for (timeout, {});
+    }
+
+    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
+                                           std::stop_token cancellation)
+    {
+        std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
+        std::unique_lock lock (_mutex);
+        if (!_ready.wait_for (lock, timeout, [&] {
+                return _result.has_value () || cancellation.stop_requested ();
+            })
+            || !_result) {
+            return std::nullopt;
+        }
+        return *_result;
+    }
+
     void on_completed (std::function<void (const result_t<T> &)> callback)
     {
         auto self = this->shared_from_this ();
@@ -511,6 +532,17 @@ template <typename T> class task_t
 
     const result_t<T> &result () const { return _state->result (); }
 
+    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout) const
+    {
+        return _state->result_for (timeout);
+    }
+
+    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
+                                           std::stop_token cancellation) const
+    {
+        return _state->result_for (timeout, cancellation);
+    }
+
   private:
     explicit task_t (std::shared_ptr<detail::task_shared_state_t<T>> state) :
         _state (std::move (state))
@@ -587,6 +619,17 @@ template <> class task_t<void>
     }
 
     const result_t<void> &result () const { return _state->result (); }
+
+    std::optional<result_t<void>> result_for (std::chrono::milliseconds timeout) const
+    {
+        return _state->result_for (timeout);
+    }
+
+    std::optional<result_t<void>> result_for (std::chrono::milliseconds timeout,
+                                              std::stop_token cancellation) const
+    {
+        return _state->result_for (timeout, cancellation);
+    }
 
   private:
     explicit task_t (std::shared_ptr<detail::task_shared_state_t<void>> state) :

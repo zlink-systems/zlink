@@ -15,6 +15,7 @@
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <stop_token>
 #include <thread>
 
 namespace
@@ -528,6 +529,22 @@ int main ()
     queued_shutdown.join ();
     if (!queued_shutdown_done.load (std::memory_order_acquire)) {
         return 26;
+    }
+
+    zlink::framework::detail::task_completion_source_t<int> stopped_completion;
+    auto stopped_task = stopped_completion.task ();
+    std::stop_source stop_wait;
+    std::thread stop_request ([&] {
+        std::this_thread::sleep_for (std::chrono::milliseconds (5));
+        stop_wait.request_stop ();
+    });
+    const auto stop_wait_started_at = std::chrono::steady_clock::now ();
+    const auto stopped_result =
+      stopped_task.result_for (std::chrono::seconds (1), stop_wait.get_token ());
+    const auto stop_wait_elapsed = std::chrono::steady_clock::now () - stop_wait_started_at;
+    stop_request.join ();
+    if (stopped_result || stop_wait_elapsed >= std::chrono::milliseconds (250)) {
+        return 27;
     }
 
     return 0;

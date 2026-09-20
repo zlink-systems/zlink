@@ -1028,16 +1028,15 @@ void mesh_node_runtime_t::configure_actor_create_operations (
 void mesh_node_runtime_t::configure_instance_spot_operations (
   std::shared_ptr<location_repository_t> store,
   std::shared_ptr<runtime::stateful::relocation_store_port_t> relocations,
-  location_owner_token_t owner,
+  std::function<std::optional<location_owner_token_t> ()> owner,
   host::instance_spot_activation_materializer_t materializer)
 {
     if (_node)
         throw configuration_error (
           "Instance Spot operations must be configured before MeshNode start");
-    if (!store || !relocations || owner.owner_id.empty () || owner.lease_generation <= 0
-        || !materializer)
+    if (!store || !relocations || !owner || !materializer)
         throw configuration_error ("Instance Spot operations require Location and Relocation "
-                                   "Stores, an owner lease, and a materializer");
+                                   "Stores, an owner lease resolver, and a materializer");
     _user_spot_store = std::move (store);
     _instance_spot_relocations = std::move (relocations);
     _instance_spot_owner = std::move (owner);

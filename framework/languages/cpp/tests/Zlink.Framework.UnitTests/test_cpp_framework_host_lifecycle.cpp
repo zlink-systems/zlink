@@ -3,6 +3,7 @@
 #include <zlink/framework.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_repository.hpp"
 #include "runtime/locations/location_records.hpp"
 #include "runtime/host/relocation_target_eligibility.hpp"
 
@@ -24,6 +25,102 @@
 
 namespace
 {
+
+struct degraded_channel_message_t
+{
+};
+
+struct degraded_channel_handler_t
+{
+    using message_type = degraded_channel_message_t;
+
+    void handle (const degraded_channel_message_t &) {}
+};
+
+struct degraded_object_message_t
+{
+    static constexpr const char *packet_name = "degraded-object-message";
+    int value = 0;
+};
+
+void to_json (nlohmann::json &json, const degraded_object_message_t &message)
+{
+    json = nlohmann::json{{"value", message.value}};
+}
+
+void from_json (const nlohmann::json &json, degraded_object_message_t &message)
+{
+    message.value = json.at ("value").get<int> ();
+}
+
+class degraded_object_spot_t;
+
+struct degraded_object_timer_handler_t
+{
+    zlink::framework::task_t<void> handle (degraded_object_spot_t &,
+                                           const zlink::framework::timer_tick_t &)
+    {
+        timer_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return;
+    }
+
+    static inline std::atomic_int timer_count{0};
+};
+
+class degraded_object_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
+{
+  public:
+    explicit degraded_object_spot_t (zlink::framework::spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::spot_context_t &context () noexcept override { return _context; }
+
+    const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
+
+    void configure () override
+    {
+        _context.handlers ().add_handler<&degraded_object_spot_t::on_message> ();
+        (void) _context.add_timer<degraded_object_timer_handler_t> ("degraded-object-timer",
+                                                                    std::chrono::milliseconds (5));
+    }
+
+    zlink::framework::task_t<zlink::framework::spot_create_response_t>
+    on_create (const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_create_response_t::accept ();
+    }
+
+    zlink::framework::task_t<void> on_initialize () override { co_return; }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::reject ();
+    }
+
+    zlink::framework::task_t<void> on_actor_joined (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_leave_actor (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+    void on_message (const degraded_object_message_t &message)
+    {
+        message_value.store (message.value, std::memory_order_release);
+    }
+
+    static inline std::atomic_int factory_count{0};
+    static inline std::atomic_int message_value{0};
+
+  private:
+    zlink::framework::spot_context_t _context;
+};
 
 struct relocation_ready_message_t
 {
@@ -608,6 +705,265 @@ class mesh_started_probe_service_t final : public zlink::framework::hosted_servi
     std::string _mesh_name;
 };
 
+class recovering_location_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        if (!_available.load (std::memory_order_acquire))
+            return failed<zlink::framework::store_read_result_t> ();
+        return _inner->read (std::move (key));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        if (!_available.load (std::memory_order_acquire))
+            return failed<zlink::framework::store_write_result_t> ();
+        return _inner->write (std::move (request));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        return _inner->scan (std::move (request));
+    }
+
+    void recover () noexcept { _available.store (true, std::memory_order_release); }
+
+  private:
+    template <typename T>
+    static zlink::framework::task_t<T> failed ()
+    {
+        return zlink::framework::task_t<T> (
+          zlink::framework::result_t<T>::failure (
+            zlink::framework::framework_error_kind_t::unavailable,
+            "injected Location Store outage"));
+    }
+
+    std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> _inner =
+      std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+    std::atomic_bool _available{false};
+};
+
+class degraded_location_host_probe_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    degraded_location_host_probe_t (zlink::framework::app_t &app,
+                                    std::shared_ptr<recovering_location_store_t> store,
+                                    std::chrono::steady_clock::time_point started_at,
+                                    std::chrono::milliseconds renew_timeout) :
+        _app (app),
+        _store (std::move (store)),
+        _started_at (started_at),
+        _renew_timeout (renew_timeout)
+    {
+    }
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        auto *location_repository =
+          &services.get_required<zlink::framework::location_repository_t> ();
+        auto manager = services.get_required<zlink::framework::spot_manager_t> ();
+        auto *serializers = &services.get_required<zlink::framework::serializer_registry_t> ();
+        _worker = std::thread ([this, location_repository, manager = std::move (manager),
+                                serializers] () mutable {
+            auto &locations = *location_repository;
+            auto client = _app.advanced ().zlink ().route_client (*serializers);
+            startup_completed =
+              wait_until ([this] { return _app.is_ready (); }, std::chrono::seconds (1));
+            started_within_timeout =
+              std::chrono::steady_clock::now () - _started_at < _renew_timeout;
+            descriptor_blocked =
+              locations.list_mesh_nodes ("degraded-location-host").result ().value ().items.empty ()
+              && locations.list_client_servers ("degraded-client-server")
+                   .result ()
+                   .value ()
+                   .items.empty ()
+              && locations.list_fanout_publishers ("degraded-fanout")
+                   .result ()
+                   .value ()
+                   .items.empty ();
+
+            const auto blocked_create =
+              manager
+                .get_or_create (zlink::framework::spot_id_t ("degraded-object"), "degraded-object")
+                .in_mesh ("degraded-location-host")
+                .timeout (std::chrono::milliseconds (50))
+                .async ()
+                .result ();
+            factory_blocked =
+              !blocked_create
+              && degraded_object_spot_t::factory_count.load (std::memory_order_acquire) == 0;
+            const auto blocked_message =
+              client
+                .send_to_spot (zlink::framework::spot_id_t ("degraded-object"),
+                               degraded_object_message_t{17})
+                .async ()
+                .result ();
+            message_and_timer_blocked =
+              !blocked_message
+              && degraded_object_spot_t::message_value.load (std::memory_order_acquire) == 0
+              && degraded_object_timer_handler_t::timer_count.load (std::memory_order_acquire) == 0;
+            _store->recover ();
+            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+            while (std::chrono::steady_clock::now () < deadline) {
+                const auto mesh =
+                  locations.list_mesh_nodes ("degraded-location-host").result ().value ();
+                const auto client_server =
+                  locations.list_client_servers ("degraded-client-server").result ().value ();
+                const auto fanout =
+                  locations.list_fanout_publishers ("degraded-fanout").result ().value ();
+                mesh_republished = !mesh.items.empty () && !mesh.items.front ().owner_id.empty ()
+                                   && mesh.items.front ().lease_generation > 0;
+                client_server_republished = !client_server.items.empty ()
+                                            && !client_server.items.front ().owner_id.empty ()
+                                            && client_server.items.front ().lease_generation > 0;
+                fanout_republished = !fanout.items.empty ()
+                                     && !fanout.items.front ().owner_id.empty ()
+                                     && fanout.items.front ().lease_generation > 0;
+                if (mesh_republished && client_server_republished && fanout_republished) {
+                    descriptor_republished = true;
+                    break;
+                }
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            }
+            const auto resumed_create =
+              manager
+                .get_or_create (zlink::framework::spot_id_t ("degraded-object"), "degraded-object")
+                .in_mesh ("degraded-location-host")
+                .timeout (std::chrono::seconds (1))
+                .async ()
+                .result ();
+            factory_resumed =
+              resumed_create
+              && degraded_object_spot_t::factory_count.load (std::memory_order_acquire) == 1;
+            const auto resumed_message =
+              client
+                .send_to_spot (zlink::framework::spot_id_t ("degraded-object"),
+                               degraded_object_message_t{17})
+                .async ()
+                .result ();
+            message_resumed = static_cast<bool> (resumed_message);
+            if (!resumed_message)
+                resumed_message_error = resumed_message.error () ? resumed_message.error ()->what ()
+                                                                 : "message submission failed";
+            message_and_timer_resumed =
+              resumed_message
+              && wait_until (
+                [] {
+                    return degraded_object_spot_t::message_value.load (std::memory_order_acquire)
+                             == 17
+                           && degraded_object_timer_handler_t::timer_count.load (
+                                std::memory_order_acquire)
+                                > 0;
+                },
+                std::chrono::seconds (1));
+            _app.stop ();
+        });
+        co_return;
+    }
+
+    void stop () noexcept override
+    {
+        if (_worker.joinable ())
+            _worker.join ();
+    }
+
+    bool startup_completed = false;
+    bool started_within_timeout = false;
+    bool descriptor_blocked = false;
+    bool descriptor_republished = false;
+    bool mesh_republished = false;
+    bool client_server_republished = false;
+    bool fanout_republished = false;
+    bool factory_blocked = false;
+    bool factory_resumed = false;
+    bool message_and_timer_blocked = false;
+    bool message_and_timer_resumed = false;
+    bool message_resumed = false;
+    std::string resumed_message_error;
+
+  private:
+    zlink::framework::app_t &_app;
+    std::shared_ptr<recovering_location_store_t> _store;
+    std::chrono::steady_clock::time_point _started_at;
+    std::chrono::milliseconds _renew_timeout;
+    std::thread _worker;
+};
+
+bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
+{
+    degraded_object_spot_t::factory_count.store (0, std::memory_order_release);
+    degraded_object_spot_t::message_value.store (0, std::memory_order_release);
+    degraded_object_timer_handler_t::timer_count.store (0, std::memory_order_release);
+    auto app = zlink::framework::app_t::create ();
+    auto store = std::make_shared<recovering_location_store_t> ();
+    auto relocation_store =
+      std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
+    constexpr auto renew_timeout = std::chrono::seconds (1);
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store (store);
+    options.add_relocation_store (relocation_store);
+    auto &locations = options.configure_locations ();
+    locations.owner_lease_renew_interval = std::chrono::milliseconds (10);
+    locations.owner_lease_renew_timeout = renew_timeout;
+    locations.owner_lease_ttl = std::chrono::seconds (3);
+    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.polling_interval = std::chrono::milliseconds (5);
+    auto degraded_mesh = options.add_route_mesh ("degraded-location-host");
+    degraded_mesh.channel_name ("degraded-object-channel").server ();
+    degraded_mesh.set_object_role (zlink::framework::object_role_t::server)
+      .set_routing_id (zlink::routing_id_t::from ("degraded-location-host-node"))
+      .listen ("inproc://degraded-location-host-node")
+      .add_spot_factory<degraded_object_spot_t> (
+        "degraded-object",
+        [] (zlink::framework::spot_context_t context) {
+            degraded_object_spot_t::factory_count.fetch_add (1, std::memory_order_acq_rel);
+            return std::make_shared<degraded_object_spot_t> (std::move (context));
+        },
+        [] (auto &factory) { factory.recreate_on_relocation (); });
+    options.add_client_server_channel ("degraded-client-server")
+      .server ()
+      .listen (0)
+      .add_send_handler<degraded_channel_handler_t, degraded_channel_message_t> ();
+    options.add_fanout_channel ("degraded-fanout")
+      .enable_publisher (0)
+      .set_routing_id (zlink::routing_id_t::from ("degraded-fanout-publisher"));
+
+    const auto started_at = std::chrono::steady_clock::now ();
+    auto probe =
+      std::make_unique<degraded_location_host_probe_t> (app, store, started_at, renew_timeout);
+    auto *probe_view = probe.get ();
+    app.add_hosted_service (std::move (probe));
+    char program[] = "degraded-location-host";
+    char *arguments[] = {program, nullptr};
+    const auto exit_code = app.run (1, arguments);
+    if (exit_code == 0 && probe_view->startup_completed && probe_view->started_within_timeout
+        && probe_view->descriptor_blocked && probe_view->descriptor_republished
+        && probe_view->factory_blocked && probe_view->factory_resumed
+        && probe_view->message_and_timer_blocked && probe_view->message_and_timer_resumed)
+        return true;
+    std::cerr << "degraded Location host did not gate and republish its descriptor"
+              << " started-within-timeout=" << probe_view->started_within_timeout
+              << " startup-completed=" << probe_view->startup_completed
+              << " blocked=" << probe_view->descriptor_blocked
+              << " republished=" << probe_view->descriptor_republished
+              << " mesh=" << probe_view->mesh_republished
+              << " client-server=" << probe_view->client_server_republished
+              << " fanout=" << probe_view->fanout_republished
+              << " factory-blocked=" << probe_view->factory_blocked
+              << " factory-resumed=" << probe_view->factory_resumed
+              << " work-blocked=" << probe_view->message_and_timer_blocked
+              << " work-resumed=" << probe_view->message_and_timer_resumed
+              << " send-resumed=" << probe_view->message_resumed
+              << " message-value=" << degraded_object_spot_t::message_value.load ()
+              << " timer-count=" << degraded_object_timer_handler_t::timer_count.load ()
+              << " message-error=" << probe_view->resumed_message_error << '\n';
+    return false;
+}
+
 bool verify_deferred_framework_apply_preserves_hosted_service_order ()
 {
     constexpr std::string_view mesh_name = "deferred-framework-order-mesh";
@@ -870,6 +1226,87 @@ bool verify_relocation_blocker (
     run_thread.join ();
     return matched && stopped.outcome == zlink::framework::termination_outcome_t::stopped
            && exit_code == 0;
+}
+
+bool verify_degraded_host_blocks_and_resumes_relocation ()
+{
+    auto app = zlink::framework::app_t::create ();
+    auto location_store = std::make_shared<recovering_location_store_t> ();
+    auto relocation_store =
+      std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store (location_store);
+    options.add_relocation_store (relocation_store);
+    auto &locations = options.configure_locations ();
+    locations.owner_lease_renew_interval = std::chrono::milliseconds (10);
+    locations.owner_lease_renew_timeout = std::chrono::milliseconds (50);
+    locations.owner_lease_ttl = std::chrono::seconds (3);
+    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.polling_interval = std::chrono::milliseconds (5);
+    auto degraded_mesh = options.add_route_mesh ("degraded-relocation-host");
+    degraded_mesh.channel_name ("degraded-relocation-channel").server ();
+    degraded_mesh.set_object_role (zlink::framework::object_role_t::server)
+      .set_routing_id (zlink::routing_id_t::from ("degraded-relocation-node"))
+      .listen ("inproc://degraded-relocation-node")
+      .add_spot_factory<degraded_object_spot_t> (
+        "degraded-object",
+        [] (zlink::framework::spot_context_t context) {
+            return std::make_shared<degraded_object_spot_t> (std::move (context));
+        },
+        [] (auto &factory) { factory.recreate_on_relocation (); });
+    auto service = std::make_unique<blocking_stop_service_t> ();
+    auto *service_view = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    char program[] = "degraded-relocation-host";
+    char *arguments[] = {program, nullptr};
+    int exit_code = -1;
+    std::thread run_thread ([&] { exit_code = app.run (1, arguments); });
+    service_view->wait_started ();
+    const bool startup_completed =
+      wait_until ([&] { return app.is_ready (); }, std::chrono::seconds (1));
+    const auto blocked =
+      app
+        .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+                    .deadline = std::chrono::milliseconds (50)})
+        .result ()
+        .value ();
+    const bool relocation_blocked =
+      blocked.outcome == zlink::framework::relocation_outcome_t::blocked
+      && blocked.reason == zlink::framework::relocation_reason_t::store_unavailable;
+
+    location_store->recover ();
+    bool relocation_resumed = false;
+    const auto recovery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    do {
+        const auto resumed =
+          app
+            .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+                        .deadline = std::chrono::milliseconds (25)})
+            .result ()
+            .value ();
+        relocation_resumed =
+          resumed.outcome == zlink::framework::relocation_outcome_t::blocked
+          && resumed.reason == zlink::framework::relocation_reason_t::target_unavailable;
+        if (!relocation_resumed)
+            std::this_thread::sleep_for (std::chrono::milliseconds (5));
+    } while (!relocation_resumed && std::chrono::steady_clock::now () < recovery_deadline);
+
+    auto shutdown = app.shutdown (std::chrono::seconds (1));
+    service_view->wait_stop_entered ();
+    service_view->release ();
+    const auto stopped = shutdown.result ().value ();
+    run_thread.join ();
+    const bool passed = startup_completed && relocation_blocked && relocation_resumed
+                        && stopped.outcome == zlink::framework::termination_outcome_t::stopped
+                        && exit_code == 0;
+    if (!passed) {
+        std::cerr << "degraded host relocation admission did not close and resume"
+                  << " startup=" << startup_completed
+                  << " blocked-reason=" << static_cast<int> (blocked.reason)
+                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed << '\n';
+    }
+    return passed;
 }
 
 void configure_empty_relocation_app (
@@ -1525,6 +1962,12 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main ()
 {
+    if (!verify_degraded_host_republishes_descriptor_after_owner_claim ())
+        return EXIT_FAILURE;
+
+    if (!verify_degraded_host_blocks_and_resumes_relocation ())
+        return EXIT_FAILURE;
+
     if (!verify_deferred_framework_apply_preserves_hosted_service_order ())
         return EXIT_FAILURE;
 

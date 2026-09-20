@@ -1671,7 +1671,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             actor_gateway->get ().bind_serializers (*_serializers);
         }
         _stop.store (false, std::memory_order_release);
-        _accept_application_dispatch.store (true, std::memory_order_release);
         _actor_destroy_gate = std::make_shared<actor_destroy_callback_gate_t> ();
         auto store =
           std::shared_ptr<location_repository_t> (&services.get_required<location_repository_t> (),
@@ -1707,10 +1706,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         auto &location_runtime = services.get_required<location_runtime_t> ();
         _location_runtime = &location_runtime;
         _location_owner = location_runtime.current_owner_token ();
-        if (!_location_owner)
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "MeshNode publication requires an active Location owner lease");
+        _accept_application_dispatch.store (
+          _location_owner.has_value (), std::memory_order_release);
         std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
         const auto has_instance_factories = std::any_of (
           _registrations.begin (), _registrations.end (), [] (const auto &registration) {
@@ -1812,7 +1809,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         authority_owner_generation);
                   };
                 _nodes[index]->configure_instance_spot_operations (
-                  store, instance_relocations, *_location_owner,
+                  store, instance_relocations,
+                  [this] { return current_location_owner (); },
                   host::instance_spot_activation_materializer_t{
                     [registration,
                      store] (const protocol::instance_spot_activation_header_t &request) {
@@ -2203,10 +2201,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             const auto status = node->status ();
             mesh_node_descriptor_t descriptor;
             const auto owner = current_location_owner ();
-            if (!owner)
-                throw framework_exception_t (
-                  framework_error_kind_t::not_configured,
-                  "MeshNode publication requires an active Location owner lease");
             descriptor.mesh_name = node->mesh_name ();
             descriptor.rid = status.routing_id ();
             descriptor.lifecycle_generation = status.lifecycle_generation ();
@@ -2221,8 +2215,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.activation_concurrency.limit = node->activation_concurrency_limit ();
             descriptor.state = framework_runtime_state_t::serving;
             descriptor.security_identity = "default";
-            descriptor.owner_id = owner->owner_id;
-            descriptor.lease_generation = owner->lease_generation;
+            descriptor.owner_id = owner ? owner->owner_id : std::string{};
+            descriptor.lease_generation = owner ? owner->lease_generation : 0;
             for (const auto &stable_type : registration->spot_state->snapshot.actor_types) {
                 const auto configured =
                   registration->spot_state->actor_factories.find (stable_type);
@@ -2306,14 +2300,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                            return std::tie (left.object_kind, left.stable_type)
                                   < std::tie (right.object_kind, right.stable_type);
                        });
-            const auto written =
-              _location_store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
-                .result ()
-                .value ();
-            if (written.status != location_write_status_t::stored)
-                throw framework_exception_t (framework_error_kind_t::not_configured,
-                                             "MeshNode Location descriptor publication was fenced");
-            _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
+            if (owner) {
+                const auto written =
+                  _location_store
+                    ->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                    .result ()
+                    .value ();
+                if (written.status != location_write_status_t::stored)
+                    throw framework_exception_t (
+                      framework_error_kind_t::not_configured,
+                      "MeshNode Location descriptor publication was fenced");
+                _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
+            }
             _published_mesh_descriptors.push_back (descriptor);
             node->bind_descriptor_publisher (
               [this, index] (const std::map<std::string, int> &channel_weights,
@@ -2350,7 +2348,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             mailbox.bind_application_dispatch (
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
                   std::lock_guard lock (_dispatch_gate_mutex);
-                  if (!_accept_application_dispatch.load (std::memory_order_relaxed)) {
+                  if (!_accept_application_dispatch.load (std::memory_order_relaxed)
+                      || !current_location_owner ()) {
                       if (record.before_application_handler)
                           record.before_application_handler = {};
                       else
@@ -2690,34 +2689,50 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::republish_after_store_recovery () noexcept
+bool mesh_node_host_service_t::republish_after_store_recovery ()
 {
     std::lock_guard lock (_descriptor_publish_mutex);
     const auto owner = current_location_owner ();
     if (!_location_store || !owner)
         return _published_mesh_descriptors.empty ();
-    try {
-        for (std::size_t index = 0; index < _published_mesh_descriptors.size (); ++index) {
-            auto descriptor = _published_mesh_descriptors[index];
-            descriptor.owner_id = owner->owner_id;
-            descriptor.lease_generation = owner->lease_generation;
-            if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
-                return false;
-            }
-            ++descriptor.descriptor_revision;
-            const auto written =
-              _location_store->update_mesh_node (descriptor, location_write_intent_t::renew)
-                .result ()
-                .value ();
-            if (written.status != location_write_status_t::stored)
-                return false;
-            _published_mesh_descriptors[index] = std::move (descriptor);
+    for (std::size_t index = 0; index < _published_mesh_descriptors.size (); ++index) {
+        auto descriptor = _published_mesh_descriptors[index];
+        const auto key = mesh_node_descriptor_key_t{descriptor.mesh_name, descriptor.rid};
+        const bool first_publication =
+          std::find_if (
+            _published_mesh_nodes.begin (), _published_mesh_nodes.end (),
+            [&key] (const auto &published) {
+                return published.mesh_name == key.mesh_name && published.rid == key.rid;
+            })
+          == _published_mesh_nodes.end ();
+        if (!first_publication
+            && descriptor.owner_id == owner->owner_id
+            && descriptor.lease_generation == owner->lease_generation)
+            continue;
+        descriptor.owner_id = owner->owner_id;
+        descriptor.lease_generation = owner->lease_generation;
+        if (!first_publication
+            && descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
+            return false;
         }
-        return true;
+        if (!first_publication)
+            ++descriptor.descriptor_revision;
+        const auto written =
+          _location_store->update_mesh_node (
+            descriptor,
+            first_publication ? location_write_intent_t::new_claim
+                              : location_write_intent_t::renew)
+            .result ()
+            .value ();
+        if (written.status != location_write_status_t::stored)
+            return false;
+        _published_mesh_descriptors[index] = std::move (descriptor);
+        if (first_publication)
+            _published_mesh_nodes.push_back (std::move (key));
     }
-    catch (...) {
-        return false;
-    }
+    _accept_application_dispatch.store (true, std::memory_order_release);
+    _dispatch_gate_changed.notify_all ();
+    return true;
 }
 
 void mesh_node_host_service_t::stop () noexcept
@@ -2885,7 +2900,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
 
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed))
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
+            || !current_location_owner ())
             return zlink::submit_result_t::terminated;
     }
     auto application_permit = _application_jobs->wait_for_supply_blocking ();
@@ -2895,7 +2911,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
       std::make_shared<application_job_queue_t::permit_t> (std::move (*application_permit));
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed))
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
+            || !current_location_owner ())
             return zlink::submit_result_t::terminated;
         application_job->mark_queued ();
     }

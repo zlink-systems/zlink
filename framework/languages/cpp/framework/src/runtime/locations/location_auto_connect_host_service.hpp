@@ -250,8 +250,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _stop.store (false, std::memory_order_release);
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
-        for (auto &loop : _loops)
+        for (auto &loop : _loops) {
+            loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
             loop.thread = std::thread ([this, &loop] { run_loop (loop); });
+        }
         return task_t<void> (result_t<void>::success ());
     }
 
@@ -421,17 +423,14 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             page.continuation_token = result.continuation_token;
         } while (page.continuation_token);
 
-        if (loop.recovering_from_store_failure) {
-            /* A successful read can precede the owner heartbeat that restores
-             * the local lease. Keep existing connections until that lease and
-             * every local descriptor have been published again. The next
-             * polling tick then computes a diff from a complete live view. */
-            if (!_runtime->owner_lease_healthy ()
-                || (_republish_after_store_recovery
-                    && !_republish_after_store_recovery ())) {
-                retry_pending_targets (loop);
-                return;
-            }
+        const bool was_recovering = loop.recovering_from_store_failure;
+        if (!_runtime->owner_lease_usable ()
+            || !republish_after_store_recovery ()) {
+            loop.recovering_from_store_failure = true;
+            retry_pending_targets (loop);
+            return;
+        }
+        if (was_recovering) {
             loop.recovering_from_store_failure = false;
             loop.failure_started_at.reset ();
             if (_route_cache)
@@ -493,6 +492,27 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * selected descriptor until the physical intent exists. */
                 connect (loop, target);
             }
+        }
+    }
+
+    bool republish_after_store_recovery () noexcept
+    {
+        try {
+            bool published = true;
+            if (_republish_after_store_recovery)
+                published = _republish_after_store_recovery () && published;
+            if (_client_server && _client_server_started)
+                published = _client_server->republish_after_store_recovery () && published;
+            if (_fanout)
+                published = _fanout->republish_after_store_recovery () && published;
+            if (!published)
+                _runtime->record_runtime_failure (
+                  "Location descriptor publication was rejected");
+            return published;
+        }
+        catch (const std::exception &error) {
+            _runtime->record_runtime_failure (error.what ());
+            return false;
         }
     }
 
