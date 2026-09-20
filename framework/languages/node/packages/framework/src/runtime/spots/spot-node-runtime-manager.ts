@@ -267,6 +267,7 @@ export class ZLinkSpotNodeRuntimeManager {
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
         routingId,
+        receiveTimeoutMs: spotNode.router?.receiveTimeoutMs,
         applicationJobQueue: this.applicationJobQueue,
         applicationJobReceiveFlowFailureSink:
           this.options.applicationJobReceiveFlowFailureSink,

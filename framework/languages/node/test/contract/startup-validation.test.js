@@ -111,6 +111,17 @@ test('Node registration assigns an omitted RouteMesh listener to process-default
   assert.equal(registration.spotNodes.get('automatic').router.port, 0);
 });
 
+test('RouteMesh builder retains the router receive timeout', () => {
+  const registration = framework.createFrameworkRegistration(
+    framework.createFrameworkOptions((builder) => {
+      const socket = builder.addRouteMesh('game').configureRouterSocket();
+      socket.receiveTimeoutMs = 37;
+    })
+  );
+
+  assert.equal(registration.spotNodes.get('game').router.receiveTimeoutMs, 37);
+});
+
 test('RouteMesh listener uses separate bind and advertised hosts with Core-resolved port zero', () => {
   const options = framework.createFrameworkOptions((builder) => {
     builder.addRouteMesh('game')
