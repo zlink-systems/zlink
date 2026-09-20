@@ -215,9 +215,21 @@ function hasAuthorityFence(
   readonly expectedAuthorityOwnerGeneration: string;
   readonly expectedOwnerLeaseGeneration: string;
 } {
-  return join.actorNodeGeneration !== undefined
-    && join.expectedAuthorityOwnerGeneration !== undefined
-    && join.expectedOwnerLeaseGeneration !== undefined;
+  const fields = [
+    join.actorNodeGeneration,
+    join.expectedAuthorityOwnerGeneration,
+    join.expectedOwnerLeaseGeneration
+  ];
+  if (fields.every(value => value === undefined)) {
+    return false;
+  }
+  if (fields.some(value => value === undefined)) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      `Actor '${join.actorId}' Join carries an incomplete Authority fence.`
+    );
+  }
+  return true;
 }
 
 function decodeJoinAuthorityFence(join: JoinAuthorityFence): {
