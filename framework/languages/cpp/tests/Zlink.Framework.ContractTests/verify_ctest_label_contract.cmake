@@ -9,6 +9,8 @@ if(NOT DEFINED ZLINK_FRAMEWORK_CPP_CONFIGURATION
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_CONFIGURATION is required")
 endif()
 
+include("${ZLINK_FRAMEWORK_CPP_SOURCE_DIR}/tests/Zlink.Framework.ContractTests/release_test_labels.cmake")
+
 set(required_labels
   framework-contract
   framework-unit
@@ -88,6 +90,7 @@ if(build_cache MATCHES "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES:BOOL=ON")
 endif()
 
 set(known_labels
+  ${ZLINK_FRAMEWORK_CPP_TEST_TIERS}
   ${required_labels}
   ${sample_labels}
   framework-extension
@@ -203,6 +206,70 @@ foreach(label IN LISTS required_labels)
     message(FATAL_ERROR "CTest label ${label} selects no tests")
   endif()
 endforeach()
+
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
+    -C "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}" --show-only=json-v1
+  RESULT_VARIABLE test_json_result
+  OUTPUT_VARIABLE test_json_output
+  ERROR_VARIABLE test_json_error)
+if(NOT test_json_result EQUAL 0)
+  message(FATAL_ERROR "ctest test metadata print failed: ${test_json_error}")
+endif()
+
+string(JSON test_count LENGTH "${test_json_output}" tests)
+if(test_count GREATER 0)
+  math(EXPR test_last_index "${test_count} - 1")
+  foreach(test_index RANGE ${test_last_index})
+    string(JSON test_name GET "${test_json_output}" tests ${test_index} name)
+    string(JSON property_count LENGTH "${test_json_output}" tests ${test_index} properties)
+    set(test_tiers)
+    if(property_count GREATER 0)
+      math(EXPR property_last_index "${property_count} - 1")
+      foreach(property_index RANGE ${property_last_index})
+        string(JSON property_name GET "${test_json_output}" tests ${test_index}
+          properties ${property_index} name)
+        if(property_name STREQUAL "LABELS")
+          string(JSON label_count LENGTH "${test_json_output}" tests ${test_index}
+            properties ${property_index} value)
+          if(label_count GREATER 0)
+            math(EXPR label_last_index "${label_count} - 1")
+            foreach(label_index RANGE ${label_last_index})
+              string(JSON test_label GET "${test_json_output}" tests ${test_index}
+                properties ${property_index} value ${label_index})
+              list(FIND ZLINK_FRAMEWORK_CPP_TEST_TIERS "${test_label}" tier_index)
+              if(NOT tier_index EQUAL -1)
+                list(APPEND test_tiers "${test_label}")
+              endif()
+            endforeach()
+          endif()
+        endif()
+      endforeach()
+    endif()
+    list(LENGTH test_tiers tier_count)
+    if(NOT tier_count EQUAL 1)
+      message(FATAL_ERROR
+        "CTest test ${test_name} must have exactly one tier label "
+        "(${ZLINK_FRAMEWORK_CPP_TEST_TIERS}); found: ${test_tiers}")
+    endif()
+  endforeach()
+endif()
+
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
+    -C "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}" -N
+    -L "${ZLINK_FRAMEWORK_CPP_RELEASE_TEST_LABEL_REGEX}"
+  RESULT_VARIABLE release_selection_result
+  OUTPUT_VARIABLE release_selection_output
+  ERROR_VARIABLE release_selection_error)
+if(NOT release_selection_result EQUAL 0)
+  message(FATAL_ERROR
+    "ctest release-tier scan failed: ${release_selection_error}")
+endif()
+if(NOT release_selection_output MATCHES "test_cpp_stream_connector")
+  message(FATAL_ERROR
+    "release tier selection must include test_cpp_stream_connector")
+endif()
 
 execute_process(
   COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
