@@ -1837,6 +1837,72 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
 });
 
+test('production repository lets NewClaim replace only descriptors whose owner lease is Missing', async () => {
+  let nowMs = Date.UTC(2026, 8, 20, 0, 0, 0);
+  const provider = new internal.ZLinkInMemoryProviderLocationStore(() => new Date(nowMs));
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => new Date(nowMs));
+  const expiredClaim = await repository.claimOwnerLease('expired-descriptor-owner', 30_000);
+  assert.equal(expiredClaim.kind, 'claimed');
+  if (expiredClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
+  const expiredDescriptor = {
+    ...placementDescriptor('descriptor-fence-expired', 'Player', 100, 0, 0),
+    ownerId: expiredClaim.token.ownerId,
+    leaseGeneration: expiredClaim.token.leaseGeneration
+  };
+  assert.equal(
+    (await repository.updateMeshNode(
+      expiredDescriptor,
+      internal.ZLinkLocationWriteIntent.NewClaim
+    )).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+
+  nowMs += 30_000;
+  assert.deepEqual(
+    await repository.readOwnerLease(expiredClaim.token.ownerId),
+    { kind: 'missing' }
+  );
+  const successorClaim = await repository.claimOwnerLease('successor-descriptor-owner', 30_000);
+  assert.equal(successorClaim.kind, 'claimed');
+  if (successorClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
+  assert.ok(successorClaim.token.leaseGeneration > expiredClaim.token.leaseGeneration);
+  assert.equal(
+    (await repository.updateMeshNode({
+      ...expiredDescriptor,
+      ownerId: successorClaim.token.ownerId,
+      leaseGeneration: successorClaim.token.leaseGeneration
+    }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+
+  const liveClaim = await repository.claimOwnerLease('live-descriptor-owner', 30_000);
+  assert.equal(liveClaim.kind, 'claimed');
+  if (liveClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
+  const liveDescriptor = {
+    ...placementDescriptor('descriptor-fence-live', 'Player', 100, 0, 0),
+    ownerId: liveClaim.token.ownerId,
+    leaseGeneration: liveClaim.token.leaseGeneration
+  };
+  assert.equal(
+    (await repository.updateMeshNode(
+      liveDescriptor,
+      internal.ZLinkLocationWriteIntent.NewClaim
+    )).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  const contenderClaim = await repository.claimOwnerLease('contending-descriptor-owner', 30_000);
+  assert.equal(contenderClaim.kind, 'claimed');
+  if (contenderClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
+  assert.notEqual(
+    (await repository.updateMeshNode({
+      ...liveDescriptor,
+      ownerId: contenderClaim.token.ownerId,
+      leaseGeneration: contenderClaim.token.leaseGeneration
+    }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+});
+
 test('production repository reclaims a Reserved authority after the Store reports its owner lease expired', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);

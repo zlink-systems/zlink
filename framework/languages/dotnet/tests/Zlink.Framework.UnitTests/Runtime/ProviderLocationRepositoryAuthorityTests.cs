@@ -375,6 +375,60 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task MeshNewClaimTakesOverDescriptorWhoseOwnerLeaseExpired()
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var expiredOwner = await ClaimAsync(
+            repository,
+            "expired-descriptor-owner",
+            TimeSpan.FromMinutes(1));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                Descriptor("source", expiredOwner),
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+            await repository.ReadOwnerLeaseAsync(expiredOwner.OwnerId));
+        var successor = await ClaimAsync(
+            repository,
+            "successor-descriptor-owner",
+            TimeSpan.FromMinutes(1));
+
+        Assert.True(successor.LeaseGeneration > expiredOwner.LeaseGeneration);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                Descriptor("source", successor),
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+    }
+
+    [Fact]
+    public async Task MeshNewClaimRejectsDescriptorWhoseOwnerLeaseIsLive()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var liveOwner = await ClaimAsync(repository, "live-descriptor-owner");
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                Descriptor("source", liveOwner),
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+        var contender = await ClaimAsync(
+            repository,
+            "contending-descriptor-owner");
+
+        Assert.Equal(
+            ZLinkLocationWriteStatus.RejectedConflict,
+            (await repository.UpdateMeshNodeAsync(
+                Descriptor("source", contender),
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+    }
+
+    [Fact]
     public async Task DescriptorRenewRetriesAfterSameOwnerLeaseHeartbeat()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
