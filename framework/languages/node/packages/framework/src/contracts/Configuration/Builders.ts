@@ -103,8 +103,6 @@ export interface ZLinkMeshChannelServerBuilder {
 export interface ZLinkMeshNodeSocketConfig {
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
-  mailboxMessageBudget: number;
-  mailboxByteBudget: number;
   receiveTimeoutMs?: number;
   sendTimeoutMs?: number;
 }

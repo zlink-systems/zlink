@@ -13,6 +13,7 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
     options: {
       readonly meshName: string;
       readonly routingId?: string;
+      readonly receiveTimeoutMs?: number;
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
@@ -29,7 +30,7 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
     return new ZLinkNodeRawMeshBackend(
       options.meshName,
       options.routingId,
-      new ZLinkNodeRawBindingPort(bindingContext),
+      new ZLinkNodeRawBindingPort(bindingContext, options.receiveTimeoutMs),
       options.applicationJobQueue,
       options.applicationJobReceiveFlowFailureSink,
       options.peerAdmissionSealed

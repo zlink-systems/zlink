@@ -1854,6 +1854,7 @@ function applySocketConfig(
   config: {
     readonly sendHighWaterMark?: number;
     readonly receiveHighWaterMark?: number;
+    readonly receiveTimeoutMs?: number;
     readonly sendTimeoutMs?: number;
     readonly maxMessageSize?: number;
   }
@@ -1863,6 +1864,9 @@ function applySocketConfig(
   }
   if (config.receiveHighWaterMark !== undefined) {
     socket.receiveHighWaterMark = config.receiveHighWaterMark;
+  }
+  if (config.receiveTimeoutMs !== undefined) {
+    socket.receiveTimeoutMs = config.receiveTimeoutMs;
   }
   if (config.sendTimeoutMs !== undefined) {
     socket.sendTimeoutMs = config.sendTimeoutMs;

@@ -47,12 +47,16 @@ export type {
 } from '../raw-binding-port';
 
 export class ZLinkNodeRawBindingPort implements ZLinkRawBindingPort {
-  constructor(private readonly sharedContext?: Context) {}
+  constructor(
+    private readonly sharedContext?: Context,
+    private readonly routerReceiveTimeoutMs?: number
+  ) {}
 
   createHost(): ZLinkRawHostPort {
     return new NodeRawHostPort(
       this.sharedContext ?? createContext(),
-      this.sharedContext === undefined
+      this.sharedContext === undefined,
+      this.routerReceiveTimeoutMs
     );
   }
 }
@@ -63,12 +67,16 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 
   constructor(
     private readonly context: Context,
-    private readonly ownsContext: boolean
+    private readonly ownsContext: boolean,
+    private readonly routerReceiveTimeoutMs?: number
   ) {}
 
   createRouter(): ZLinkRawRouterPort {
     this.requireOpen();
-    return this.own(new NodeRawRouterPort(createRouterSocket(this.context)));
+    return this.own(new NodeRawRouterPort(
+      createRouterSocket(this.context),
+      this.routerReceiveTimeoutMs
+    ));
   }
 
   createDealer(): ZLinkRawDealerPort {
@@ -230,11 +238,14 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     }).disconnectRid(bindingRoutingId(routingId));
   }
 
-  constructor(socket: RouterSocket) {
+  constructor(socket: RouterSocket, receiveTimeoutMs?: number) {
     super(socket);
     socket.options.handover = true;
     socket.options.mandatory = true;
     socket.options.probe = true;
+    if (receiveTimeoutMs !== undefined) {
+      socket.options.recvTimeout = receiveTimeoutMs;
+    }
   }
 
   localEndpoint(): string {

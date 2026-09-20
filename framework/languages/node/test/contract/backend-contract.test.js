@@ -2003,6 +2003,31 @@ test('backend adapter creates context and core socket wrappers through public bi
   }
 });
 
+test('backend adapter applies receive timeout to the binding socket', async () => {
+  const factory = new backend.ZLinkNodeBackendAdapterFactory();
+  const channel = factory.createChannelAdapter();
+  const context = channel.createContext();
+  const router = channel.createRouterSocket(context);
+  const meshNode = factory.createMeshAdapter().createMeshNode(context, {
+    meshName: 'backend.receive-timeout',
+    routingId: `backend-receive-timeout-${process.pid}`,
+    receiveTimeoutMs: 41,
+    applicationJobQueue: applicationJobQueue()
+  });
+
+  try {
+    router.receiveTimeoutMs = 37;
+    meshNode.setBind(`inproc://backend-receive-timeout-${process.pid}`);
+    meshNode.start();
+    assert.equal(router.nativeInstance.options.recvTimeout, 37);
+    assert.equal(meshNode.runtime.router.socket.options.recvTimeout, 41);
+  } finally {
+    meshNode.close();
+    await router.dispose();
+    await context.dispose();
+  }
+});
+
 test('backend bound router dispose releases its poller and endpoint through socket close', async () => {
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const channel = factory.createChannelAdapter();
