@@ -740,8 +740,19 @@ int main ()
             std::cerr << "creation terminal golden publication failed\n";
             return 1;
         }
-        const std::string terminal_key_value = std::string ("creation-terminal") + '\0'
-          + "01020304" + '\0' + "7" + '\0' + "000000000000002a0000000000000001";
+        const auto &key_derivations = root.at ("keyDerivation");
+        const auto terminal_key_vector = std::find_if (
+          key_derivations.begin (), key_derivations.end (), [] (const auto &vector) {
+              return vector.at ("record").template get<std::string> () == "creation-terminal";
+          });
+        if (terminal_key_vector == key_derivations.end ()) {
+            std::cerr << "creation terminal golden key vector is missing\n";
+            return 1;
+        }
+        const auto terminal_key_raw =
+          from_hex (terminal_key_vector->at ("preimageHex").template get<std::string> ());
+        const std::string terminal_key_value (
+          reinterpret_cast<const char *> (terminal_key_raw.data ()), terminal_key_raw.size ());
         const auto terminal_stored = store.read ({terminal_key_value}).result ().value ();
         const auto *terminal_found = std::get_if<store_found_t> (&terminal_stored);
         if (terminal_found == nullptr) {
