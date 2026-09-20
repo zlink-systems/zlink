@@ -77,6 +77,8 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                 routerSendHighWaterMark > 0
                     ? (int) Math.min(routerSendHighWaterMark, Integer.MAX_VALUE)
                     : 4096);
+            registration.configureRouterSocket().receiveTimeout()
+                .ifPresent(node::setRouterReceiveTimeout);
             node.setRouterSendTimeout(
                 registration.configureRouterSocket().sendTimeout()
                     .orElse(Duration.ofSeconds(1)));
