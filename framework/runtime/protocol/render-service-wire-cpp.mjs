@@ -119,7 +119,7 @@ function negotiatedBounds(owner) {
     visiting.add(current);
     for (const operation of current.operations) {
       if (operation.op === "negotiated-bound") {
-        result.set(operation.maximum.name, operation);
+        result.set(operation.context.name, operation);
       }
     }
     for (const reference of operationReferences(current.operations)) {
@@ -134,10 +134,20 @@ function negotiatedBounds(owner) {
 function decodeParameters(owner) {
   return `${parameters(owner)}${negotiatedBounds(owner).length === 0
     ? ""
-    : ", const decoder_context_t& context"}`;
+    : ", const codec_context_t& context"}`;
 }
 
 function decodeParameterArguments(owner) {
+  return `${parameterArguments(owner)}${negotiatedBounds(owner).length === 0 ? "" : ", context"}`;
+}
+
+function encodeParameters(owner) {
+  return `${parameters(owner)}${negotiatedBounds(owner).length === 0
+    ? ""
+    : ", const codec_context_t& context"}`;
+}
+
+function encodeParameterArguments(owner) {
   return `${parameterArguments(owner)}${negotiatedBounds(owner).length === 0 ? "" : ", context"}`;
 }
 
@@ -157,6 +167,11 @@ function fieldArguments(field, value) {
 }
 
 function fieldDecodeArguments(field, value) {
+  const child = types.get(field.type.$ref);
+  return `${fieldArguments(field, value)}${negotiatedBounds(child).length === 0 ? "" : ", context"}`;
+}
+
+function fieldEncodeArguments(field, value) {
   const child = types.get(field.type.$ref);
   return `${fieldArguments(field, value)}${negotiatedBounds(child).length === 0 ? "" : ", context"}`;
 }
@@ -383,7 +398,7 @@ function emitFieldDecode(field, owner, value = "out", reader = "reader", flagsNa
 function emitFieldEncode(field, owner, value = "value", writer = "writer", flagsName = "flagsValue") {
   const member = `${value}.${identifier(field.name)}`;
   const target = field.when || field.required === false ? `*${member}` : member;
-  const encode = `if (const auto error = ${internalEncode(field.type)}(${writer}, ${target}${fieldArguments(field, value)}); error != error_code::ok) return error;`;
+  const encode = `if (const auto error = ${internalEncode(field.type)}(${writer}, ${target}${fieldEncodeArguments(field, value)}); error != error_code::ok) return error;`;
   const checks = fieldRangeChecks(field, target);
   if (field.when) {
     const guard = conditionExpression(field.when, owner, value, flagsName);
@@ -528,23 +543,27 @@ function trailingRuntimePredicates(owner, value) {
     .map((entry) => runtimePredicate(owner, entry, value)).join("\n");
 }
 
-function negotiatedBoundCheck(owner, operation, measured) {
+function negotiatedBoundCheck(owner, operation, application, measured) {
+  const applied = operation.applications[application];
   if (operation.topology !== "clientServer"
-      || operation.maximum.kind !== "decoder-context"
       || operation.comparison !== "less-than-or-equal"
-      || operation.direction !== "decode") {
+      || operation.context.missing !== "protocol-error"
+      || operation.context.negative !== "protocol-error"
+      || operation.context.aboveAbsoluteMaximum !== "protocol-error"
+      || applied.context.name !== operation.context.name) {
     throw new Error(`${owner.name}: unsupported negotiated-bound operation`);
   }
-  return `if (${measured} > ${unsignedLiteral(operation.absoluteMaximum)} || ${measured} > context.${identifier(operation.maximum.name)}) return error_code::limit;`;
+  const context = `context.${identifier(applied.context.name)}`;
+  return `if (!${context} || *${context} < 0 || static_cast<std::uint64_t>(*${context}) > ${unsignedLiteral(operation.context.absoluteMaximum)}) return error_code::context;\nif (${measured} > static_cast<std::uint64_t>(*${context})) return error_code::limit;`;
 }
 
-function trailingNegotiatedBounds(owner, measuredByKind) {
+function negotiatedBoundChecks(owner, application, measuredByKind) {
   return owner.operations.filter((entry) => entry.op === "negotiated-bound").map((operation) => {
     const measured = measuredByKind[operation.measured];
     if (measured === undefined) {
       throw new Error(`${owner.name}: unsupported negotiated-bound measurement ${operation.measured}`);
     }
-    return negotiatedBoundCheck(owner, operation, measured);
+    return negotiatedBoundCheck(owner, operation, application, measured);
   }).join("\n");
 }
 
@@ -583,8 +602,9 @@ function emitLengthCodec(owner, operation) {
   const byteView = operation.content === "text"
     ? `std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(${encodedValue}.data()), ${encodedValue}.size())`
     : `std::span<const std::uint8_t>(${encodedValue})`;
-  const negotiated = trailingNegotiatedBounds(owner, { "content-bytes": "size" });
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.lengthType)} length{};\nif (const auto error = ${internalDecode(operation.lengthType)}(reader, length); error != error_code::ok) return error;\nconst auto size = static_cast<std::uint64_t>(length.value);\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${negotiated}\n${absent ? "if (size == 0) { out.value.reset(); return error_code::ok; }" : ""}\nstd::span<const std::uint8_t> bytes;\nif (const auto error = reader.take(size, bytes); error != error_code::ok) return error;\n${assign}\n${validateText ? `if (!validUtf8(${decodedValue}, ${validateText.nul === "forbidden" ? "true" : "false"})) return error_code::utf8;` : ""}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value) {\nconst auto size = static_cast<std::uint64_t>(${absent ? "value.value ? value.value->size() : 0" : "value.value.size()"});\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${textCheck}\n${typeName(operation.lengthType)} length{static_cast<${valueCppType(operation.lengthType)}>(size)};\nif (const auto error = ${internalEncode(operation.lengthType)}(writer, length); error != error_code::ok) return error;\n${absent ? "if (!value.value) return error_code::ok;" : ""}\nwriter.bytes(${byteView});\nreturn error_code::ok;\n}`;
+  const decodeNegotiated = negotiatedBoundChecks(owner, "decode", { "content-bytes": "size" });
+  const encodeNegotiated = negotiatedBoundChecks(owner, "encode", { "content-bytes": "size" });
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.lengthType)} length{};\nif (const auto error = ${internalDecode(operation.lengthType)}(reader, length); error != error_code::ok) return error;\nconst auto size = static_cast<std::uint64_t>(length.value);\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${decodeNegotiated}\n${absent ? "if (size == 0) { out.value.reset(); return error_code::ok; }" : ""}\nstd::span<const std::uint8_t> bytes;\nif (const auto error = reader.take(size, bytes); error != error_code::ok) return error;\n${assign}\n${validateText ? `if (!validUtf8(${decodedValue}, ${validateText.nul === "forbidden" ? "true" : "false"})) return error_code::utf8;` : ""}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto size = static_cast<std::uint64_t>(${absent ? "value.value ? value.value->size() : 0" : "value.value.size()"});\nif (size < ${unsignedLiteral(operation.minimumBytes)} || size > ${unsignedLiteral(operation.maximumBytes)}) return error_code::range;\n${encodeNegotiated}\n${textCheck}\n${typeName(operation.lengthType)} length{static_cast<${valueCppType(operation.lengthType)}>(size)};\nif (const auto error = ${internalEncode(operation.lengthType)}(writer, length); error != error_code::ok) return error;\n${absent ? "if (!value.value) return error_code::ok;" : ""}\nwriter.bytes(${byteView});\nreturn error_code::ok;\n}`;
 }
 
 function emitStructCodec(owner, operation) {
@@ -597,7 +617,7 @@ function emitStructCodec(owner, operation) {
   const limit = operation.maximumEncodedBytes === undefined
     ? ""
     : `if (writer.data.size() - encodedStart > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::limit;`;
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${decode}\n${constraints}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\n${start}\n${encodeConstraints}\n${trailingRuntimePredicates(owner, "value")}\n${encode}\n${limit}\nreturn error_code::ok;\n}`;
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${decode}\n${constraints}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\n${start}\n${encodeConstraints}\n${trailingRuntimePredicates(owner, "value")}\n${encode}\n${limit}\nreturn error_code::ok;\n}`;
 }
 
 function emitVectorCodec(owner, operation) {
@@ -607,7 +627,7 @@ function emitVectorCodec(owner, operation) {
     ? ""
     : `if (count > ${unsignedLiteral(operation.maximumItems)}) return error_code::range;`;
   const constraints = vectorConstraint(operation, owner);
-  return `inline error_code validate_constraints_${n}(const ${n}_t& value) {\n${constraints}\nreturn error_code::ok;\n}\ninline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.countType)} countValue{};\nif (const auto error = ${internalDecode(operation.countType)}(reader, countValue); error != error_code::ok) return error;\nconst auto count = static_cast<std::uint64_t>(countValue.value);\n${maximum}\nout.items.clear();\nout.items.reserve(static_cast<std::size_t>(count));\nfor (std::uint64_t index = 0; index < count; ++index) {\n${typeName(item)} item{};\nif (const auto error = ${internalDecode(item)}(reader, item${decodeParameterArguments(types.get(item.$ref))}); error != error_code::ok) return error;\nout.items.push_back(std::move(item));\n}\nif (const auto error = validate_constraints_${n}(out); error != error_code::ok) return error;\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\nconst auto count = static_cast<std::uint64_t>(value.items.size());\n${maximum}\nif (const auto error = validate_constraints_${n}(value); error != error_code::ok) return error;\n${trailingRuntimePredicates(owner, "value")}\n${typeName(operation.countType)} countValue{static_cast<decltype(${typeName(operation.countType)}::value)>(count)};\nif (const auto error = ${internalEncode(operation.countType)}(writer, countValue); error != error_code::ok) return error;\nfor (const auto& item : value.items) {\nif (const auto error = ${internalEncode(item)}(writer, item${parameterArguments(types.get(item.$ref))}); error != error_code::ok) return error;\n}\nreturn error_code::ok;\n}`;
+  return `inline error_code validate_constraints_${n}(const ${n}_t& value) {\n${constraints}\nreturn error_code::ok;\n}\ninline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.countType)} countValue{};\nif (const auto error = ${internalDecode(operation.countType)}(reader, countValue); error != error_code::ok) return error;\nconst auto count = static_cast<std::uint64_t>(countValue.value);\n${maximum}\nout.items.clear();\nout.items.reserve(static_cast<std::size_t>(count));\nfor (std::uint64_t index = 0; index < count; ++index) {\n${typeName(item)} item{};\nif (const auto error = ${internalDecode(item)}(reader, item${decodeParameterArguments(types.get(item.$ref))}); error != error_code::ok) return error;\nout.items.push_back(std::move(item));\n}\nif (const auto error = validate_constraints_${n}(out); error != error_code::ok) return error;\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto count = static_cast<std::uint64_t>(value.items.size());\n${maximum}\nif (const auto error = validate_constraints_${n}(value); error != error_code::ok) return error;\n${trailingRuntimePredicates(owner, "value")}\n${typeName(operation.countType)} countValue{static_cast<decltype(${typeName(operation.countType)}::value)>(count)};\nif (const auto error = ${internalEncode(operation.countType)}(writer, countValue); error != error_code::ok) return error;\nfor (const auto& item : value.items) {\nif (const auto error = ${internalEncode(item)}(writer, item${encodeParameterArguments(types.get(item.$ref))}); error != error_code::ok) return error;\n}\nreturn error_code::ok;\n}`;
 }
 
 function emitVersionedVectorCodec(owner, operation) {
@@ -619,7 +639,7 @@ function emitVersionedVectorCodec(owner, operation) {
   const base = emitVectorCodec(owner, vectorOperation)
     .replace(`decode_value_${n}(reader_t& reader, ${n}_t& out`, `decode_items_${n}(reader_t& reader, ${n}_t& out`)
     .replace(`encode_value_${n}(writer_t& writer, const ${n}_t& value`, `encode_items_${n}(writer_t& writer, const ${n}_t& value`);
-  return `${base}\ninline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName({ $ref: version.$ref })} versionValue{};\nif (const auto error = ${internalDecode({ $ref: version.$ref })}(reader, versionValue); error != error_code::ok) return error;\nif (versionValue.value != ${version.constant}) return error_code::constant;\nreturn decode_items_${n}(reader, out${decodeParameterArguments(owner)});\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\nconst auto encodedStart = writer.data.size();\n${typeName({ $ref: version.$ref })} versionValue{${version.constant}};\nif (const auto error = ${internalEncode({ $ref: version.$ref })}(writer, versionValue); error != error_code::ok) return error;\nif (const auto error = encode_items_${n}(writer, value${parameterArguments(owner)}); error != error_code::ok) return error;\nif (writer.data.size() - encodedStart > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::limit;\nreturn error_code::ok;\n}`;
+  return `${base}\ninline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName({ $ref: version.$ref })} versionValue{};\nif (const auto error = ${internalDecode({ $ref: version.$ref })}(reader, versionValue); error != error_code::ok) return error;\nif (versionValue.value != ${version.constant}) return error_code::constant;\nreturn decode_items_${n}(reader, out${decodeParameterArguments(owner)});\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto encodedStart = writer.data.size();\n${typeName({ $ref: version.$ref })} versionValue{${version.constant}};\nif (const auto error = ${internalEncode({ $ref: version.$ref })}(writer, versionValue); error != error_code::ok) return error;\nif (const auto error = encode_items_${n}(writer, value${encodeParameterArguments(owner)}); error != error_code::ok) return error;\nif (writer.data.size() - encodedStart > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::limit;\nreturn error_code::ok;\n}`;
 }
 
 function emitDelimitedCodec(owner, operation) {
@@ -631,10 +651,13 @@ function emitDelimitedCodec(owner, operation) {
   const limit = operation.maximumEncodedBytes === undefined
     ? ""
     : `if (body.data.size() + ${overhead}u > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::limit;`;
-  const negotiated = trailingNegotiatedBounds(owner, {
+  const decodeNegotiated = negotiatedBoundChecks(owner, "decode", {
     "encoded-bytes": `static_cast<std::uint64_t>(${overhead}u) + ${numericExpression("length", operation.length)}`,
   });
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.version)} version{};\nif (const auto error = ${internalDecode(operation.version)}(reader, version); error != error_code::ok) return error;\nif (${numericExpression("version", operation.version)} != ${operation.version.constant}) return error_code::constant;\n${typeName(operation.length)} length{};\nif (const auto error = ${internalDecode(operation.length)}(reader, length); error != error_code::ok) return error;\n${negotiated}\nreader_t body;\nif (const auto error = reader.subreader(${numericExpression("length", operation.length)}, body); error != error_code::ok) return error;\n${decodeFields}\nif (!body.empty()) return error_code::trailing;\n${aggregateConstraints(operation, owner, "out")}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\n${aggregateConstraints(operation, owner, "value")}\n${trailingRuntimePredicates(owner, "value")}\nwriter_t body;\n${encodeFields}\n${limit}\n${typeName(operation.version)} version{${operation.version.constant}};\nif (const auto error = ${internalEncode(operation.version)}(writer, version); error != error_code::ok) return error;\n${typeName(operation.length)} length{static_cast<${valueCppType(operation.length)}>(body.data.size())};\nif (const auto error = ${internalEncode(operation.length)}(writer, length); error != error_code::ok) return error;\nwriter.bytes(body.data);\nreturn error_code::ok;\n}`;
+  const encodeNegotiated = negotiatedBoundChecks(owner, "encode", {
+    "encoded-bytes": `static_cast<std::uint64_t>(${overhead}u) + body.data.size()`,
+  });
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.version)} version{};\nif (const auto error = ${internalDecode(operation.version)}(reader, version); error != error_code::ok) return error;\nif (${numericExpression("version", operation.version)} != ${operation.version.constant}) return error_code::constant;\n${typeName(operation.length)} length{};\nif (const auto error = ${internalDecode(operation.length)}(reader, length); error != error_code::ok) return error;\n${decodeNegotiated}\nreader_t body;\nif (const auto error = reader.subreader(${numericExpression("length", operation.length)}, body); error != error_code::ok) return error;\n${decodeFields}\nif (!body.empty()) return error_code::trailing;\n${aggregateConstraints(operation, owner, "out")}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\n${aggregateConstraints(operation, owner, "value")}\n${trailingRuntimePredicates(owner, "value")}\nwriter_t body;\n${encodeFields}\n${limit}\n${encodeNegotiated}\n${typeName(operation.version)} version{${operation.version.constant}};\nif (const auto error = ${internalEncode(operation.version)}(writer, version); error != error_code::ok) return error;\n${typeName(operation.length)} length{static_cast<${valueCppType(operation.length)}>(body.data.size())};\nif (const auto error = ${internalEncode(operation.length)}(writer, length); error != error_code::ok) return error;\nwriter.bytes(body.data);\nreturn error_code::ok;\n}`;
 }
 
 function encodedLimitCheck(owner, measured) {
@@ -695,7 +718,7 @@ function emitConditionalCodec(owner, operation) {
   const encodeBody = operation.bodyLengthType === null
     ? `writer_t& bodyWriter = writer;\n${encodeCases}\nreturn error_code::union_case;`
     : `writer_t bodyWriter;\nauto encodeSelected = [&]() -> error_code {\n${encodeCases}\nreturn error_code::union_case;\n};\nif (const auto error = encodeSelected(); error != error_code::ok) return error;\n${typeName(operation.bodyLengthType)} length{static_cast<decltype(${typeName(operation.bodyLengthType)}::value)>(bodyWriter.data.size())};\nif (const auto error = ${internalEncode(operation.bodyLengthType)}(writer, length); error != error_code::ok) return error;\nwriter.bytes(bodyWriter.data);\n${encodedLimitCheck(owner, "writer.data.size() - encodedStart")}\nreturn error_code::ok;`;
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\nconst auto encodedStart = reader.position();\n${decodeDiscriminators}\n${decodeBody}\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\nconst auto encodedStart = writer.data.size();\n${encodeDiscriminators}\n${encodeBody}\n}`;
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\nconst auto encodedStart = reader.position();\n${decodeDiscriminators}\n${decodeBody}\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\nconst auto encodedStart = writer.data.size();\n${encodeDiscriminators}\n${encodeBody}\n}`;
 }
 
 function tlvPresenceRules(operation, owner, value) {
@@ -730,9 +753,9 @@ function emitTlvCodec(owner, operation) {
     const member = `value.${identifier(field.name)}`;
     const target = field.required === false ? `*${member}` : member;
     const guard = field.required === false ? `if (${member}) {` : "{";
-    return `${guard}\nwriter_t itemWriter;\n${fieldRangeChecks(field, target)}\n${tlvFieldConstraints(field, target)}\nif (const auto error = ${internalEncode(field.type)}(itemWriter, ${target}${fieldArguments(field, "value")}); error != error_code::ok) return error;\nentries.push_back(tlv_entry_t{${field.id}u, std::move(itemWriter.data)});\n}`;
+    return `${guard}\nwriter_t itemWriter;\n${fieldRangeChecks(field, target)}\n${tlvFieldConstraints(field, target)}\nif (const auto error = ${internalEncode(field.type)}(itemWriter, ${target}${fieldEncodeArguments(field, "value")}); error != error_code::ok) return error;\nentries.push_back(tlv_entry_t{${field.id}u, std::move(itemWriter.data)});\n}`;
   }).join("\n");
-  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.totalLengthType)} totalLength{};\nif (const auto error = ${internalDecode(operation.totalLengthType)}(reader, totalLength); error != error_code::ok) return error;\nreader_t body;\nif (const auto error = reader.subreader(${numericExpression("totalLength", operation.totalLengthType)}, body); error != error_code::ok) return error;\n${seen}\nout.unknownFields.clear();\nbool first = true;\nstd::uint64_t previous{};\nwhile (!body.empty()) {\n${typeName(operation.fieldIdType)} idValue{};\n${typeName(operation.fieldLengthType)} lengthValue{};\nif (const auto error = ${internalDecode(operation.fieldIdType)}(body, idValue); error != error_code::ok) return error;\nif (const auto error = ${internalDecode(operation.fieldLengthType)}(body, lengthValue); error != error_code::ok) return error;\nconst auto id = static_cast<std::uint64_t>(idValue.value);\nif (!first && id <= previous) return id == previous ? error_code::duplicate : error_code::order;\nfirst = false;\nprevious = id;\nreader_t itemReader;\nif (const auto error = body.subreader(lengthValue.value, itemReader); error != error_code::ok) return error;\nswitch (id) {\n${decodeCases}\ndefault: {\nstd::span<const std::uint8_t> unknown;\nif (const auto error = itemReader.take(itemReader.remaining(), unknown); error != error_code::ok) return error;\nout.unknownFields.push_back({id, {unknown.begin(), unknown.end()}});\nbreak;\n}\n}\n}\n${required}\n${tlvPresenceRules(operation, owner, "out")}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${parameters(owner)}) {\n${tlvPresenceRules(operation, owner, "value")}\n${trailingRuntimePredicates(owner, "value")}\nstd::vector<tlv_entry_t> entries;\n${encodeFields}\nfor (const auto& unknown : value.unknownFields) entries.push_back({unknown.id, unknown.value});\nstd::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) { return left.id < right.id; });\nfor (std::size_t index = 1; index < entries.size(); ++index) if (entries[index - 1].id == entries[index].id) return error_code::duplicate;\nwriter_t body;\nfor (const auto& entry : entries) {\n${typeName(operation.fieldIdType)} idValue{static_cast<decltype(${typeName(operation.fieldIdType)}::value)>(entry.id)};\n${typeName(operation.fieldLengthType)} lengthValue{static_cast<decltype(${typeName(operation.fieldLengthType)}::value)>(entry.value.size())};\nif (const auto error = ${internalEncode(operation.fieldIdType)}(body, idValue); error != error_code::ok) return error;\nif (const auto error = ${internalEncode(operation.fieldLengthType)}(body, lengthValue); error != error_code::ok) return error;\nbody.bytes(entry.value);\n}\nif (body.data.size() > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::range;\n${typeName(operation.totalLengthType)} totalLength{static_cast<decltype(${typeName(operation.totalLengthType)}::value)>(body.data.size())};\nif (const auto error = ${internalEncode(operation.totalLengthType)}(writer, totalLength); error != error_code::ok) return error;\nwriter.bytes(body.data);\nreturn error_code::ok;\n}`;
+  return `inline error_code decode_value_${n}(reader_t& reader, ${n}_t& out${decodeParameters(owner)}) {\n${typeName(operation.totalLengthType)} totalLength{};\nif (const auto error = ${internalDecode(operation.totalLengthType)}(reader, totalLength); error != error_code::ok) return error;\nreader_t body;\nif (const auto error = reader.subreader(${numericExpression("totalLength", operation.totalLengthType)}, body); error != error_code::ok) return error;\n${seen}\nout.unknownFields.clear();\nbool first = true;\nstd::uint64_t previous{};\nwhile (!body.empty()) {\n${typeName(operation.fieldIdType)} idValue{};\n${typeName(operation.fieldLengthType)} lengthValue{};\nif (const auto error = ${internalDecode(operation.fieldIdType)}(body, idValue); error != error_code::ok) return error;\nif (const auto error = ${internalDecode(operation.fieldLengthType)}(body, lengthValue); error != error_code::ok) return error;\nconst auto id = static_cast<std::uint64_t>(idValue.value);\nif (!first && id <= previous) return id == previous ? error_code::duplicate : error_code::order;\nfirst = false;\nprevious = id;\nreader_t itemReader;\nif (const auto error = body.subreader(lengthValue.value, itemReader); error != error_code::ok) return error;\nswitch (id) {\n${decodeCases}\ndefault: {\nstd::span<const std::uint8_t> unknown;\nif (const auto error = itemReader.take(itemReader.remaining(), unknown); error != error_code::ok) return error;\nout.unknownFields.push_back({id, {unknown.begin(), unknown.end()}});\nbreak;\n}\n}\n}\n${required}\n${tlvPresenceRules(operation, owner, "out")}\n${trailingRuntimePredicates(owner, "out")}\nreturn error_code::ok;\n}\ninline error_code encode_value_${n}(writer_t& writer, const ${n}_t& value${encodeParameters(owner)}) {\n${tlvPresenceRules(operation, owner, "value")}\n${trailingRuntimePredicates(owner, "value")}\nstd::vector<tlv_entry_t> entries;\n${encodeFields}\nfor (const auto& unknown : value.unknownFields) entries.push_back({unknown.id, unknown.value});\nstd::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) { return left.id < right.id; });\nfor (std::size_t index = 1; index < entries.size(); ++index) if (entries[index - 1].id == entries[index].id) return error_code::duplicate;\nwriter_t body;\nfor (const auto& entry : entries) {\n${typeName(operation.fieldIdType)} idValue{static_cast<decltype(${typeName(operation.fieldIdType)}::value)>(entry.id)};\n${typeName(operation.fieldLengthType)} lengthValue{static_cast<decltype(${typeName(operation.fieldLengthType)}::value)>(entry.value.size())};\nif (const auto error = ${internalEncode(operation.fieldIdType)}(body, idValue); error != error_code::ok) return error;\nif (const auto error = ${internalEncode(operation.fieldLengthType)}(body, lengthValue); error != error_code::ok) return error;\nbody.bytes(entry.value);\n}\nif (body.data.size() > ${unsignedLiteral(operation.maximumEncodedBytes)}) return error_code::range;\n${typeName(operation.totalLengthType)} totalLength{static_cast<decltype(${typeName(operation.totalLengthType)}::value)>(body.data.size())};\nif (const auto error = ${internalEncode(operation.totalLengthType)}(writer, totalLength); error != error_code::ok) return error;\nwriter.bytes(body.data);\nreturn error_code::ok;\n}`;
 }
 
 const codecEmitters = new Map([
@@ -805,20 +828,23 @@ function emitCommand(command) {
   const args = contexts.map((entry) => `, ${identifier(entry.name)}`).join("");
   const decodeHeadParams = decodeParameters(semanticOwner);
   const decodeHeadArgs = decodeParameterArguments(semanticOwner);
-  const decodeParams = `${params}${negotiatedBounds(command).length === 0 ? "" : ", const decoder_context_t& context"}`;
+  const encodeHeadParams = encodeParameters(semanticOwner);
+  const encodeHeadArgs = encodeParameterArguments(semanticOwner);
+  const decodeParams = `${params}${negotiatedBounds(command).length === 0 ? "" : ", const codec_context_t& context"}`;
+  const encodeParams = `${params}${negotiatedBounds(command).length === 0 ? "" : ", const codec_context_t& context"}`;
   const metadataDecode = metadata ? `const bool hasMetadata = (out.flags & ${flags.get(metadata.flag.name)}u) != 0u;\nif (hasMetadata) {\nif (index >= frames.size()) return {error_code::required, {}};\nout.metadata.emplace();\nreader_t metadataReader{frames[index++]};\nif (const auto error = ${internalDecode(metadata.frame)}(metadataReader, *out.metadata${negotiatedBounds(types.get(metadata.frame.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok || !metadataReader.empty()) return {error == error_code::ok ? error_code::trailing : error, {}};\n} else {\nout.metadata.reset();\n}` : "";
-  const metadataEncode = metadata ? `const bool hasMetadata = (value.flags & ${flags.get(metadata.flag.name)}u) != 0u;\nif (hasMetadata != value.metadata.has_value()) return {hasMetadata ? error_code::required : error_code::forbidden, {}};\nif (value.metadata) {\nwriter_t metadataWriter;\nif (const auto error = ${internalEncode(metadata.frame)}(metadataWriter, *value.metadata); error != error_code::ok) return {error, {}};\nframes.push_back(std::move(metadataWriter.data));\n}` : "";
+  const metadataEncode = metadata ? `const bool hasMetadata = (value.flags & ${flags.get(metadata.flag.name)}u) != 0u;\nif (hasMetadata != value.metadata.has_value()) return {hasMetadata ? error_code::required : error_code::forbidden, {}};\nif (value.metadata) {\nwriter_t metadataWriter;\nif (const auto error = ${internalEncode(metadata.frame)}(metadataWriter, *value.metadata${negotiatedBounds(types.get(metadata.frame.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok) return {error, {}};\nframes.push_back(std::move(metadataWriter.data));\n}` : "";
   let payloadDecode = "";
   let payloadEncode = "";
   if (payload.policy === "forbidden") {
     payloadDecode = "if (index != frames.size()) return {error_code::forbidden, {}};";
   } else {
     payloadDecode = `${payload.policy === "required" ? "if (index >= frames.size()) return {error_code::required, {}};" : ""}\nif (index < frames.size()) {\nout.payload.emplace();\nreader_t payloadReader{frames[index++]};\nif (const auto error = ${internalDecode(payload.type)}(payloadReader, *out.payload${negotiatedBounds(types.get(payload.type.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok || !payloadReader.empty()) return {error == error_code::ok ? error_code::trailing : error, {}};\n}\nif (index != frames.size()) return {error_code::trailing, {}};`;
-    payloadEncode = `if (${payload.policy === "required" ? "!value.payload" : "false"}) return {error_code::required, {}};\nif (value.payload) {\nwriter_t payloadWriter;\nif (const auto error = ${internalEncode(payload.type)}(payloadWriter, *value.payload); error != error_code::ok) return {error, {}};\nframes.push_back(std::move(payloadWriter.data));\n}`;
+    payloadEncode = `if (${payload.policy === "required" ? "!value.payload" : "false"}) return {error_code::required, {}};\nif (value.payload) {\nwriter_t payloadWriter;\nif (const auto error = ${internalEncode(payload.type)}(payloadWriter, *value.payload${negotiatedBounds(types.get(payload.type.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok) return {error, {}};\nframes.push_back(std::move(payloadWriter.data));\n}`;
   }
   const magic = header.magic.map((entry) => `writer.data.push_back(${entry}u);`).join("\n");
   const magicDecode = header.magic.map((entry) => `if (const auto error = reader.expect(${entry}u); error != error_code::ok) return error;`).join("\n");
-  return `${dto}\ninline error_code decode_head_${n}(reader_t& reader, ${n}_t& out${decodeHeadParams}) {\n${magicDecode}\nif (const auto error = reader.expect(${header.wireMajor}u); error != error_code::ok) return error;\nif (const auto error = reader.expect(${header.commandId}u); error != error_code::ok) return error;\nstd::uint64_t flagsValue{};\nif (const auto error = reader.unsignedInteger(1, flagsValue); error != error_code::ok) return error;\nout.flags = static_cast<std::uint8_t>(flagsValue);\nif ((out.flags & ~${allowed}u) != 0u || (out.flags & ${required}u) != ${required}u) return error_code::flags;\n${commandFlagConstraints(command, "out.flags")}\n${decodeFields}\nif (!reader.empty()) return error_code::trailing;\n${predicateDecode}\nreturn error_code::ok;\n}\ninline error_code encode_head_${n}(writer_t& writer, const ${n}_t& value${params}) {\nif ((value.flags & ~${allowed}u) != 0u || (value.flags & ${required}u) != ${required}u) return error_code::flags;\n${commandFlagConstraints(command, "value.flags")}\n${predicateEncode}\n${magic}\nwriter.data.push_back(${header.wireMajor}u);\nwriter.data.push_back(${header.commandId}u);\nwriter.data.push_back(value.flags);\n${encodeFields}\nreturn error_code::ok;\n}\ninline result_t<${n}_t> decode_${n}_frames(const std::vector<std::vector<std::uint8_t>>& frames${decodeParams}) {\nif (frames.empty()) return {error_code::required, {}};\n${n}_t out{};\nreader_t headReader{frames.front()};\nif (const auto error = decode_head_${n}(headReader, out${decodeHeadArgs}); error != error_code::ok) return {error, {}};\nstd::size_t index = 1;\n${metadataDecode}\n${payloadDecode}\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::vector<std::uint8_t>>> encode_${n}_frames(const ${n}_t& value${params}) {\nwriter_t headWriter;\nif (const auto error = encode_head_${n}(headWriter, value${args}); error != error_code::ok) return {error, {}};\nstd::vector<std::vector<std::uint8_t>> frames;\nframes.push_back(std::move(headWriter.data));\n${metadataEncode}\n${payloadEncode}\nreturn {error_code::ok, std::move(frames)};\n}\ninline bool validate_${n}_runtime_predicates(const ${n}_t& value) {\nreturn [&]() -> error_code {\n${predicateEncode}\nreturn error_code::ok;\n}() == error_code::ok;\n}`;
+  return `${dto}\ninline error_code decode_head_${n}(reader_t& reader, ${n}_t& out${decodeHeadParams}) {\n${magicDecode}\nif (const auto error = reader.expect(${header.wireMajor}u); error != error_code::ok) return error;\nif (const auto error = reader.expect(${header.commandId}u); error != error_code::ok) return error;\nstd::uint64_t flagsValue{};\nif (const auto error = reader.unsignedInteger(1, flagsValue); error != error_code::ok) return error;\nout.flags = static_cast<std::uint8_t>(flagsValue);\nif ((out.flags & ~${allowed}u) != 0u || (out.flags & ${required}u) != ${required}u) return error_code::flags;\n${commandFlagConstraints(command, "out.flags")}\n${decodeFields}\nif (!reader.empty()) return error_code::trailing;\n${predicateDecode}\nreturn error_code::ok;\n}\ninline error_code encode_head_${n}(writer_t& writer, const ${n}_t& value${encodeHeadParams}) {\nif ((value.flags & ~${allowed}u) != 0u || (value.flags & ${required}u) != ${required}u) return error_code::flags;\n${commandFlagConstraints(command, "value.flags")}\n${predicateEncode}\n${magic}\nwriter.data.push_back(${header.wireMajor}u);\nwriter.data.push_back(${header.commandId}u);\nwriter.data.push_back(value.flags);\n${encodeFields}\nreturn error_code::ok;\n}\ninline result_t<${n}_t> decode_${n}_frames(const std::vector<std::vector<std::uint8_t>>& frames${decodeParams}) {\nif (frames.empty()) return {error_code::required, {}};\n${n}_t out{};\nreader_t headReader{frames.front()};\nif (const auto error = decode_head_${n}(headReader, out${decodeHeadArgs}); error != error_code::ok) return {error, {}};\nstd::size_t index = 1;\n${metadataDecode}\n${payloadDecode}\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::vector<std::uint8_t>>> encode_${n}_frames(const ${n}_t& value${encodeParams}) {\nwriter_t headWriter;\nif (const auto error = encode_head_${n}(headWriter, value${encodeHeadArgs}); error != error_code::ok) return {error, {}};\nstd::vector<std::vector<std::uint8_t>> frames;\nframes.push_back(std::move(headWriter.data));\n${metadataEncode}\n${payloadEncode}\nreturn {error_code::ok, std::move(frames)};\n}\ninline bool validate_${n}_runtime_predicates(const ${n}_t& value) {\nreturn [&]() -> error_code {\n${predicateEncode}\nreturn error_code::ok;\n}() == error_code::ok;\n}`;
 }
 
 function emitDurable(format) {
@@ -829,14 +855,18 @@ function emitDurable(format) {
   if (checksum.algorithm !== "crc32c-castagnoli") throw new Error(`${format.name}: unsupported checksum`);
   const magicDecode = header.magic.map((entry) => `if (const auto error = reader.expect(${entry}u); error != error_code::ok) return {error, {}};`).join("\n");
   const magicEncode = header.magic.map((entry) => `writer.data.push_back(${entry}u);`).join("\n");
-  return `struct ${n}_t {\n    ${typeName(header.body)} body{};\n    bool operator==(const ${n}_t&) const = default;\n};\ninline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${negotiatedBounds(format).length === 0 ? "" : ", const decoder_context_t& context"}) {\nif (bytes.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreader_t reader{bytes};\n${magicDecode}\nif (const auto error = reader.expect(${header.formatVersion}u); error != error_code::ok) return {error, {}};\n${typeName(header.flagsType)} flagsValue{};\nif (const auto error = ${internalDecode(header.flagsType)}(reader, flagsValue); error != error_code::ok) return {error, {}};\nif (${numericExpression("flagsValue", header.flagsType)} != ${header.flags}) return {error_code::flags, {}};\nu32_t bodyLength{};\nif (const auto error = decode_value_u32(reader, bodyLength); error != error_code::ok) return {error, {}};\nreader_t bodyReader;\nif (const auto error = reader.subreader(bodyLength.value, bodyReader); error != error_code::ok) return {error, {}};\n${n}_t out{};\nif (const auto error = ${internalDecode(header.body)}(bodyReader, out.body${negotiatedBounds(types.get(header.body.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok || !bodyReader.empty()) return {error == error_code::ok ? error_code::trailing : error, {}};\nconst auto checksumPosition = reader.position();\nstd::uint64_t checksumValue{};\nif (const auto error = reader.unsignedInteger(4, checksumValue); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nif (checksumValue != crc32c(bytes.first(checksumPosition))) return {error_code::checksum, {}};\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value) {\nwriter_t bodyWriter;\nif (const auto error = ${internalEncode(header.body)}(bodyWriter, value.body); error != error_code::ok) return {error, {}};\nwriter_t writer;\n${magicEncode}\nwriter.data.push_back(${header.formatVersion}u);\n${typeName(header.flagsType)} flagsValue{${header.flags}};\nif (const auto error = ${internalEncode(header.flagsType)}(writer, flagsValue); error != error_code::ok) return {error, {}};\nu32_t bodyLength{static_cast<std::uint32_t>(bodyWriter.data.size())};\nif (const auto error = encode_value_u32(writer, bodyLength); error != error_code::ok) return {error, {}};\nwriter.bytes(bodyWriter.data);\nconst auto checksumValue = crc32c(writer.data);\nif (const auto error = writer.unsignedInteger(4, checksumValue); error != error_code::ok) return {error, {}};\nif (writer.data.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
+  const contextParameter = negotiatedBounds(format).length === 0 ? "" : ", const codec_context_t& context";
+  const bodyContextArgument = negotiatedBounds(types.get(header.body.$ref)).length === 0 ? "" : ", context";
+  return `struct ${n}_t {\n    ${typeName(header.body)} body{};\n    bool operator==(const ${n}_t&) const = default;\n};\ninline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${contextParameter}) {\nif (bytes.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreader_t reader{bytes};\n${magicDecode}\nif (const auto error = reader.expect(${header.formatVersion}u); error != error_code::ok) return {error, {}};\n${typeName(header.flagsType)} flagsValue{};\nif (const auto error = ${internalDecode(header.flagsType)}(reader, flagsValue); error != error_code::ok) return {error, {}};\nif (${numericExpression("flagsValue", header.flagsType)} != ${header.flags}) return {error_code::flags, {}};\nu32_t bodyLength{};\nif (const auto error = decode_value_u32(reader, bodyLength); error != error_code::ok) return {error, {}};\nreader_t bodyReader;\nif (const auto error = reader.subreader(bodyLength.value, bodyReader); error != error_code::ok) return {error, {}};\n${n}_t out{};\nif (const auto error = ${internalDecode(header.body)}(bodyReader, out.body${bodyContextArgument}); error != error_code::ok || !bodyReader.empty()) return {error == error_code::ok ? error_code::trailing : error, {}};\nconst auto checksumPosition = reader.position();\nstd::uint64_t checksumValue{};\nif (const auto error = reader.unsignedInteger(4, checksumValue); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nif (checksumValue != crc32c(bytes.first(checksumPosition))) return {error_code::checksum, {}};\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value${contextParameter}) {\nwriter_t bodyWriter;\nif (const auto error = ${internalEncode(header.body)}(bodyWriter, value.body${bodyContextArgument}); error != error_code::ok) return {error, {}};\nwriter_t writer;\n${magicEncode}\nwriter.data.push_back(${header.formatVersion}u);\n${typeName(header.flagsType)} flagsValue{${header.flags}};\nif (const auto error = ${internalEncode(header.flagsType)}(writer, flagsValue); error != error_code::ok) return {error, {}};\nu32_t bodyLength{static_cast<std::uint32_t>(bodyWriter.data.size())};\nif (const auto error = encode_value_u32(writer, bodyLength); error != error_code::ok) return {error, {}};\nwriter.bytes(bodyWriter.data);\nconst auto checksumValue = crc32c(writer.data);\nif (const auto error = writer.unsignedInteger(4, checksumValue); error != error_code::ok) return {error, {}};\nif (writer.data.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
 }
 
 function emitLogical(format) {
   const n = identifier(`logical_${format.name}`);
   const stream = format.operations.find((entry) => entry.op === "logical-stream");
   const limit = format.operations.find((entry) => entry.op === "encoded-limit");
-  return `struct ${n}_t {\n    ${typeName(stream.body)} body{};\n    bool operator==(const ${n}_t&) const = default;\n};\ninline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${negotiatedBounds(format).length === 0 ? "" : ", const decoder_context_t& context"}) {\nif (bytes.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreader_t reader{bytes};\n${n}_t out{};\nif (const auto error = ${internalDecode(stream.body)}(reader, out.body${negotiatedBounds(types.get(stream.body.$ref)).length === 0 ? "" : ", context"}); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value) {\nwriter_t writer;\nif (const auto error = ${internalEncode(stream.body)}(writer, value.body); error != error_code::ok) return {error, {}};\nif (writer.data.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
+  const contextParameter = negotiatedBounds(format).length === 0 ? "" : ", const codec_context_t& context";
+  const bodyContextArgument = negotiatedBounds(types.get(stream.body.$ref)).length === 0 ? "" : ", context";
+  return `struct ${n}_t {\n    ${typeName(stream.body)} body{};\n    bool operator==(const ${n}_t&) const = default;\n};\ninline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${contextParameter}) {\nif (bytes.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreader_t reader{bytes};\n${n}_t out{};\nif (const auto error = ${internalDecode(stream.body)}(reader, out.body${bodyContextArgument}); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nreturn {error_code::ok, std::move(out)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value${contextParameter}) {\nwriter_t writer;\nif (const auto error = ${internalEncode(stream.body)}(writer, value.body${bodyContextArgument}); error != error_code::ok) return {error, {}};\nif (writer.data.size() > ${unsignedLiteral(limit.maximumEncodedBytes)}) return {error_code::limit, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
 }
 
 const operationSyntaxEmitters = new Map([
@@ -890,7 +920,7 @@ function assertOperationCoverage(ir) {
 
 function publicTypeApi(owner) {
   const n = identifier(owner.name);
-  return `inline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${decodeParameters(owner)}) {\nreader_t reader{bytes};\n${n}_t value{};\nif (const auto error = decode_value_${n}(reader, value${decodeParameterArguments(owner)}); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nreturn {error_code::ok, std::move(value)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value${parameters(owner)}) {\nwriter_t writer;\nif (const auto error = encode_value_${n}(writer, value${parameterArguments(owner)}); error != error_code::ok) return {error, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
+  return `inline result_t<${n}_t> decode_${n}(std::span<const std::uint8_t> bytes${decodeParameters(owner)}) {\nreader_t reader{bytes};\n${n}_t value{};\nif (const auto error = decode_value_${n}(reader, value${decodeParameterArguments(owner)}); error != error_code::ok) return {error, {}};\nif (!reader.empty()) return {error_code::trailing, {}};\nreturn {error_code::ok, std::move(value)};\n}\ninline result_t<std::vector<std::uint8_t>> encode_${n}(const ${n}_t& value${encodeParameters(owner)}) {\nwriter_t writer;\nif (const auto error = encode_value_${n}(writer, value${encodeParameterArguments(owner)}); error != error_code::ok) return {error, {}};\nreturn {error_code::ok, std::move(writer.data)};\n}`;
 }
 
 function render(ir) {
@@ -898,7 +928,7 @@ function render(ir) {
   flags = new Map(ir.flags.map((entry) => [entry.name, entry.bit]));
   decoderContextFields = [...new Map(ir.types.flatMap((owner) => owner.operations
     .filter((operation) => operation.op === "negotiated-bound")
-    .map((operation) => [operation.maximum.name, operation]))).values()];
+    .map((operation) => [operation.context.name, operation]))).values()];
   assertOperationCoverage(ir);
   const ordered = orderedTypes(ir);
   const dtos = ordered.map(emitDto).join("\n\n");
@@ -946,6 +976,7 @@ enum class error_code : std::uint8_t {
     predicate,
     checksum,
     limit,
+    context,
 };
 
 template<class T>
@@ -955,8 +986,8 @@ struct result_t {
     explicit operator bool() const noexcept { return error == error_code::ok; }
 };
 
-struct decoder_context_t {
-${decoderContextFields.map((operation) => `    std::uint64_t ${identifier(operation.maximum.name)};`).join("\n")}
+struct codec_context_t {
+${decoderContextFields.map((operation) => `    std::optional<std::int64_t> ${identifier(operation.context.name)};`).join("\n")}
 };
 
 struct reader_t {
