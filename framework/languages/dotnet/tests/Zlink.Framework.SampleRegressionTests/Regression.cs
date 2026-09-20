@@ -308,7 +308,7 @@ public sealed partial class RegressionTests
         // Scope this readiness check to /health handlers. Operational relocation
         // queries can share their host file (08-location-maintenance §3).
         var healthHandler = new Regex(
-            "MapGet\\(\"/health\",(?<handler>(?:[^()]|\\((?<depth>)|\\)(?<-depth>))*)(?(depth)(?!))\\)",
+            "MapGet\\s*\\(\\s*\"/health\"\\s*,(?<handler>(?:[^()]|\\((?<depth>)|\\)(?<-depth>))*)(?(depth)(?!))\\)",
             RegexOptions.CultureInvariant);
         var handlers = hostFiles.SelectMany(file => healthHandler.Matches(ReadSource(file))
             .Cast<Match>().Select(match => match.Groups["handler"].Value)).ToArray();
@@ -467,7 +467,10 @@ public sealed partial class RegressionTests
 
     private static void AssertLocationStoreHost(string hostFactory)
     {
-        Assert.Contains("AddLocationStore(new ZLinkRedisLocationStore", hostFactory, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("AddLocationStore(new ZLinkRedisLocationStore"),
+            NormalizeWhitespace(hostFactory),
+            StringComparison.Ordinal);
         Assert.Contains("redis.ConnectionString = topology.RedisEndpoint", hostFactory, StringComparison.Ordinal);
         Assert.Contains("redis.KeyPrefix = topology.RedisKeyPrefix", hostFactory, StringComparison.Ordinal);
     }
@@ -803,7 +806,7 @@ public sealed partial class RegressionTests
         // so before ReadSource() owned the rule the checkout's line endings decided the verdict
         // instead of the content. Drive a real sample file through the read path both ways.
         const string needle =
-            "Rehydrate(\n        QuestDefinition definition,\n        IReadOnlyList<QuestDomainEvent> stream)";
+            "Rehydrate(\n        QuestDefinition definition,\n        IReadOnlyList<QuestDomainEvent> stream\n    )";
         var original = Path.Combine(
             ResolveSampleRoot("GameQuest"), "Server", "QuestMission", "Domain", "QuestDomain.cs");
         var lfText = ReadSource(original);
@@ -848,6 +851,11 @@ public sealed partial class RegressionTests
     private static string ReadSource(string path)
     {
         return File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeWhitespace(string source)
+    {
+        return Regex.Replace(source, @"\s+", string.Empty, RegexOptions.CultureInvariant);
     }
 
     private static IEnumerable<string> EnumerateSourceFiles(string root)
