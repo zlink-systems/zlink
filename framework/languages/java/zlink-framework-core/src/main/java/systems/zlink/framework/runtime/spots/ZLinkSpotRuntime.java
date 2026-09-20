@@ -3895,6 +3895,7 @@ public final class ZLinkSpotRuntime
     <T> CompletionStage<T> admitApplicationJob(
         Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
+        ensureOwnerAdmissionOpen();
         if (systems.zlink.framework.runtime.internal.dispatch
             .ZLinkApplicationJobContext.current().isPresent()) {
             return operation.get();
@@ -3905,6 +3906,7 @@ public final class ZLinkSpotRuntime
     <T> CompletionStage<T> admitNewApplicationJob(
         Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
+        ensureOwnerAdmissionOpen();
         return applicationJobQueue.acquire().thenCompose(permit -> {
             permit.queued();
             CompletionStage<T> result;
@@ -4020,6 +4022,13 @@ public final class ZLinkSpotRuntime
     }
 
     @Override
+    void ensureOwnerAdmissionOpen() {
+        if (userSpotLocationRuntime != null) {
+            userSpotLocationRuntime.ensureOwnerAdmissionOpen();
+        }
+    }
+
+    @Override
     Executor serialExecutor() {
         return frameworkRegistration.serialExecutor();
     }
@@ -4052,6 +4061,7 @@ public final class ZLinkSpotRuntime
             eventDispatcher,
             primaryNodeSourceName,
             (timerName, operation) -> dispatch.enqueue(timerName, () -> {
+                ensureOwnerAdmissionOpen();
                 //  Spec 27 §4: a timer callback starts a new flow at every
                 //  diagnostics level except Off.
                 if (!flowCaptureEnabled()) {

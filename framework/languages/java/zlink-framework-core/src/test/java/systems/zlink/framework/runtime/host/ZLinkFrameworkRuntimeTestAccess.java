@@ -30,6 +30,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         return runtime.startupCompletion();
     }
 
+    public static boolean ownerAdmissionOpen(
+        ZLinkFrameworkRuntime runtime) {
+        return runtime.ownerAdmissionOpen();
+    }
+
     public static ZLinkFrameworkRuntime start(
         DefaultZLinkFrameworkOptions options,
         ZLinkBackendAdapterProvider backendProvider,

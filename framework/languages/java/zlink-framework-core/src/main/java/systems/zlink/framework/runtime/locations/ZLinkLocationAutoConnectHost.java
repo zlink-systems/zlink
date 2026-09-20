@@ -225,6 +225,17 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         return fanout.start();
     }
 
+    public CompletionStage<Void> recoverOwnerLease() {
+        var owner = runtime.ownerTokenSnapshot();
+        if (clientServers != null && clientServers.store() != null) {
+            clientServers.setOwner(owner);
+        }
+        if (fanout != null && fanout.store() != null) {
+            fanout.setOwner(owner);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     public CompletionStage<Void> markDraining() {
         CompletionStage<Void> chain = !clientServersStarted
             ? CompletableFuture.completedFuture(null)

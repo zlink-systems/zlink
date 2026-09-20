@@ -39,7 +39,8 @@ final class ZLinkLocationRuntimeRecoveryTest {
             "owner-a",
             Duration.ofSeconds(1),
             Duration.ofMillis(20),
-            Duration.ofMillis(10))) {
+            Duration.ofMillis(10),
+            Duration.ofMillis(100))) {
             runtime.setOwnerLeaseRecoveryListener(() -> {
                 republished.countDown();
                 return CompletableFuture.completedFuture(null);
@@ -76,6 +77,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
             "owner-a",
             Duration.ofSeconds(1),
             Duration.ofMillis(20),
+            Duration.ofMillis(100),
             Duration.ofMillis(100))) {
             CompletableFuture<Void> startup = runtime.start(RoutingId.from("node-a"))
                 .toCompletableFuture();
@@ -162,7 +164,8 @@ final class ZLinkLocationRuntimeRecoveryTest {
             "owner-a",
             Duration.ofSeconds(1),
             Duration.ofSeconds(1),
-            Duration.ofMillis(20))) {
+            Duration.ofMillis(20),
+            Duration.ofMillis(100))) {
             var failure = assertThrows(java.util.concurrent.CompletionException.class,
                 () -> runtime.start(RoutingId.from("node-a"))
                     .toCompletableFuture().join());

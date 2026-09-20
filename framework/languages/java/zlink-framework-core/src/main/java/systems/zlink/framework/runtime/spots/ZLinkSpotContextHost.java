@@ -11,6 +11,9 @@ import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 
 abstract class ZLinkSpotContextHost {
+    void ensureOwnerAdmissionOpen() {
+    }
+
     abstract Executor serialExecutor();
 
     /** Executor for runtime control work that must progress during relocation. */

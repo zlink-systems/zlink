@@ -489,8 +489,13 @@ public final class ZLinkFrameworkRuntime
                 if (runtimeState.get()
                     != ZLinkFrameworkRuntimeState.PREPARING) {
                     return this.objectDescriptors.recoverAfterOwnerLease(
-                        this.runtimeState.get(),
-                        this.locationRuntime.recoveryPreviousOwnerToken());
+                            this.runtimeState.get(),
+                            this.locationRuntime.recoveryPreviousOwnerToken())
+                        .thenCompose(ignored ->
+                            this.locationAutoConnectHost == null
+                                ? CompletableFuture.completedFuture(null)
+                                : this.locationAutoConnectHost
+                                    .recoverOwnerLease());
                 }
                 return startOwnerBoundRuntime(spotSubsystem)
                     .thenRun(this::completeOwnerBoundStartup);
@@ -499,7 +504,7 @@ public final class ZLinkFrameworkRuntime
         locationSubsystem.startup()
             .thenCompose(ignored -> {
                 if (this.locationRuntime != null
-                    && !this.locationRuntime.ownerLeaseHealthy()) {
+                    && !this.locationRuntime.isOwnerAdmissionOpen()) {
                     startupReady.complete(null);
                     return CompletableFuture.completedFuture(null);
                 }
@@ -1045,6 +1050,13 @@ public final class ZLinkFrameworkRuntime
         Duration deadline = options.deadline() == null
             ? DEFAULT_TERMINATION_DEADLINE
             : options.deadline();
+        if (locationRuntime != null
+            && !locationRuntime.isOwnerAdmissionOpen()) {
+            return CompletableFuture.completedFuture(blockedRelocation(
+                options.mode(),
+                effectiveTargetVersion,
+                ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY));
+        }
         if (runtimeState.get() == ZLinkFrameworkRuntimeState.RELOCATED
             && lastRelocationResult.get() != null) {
             return CompletableFuture.completedFuture(
@@ -2153,6 +2165,11 @@ public final class ZLinkFrameworkRuntime
 
     CompletionStage<Void> startupCompletion() {
         return independentWaiter(startupReady);
+    }
+
+    boolean ownerAdmissionOpen() {
+        return locationRuntime == null
+            || locationRuntime.isOwnerAdmissionOpen();
     }
 
     private void runDrain() {

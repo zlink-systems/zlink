@@ -29,6 +29,7 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     private final Set<String> spots = ConcurrentHashMap.newKeySet();
     private final Map<String, ActorRef> actors = new ConcurrentHashMap<>();
     private final Set<RoutingId> sessionRoutes = ConcurrentHashMap.newKeySet();
+    private final ZLinkLocationRuntime runtime;
     private final ZLinkLocationRepository store;
     private final ZLinkActorAuthorityPayloadCodec actorAuthorities =
         new ZLinkActorAuthorityPayloadCodec();
@@ -36,8 +37,16 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
         new ZLinkServiceAuthorityPayloadCodec();
 
     public ZLinkLocationLifecycle(ZLinkLocationRuntime runtime) {
-        this.store = Objects.requireNonNull(runtime, "runtime")
-            .locationStore();
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.store = runtime.locationStore();
+    }
+
+    public boolean isOwnerAdmissionOpen() {
+        return runtime.isOwnerAdmissionOpen();
+    }
+
+    public void ensureOwnerAdmissionOpen() {
+        runtime.ensureOwnerAdmissionOpen();
     }
 
     public CompletionStage<ZLinkLocationWriteStatus> claimSpot(

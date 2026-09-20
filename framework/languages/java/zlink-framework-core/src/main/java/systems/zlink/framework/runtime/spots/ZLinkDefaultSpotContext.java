@@ -177,6 +177,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
+        host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueueWithPayloadBytes(
             payloadBytes,
             () -> runApplicationExecution(null, false,
@@ -634,6 +635,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
+        host.ensureOwnerAdmissionOpen();
         return serials.executeSpot(payloadBytes, () -> {
             CompletionStage<Void> stage = runApplicationExecution(
                 null,

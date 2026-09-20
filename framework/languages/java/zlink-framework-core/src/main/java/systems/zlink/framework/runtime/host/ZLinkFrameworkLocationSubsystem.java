@@ -69,7 +69,8 @@ final class ZLinkFrameworkLocationSubsystem {
             locationStores,
             registration.locations().options().ownerLeaseTtl(),
             registration.locations().options().ownerLeaseRenewInterval(),
-            registration.locations().options().ownerLeaseRenewTimeout());
+            registration.locations().options().ownerLeaseRenewTimeout(),
+            registration.locations().options().ownerLeaseFencingMargin());
         CompletionStage<Void> startup =
             locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
 

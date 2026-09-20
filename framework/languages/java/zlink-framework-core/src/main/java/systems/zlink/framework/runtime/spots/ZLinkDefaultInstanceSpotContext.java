@@ -151,6 +151,7 @@ final class DefaultInstanceSpotContext
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
+        host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueue(operation);
     }
 
