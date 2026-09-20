@@ -135,7 +135,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void lateClaimResultAfterCancellationCleanupNeverOpensAdmission()
+    void cancellationHasOneConfirmationAndReleaseOwner()
         throws Exception {
         CancelledLateClaimStore store = new CancelledLateClaimStore();
         try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
@@ -149,11 +149,12 @@ final class ZLinkLocationRuntimeRecoveryTest {
                 .toCompletableFuture();
 
             assertTrue(startup.cancel(true));
-            assertTrue(store.firstReadStarted.await(1, TimeUnit.SECONDS));
-            store.completeInitialCleanupRead();
+            assertEquals(0, store.readCount.get());
             store.completeLateClaim();
 
             assertTrue(store.released.await(1, TimeUnit.SECONDS));
+            assertEquals(1, store.readCount.get());
+            assertEquals(1, store.releaseCount.get());
             assertFalse(runtime.ownerLeaseHealthy());
             assertThrows(IllegalStateException.class, runtime::currentOwnerToken);
             assertEquals(0, store.heartbeatRenewals.get());
@@ -421,11 +422,9 @@ final class ZLinkLocationRuntimeRecoveryTest {
         extends ZLinkLocationStoreTestAdapter {
         private final CompletableFuture<ZLinkOwnerLeaseClaimResult> claim =
             new CompletableFuture<>();
-        private final CompletableFuture<ZLinkOwnerLeaseReadResult> firstRead =
-            new CompletableFuture<>();
-        private final CountDownLatch firstReadStarted = new CountDownLatch(1);
         private final CountDownLatch released = new CountDownLatch(1);
         private final AtomicInteger readCount = new AtomicInteger();
+        private final AtomicInteger releaseCount = new AtomicInteger();
         private final AtomicInteger heartbeatRenewals = new AtomicInteger();
         private final ZLinkLocationOwnerToken token =
             new ZLinkLocationOwnerToken("owner-a", 1);
@@ -440,10 +439,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
         @Override
         public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(
             String ownerId) {
-            if (readCount.getAndIncrement() == 0) {
-                firstReadStarted.countDown();
-                return firstRead;
-            }
+            readCount.incrementAndGet();
             Instant now = Instant.now();
             return CompletableFuture.completedFuture(new ZLinkOwnerLeaseFound(
                 token, now.plusSeconds(1), now));
@@ -452,6 +448,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
         @Override
         public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
             ZLinkLocationOwnerToken value) {
+            releaseCount.incrementAndGet();
             released.countDown();
             return CompletableFuture.completedFuture(
                 ZLinkOwnerLeaseReleaseResult.RELEASED);
@@ -463,10 +460,6 @@ final class ZLinkLocationRuntimeRecoveryTest {
             Duration ttl) {
             heartbeatRenewals.incrementAndGet();
             return CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
-        }
-
-        void completeInitialCleanupRead() {
-            firstRead.complete(new ZLinkOwnerLeaseMissing());
         }
 
         void completeLateClaim() {
