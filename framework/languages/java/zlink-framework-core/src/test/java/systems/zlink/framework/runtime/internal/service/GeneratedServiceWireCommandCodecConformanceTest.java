@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import systems.zlink.framework.runtime.protocol.ServiceWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 final class GeneratedServiceWireCommandCodecConformanceTest {
@@ -104,6 +106,58 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             assertTrue(runtimeZljrRejects(bytes));
             assertThrows(Exception.class,
                 () -> ServiceWirePilotCodec.decodeZljrRecordV1(bytes));
+        }
+    }
+
+    @Test
+    void finalGeneratedCodecConformsToEveryIndexedFixture()
+        throws Exception {
+        JsonNode fixtures = fixtureIndex().path("fixtures");
+        assertEquals(9, fixtures.size());
+        for (JsonNode indexed : fixtures) {
+            String file = indexed.path("goldenFixture").asText()
+                .substring("golden/".length());
+            JsonNode golden = fixture(file);
+            String kind = indexed.path("kind").asText();
+            for (JsonNode canonical : indexed.path("canonical")) {
+                JsonNode pointers = canonical.path("pointers");
+                switch (kind) {
+                    case "durable" -> {
+                        byte[] bytes = pointedHex(golden, pointers, "encodedHex");
+                        String format = indexed.path("surface").path("format").asText();
+                        assertArrayEquals(bytes, ServiceWireCodec.encodeDurable(format,
+                            ServiceWireCodec.decodeDurable(format, bytes)), file);
+                        byte[] malformed = Arrays.copyOf(bytes, bytes.length);
+                        malformed[malformed.length - 1] ^= 1;
+                        assertThrows(Exception.class,
+                            () -> ServiceWireCodec.decodeDurable(format, malformed), file);
+                    }
+                    case "logical" -> {
+                        byte[] bytes = pointedHex(golden, pointers, "logicalHex");
+                        var context = new ServiceWireCodec.DecoderContext(null, null, null);
+                        assertArrayEquals(bytes, ServiceWireCodec.encodeRelocationEnvelopeV1(
+                            ServiceWireCodec.decodeRelocationEnvelopeV1(bytes, context), context),
+                            file);
+                        byte[] malformed = Arrays.copyOf(bytes, bytes.length + 1);
+                        assertThrows(Exception.class, () -> ServiceWireCodec
+                            .decodeRelocationEnvelopeV1(malformed, context), file);
+                    }
+                    case "command" -> {
+                        List<byte[]> frames = pointedFrames(golden, pointers);
+                        assertFramesEqual(frames, ServiceWireCodec.encodeCommandFrames(
+                            ServiceWireCodec.decodeCommand(frames)));
+                    }
+                    default -> throw new IllegalStateException("unknown fixture kind: " + kind);
+                }
+            }
+            if (kind.equals("command")) {
+                for (JsonNode malformed : indexed.path("malformed")) {
+                    List<byte[]> frames = pointedFrames(golden, malformed.path("pointers"));
+                    assertThrows(Exception.class,
+                        () -> ServiceWireCodec.decodeCommand(frames),
+                        file + ":" + malformed.path("name").asText());
+                }
+            }
         }
     }
 
@@ -229,5 +283,41 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             current = current.getParent();
         }
         throw new IllegalStateException("shared fixture was not found: " + file);
+    }
+
+    private static JsonNode fixtureIndex() throws Exception {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path candidate = current.resolve("runtime/protocol/generated/fixtures/index.json");
+            if (Files.isRegularFile(candidate)) {
+                return JSON.readTree(Files.readString(candidate));
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException("shared fixture index was not found");
+    }
+
+    private static byte[] pointedHex(JsonNode fixture, JsonNode pointers,
+        String name) {
+        return HexFormat.of().parseHex(fixture.at(pointers.path(name).asText()).asText());
+    }
+
+    private static List<byte[]> pointedFrames(JsonNode fixture, JsonNode pointers) {
+        JsonNode framesPointer = pointers.path("framesHex");
+        if (!framesPointer.isMissingNode()) {
+            List<byte[]> frames = new ArrayList<>();
+            for (JsonNode frame : fixture.at(framesPointer.asText())) {
+                frames.add(HexFormat.of().parseHex(frame.asText()));
+            }
+            return frames;
+        }
+        return List.of(pointedHex(fixture, pointers, "hex"));
+    }
+
+    private static void assertFramesEqual(List<byte[]> expected, List<byte[]> actual) {
+        assertTrue(expected.size() == actual.size());
+        for (int index = 0; index < expected.size(); index++) {
+            assertArrayEquals(expected.get(index), actual.get(index));
+        }
     }
 }
