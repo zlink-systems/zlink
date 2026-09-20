@@ -12,7 +12,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     public void Generated_codec_conforms_to_every_indexed_vector()
     {
         using var index = ReadJson("generated/fixtures/index.json");
-        Assert.Equal(2, index.RootElement.GetProperty("version").GetInt32());
+        Assert.Equal(3, index.RootElement.GetProperty("version").GetInt32());
         Assert.Equal(9, index.RootElement.GetProperty("fixtures").GetArrayLength());
 
         var cases = new List<ConformanceCase>();
@@ -51,7 +51,17 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(42, cases.Count);
+        Assert.Equal(100, cases.Count);
+        var operationCases = index.RootElement.GetProperty("operationCases").EnumerateArray().ToArray();
+        Assert.Equal(28, operationCases.Count(item => item.GetProperty("expect").GetString() == "accept"));
+        Assert.Equal(49, operationCases.Count(item => item.GetProperty("expect").GetString() == "reject"));
+        Assert.Equal(25, operationCases.Select(item => item.GetProperty("operation").GetString()).Distinct().Count());
+        foreach (var operation in operationCases.GroupBy(item => item.GetProperty("operation").GetString()!))
+        {
+            var boundary = operation.Where(item => item.TryGetProperty("boundaryPair", out _)).ToArray();
+            Assert.Contains(boundary, item => item.GetProperty("expect").GetString() == "accept");
+            Assert.Contains(boundary, item => item.GetProperty("expect").GetString() == "reject");
+        }
         foreach (var testCase in cases)
         {
             Assert.True(testCase.Expect is "accept" or "reject", testCase.Label);
@@ -102,114 +112,196 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
 
     private static void ExerciseOperation(JsonElement vector)
     {
-        var name = vector.GetProperty("name").GetString();
-        if (name == "terminal-predicate")
+        var expect = vector.GetProperty("expect").GetString()!;
+        var directions = vector.TryGetProperty("directions", out var declared)
+            ? declared.EnumerateArray().Select(item => item.GetString()!).ToArray()
+            : ["decode"];
+        var wire = OperationWire(vector);
+        foreach (var direction in directions)
         {
-            var input = vector.GetProperty("input");
-            ServiceWireCodec.ValidateTerminalFailure(
-                Enum.Parse<ServiceWireCodec.RequestTerminalResult>(
-                    Pascal(input.GetProperty("terminalResult").GetString()!)),
-                Enum.Parse<ServiceWireCodec.FrameworkErrorCode>(
-                    Pascal(input.GetProperty("failureCode").GetString()!)));
-            return;
-        }
-
-        var bytes = Convert.FromHexString(vector.TryGetProperty("hex", out var hex)
-            ? hex.GetString()!
-            : vector.GetProperty("framesHex")[0].GetString()!);
-        switch (name)
-        {
-            case "vector-ordering":
-                ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1(bytes, Context);
-                break;
-            case "tlv-unknown-non-empty-skip":
-            case "tlv-required-field-presence":
-            case "tlv-unknown-with-missing-required":
-                ServiceWireCodec.DecodeDescriptorExtension(bytes, Context);
-                break;
-            case "invalid-utf8":
-            case "nul-text":
-                ServiceWireCodec.DecodeText8(bytes, Context);
-                break;
-            case "flag-implication":
-                ServiceWireCodec.DecodeActorSend24([bytes], Context);
-                break;
-            case "metadata-frame-required":
-                ServiceWireCodec.DecodeNodeSend16(
-                    vector.GetProperty("framesHex").EnumerateArray()
-                        .Select(item => Convert.FromHexString(item.GetString()!)).ToArray(), Context);
-                break;
-            case "conditional-union-case-constraint":
-                ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, Context);
-                break;
-            case "metadata-nonadjacent-duplicate-key":
-                ServiceWireCodec.DecodeMetadataFrame(bytes, Context);
-                break;
-            case "client-server-negotiated-payload-bound":
-            case "client-server-negotiated-envelope-bound":
-            case "client-server-negotiated-context-missing":
-            case "client-server-negotiated-context-negative":
-            case "client-server-negotiated-context-above-absolute-maximum":
-                ExerciseNegotiatedBound(vector, bytes);
-                break;
-            case "durable-flags":
-            case "durable-checksum":
-            case "durable-trailing":
-                ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, Context);
-                break;
-            default:
-                throw new ConformanceHarnessException($"unhandled operation case {name}");
-        }
-    }
-
-    private static void ExerciseNegotiatedBound(JsonElement vector, byte[] bytes)
-    {
-        var name = vector.GetProperty("name").GetString()!;
-        var context = NegotiatedContextFor(vector);
-        foreach (var direction in vector.GetProperty("directions").EnumerateArray()
-                     .Select(item => item.GetString()!))
-        {
-            var exception = Record.Exception(() => (name, direction) switch
-            {
-                ("client-server-negotiated-envelope-bound", "decode") =>
-                    ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context),
-                ("client-server-negotiated-envelope-bound", "encode") =>
-                    EncodeApplicationPayloadEnvelope(bytes, context),
-                (_, "decode") => ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context),
-                (_, "encode") => EncodeApplicationPayload(bytes, context),
-                _ => throw new ConformanceHarnessException(
-                    $"unhandled negotiated-bound direction {name}:{direction}")
-            });
-            if (exception is null)
-                throw new ConformanceHarnessException(
-                    $"negotiated-bound direction accepted {name}:{direction}");
+            var exception = Record.Exception(() => ExerciseDirection(vector, direction, wire));
+            if (expect == "accept" && exception is not null)
+                throw new ConformanceHarnessException($"{direction} rejected: {exception}");
+            if (expect == "reject" && exception is null)
+                throw new ConformanceHarnessException($"{direction} accepted");
             if (exception is ConformanceHarnessException)
                 throw exception;
         }
 
-        throw new InvalidDataException("all negotiated-bound directions rejected");
+        if (expect == "reject")
+            throw new InvalidDataException("all declared directions rejected");
     }
 
-    private static ServiceWireCodec.ApplicationPayloadBytes EncodeApplicationPayload(
-        byte[] bytes, ServiceWireCodec.DecodeContext context)
+    private static void ExerciseDirection(JsonElement vector, string direction, object wire)
     {
-        var value = ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, Context);
-        ServiceWireCodec.EncodeApplicationPayloadBytes(value, context);
-        return value;
+        var name = vector.GetProperty("name").GetString()!;
+        if (vector.GetProperty("surface").GetProperty("format").GetString() == "semantic")
+        {
+            var input = vector.GetProperty("input");
+            ServiceWireCodec.ValidateTerminalFailure(
+                Enum.Parse<ServiceWireCodec.RequestTerminalResult>(Pascal(input.GetProperty("terminalResult").GetString()!)),
+                Enum.Parse<ServiceWireCodec.FrameworkErrorCode>(Pascal(input.GetProperty("failureCode").GetString()!)));
+            return;
+        }
+
+        var context = ContextFor(vector);
+        if (direction == "decode")
+        {
+            DecodeSurface(vector, wire, context);
+            return;
+        }
+        if (direction != "encode")
+            throw new ConformanceHarnessException($"unknown direction {name}:{direction}");
+
+        var value = vector.TryGetProperty("input", out _)
+            ? InputValue(vector)
+            : DecodeSurface(vector, wire, Context);
+        var encoded = EncodeSurface(vector, value, context);
+        if (vector.GetProperty("expect").GetString() == "accept")
+            AssertWireEqual(wire, encoded, name);
     }
 
-    private static ServiceWireCodec.ApplicationPayloadEnvelopeV1 EncodeApplicationPayloadEnvelope(
-        byte[] bytes, ServiceWireCodec.DecodeContext context)
+    private static object DecodeSurface(JsonElement vector, object wire,
+        ServiceWireCodec.DecodeContext context)
     {
-        var value = ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, Context);
-        ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1(value, context);
-        return value;
+        var surface = vector.GetProperty("surface");
+        if (surface.GetProperty("format").GetString() == "command")
+            return surface.GetProperty("commandId").GetInt32() switch
+            {
+                16 => ServiceWireCodec.DecodeNodeSend16((byte[][])wire, context),
+                24 => ServiceWireCodec.DecodeActorSend24((byte[][])wire, context),
+                _ => throw new ConformanceHarnessException("operation command surface")
+            };
+        return surface.GetProperty("format").GetString() switch
+        {
+            "authority-payload-v1" => ServiceWireCodec.DecodeDurableAuthorityPayloadV1((byte[])wire, context),
+            "relocation-envelope-v1" => ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1((byte[])wire, context),
+            "type" => DecodeType(surface.GetProperty("type").GetString()!, (byte[])wire, context),
+            _ => throw new ConformanceHarnessException("operation decode surface")
+        };
     }
 
-    private static ServiceWireCodec.DecodeContext NegotiatedContextFor(JsonElement vector)
+    private static object EncodeSurface(JsonElement vector, object value,
+        ServiceWireCodec.DecodeContext context)
+    {
+        var surface = vector.GetProperty("surface");
+        if (surface.GetProperty("format").GetString() == "command")
+            return surface.GetProperty("commandId").GetInt32() switch
+            {
+                16 => ServiceWireCodec.EncodeNodeSend16((ServiceWireCodec.NodeSend16)value, context),
+                24 => ServiceWireCodec.EncodeActorSend24((ServiceWireCodec.ActorSend24)value, context),
+                _ => throw new ConformanceHarnessException("operation command surface")
+            };
+        return surface.GetProperty("format").GetString() switch
+        {
+            "authority-payload-v1" => ServiceWireCodec.EncodeDurableAuthorityPayloadV1(
+                (ServiceWireCodec.AuthorityPayloadV1)value, context),
+            "relocation-envelope-v1" => ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(
+                (ServiceWireCodec.RelocationEnvelopeV1)value, context),
+            "type" => EncodeType(surface.GetProperty("type").GetString()!, value, context),
+            _ => throw new ConformanceHarnessException("operation encode surface")
+        };
+    }
+
+    private static object DecodeType(string type, byte[] bytes,
+        ServiceWireCodec.DecodeContext context) => type switch
+    {
+        "application-version" => ServiceWireCodec.DecodeApplicationVersion(bytes, context),
+        "bool8" => ServiceWireCodec.DecodeBool8(bytes, context),
+        "rid" => ServiceWireCodec.DecodeRid(bytes, context),
+        "text8" => ServiceWireCodec.DecodeText8(bytes, context),
+        "optional-actor-ref" => ServiceWireCodec.DecodeOptionalActorRef(bytes, context),
+        "actor-ref" => ServiceWireCodec.DecodeActorRef(bytes, context),
+        "sorted-text8-vector" => ServiceWireCodec.DecodeSortedText8Vector(bytes, context),
+        "metadata-frame" => ServiceWireCodec.DecodeMetadataFrame(bytes, context),
+        "application-payload-envelope-v1" => ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context),
+        "relocation-object-identity" => ServiceWireCodec.DecodeRelocationObjectIdentity(bytes, context),
+        "descriptor-extension" => ServiceWireCodec.DecodeDescriptorExtension(bytes, context),
+        "aggregate-participant-vector" => ServiceWireCodec.DecodeAggregateParticipantVector(bytes, context),
+        "application-payload-bytes" => ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context),
+        _ => throw new ConformanceHarnessException($"operation type decode {type}")
+    };
+
+    private static byte[] EncodeType(string type, object value,
+        ServiceWireCodec.DecodeContext context) => type switch
+    {
+        "application-version" => ServiceWireCodec.EncodeApplicationVersion((ServiceWireCodec.ApplicationVersion)value, context),
+        "bool8" => ServiceWireCodec.EncodeBool8((ServiceWireCodec.Bool8)value, context),
+        "rid" => ServiceWireCodec.EncodeRid((ServiceWireCodec.Rid)value, context),
+        "text8" => ServiceWireCodec.EncodeText8((ServiceWireCodec.Text8)value, context),
+        "optional-actor-ref" => ServiceWireCodec.EncodeOptionalActorRef((ServiceWireCodec.OptionalActorRef)value, context),
+        "actor-ref" => ServiceWireCodec.EncodeActorRef((ServiceWireCodec.ActorRef)value, context),
+        "sorted-text8-vector" => ServiceWireCodec.EncodeSortedText8Vector((ServiceWireCodec.SortedText8Vector)value, context),
+        "metadata-frame" => ServiceWireCodec.EncodeMetadataFrame((ServiceWireCodec.MetadataFrame)value, context),
+        "application-payload-envelope-v1" => ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1((ServiceWireCodec.ApplicationPayloadEnvelopeV1)value, context),
+        "relocation-object-identity" => ServiceWireCodec.EncodeRelocationObjectIdentity((ServiceWireCodec.RelocationObjectIdentity)value, context),
+        "descriptor-extension" => ServiceWireCodec.EncodeDescriptorExtension((ServiceWireCodec.DescriptorExtension)value, context),
+        "aggregate-participant-vector" => ServiceWireCodec.EncodeAggregateParticipantVector((ServiceWireCodec.AggregateParticipantVector)value, context),
+        "application-payload-bytes" => ServiceWireCodec.EncodeApplicationPayloadBytes((ServiceWireCodec.ApplicationPayloadBytes)value, context),
+        _ => throw new ConformanceHarnessException($"operation type encode {type}")
+    };
+
+    private static object InputValue(JsonElement vector)
+    {
+        var name = vector.GetProperty("name").GetString()!;
+        var input = vector.GetProperty("input");
+        var type = vector.GetProperty("surface").GetProperty("type").GetString();
+        if (name == "text-lone-surrogate") return new ServiceWireCodec.Text8("\ud800");
+        if (type == "optional-actor-ref") return new ServiceWireCodec.OptionalActorRef(
+            new ServiceWireCodec.OptionalText8(input.GetProperty("actorId").ValueKind == JsonValueKind.Null ? null : input.GetProperty("actorId").GetString()),
+            input.GetProperty("generation").ValueKind == JsonValueKind.Null ? null : new ServiceWireCodec.NonzeroU64(input.GetProperty("generation").GetUInt64()));
+        if (type == "relocation-object-identity") return new ServiceWireCodec.RelocationObjectIdentityCase0(
+            Enum.Parse<ServiceWireCodec.StatefulObjectKind>(Pascal(input.GetProperty("objectKind").GetString()!)),
+            new ServiceWireCodec.ActorRef(new ServiceWireCodec.Text8(input.GetProperty("actor").GetProperty("actorId").GetString()!), new ServiceWireCodec.NonzeroU64(input.GetProperty("actor").GetProperty("objectGeneration").GetUInt64())),
+            new ServiceWireCodec.NonzeroU64(input.GetProperty("expectedAuthorityOwnerGeneration").GetUInt64()));
+        if (type == "descriptor-extension") return Descriptor(input);
+        if (type == "aggregate-participant-vector") return AggregateParticipants(input);
+        if (type == "sorted-text8-vector") return new ServiceWireCodec.SortedText8Vector(
+            input.EnumerateArray().Select(item => new ServiceWireCodec.Text8(item.GetString()!)).ToArray());
+        if (type == "application-payload-bytes") return new ServiceWireCodec.ApplicationPayloadBytes(
+            Enumerable.Repeat((byte)input.GetProperty("repeatByte").GetInt32(), input.GetProperty("count").GetInt32()).ToArray());
+        throw new ConformanceHarnessException($"operation input {name}");
+    }
+
+    private static ServiceWireCodec.DescriptorExtension Descriptor(JsonElement input)
+    {
+        T? Optional<T>(string name, Func<JsonElement, T> create) where T : class =>
+            input.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null ? create(value) : null;
+        ServiceWireCodec.RuntimeState? runtimeState = input.TryGetProperty("runtimeState", out var runtime) && runtime.ValueKind != JsonValueKind.Null
+            ? Enum.Parse<ServiceWireCodec.RuntimeState>(Pascal(runtime.GetString()!)) : null;
+        ServiceWireCodec.ObjectRole? objectRole = input.TryGetProperty("objectRole", out var role) && role.ValueKind != JsonValueKind.Null
+            ? Enum.Parse<ServiceWireCodec.ObjectRole>(Pascal(role.GetString()!)) : null;
+        return new(
+            runtimeState,
+            Optional("applicationVersion", value => new ServiceWireCodec.ApplicationVersion(value.GetInt64())),
+            null, null, null,
+            Optional("protocolCapabilities", value => new ServiceWireCodec.SortedText8Vector(value.EnumerateArray().Select(item => new ServiceWireCodec.Text8(item.GetString()!)).ToArray())),
+            objectRole,
+            Optional("placementWeight", value => new ServiceWireCodec.U32(value.GetUInt32())),
+            Optional("activeCapacityLimit", value => new ServiceWireCodec.ObjectCapacityLimit(value.GetUInt32())),
+            Optional("pendingCapacityLimit", value => new ServiceWireCodec.ObjectPendingCapacityLimit(value.GetUInt32())),
+            Optional("activeCapacityUsed", value => new ServiceWireCodec.U32(value.GetUInt32())),
+            Optional("pendingCapacityUsed", value => new ServiceWireCodec.U32(value.GetUInt32())));
+    }
+
+    private static ServiceWireCodec.AggregateParticipantVector AggregateParticipants(JsonElement input) => new(
+        input.EnumerateArray().Select(item =>
+        {
+            var actor = item.GetProperty("object").GetProperty("actor");
+            var identity = new ServiceWireCodec.RelocationObjectIdentityCase0(
+                ServiceWireCodec.StatefulObjectKind.Actor,
+                new ServiceWireCodec.ActorRef(new ServiceWireCodec.Text8(actor.GetProperty("actorId").GetString()!), new ServiceWireCodec.NonzeroU64(actor.GetProperty("objectGeneration").GetUInt64())),
+                new ServiceWireCodec.NonzeroU64(item.GetProperty("object").GetProperty("expectedAuthorityOwnerGeneration").GetUInt64()));
+            return new ServiceWireCodec.MaintenanceAggregateParticipantV1(identity,
+                new ServiceWireCodec.AuthorityStoreVersion(item.GetProperty("expectedStoreVersion").GetString()!),
+                new ServiceWireCodec.AggregateParticipantMutationBytes(Convert.FromHexString(item.GetProperty("mutationHex").GetString()!)));
+        }).ToArray());
+
+    private static ServiceWireCodec.DecodeContext ContextFor(JsonElement vector)
     {
         if (!vector.TryGetProperty("context", out var values))
-            return ServiceWireCodec.DecodeContext.Empty;
+            return vector.GetProperty("operation").GetString() == "negotiated-bound"
+                ? ServiceWireCodec.DecodeContext.Empty : Context;
 
         var payloadMaximum = values.TryGetProperty(
             "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead", out var payload)
@@ -220,6 +312,36 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             ? envelope.GetInt64()
             : null;
         return new(null, null, null, payloadMaximum, envelopeMaximum);
+    }
+
+    private static object OperationWire(JsonElement vector)
+    {
+        if (vector.TryGetProperty("framesHex", out var frames))
+            return frames.EnumerateArray().Select(item => Convert.FromHexString(item.GetString()!)).ToArray();
+        if (vector.TryGetProperty("chunksHex", out var chunks))
+            return chunks.EnumerateArray().SelectMany(item => Convert.FromHexString(item.GetString()!)).ToArray();
+        if (vector.TryGetProperty("byteRecipe", out var recipe))
+        {
+            using var stream = new MemoryStream(recipe.GetProperty("encodedBytes").GetInt32());
+            foreach (var segment in recipe.GetProperty("segments").EnumerateArray())
+                if (segment.TryGetProperty("hex", out var hex)) stream.Write(Convert.FromHexString(hex.GetString()!));
+                else
+                {
+                    var bytes = Enumerable.Repeat((byte)segment.GetProperty("repeatByte").GetInt32(), segment.GetProperty("count").GetInt32()).ToArray();
+                    stream.Write(bytes);
+                }
+            return stream.ToArray();
+        }
+        return Convert.FromHexString(vector.GetProperty("hex").GetString()!);
+    }
+
+    private static void AssertWireEqual(object expected, object actual, string name)
+    {
+        if (expected is byte[] bytes && actual is byte[] encoded)
+            Assert.True(bytes.SequenceEqual(encoded), name);
+        else if (expected is byte[][] frames && actual is byte[][] encodedFrames)
+            Assert.Equal(frames, encodedFrames);
+        else throw new ConformanceHarnessException($"wire shape {name}");
     }
 
     private static byte[][] GeneratedCommandRoundTrip(int commandId, byte[][] frames) =>
