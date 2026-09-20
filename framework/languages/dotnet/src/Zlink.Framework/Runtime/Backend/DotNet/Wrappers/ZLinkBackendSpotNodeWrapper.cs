@@ -551,6 +551,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         string actorId,
         string stableType,
         ObjectReservationFence reservation,
+        ZLinkCreationOperationId operation,
         ulong deadlineUnixMs,
         TimeSpan timeout,
         CancellationToken cancellationToken)
@@ -594,6 +595,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 actorId,
                 stableType,
                 reservation,
+                operation,
                 deadlineUnixMs,
                 id,
                 timeout));
@@ -1562,7 +1564,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         };
     }
 
-    private static ZLinkRetryAdvice RetryAdviceFor(ZLinkFrameworkErrorKind kind)
+    internal static ZLinkRetryAdvice RetryAdviceFor(ZLinkFrameworkErrorKind kind)
     {
         return kind is ZLinkFrameworkErrorKind.Unavailable
             or ZLinkFrameworkErrorKind.DeadlineExceeded

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
@@ -423,6 +424,122 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             await fixture.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task ActorManager_ResponseLoss_ReturnsStoredCreationTerminal()
+    {
+        const string actorId = "response-loss-actor";
+        const string actorType = "response-loss-probe";
+        var targetRid = RoutingId.From("response-loss-node");
+        var node = new CapturingSpotNode();
+        node.AdmittedMeshPeers.Add(new MeshNodePeer(
+            1,
+            MeshPeerSource.Discovery,
+            MeshPeerState.Admitted,
+            targetRid,
+            1,
+            1,
+            "inproc://response-loss-node",
+            1,
+            0,
+            1));
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            preseedActorOwnership: false);
+        try
+        {
+            var store = RequireLocationStore(runtime);
+            _ = await PublishCandidateAsync(
+                store,
+                "response-loss-owner",
+                targetRid,
+                TimeSpan.FromMinutes(1),
+                actorType: actorType);
+            ZLinkCreationOperationId? submittedOperation = null;
+            ulong submittedObjectGeneration = 0;
+            node.ActorCreateRemoteHandler = async (
+                _, submittedActorId, stableType, fence, operation, deadlineUnixMs,
+                _, _) =>
+            {
+                submittedOperation = operation;
+                submittedObjectGeneration = fence.ObjectGeneration;
+                var actor = new ActorRef(
+                    submittedActorId,
+                    fence.ObjectGeneration,
+                    "entry",
+                    targetRid);
+                var envelope = ZLinkActorCreationTerminalCodec.Encode(
+                    new ActorCreateOperationTerminal(
+                        RequestResult.Ok,
+                        ServiceWireConstants.FrameworkErrorCode.None,
+                        new ActorCreateCompletion(ActorCreateResult.Created, actor)),
+                    runtime.Registration.Codecs);
+                var reservation = new ZLinkObjectReservation(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(submittedActorId),
+                    fence.ExpectedStoreVersion,
+                    fence.ObjectGeneration,
+                    fence.AuthorityOwnerGeneration,
+                    fence.ReservationId,
+                    new ZLinkMeshNodeDescriptorKey("entry", targetRid),
+                    fence.TargetNodeGeneration,
+                    new ZLinkLocationOwnerToken(
+                        fence.TargetOwnerId,
+                        fence.TargetOwnerLeaseGeneration));
+                var ready = ZLinkActorAuthorityPayloadCodec.Encode(
+                    new ZLinkActorAuthorityPayload(
+                        ZLinkActorAuthorityState.Ready,
+                        stableType,
+                        submittedActorId,
+                        "entry:test",
+                        1,
+                        ZLinkSpotKind.Entry,
+                        fence.TargetOwnerId,
+                        fence.TargetOwnerLeaseGeneration,
+                        "entry",
+                        targetRid,
+                        fence.TargetNodeGeneration));
+                var completed = await store.CompleteCreationAsync(
+                    reservation,
+                    new ZLinkObjectCreationCompletion.Created(
+                        ready,
+                        new ZLinkCreationTerminalPublication(
+                            operation,
+                            envelope,
+                            DateTimeOffset.FromUnixTimeMilliseconds(
+                                    checked((long)deadlineUnixMs))
+                                .AddMinutes(1))));
+                Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(completed);
+                throw new TimeoutException("response lost after terminal storage");
+            };
+
+            var manager = new ZLinkActorManagerService(runtime);
+            var result = await manager.GetOrCreate(actorId, actorType)
+                .InMesh("entry")
+                .Async();
+
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(result);
+            Assert.Equal(actorId, created.Actor.ActorId);
+            Assert.Equal(submittedObjectGeneration, created.Actor.ObjectGeneration);
+            Assert.NotNull(submittedOperation);
+            Assert.Equal(node.RoutingId, submittedOperation.Value.SourceNodeRid);
+            Assert.Equal(
+                node.MeshStatus().LifecycleGeneration,
+                submittedOperation.Value.SourceNodeGeneration);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public void ActorManager_OperationIdentity_DoesNotProduceAllZero()
+    {
+        var operation = ZLinkActorManagerService.CreateOperationId(new byte[16]);
+
+        Assert.Equal(0UL, operation.High);
+        Assert.Equal(1UL, operation.Low);
     }
 
     private static async Task SendInstanceIntentAsync(

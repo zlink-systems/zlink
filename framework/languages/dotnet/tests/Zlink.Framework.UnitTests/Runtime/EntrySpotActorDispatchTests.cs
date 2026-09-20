@@ -10667,6 +10667,42 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public Func<ValueTask>? NodeDisposeHandler { get; set; }
 
+        public Func<
+            RoutingId,
+            string,
+            string,
+            ObjectReservationFence,
+            ZLinkCreationOperationId,
+            ulong,
+            TimeSpan,
+            CancellationToken,
+            ValueTask<(ActorCreateCompletion Completion, IReadOnlyList<Message> Reply)>>?
+            ActorCreateRemoteHandler { get; set; }
+
+        public ValueTask<(
+            ActorCreateCompletion Completion,
+            IReadOnlyList<Message> Reply)> CreateActorRemoteAsync(
+            RoutingId targetNodeRid,
+            string actorId,
+            string stableType,
+            ObjectReservationFence reservation,
+            ZLinkCreationOperationId operation,
+            ulong deadlineUnixMs,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) =>
+            ActorCreateRemoteHandler?.Invoke(
+                targetNodeRid,
+                actorId,
+                stableType,
+                reservation,
+                operation,
+                deadlineUnixMs,
+                timeout,
+                cancellationToken)
+            ?? ValueTask.FromException<(
+                ActorCreateCompletion,
+                IReadOnlyList<Message>)>(new NotSupportedException());
+
         public ValueTask DisposeAsync() =>
             NodeDisposeHandler?.Invoke() ?? ValueTask.CompletedTask;
 

@@ -339,6 +339,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
             string actorId,
             string stableType,
             ObjectReservationFence reservation,
+            ZLinkCreationOperationId operation,
             ulong deadlineUnixMs,
             TimeSpan timeout,
             CancellationToken cancellationToken) =>
