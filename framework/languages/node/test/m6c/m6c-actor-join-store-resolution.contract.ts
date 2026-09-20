@@ -136,6 +136,30 @@ test('remote Actor Join reports an incomplete legacy wire fence as ProtocolError
   );
 });
 
+test('remote Actor Join without legacy wire fence fields keeps the legacy type path', async () => {
+  let resolvedType: string | undefined;
+  const receiver = receiverFor({
+    readAuthority: async () => {
+      throw new Error('legacy Join must not read Authority');
+    },
+    getOrCreateActor: async (_actorId, stableType) => {
+      resolvedType = stableType;
+      return {};
+    }
+  });
+  const {
+    actorNodeGeneration: _nodeGeneration,
+    expectedAuthorityOwnerGeneration: _authorityGeneration,
+    expectedOwnerLeaseGeneration: _leaseGeneration,
+    ...legacy
+  } = joinPayload();
+
+  const result = await receiver.receive({ ...legacy, actorType: 'LegacyActor' }, routeContext());
+
+  assert.equal(result.accepted, false);
+  assert.equal(resolvedType, 'LegacyActor');
+});
+
 test('remote Actor Join reports a missing Authority row as NotFound', async () => {
   const receiver = receiverFor({
     readAuthority: async () => ({ kind: 'missing', storeNow: new Date() }),
