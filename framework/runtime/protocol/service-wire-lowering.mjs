@@ -237,17 +237,23 @@ function unionCaseOwner(typeName, signature) {
 
 function negotiatedBoundOperation(runtimeMaximum, measured) {
   const clientServer = runtimeMaximum.clientServer;
+  const contextName = clientServer.$negotiatedBound;
   return {
     op: "negotiated-bound",
     topology: "clientServer",
-    maximum: {
-      kind: "decoder-context",
-      name: clientServer.$negotiatedBound,
+    context: {
+      name: contextName,
+      absoluteMaximum: clientServer.absoluteMaximum,
+      missing: "protocol-error",
+      negative: "protocol-error",
+      aboveAbsoluteMaximum: "protocol-error",
     },
-    absoluteMaximum: clientServer.absoluteMaximum,
+    applications: {
+      encode: { context: { kind: "encoder-context", name: contextName } },
+      decode: { context: { kind: "decoder-context", name: contextName } },
+    },
     measured,
     comparison: "less-than-or-equal",
-    direction: "decode",
   };
 }
 
@@ -931,10 +937,21 @@ function assertLoweringCoverage(schema, ir) {
     const lowered = ir.types.find((type) => type.name === source.name);
     const runtimeMaximum = lowered.runtimeMaximumBytes ?? lowered.runtimeMaximumEncodedBytes;
     const negotiated = lowered.operations.find((operation) => operation.op === "negotiated-bound");
-    if (negotiated?.maximum?.kind !== "decoder-context"
-        || negotiated.maximum.name !== runtimeMaximum.clientServer.$negotiatedBound
-        || negotiated.absoluteMaximum !== runtimeMaximum.clientServer.absoluteMaximum
-        || negotiated.direction !== "decode") {
+    const contextName = runtimeMaximum.clientServer.$negotiatedBound;
+    const expectedContext = {
+      name: contextName,
+      absoluteMaximum: runtimeMaximum.clientServer.absoluteMaximum,
+      missing: "protocol-error",
+      negative: "protocol-error",
+      aboveAbsoluteMaximum: "protocol-error",
+    };
+    const expectedApplications = {
+      encode: { context: { kind: "encoder-context", name: contextName } },
+      decode: { context: { kind: "decoder-context", name: contextName } },
+    };
+    if (JSON.stringify(negotiated?.context) !== JSON.stringify(expectedContext)
+        || JSON.stringify(negotiated?.applications) !== JSON.stringify(expectedApplications)
+        || negotiated.comparison !== "less-than-or-equal") {
       errors.push(`type:${source.name}: ClientServer negotiated bound did not reach operations`);
     }
   }
@@ -1189,14 +1206,29 @@ function runSelfTests(schemaPath) {
     {
       op: "negotiated-bound",
       topology: "clientServer",
-      maximum: {
-        kind: "decoder-context",
+      context: {
         name: "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+        absoluteMaximum: 4294966774,
+        missing: "protocol-error",
+        negative: "protocol-error",
+        aboveAbsoluteMaximum: "protocol-error",
       },
-      absoluteMaximum: 4294966774,
+      applications: {
+        encode: {
+          context: {
+            kind: "encoder-context",
+            name: "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+          },
+        },
+        decode: {
+          context: {
+            kind: "decoder-context",
+            name: "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+          },
+        },
+      },
       measured: "content-bytes",
       comparison: "less-than-or-equal",
-      direction: "decode",
     },
   );
   assert.deepEqual(
@@ -1206,14 +1238,29 @@ function runSelfTests(schemaPath) {
     {
       op: "negotiated-bound",
       topology: "clientServer",
-      maximum: {
-        kind: "decoder-context",
+      context: {
         name: "effectiveCompleteMessageBytes",
+        absoluteMaximum: 4294967295,
+        missing: "protocol-error",
+        negative: "protocol-error",
+        aboveAbsoluteMaximum: "protocol-error",
       },
-      absoluteMaximum: 4294967295,
+      applications: {
+        encode: {
+          context: {
+            kind: "encoder-context",
+            name: "effectiveCompleteMessageBytes",
+          },
+        },
+        decode: {
+          context: {
+            kind: "decoder-context",
+            name: "effectiveCompleteMessageBytes",
+          },
+        },
+      },
       measured: "encoded-bytes",
       comparison: "less-than-or-equal",
-      direction: "decode",
     },
   );
 

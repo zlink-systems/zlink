@@ -74,8 +74,9 @@ Operation IR은 검증·직렬화 의미의 단일 소유자다. Renderer는 다
 self-test는 위 25개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
 검사한다. Field condition은 `when`과 encoder·decoder의 `whenFalse` 동작을 함께 보존한다.
 Conditional-union case는 field operation 뒤에 owner path가 있는 `constraint`를 실행한다.
-`negotiated-bound`의 상한 operand는 decoder의 명시적 context parameter이며 ClientServer 협상값과
-실제 content 또는 encoded byte 수를 비교한다.
+`negotiated-bound`는 encoder·decoder application이 같은 비교 규칙과 context policy를 사용하도록
+명시한다. Context 값이 없거나 음수이거나 선언된 absolute maximum을 초과하면 protocol error이며,
+유효한 협상값과 실제 content 또는 encoded byte 수를 비교한다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는

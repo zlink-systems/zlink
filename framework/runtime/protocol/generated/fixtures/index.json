@@ -442,7 +442,11 @@
         "commandId": null
       },
       "hex": "0000000401020304",
-      "decodeContext": {
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
         "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 3
       }
     },
@@ -458,9 +462,70 @@
         "commandId": null
       },
       "hex": "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f",
-      "decodeContext": {
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
         "effectiveCompleteMessageBytes": 49,
         "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 1
+      }
+    },
+    {
+      "name": "client-server-negotiated-context-missing",
+      "operation": "negotiated-bound",
+      "rule": "context-required",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "directions": [
+        "encode",
+        "decode"
+      ]
+    },
+    {
+      "name": "client-server-negotiated-context-negative",
+      "operation": "negotiated-bound",
+      "rule": "context-negative",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": -1
+      }
+    },
+    {
+      "name": "client-server-negotiated-context-above-absolute-maximum",
+      "operation": "negotiated-bound",
+      "rule": "context-absolute-maximum",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 4294966775
       }
     },
     {

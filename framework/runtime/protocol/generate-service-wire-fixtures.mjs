@@ -391,7 +391,8 @@ function buildOperationCases(schema) {
       surface("type", "application-payload-bytes"),
       negotiatedPayload,
       {
-        decodeContext: {
+        directions: ["encode", "decode"],
+        context: {
           effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 3,
         },
       },
@@ -404,9 +405,47 @@ function buildOperationCases(schema) {
       surface("type", "application-payload-envelope-v1"),
       negotiatedEnvelope,
       {
-        decodeContext: {
+        directions: ["encode", "decode"],
+        context: {
           effectiveCompleteMessageBytes: negotiatedEnvelope.length - 1,
           effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 1,
+        },
+      },
+    ),
+    operationCase(
+      "client-server-negotiated-context-missing",
+      "negotiated-bound",
+      "context-required",
+      "reject",
+      surface("type", "application-payload-bytes"),
+      negotiatedPayload,
+      { directions: ["encode", "decode"] },
+    ),
+    operationCase(
+      "client-server-negotiated-context-negative",
+      "negotiated-bound",
+      "context-negative",
+      "reject",
+      surface("type", "application-payload-bytes"),
+      negotiatedPayload,
+      {
+        directions: ["encode", "decode"],
+        context: {
+          effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: -1,
+        },
+      },
+    ),
+    operationCase(
+      "client-server-negotiated-context-above-absolute-maximum",
+      "negotiated-bound",
+      "context-absolute-maximum",
+      "reject",
+      surface("type", "application-payload-bytes"),
+      negotiatedPayload,
+      {
+        directions: ["encode", "decode"],
+        context: {
+          effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 4294966775,
         },
       },
     ),
@@ -528,6 +567,12 @@ function validateIndexReferences(index) {
     }
     if (caseNames.has(entry.name)) {
       throw new Error(`fixture index operation case is duplicated: ${entry.name}`);
+    }
+    if (entry.operation === "negotiated-bound"
+        && JSON.stringify(entry.directions) !== JSON.stringify(["encode", "decode"])) {
+      throw new Error(
+        `fixture index operationCases[${caseIndex}] negotiated-bound directions are invalid`,
+      );
     }
     caseNames.add(entry.name);
   }
