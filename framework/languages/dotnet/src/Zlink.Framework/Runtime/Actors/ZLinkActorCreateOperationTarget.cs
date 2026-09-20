@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -311,7 +310,6 @@ internal sealed class ZLinkActorOperationTarget(
         var publication = new ZLinkCreationTerminalPublication(
             operationId,
             envelope,
-            SHA256.HashData(envelope),
             DateTimeOffset.FromUnixTimeMilliseconds(
                     checked((long)operation.DeadlineUnixMs))
                 .Add(TerminalRetention));
@@ -381,11 +379,7 @@ internal sealed class ZLinkActorOperationTarget(
 
     private ActorCreateOperationTerminal DecodeTerminal(ZLinkCreationTerminalRecord record)
     {
-        if (record.ObjectKind != ZLinkPlacementObjectKind.Actor
-            || !CryptographicOperations.FixedTimeEquals(
-                SHA256.HashData(record.TerminalEnvelope.Span),
-                record.TerminalEnvelopeSha256.Span)
-            || !ZLinkActorCreationTerminalCodec.TryDecode(
+        if (!ZLinkActorCreationTerminalCodec.TryDecode(
                 record.TerminalEnvelope,
                 codecs,
                 out var terminal))

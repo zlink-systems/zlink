@@ -803,38 +803,45 @@ internal sealed partial class ZLinkProviderLocationRepository(
     // .Value itself must equal the exact NUL-delimited logical key preimage
     // the spec pins -- raw UTF-8 bytes, no percent-encoding or length
     // framing. The record-kind segments below (mesh-node/owner-lease/
-    // client-server/fanout-publisher) double as scan prefixes: a NUL byte
+    // client-server/fanout-publisher/authority/creation-terminal) double as
+    // scan prefixes: a NUL byte
     // terminates each variable segment, so prefix scans by MeshName/
     // ChannelName below cannot spuriously match a longer name that merely
     // starts with the same characters.
-    // Visibility is `internal` (not `private`) on these four key builders
+    // Visibility is `internal` (not `private`) on these key builders
     // specifically so StoreRecordGoldenTests can drive the production
     // preimage under conformance test (checklist C-3/C-4 golden fixture),
     // rather than reimplementing preimage construction in the test.
     internal static ZLinkStoreKey OwnerKey(string ownerId) =>
-        Key($"owner-lease\0{ownerId}");
+        OpaqueRecordKey("owner-lease", ownerId);
 
     internal static ZLinkStoreKey MeshKey(string meshName, RoutingId rid) =>
-        Key($"{MeshPrefix(meshName)}{rid.ToHex()}");
+        OpaqueRecordKey("mesh-node", meshName, rid.ToHex());
 
     private static string MeshPrefix(string meshName) =>
-        $"mesh-node\0{meshName}\0";
+        OpaqueRecordPrefix("mesh-node", meshName);
 
     internal static ZLinkStoreKey ClientServerKey(
         string channelName,
         RoutingId rid) =>
-        Key($"{ClientServerPrefix(channelName)}{rid.ToHex()}");
+        OpaqueRecordKey("client-server", channelName, rid.ToHex());
 
     private static string ClientServerPrefix(string channelName) =>
-        $"client-server\0{channelName}\0";
+        OpaqueRecordPrefix("client-server", channelName);
 
     internal static ZLinkStoreKey FanoutKey(
         string channelName,
         RoutingId rid) =>
-        Key($"{FanoutPrefix(channelName)}{rid.ToHex()}");
+        OpaqueRecordKey("fanout-publisher", channelName, rid.ToHex());
 
     private static string FanoutPrefix(string channelName) =>
-        $"fanout-publisher\0{channelName}\0";
+        OpaqueRecordPrefix("fanout-publisher", channelName);
+
+    private static ZLinkStoreKey OpaqueRecordKey(params string[] segments) =>
+        Key(string.Join('\0', segments));
+
+    private static string OpaqueRecordPrefix(params string[] segments) =>
+        OpaqueRecordKey(segments).Value + '\0';
 
     /// <summary>
     /// Test-only accessor (StoreRecordGoldenTests) for the canonical
@@ -845,8 +852,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
         long leaseGeneration) =>
         Encode(new OwnerRecord(ownerId, leaseGeneration));
 
-    // Provider-private keys (capacity, reservation, aggregate, terminal,
-    // generation counter) aren't part of the public opaque-record contract
+    // Provider-private keys (capacity, reservation, aggregate, generation
+    // counter) aren't part of the public opaque-record contract
     // (21-location-runtime.md#1.2) and keep this length-framed encoding.
     private static string EncodeSegment(string value) =>
         Encoding.UTF8.GetByteCount(value).ToString(

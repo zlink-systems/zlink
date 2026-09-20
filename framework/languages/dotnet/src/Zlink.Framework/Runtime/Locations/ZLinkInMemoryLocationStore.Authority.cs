@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -516,23 +515,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 return
                     new ZLinkObjectCreationCompleteResult.GenerationExhausted();
 
-            var terminalState = completion switch
-            {
-                ZLinkObjectCreationCompletion.Created =>
-                    ZLinkCreationTerminalState.Created,
-                ZLinkObjectCreationCompletion.Rejected =>
-                    ZLinkCreationTerminalState.Rejected,
-                ZLinkObjectCreationCompletion.Failed =>
-                    ZLinkCreationTerminalState.Failed,
-                _ => throw new ArgumentOutOfRangeException(nameof(completion))
-            };
             var terminal = new ZLinkCreationTerminalRecord(
                 publication.Operation,
-                reservation.ReservationVersion,
-                current.Allocation.ObjectKind,
-                terminalState,
                 publication.TerminalEnvelope.ToArray(),
-                publication.TerminalEnvelopeSha256.ToArray(),
                 publication.ExpiresAt,
                 now);
 
@@ -1327,18 +1312,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ArgumentNullException.ThrowIfNull(publication);
         ValidateCreationOperation(publication.Operation);
-        if (publication.TerminalEnvelope.Length > 1024 * 1024
-            || publication.TerminalEnvelopeSha256.Length != 32)
+        if (publication.TerminalEnvelope.Length > 1024 * 1024)
             throw new ArgumentException(
                 "The creation terminal publication does not match its reservation.",
-                nameof(publication));
-        Span<byte> digest = stackalloc byte[32];
-        SHA256.HashData(publication.TerminalEnvelope.Span, digest);
-        if (!CryptographicOperations.FixedTimeEquals(
-                digest,
-                publication.TerminalEnvelopeSha256.Span))
-            throw new ArgumentException(
-                "The creation terminal SHA-256 does not match its envelope.",
                 nameof(publication));
     }
 

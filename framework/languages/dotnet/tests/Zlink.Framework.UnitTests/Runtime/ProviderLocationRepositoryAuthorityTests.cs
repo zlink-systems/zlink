@@ -1331,7 +1331,6 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     new ZLinkCreationTerminalPublication(
                         operation,
                         envelope,
-                        SHA256.HashData(envelope),
                         DateTimeOffset.UtcNow.AddMinutes(5)));
                 return (
                     item,
@@ -1352,6 +1351,91 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 await repository.ReadAuthorityAsync(
                     completion.item.request.Key));
         }
+    }
+
+    [Fact]
+    public async Task CreationTerminalUsesCanonicalSingleKeyAndRawValue()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "terminal-key-owner");
+        var descriptor = Descriptor("terminal-key-node", owner);
+        _ = await repository.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:terminal-key", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request));
+        var operation = new ZLinkCreationOperationId(
+            RoutingId.FromHex("00ff10"),
+            7,
+            1,
+            0xabcdef);
+        var envelope = Convert.FromHexString(
+            "0000001e6372656174696f6e2d6f7065726174696f6e2d7465726d696e616c2d7631"
+            + "00000002000000000000000000000000000000000000000000");
+
+        Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
+            await repository.CompleteCreationAsync(
+                reserved.Reservation,
+                new ZLinkObjectCreationCompletion.Created(
+                    new byte[] { 0x22 },
+                    new ZLinkCreationTerminalPublication(
+                        operation,
+                        envelope,
+                        DateTimeOffset.UtcNow.AddMinutes(5)))));
+
+        const string key = "creation-terminal\0"
+            + "00ff10\0"
+            + "7\0"
+            + "00000000000000010000000000abcdef";
+        var stored = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await provider.ReadAsync(new ZLinkStoreKey(key)));
+        Assert.Equal(envelope, stored.Value.Bytes.ToArray());
+        Assert.Equal(
+            [key],
+            await ScanKeysAsync(provider, "creation-terminal\0"));
+
+        var read = Assert.IsType<ZLinkCreationTerminalReadResult.Found>(
+            await repository.ReadCreationTerminalAsync(operation));
+        Assert.Equal(envelope, read.Record.TerminalEnvelope.ToArray());
+    }
+
+    [Fact]
+    public async Task CreationTerminalReadsNodeHandCodecBytesFromCanonicalKey()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var operation = new ZLinkCreationOperationId(
+            RoutingId.FromHex("00ff10"),
+            7,
+            1,
+            0xabcdef);
+        const string nodeKeyHex =
+            "6372656174696f6e2d7465726d696e616c003030666631300037003030303030303030"
+            + "303030303030303130303030303030303030616263646566";
+        var key = Encoding.UTF8.GetString(Convert.FromHexString(nodeKeyHex));
+        Assert.Equal(
+            "creation-terminal\0"
+                + "00ff10\0"
+                + "7\0"
+                + "00000000000000010000000000abcdef",
+            key);
+        var nodeEnvelope = Convert.FromHexString(
+            "0000001e6372656174696f6e2d6f7065726174696f6e2d7465726d696e616c2d7631"
+            + "00000002000000000000000000000000000000000000000000");
+
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(new ZLinkStoreWriteRequest(
+                [new ZLinkStoreCondition.Missing(new ZLinkStoreKey(key))],
+                [new ZLinkStoreMutation.Put(
+                    new ZLinkStoreKey(key),
+                    nodeEnvelope,
+                    TimeSpan.FromMinutes(5))])));
+
+        var read = Assert.IsType<ZLinkCreationTerminalReadResult.Found>(
+            await repository.ReadCreationTerminalAsync(operation));
+        Assert.Equal(nodeEnvelope, read.Record.TerminalEnvelope.ToArray());
     }
 
     [Fact]
