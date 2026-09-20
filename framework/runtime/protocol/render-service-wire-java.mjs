@@ -281,14 +281,20 @@ function vectorConstraintCode(type, op, itemReference, listExpression) {
   }).join("");
 }
 
-function negotiatedBound(type, measured) {
+function negotiatedBound(type, measured, application, value) {
   const bounds = type.operations.filter((entry) => entry.op === "negotiated-bound" && entry.measured === measured);
   return bounds.map((bound) => {
-    if (bound.maximum.kind !== "decoder-context" || bound.comparison !== "less-than-or-equal" || bound.direction !== "decode") {
+    const applied = bound.applications[application]?.context;
+    if (!new Set(["encoder-context", "decoder-context"]).has(applied?.kind)
+        || applied.name !== bound.context.name
+        || bound.context.missing !== "protocol-error" || bound.context.negative !== "protocol-error"
+        || bound.context.aboveAbsoluteMaximum !== "protocol-error"
+        || bound.comparison !== "less-than-or-equal") {
       throw new Error(`${type.name}: unsupported negotiated-bound syntax`);
     }
-    const value = measured === "content-bytes" ? "length" : "(r.at-start)";
-    return `require((long)${value}<=${longLiteral(bound.absoluteMaximum)}&&(long)${value}<=c.${fieldName(bound.maximum.name)}(),${javaString(type.name + " " + bound.topology + " negotiated bound")});`;
+    const context = `c.${fieldName(bound.context.name)}()`;
+    const message = javaString(type.name + " " + bound.topology + " negotiated bound");
+    return `require(${context}!=null&&${context}>=0&&${context}<=${longLiteral(bound.context.absoluteMaximum)},${message});require((long)${value}<=${context},${message});`;
   }).join("");
 }
 
@@ -318,26 +324,28 @@ function codecMethods(type, typeByName, flagBits) {
     const maximum = Math.min(op.maximumBytes, 2147483647);
     const textValidation = type.operations.find((entry) => entry.op === "text-validation");
     if (isText && !textValidation) throw new Error(`${type.name}: missing text-validation operation`);
-    const bound = negotiatedBound(type, "content-bytes");
-    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${bound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
-      + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${isText ? "byte[] bytes=" + bytes + ";" : `byte[] bytes=${bytes};`} ${absent ? "if(bytes==null)bytes=new byte[0];" : `require(bytes!=null,${javaString(type.name)});`} require(bytes.length>=${op.minimumBytes ?? 0}&&bytes.length<=${maximum},${javaString(type.name + " length")}); encode${lengthType}(new ${lengthType}(bytes.length),w,c,flags); w.bytes(bytes); }`;
+    const decodeBound = negotiatedBound(type, "content-bytes", "decode", "length");
+    const encodeBound = negotiatedBound(type, "content-bytes", "encode", "bytes.length");
+    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${decodeBound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
+      + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${isText ? "byte[] bytes=" + bytes + ";" : `byte[] bytes=${bytes};`} ${absent ? "if(bytes==null)bytes=new byte[0];" : `require(bytes!=null,${javaString(type.name)});`} require(bytes.length>=${op.minimumBytes ?? 0}&&bytes.length<=${maximum},${javaString(type.name + " length")}); ${encodeBound} encode${lengthType}(new ${lengthType}(bytes.length),w,c,flags); w.bytes(bytes); }`;
   }
   if (op.op === "struct" || op.op === "versioned-length-delimited") {
     const fields = op.fields;
     const delimited = op.op === "versioned-length-delimited";
     const decoded = decodeFields(fields, delimited ? "body" : "r", "c", "flags", typeByName, flagBits);
     const args = fields.map((f) => fieldName(f.name)).join(", ");
-    const envelopeBound = negotiatedBound(type, "encoded-bytes");
+    const decodeEnvelopeBound = negotiatedBound(type, "encoded-bytes", "decode", "(r.at-start)");
+    const encodeEnvelopeBound = negotiatedBound(type, "encoded-bytes", "encode", "(w.size()-start)");
     const before = delimited
-      ? `${envelopeBound ? "int start=r.at; " : ""}require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
+      ? `${decodeEnvelopeBound ? "int start=r.at; " : ""}require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
       : "";
-    const after = delimited ? `body.end(${javaString(type.name)});${envelopeBound}` : "";
+    const after = delimited ? `body.end(${javaString(type.name)});${decodeEnvelopeBound}` : "";
     const encoded = encodeFields(fields, "value", delimited ? "body" : "w", "c", "flags", typeByName, flagBits);
     const encodeBefore = delimited
-      ? `encode${refType(op.version)}(new ${refType(op.version)}(${integerArgument(op.version, longLiteral(op.version.constant), typeByName)}),w,c,flags); Writer body=new Writer();`
+      ? `${encodeEnvelopeBound ? "int start=w.size(); " : ""}encode${refType(op.version)}(new ${refType(op.version)}(${integerArgument(op.version, longLiteral(op.version.constant), typeByName)}),w,c,flags); Writer body=new Writer();`
       : "";
     const encodeAfter = delimited
-      ? `byte[] bytes=body.result(); encode${refType(op.length)}(new ${refType(op.length)}(bytes.length),w,c,flags); w.bytes(bytes);`
+      ? `byte[] bytes=body.result(); encode${refType(op.length)}(new ${refType(op.length)}(bytes.length),w,c,flags); w.bytes(bytes);${encodeEnvelopeBound}`
       : "";
     const decodedConstraints = structConstraints(type, op.constraints ?? []);
     const encodedConstraints = structConstraints(type, op.constraints ?? [], "value");
@@ -559,9 +567,9 @@ function render(ir) {
   const flagBits = new Map(ir.flags.map((flag) => [flag.name, flag.bit]));
   const negotiatedContexts = [...new Set(ir.types.flatMap((type) => type.operations
     .filter((entry) => entry.op === "negotiated-bound")
-    .map((entry) => entry.maximum.name)))].sort().map((name) => ({ name, negotiated: true }));
+    .map((entry) => entry.context.name)))].sort().map((name) => ({ name, negotiated: true }));
   const context = [...ir.semanticContexts, ...negotiatedContexts].map((entry) => {
-    if (entry.negotiated) return `long ${fieldName(entry.name)}`;
+    if (entry.negotiated) return `Long ${fieldName(entry.name)}`;
     const type = entry.valueType ? refType(entry.valueType) : "Boolean";
     return `${type} ${fieldName(entry.name)}`;
   }).join(", ");
