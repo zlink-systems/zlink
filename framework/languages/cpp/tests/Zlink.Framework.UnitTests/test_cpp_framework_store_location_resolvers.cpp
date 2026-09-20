@@ -10,6 +10,7 @@
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
@@ -1957,6 +1958,95 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesSpotAddressFromStore)
     EXPECT_EQ ("mesh-a", address->mesh_name);
     EXPECT_EQ ("node-a", address->node_rid.to_string ());
     EXPECT_EQ ("spot-a", address->spot_id);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      DirectSendAndRequestResolveCanonicalInstanceSpotAuthority)
+{
+    test_location_repository_t store;
+    (void) claim_test_owner (store, "owner-instance");
+    const auto owner = live_owner_token (store, "owner-instance");
+    store.set_authority (
+      "zla1:s:13:instance-spot",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = zlink::framework::runtime::encode_instance_spot_authority_payload ({
+          .state = zlink::framework::runtime::instance_spot_authority_state_t::ready,
+          .stable_type = "cart",
+          .spot_id = "instance-spot",
+          .owner_id = owner.owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+          .mesh_name = "mesh-instance",
+          .node_rid = zlink::framework::node_rid_t::from_string ("node-instance"),
+          .node_generation = 7}),
+        .object_generation = 11,
+        .authority_owner_generation = 1,
+        .owner = owner,
+        .allocation = {
+          .state = zlink::framework::placement_allocation_state_t::active,
+          .object_kind = zlink::framework::placement_object_kind_t::instance_spot,
+          .stable_type = "cart",
+          .target = {
+            .mesh_name = "mesh-instance",
+            .node_rid = zlink::framework::node_rid_t::from_string ("node-instance"),
+            .node_lifecycle_generation = 7,
+            .owner = owner}}});
+
+    store_location_resolvers_t resolvers (store);
+    zlink::framework::zlink_builder_t builder;
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ());
+    runtime.bind_spot_address_resolver (resolvers);
+
+    std::atomic_int sends{0};
+    std::atomic_int requests{0};
+    zlink::framework::runtime::messaging::envelope_codec_t envelope_codec;
+    zlink::framework::serializer_registry_t serializers;
+    runtime.bind_spot_mesh_transport (
+      "mesh-instance",
+      [&] (const zlink::routing_id_t &node_rid, const std::string &spot_id,
+           std::uint64_t generation,
+           zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          if (node_rid.to_string () == "node-instance" && spot_id == "instance-spot"
+              && generation == 11)
+              ++sends;
+          co_return zlink::framework::result_t<void>::success ();
+      },
+      [&] (const zlink::routing_id_t &node_rid, const std::string &spot_id,
+           std::uint64_t generation,
+           zlink::framework::runtime::messaging::message_parts_t parts,
+           std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
+          if (node_rid.to_string () == "node-instance" && spot_id == "instance-spot"
+              && generation == 11)
+              ++requests;
+          auto header = envelope_codec.decode_header (parts).value ();
+          header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+          lease_target_reply_t reply{"node-instance"};
+          co_return zlink::framework::result_t<
+            zlink::framework::runtime::messaging::message_parts_t>::success (
+            envelope_codec.encode_parts (header, reply, serializers));
+      });
+
+    auto client = builder.route_client (serializers);
+    const auto sent = client
+                        .send_to_spot ("instance-spot", user_spot_delivery_probe_t{41})
+                        .async ()
+                        .result ();
+    const auto reply = client
+                         .request_to_spot ("instance-spot", lease_target_request_t{42})
+                         .timeout (std::chrono::milliseconds (100))
+                         .async<lease_target_reply_t> ()
+                         .result ();
+
+    EXPECT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "no error detail");
+    EXPECT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "no error detail");
+    if (reply)
+        EXPECT_EQ ("node-instance", reply.value ().node_rid);
+    EXPECT_EQ (1, sends.load ());
+    EXPECT_EQ (1, requests.load ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)

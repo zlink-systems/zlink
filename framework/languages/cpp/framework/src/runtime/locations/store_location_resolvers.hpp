@@ -406,6 +406,9 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     {
         if (const auto user = decode_ready_user_spot_authority_payload (payload))
             return user->spot_id;
+        if (const auto instance = decode_instance_spot_authority_payload (payload);
+            instance && instance->state == instance_spot_authority_state_t::ready)
+            return instance->spot_id;
         if (payload.size () < 5
             || std::to_integer<unsigned char> (payload[0]) != 'Z'
             || std::to_integer<unsigned char> (payload[1]) != 'L'
