@@ -62,6 +62,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   A change that breaks one of the seven §3 prohibitions (heap allocation, string identity,
   per-socket table lookups, unconditional side work, reader-sleeping previews, fixed sleeps,
   missed temporary-owner signals) is rewritten in the §4 cache/fallback form.
+- Line wrapping and formatters: [`doc/principal/dev/source-formatting.ko.md`](doc/principal/dev/source-formatting.ko.md).
+  100 columns; one line when it fits; one argument per line and one `.` call per line when it
+  does not; everything else is whatever the language formatter emits. Run
+  `scripts/format/format.sh [--check]`; the current scope is the framework tutorial and samples.
 - Comments: [`doc/principal/source-comment-principles.md`](doc/principal/source-comment-principles.md).
   Explain why, never restate the implementation.
 - Public API/ABI/enum changes ship with the spec change in a separate commit. An API without

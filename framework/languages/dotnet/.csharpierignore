@@ -1,0 +1,6 @@
+# CSharpier formats XML project files too. Those are owned by sync-version.py and MSBuild
+# conventions, so only C# sources are formatted here.
+*.csproj
+*.props
+*.targets
+*.slnx
