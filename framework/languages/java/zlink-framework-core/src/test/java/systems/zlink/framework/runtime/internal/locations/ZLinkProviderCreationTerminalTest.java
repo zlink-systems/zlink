@@ -121,6 +121,30 @@ final class ZLinkProviderCreationTerminalTest {
                 fixture.request("next"), () -> false)));
     }
 
+    @Test
+    void completionRejectsReservationWithStaleAuthorityStoreVersion() {
+        var fixture = new Fixture();
+        var reservation = fixture.reservation;
+        var stale = new ZLinkObjectReservation(
+            reservation.authorityKey(), "stale-store-version",
+            reservation.objectGeneration(), reservation.authorityOwnerGeneration(),
+            reservation.reservationVersion(), reservation.targetDescriptor(),
+            reservation.targetDescriptorLifecycleGeneration(),
+            reservation.targetOwner());
+
+        assertEquals(ZLinkObjectCommitResult.STALE,
+            await(fixture.repository.commit(
+                stale, new byte[] {9}, null, () -> false)));
+        assertTrue(fixture.provider.writes.isEmpty());
+        var authority = assertInstanceOf(ZLinkAuthoritySnapshot.class,
+            await(fixture.repository.read(
+                reservation.authorityKey(), () -> false)));
+        assertEquals(reservation.storeVersion(), authority.storeVersion());
+        assertEquals(ZLinkPlacementAllocationState.PENDING,
+            authority.allocation().state());
+        assertTrue(authority.pendingCreation().isPresent());
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {0, 1, 2, 3})
     void identityMismatchIsMissingEvenWhenProviderReturnsAnotherOperationsRecord(

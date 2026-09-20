@@ -633,7 +633,7 @@ final class ZLinkProviderAuthorityRepository {
             if (current.aggregate() != null) {
                 return completed(ZLinkObjectCommitResult.STALE);
             }
-            if (!matches(current, reservation)) {
+            if (!matches(found.value(), current, reservation)) {
                 return completed(
                     current.pendingCreation().isEmpty()
                         ? ZLinkObjectCommitResult.ALREADY_COMMITTED
@@ -674,7 +674,8 @@ final class ZLinkProviderAuthorityRepository {
                 return completed(ZLinkObjectAbortResult.STALE);
             }
             AuthorityRecord current = decode(found.value().bytes());
-            if (current.aggregate() != null || !matches(current, reservation)) {
+            if (current.aggregate() != null
+                || !matches(found.value(), current, reservation)) {
                 return completed(ZLinkObjectAbortResult.STALE);
             }
             return writeCreationTransition(
@@ -2232,9 +2233,11 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private static boolean matches(
+        ZLinkStoreValue authority,
         AuthorityRecord current,
         ZLinkObjectReservation reservation) {
-        return current.objectGeneration() == reservation.objectGeneration()
+        return authority.version().value().equals(reservation.storeVersion())
+            && current.objectGeneration() == reservation.objectGeneration()
             && current.authorityOwnerGeneration()
                 == reservation.authorityOwnerGeneration()
             && current.ownerId().equals(
