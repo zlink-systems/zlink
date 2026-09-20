@@ -3294,6 +3294,56 @@ int main ()
     if (connector.codecs ().supports (zlink::stream_connector::codec_t::message_pack)) {
         return 11;
     }
+
+    /* stream-connector §7/§12: close starts lifecycle delivery in state then
+     * disconnect order, but a state handler that does not finish cannot hold
+     * the close operation open. */
+    {
+        zlink::stream_connector::connector_options_t close_handler_options;
+        close_handler_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        auto close_handler_connector =
+          zlink::stream_connector::connector_factory_t::create (close_handler_options);
+        callback_latch_t closed_state_started;
+        callback_latch_t release_closed_state;
+        callback_latch_t disconnected_after_closed_state;
+        std::atomic_bool closed_state_finished{false};
+        std::atomic_bool disconnected_ordered{false};
+        auto close_handler_state_subscription =
+          close_handler_connector.on_connection_state_changed ([&] (const auto &state) {
+              if (state.current != zlink::stream_connector::connection_state_t::closed) {
+                  return;
+              }
+              closed_state_started.signal ();
+              release_closed_state.wait_for (std::chrono::seconds (2));
+              closed_state_finished.store (true, std::memory_order_release);
+          });
+        auto close_handler_disconnected_subscription = close_handler_connector.on_disconnected (
+          [&] (std::optional<zlink::stream_connector::close_reason_t> reason) {
+              disconnected_ordered.store (
+                reason == zlink::stream_connector::close_reason_t::client_close
+                  && closed_state_finished.load (std::memory_order_acquire),
+                std::memory_order_release);
+              disconnected_after_closed_state.signal ();
+          });
+        auto close_handler_future = std::async (std::launch::async, [&] {
+            return close_handler_connector.close ();
+        });
+        if (!closed_state_started.wait_for (std::chrono::milliseconds (100))
+            || close_handler_future.wait_for (std::chrono::milliseconds (100))
+                 != std::future_status::ready) {
+            release_closed_state.signal ();
+            (void) close_handler_future.get ();
+            return 256;
+        }
+        const auto close_handler_result = close_handler_future.get ();
+        release_closed_state.signal ();
+        if (!close_handler_result
+            || !disconnected_after_closed_state.wait_for (std::chrono::milliseconds (100))
+            || !disconnected_ordered.load (std::memory_order_acquire)) {
+            return 257;
+        }
+    }
+
     auto disconnected = connector.close ();
     if (!disconnected
         || connector.state () != zlink::stream_connector::connection_state_t::closed) {
