@@ -606,17 +606,7 @@ void schedule_delivery (std::shared_ptr<void> state, std::function<void ()> call
 void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
                                   std::function<void ()> callback)
 {
-    if (!callback) {
-        return;
-    }
-    auto callback_state = state;
-    schedule_delivery (
-      state,
-      [state = std::move (callback_state), callback = std::move (callback)] () mutable {
-          if (state->lifecycle_callbacks_enabled.load (std::memory_order_acquire)) {
-              callback ();
-          }
-      });
+    schedule_delivery (std::move (state), std::move (callback));
 }
 
 void post_runtime_operation (std::function<void ()> operation)
@@ -1390,17 +1380,6 @@ namespace
 
 result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
 {
-    // Operation completions still run below with a closed result. Registered
-    // lifecycle callbacks are different: a queued callback can hold a
-    // caller-owned capture, so it must not cross the synchronous close
-    // boundary.
-    state->lifecycle_callbacks_enabled.store (false, std::memory_order_release);
-    {
-        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
-        state->state_handlers.clear ();
-        state->error_handlers.clear ();
-        state->disconnected_handlers.clear ();
-    }
     std::shared_ptr<boost::asio::steady_timer> reconnect_timer;
     std::shared_ptr<detail::transport_connect_control_t> connect_control;
     {
@@ -1448,7 +1427,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
     }
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
-        detail::change_state (state, connection_state_t::closed);
         state->connection.reset ();
         while (!state->pending_sends.empty ()) {
             auto send = std::move (state->pending_sends.front ());
@@ -1502,6 +1480,13 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
             // transport_mutex. Lock order: transport -> delivery.
             std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
             state->delivery_queue.clear ();
+        }
+        detail::change_state (state, connection_state_t::closed);
+        {
+            std::lock_guard<std::mutex> lifecycle_lock (state->lifecycle_mutex);
+            state->state_handlers.clear ();
+            state->error_handlers.clear ();
+            state->disconnected_handlers.clear ();
         }
         state->state_changed.notify_all ();
     }
