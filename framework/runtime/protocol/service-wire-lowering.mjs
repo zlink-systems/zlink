@@ -80,6 +80,18 @@ const TYPE_CONSTRAINT_KEYS = new Set([
 ]);
 const FIELD_CONSTRAINT_KEYS = new Set(["kind"]);
 const FLAG_CONSTRAINT_KEYS = new Set(["kind", "flags", "if", "then"]);
+const DURABLE_FORMAT_KEYS = new Set([
+  "name", "magic", "formatVersion", "flags", "flagsType", "byteOrder", "bodyLengthType",
+  "maximumEncodedBytes", "body", "checksum", "goldenFixture", "providerInterpretation",
+]);
+const CHECKSUM_KEYS = new Set(["algorithm", "encoding", "coverage", "position"]);
+const LOGICAL_STREAM_KEYS = new Set([
+  "name", "encoding", "body", "generatedObjectTree", "maximumBytes", "chunkSplit", "replay",
+  "goldenFixture",
+]);
+const GENERATED_OBJECT_TREE_KEYS = new Set([
+  "root", "applicationStates", "savedWork", "timerRegistrations", "pendingTimerTicks",
+]);
 const CONDITION_KEYS = CONDITION_KINDS;
 const CONDITIONAL_FALSE_BEHAVIOR = {
   encoder: "reject-present-value",
@@ -311,11 +323,23 @@ function lowerCommand(command, model) {
   return node;
 }
 
+function lowerDurableFormat(format, model) {
+  return lowerValue(format, model);
+}
+
+function lowerLogicalStreamFormat(format, model) {
+  return lowerValue(format, model);
+}
+
 function unknownKeys(value, allowed) {
   return Object.keys(value).filter((key) => !allowed.has(key));
 }
 
 function assertKeys(value, allowed, location, errors) {
+  if (!isObject(value)) {
+    errors.push(`${location}: expected an object`);
+    return;
+  }
   for (const key of unknownKeys(value, allowed)) {
     errors.push(`${location}.${key}: unknown keyword`);
   }
@@ -433,10 +457,22 @@ function assertLoweringCoverage(schema, ir) {
     assertConstraints(command.flagConstraints, FLAG_CONSTRAINT_KEYS,
       `${location}.flagConstraints`, errors);
   });
+  schema.durableFormats.forEach((format, index) => {
+    const location = `$.durableFormats[${index}]`;
+    assertKeys(format, DURABLE_FORMAT_KEYS, location, errors);
+    assertKeys(format.checksum, CHECKSUM_KEYS, `${location}.checksum`, errors);
+  });
+  assertKeys(schema.relocationLogicalStreamFormat, LOGICAL_STREAM_KEYS,
+    "$.relocationLogicalStreamFormat", errors);
+  assertKeys(schema.relocationLogicalStreamFormat.generatedObjectTree,
+    GENERATED_OBJECT_TREE_KEYS, "$.relocationLogicalStreamFormat.generatedObjectTree", errors);
   assertBoundReferences(schema.types, "$.types", errors);
   assertBoundReferences(schema.flags, "$.flags", errors);
   assertBoundReferences(schema.semanticContexts, "$.semanticContexts", errors);
   assertBoundReferences(schema.commands, "$.commands", errors);
+  assertBoundReferences(schema.durableFormats, "$.durableFormats", errors);
+  assertBoundReferences(schema.relocationLogicalStreamFormat,
+    "$.relocationLogicalStreamFormat", errors);
 
   const sourceTypeNames = schema.types.map((type) => type.name);
   const loweredTypeNames = ir.types.map((type) => type.name);
@@ -470,6 +506,33 @@ function assertLoweringCoverage(schema, ir) {
       errors.push(`type:${source.name}: conditional-union cases or discriminators did not reach the IR`);
     }
   }
+  const sourceDurableNames = schema.durableFormats.map((format) => format.name);
+  const loweredDurableNames = ir.durableFormats.map((format) => format.name);
+  if (JSON.stringify(loweredDurableNames) !== JSON.stringify(sourceDurableNames)) {
+    errors.push(`$.durableFormats: lowered durable format inventory differs from the schema`);
+  }
+  for (const source of schema.durableFormats) {
+    const lowered = ir.durableFormats.find((format) => format.name === source.name);
+    if (lowered === undefined
+        || JSON.stringify(lowered.magic) !== JSON.stringify(source.magic)
+        || lowered.body?.$ref !== source.body?.$ref
+        || lowered.goldenFixture !== source.goldenFixture
+        || JSON.stringify(lowered.checksum) !== JSON.stringify(source.checksum)) {
+      errors.push(`durableFormat:${source.name}: envelope declaration did not reach the IR`);
+    }
+  }
+  const sourceLogical = schema.relocationLogicalStreamFormat;
+  const loweredLogical = ir.relocationLogicalStreamFormat;
+  const logicalTreeMatches = Object.entries(sourceLogical.generatedObjectTree ?? {})
+    .every(([name, reference]) => loweredLogical?.generatedObjectTree?.[name]?.$ref === reference.$ref);
+  if (loweredLogical?.name !== sourceLogical.name
+      || loweredLogical?.body?.$ref !== sourceLogical.body?.$ref
+      || loweredLogical?.goldenFixture !== sourceLogical.goldenFixture
+      || Object.keys(loweredLogical?.generatedObjectTree ?? {}).length
+        !== Object.keys(sourceLogical.generatedObjectTree ?? {}).length
+      || !logicalTreeMatches) {
+    errors.push(`$.relocationLogicalStreamFormat: logical stream declaration did not reach the IR`);
+  }
   if (errors.length > 0) {
     throw new LoweringCoverageError(errors);
   }
@@ -478,6 +541,8 @@ function assertLoweringCoverage(schema, ir) {
     commands: ir.commands.length,
     kinds: kinds.size,
     conditionalUnions: loweredUnions.length,
+    durableFormats: ir.durableFormats.length,
+    logicalStreams: 1,
   };
 }
 
@@ -513,6 +578,11 @@ function lowerSchema(schemaPathOrObject) {
       : { kind: constraint.kind }),
     types: schema.types.map((type) => lowerType(type, model)),
     commands: schema.commands.map((command) => lowerCommand(command, model)),
+    durableFormats: schema.durableFormats.map((format) => lowerDurableFormat(format, model)),
+    relocationLogicalStreamFormat: lowerLogicalStreamFormat(
+      schema.relocationLogicalStreamFormat,
+      model,
+    ),
   };
   assertLoweringCoverage(schema, ir);
   return ir;
@@ -743,9 +813,62 @@ function runSelfTests(schemaPath) {
     }],
   );
 
+  assert.deepEqual(ir.durableFormats.map((format) => format.name), [
+    "authority-payload-v1",
+    "instance-activation-recovery-v1",
+    "relocation-data-chunk-v1",
+    "relocation-manifest-v1",
+  ]);
+  assert.deepEqual(ir.durableFormats[0], {
+    name: "authority-payload-v1",
+    magic: [90, 76, 65, 85],
+    formatVersion: 1,
+    flags: 0,
+    flagsType: { $ref: "u16" },
+    byteOrder: "big-endian",
+    bodyLengthType: { $ref: "u32" },
+    maximumEncodedBytes: 1048576,
+    body: { $ref: "authority-payload-v1" },
+    checksum: {
+      algorithm: "crc32c-castagnoli",
+      encoding: "u32-big-endian",
+      coverage: "magic-through-body",
+      position: "trailing",
+    },
+    goldenFixture: "golden/durable-authority-v1.json",
+    providerInterpretation: "opaque-bytes",
+  });
+  assert(ir.durableFormats.every((format) => format.checksum.algorithm === "crc32c-castagnoli"
+    && format.checksum.position === "trailing"));
+  assert.deepEqual(ir.relocationLogicalStreamFormat, {
+    name: "relocation-envelope-v1",
+    encoding: "canonical-big-endian-field-stream-without-monolithic-provider-envelope",
+    body: { $ref: "relocation-envelope-v1" },
+    generatedObjectTree: {
+      root: { $ref: "relocation-envelope-v1" },
+      applicationStates: { $ref: "relocation-participant-application-state-vector" },
+      savedWork: { $ref: "saved-work-vector" },
+      timerRegistrations: { $ref: "relocation-timer-registration-vector" },
+      pendingTimerTicks: { $ref: "relocation-pending-timer-tick-vector" },
+    },
+    maximumBytes: 274877906944,
+    chunkSplit: "any-byte-boundary-including-within-frozen-record",
+    replay: "bounded-incremental-decode-without-whole-stream-allocation",
+    goldenFixture: "golden/relocation-envelope-v1.json",
+  });
+  expectValidatorFailure(schema, (candidate) => {
+    candidate.durableFormats[0].checksum.algorithm = "unknown-checksum";
+  });
+  expectValidatorFailure(schema, (candidate) => {
+    candidate.relocationLogicalStreamFormat.generatedObjectTree.savedWork.$ref = "undefined-type";
+  });
+
   const unknownKeyword = structuredClone(schema);
   unknownKeyword.types[0].futureKeyword = true;
   assert.throws(() => lowerSchema(unknownKeyword), LoweringCoverageError);
+  const unknownDurableKeyword = structuredClone(schema);
+  unknownDurableKeyword.durableFormats[0].futureKeyword = true;
+  assert.throws(() => lowerSchema(unknownDurableKeyword), LoweringCoverageError);
   assert.deepEqual(JSON.parse(JSON.stringify(ir)), ir);
   assert.equal(ir.types.length, 155);
   assert.equal(ir.commands.length, 40);
@@ -767,6 +890,8 @@ function runSelfTests(schemaPath) {
     conditionalUnions: irUnions.length,
     layoutConstraintKinds: 8,
     tlvPresenceRules: 1,
+    durableFormats: ir.durableFormats.length,
+    logicalStreams: 1,
   };
 }
 
@@ -800,7 +925,9 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
           + `${result.validatorNegativeConditions} validator-negative conditions, `
           + `${result.conditionalUnions} conditional unions, `
           + `${result.layoutConstraintKinds} layout constraint kinds, `
-          + `${result.tlvPresenceRules} TLV presence rule, JSON round-trip`,
+          + `${result.tlvPresenceRules} TLV presence rule, `
+          + `${result.durableFormats} durable formats, `
+          + `${result.logicalStreams} logical stream, JSON round-trip`,
       );
     } else {
       const schema = readSchema(schemaPath);
@@ -808,7 +935,8 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
       const coverage = assertLoweringCoverage(schema, ir);
       console.log(
         `service wire lowering valid: ${coverage.types} types, ${coverage.commands} commands, `
-          + `${coverage.kinds} kinds, ${coverage.conditionalUnions} conditional unions`,
+          + `${coverage.kinds} kinds, ${coverage.conditionalUnions} conditional unions, `
+          + `${coverage.durableFormats} durable formats, ${coverage.logicalStreams} logical stream`,
       );
     }
   } catch (error) {
