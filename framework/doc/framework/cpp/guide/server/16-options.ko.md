@@ -138,7 +138,7 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `send_timeout` | 보낼 자리가 나기를 기다리는 상한 | 1초 |
-| `ReceiveTimeout` | 받는 방향의 대기 상한 | 지정 안 함 |
+| `receive_timeout` | 받는 방향의 대기 상한 | 지정 안 함 |
 | `SendHighWaterMark` · `ReceiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
 
 상한에 도달하면 보내는 쪽이 `send_timeout`까지 기다리고, 끝까지 자리가 나지 않으면 그 호출은
