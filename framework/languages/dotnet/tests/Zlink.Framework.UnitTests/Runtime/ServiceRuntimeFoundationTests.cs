@@ -2852,9 +2852,7 @@ public sealed class ServiceRuntimeFoundationTests
             3,
             owner.OwnerId,
             checked((ulong)owner.LeaseGeneration),
-            null,
-            0,
-            0);
+            null);
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await store.ReserveAsync(
                 new ZLinkObjectReservationRequest(
