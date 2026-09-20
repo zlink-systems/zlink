@@ -826,7 +826,7 @@ RID, source host 실행 세대와 128-bit `OperationId`를 요청 식별자로 �
 
 | 저장한 최종 결과 | 계약 |
 |---|---|
-| 형식 | `creation-operation-terminal-v1`과 SHA-256을 사용한다. Network correlation과 reply route는 저장하지 않는다. |
+| 형식 | `creation-operation-terminal-v1`이다. Network correlation과 reply route는 저장하지 않는다. |
 | 저장 위치 | §3.4의 opaque record `creation-terminal` 하나에 둔다. meta·payload를 나눈 보조 key를 두지 않는다. |
 | 크기 | 최대 1,048,576 bytes다. |
 | 보관 기한 | 최초 deadline에서 5분 뒤까지다. Provider가 반환한 Store 시각을 사용한다. |
