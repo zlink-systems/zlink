@@ -87,8 +87,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                                                      message_context_t &,
                                                      const bind_courier_session_req_t &request)
     {
-        std::cerr << "deliverydispatch-courier bind-relayed courier=" << request.courier_id
-                  << "\n";
+        std::cerr << "deliverydispatch-courier bind-relayed courier=" << request.courier_id << "\n";
         return {request.courier_id};
     }
 
@@ -100,8 +99,10 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
         actor.offered_attempts[message.delivery_id] = message.attempt;
         co_await actor.context ()
           .bound_session ()
-          .send (offer_delivery_notify_t{message.courier_id, message.delivery_id,
-                                         message.pickup_address, message.dropoff_address})
+          .send (offer_delivery_notify_t{message.courier_id,
+                                         message.delivery_id,
+                                         message.pickup_address,
+                                         message.dropoff_address})
           .async ();
     }
     // --8<-- [end:doc-dd-offer-push]
@@ -124,8 +125,11 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
 
         _channels
           .send (sample_names_t::dispatch_route_channel,
-                 offer_delivery_result_msg_t{decision.delivery_id, decision.courier_id, attempt,
-                                             decision.accepted, decision.reason})
+                 offer_delivery_result_msg_t{decision.delivery_id,
+                                             decision.courier_id,
+                                             attempt,
+                                             decision.accepted,
+                                             decision.reason})
           .async ();
         // --8<-- [end:doc-dd-decision-send]
     }
@@ -175,7 +179,8 @@ int main (int argc, char **argv)
       .disable_relocation ();
     // --8<-- [end:doc-dd-node-register]
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      instance_name, sample_names_t::courier_actor_discovery,
+      instance_name,
+      sample_names_t::courier_actor_discovery,
       std::vector<std::string>{sample_names_t::courier_session_route_node,
                                sample_names_t::dispatch_route_node}));
     return app.run (argc, argv);

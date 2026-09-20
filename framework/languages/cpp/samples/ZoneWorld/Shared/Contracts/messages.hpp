@@ -367,148 +367,158 @@ struct crash_relocation_probe_res_t
 
 #define ZW_WRITE(field, wire) j[wire] = value.field;
 #define ZW_READ(field, wire) j.at (wire).get_to (value.field);
-#define ZW_JSON_FIELDS(type, fields)                                                   \
-    inline void to_json (nlohmann::json &j, const type &value)                        \
-    { j = nlohmann::json::object (); fields (ZW_WRITE) }                              \
-    inline void from_json (const nlohmann::json &j, type &value)                      \
-    { fields (ZW_READ) }
-#define ZW_EMPTY_JSON(type)                                                            \
-    inline void to_json (nlohmann::json &j, const type &) { j = nlohmann::json::object (); } \
-    inline void from_json (const nlohmann::json &, type &) {}
+#define ZW_JSON_FIELDS(type, fields)                                                               \
+    inline void to_json (nlohmann::json &j, const type &value)                                     \
+    {                                                                                              \
+        j = nlohmann::json::object ();                                                             \
+        fields (ZW_WRITE)                                                                          \
+    }                                                                                              \
+    inline void from_json (const nlohmann::json &j, type &value)                                   \
+    {                                                                                              \
+        fields (ZW_READ)                                                                           \
+    }
+#define ZW_EMPTY_JSON(type)                                                                        \
+    inline void to_json (nlohmann::json &j, const type &)                                          \
+    {                                                                                              \
+        j = nlohmann::json::object ();                                                             \
+    }                                                                                              \
+    inline void from_json (const nlohmann::json &, type &)                                         \
+    {                                                                                              \
+    }
 
-#define PLAYER_VIEW_FIELDS(F) \
-    F (player_id, "playerId") \
-    F (x, "x") \
-    F (y, "y") \
-    F (zone_id, "zoneId") \
+#define PLAYER_VIEW_FIELDS(F)                                                                      \
+    F (player_id, "playerId")                                                                      \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
+    F (zone_id, "zoneId")                                                                          \
     F (is_bot, "isBot")
-#define NODE_VIEW_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (registered, "registered") \
-    F (connected, "connected") \
-    F (maintenance, "maintenance") \
-    F (zones, "zones") \
+#define NODE_VIEW_FIELDS(F)                                                                        \
+    F (node_id, "nodeId")                                                                          \
+    F (registered, "registered")                                                                   \
+    F (connected, "connected")                                                                     \
+    F (maintenance, "maintenance")                                                                 \
+    F (zones, "zones")                                                                             \
     F (player_count, "playerCount")
 #define JOIN_WORLD_REQ_FIELDS(F) F (player_id, "playerId")
-#define JOIN_WORLD_RES_FIELDS(F) \
-    F (player_id, "playerId") \
-    F (zone_id, "zoneId") \
-    F (x, "x") \
-    F (y, "y") \
+#define JOIN_WORLD_RES_FIELDS(F)                                                                   \
+    F (player_id, "playerId")                                                                      \
+    F (zone_id, "zoneId")                                                                          \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
     F (error, "error")
-#define MOVE_FIELDS(F) \
-    F (x, "x") \
+#define MOVE_FIELDS(F)                                                                             \
+    F (x, "x")                                                                                     \
     F (y, "y")
-#define ZONE_STATE_FIELDS(F) \
-    F (zone_id, "zoneId") \
-    F (tick, "tick") \
+#define ZONE_STATE_FIELDS(F)                                                                       \
+    F (zone_id, "zoneId")                                                                          \
+    F (tick, "tick")                                                                               \
     F (players, "players")
-#define ZONE_CHANGED_FIELDS(F) \
-    F (player_id, "playerId") \
+#define ZONE_CHANGED_FIELDS(F)                                                                     \
+    F (player_id, "playerId")                                                                      \
     F (zone_id, "zoneId")
-#define ANNOUNCE_FIELDS(F) \
-    F (announcement_id, "announcementId") \
+#define ANNOUNCE_FIELDS(F)                                                                         \
+    F (announcement_id, "announcementId")                                                          \
     F (text, "text")
-#define MOVE_REJECTED_FIELDS(F) \
-    F (reason, "reason") \
-    F (x, "x") \
+#define MOVE_REJECTED_FIELDS(F)                                                                    \
+    F (reason, "reason")                                                                           \
+    F (x, "x")                                                                                     \
     F (y, "y")
 #define NODES_FIELDS(F) F (nodes, "nodes")
-#define NODE_ALERT_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (kind, "kind") \
-    F (detail, "detail") \
+#define NODE_ALERT_FIELDS(F)                                                                       \
+    F (node_id, "nodeId")                                                                          \
+    F (kind, "kind")                                                                               \
+    F (detail, "detail")                                                                           \
     F (occurred_at, "occurredAt")
 #define TEXT_FIELDS(F) F (text, "text")
 #define ANNOUNCEMENT_ID_FIELDS(F) F (announcement_id, "announcementId")
-#define MAINTENANCE_REQ_FIELDS(F) \
-    F (node_id, "nodeId") \
+#define MAINTENANCE_REQ_FIELDS(F)                                                                  \
+    F (node_id, "nodeId")                                                                          \
     F (enabled, "enabled")
-#define MAINTENANCE_RES_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (enabled, "enabled") \
-    F (zones, "zones") \
+#define MAINTENANCE_RES_FIELDS(F)                                                                  \
+    F (node_id, "nodeId")                                                                          \
+    F (enabled, "enabled")                                                                         \
+    F (zones, "zones")                                                                             \
     F (error, "error")
 #define NODE_ID_FIELDS(F) F (node_id, "nodeId")
-#define DIAGNOSTICS_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (zones, "zones") \
-    F (player_count, "playerCount") \
-    F (maintenance, "maintenance") \
+#define DIAGNOSTICS_FIELDS(F)                                                                      \
+    F (node_id, "nodeId")                                                                          \
+    F (zones, "zones")                                                                             \
+    F (player_count, "playerCount")                                                                \
+    F (maintenance, "maintenance")                                                                 \
     F (error, "error")
-#define RELOCATION_PAIR_FIELDS(F) \
-    F (source_zone_id, "sourceZoneId") \
-    F (target_zone_id, "targetZoneId") \
-    F (source_owner_node_rid, "sourceOwnerNodeRid") \
-    F (target_owner_node_rid, "targetOwnerNodeRid") \
+#define RELOCATION_PAIR_FIELDS(F)                                                                  \
+    F (source_zone_id, "sourceZoneId")                                                             \
+    F (target_zone_id, "targetZoneId")                                                             \
+    F (source_owner_node_rid, "sourceOwnerNodeRid")                                                \
+    F (target_owner_node_rid, "targetOwnerNodeRid")                                                \
     F (error, "error")
 #define ACTOR_LOCATION_REQ_FIELDS(F) F (actor_id, "actorId")
-#define ACTOR_LOCATION_RES_FIELDS(F) \
-    F (actor_id, "actorId") \
-    F (object_generation, "objectGeneration") \
-    F (owner_node_rid, "ownerNodeRid") \
+#define ACTOR_LOCATION_RES_FIELDS(F)                                                               \
+    F (actor_id, "actorId")                                                                        \
+    F (object_generation, "objectGeneration")                                                      \
+    F (owner_node_rid, "ownerNodeRid")                                                             \
     F (error, "error")
-#define ENTER_WORLD_REQ_FIELDS(F) \
-    F (x, "x") \
-    F (y, "y") \
-    F (is_bot, "isBot") \
-    F (dir_x, "dirX") \
+#define ENTER_WORLD_REQ_FIELDS(F)                                                                  \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
+    F (is_bot, "isBot")                                                                            \
+    F (dir_x, "dirX")                                                                              \
     F (dir_y, "dirY")
-#define ENTER_WORLD_RES_FIELDS(F) \
-    F (zone_id, "zoneId") \
-    F (x, "x") \
-    F (y, "y") \
+#define ENTER_WORLD_RES_FIELDS(F)                                                                  \
+    F (zone_id, "zoneId")                                                                          \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
     F (error, "error")
-#define APPLY_MAINTENANCE_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (enabled, "enabled") \
+#define APPLY_MAINTENANCE_FIELDS(F)                                                                \
+    F (node_id, "nodeId")                                                                          \
+    F (enabled, "enabled")                                                                         \
     F (zones, "zones")
-#define GET_DIAGNOSTICS_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (zones, "zones") \
-    F (player_count, "playerCount") \
+#define GET_DIAGNOSTICS_FIELDS(F)                                                                  \
+    F (node_id, "nodeId")                                                                          \
+    F (zones, "zones")                                                                             \
+    F (player_count, "playerCount")                                                                \
     F (maintenance, "maintenance")
-#define REPORT_EVENT_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (kind, "kind") \
-    F (detail, "detail") \
+#define REPORT_EVENT_FIELDS(F)                                                                     \
+    F (node_id, "nodeId")                                                                          \
+    F (kind, "kind")                                                                               \
+    F (detail, "detail")                                                                           \
     F (occurred_at, "occurredAt")
-#define REPORT_STATUS_FIELDS(F) \
-    F (node_id, "nodeId") \
-    F (zones, "zones") \
-    F (player_count, "playerCount") \
+#define REPORT_STATUS_FIELDS(F)                                                                    \
+    F (node_id, "nodeId")                                                                          \
+    F (zones, "zones")                                                                             \
+    F (player_count, "playerCount")                                                                \
     F (maintenance, "maintenance")
-#define BORDER_FIELDS(F) \
-    F (from_zone_id, "fromZoneId") \
-    F (to_zone_id, "toZoneId") \
-    F (tick, "tick") \
+#define BORDER_FIELDS(F)                                                                           \
+    F (from_zone_id, "fromZoneId")                                                                 \
+    F (to_zone_id, "toZoneId")                                                                     \
+    F (tick, "tick")                                                                               \
     F (players, "players")
-#define ENTER_ZONE_FIELDS(F) \
-    F (player_id, "playerId") \
-    F (x, "x") \
-    F (y, "y") \
-    F (is_bot, "isBot") \
-    F (initial_entry, "initialEntry") \
-    F (from_zone_id, "fromZoneId") \
+#define ENTER_ZONE_FIELDS(F)                                                                       \
+    F (player_id, "playerId")                                                                      \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
+    F (is_bot, "isBot")                                                                            \
+    F (initial_entry, "initialEntry")                                                              \
+    F (from_zone_id, "fromZoneId")                                                                 \
     F (crash_boundary_probe, "crashBoundaryProbe")
-#define ENTER_ZONE_RES_FIELDS(F) \
-    F (zone_id, "zoneId") \
+#define ENTER_ZONE_RES_FIELDS(F)                                                                   \
+    F (zone_id, "zoneId")                                                                          \
     F (error, "error")
-#define UPDATE_POSITION_FIELDS(F) \
-    F (player_id, "playerId") \
-    F (x, "x") \
-    F (y, "y") \
+#define UPDATE_POSITION_FIELDS(F)                                                                  \
+    F (player_id, "playerId")                                                                      \
+    F (x, "x")                                                                                     \
+    F (y, "y")                                                                                     \
     F (is_bot, "isBot")
-#define FOLLOW_REQ_FIELDS(F) \
-    F (actor_id, "actorId") \
-    F (probe_id, "probeId") \
+#define FOLLOW_REQ_FIELDS(F)                                                                       \
+    F (actor_id, "actorId")                                                                        \
+    F (probe_id, "probeId")                                                                        \
     F (payload, "payload")
-#define FOLLOW_RES_FIELDS(F) \
-    F (probe_id, "probeId") \
-    F (payload, "payload") \
+#define FOLLOW_RES_FIELDS(F)                                                                       \
+    F (probe_id, "probeId")                                                                        \
+    F (payload, "payload")                                                                         \
     F (error, "error")
-#define CRASH_MOVE_FIELDS(F) \
-    F (x, "x") \
+#define CRASH_MOVE_FIELDS(F)                                                                       \
+    F (x, "x")                                                                                     \
     F (y, "y")
 #define ERROR_FIELDS(F) F (error, "error")
 

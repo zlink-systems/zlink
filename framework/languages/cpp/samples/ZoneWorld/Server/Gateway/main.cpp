@@ -18,7 +18,6 @@ namespace fw = zlink::framework;
 class game_session_t final : public fw::packet_stream_session_t
 {
   public:
-
     explicit game_session_t (fw::actor_client_t &actor_client) : _actor_client (actor_client) {}
 
     fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
@@ -62,9 +61,11 @@ class game_session_t final : public fw::packet_stream_session_t
                                                   actor_location_probe_req_t{request.actor_id})
                                         .async<actor_location_probe_res_t> ();
                 stream
-                  .reply_packet (zlink::message_t::from_json (
-                    fresh_actor_probe_res_t{observed.actor_id, observed.object_generation,
-                                            observed.owner_node_rid, observed.error}))
+                  .reply_packet (
+                    zlink::message_t::from_json (fresh_actor_probe_res_t{observed.actor_id,
+                                                                         observed.object_generation,
+                                                                         observed.owner_node_rid,
+                                                                         observed.error}))
                   .async ();
             }
             catch (const fw::framework_exception_t &error) {
@@ -204,11 +205,14 @@ class world_bootstrap_handler_t
             int dx;
             int dy;
         };
-        constexpr std::array routes{
-          route_t{"bot-nw-x", 10, 15, 1, 0},  route_t{"bot-nw-y", 15, 10, 0, 1},
-          route_t{"bot-ne-x", 90, 15, -1, 0}, route_t{"bot-ne-y", 85, 10, 0, 1},
-          route_t{"bot-sw-x", 10, 85, 1, 0},  route_t{"bot-sw-y", 15, 90, 0, -1},
-          route_t{"bot-se-x", 90, 85, -1, 0}, route_t{"bot-se-y", 85, 90, 0, -1}};
+        constexpr std::array routes{route_t{"bot-nw-x", 10, 15, 1, 0},
+                                    route_t{"bot-nw-y", 15, 10, 0, 1},
+                                    route_t{"bot-ne-x", 90, 15, -1, 0},
+                                    route_t{"bot-ne-y", 85, 10, 0, 1},
+                                    route_t{"bot-sw-x", 10, 85, 1, 0},
+                                    route_t{"bot-sw-y", 15, 90, 0, -1},
+                                    route_t{"bot-se-x", 90, 85, -1, 0},
+                                    route_t{"bot-se-y", 85, 90, 0, -1}};
         std::vector<fw::actor_id_t> actor_ids;
         int bot_count = 0;
         for (const auto &route : routes) {

@@ -24,7 +24,8 @@ struct player_actor_t : framework::actor_t
 
     player_actor_t () = default;
     player_actor_t (const player_actor_t &other) :
-        actor_id (other.actor_id), display_name (other.display_name),
+        actor_id (other.actor_id),
+        display_name (other.display_name),
         destroy_after_entry_spot_join (other.destroy_after_entry_spot_join),
         disconnected (other.disconnected)
     {
@@ -50,8 +51,7 @@ struct player_actor_t : framework::actor_t
 
     void set_actor_context (actor_context_t actor_context) const
     {
-        this->actor_context =
-          std::make_unique<actor_context_t> (std::move (actor_context));
+        this->actor_context = std::make_unique<actor_context_t> (std::move (actor_context));
     }
 
     actor_context_t &context () noexcept override { return *actor_context; }

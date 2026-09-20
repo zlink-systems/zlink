@@ -73,12 +73,12 @@ class authenticate_user_handler_t
         if (!user) {
             std::cerr << "supportchat api: authenticate rejected token=" << request.access_token
                       << "\n";
-            return authenticate_user_res_t{false, std::nullopt, std::nullopt, std::nullopt,
-                                           std::string ("UnknownAccessToken")};
+            return authenticate_user_res_t{
+              false, std::nullopt, std::nullopt, std::nullopt, std::string ("UnknownAccessToken")};
         }
         std::cerr << "supportchat api: authenticate actor=" << user->actor_id << "\n";
-        return authenticate_user_res_t{true, user->actor_id, user->display_name, user->role,
-                                       std::nullopt};
+        return authenticate_user_res_t{
+          true, user->actor_id, user->display_name, user->role, std::nullopt};
     }
 
   private:
@@ -97,15 +97,16 @@ class open_conversation_api_handler_t
     task_t<open_conversation_api_res_t> handle (const open_conversation_api_req_t &request)
     {
         // --8<-- [start:doc-sc-api-open]
-        auto created =
-          co_await _spots.create (sample_names_t::conversation_spot)
-            .in_mesh (sample_names_t::mesh)
-            .creation_request (conversation_create_req_t{
-              request.customer_actor_id, request.customer_display_name, request.subject,
-              std::chrono::duration_cast<std::chrono::milliseconds> (
-                std::chrono::system_clock::now ().time_since_epoch ())
-                .count ()})
-            .async ();
+        auto created = co_await _spots.create (sample_names_t::conversation_spot)
+                         .in_mesh (sample_names_t::mesh)
+                         .creation_request (conversation_create_req_t{
+                           request.customer_actor_id,
+                           request.customer_display_name,
+                           request.subject,
+                           std::chrono::duration_cast<std::chrono::milliseconds> (
+                             std::chrono::system_clock::now ().time_since_epoch ())
+                             .count ()})
+                         .async ();
         // --8<-- [end:doc-sc-api-open]
         if (created.state == spot_create_state_t::rejected || !created.reply) {
             throw framework_exception_t (framework_error_kind_t::rejected,
@@ -159,7 +160,7 @@ int main (int argc, char **argv)
       .add<authenticate_user_handler_t> ()
       .add<open_conversation_api_handler_t> ();
     app.add_hosted_service (std::make_unique<sample_readiness_service_t> ("public", "api"));
-    app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
-      sample_names_t::mesh, "api"));
+    app.add_hosted_service (
+      std::make_unique<spot_route_readiness_service_t> (sample_names_t::mesh, "api"));
     return app.run (argc, argv);
 }

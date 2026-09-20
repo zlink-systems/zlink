@@ -212,11 +212,10 @@ class inventory_module_t
                 state["inventory"][line.sku] = seed;
             }
         }
-        reservations[command.reservation_id] =
-          nlohmann::json{{"orderId", command.order_id},
-                         {"accepted", result.accepted},
-                         {"reason", result.reason},
-                         {"lines", command.lines}};
+        reservations[command.reservation_id] = nlohmann::json{{"orderId", command.order_id},
+                                                              {"accepted", result.accepted},
+                                                              {"reason", result.reason},
+                                                              {"lines", command.lines}};
         return result;
     }
 
@@ -258,9 +257,8 @@ class payment_module_t
           state["paymentMethods"].contains (command.payment_method_id)
             ? state["paymentMethods"][command.payment_method_id].get<payment_method_seed_t> ()
             : payment_method_seed_t{command.payment_method_id, false, "unknown payment method"};
-        authorize_payment_result_t result{method.should_authorize,
-                                          method.should_authorize ? std::string{}
-                                                                  : method.failure_reason};
+        authorize_payment_result_t result{
+          method.should_authorize, method.should_authorize ? std::string{} : method.failure_reason};
         payments[command.payment_id] = nlohmann::json{{"orderId", command.order_id},
                                                       {"accepted", result.accepted},
                                                       {"reason", result.reason},
@@ -299,7 +297,10 @@ inline bool advance_once (nlohmann::json &state,
         if (start_command == nullptr) {
             return false;
         }
-        append_event (state, order_id, order_event_types_t::order_started, source_command_id,
+        append_event (state,
+                      order_id,
+                      order_event_types_t::order_started,
+                      source_command_id,
                       nlohmann::json{{"cartId", start_command->cart_id},
                                      {"shippingAddressId", start_command->shipping_address_id},
                                      {"paymentMethodId", start_command->payment_method_id},
@@ -320,12 +321,18 @@ inline bool advance_once (nlohmann::json &state,
         const auto result = inventory_module_t::reserve (
           state, reserve_inventory_command_t{order_id, reservation_id, aggregate.lines});
         if (result.accepted) {
-            append_event (state, order_id, order_event_types_t::inventory_reserved,
+            append_event (state,
+                          order_id,
+                          order_event_types_t::inventory_reserved,
                           source_command_id,
-                          nlohmann::json{{"reservationId", reservation_id}}, aggregate.version);
+                          nlohmann::json{{"reservationId", reservation_id}},
+                          aggregate.version);
         } else {
-            append_event (state, order_id, order_event_types_t::inventory_reservation_failed,
-                          source_command_id, nlohmann::json{{"reason", result.reason}},
+            append_event (state,
+                          order_id,
+                          order_event_types_t::inventory_reservation_failed,
+                          source_command_id,
+                          nlohmann::json{{"reason", result.reason}},
                           aggregate.version);
         }
         return true;
@@ -333,42 +340,63 @@ inline bool advance_once (nlohmann::json &state,
 
     if (aggregate.status == order_status_t::inventory_reserved) {
         const auto payment_id = payment_id_for (order_id);
-        const auto result = payment_module_t::authorize (
-          state, authorize_payment_command_t{order_id, payment_id, aggregate.payment_method_id,
-                                             aggregate.amount, aggregate.currency});
+        const auto result =
+          payment_module_t::authorize (state,
+                                       authorize_payment_command_t{order_id,
+                                                                   payment_id,
+                                                                   aggregate.payment_method_id,
+                                                                   aggregate.amount,
+                                                                   aggregate.currency});
         if (result.accepted) {
-            append_event (state, order_id, order_event_types_t::payment_authorized,
-                          source_command_id, nlohmann::json{{"paymentId", payment_id}},
+            append_event (state,
+                          order_id,
+                          order_event_types_t::payment_authorized,
+                          source_command_id,
+                          nlohmann::json{{"paymentId", payment_id}},
                           aggregate.version);
         } else {
-            append_event (state, order_id, order_event_types_t::payment_failed, source_command_id,
-                          nlohmann::json{{"reason", result.reason}}, aggregate.version);
+            append_event (state,
+                          order_id,
+                          order_event_types_t::payment_failed,
+                          source_command_id,
+                          nlohmann::json{{"reason", result.reason}},
+                          aggregate.version);
         }
         return true;
     }
 
     if (aggregate.status == order_status_t::payment_authorized) {
-        append_event (state, order_id, order_event_types_t::order_confirmed, source_command_id,
-                      nlohmann::json{{"confirmedAtUnixMs", now_unix_ms ()}}, aggregate.version);
+        append_event (state,
+                      order_id,
+                      order_event_types_t::order_confirmed,
+                      source_command_id,
+                      nlohmann::json{{"confirmedAtUnixMs", now_unix_ms ()}},
+                      aggregate.version);
         return true;
     }
 
     if (aggregate.status == order_event_types_t::payment_failed) {
         (void) inventory_module_t::release (
           state, release_inventory_command_t{order_id, aggregate.reservation_id, aggregate.reason});
-        append_event (state, order_id, order_event_types_t::inventory_released, source_command_id,
-                      nlohmann::json{{"reservationId", aggregate.reservation_id},
-                                     {"reason", aggregate.reason}},
-                      aggregate.version);
+        append_event (
+          state,
+          order_id,
+          order_event_types_t::inventory_released,
+          source_command_id,
+          nlohmann::json{{"reservationId", aggregate.reservation_id}, {"reason", aggregate.reason}},
+          aggregate.version);
         return true;
     }
 
     if (aggregate.status == order_event_types_t::inventory_released
         || aggregate.status == order_event_types_t::inventory_reservation_failed) {
-        append_event (state, order_id, order_event_types_t::order_failed, source_command_id,
-                      nlohmann::json{{"reason", aggregate.reason},
-                                     {"failedAtUnixMs", now_unix_ms ()}},
-                      aggregate.version);
+        append_event (
+          state,
+          order_id,
+          order_event_types_t::order_failed,
+          source_command_id,
+          nlohmann::json{{"reason", aggregate.reason}, {"failedAtUnixMs", now_unix_ms ()}},
+          aggregate.version);
         return true;
     }
     // --8<-- [end:doc-sm-next-step]

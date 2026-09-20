@@ -22,10 +22,8 @@ namespace zlink::samples::gamequest
 // This CLI scenario completes each HTTP request before advancing its workflow state.
 class gamequest_client_scenario_t
 {
-    using quest_progress_message_t =
-      zlink::stream_connector::message_t<quest_progress_notify_t>;
-    using quest_completed_message_t =
-      zlink::stream_connector::message_t<quest_completed_notify_t>;
+    using quest_progress_message_t = zlink::stream_connector::message_t<quest_progress_notify_t>;
+    using quest_completed_message_t = zlink::stream_connector::message_t<quest_completed_notify_t>;
 
   public:
     bool run (const std::string &api_a_stream_endpoint,
@@ -44,64 +42,63 @@ class gamequest_client_scenario_t
                             .packet_name (join_session_req_t::packet_name)
                             .async<join_session_res_t> ()
                             .result ();
-            dump_initial_join_quests ("player-alice", joined ? joined.value ().active_quests
-                                                             : std::vector<quest_progress_t>{});
+            dump_initial_join_quests ("player-alice",
+                                      joined ? joined.value ().active_quests
+                                             : std::vector<quest_progress_t>{});
             ensure (joined && joined.value ().active_quests.empty (),
                     "player-alice initial join should have no active quests");
 
-            auto first_progress = api_a.wait_for<quest_progress_notify_t> ()
-                                    .where (
-                                      [] (const quest_progress_message_t &message) {
-                                        const auto &payload = message.payload;
-                                        return payload.player_id == "player-alice"
-                                               && payload.progress.quest_id
-                                                    == quest_ids_t::first_hunt
-                                               && payload.progress.current_count == 1;
-                                    })
-                                    .timeout (std::chrono::seconds (12))
-                                    .to_future ("first hunt progress wait failed");
-            auto first_kill = api_a.request (
-                                  kill_monster_req_t{"player-alice", "wolf", "forest", "kill-1"})
-                                .packet_name (kill_monster_req_t::packet_name)
-                                .async<kill_monster_res_t> ()
-                                .result ();
+            auto first_progress =
+              api_a.wait_for<quest_progress_notify_t> ()
+                .where ([] (const quest_progress_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.player_id == "player-alice"
+                           && payload.progress.quest_id == quest_ids_t::first_hunt
+                           && payload.progress.current_count == 1;
+                })
+                .timeout (std::chrono::seconds (12))
+                .to_future ("first hunt progress wait failed");
+            auto first_kill =
+              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-1"})
+                .packet_name (kill_monster_req_t::packet_name)
+                .async<kill_monster_res_t> ()
+                .result ();
             dump_event_id_if_mismatch ("first kill", "player-alice-kill-1", first_kill);
             ensure (first_kill && first_kill.value ().event_id == "player-alice-kill-1",
                     "first kill event id mismatch");
             ensure (first_progress.get ().payload.progress.current_count == 1,
                     "first hunt progress push mismatch");
 
-            auto first_hunt_completed = api_a.wait_for<quest_completed_notify_t> ()
-                                          .where (
-                                             [] (const quest_completed_message_t &message) {
-                                              const auto &payload = message.payload;
-                                              return payload.player_id == "player-alice"
-                                                     && payload.progress.quest_id
-                                                          == quest_ids_t::first_hunt
-                                                     && payload.reward_granted;
-                                          })
-                                          .timeout (std::chrono::seconds (12))
-                                          .to_future ("first hunt completion wait failed");
+            auto first_hunt_completed =
+              api_a.wait_for<quest_completed_notify_t> ()
+                .where ([] (const quest_completed_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.player_id == "player-alice"
+                           && payload.progress.quest_id == quest_ids_t::first_hunt
+                           && payload.reward_granted;
+                })
+                .timeout (std::chrono::seconds (12))
+                .to_future ("first hunt completion wait failed");
             (void) api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-2"})
               .packet_name (kill_monster_req_t::packet_name)
               .async<kill_monster_res_t> ()
               .result ();
-            auto third_kill = api_a.request (
-                                  kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
-                                .packet_name (kill_monster_req_t::packet_name)
-                                .async<kill_monster_res_t> ()
-                                .result ();
+            auto third_kill =
+              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
+                .packet_name (kill_monster_req_t::packet_name)
+                .async<kill_monster_res_t> ()
+                .result ();
             ensure (third_kill && third_kill.value ().event_id == "player-alice-kill-3",
                     "third kill event id mismatch");
-            ensure (first_hunt_completed.get ().payload.progress.status ==
-              quest_status_t::reward_granted,
+            ensure (first_hunt_completed.get ().payload.progress.status
+                      == quest_status_t::reward_granted,
                     "first hunt completion push mismatch");
 
-            auto duplicate = api_a.request (
-                                  kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
-                               .packet_name (kill_monster_req_t::packet_name)
-                               .async<kill_monster_res_t> ()
-                               .result ();
+            auto duplicate =
+              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
+                .packet_name (kill_monster_req_t::packet_name)
+                .async<kill_monster_res_t> ()
+                .result ();
             ensure (duplicate && duplicate.value ().event_id == third_kill.value ().event_id,
                     "duplicate kill idempotency mismatch");
 
@@ -117,32 +114,29 @@ class gamequest_client_scenario_t
             ensure (wait_for_progress (api_b, "player-bob", quest_ids_t::herb_gathering, 1),
                     "player-bob did not see the offline herb progress");
 
-            auto herb_completed = api_b.wait_for<quest_completed_notify_t> ()
-                                    .where (
-                                      [] (const quest_completed_message_t &message) {
-                                        const auto &payload = message.payload;
-                                        return payload.player_id == "player-bob"
-                                               && payload.progress.quest_id
-                                                    == quest_ids_t::herb_gathering
-                                               && payload.reward_granted;
-                                    })
-                                    .timeout (std::chrono::seconds (12))
-                                    .to_future ("herb completion wait failed");
+            auto herb_completed =
+              api_b.wait_for<quest_completed_notify_t> ()
+                .where ([] (const quest_completed_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.player_id == "player-bob"
+                           && payload.progress.quest_id == quest_ids_t::herb_gathering
+                           && payload.reward_granted;
+                })
+                .timeout (std::chrono::seconds (12))
+                .to_future ("herb completion wait failed");
             api_b.send (collect_item_req_t{"player-bob", "healing-herb", 4, "herb-2"}).submit ();
             ensure (herb_completed.get ().payload.progress.status == quest_status_t::reward_granted,
                     "herb completion push mismatch");
 
             /* projection 재생성(§14): 표시용 projection을 지운 뒤 event stream만으로 같은
              * RewardGranted 상태를 복원한다. */
-            auto deleted = api_b.request (
-                                  projection_admin_req_t{"player-bob",
-                                                         quest_ids_t::herb_gathering,
-                                                         "delete"})
+            auto deleted = api_b
+                             .request (projection_admin_req_t{
+                               "player-bob", quest_ids_t::herb_gathering, "delete"})
                              .packet_name (projection_admin_req_t::packet_name)
                              .async<projection_admin_res_t> ()
                              .result ();
-            ensure (deleted && deleted.value ().ok,
-                    "player-bob projection delete failed");
+            ensure (deleted && deleted.value ().ok, "player-bob projection delete failed");
             auto missing_projection = api_b.request (get_quest_progress_req_t{"player-bob"})
                                         .packet_name (get_quest_progress_req_t::packet_name)
                                         .async<get_quest_progress_res_t> ()
@@ -151,14 +145,12 @@ class gamequest_client_scenario_t
                       && std::none_of (missing_projection.value ().active_quests.begin (),
                                        missing_projection.value ().active_quests.end (),
                                        [] (const quest_progress_t &progress) {
-                                           return progress.quest_id
-                                                  == quest_ids_t::herb_gathering;
+                                           return progress.quest_id == quest_ids_t::herb_gathering;
                                        }),
                     "deleted player-bob projection is still visible");
-            auto rebuilt = api_b.request (
-                                  projection_admin_req_t{"player-bob",
-                                                         quest_ids_t::herb_gathering,
-                                                         "rebuild"})
+            auto rebuilt = api_b
+                             .request (projection_admin_req_t{
+                               "player-bob", quest_ids_t::herb_gathering, "rebuild"})
                              .packet_name (projection_admin_req_t::packet_name)
                              .async<projection_admin_res_t> ()
                              .result ();
@@ -166,8 +158,7 @@ class gamequest_client_scenario_t
                       && std::any_of (rebuilt.value ().projection.begin (),
                                       rebuilt.value ().projection.end (),
                                       [] (const quest_progress_t &progress) {
-                                          return progress.quest_id
-                                                   == quest_ids_t::herb_gathering
+                                          return progress.quest_id == quest_ids_t::herb_gathering
                                                  && progress.status
                                                       == quest_status_t::reward_granted;
                                       }),
@@ -186,10 +177,10 @@ class gamequest_client_scenario_t
                                   .packet_name (get_quest_progress_req_t::packet_name)
                                   .async<get_quest_progress_res_t> ()
                                   .result ();
-            ensure (after_replay
-                      && has_progress (after_replay.value ().active_quests,
-                                       quest_ids_t::first_hunt, 3),
-                    "replayed gameplay event changed the quest progress");
+            ensure (
+              after_replay
+                && has_progress (after_replay.value ().active_quests, quest_ids_t::first_hunt, 3),
+              "replayed gameplay event changed the quest progress");
 
             /* reset/reconcile(§14): owner에게 publish되지 않은 authoritative gameplay fact를
              * GameApi에만 기록한 뒤 Sync로 QuestReconciled event를 만든다. */
@@ -203,10 +194,10 @@ class gamequest_client_scenario_t
                                 .packet_name (sync_quest_progress_req_t::packet_name)
                                 .async<sync_quest_progress_res_t> ()
                                 .result ();
-            ensure (reconciled
-                      && has_progress (reconciled.value ().updated_quests,
-                                       quest_ids_t::first_hunt, 4),
-                    "gameplay snapshot did not reconcile the first-hunt progress");
+            ensure (
+              reconciled
+                && has_progress (reconciled.value ().updated_quests, quest_ids_t::first_hunt, 4),
+              "gameplay snapshot did not reconcile the first-hunt progress");
 
             /* reconnect(§14): 다른 노드로 다시 접속하면 notify가 그 노드로 따라온다. session
              * binding이 owner spot의 notify 경로를 정하기 때문이다. */
@@ -218,19 +209,18 @@ class gamequest_client_scenario_t
                                     .result ();
             ensure (static_cast<bool> (alice_rejoined),
                     "player-alice rejoin on the second node failed");
-            auto ruins_completed = alice_b.wait_for<quest_completed_notify_t> ()
-                                     .where (
-                                       [] (const quest_completed_message_t &message) {
-                                         const auto &payload = message.payload;
-                                         return payload.player_id == "player-alice"
-                                                && payload.progress.quest_id
-                                                     == quest_ids_t::visit_ruins;
-                                     })
-                                     .timeout (std::chrono::seconds (12))
-                                     .to_future ("ruins completion wait after reconnect failed");
+            auto ruins_completed =
+              alice_b.wait_for<quest_completed_notify_t> ()
+                .where ([] (const quest_completed_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.player_id == "player-alice"
+                           && payload.progress.quest_id == quest_ids_t::visit_ruins;
+                })
+                .timeout (std::chrono::seconds (12))
+                .to_future ("ruins completion wait after reconnect failed");
             alice_b.send (enter_area_req_t{"player-alice", "ruins", "enter-ruins"}).submit ();
-            ensure (ruins_completed.get ().payload.progress.status ==
-              quest_status_t::reward_granted,
+            ensure (ruins_completed.get ().payload.progress.status
+                      == quest_status_t::reward_granted,
                     "reconnected player did not receive the notify on the new node");
 
             /* §9-8: the close contract is the one-way ClosePlayerQuestMsg.  The
@@ -246,9 +236,9 @@ class gamequest_client_scenario_t
              * as stale. The Framework invalidates that route, but does not
              * resubmit the same application request to a new owner. */
             auto stale_owner = alice_b.request (get_quest_progress_req_t{"player-alice"})
-                               .packet_name (get_quest_progress_req_t::packet_name)
-                               .async<get_quest_progress_res_t> ()
-                               .result ();
+                                 .packet_name (get_quest_progress_req_t::packet_name)
+                                 .async<get_quest_progress_res_t> ()
+                                 .result ();
             ensure (!stale_owner
                       && stale_owner.error_code ()
                            == zlink::stream_connector::error_code_t::remote_error,
@@ -261,10 +251,10 @@ class gamequest_client_scenario_t
                                 .packet_name (get_quest_progress_req_t::packet_name)
                                 .async<get_quest_progress_res_t> ()
                                 .result ();
-            ensure (rehydrated
-                      && has_progress (rehydrated.value ().active_quests,
-                                       quest_ids_t::first_hunt, 4),
-                    "owner reactivation did not rehydrate the event stream");
+            ensure (
+              rehydrated
+                && has_progress (rehydrated.value ().active_quests, quest_ids_t::first_hunt, 4),
+              "owner reactivation did not rehydrate the event stream");
 
             /* scale-out (§18): two independent player owners exercise both
              * API streams and let the RouteMesh placement select the two
@@ -282,36 +272,33 @@ class gamequest_client_scenario_t
                                     .packet_name (join_session_req_t::packet_name)
                                     .async<join_session_res_t> ()
                                     .result ();
-            ensure (scale_a_joined && scale_b_joined,
-                    "GameQuest scale-out player join failed");
+            ensure (scale_a_joined && scale_b_joined, "GameQuest scale-out player join failed");
             auto scale_a_progress = scale_a.wait_for<quest_progress_notify_t> ()
-                                      .where (
-                                         [] (const quest_progress_message_t &message) {
-                                           const auto &payload = message.payload;
-                                           return payload.player_id == "player-scale-a"
-                                                  && payload.progress.current_count == 1;
+                                      .where ([] (const quest_progress_message_t &message) {
+                                          const auto &payload = message.payload;
+                                          return payload.player_id == "player-scale-a"
+                                                 && payload.progress.current_count == 1;
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-a progress wait failed");
             auto scale_b_progress = scale_b.wait_for<quest_progress_notify_t> ()
-                                      .where (
-                                         [] (const quest_progress_message_t &message) {
-                                           const auto &payload = message.payload;
-                                           return payload.player_id == "player-scale-b"
-                                                  && payload.progress.current_count == 1;
+                                      .where ([] (const quest_progress_message_t &message) {
+                                          const auto &payload = message.payload;
+                                          return payload.player_id == "player-scale-b"
+                                                 && payload.progress.current_count == 1;
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-b progress wait failed");
-            auto scale_a_event = scale_a.request (
-                                      kill_monster_req_t{"player-scale-a", "wolf", "forest",
-                                                         "scale-kill-1"})
-                                   .packet_name (kill_monster_req_t::packet_name)
-                                   .async<kill_monster_res_t> ()
-                                   .result ();
+            auto scale_a_event =
+              scale_a
+                .request (kill_monster_req_t{"player-scale-a", "wolf", "forest", "scale-kill-1"})
+                .packet_name (kill_monster_req_t::packet_name)
+                .async<kill_monster_res_t> ()
+                .result ();
             scale_b.send (collect_item_req_t{"player-scale-b", "healing-herb", 1, "scale-herb-1"})
               .submit ();
-            ensure (scale_a_event && scale_a_event.value ().event_id ==
-              "player-scale-a-scale-kill-1",
+            ensure (scale_a_event
+                      && scale_a_event.value ().event_id == "player-scale-a-scale-kill-1",
                     "GameQuest scale-out event id mismatch");
             ensure (scale_a_progress.get ().payload.progress.current_count == 1
                       && scale_b_progress.get ().payload.progress.current_count == 1,
@@ -327,38 +314,38 @@ class gamequest_client_scenario_t
                                   .async<join_session_res_t> ()
                                   .result ();
             ensure (static_cast<bool> (owner_joined), "owner-failure player join failed");
-            auto owner_progress = owner_failure.wait_for<quest_progress_notify_t> ()
-                                    .where (
-                                      [] (const quest_progress_message_t &message) {
-                                        const auto &payload = message.payload;
-                                        return payload.player_id == "player-owner-failure"
-                                               && payload.progress.quest_id
-                                                    == quest_ids_t::first_hunt
-                                               && payload.progress.current_count == 1;
-                                    })
-                                    .timeout (std::chrono::seconds (12))
-                                    .to_future ("owner-failure progress wait failed");
-            auto owner_setup = owner_failure.request (
-                                  kill_monster_req_t{"player-owner-failure", "wolf", "forest",
-                                                     "owner-ready-kill"})
+            auto owner_progress =
+              owner_failure.wait_for<quest_progress_notify_t> ()
+                .where ([] (const quest_progress_message_t &message) {
+                    const auto &payload = message.payload;
+                    return payload.player_id == "player-owner-failure"
+                           && payload.progress.quest_id == quest_ids_t::first_hunt
+                           && payload.progress.current_count == 1;
+                })
+                .timeout (std::chrono::seconds (12))
+                .to_future ("owner-failure progress wait failed");
+            auto owner_setup = owner_failure
+                                 .request (kill_monster_req_t{
+                                   "player-owner-failure", "wolf", "forest", "owner-ready-kill"})
                                  .packet_name (kill_monster_req_t::packet_name)
                                  .async<kill_monster_res_t> ()
                                  .result ();
-            ensure (owner_setup && owner_setup.value ().event_id
-                      == "player-owner-failure-owner-ready-kill",
+            ensure (owner_setup
+                      && owner_setup.value ().event_id == "player-owner-failure-owner-ready-kill",
                     "owner-failure setup event id mismatch");
             ensure (owner_progress.get ().payload.progress.current_count == 1,
                     "owner-failure owner did not process the setup event");
-            std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure" <<
-              std::endl;
+            std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure"
+                      << std::endl;
             wait_for_release (owner_loss_release_file);
 
-            auto unavailable = owner_failure.request (
-                                 kill_monster_req_t{"player-owner-failure", "wolf", "forest",
-                                                    "owner-unavailable-kill"})
-                                .packet_name (kill_monster_req_t::packet_name)
-                                .async<kill_monster_res_t> ()
-                                .result ();
+            auto unavailable =
+              owner_failure
+                .request (kill_monster_req_t{
+                  "player-owner-failure", "wolf", "forest", "owner-unavailable-kill"})
+                .packet_name (kill_monster_req_t::packet_name)
+                .async<kill_monster_res_t> ()
+                .result ();
             ensure (!unavailable
                       && unavailable.error_code ()
                            == zlink::stream_connector::error_code_t::remote_error,
@@ -396,11 +383,10 @@ class gamequest_client_scenario_t
                               const std::string &quest_id,
                               int current_count)
     {
-        return std::any_of (projection.begin (), projection.end (),
-                            [&] (const quest_progress_t &progress) {
-                                return progress.quest_id == quest_id
-                                       && progress.current_count == current_count;
-                            });
+        return std::any_of (
+          projection.begin (), projection.end (), [&] (const quest_progress_t &progress) {
+              return progress.quest_id == quest_id && progress.current_count == current_count;
+          });
     }
 
     static void wait_for_release (const std::string &release_file)
@@ -421,13 +407,11 @@ class gamequest_client_scenario_t
         std::cerr << "gamequest initial join dump player=" << player_id
                   << " activeQuestCount=" << quests.size () << "\n";
         for (const auto &quest : quests) {
-            std::cerr << "gamequest initial join quest"
-                      << " questId=" << quest.quest_id
+            std::cerr << "gamequest initial join quest" << " questId=" << quest.quest_id
                       << " creatorPlayer=" << quest.player_id
                       << " lastEventId=" << quest.last_source_event_id.value_or ("<none>")
                       << " updatedAtUnixMs=" << quest.updated_at_unix_ms
-                      << " status=" << quest.status
-                      << " count=" << quest.current_count << "/"
+                      << " status=" << quest.status << " count=" << quest.current_count << "/"
                       << quest.required_count << "\n";
         }
     }
@@ -444,8 +428,7 @@ class gamequest_client_scenario_t
         std::cerr << "gamequest event id dump label=" << label << " expected=" << expected;
         if (result) {
             std::cerr << " actual=" << result.value ().event_id;
-        }
-        else {
+        } else {
             std::cerr << " actual=<no-response>";
             if (result.error ()) {
                 std::cerr << " error=" << result.error ()->message;
@@ -461,7 +444,9 @@ class gamequest_client_scenario_t
                            .build ()
                            .post ("/self-check/assert")
                            .body (server_assertion_req_t{})
-                           .submit<server_assertion_res_t> ().value ().body;
+                           .submit<server_assertion_res_t> ()
+                           .value ()
+                           .body;
         ensure (assertion.passed, "server assertion failed");
     }
 
@@ -477,8 +462,8 @@ class gamequest_client_scenario_t
                              .packet_name (get_quest_progress_req_t::packet_name)
                              .template async<get_quest_progress_res_t> ()
                              .result ();
-            if (current && has_progress (current.value ().active_quests, quest_id, expected_count))
-              {
+            if (current
+                && has_progress (current.value ().active_quests, quest_id, expected_count)) {
                 return true;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (100));

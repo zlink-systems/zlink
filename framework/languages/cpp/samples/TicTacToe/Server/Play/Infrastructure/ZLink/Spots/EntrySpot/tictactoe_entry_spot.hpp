@@ -23,8 +23,7 @@ using framework::message_t;
 class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
 {
   public:
-    explicit tictactoe_entry_spot_t (entry_spot_context_t context) :
-        _context (std::move (context))
+    explicit tictactoe_entry_spot_t (entry_spot_context_t context) : _context (std::move (context))
     {
     }
 
@@ -41,9 +40,8 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
         // --8<-- [end:doc-multicast-subscribe]
     }
 
-    task_t<void> join_game (player_actor_t &actor,
-                            message_context_t &,
-                            const join_game_msg_t &request);
+    task_t<void>
+    join_game (player_actor_t &actor, message_context_t &, const join_game_msg_t &request);
 
     observe_milestone_res_t observe_milestone (const player_actor_t &actor,
                                                message_context_t &,
@@ -51,19 +49,15 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
 
     /* 공통 sample spec §13: 인증에서 받은 PlayerInfo가 actor 생성 payload로 들어오고,
      * actor는 그 값(display name/level/wins)을 그대로 보관한다. */
-    task_t<actor_create_response_t>
-    on_create_actor (
-      player_actor_t &actor,
-      const message_t &create_request) override
+    task_t<actor_create_response_t> on_create_actor (player_actor_t &actor,
+                                                     const message_t &create_request) override
     {
         actor.apply_player (create_request.decode<player_actor_create_req_t> ().player);
         created_actor_ids.push_back (actor.actor_id);
         co_return actor_create_response_t::accept ();
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view,
-                   const message_t &) override
+    task_t<spot_actor_join_result_t> on_actor_join (std::string_view, const message_t &) override
     {
         co_return spot_actor_join_result_t::accept ();
     }

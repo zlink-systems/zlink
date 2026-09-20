@@ -47,15 +47,15 @@ class commerce_api_handlers_t
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
                 state["nextOrderSequence"] = next;
-                mappings[request.idempotency_key] = nlohmann::json{
-                  {"orderId", "order-" + std::string (4 - std::to_string (next).size (), '0')
-                                + std::to_string (next)},
-                  {"started", false}};
+                mappings[request.idempotency_key] =
+                  nlohmann::json{{"orderId",
+                                  "order-" + std::string (4 - std::to_string (next).size (), '0')
+                                    + std::to_string (next)},
+                                 {"started", false}};
             }
             const auto order_id =
               mappings[request.idempotency_key].value ("orderId", std::string{});
-            const auto already_started =
-              mappings[request.idempotency_key].value ("started", false);
+            const auto already_started = mappings[request.idempotency_key].value ("started", false);
 
             /* 장바구니는 CommerceStateStore의 시드에서 읽어 검증한다 — 금액 범위나 cart id
              * 문자열 비교로 성공·실패를 흉내내지 않는다. */
@@ -64,17 +64,16 @@ class commerce_api_handlers_t
             }
             const auto cart = state["carts"][request.cart_id].get<cart_seed_t> ();
             mappings[request.idempotency_key]["started"] = true;
-            return start_plan_t{
-              start_order_workflow_req_t{order_id,
-                                         request.cart_id,
-                                         request.shipping_address_id,
-                                         request.payment_method_id,
-                                         request.idempotency_key,
-                                         "start:" + request.idempotency_key,
-                                         cart.lines,
-                                         cart.amount,
-                                         cart.currency},
-              already_started};
+            return start_plan_t{start_order_workflow_req_t{order_id,
+                                                           request.cart_id,
+                                                           request.shipping_address_id,
+                                                           request.payment_method_id,
+                                                           request.idempotency_key,
+                                                           "start:" + request.idempotency_key,
+                                                           cart.lines,
+                                                           cart.amount,
+                                                           cart.currency},
+                                already_started};
         });
 
         /* 공통 sample spec §6.1: "이미 확정된 idempotency mapping을 재사용하는 경우에는
@@ -86,8 +85,7 @@ class commerce_api_handlers_t
                         return projection_lookup_t{};
                     }
                     return projection_lookup_t{
-                      true,
-                      state["readModels"][plan.command.order_id].get<order_state_t> ()};
+                      true, state["readModels"][plan.command.order_id].get<order_state_t> ()};
                 });
                 if (projection.found) {
                     co_return start_order_res_t{projection.state.order_id, projection.state};
@@ -123,8 +121,7 @@ class commerce_api_handlers_t
         const auto order_id = _store.update ([&] (nlohmann::json &state) {
             const auto next = state.value ("nextOrderSequence", 0) + 1;
             state["nextOrderSequence"] = next;
-            const auto order_id = "order-"
-                                  + std::string (4 - std::to_string (next).size (), '0')
+            const auto order_id = "order-" + std::string (4 - std::to_string (next).size (), '0')
                                   + std::to_string (next);
             state["idempotency"][request.idempotency_key] =
               nlohmann::json{{"orderId", order_id}, {"started", false}};
@@ -145,10 +142,11 @@ class commerce_api_handlers_t
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
                 state["nextOrderSequence"] = next;
-                mappings[request.idempotency_key] = nlohmann::json{
-                  {"orderId", "order-" + std::string (4 - std::to_string (next).size (), '0')
-                                + std::to_string (next)},
-                  {"started", false}};
+                mappings[request.idempotency_key] =
+                  nlohmann::json{{"orderId",
+                                  "order-" + std::string (4 - std::to_string (next).size (), '0')
+                                    + std::to_string (next)},
+                                 {"started", false}};
             }
             const auto id = mappings[request.idempotency_key].value ("orderId", std::string{});
             state["testHooks"]["stopAt"][id] = order_status_t::inventory_reserved;
@@ -191,11 +189,13 @@ class commerce_api_handlers_t
     {
         return _store.read ([&] (const nlohmann::json &state) {
             std::vector<std::string> evidence;
-            for (const auto &order_id :
-                 {request.successful_order_id, request.pending_recovered_order_id,
-                  request.concurrent_order_id, request.resumed_order_id,
-                  request.inventory_failure_order_id, request.payment_failure_order_id,
-                  request.scale_out_order_id}) {
+            for (const auto &order_id : {request.successful_order_id,
+                                         request.pending_recovered_order_id,
+                                         request.concurrent_order_id,
+                                         request.resumed_order_id,
+                                         request.inventory_failure_order_id,
+                                         request.payment_failure_order_id,
+                                         request.scale_out_order_id}) {
                 const auto events = event_types_for (state, order_id);
                 std::string line = order_id + ":";
                 for (std::size_t i = 0; i < events.size (); ++i) {
@@ -212,22 +212,29 @@ class commerce_api_handlers_t
             evidence.push_back ("startedIdempotency="
                                 + std::to_string (state["idempotency"].size ()));
             evidence.push_back ("routing=global-order-id");
-            const auto success =
-              std::vector<std::string>{"OrderStartedEvent", "InventoryReservedEvent",
-                                       "PaymentAuthorizedEvent", "OrderConfirmedEvent"};
+            const auto success = std::vector<std::string>{"OrderStartedEvent",
+                                                          "InventoryReservedEvent",
+                                                          "PaymentAuthorizedEvent",
+                                                          "OrderConfirmedEvent"};
             const auto passed =
               has_sequence (state, request.successful_order_id, success)
               && has_prefix (state, request.pending_recovered_order_id, success)
               && has_sequence (state, request.concurrent_order_id, success)
               && has_sequence (state, request.resumed_order_id, success)
               && has_sequence (
-                state, request.inventory_failure_order_id,
+                state,
+                request.inventory_failure_order_id,
                 {"OrderStartedEvent", "InventoryReservationFailedEvent", "OrderFailedEvent"})
-              && has_sequence (state, request.payment_failure_order_id,
-                               {"OrderStartedEvent", "InventoryReservedEvent", "PaymentFailedEvent",
-                                "InventoryReleasedEvent", "OrderFailedEvent"})
+              && has_sequence (state,
+                               request.payment_failure_order_id,
+                               {"OrderStartedEvent",
+                                "InventoryReservedEvent",
+                                "PaymentFailedEvent",
+                                "InventoryReleasedEvent",
+                                "OrderFailedEvent"})
               && has_sequence (state, request.scale_out_order_id, success)
-              && state["paymentAttempts"].size () >= 1 && state["releasedReservations"].size () >= 1
+              && state["paymentAttempts"].size () >= 1
+              && state["releasedReservations"].size () >= 1
               /* Five runner fixtures (including planned relocation) plus five Client keys are
                * expected.  The
                * assertion still receives every Client-created order id from
@@ -236,8 +243,7 @@ class commerce_api_handlers_t
             if (passed) {
                 std::cerr << "shoppingmall-evidence order=" << request.successful_order_id
                           << " events="
-                          << event_types_for (state, request.successful_order_id).size ()
-                          << "\n";
+                          << event_types_for (state, request.successful_order_id).size () << "\n";
             }
             return server_assertion_res_t{passed, evidence};
         });
@@ -373,13 +379,17 @@ int main (int argc, char **argv)
       .map_post<delete_projection_handler_t> ("/self-check/projection/delete")
       .map_post<rebuild_projection_handler_t> ("/orders/rebuild")
       .map_post<assert_handler_t> ("/self-check/assert");
-    app.add_hosted_service (std::make_unique<shoppingmall_http_readiness_service_t> (
-      instance.instance_id));
+    app.add_hosted_service (
+      std::make_unique<shoppingmall_http_readiness_service_t> (instance.instance_id));
     app.add_hosted_service (std::make_unique<shoppingmall_object_route_readiness_service_t> (
-      sample_names_t::order_workflow_channel, instance.instance_id,
-      "shoppingmall-workflow-a-workflow", "workflow-a"));
+      sample_names_t::order_workflow_channel,
+      instance.instance_id,
+      "shoppingmall-workflow-a-workflow",
+      "workflow-a"));
     app.add_hosted_service (std::make_unique<shoppingmall_object_route_readiness_service_t> (
-      sample_names_t::order_workflow_channel, instance.instance_id,
-      "shoppingmall-workflow-b-workflow", "workflow-b"));
+      sample_names_t::order_workflow_channel,
+      instance.instance_id,
+      "shoppingmall-workflow-b-workflow",
+      "workflow-b"));
     return app.run (argc, argv);
 }

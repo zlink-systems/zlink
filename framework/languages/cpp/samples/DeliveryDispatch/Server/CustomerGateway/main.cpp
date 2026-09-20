@@ -141,8 +141,8 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
         }
         actor.context ()
           .bound_session ()
-          .send (delivery_status_notify_t{status.delivery_id, status.status, status.courier_id,
-                                          status.occurred_at_unix_ms})
+          .send (delivery_status_notify_t{
+            status.delivery_id, status.status, status.courier_id, status.occurred_at_unix_ms})
           .async ();
         if (status.status == delivery_status_t::delivered) {
             std::cerr << "deliverydispatch-customer pushed status=Delivered delivery="
@@ -159,7 +159,6 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
 class customer_gateway_session_t final : public packet_stream_session_t
 {
   public:
-
     explicit customer_gateway_session_t (customer_session_directory_t &sessions) :
         _sessions (sessions)
     {
@@ -197,12 +196,13 @@ class customer_gateway_session_t final : public packet_stream_session_t
         const auto request = payload.parse_json<subscribe_delivery_req_t> ();
         auto &actors = stream.actors ();
         auto actor =
-          actors.get_or_create (sample_names_t::customer_actor_type, sample_names_t::customer_id,
+          actors.get_or_create (sample_names_t::customer_actor_type,
+                                sample_names_t::customer_id,
                                 ensure_customer_actor_req_t{sample_names_t::customer_id});
         if (!actor) {
-            throw framework_exception_t (actor.error_kind (), actor.error ()
-                                                                ? actor.error ()->what ()
-                                                                : "customer actor create failed");
+            throw framework_exception_t (actor.error_kind (),
+                                         actor.error () ? actor.error ()->what ()
+                                                        : "customer actor create failed");
         }
         std::string actor_id = sample_names_t::customer_id;
         if (!_bound_actors.contains (actor_id)) {
@@ -277,7 +277,8 @@ int main (int argc, char **argv)
       .bind (topology.customer_stream_endpoint)
       .register_session<customer_gateway_session_t> ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::customer_gateway_node, sample_names_t::customer_actor_discovery,
+      sample_names_t::customer_gateway_node,
+      sample_names_t::customer_actor_discovery,
       std::vector<std::string>{sample_names_t::tracking_route_node}));
     return app.run (argc, argv);
 }

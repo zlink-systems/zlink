@@ -71,33 +71,28 @@ inline void require (bool condition, const char *message)
         throw std::runtime_error (message);
 }
 
-se::task_t<void> wait_for_condition (
-  std::function<bool ()> condition,
-  std::chrono::milliseconds timeout,
-  std::string timeout_message)
+se::task_t<void> wait_for_condition (std::function<bool ()> condition,
+                                     std::chrono::milliseconds timeout,
+                                     std::string timeout_message)
 {
     return se::task_t<void> (
-      [condition = std::move (condition), timeout,
-       timeout_message = std::move (timeout_message)] (
+      [condition = std::move (condition), timeout, timeout_message = std::move (timeout_message)] (
         std::function<void (se::result_t<void>)> completed) mutable {
-          std::thread (
-            [condition = std::move (condition), timeout,
-             timeout_message = std::move (timeout_message),
-             completed = std::move (completed)] () mutable {
-                const auto deadline = std::chrono::steady_clock::now () + timeout;
-                while (!condition ()) {
-                    if (std::chrono::steady_clock::now () >= deadline) {
-                        completed (se::result_t<void>::failure (
-                          se::error_code_t::user_callback_failed,
-                          std::move (timeout_message)));
-                        return;
-                    }
-                    std::this_thread::sleep_for (
-                      std::chrono::milliseconds (25));
-                }
-                completed (se::result_t<void>::success ());
-            })
-            .detach ();
+          std::thread ([condition = std::move (condition),
+                        timeout,
+                        timeout_message = std::move (timeout_message),
+                        completed = std::move (completed)] () mutable {
+              const auto deadline = std::chrono::steady_clock::now () + timeout;
+              while (!condition ()) {
+                  if (std::chrono::steady_clock::now () >= deadline) {
+                      completed (se::result_t<void>::failure (
+                        se::error_code_t::user_callback_failed, std::move (timeout_message)));
+                      return;
+                  }
+                  std::this_thread::sleep_for (std::chrono::milliseconds (25));
+              }
+              completed (se::result_t<void>::success ());
+          }).detach ();
       });
 }
 
@@ -163,16 +158,18 @@ inline std::string same_owner_adjacent_zone (const watch_nodes_res_t &nodes,
 se::task_t<join_world_res_t> join_and_wait (se::coroutine_connector_t &game,
                                             const std::string &player_id)
 {
-    auto reply_wait =
-      game.wait_for<join_world_res_t> ()
-        .where ([player_id] (const auto &reply_message) {
-        const auto &reply = reply_message.payload; return reply.player_id == player_id; })
-        .async ();
+    auto reply_wait = game.wait_for<join_world_res_t> ()
+                        .where ([player_id] (const auto &reply_message) {
+                            const auto &reply = reply_message.payload;
+                            return reply.player_id == player_id;
+                        })
+                        .async ();
     auto state_wait =
       game.wait_for<zone_state_notify_t> ()
         .where ([player_id] (const auto &state_message) {
             const auto &state = state_message.payload;
-            return std::any_of (state.players.begin (), state.players.end (),
+            return std::any_of (state.players.begin (),
+                                state.players.end (),
                                 [&] (const auto &player) { return player.player_id == player_id; });
         })
         .async ();
@@ -199,17 +196,17 @@ se::task_t<void> move_within (se::coroutine_connector_t &game,
             next_x += std::clamp (target_x - x, -spec_t::max_step, spec_t::max_step);
         else
             next_y += std::clamp (target_y - y, -spec_t::max_step, spec_t::max_step);
-        auto state_wait = game.wait_for<zone_state_notify_t> ()
-                            .where ([player_id, next_x, next_y] (const auto &state_message) {
-                                const auto &state = state_message.payload;
-                                return std::any_of (state.players.begin (), state.players.end (),
-                                                    [&] (const auto &player) {
-                                                        return player.player_id == player_id
-                                                               && player.x == next_x
-                                                               && player.y == next_y;
-                                                    });
-                            })
-                            .async ();
+        auto state_wait =
+          game.wait_for<zone_state_notify_t> ()
+            .where ([player_id, next_x, next_y] (const auto &state_message) {
+                const auto &state = state_message.payload;
+                return std::any_of (
+                  state.players.begin (), state.players.end (), [&] (const auto &player) {
+                      return player.player_id == player_id && player.x == next_x
+                             && player.y == next_y;
+                  });
+            })
+            .async ();
         game.send (move_msg_t{next_x, next_y}).submit ();
         (void) co_await state_wait;
         x = next_x;
@@ -258,7 +255,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
 
     const auto nodes = co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
     require (nodes.nodes.size () == 2, "Ops must report exactly two ZoneNodes");
-    require (std::all_of (nodes.nodes.begin (), nodes.nodes.end (),
+    require (std::all_of (nodes.nodes.begin (),
+                          nodes.nodes.end (),
                           [] (const auto &node) { return node.registered && node.connected; }),
              "ZoneNodes must be registered and connected");
     std::cout << "scenario ZW-C1 passed\n";
@@ -288,28 +286,33 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
         .where ([] (const auto &state_message) {
             const auto &state = state_message.payload;
             return std::any_of (
-                     state.players.begin (), state.players.end (),
+                     state.players.begin (),
+                     state.players.end (),
                      [] (const auto &player) { return player.player_id == "player-alice"; })
                    && std::any_of (
-                     state.players.begin (), state.players.end (),
-                     [] (const auto &player) { return player.player_id == "player-bob"; });
+                     state.players.begin (), state.players.end (), [] (const auto &player) {
+                         return player.player_id == "player-bob";
+                     });
         })
         .async ();
     const auto bob_joined = co_await join_and_wait (neighbor, "player-bob");
     require (bob_joined.zone_id == "zone-nw", "second player did not join the spawn zone");
     const auto alice_shared = co_await alice_shared_wait;
-    auto bob_shared_wait =
-      neighbor.wait_for<zone_state_notify_t> ()
-        .where ([] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return std::any_of (
-                     state.players.begin (), state.players.end (),
-                     [] (const auto &player) { return player.player_id == "player-alice"; })
-                   && std::any_of (
-                     state.players.begin (), state.players.end (),
-                     [] (const auto &player) { return player.player_id == "player-bob"; });
-        })
-        .async ();
+    auto bob_shared_wait = neighbor.wait_for<zone_state_notify_t> ()
+                             .where ([] (const auto &state_message) {
+                                 const auto &state = state_message.payload;
+                                 return std::any_of (state.players.begin (),
+                                                     state.players.end (),
+                                                     [] (const auto &player) {
+                                                         return player.player_id == "player-alice";
+                                                     })
+                                        && std::any_of (state.players.begin (),
+                                                        state.players.end (),
+                                                        [] (const auto &player) {
+                                                            return player.player_id == "player-bob";
+                                                        });
+                             })
+                             .async ();
     const auto bob_shared = co_await bob_shared_wait;
     require (alice_shared.payload.players.size () >= 2 && bob_shared.payload.players.size () >= 2,
              "both same-zone clients must see both players");
@@ -349,9 +352,10 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
       co_await ops.request (set_maintenance_req_t{target_node.node_id, false})
         .async<set_maintenance_res_t> ();
     require (!target_reset.error && !target_reset.enabled, "A3 target maintenance cleanup failed");
-    const std::vector<std::string> expected_rejections{
-      reject_reason_t::out_of_range, reject_reason_t::too_far, reject_reason_t::diagonal_crossing,
-      reject_reason_t::zone_maintenance};
+    const std::vector<std::string> expected_rejections{reject_reason_t::out_of_range,
+                                                       reject_reason_t::too_far,
+                                                       reject_reason_t::diagonal_crossing,
+                                                       reject_reason_t::zone_maintenance};
     require (rejection_order == expected_rejections, "A3 rejection order is not canonical");
     std::cout << "scenario ZW-A3 passed\n";
 
@@ -365,12 +369,12 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     std::cout << "scenario ZW-E1 passed\n";
 
     co_await probe.connect ().async ();
-    auto blocked_join_wait =
-      probe.wait_for<join_world_res_t> ()
-        .where ([] (const auto &reply_message) {
-        const auto &reply = reply_message.payload; return reply.player_id == "player-maintenance";
-          })
-        .async ();
+    auto blocked_join_wait = probe.wait_for<join_world_res_t> ()
+                               .where ([] (const auto &reply_message) {
+                                   const auto &reply = reply_message.payload;
+                                   return reply.player_id == "player-maintenance";
+                               })
+                               .async ();
     probe.send (join_world_req_t{"player-maintenance"}).submit ();
     const auto blocked_join = co_await blocked_join_wait;
     require (blocked_join.payload.error == reject_reason_t::zone_maintenance,
@@ -385,8 +389,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
 
     const auto same_owner_zone = same_owner_adjacent_zone (nodes, "zone-nw");
     const auto same_owner_edge = crossing_from_nw (same_owner_zone);
-    co_await move_within (game, "player-alice", alice_x, alice_y, same_owner_edge.source_x,
-                          same_owner_edge.source_y);
+    co_await move_within (
+      game, "player-alice", alice_x, alice_y, same_owner_edge.source_x, same_owner_edge.source_y);
     auto e4_wait = game.wait_for<move_rejected_notify_t> ().async ();
     game.send (move_msg_t{same_owner_edge.target_x, same_owner_edge.target_y}).submit ();
     require ((co_await e4_wait).payload.reason == reject_reason_t::zone_maintenance,
@@ -413,11 +417,11 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
         .where ([&] (const auto &state_message) {
             const auto &state = state_message.payload;
             return state.zone_id == "zone-nw"
-                   && std::any_of (state.players.begin (), state.players.end (),
-                                   [&] (const auto &player) {
-                                       return player.player_id == "player-bob"
-                                              && player.zone_id == pair.target_zone_id;
-                                   });
+                   && std::any_of (
+                     state.players.begin (), state.players.end (), [&] (const auto &player) {
+                         return player.player_id == "player-bob"
+                                && player.zone_id == pair.target_zone_id;
+                     });
         })
         .async ();
     (void) co_await border_wait;
@@ -519,23 +523,23 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     const auto source_join = co_await join_and_wait (source, "player-transition-source");
     int source_x = source_join.x;
     int source_y = source_join.y;
-    co_await move_within (source, "player-transition-source", source_x, source_y, edge.source_x,
-                          edge.source_y);
+    co_await move_within (
+      source, "player-transition-source", source_x, source_y, edge.source_x, edge.source_y);
     const auto target_join = co_await join_and_wait (target, "player-transition-target");
     int target_x = target_join.x;
     int target_y = target_join.y;
-    co_await move_within (target, "player-transition-target", target_x, target_y, edge.source_x,
-                          edge.source_y);
+    co_await move_within (
+      target, "player-transition-target", target_x, target_y, edge.source_x, edge.source_y);
     co_await cross_zone (target, "player-transition-target", target_x, target_y, edge);
     auto visible_wait =
       source.wait_for<zone_state_notify_t> ()
         .where ([&] (const auto &state_message) {
             const auto &state = state_message.payload;
-            return std::any_of (state.players.begin (), state.players.end (),
-                                [&] (const auto &player) {
-                                    return player.player_id == "player-transition-target"
-                                           && player.zone_id == pair.target_zone_id;
-                                });
+            return std::any_of (
+              state.players.begin (), state.players.end (), [&] (const auto &player) {
+                  return player.player_id == "player-transition-target"
+                         && player.zone_id == pair.target_zone_id;
+              });
         })
         .async ();
     (void) co_await visible_wait;
@@ -545,8 +549,9 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
         .where ([] (const auto &state_message) {
             const auto &state = state_message.payload;
             return std::none_of (
-              state.players.begin (), state.players.end (),
-              [] (const auto &player) { return player.player_id == "player-transition-target"; });
+              state.players.begin (), state.players.end (), [] (const auto &player) {
+                  return player.player_id == "player-transition-target";
+              });
         })
         .async ();
     auto disconnected_wait = ops.wait_for<node_status_notify_t> ()
@@ -626,13 +631,13 @@ se::task_t<bool> run_e5_restore (se::coroutine_connector_t &ops, const std::stri
                           .async ();
     std::cout << "scenario ZW-E5 restore armed" << std::endl;
     (void) co_await stopped_wait;
-    auto replacement_wait = ops.wait_for<node_status_notify_t> ()
-                              .where ([target_node_id] (const auto &node_message) {
-                                  const auto &node = node_message.payload;
-                                  return node.node_id == target_node_id && node.registered
-                                         && node.connected;
-                              })
-                              .async ();
+    auto replacement_wait =
+      ops.wait_for<node_status_notify_t> ()
+        .where ([target_node_id] (const auto &node_message) {
+            const auto &node = node_message.payload;
+            return node.node_id == target_node_id && node.registered && node.connected;
+        })
+        .async ();
     std::cout << "scenario ZW-E5 replacement waiting" << std::endl;
     (void) co_await replacement_wait;
     const auto diagnostics = co_await ops.request (node_diagnostics_req_t{target_node_id})
@@ -682,11 +687,12 @@ se::task_t<bool> run_g4_boundary (se::coroutine_connector_t &game, se::coroutine
     int x = joined.x;
     int y = joined.y;
     co_await move_within (game, joined.player_id, x, y, edge.source_x, edge.source_y);
-    auto failed_wait =
-      game.wait_for<crash_relocation_probe_res_t> ()
-        .where ([] (const auto &reply_message) {
-        const auto &reply = reply_message.payload; return reply.error == errors_t::unavailable; })
-        .async ();
+    auto failed_wait = game.wait_for<crash_relocation_probe_res_t> ()
+                         .where ([] (const auto &reply_message) {
+                             const auto &reply = reply_message.payload;
+                             return reply.error == errors_t::unavailable;
+                         })
+                         .async ();
     game.send (crash_relocation_probe_msg_t{edge.target_x, edge.target_y}).submit ();
     std::cout << "scenario ZW-G4 armed node=" << target_node_id << std::endl;
     const auto failed = co_await failed_wait;
@@ -715,26 +721,25 @@ se::task_t<bool> run_b8 (se::coroutine_connector_t &game,
     int y = joined.y;
     co_await move_within (game, joined.player_id, x, y, edge.source_x, edge.source_y);
     std::cout << "scenario ZW-B8 armed" << std::endl;
-    co_await wait_for_condition (
-      [arm_file] { return std::filesystem::exists (arm_file); },
-      std::chrono::seconds (10),
-      "B8 runner did not arm the command-44 proxy");
+    co_await wait_for_condition ([arm_file] { return std::filesystem::exists (arm_file); },
+                                 std::chrono::seconds (10),
+                                 "B8 runner did not arm the command-44 proxy");
     game.send (move_msg_t{edge.target_x, edge.target_y}).submit ();
-    co_await wait_for_condition (
-      [&disconnected] { return disconnected.load (); },
-      std::chrono::seconds (45),
-      "B8 physical connection did not close at seal timeout");
+    co_await wait_for_condition ([&disconnected] { return disconnected.load (); },
+                                 std::chrono::seconds (45),
+                                 "B8 physical connection did not close at seal timeout");
     std::cout << "scenario ZW-B8 disconnected" << std::endl;
     co_await wait_for_condition (
       [arm_file] { return std::filesystem::exists (arm_file + ".blocked"); },
       std::chrono::seconds (45),
       "B8 proxy did not observe the post-commit command 44");
     co_await game.connect ().async ();
-    auto rejoin_wait =
-      game.wait_for<join_world_res_t> ()
-        .where ([] (const auto &reply_message) {
-        const auto &reply = reply_message.payload; return reply.player_id == "player-b8-seal"; })
-        .async ();
+    auto rejoin_wait = game.wait_for<join_world_res_t> ()
+                         .where ([] (const auto &reply_message) {
+                             const auto &reply = reply_message.payload;
+                             return reply.player_id == "player-b8-seal";
+                         })
+                         .async ();
     game.send (join_world_req_t{"player-b8-seal"}).submit ();
     const auto rebound = co_await rejoin_wait;
     require (!rebound.payload.error && rebound.payload.zone_id == pair.target_zone_id,
@@ -787,7 +792,7 @@ int main (int argc, char **argv)
         if (!result) {
             std::cerr << "zoneworld=failed stream-error-code="
                       << static_cast<int> (result.error_code ().value_or (
-                                          zlink::stream_connector::error_code_t::disconnected))
+                           zlink::stream_connector::error_code_t::disconnected))
                       << " message=" << result.error ()->message << '\n';
             return 1;
         }

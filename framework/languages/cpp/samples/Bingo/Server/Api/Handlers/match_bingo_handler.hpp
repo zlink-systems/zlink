@@ -50,9 +50,10 @@ class match_bingo_api_handler_t
           }())
           .async ();
         // --8<-- [end:doc-bingo-api-match]
-        _logger.info ("match bingo room", {{"actor_id", request.actor_id ()},
-                                           {"room_id", allocated.room_id ()},
-                                           {"mode", request.mode ()}});
+        _logger.info ("match bingo room",
+                      {{"actor_id", request.actor_id ()},
+                       {"room_id", allocated.room_id ()},
+                       {"mode", request.mode ()}});
         match_bingo_api_res_t response;
         response.set_room_id (allocated.room_id ());
         co_return response;

@@ -48,8 +48,9 @@ class play_server_host_factory_t
         options.add_client_server_channel (sample_names_t::api_channel).client ();
         // --8<-- [start:doc-bingo-play-register]
         auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
-        room_mesh.set_routing_id (zlink::routing_id_t::from (
-          topology.play_node == "b" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid))
+        room_mesh
+          .set_routing_id (zlink::routing_id_t::from (
+            topology.play_node == "b" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid))
           .listen (topology.selected_play_spot_router_endpoint ());
         room_mesh.channel (sample_names_t::room_spot_mesh).server ();
         room_mesh.objects ()
@@ -69,7 +70,8 @@ class play_server_host_factory_t
           .preserve_state_with<player_actor_relocation_adapter_t> ();
         // --8<-- [end:doc-bingo-play-register]
         app.add_hosted_service (std::make_unique<play_peer_route_readiness_service_t> (
-          sample_names_t::room_spot_mesh, "play-" + topology.play_node,
+          sample_names_t::room_spot_mesh,
+          "play-" + topology.play_node,
           topology.play_node == "a" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid,
           "play-" + (topology.play_node == "a" ? std::string ("b") : std::string ("a"))));
         return app;

@@ -176,7 +176,9 @@ std::optional<command_44_t> command_44_identity (const std::vector<std::uint8_t>
     }
 }
 
-void pump (tcp::socket &source, tcp::socket &sink, const char *direction,
+void pump (tcp::socket &source,
+           tcp::socket &sink,
+           const char *direction,
            const std::filesystem::path &arm_file)
 {
     frame_parser_t parser;
@@ -204,8 +206,7 @@ void pump (tcp::socket &source, tcp::socket &sink, const char *direction,
                     std::cout << "blocked-command-44 direction=" << direction
                               << " actor=" << command_44->actor << " action=commit"
                               << " previous-authority=" << command_44->previous_authority
-                              << " target-authority=" << command_44->target_authority
-                              << std::endl;
+                              << " target-authority=" << command_44->target_authority << std::endl;
                 } else {
                     asio::write (sink, asio::buffer (message));
                 }
@@ -289,8 +290,7 @@ int main (int argc, char **argv)
         acceptor.bind (listen);
         acceptor.listen ();
         std::cout << "proxy-ready listen=" << options.listen_host << ':' << options.listen_port
-                  << " target=" << options.target_host << ':' << options.target_port
-                  << std::endl;
+                  << " target=" << options.target_host << ':' << options.target_port << std::endl;
         for (;;) {
             tcp::socket client (io);
             acceptor.accept (client);

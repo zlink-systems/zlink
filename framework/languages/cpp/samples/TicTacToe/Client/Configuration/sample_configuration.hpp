@@ -19,8 +19,7 @@ inline sample_topology_t load_sample_topology (int argc, char **argv)
         const std::string prefix = "--api-http-endpoint=";
         if (arg.rfind (prefix, 0) == 0) {
             topology.api_http_endpoint = arg.substr (prefix.size ());
-        }
-        else if (arg == "--api-http-endpoint" && index + 1 < argc) {
+        } else if (arg == "--api-http-endpoint" && index + 1 < argc) {
             topology.api_http_endpoint = argv[++index];
         }
     }

@@ -19,7 +19,6 @@ using framework::message_t;
 class bingo_session_t final : public packet_stream_session_t
 {
   public:
-
     bingo_session_t (session_actor_manager_t &actors,
                      authenticate_session_handler_t &authenticate) :
         _actors (actors), _authenticate (authenticate)
@@ -84,9 +83,9 @@ class bingo_session_t final : public packet_stream_session_t
         }
         auto actor = _actors.find (*_bound_actor_id);
         if (!actor) {
-            return result_t<session_actor_t>::failure (
-              framework_error_kind_t::not_found,
-              "Exactly one actor must be bound before " + action + ".");
+            return result_t<session_actor_t>::failure (framework_error_kind_t::not_found,
+                                                       "Exactly one actor must be bound before "
+                                                         + action + ".");
         }
         return result_t<session_actor_t>::success (std::move (*actor));
     }

@@ -17,9 +17,8 @@ inline task_t<void> tictactoe_game_spot_t::handle_game_tick (const timer_tick_t 
     co_return;
 }
 
-inline task_t<void>
-tictactoe_game_timer_handler_t::handle (tictactoe_game_spot_t &spot,
-                                        const timer_tick_t &tick) const
+inline task_t<void> tictactoe_game_timer_handler_t::handle (tictactoe_game_spot_t &spot,
+                                                            const timer_tick_t &tick) const
 {
     co_await spot.handle_game_tick (tick);
 }

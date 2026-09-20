@@ -37,7 +37,8 @@ class maintenance_store_t
     bool read (const std::string &node_id) const
     {
         const auto reply = execute ({"GET", _prefix + node_id});
-        if (reply.type == '$' && reply.nil) return false;
+        if (reply.type == '$' && reply.nil)
+            return false;
         if (reply.type != '$')
             throw std::runtime_error ("Redis returned an invalid ZoneWorld maintenance value");
         return reply.value == "1";
@@ -53,11 +54,12 @@ class maintenance_store_t
 
     static std::pair<std::string, std::string> split_endpoint (std::string endpoint)
     {
-        if (endpoint.rfind ("tcp://", 0) == 0) endpoint.erase (0, 6);
-        else if (endpoint.rfind ("redis://", 0) == 0) endpoint.erase (0, 8);
+        if (endpoint.rfind ("tcp://", 0) == 0)
+            endpoint.erase (0, 6);
+        else if (endpoint.rfind ("redis://", 0) == 0)
+            endpoint.erase (0, 8);
         const auto separator = endpoint.rfind (':');
-        if (separator == std::string::npos || separator == 0
-            || separator + 1 == endpoint.size ())
+        if (separator == std::string::npos || separator == 0 || separator + 1 == endpoint.size ())
             throw std::runtime_error ("Redis endpoint must use host:port");
         return {endpoint.substr (0, separator), endpoint.substr (separator + 1)};
     }
@@ -77,7 +79,8 @@ class maintenance_store_t
         std::istream input (&buffer);
         std::string line;
         std::getline (input, line);
-        if (!line.empty () && line.back () == '\r') line.pop_back ();
+        if (!line.empty () && line.back () == '\r')
+            line.pop_back ();
         return line;
     }
 
@@ -92,18 +95,22 @@ class maintenance_store_t
         boost::asio::write (socket, boost::asio::buffer (request));
         boost::asio::streambuf buffer;
         const auto header = read_line (socket, buffer);
-        if (header.empty ()) throw std::runtime_error ("Redis returned an empty response");
-        if (header.front () == '-') throw std::runtime_error ("Redis error: " + header.substr (1));
-        if (header.front () == '+') return {'+', header.substr (1), false};
+        if (header.empty ())
+            throw std::runtime_error ("Redis returned an empty response");
+        if (header.front () == '-')
+            throw std::runtime_error ("Redis error: " + header.substr (1));
+        if (header.front () == '+')
+            return {'+', header.substr (1), false};
         if (header.front () != '$')
             throw std::runtime_error ("Redis returned an unsupported response");
         const auto size = std::stoll (header.substr (1));
-        if (size < 0) return {'$', {}, true};
+        if (size < 0)
+            return {'$', {}, true};
         while (buffer.size () < static_cast<std::size_t> (size + 2))
-            boost::asio::read (
-              socket, buffer,
-              boost::asio::transfer_at_least (
-                static_cast<std::size_t> (size + 2) - buffer.size ()));
+            boost::asio::read (socket,
+                               buffer,
+                               boost::asio::transfer_at_least (static_cast<std::size_t> (size + 2)
+                                                               - buffer.size ()));
         std::string value (static_cast<std::size_t> (size), '\0');
         std::istream input (&buffer);
         input.read (value.data (), size);

@@ -73,7 +73,8 @@ class api_server_host_factory_t
         app.add_hosted_service (
           std::make_unique<api_http_readiness_service_t> ("api-" + topology.api_node));
         app.add_hosted_service (std::make_unique<api_spot_route_readiness_service_t> (
-          sample_names_t::game_spot_node, "api-" + topology.api_node,
+          sample_names_t::game_spot_node,
+          "api-" + topology.api_node,
           std::vector<std::string>{sample_names_t::play_a_rid, sample_names_t::play_b_rid}));
         return app;
     }

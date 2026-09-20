@@ -66,8 +66,7 @@ struct spec_t
 
 inline const std::array<std::string, 4> &all_zones ()
 {
-    static const std::array<std::string, 4> zones{
-      "zone-nw", "zone-ne", "zone-sw", "zone-se"};
+    static const std::array<std::string, 4> zones{"zone-nw", "zone-ne", "zone-sw", "zone-se"};
     return zones;
 }
 
@@ -81,28 +80,32 @@ struct reject_reason_t
 
 inline std::string zone_of (int x, int y)
 {
-    return y < 50 ? (x < 50 ? "zone-nw" : "zone-ne")
-                  : (x < 50 ? "zone-sw" : "zone-se");
+    return y < 50 ? (x < 50 ? "zone-nw" : "zone-ne") : (x < 50 ? "zone-sw" : "zone-se");
 }
 
-inline std::optional<std::string> validate_move (int from_x, int from_y, int x, int y,
-                                                 bool target_maintenance)
+inline std::optional<std::string>
+validate_move (int from_x, int from_y, int x, int y, bool target_maintenance)
 {
-    if (x < 0 || x >= 100 || y < 0 || y >= 100) return reject_reason_t::out_of_range;
+    if (x < 0 || x >= 100 || y < 0 || y >= 100)
+        return reject_reason_t::out_of_range;
     if (std::abs (x - from_x) > 5 || std::abs (y - from_y) > 5)
         return reject_reason_t::too_far;
-    if (zone_of (from_x, from_y) != zone_of (x, y)
-        && (from_x < 50) != (x < 50) && (from_y < 50) != (y < 50))
+    if (zone_of (from_x, from_y) != zone_of (x, y) && (from_x < 50) != (x < 50)
+        && (from_y < 50) != (y < 50))
         return reject_reason_t::diagonal_crossing;
-    if (target_maintenance) return reject_reason_t::zone_maintenance;
+    if (target_maintenance)
+        return reject_reason_t::zone_maintenance;
     return std::nullopt;
 }
 
 inline std::vector<std::string> adjacent_zones (const std::string &zone)
 {
-    if (zone == "zone-nw") return {"zone-ne", "zone-sw"};
-    if (zone == "zone-ne") return {"zone-nw", "zone-se"};
-    if (zone == "zone-sw") return {"zone-nw", "zone-se"};
+    if (zone == "zone-nw")
+        return {"zone-ne", "zone-sw"};
+    if (zone == "zone-ne")
+        return {"zone-nw", "zone-se"};
+    if (zone == "zone-sw")
+        return {"zone-nw", "zone-se"};
     return {"zone-ne", "zone-sw"};
 }
 

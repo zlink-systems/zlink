@@ -56,7 +56,8 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
     spot_route_readiness_service_t (std::string mesh_name,
                                     std::string node_name,
                                     std::vector<std::string> target_rids) :
-        _mesh_name (std::move (mesh_name)), _node_name (std::move (node_name)),
+        _mesh_name (std::move (mesh_name)),
+        _node_name (std::move (node_name)),
         _target_rids (std::move (target_rids))
     {
     }
@@ -67,26 +68,29 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
         _state = state;
         auto &runtime = services.get_required<framework::route_mesh_runtime_t> ();
         _observation = runtime.observe (
-          _mesh_name, 64,
+          _mesh_name,
+          64,
           [state, node_name = _node_name, mesh_name = _mesh_name, target_rids = _target_rids] (
             const framework::observed_status_t<framework::mesh_node_snapshot_t> &observed) {
               report_if_ready (state, node_name, mesh_name, target_rids, observed.status);
           });
-        _worker = std::thread (
-          [state, runtime = &runtime, mesh_name = _mesh_name, node_name = _node_name,
-           target_rids = _target_rids] () mutable {
-              while (!state->stopping.load (std::memory_order_acquire)) {
-                  try {
-                      report_if_ready (state, node_name, mesh_name, target_rids,
-                                       runtime->snapshot (mesh_name));
-                  }
-                  catch (...) {
-                  }
-                  if (state->reported.load (std::memory_order_acquire))
-                      return;
-                  std::this_thread::sleep_for (std::chrono::milliseconds (50));
-              }
-          });
+        _worker = std::thread ([state,
+                                runtime = &runtime,
+                                mesh_name = _mesh_name,
+                                node_name = _node_name,
+                                target_rids = _target_rids] () mutable {
+            while (!state->stopping.load (std::memory_order_acquire)) {
+                try {
+                    report_if_ready (
+                      state, node_name, mesh_name, target_rids, runtime->snapshot (mesh_name));
+                }
+                catch (...) {
+                }
+                if (state->reported.load (std::memory_order_acquire))
+                    return;
+                std::this_thread::sleep_for (std::chrono::milliseconds (50));
+            }
+        });
         co_return;
     }
 
@@ -114,8 +118,8 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
                                  const std::vector<std::string> &target_rids,
                                  const framework::mesh_node_snapshot_t &snapshot)
     {
-        const auto targets_ready = std::ranges::all_of (
-          target_rids, [&snapshot] (const std::string &target_rid) {
+        const auto targets_ready =
+          std::ranges::all_of (target_rids, [&snapshot] (const std::string &target_rid) {
               return std::ranges::any_of (
                 snapshot.peers, [&target_rid] (const framework::mesh_peer_snapshot_t &peer) {
                     return peer.node_rid.to_string () == target_rid
@@ -124,8 +128,8 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
           });
         if (!targets_ready || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
-        std::cout << "gamequest-ready kind=spot-route node=" << node_name
-                  << " mesh=" << mesh_name << std::endl;
+        std::cout << "gamequest-ready kind=spot-route node=" << node_name << " mesh=" << mesh_name
+                  << std::endl;
     }
 
     std::string _mesh_name;

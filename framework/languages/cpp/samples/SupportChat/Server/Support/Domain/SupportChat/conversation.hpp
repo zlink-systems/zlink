@@ -35,8 +35,9 @@ using conversation_timeout_event_t =
 class conversation_t
 {
   public:
-    conversation_t (std::string conversation_id, std::string subject, std::string customer_actor_id)
-      :
+    conversation_t (std::string conversation_id,
+                    std::string subject,
+                    std::string customer_actor_id) :
         _conversation_id (std::move (conversation_id)),
         _subject (std::move (subject)),
         _customer_actor_id (std::move (customer_actor_id)),
@@ -81,11 +82,8 @@ class conversation_t
             _status = conversation_status_t::active;
             _close_deadline_unix_ms.reset ();
         }
-        auto message = chat_message_t{_conversation_id,
-                                      ++_last_message_seq,
-                                      sender_actor_id,
-                                      text,
-                                      now_unix_ms};
+        auto message =
+          chat_message_t{_conversation_id, ++_last_message_seq, sender_actor_id, text, now_unix_ms};
         _last_message_at_unix_ms = now_unix_ms;
         _idle_deadline_unix_ms = now_unix_ms + idle_timeout_ms;
         return {message, snapshot ()};
@@ -163,10 +161,10 @@ class conversation_t
 
     void ensure_participant (const std::string &actor_id) const
     {
-        const auto found = std::any_of (_participants.begin (), _participants.end (),
-                                        [&] (const auto &participant) {
-                                            return participant.actor_id == actor_id;
-                                        });
+        const auto found =
+          std::any_of (_participants.begin (), _participants.end (), [&] (const auto &participant) {
+              return participant.actor_id == actor_id;
+          });
         if (!found) {
             throw std::logic_error ("actor is not a conversation participant: " + actor_id);
         }
@@ -174,10 +172,10 @@ class conversation_t
 
     void upsert_participant (conversation_participant_t participant)
     {
-        const auto existing = std::find_if (_participants.begin (), _participants.end (),
-                                           [&] (const auto &current) {
-                                               return current.actor_id == participant.actor_id;
-                                           });
+        const auto existing =
+          std::find_if (_participants.begin (), _participants.end (), [&] (const auto &current) {
+              return current.actor_id == participant.actor_id;
+          });
         if (existing == _participants.end ()) {
             _participants.push_back (std::move (participant));
             return;

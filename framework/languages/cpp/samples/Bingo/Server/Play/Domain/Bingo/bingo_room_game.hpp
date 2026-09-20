@@ -96,7 +96,8 @@ class bingo_room_game_t
     bingo_room_state_t leave (const std::string &actor_id)
     {
         _state.players.erase (
-          std::remove_if (_state.players.begin (), _state.players.end (),
+          std::remove_if (_state.players.begin (),
+                          _state.players.end (),
                           [&] (const auto &player) { return player.actor_id == actor_id; }),
           _state.players.end ());
         _state.can_start = _state.players.size () == 2;
@@ -108,8 +109,9 @@ class bingo_room_game_t
   private:
     std::vector<bingo_player_state_t>::iterator find_player (const std::string &actor_id)
     {
-        return std::find_if (_state.players.begin (), _state.players.end (),
-                             [&] (const auto &p) { return p.actor_id == actor_id; });
+        return std::find_if (_state.players.begin (), _state.players.end (), [&] (const auto &p) {
+            return p.actor_id == actor_id;
+        });
     }
 
     bingo_room_state_t _state;

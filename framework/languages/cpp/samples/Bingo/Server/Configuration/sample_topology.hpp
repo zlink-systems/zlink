@@ -47,8 +47,7 @@ struct sample_topology_t
         topology.session_b_route_endpoint =
           section.get ("sessionBPlayRouteEndpoint").value_or (topology.session_b_route_endpoint);
         topology.matchmaking_route_endpoint =
-          section.get ("matchmakingRouteEndpoint")
-            .value_or (topology.matchmaking_route_endpoint);
+          section.get ("matchmakingRouteEndpoint").value_or (topology.matchmaking_route_endpoint);
         topology.play_a_spot_endpoint =
           section.get ("playASpotEndpoint").value_or (topology.play_a_spot_endpoint);
         topology.play_b_spot_endpoint =
@@ -193,8 +192,8 @@ struct sample_topology_t
 inline std::string host_from_tcp_endpoint (const std::string &endpoint)
 {
     constexpr auto prefix = "tcp://";
-    const auto begin = endpoint.rfind (prefix, 0) == 0 ? std::char_traits<char>::length (prefix) :
-      0;
+    const auto begin =
+      endpoint.rfind (prefix, 0) == 0 ? std::char_traits<char>::length (prefix) : 0;
     const auto separator = endpoint.rfind (':');
     if (separator == std::string::npos || separator <= begin) {
         throw std::runtime_error ("TCP endpoint must contain a host and port");
