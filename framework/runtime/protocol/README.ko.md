@@ -12,6 +12,14 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   condition signature 모델
 - `service-wire-lowering.mjs`: 검증된 schema의 type·command·flag·semantic 선언을 언어 중립 JSON IR로
   변환하고 coverage를 확인하는 도구
+- `service-wire-output-manifest.mjs`: 최종 renderer, runtime 사본, fixture·상수 asset과 4단계까지 유지하는
+  legacy pilot 산출물의 단일 output manifest
+- `generate-service-wire-codecs.mjs`: lowering부터 네 renderer, fixture index, 상수 asset과 legacy pilot을
+  순서대로 생성하고 전체 drift·orphan을 확인하는 통합 진입점
+- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: 언어 중립 IR에서 각 runtime의 최종 정적 codec을
+  생성하는 renderer
+- `generate-service-wire-pilot-codecs.mjs`: 기존 runtime adapter가 소비하며 4단계 adapter 교체 뒤 제거하는
+  legacy codec generator
 - `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden fixture catalog를 생성하고 drift를 확인하는 도구
 - `golden/durable-authority-v1.json`: 네 runtime이 Ready Instance cold activation recovery pointer를
   읽고 쓰는 golden fixture
@@ -45,12 +53,12 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `golden/`: service frame의 정상·경계·오류 fixture를 추가하는 위치
 - `generate-service-wire-assets.mjs`: 검증한 schema에서 네 언어 command·flag·Framework wire error·multipart
   profile 상수와 공통 decoder fixture를 생성하고 `--check`로 drift를 차단하는 도구
-- `generated/`: C++·.NET·JVM·Node.js runtime이 복사하지 않고 사용하는 생성 상수
+- `generated/`: C++·.NET·JVM·Node.js runtime이 사용하는 정규 codec·상수, fixture index와 legacy pilot 산출물
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
 
-Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 155개 type,
+Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
-contract amendment fixture 1개와 252가지 invalid mutation이 실제로
+contract amendment fixture 1개와 255가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline
@@ -71,8 +79,8 @@ wire `33`에서 public `32`로, `SpotMoving`은 wire `34`에서 public `33`으�
 ```bash
 node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
-node framework/runtime/protocol/generate-service-wire-assets.mjs
-node framework/runtime/protocol/generate-service-wire-assets.mjs --check
+node framework/runtime/protocol/generate-service-wire-codecs.mjs --write
+node framework/runtime/protocol/generate-service-wire-codecs.mjs --check
 node framework/runtime/protocol/verify-service-wire-decoder-fixtures.mjs
 ```
 
