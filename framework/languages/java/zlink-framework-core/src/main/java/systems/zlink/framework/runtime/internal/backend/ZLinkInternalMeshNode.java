@@ -101,6 +101,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // RouteMesh admission yet.
     }
 
+    default void setRouterReceiveTimeout(Duration value) {
+        // Optional for test and alternate backends that do not expose Core
+        // RouteMesh admission yet.
+    }
+
     default void setRouterPendingAdmissionCapacity(int value) {
         // Optional for test and alternate backends that do not expose bounded
         // asynchronous RouteMesh admission yet.
