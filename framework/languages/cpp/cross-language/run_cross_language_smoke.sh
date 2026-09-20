@@ -1738,10 +1738,10 @@ stage_cpp_source_java_target_user_spot_join() {
 # implementations currently use the same creation-intent form,
 # `inline-v1:<base64url>`; none appends a CRC32C segment. The
 # `remote-actor-create-dotnet-java` control cell passes, while the three C++
-# requester cells still fail after peer discovery: C++ reports that transport
-# completion did not arrive for the .NET and Java targets, and maps the Node
-# target's terminal rejection to a framework failure. Keep the three cells
-# quarantined until #763 resolves the C++ requester path.
+# requester cells still fail after peer discovery: C++ reports
+# `Actor creation completion was fenced` for the .NET, Node, and Java targets
+# at mesh_node_host_service.cpp:552. Keep the three cells quarantined until
+# #763 resolves the C++ requester path.
 assert_remote_actor_create() {
   local source_events="$1"
   local requester_rid="$2"
@@ -1868,9 +1868,9 @@ stage_cpp_source_java_target_remote_actor_create() {
 #
 # Each entry names the issue that owns the remaining cause.
 QUARANTINED_CELLS=(
-  "remote-actor-create-cpp-dotnet|#763 -- the C++ requester reports protocol_error: the creation transport does not reach its completed terminal after peer-ready (mesh_node_host_service.cpp:450)"
-  "remote-actor-create-cpp-java|#763 -- same as remote-actor-create-cpp-dotnet"
-  "remote-actor-create-cpp-node|#763 -- the C++ requester maps the Node target's terminal rejection to internal_failure after peer-ready (mesh_node_host_service.cpp:464)"
+  "remote-actor-create-cpp-dotnet|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
+  "remote-actor-create-cpp-java|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
+  "remote-actor-create-cpp-node|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
 )
 
 run_quarantine_guard() {
