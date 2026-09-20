@@ -7,12 +7,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
@@ -167,12 +173,14 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(19, operationCases.size());
-        int negotiatedBoundCases = 0;
+        assertEquals(77, operationCases.size());
+        Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
-            if (operation.equals("negotiated-bound")) {
-                negotiatedBoundCases++;
+            if (operationCase.has("boundaryPair")) {
+                boundaryPairs.computeIfAbsent(
+                    operationCase.path("boundaryPair").asText(), ignored -> new HashSet<>())
+                    .add(operationCase.path("expect").asText());
             }
             for (String direction : directions(operationCase)) {
                 String message = operation + ":"
@@ -186,7 +194,10 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 }
             }
         }
-        assertEquals(5, negotiatedBoundCases);
+        assertEquals(25, boundaryPairs.size());
+        for (Map.Entry<String, Set<String>> pair : boundaryPairs.entrySet()) {
+            assertEquals(Set.of("accept", "reject"), pair.getValue(), pair.getKey());
+        }
     }
 
     private static void assertOperationCaseAccepted(JsonNode operationCase,
@@ -216,49 +227,52 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         ServiceWireCodec.DecoderContext context = context(operationCase);
         switch (surface.path("format").asText()) {
             case "type" -> {
-                byte[] bytes = HexFormat.of().parseHex(operationCase.path("hex").asText());
-                switch (surface.path("type").asText()) {
-                    case "descriptor-extension" ->
-                        ServiceWireCodec.decodeDescriptorExtension(bytes, context);
-                    case "text8" -> ServiceWireCodec.decodeText8(bytes, context);
-                    case "metadata-frame" ->
-                        ServiceWireCodec.decodeMetadataFrame(bytes, context);
-                    case "application-payload-bytes" -> {
-                        if (direction.equals("decode")) {
-                            ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
-                        } else {
-                            var value = ServiceWireCodec.decodeApplicationPayloadBytes(
-                                bytes, CONTEXT);
-                            ServiceWireCodec.encodeApplicationPayloadBytes(value, context);
-                        }
-                    }
-                    case "application-payload-envelope-v1" -> {
-                        if (direction.equals("decode")) {
-                            ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(
-                                bytes, context);
-                        } else {
-                            var value = ServiceWireCodec
-                                .decodeApplicationPayloadEnvelopeV1(bytes, CONTEXT);
-                            ServiceWireCodec.encodeApplicationPayloadEnvelopeV1(
-                                value, context);
-                        }
-                    }
-                    default -> throw new IllegalStateException("unknown type operation case");
+                byte[] bytes = operationBytes(operationCase);
+                String type = surface.path("type").asText();
+                if (direction.equals("decode")) {
+                    decodeType(type, bytes, context);
+                } else {
+                    Object value = operationCase.has("input")
+                        ? inputValue(type, operationCase.path("input"))
+                        : decodeType(type, bytes, CONTEXT);
+                    assertArrayEquals(bytes, encodeType(type, value, context));
                 }
             }
-            case "command" -> ServiceWireCodec.decodeCommand(
-                hexFrames(operationCase.path("framesHex")), context);
+            case "command" -> {
+                List<byte[]> frames = hexFrames(operationCase.path("framesHex"));
+                if (direction.equals("decode")) {
+                    ServiceWireCodec.decodeCommand(frames, context);
+                } else {
+                    assertFramesEqual(frames, ServiceWireCodec.encodeCommandFrames(
+                        ServiceWireCodec.decodeCommand(frames, CONTEXT), context));
+                }
+            }
             case "semantic" -> ServiceWireCodec.validateReplyPredicate(
                 ServiceWireCodec.RequestTerminalResult.valueOf(
                     enumName(operationCase.path("input").path("terminalResult").asText())),
                 ServiceWireCodec.FrameworkErrorCode.valueOf(
                     enumName(operationCase.path("input").path("failureCode").asText())));
-            case "relocation-envelope-v1" -> ServiceWireCodec
-                .decodeLogicalRelocationEnvelopeV1(
-                    HexFormat.of().parseHex(operationCase.path("hex").asText()), CONTEXT);
-            case "authority-payload-v1" -> ServiceWireCodec.decodeDurable(
-                "authority-payload-v1",
-                HexFormat.of().parseHex(operationCase.path("hex").asText()), context);
+            case "relocation-envelope-v1" -> {
+                byte[] bytes = operationBytes(operationCase);
+                if (direction.equals("decode")) {
+                    ServiceWireCodec.decodeLogicalRelocationEnvelopeV1(bytes, context);
+                } else {
+                    assertArrayEquals(bytes, ServiceWireCodec
+                        .encodeLogicalRelocationEnvelopeV1(ServiceWireCodec
+                            .decodeLogicalRelocationEnvelopeV1(bytes, CONTEXT), context));
+                }
+            }
+            case "authority-payload-v1" -> {
+                byte[] bytes = operationBytes(operationCase);
+                if (direction.equals("decode")) {
+                    ServiceWireCodec.decodeDurable(
+                        "authority-payload-v1", bytes, context);
+                } else {
+                    assertArrayEquals(bytes, ServiceWireCodec.encodeDurable(
+                        "authority-payload-v1", ServiceWireCodec.decodeDurable(
+                            "authority-payload-v1", bytes, CONTEXT), context));
+                }
+            }
             default -> throw new IllegalStateException("unknown operation case surface");
         }
     }
@@ -277,6 +291,183 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             : missing ? null : 4_294_966_774L;
         return new ServiceWireCodec.DecoderContext(
             null, null, null, messageBytes, payloadBytes);
+    }
+
+    private static byte[] operationBytes(JsonNode operationCase) throws Exception {
+        if (operationCase.has("hex")) {
+            return HexFormat.of().parseHex(operationCase.path("hex").asText());
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        if (operationCase.has("chunksHex")) {
+            for (JsonNode chunk : operationCase.path("chunksHex")) {
+                bytes.writeBytes(HexFormat.of().parseHex(chunk.asText()));
+            }
+            return bytes.toByteArray();
+        }
+        JsonNode recipe = operationCase.path("byteRecipe");
+        for (JsonNode segment : recipe.path("segments")) {
+            if (segment.has("hex")) {
+                bytes.writeBytes(HexFormat.of().parseHex(segment.path("hex").asText()));
+            } else {
+                byte[] repeated = new byte[segment.path("count").asInt()];
+                Arrays.fill(repeated, (byte) segment.path("repeatByte").asInt());
+                bytes.writeBytes(repeated);
+            }
+        }
+        byte[] result = bytes.toByteArray();
+        assertEquals(recipe.path("encodedBytes").asInt(), result.length);
+        assertEquals(recipe.path("sha256").asText(), HexFormat.of().formatHex(
+            MessageDigest.getInstance("SHA-256").digest(result)));
+        return result;
+    }
+
+    private static Object decodeType(String type, byte[] bytes,
+        ServiceWireCodec.DecoderContext context) throws Exception {
+        return switch (type) {
+            case "application-version" ->
+                ServiceWireCodec.decodeApplicationVersion(bytes, context);
+            case "bool8" -> ServiceWireCodec.decodeBool8(bytes, context);
+            case "rid" -> ServiceWireCodec.decodeRid(bytes, context);
+            case "text8" -> ServiceWireCodec.decodeText8(bytes, context);
+            case "optional-actor-ref" ->
+                ServiceWireCodec.decodeOptionalActorRef(bytes, context);
+            case "actor-ref" -> ServiceWireCodec.decodeActorRef(bytes, context);
+            case "sorted-text8-vector" ->
+                ServiceWireCodec.decodeSortedText8Vector(bytes, context);
+            case "metadata-frame" ->
+                ServiceWireCodec.decodeMetadataFrame(bytes, context);
+            case "application-payload-envelope-v1" ->
+                ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(bytes, context);
+            case "relocation-object-identity" ->
+                ServiceWireCodec.decodeRelocationObjectIdentity(bytes, context);
+            case "descriptor-extension" ->
+                ServiceWireCodec.decodeDescriptorExtension(bytes, context);
+            case "aggregate-participant-vector" ->
+                ServiceWireCodec.decodeAggregateParticipantVector(bytes, context);
+            case "application-payload-bytes" ->
+                ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
+            default -> throw new IllegalStateException("unknown fixture type: " + type);
+        };
+    }
+
+    private static byte[] encodeType(String type, Object value,
+        ServiceWireCodec.DecoderContext context) throws Exception {
+        return switch (type) {
+            case "application-version" -> ServiceWireCodec.encodeApplicationVersion(
+                (ServiceWireCodec.ApplicationVersion) value, context);
+            case "bool8" -> ServiceWireCodec.encodeBool8(
+                (ServiceWireCodec.Bool8) value, context);
+            case "rid" -> ServiceWireCodec.encodeRid(
+                (ServiceWireCodec.Rid) value, context);
+            case "text8" -> ServiceWireCodec.encodeText8(
+                (ServiceWireCodec.Text8) value, context);
+            case "optional-actor-ref" -> ServiceWireCodec.encodeOptionalActorRef(
+                (ServiceWireCodec.OptionalActorRef) value, context);
+            case "actor-ref" -> ServiceWireCodec.encodeActorRef(
+                (ServiceWireCodec.ActorRef) value, context);
+            case "sorted-text8-vector" -> ServiceWireCodec.encodeSortedText8Vector(
+                (ServiceWireCodec.SortedText8Vector) value, context);
+            case "metadata-frame" -> ServiceWireCodec.encodeMetadataFrame(
+                (ServiceWireCodec.MetadataFrame) value, context);
+            case "application-payload-envelope-v1" -> ServiceWireCodec
+                .encodeApplicationPayloadEnvelopeV1(
+                    (ServiceWireCodec.ApplicationPayloadEnvelopeV1) value, context);
+            case "relocation-object-identity" -> ServiceWireCodec
+                .encodeRelocationObjectIdentity(
+                    (ServiceWireCodec.RelocationObjectIdentity) value, context);
+            case "descriptor-extension" -> ServiceWireCodec.encodeDescriptorExtension(
+                (ServiceWireCodec.DescriptorExtension) value, context);
+            case "aggregate-participant-vector" -> ServiceWireCodec
+                .encodeAggregateParticipantVector(
+                    (ServiceWireCodec.AggregateParticipantVector) value, context);
+            case "application-payload-bytes" -> ServiceWireCodec
+                .encodeApplicationPayloadBytes(
+                    (ServiceWireCodec.ApplicationPayloadBytes) value, context);
+            default -> throw new IllegalStateException("unknown fixture type: " + type);
+        };
+    }
+
+    private static Object inputValue(String type, JsonNode input) {
+        return switch (type) {
+            case "text8" -> new ServiceWireCodec.Text8(input.asText());
+            case "optional-actor-ref" -> new ServiceWireCodec.OptionalActorRef(
+                new ServiceWireCodec.OptionalText8(input.path("actorId").isNull()
+                    ? null : input.path("actorId").asText()),
+                input.path("generation").isNull() ? null
+                    : new ServiceWireCodec.NonzeroU64(
+                        input.path("generation").asLong()));
+            case "sorted-text8-vector" -> new ServiceWireCodec.SortedText8Vector(
+                nodes(input).stream().map(value ->
+                    new ServiceWireCodec.Text8(value.asText())).toList());
+            case "relocation-object-identity" -> relocationIdentity(input);
+            case "descriptor-extension" -> descriptorExtension(input);
+            case "aggregate-participant-vector" ->
+                new ServiceWireCodec.AggregateParticipantVector(nodes(input).stream()
+                    .map(GeneratedServiceWireCommandCodecConformanceTest::participant)
+                    .toList());
+            case "application-payload-bytes" -> {
+                byte[] bytes = new byte[input.path("count").asInt()];
+                Arrays.fill(bytes, (byte) input.path("repeatByte").asInt());
+                yield new ServiceWireCodec.ApplicationPayloadBytes(bytes);
+            }
+            default -> throw new IllegalStateException("unsupported fixture input: " + type);
+        };
+    }
+
+    private static ServiceWireCodec.RelocationObjectIdentity relocationIdentity(
+        JsonNode input) {
+        JsonNode actor = input.path("actor");
+        return new ServiceWireCodec.RelocationObjectIdentityActor(
+            ServiceWireCodec.StatefulObjectKind.valueOf(
+                enumName(input.path("objectKind").asText())),
+            new ServiceWireCodec.ActorRef(
+                new ServiceWireCodec.Text8(actor.path("actorId").asText()),
+                new ServiceWireCodec.NonzeroU64(
+                    actor.path("objectGeneration").asLong())),
+            new ServiceWireCodec.NonzeroU64(
+                input.path("expectedAuthorityOwnerGeneration").asLong()));
+    }
+
+    private static ServiceWireCodec.MaintenanceAggregateParticipantV1 participant(
+        JsonNode input) {
+        return new ServiceWireCodec.MaintenanceAggregateParticipantV1(
+            relocationIdentity(input.path("object")),
+            new ServiceWireCodec.AuthorityStoreVersion(
+                input.path("expectedStoreVersion").asText()),
+            new ServiceWireCodec.AggregateParticipantMutationBytes(
+                HexFormat.of().parseHex(input.path("mutationHex").asText())));
+    }
+
+    private static ServiceWireCodec.DescriptorExtension descriptorExtension(
+        JsonNode input) {
+        List<ServiceWireCodec.Text8> capabilities = nodes(
+            input.path("protocolCapabilities")).stream()
+            .map(value -> new ServiceWireCodec.Text8(value.asText())).toList();
+        return new ServiceWireCodec.DescriptorExtension(
+            input.path("runtimeState").isNull() ? null
+                : ServiceWireCodec.RuntimeState.valueOf(
+                    enumName(input.path("runtimeState").asText())),
+            new ServiceWireCodec.ApplicationVersion(
+                input.path("applicationVersion").asLong()),
+            null,
+            null,
+            null,
+            new ServiceWireCodec.SortedText8Vector(capabilities),
+            ServiceWireCodec.ObjectRole.valueOf(
+                enumName(input.path("objectRole").asText())),
+            new ServiceWireCodec.U32(input.path("placementWeight").asInt()),
+            new ServiceWireCodec.ObjectCapacityLimit(
+                input.path("activeCapacityLimit").asInt()),
+            new ServiceWireCodec.ObjectPendingCapacityLimit(
+                input.path("pendingCapacityLimit").asInt()),
+            new ServiceWireCodec.U32(input.path("activeCapacityUsed").asInt()),
+            new ServiceWireCodec.U32(input.path("pendingCapacityUsed").asInt()));
+    }
+
+    private static List<JsonNode> nodes(JsonNode array) {
+        List<JsonNode> result = new ArrayList<>();
+        array.forEach(result::add);
+        return result;
     }
 
     private static List<byte[]> hexFrames(JsonNode frames) {

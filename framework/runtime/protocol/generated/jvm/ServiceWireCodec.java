@@ -312,9 +312,10 @@ final class ServiceWireCodec {
   private static void requireUnsigned(long value,int width,String minimum,String maximum,String name)throws IOException{BigInteger actual=new BigInteger(width==8?Long.toUnsignedString(value):Long.toString(Integer.toUnsignedLong((int)value)));if(minimum!=null&&actual.compareTo(new BigInteger(minimum))<0||maximum!=null&&actual.compareTo(new BigInteger(maximum))>0)throw error(name+" range");}
   private static void requireSigned(long value,String minimum,String maximum,String name)throws IOException{if(minimum!=null&&value<Long.parseLong(minimum)||maximum!=null&&value>Long.parseLong(maximum))throw error(name+" range");}
   private static int length(Object value)throws IOException{try{return switch(value){case U8 x->x.value();case U16 x->x.value();case U32 x->x.value();case U64 x->Math.toIntExact(x.value());default->throw error("length type");};}catch(ArithmeticException e){throw error("length range");}}
-  private static byte[] strictBytes(String value)throws IOException{if(value==null)return null;byte[] bytes=value.getBytes(StandardCharsets.UTF_8);for(byte b:bytes)if(b==0)throw error("NUL text");return bytes;}
+  private static byte[] strictBytes(String value)throws IOException{if(value==null)return null;try{ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);for(byte b:bytes)if(b==0)throw error("NUL text");return bytes;}catch(CharacterCodingException e){throw error("invalid UTF-16 text");}}
   private static String strictText(byte[] value,String name)throws IOException{for(byte b:value)if(b==0)throw error(name+" NUL");try{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(value)).toString();}catch(CharacterCodingException e){throw error(name+" UTF-8");}}
   private static int compareUnsigned(byte[] left,byte[] right){int count=Math.min(left.length,right.length);for(int i=0;i<count;i++){int compared=Integer.compare(Byte.toUnsignedInt(left[i]),Byte.toUnsignedInt(right[i]));if(compared!=0)return compared;}return Integer.compare(left.length,right.length);}
+  private static void canonicalAuthorityKey(Writer writer,String prefix,String kind,String separator,String...components)throws IOException{writer.bytes((prefix+separator+kind).getBytes(StandardCharsets.US_ASCII));for(String component:components){byte[] raw=strictBytes(component);writer.bytes((separator+raw.length+separator).getBytes(StandardCharsets.US_ASCII));for(byte value:raw){int current=Byte.toUnsignedInt(value);if(current>='A'&&current<='Z'||current>='a'&&current<='z'||current>='0'&&current<='9'||current=='-'||current=='.'||current=='_'||current=='~')writer.u8(current);else{writer.u8('%');writer.u8("0123456789ABCDEF".charAt(current>>>4));writer.u8("0123456789ABCDEF".charAt(current&15));}}}}
 
   private static U8 decodeU8(Reader r, DecoderContext c, int flags) throws IOException { int value=(int)r.uint(1); requireUnsigned(value, 1, "0", "255", "u8"); return new U8(value); }
   private static void encodeU8(U8 value, Writer w, DecoderContext c, int flags) throws IOException { requireUnsigned(value.value(), 1, "0", "255", "u8"); w.uint(1, value.value()); }
@@ -338,46 +339,46 @@ final class ServiceWireCodec {
   private static void encodeApplicationVersion(ApplicationVersion value, Writer w, DecoderContext c, int flags) throws IOException { requireSigned(value.value(), "0", "9223372036854775807", "application-version"); w.uint(8, value.value()); }
   private static Bool8 decodeBool8(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return Bool8.FALSE;if(wire==1L)return Bool8.TRUE;throw error("bool8 enum"); }
   private static void encodeBool8(Bool8 value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
-  private static Rid decodeRid(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255,"rid length");   return new Rid(r.bytes(length)); }
-  private static void encodeRid(Rid value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"rid"); require(bytes.length>=1&&bytes.length<=255,"rid length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static OptionalRid decodeOptionalRid(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=0&&length<=255,"optional-rid length");  if(length==0)return new OptionalRid(null); return new OptionalRid(r.bytes(length)); }
-  private static void encodeOptionalRid(OptionalRid value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); if(bytes==null)bytes=new byte[0]; require(bytes.length>=0&&bytes.length<=255,"optional-rid length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static Text8 decodeText8(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255,"text8 length");   return new Text8(strictText(r.bytes(length), "text8")); }
-  private static void encodeText8(Text8 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"text8"); require(bytes.length>=1&&bytes.length<=255,"text8 length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static OptionalText8 decodeOptionalText8(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=0&&length<=255,"optional-text8 length");  if(length==0)return new OptionalText8(null); return new OptionalText8(strictText(r.bytes(length), "optional-text8")); }
-  private static void encodeOptionalText8(OptionalText8 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); if(bytes==null)bytes=new byte[0]; require(bytes.length>=0&&bytes.length<=255,"optional-text8 length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static Sha256Bytes decodeSha256Bytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=32&&length<=32,"sha256-bytes length");   return new Sha256Bytes(r.bytes(length)); }
-  private static void encodeSha256Bytes(Sha256Bytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"sha256-bytes"); require(bytes.length>=32&&bytes.length<=32,"sha256-bytes length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Rid decodeRid(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255L,"rid length");   return new Rid(r.bytes(length)); }
+  private static void encodeRid(Rid value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"rid"); require(bytes.length>=1&&bytes.length<=255L,"rid length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static OptionalRid decodeOptionalRid(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=0&&length<=255L,"optional-rid length");  if(length==0)return new OptionalRid(null); return new OptionalRid(r.bytes(length)); }
+  private static void encodeOptionalRid(OptionalRid value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); if(bytes==null)bytes=new byte[0]; require(bytes.length>=0&&bytes.length<=255L,"optional-rid length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Text8 decodeText8(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255L,"text8 length");   return new Text8(strictText(r.bytes(length), "text8")); }
+  private static void encodeText8(Text8 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"text8"); require(bytes.length>=1&&bytes.length<=255L,"text8 length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static OptionalText8 decodeOptionalText8(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=0&&length<=255L,"optional-text8 length");  if(length==0)return new OptionalText8(null); return new OptionalText8(strictText(r.bytes(length), "optional-text8")); }
+  private static void encodeOptionalText8(OptionalText8 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); if(bytes==null)bytes=new byte[0]; require(bytes.length>=0&&bytes.length<=255L,"optional-text8 length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Sha256Bytes decodeSha256Bytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=32&&length<=32L,"sha256-bytes length");   return new Sha256Bytes(r.bytes(length)); }
+  private static void encodeSha256Bytes(Sha256Bytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"sha256-bytes"); require(bytes.length>=32&&bytes.length<=32L,"sha256-bytes length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
   private static CreationRequestSize decodeCreationRequestSize(Reader r, DecoderContext c, int flags) throws IOException { int value=(int)r.uint(4); requireUnsigned(value, 4, "0", "1048576", "creation-request-size"); return new CreationRequestSize(value); }
   private static void encodeCreationRequestSize(CreationRequestSize value, Writer w, DecoderContext c, int flags) throws IOException { requireUnsigned(value.value(), 4, "0", "1048576", "creation-request-size"); w.uint(4, value.value()); }
-  private static Text16 decodeText16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=65535,"text16 length");   return new Text16(strictText(r.bytes(length), "text16")); }
-  private static void encodeText16(Text16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"text16"); require(bytes.length>=0&&bytes.length<=65535,"text16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static NonemptyText16 decodeNonemptyText16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=65535,"nonempty-text16 length");   return new NonemptyText16(strictText(r.bytes(length), "nonempty-text16")); }
-  private static void encodeNonemptyText16(NonemptyText16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"nonempty-text16"); require(bytes.length>=1&&bytes.length<=65535,"nonempty-text16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static Endpoint decodeEndpoint(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096,"endpoint length");   return new Endpoint(strictText(r.bytes(length), "endpoint")); }
-  private static void encodeEndpoint(Endpoint value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"endpoint"); require(bytes.length>=1&&bytes.length<=4096,"endpoint length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static Blob16 decodeBlob16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=65535,"blob16 length");   return new Blob16(r.bytes(length)); }
-  private static void encodeBlob16(Blob16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"blob16"); require(bytes.length>=0&&bytes.length<=65535,"blob16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static NonemptyBlob16 decodeNonemptyBlob16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=65535,"nonempty-blob16 length");   return new NonemptyBlob16(r.bytes(length)); }
-  private static void encodeNonemptyBlob16(NonemptyBlob16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"nonempty-blob16"); require(bytes.length>=1&&bytes.length<=65535,"nonempty-blob16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static PacketName decodePacketName(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255,"packet-name length");   return new PacketName(strictText(r.bytes(length), "packet-name")); }
-  private static void encodePacketName(PacketName value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"packet-name"); require(bytes.length>=1&&bytes.length<=255,"packet-name length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static ContentType decodeContentType(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255,"content-type length");   return new ContentType(strictText(r.bytes(length), "content-type")); }
-  private static void encodeContentType(ContentType value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"content-type"); require(bytes.length>=1&&bytes.length<=255,"content-type length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static ApplicationPayloadBytes decodeApplicationPayloadBytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=0&&length<=2147483647,"application-payload-bytes length"); require(c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()!=null&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()>=0&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()<=4294966774L,"application-payload-bytes clientServer negotiated bound");require((long)length<=c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead(),"application-payload-bytes clientServer negotiated bound");  return new ApplicationPayloadBytes(r.bytes(length)); }
-  private static void encodeApplicationPayloadBytes(ApplicationPayloadBytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"application-payload-bytes"); require(bytes.length>=0&&bytes.length<=2147483647,"application-payload-bytes length"); require(c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()!=null&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()>=0&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()<=4294966774L,"application-payload-bytes clientServer negotiated bound");require((long)bytes.length<=c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead(),"application-payload-bytes clientServer negotiated bound"); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Text16 decodeText16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=65535L,"text16 length");   return new Text16(strictText(r.bytes(length), "text16")); }
+  private static void encodeText16(Text16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"text16"); require(bytes.length>=0&&bytes.length<=65535L,"text16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static NonemptyText16 decodeNonemptyText16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=65535L,"nonempty-text16 length");   return new NonemptyText16(strictText(r.bytes(length), "nonempty-text16")); }
+  private static void encodeNonemptyText16(NonemptyText16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"nonempty-text16"); require(bytes.length>=1&&bytes.length<=65535L,"nonempty-text16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Endpoint decodeEndpoint(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096L,"endpoint length");   return new Endpoint(strictText(r.bytes(length), "endpoint")); }
+  private static void encodeEndpoint(Endpoint value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"endpoint"); require(bytes.length>=1&&bytes.length<=4096L,"endpoint length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static Blob16 decodeBlob16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=65535L,"blob16 length");   return new Blob16(r.bytes(length)); }
+  private static void encodeBlob16(Blob16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"blob16"); require(bytes.length>=0&&bytes.length<=65535L,"blob16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static NonemptyBlob16 decodeNonemptyBlob16(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=65535L,"nonempty-blob16 length");   return new NonemptyBlob16(r.bytes(length)); }
+  private static void encodeNonemptyBlob16(NonemptyBlob16 value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"nonempty-blob16"); require(bytes.length>=1&&bytes.length<=65535L,"nonempty-blob16 length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static PacketName decodePacketName(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255L,"packet-name length");   return new PacketName(strictText(r.bytes(length), "packet-name")); }
+  private static void encodePacketName(PacketName value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"packet-name"); require(bytes.length>=1&&bytes.length<=255L,"packet-name length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static ContentType decodeContentType(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU8(r,c,flags)); require(length>=1&&length<=255L,"content-type length");   return new ContentType(strictText(r.bytes(length), "content-type")); }
+  private static void encodeContentType(ContentType value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"content-type"); require(bytes.length>=1&&bytes.length<=255L,"content-type length");  encodeU8(new U8(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static ApplicationPayloadBytes decodeApplicationPayloadBytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=0&&length<=4294966774L,"application-payload-bytes length"); require(c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()!=null&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()>=0&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()<=4294966774L,"application-payload-bytes clientServer negotiated bound");require((long)length<=c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead(),"application-payload-bytes clientServer negotiated bound");  return new ApplicationPayloadBytes(r.bytes(length)); }
+  private static void encodeApplicationPayloadBytes(ApplicationPayloadBytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"application-payload-bytes"); require(bytes.length>=0&&bytes.length<=4294966774L,"application-payload-bytes length"); require(c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()!=null&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()>=0&&c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead()<=4294966774L,"application-payload-bytes clientServer negotiated bound");require((long)bytes.length<=c.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead(),"application-payload-bytes clientServer negotiated bound"); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
   private static ApplicationPayloadEnvelopeV1 decodeApplicationPayloadEnvelopeV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"application-payload-envelope-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
     PacketName packetName = decodePacketName(body, c, flags);
     ContentType contentType = decodeContentType(body, c, flags);
     ApplicationPayloadBytes payload = decodeApplicationPayloadBytes(body, c, flags);
-    body.end("application-payload-envelope-v1");require(c.effectiveCompleteMessageBytes()!=null&&c.effectiveCompleteMessageBytes()>=0&&c.effectiveCompleteMessageBytes()<=4294967295L,"application-payload-envelope-v1 clientServer negotiated bound");require((long)(r.at-start)<=c.effectiveCompleteMessageBytes(),"application-payload-envelope-v1 clientServer negotiated bound");  return new ApplicationPayloadEnvelopeV1(packetName, contentType, payload); }
+    body.end("application-payload-envelope-v1");require(c.effectiveCompleteMessageBytes()!=null&&c.effectiveCompleteMessageBytes()>=0&&c.effectiveCompleteMessageBytes()<=4294967295L,"application-payload-envelope-v1 clientServer negotiated bound");require((long)(r.at-start)<=c.effectiveCompleteMessageBytes(),"application-payload-envelope-v1 clientServer negotiated bound");require((long)(r.at-start)<=4294967295L,"application-payload-envelope-v1 encoded limit");  return new ApplicationPayloadEnvelopeV1(packetName, contentType, payload); }
   private static void encodeApplicationPayloadEnvelopeV1(ApplicationPayloadEnvelopeV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodePacketName(value.packetName(), body, c, flags);
     encodeContentType(value.contentType(), body, c, flags);
     encodeApplicationPayloadBytes(value.payload(), body, c, flags);
-    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require(c.effectiveCompleteMessageBytes()!=null&&c.effectiveCompleteMessageBytes()>=0&&c.effectiveCompleteMessageBytes()<=4294967295L,"application-payload-envelope-v1 clientServer negotiated bound");require((long)(w.size()-start)<=c.effectiveCompleteMessageBytes(),"application-payload-envelope-v1 clientServer negotiated bound"); }
-  private static MetadataValue decodeMetadataValue(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=1024,"metadata-value length");   return new MetadataValue(strictText(r.bytes(length), "metadata-value")); }
-  private static void encodeMetadataValue(MetadataValue value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"metadata-value"); require(bytes.length>=0&&bytes.length<=1024,"metadata-value length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require(c.effectiveCompleteMessageBytes()!=null&&c.effectiveCompleteMessageBytes()>=0&&c.effectiveCompleteMessageBytes()<=4294967295L,"application-payload-envelope-v1 clientServer negotiated bound");require((long)(w.size()-start)<=c.effectiveCompleteMessageBytes(),"application-payload-envelope-v1 clientServer negotiated bound");require((long)(w.size()-start)<=4294967295L,"application-payload-envelope-v1 encoded limit"); }
+  private static MetadataValue decodeMetadataValue(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=0&&length<=1024L,"metadata-value length");   return new MetadataValue(strictText(r.bytes(length), "metadata-value")); }
+  private static void encodeMetadataValue(MetadataValue value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"metadata-value"); require(bytes.length>=0&&bytes.length<=1024L,"metadata-value length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
   private static MetadataEntry decodeMetadataEntry(Reader r, DecoderContext c, int flags) throws IOException {
     Text8 key = decodeText8(r, c, flags);
     MetadataValue value = decodeMetadataValue(r, c, flags);
@@ -386,8 +387,8 @@ final class ServiceWireCodec {
     encodeText8(value.key(), w, c, flags);
     encodeMetadataValue(value.value(), w, c, flags);
      }
-  private static MetadataFrame decodeMetadataFrame(Reader r, DecoderContext c, int flags) throws IOException { require(decodeU8(r,c,flags).value()==1L,"metadata-frame version"); int count=length(decodeU8(r,c,flags));  List<MetadataEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeMetadataEntry(r, c, flags)); Set<ByteKey> keys0=new HashSet<>();for(MetadataEntry item:values){Writer key0=new Writer();encodeText8(item.key(), key0, c, flags);require(keys0.add(new ByteKey(key0.result())),"metadata-frame unique");} return new MetadataFrame(values); }
-  private static void encodeMetadataFrame(MetadataFrame value, Writer w, DecoderContext c, int flags) throws IOException { encodeU8(new U8((int)(1L)),w,c,flags);  Set<ByteKey> keys0=new HashSet<>();for(MetadataEntry item:value.entries()){Writer key0=new Writer();encodeText8(item.key(), key0, c, flags);require(keys0.add(new ByteKey(key0.result())),"metadata-frame unique");} encodeU8(new U8((int)(value.entries().size())),w,c,flags); for(MetadataEntry item:value.entries())encodeMetadataEntry(item, w, c, flags); }
+  private static MetadataFrame decodeMetadataFrame(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"metadata-frame version"); int count=length(decodeU8(r,c,flags));  List<MetadataEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeMetadataEntry(r, c, flags)); Set<ByteKey> keys0=new HashSet<>();for(MetadataEntry item:values){Writer key0=new Writer();key0.bytes(strictBytes(item.key().value()));require(keys0.add(new ByteKey(key0.result())),"metadata-frame unique");}require((long)(r.at-start)<=1024L,"metadata-frame encoded limit"); return new MetadataFrame(values); }
+  private static void encodeMetadataFrame(MetadataFrame value, Writer w, DecoderContext c, int flags) throws IOException { int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags);  Set<ByteKey> keys0=new HashSet<>();for(MetadataEntry item:value.entries()){Writer key0=new Writer();key0.bytes(strictBytes(item.key().value()));require(keys0.add(new ByteKey(key0.result())),"metadata-frame unique");} encodeU8(new U8((int)(value.entries().size())),w,c,flags); for(MetadataEntry item:value.entries())encodeMetadataEntry(item, w, c, flags); require((long)(w.size()-start)<=1024L,"metadata-frame encoded limit"); }
   private static RuntimeState decodeRuntimeState(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return RuntimeState.PREPARING;if(wire==1L)return RuntimeState.SERVING;if(wire==2L)return RuntimeState.DRAINING;if(wire==3L)return RuntimeState.STOPPED;if(wire==4L)return RuntimeState.ERROR;throw error("runtime-state enum"); }
   private static void encodeRuntimeState(RuntimeState value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static StatefulObjectKind decodeStatefulObjectKind(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==1L)return StatefulObjectKind.ACTOR;if(wire==2L)return StatefulObjectKind.USER_SPOT;if(wire==3L)return StatefulObjectKind.INSTANCE_SPOT;throw error("stateful-object-kind enum"); }
@@ -433,6 +434,7 @@ final class ServiceWireCodec {
   }
   private static void encodeActorJoinReplyTail(ActorJoinReplyTail value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ActorJoinReplyTailAccepted item){
+      require(item.joinResult()==ActorJoinResult.ACCEPTED,"actor-join-reply-tail discriminator agreement");
       encodeActorJoinResult(item.joinResult(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotRef(item.spot(), selected, c, flags);
@@ -442,6 +444,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorJoinReplyTailRejected item){
+      require(item.joinResult()==ActorJoinResult.REJECTED,"actor-join-reply-tail discriminator agreement");
       encodeActorJoinResult(item.joinResult(), w, c, flags);
       Writer selected=new Writer();
       encodeOptionalSpotRef(item.spot(), selected, c, flags);
@@ -533,6 +536,7 @@ final class ServiceWireCodec {
   }
   private static void encodeActorCreateTerminal(ActorCreateTerminal value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ActorCreateTerminalExisting item){
+      require(item.createResult()==ActorCreateResult.EXISTING,"actor-create-terminal discriminator agreement");
       encodeActorCreateResult(item.createResult(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRef(item.actor(), selected, c, flags);
@@ -540,6 +544,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorCreateTerminalCreated item){
+      require(item.createResult()==ActorCreateResult.CREATED,"actor-create-terminal discriminator agreement");
       encodeActorCreateResult(item.createResult(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRef(item.actor(), selected, c, flags);
@@ -547,6 +552,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorCreateTerminalRejected item){
+      require(item.createResult()==ActorCreateResult.REJECTED,"actor-create-terminal discriminator agreement");
       encodeActorCreateResult(item.createResult(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
@@ -554,7 +560,7 @@ final class ServiceWireCodec {
     }
     throw error("actor-create-terminal case");
   }
-  private static CreationOperationTerminalV1 decodeCreationOperationTerminalV1(Reader r, DecoderContext c, int flags) throws IOException { require(decodeU8(r,c,flags).value()==1L,"creation-operation-terminal-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
+  private static CreationOperationTerminalV1 decodeCreationOperationTerminalV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"creation-operation-terminal-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
     RequestTerminalResult terminalResult = decodeRequestTerminalResult(body, c, flags);
     FrameworkErrorCode failureCode = decodeFrameworkErrorCode(body, c, flags);
     Bool8 hasCreation = decodeBool8(body, c, flags);
@@ -563,15 +569,15 @@ final class ServiceWireCodec {
     Bool8 hasApplicationPayload = decodeBool8(body, c, flags);
     ApplicationPayloadEnvelopeV1 applicationPayload = null;
     if (hasApplicationPayload != null && hasApplicationPayload.toString().equals("TRUE")) applicationPayload = decodeApplicationPayloadEnvelopeV1(body, c, flags);
-    body.end("creation-operation-terminal-v1"); if(terminalResult==RequestTerminalResult.OK)require(failureCode==FrameworkErrorCode.NONE&&hasCreation==Bool8.TRUE,"creation-operation-terminal-v1 success shape"); if(terminalResult!=RequestTerminalResult.OK)require(hasCreation==Bool8.FALSE&&hasApplicationPayload==Bool8.FALSE,"creation-operation-terminal-v1 failure shape"); if(creation instanceof ActorCreateTerminalExisting)require(hasApplicationPayload==Bool8.FALSE,"creation-operation-terminal-v1 existing shape"); return new CreationOperationTerminalV1(terminalResult, failureCode, hasCreation, creation, hasApplicationPayload, applicationPayload); }
-  private static void encodeCreationOperationTerminalV1(CreationOperationTerminalV1 value, Writer w, DecoderContext c, int flags) throws IOException {if(value.terminalResult()==RequestTerminalResult.OK)require(value.failureCode()==FrameworkErrorCode.NONE&&value.hasCreation()==Bool8.TRUE,"creation-operation-terminal-v1 success shape"); if(value.terminalResult()!=RequestTerminalResult.OK)require(value.hasCreation()==Bool8.FALSE&&value.hasApplicationPayload()==Bool8.FALSE,"creation-operation-terminal-v1 failure shape"); if(value.creation() instanceof ActorCreateTerminalExisting)require(value.hasApplicationPayload()==Bool8.FALSE,"creation-operation-terminal-v1 existing shape");encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
+    body.end("creation-operation-terminal-v1");require((long)(r.at-start)<=1048576L,"creation-operation-terminal-v1 encoded limit"); if(terminalResult==RequestTerminalResult.OK)require(failureCode==FrameworkErrorCode.NONE&&hasCreation==Bool8.TRUE,"creation-operation-terminal-v1 success shape"); if(terminalResult!=RequestTerminalResult.OK)require(hasCreation==Bool8.FALSE&&hasApplicationPayload==Bool8.FALSE,"creation-operation-terminal-v1 failure shape"); if(creation instanceof ActorCreateTerminalExisting)require(hasApplicationPayload==Bool8.FALSE,"creation-operation-terminal-v1 existing shape"); return new CreationOperationTerminalV1(terminalResult, failureCode, hasCreation, creation, hasApplicationPayload, applicationPayload); }
+  private static void encodeCreationOperationTerminalV1(CreationOperationTerminalV1 value, Writer w, DecoderContext c, int flags) throws IOException {if(value.terminalResult()==RequestTerminalResult.OK)require(value.failureCode()==FrameworkErrorCode.NONE&&value.hasCreation()==Bool8.TRUE,"creation-operation-terminal-v1 success shape"); if(value.terminalResult()!=RequestTerminalResult.OK)require(value.hasCreation()==Bool8.FALSE&&value.hasApplicationPayload()==Bool8.FALSE,"creation-operation-terminal-v1 failure shape"); if(value.creation() instanceof ActorCreateTerminalExisting)require(value.hasApplicationPayload()==Bool8.FALSE,"creation-operation-terminal-v1 existing shape");int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodeRequestTerminalResult(value.terminalResult(), body, c, flags);
     encodeFrameworkErrorCode(value.failureCode(), body, c, flags);
     encodeBool8(value.hasCreation(), body, c, flags);
     if (value.hasCreation() != null && value.hasCreation().toString().equals("TRUE")) { require(value.creation() != null, "creation required"); encodeActorCreateTerminal(value.creation(), body, c, flags); } else require(value.creation() == null, "creation forbidden");
     encodeBool8(value.hasApplicationPayload(), body, c, flags);
     if (value.hasApplicationPayload() != null && value.hasApplicationPayload().toString().equals("TRUE")) { require(value.applicationPayload() != null, "applicationPayload required"); encodeApplicationPayloadEnvelopeV1(value.applicationPayload(), body, c, flags); } else require(value.applicationPayload() == null, "applicationPayload forbidden");
-    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require((long)(w.size()-start)<=1048576L,"creation-operation-terminal-v1 encoded limit"); }
   private static OptionalSpotRef decodeOptionalSpotRef(Reader r, DecoderContext c, int flags) throws IOException {
     Bool8 hasSpot=decodeBool8(r, c, flags);
     Reader selected=r.slice(length(decodeU16(r,c,flags)));
@@ -587,12 +593,14 @@ final class ServiceWireCodec {
   }
   private static void encodeOptionalSpotRef(OptionalSpotRef value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof OptionalSpotRefFalse item){
+      require(item.hasSpot()==Bool8.FALSE,"optional-spot-ref discriminator agreement");
       encodeBool8(item.hasSpot(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof OptionalSpotRefTrue item){
+      require(item.hasSpot()==Bool8.TRUE,"optional-spot-ref discriminator agreement");
       encodeBool8(item.hasSpot(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotRef(item.spot(), selected, c, flags);
@@ -622,12 +630,14 @@ final class ServiceWireCodec {
   }
   private static void encodeOptionalSpotMembership(OptionalSpotMembership value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof OptionalSpotMembershipFalse item){
+      require(item.hasMembership()==Bool8.FALSE,"optional-spot-membership discriminator agreement");
       encodeBool8(item.hasMembership(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof OptionalSpotMembershipTrue item){
+      require(item.hasMembership()==Bool8.TRUE,"optional-spot-membership discriminator agreement");
       encodeBool8(item.hasMembership(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotMembership(item.membership(), selected, c, flags);
@@ -651,6 +661,7 @@ final class ServiceWireCodec {
   }
   private static void encodeBoundSessionBindingTransition(BoundSessionBindingTransition value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof BoundSessionBindingTransitionActive item){
+      require(item.bindingState()==BoundSessionBindingState.ACTIVE,"bound-session-binding-transition discriminator agreement");
       encodeBoundSessionBindingState(item.bindingState(), w, c, flags);
       Writer selected=new Writer();
       encodeNonzeroU64(item.bindingGeneration(), selected, c, flags);
@@ -658,6 +669,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof BoundSessionBindingTransitionTombstone item){
+      require(item.bindingState()==BoundSessionBindingState.TOMBSTONE,"bound-session-binding-transition discriminator agreement");
       encodeBoundSessionBindingState(item.bindingState(), w, c, flags);
       Writer selected=new Writer();
       encodeNonzeroU64(item.retiredBindingGeneration(), selected, c, flags);
@@ -700,6 +712,7 @@ final class ServiceWireCodec {
   }
   private static void encodeSessionRelocationRouteUpdate(SessionRelocationRouteUpdate value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof SessionRelocationRouteUpdateCommit item){
+      require(item.action()==SessionRelocationRouteAction.COMMIT,"session-relocation-route-update discriminator agreement");
       encodeSessionRelocationRouteAction(item.action(), w, c, flags);
       Writer selected=new Writer();
       encodeNonzeroU64(item.previousAuthorityOwnerGeneration(), selected, c, flags);
@@ -710,6 +723,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SessionRelocationRouteUpdateAbort item){
+      require(item.action()==SessionRelocationRouteAction.ABORT,"session-relocation-route-update discriminator agreement");
       encodeSessionRelocationRouteAction(item.action(), w, c, flags);
       Writer selected=new Writer();
       encodeNonzeroU64(item.currentAuthorityOwnerGeneration(), selected, c, flags);
@@ -737,6 +751,7 @@ final class ServiceWireCodec {
   }
   private static void encodeObjectCreationKey(ObjectCreationKey value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ObjectCreationKeyActor item){
+      require(item.objectKind()==StatefulObjectKind.ACTOR,"object-creation-key discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.actorId(), selected, c, flags);
@@ -744,6 +759,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ObjectCreationKeyUserSpot item){
+      require(item.objectKind()==StatefulObjectKind.USER_SPOT,"object-creation-key discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.spotId(), selected, c, flags);
@@ -751,6 +767,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ObjectCreationKeyInstanceSpot item){
+      require(item.objectKind()==StatefulObjectKind.INSTANCE_SPOT,"object-creation-key discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.spotId(), selected, c, flags);
@@ -759,22 +776,22 @@ final class ServiceWireCodec {
     }
     throw error("object-creation-key case");
   }
-  private static ObjectCreationIntentV1 decodeObjectCreationIntentV1(Reader r, DecoderContext c, int flags) throws IOException { require(decodeU8(r,c,flags).value()==1L,"object-creation-intent-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
+  private static ObjectCreationIntentV1 decodeObjectCreationIntentV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"object-creation-intent-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
     ObjectCreationKey key = decodeObjectCreationKey(body, c, flags);
     Text8 stableType = decodeText8(body, c, flags);
     Text8 initialMeshName = decodeText8(body, c, flags);
     CreationContentReference requestContentReference = decodeCreationContentReference(body, c, flags);
     Sha256Bytes requestSha256 = decodeSha256Bytes(body, c, flags);
     CreationRequestSize requestEncodedSize = decodeCreationRequestSize(body, c, flags);
-    body.end("object-creation-intent-v1");  return new ObjectCreationIntentV1(key, stableType, initialMeshName, requestContentReference, requestSha256, requestEncodedSize); }
-  private static void encodeObjectCreationIntentV1(ObjectCreationIntentV1 value, Writer w, DecoderContext c, int flags) throws IOException {encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
+    body.end("object-creation-intent-v1");require((long)(r.at-start)<=1048576L,"object-creation-intent-v1 encoded limit");  return new ObjectCreationIntentV1(key, stableType, initialMeshName, requestContentReference, requestSha256, requestEncodedSize); }
+  private static void encodeObjectCreationIntentV1(ObjectCreationIntentV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodeObjectCreationKey(value.key(), body, c, flags);
     encodeText8(value.stableType(), body, c, flags);
     encodeText8(value.initialMeshName(), body, c, flags);
     encodeCreationContentReference(value.requestContentReference(), body, c, flags);
     encodeSha256Bytes(value.requestSha256(), body, c, flags);
     encodeCreationRequestSize(value.requestEncodedSize(), body, c, flags);
-    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require((long)(w.size()-start)<=1048576L,"object-creation-intent-v1 encoded limit"); }
   private static PendingObjectCreationV1 decodePendingObjectCreationV1(Reader r, DecoderContext c, int flags) throws IOException {
     Text8 reservationId = decodeText8(r, c, flags);
     CreationContentReference requestContentReference = decodeCreationContentReference(r, c, flags);
@@ -801,7 +818,7 @@ final class ServiceWireCodec {
     encodeText8(value.ownerId(), w, c, flags);
     encodeNonzeroU64(value.ownerLeaseGeneration(), w, c, flags);
      }
-  private static InstanceActivationRecoveryV1 decodeInstanceActivationRecoveryV1(Reader r, DecoderContext c, int flags) throws IOException {
+  private static InstanceActivationRecoveryV1 decodeInstanceActivationRecoveryV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at;
     Text8 targetSpotId = decodeText8(r, c, flags);
     Text8 stableType = decodeText8(r, c, flags);
     Text8 targetMeshName = decodeText8(r, c, flags);
@@ -821,8 +838,8 @@ final class ServiceWireCodec {
     MetadataFrame metadata = null;
     if (hasMetadata != null && hasMetadata.toString().equals("TRUE")) metadata = decodeMetadataFrame(r, c, flags);
     ApplicationPayloadEnvelopeV1 applicationPayload = decodeApplicationPayloadEnvelopeV1(r, c, flags);
-      return new InstanceActivationRecoveryV1(targetSpotId, stableType, targetMeshName, targetNodeRid, targetNodeGeneration, targetDescriptorVersion, sourceNodeRid, sourceNodeGeneration, hasSourceSpotId, sourceSpotId, operationKind, operation, replyRoute, deadlineUnixMs, hasMetadata, metadata, applicationPayload); }
-  private static void encodeInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value, Writer w, DecoderContext c, int flags) throws IOException {
+    require((long)(r.at-start)<=1048576L,"instance-activation-recovery-v1 encoded limit");  return new InstanceActivationRecoveryV1(targetSpotId, stableType, targetMeshName, targetNodeRid, targetNodeGeneration, targetDescriptorVersion, sourceNodeRid, sourceNodeGeneration, hasSourceSpotId, sourceSpotId, operationKind, operation, replyRoute, deadlineUnixMs, hasMetadata, metadata, applicationPayload); }
+  private static void encodeInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size();
     encodeText8(value.targetSpotId(), w, c, flags);
     encodeText8(value.stableType(), w, c, flags);
     encodeText8(value.targetMeshName(), w, c, flags);
@@ -840,7 +857,7 @@ final class ServiceWireCodec {
     encodeBool8(value.hasMetadata(), w, c, flags);
     if (value.hasMetadata() != null && value.hasMetadata().toString().equals("TRUE")) { require(value.metadata() != null, "metadata required"); encodeMetadataFrame(value.metadata(), w, c, flags); } else require(value.metadata() == null, "metadata forbidden");
     encodeApplicationPayloadEnvelopeV1(value.applicationPayload(), w, c, flags);
-     }
+    require((long)(w.size()-start)<=1048576L,"instance-activation-recovery-v1 encoded limit"); }
   private static ObjectReservationFence decodeObjectReservationFence(Reader r, DecoderContext c, int flags) throws IOException {
     Text8 reservationId = decodeText8(r, c, flags);
     AuthorityStoreVersion expectedStoreVersion = decodeAuthorityStoreVersion(r, c, flags);
@@ -891,6 +908,7 @@ final class ServiceWireCodec {
   private static void encodeGenericObjectReservationV1(GenericObjectReservationV1 value, Writer w, DecoderContext c, int flags) throws IOException {
     int start=w.size();
     if(value instanceof GenericObjectReservationV1Reserve item){
+      require(item.operationKind()==GenericReservationOperationKind.RESERVE,"generic-object-reservation-v1 discriminator agreement");
       encodeGenericReservationOperationKind(item.operationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeObjectCreationIntentV1(item.intent(), selected, c, flags);
@@ -902,6 +920,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof GenericObjectReservationV1Commit item){
+      require(item.operationKind()==GenericReservationOperationKind.COMMIT,"generic-object-reservation-v1 discriminator agreement");
       encodeGenericReservationOperationKind(item.operationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeObjectCreationKey(item.key(), selected, c, flags);
@@ -911,6 +930,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof GenericObjectReservationV1Abort item){
+      require(item.operationKind()==GenericReservationOperationKind.ABORT,"generic-object-reservation-v1 discriminator agreement");
       encodeGenericReservationOperationKind(item.operationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeObjectCreationKey(item.key(), selected, c, flags);
@@ -929,8 +949,8 @@ final class ServiceWireCodec {
     encodeU64(value.high(), w, c, flags);
     encodeU64(value.low(), w, c, flags);
      }
-  private static AggregateParticipantMutationBytes decodeAggregateParticipantMutationBytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=1&&length<=1048576,"aggregate-participant-mutation-bytes length");   return new AggregateParticipantMutationBytes(r.bytes(length)); }
-  private static void encodeAggregateParticipantMutationBytes(AggregateParticipantMutationBytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"aggregate-participant-mutation-bytes"); require(bytes.length>=1&&bytes.length<=1048576,"aggregate-participant-mutation-bytes length");  encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static AggregateParticipantMutationBytes decodeAggregateParticipantMutationBytes(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=1&&length<=1048576L,"aggregate-participant-mutation-bytes length");   return new AggregateParticipantMutationBytes(r.bytes(length)); }
+  private static void encodeAggregateParticipantMutationBytes(AggregateParticipantMutationBytes value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"aggregate-participant-mutation-bytes"); require(bytes.length>=1&&bytes.length<=1048576L,"aggregate-participant-mutation-bytes length");  encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
   private static MaintenanceAggregateParticipantV1 decodeMaintenanceAggregateParticipantV1(Reader r, DecoderContext c, int flags) throws IOException {
     RelocationObjectIdentity object = decodeRelocationObjectIdentity(r, c, flags);
     AuthorityStoreVersion expectedStoreVersion = decodeAuthorityStoreVersion(r, c, flags);
@@ -941,22 +961,22 @@ final class ServiceWireCodec {
     encodeAuthorityStoreVersion(value.expectedStoreVersion(), w, c, flags);
     encodeAggregateParticipantMutationBytes(value.mutation(), w, c, flags);
      }
-  private static AggregateParticipantVector decodeAggregateParticipantVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU16(r,c,flags)); require(count<=1024,"aggregate-participant-vector count"); List<MaintenanceAggregateParticipantV1> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeMaintenanceAggregateParticipantV1(r, c, flags)); for(int i=1;i<values.size();i++){MaintenanceAggregateParticipantV1 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeRelocationObjectIdentity(previous.object(), left0, c, flags);encodeRelocationObjectIdentity(current.object(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"aggregate-participant-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(MaintenanceAggregateParticipantV1 item:values){Writer key1=new Writer();encodeRelocationObjectIdentity(item.object(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"aggregate-participant-vector unique");} return new AggregateParticipantVector(values); }
-  private static void encodeAggregateParticipantVector(AggregateParticipantVector value, Writer w, DecoderContext c, int flags) throws IOException {  require(value.items().size()<=1024,"aggregate-participant-vector count"); for(int i=1;i<value.items().size();i++){MaintenanceAggregateParticipantV1 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeRelocationObjectIdentity(previous.object(), left0, c, flags);encodeRelocationObjectIdentity(current.object(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"aggregate-participant-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(MaintenanceAggregateParticipantV1 item:value.items()){Writer key1=new Writer();encodeRelocationObjectIdentity(item.object(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"aggregate-participant-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(MaintenanceAggregateParticipantV1 item:value.items())encodeMaintenanceAggregateParticipantV1(item, w, c, flags); }
-  private static MaintenanceAggregateV1 decodeMaintenanceAggregateV1(Reader r, DecoderContext c, int flags) throws IOException { require(decodeU8(r,c,flags).value()==1L,"maintenance-aggregate-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
+  private static AggregateParticipantVector decodeAggregateParticipantVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU16(r,c,flags)); require(count<=1024,"aggregate-participant-vector count"); List<MaintenanceAggregateParticipantV1> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeMaintenanceAggregateParticipantV1(r, c, flags)); for(int i=1;i<values.size();i++){MaintenanceAggregateParticipantV1 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();if(previous.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(left0,"zla1","a",":",variant.actor().actorId().value());else if(previous.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(left0,"zla1","s",":",variant.spot().spotId().value());else if(previous.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(left0,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");if(current.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(right0,"zla1","a",":",variant.actor().actorId().value());else if(current.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(right0,"zla1","s",":",variant.spot().spotId().value());else if(current.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(right0,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"aggregate-participant-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(MaintenanceAggregateParticipantV1 item:values){Writer key1=new Writer();if(item.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(key1,"zla1","a",":",variant.actor().actorId().value());else if(item.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(key1,"zla1","s",":",variant.spot().spotId().value());else if(item.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(key1,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");require(keys1.add(new ByteKey(key1.result())),"aggregate-participant-vector unique");} return new AggregateParticipantVector(values); }
+  private static void encodeAggregateParticipantVector(AggregateParticipantVector value, Writer w, DecoderContext c, int flags) throws IOException {   require(value.items().size()<=1024,"aggregate-participant-vector count"); for(int i=1;i<value.items().size();i++){MaintenanceAggregateParticipantV1 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();if(previous.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(left0,"zla1","a",":",variant.actor().actorId().value());else if(previous.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(left0,"zla1","s",":",variant.spot().spotId().value());else if(previous.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(left0,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");if(current.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(right0,"zla1","a",":",variant.actor().actorId().value());else if(current.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(right0,"zla1","s",":",variant.spot().spotId().value());else if(current.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(right0,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"aggregate-participant-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(MaintenanceAggregateParticipantV1 item:value.items()){Writer key1=new Writer();if(item.object() instanceof RelocationObjectIdentityActor variant)canonicalAuthorityKey(key1,"zla1","a",":",variant.actor().actorId().value());else if(item.object() instanceof RelocationObjectIdentityUserSpot variant)canonicalAuthorityKey(key1,"zla1","s",":",variant.spot().spotId().value());else if(item.object() instanceof RelocationObjectIdentityInstanceSpot variant)canonicalAuthorityKey(key1,"zla1","s",":",variant.spotId().value());else throw error("aggregate-participant-vector authority key variant");require(keys1.add(new ByteKey(key1.result())),"aggregate-participant-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(MaintenanceAggregateParticipantV1 item:value.items())encodeMaintenanceAggregateParticipantV1(item, w, c, flags);  }
+  private static MaintenanceAggregateV1 decodeMaintenanceAggregateV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"maintenance-aggregate-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
     AggregateId aggregateId = decodeAggregateId(body, c, flags);
     NonzeroU64 aggregateGeneration = decodeNonzeroU64(body, c, flags);
     SpotRef ownerSpot = decodeSpotRef(body, c, flags);
     AggregateParticipantVector participants = decodeAggregateParticipantVector(body, c, flags);
     Sha256Bytes inventoryDigestSha256 = decodeSha256Bytes(body, c, flags);
-    body.end("maintenance-aggregate-v1");  return new MaintenanceAggregateV1(aggregateId, aggregateGeneration, ownerSpot, participants, inventoryDigestSha256); }
-  private static void encodeMaintenanceAggregateV1(MaintenanceAggregateV1 value, Writer w, DecoderContext c, int flags) throws IOException {encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
+    body.end("maintenance-aggregate-v1");require((long)(r.at-start)<=1048576L,"maintenance-aggregate-v1 encoded limit");  return new MaintenanceAggregateV1(aggregateId, aggregateGeneration, ownerSpot, participants, inventoryDigestSha256); }
+  private static void encodeMaintenanceAggregateV1(MaintenanceAggregateV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodeAggregateId(value.aggregateId(), body, c, flags);
     encodeNonzeroU64(value.aggregateGeneration(), body, c, flags);
     encodeSpotRef(value.ownerSpot(), body, c, flags);
     encodeAggregateParticipantVector(value.participants(), body, c, flags);
     encodeSha256Bytes(value.inventoryDigestSha256(), body, c, flags);
-    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require((long)(w.size()-start)<=1048576L,"maintenance-aggregate-v1 encoded limit"); }
   private static ActorRouteFence decodeActorRouteFence(Reader r, DecoderContext c, int flags) throws IOException {
     ActorRef actor = decodeActorRef(r, c, flags);
     Rid targetNodeRid = decodeRid(r, c, flags);
@@ -1014,6 +1034,7 @@ final class ServiceWireCodec {
   }
   private static void encodeMessageFollowRoute(MessageFollowRoute value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof MessageFollowRouteActor item){
+      require(item.objectKind()==AuthorityObjectKind.ACTOR,"message-follow-route discriminator agreement");
       encodeAuthorityObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRouteFence(item.actor(), selected, c, flags);
@@ -1021,6 +1042,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof MessageFollowRouteSpot item){
+      require(item.objectKind()==AuthorityObjectKind.SPOT,"message-follow-route discriminator agreement");
       encodeAuthorityObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotRouteFence(item.spot(), selected, c, flags);
@@ -1029,7 +1051,7 @@ final class ServiceWireCodec {
     }
     throw error("message-follow-route case");
   }
-  private static MessageFollowRouteV1 decodeMessageFollowRouteV1(Reader r, DecoderContext c, int flags) throws IOException { require(decodeU8(r,c,flags).value()==1L,"message-follow-route-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
+  private static MessageFollowRouteV1 decodeMessageFollowRouteV1(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; require(decodeU8(r,c,flags).value()==1L,"message-follow-route-v1 version"); Reader body=r.slice(length(decodeU32(r,c,flags)));
     MessageFollowRoute source = decodeMessageFollowRoute(body, c, flags);
     MessageFollowRoute target = decodeMessageFollowRoute(body, c, flags);
     U8 hopCount = decodeU8(body, c, flags);
@@ -1041,8 +1063,8 @@ final class ServiceWireCodec {
     requireUnsigned(queuedBytes.value(), 4, "0", null, "queuedBytes");
     OperationId originalOperation = decodeOperationId(body, c, flags);
     U64 originalReplyRouteId = decodeU64(body, c, flags);
-    body.end("message-follow-route-v1");  return new MessageFollowRouteV1(source, target, hopCount, queuedMessages, queuedBytes, originalOperation, originalReplyRouteId); }
-  private static void encodeMessageFollowRouteV1(MessageFollowRouteV1 value, Writer w, DecoderContext c, int flags) throws IOException {encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
+    body.end("message-follow-route-v1");require((long)(r.at-start)<=16777216L,"message-follow-route-v1 encoded limit");  return new MessageFollowRouteV1(source, target, hopCount, queuedMessages, queuedBytes, originalOperation, originalReplyRouteId); }
+  private static void encodeMessageFollowRouteV1(MessageFollowRouteV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodeMessageFollowRoute(value.source(), body, c, flags);
     encodeMessageFollowRoute(value.target(), body, c, flags);
     encodeU8(value.hopCount(), body, c, flags);
@@ -1050,7 +1072,7 @@ final class ServiceWireCodec {
     encodeU32(value.queuedBytes(), body, c, flags);
     encodeOperationId(value.originalOperation(), body, c, flags);
     encodeU64(value.originalReplyRouteId(), body, c, flags);
-    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+    byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);require((long)(w.size()-start)<=16777216L,"message-follow-route-v1 encoded limit"); }
   private static RelocationObjectIdentity decodeRelocationObjectIdentity(Reader r, DecoderContext c, int flags) throws IOException {
     StatefulObjectKind objectKind=decodeStatefulObjectKind(r, c, flags);
     Reader selected=r.slice(length(decodeU16(r,c,flags)));
@@ -1074,6 +1096,7 @@ final class ServiceWireCodec {
   }
   private static void encodeRelocationObjectIdentity(RelocationObjectIdentity value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof RelocationObjectIdentityActor item){
+      require(item.objectKind()==StatefulObjectKind.ACTOR,"relocation-object-identity discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRef(item.actor(), selected, c, flags);
@@ -1082,6 +1105,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof RelocationObjectIdentityUserSpot item){
+      require(item.objectKind()==StatefulObjectKind.USER_SPOT,"relocation-object-identity discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotRef(item.spot(), selected, c, flags);
@@ -1090,6 +1114,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof RelocationObjectIdentityInstanceSpot item){
+      require(item.objectKind()==StatefulObjectKind.INSTANCE_SPOT,"relocation-object-identity discriminator agreement");
       encodeStatefulObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.instanceType(), selected, c, flags);
@@ -1141,6 +1166,7 @@ final class ServiceWireCodec {
   }
   private static void encodeInstanceAuthorityIdentity(InstanceAuthorityIdentity value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof InstanceAuthorityIdentityColdActivating item){
+      require(item.authorityState()==InstanceAuthorityState.COLD_ACTIVATING,"instance-authority-identity discriminator agreement");
       encodeInstanceAuthorityState(item.authorityState(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.instanceType(), selected, c, flags);
@@ -1149,6 +1175,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof InstanceAuthorityIdentityReady item){
+      require(item.authorityState()==InstanceAuthorityState.READY,"instance-authority-identity discriminator agreement");
       encodeInstanceAuthorityState(item.authorityState(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.instanceType(), selected, c, flags);
@@ -1157,6 +1184,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof InstanceAuthorityIdentityClosing item){
+      require(item.authorityState()==InstanceAuthorityState.CLOSING,"instance-authority-identity discriminator agreement");
       encodeInstanceAuthorityState(item.authorityState(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.instanceType(), selected, c, flags);
@@ -1165,6 +1193,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof InstanceAuthorityIdentityRelocating item){
+      require(item.authorityState()==InstanceAuthorityState.RELOCATING,"instance-authority-identity discriminator agreement");
       encodeInstanceAuthorityState(item.authorityState(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.instanceType(), selected, c, flags);
@@ -1197,6 +1226,7 @@ final class ServiceWireCodec {
   }
   private static void encodeSpotAuthorityIdentity(SpotAuthorityIdentity value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof SpotAuthorityIdentityEntry item){
+      require(item.spotKind()==SpotKind.ENTRY,"spot-authority-identity discriminator agreement");
       encodeSpotKind(item.spotKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.spotId(), selected, c, flags);
@@ -1206,6 +1236,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SpotAuthorityIdentityUser item){
+      require(item.spotKind()==SpotKind.USER,"spot-authority-identity discriminator agreement");
       encodeSpotKind(item.spotKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.spotId(), selected, c, flags);
@@ -1215,6 +1246,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SpotAuthorityIdentityInstance item){
+      require(item.spotKind()==SpotKind.INSTANCE,"spot-authority-identity discriminator agreement");
       encodeSpotKind(item.spotKind(), w, c, flags);
       Writer selected=new Writer();
       encodeInstanceAuthorityIdentity(item.instance(), selected, c, flags);
@@ -1238,6 +1270,7 @@ final class ServiceWireCodec {
   }
   private static void encodeAuthorityObjectIdentity(AuthorityObjectIdentity value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof AuthorityObjectIdentityActor item){
+      require(item.objectKind()==AuthorityObjectKind.ACTOR,"authority-object-identity discriminator agreement");
       encodeAuthorityObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorAuthorityIdentity(item.actor(), selected, c, flags);
@@ -1245,6 +1278,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof AuthorityObjectIdentitySpot item){
+      require(item.objectKind()==AuthorityObjectKind.SPOT,"authority-object-identity discriminator agreement");
       encodeAuthorityObjectKind(item.objectKind(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotAuthorityIdentity(item.spot(), selected, c, flags);
@@ -1269,12 +1303,12 @@ final class ServiceWireCodec {
     encodeU64(value.high(), w, c, flags);
     encodeU64(value.low(), w, c, flags);
      }
-  private static CreationContentReference decodeCreationContentReference(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096,"creation-content-reference length");   return new CreationContentReference(strictText(r.bytes(length), "creation-content-reference")); }
-  private static void encodeCreationContentReference(CreationContentReference value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"creation-content-reference"); require(bytes.length>=1&&bytes.length<=4096,"creation-content-reference length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static RelocationReference decodeRelocationReference(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096,"relocation-reference length");   return new RelocationReference(strictText(r.bytes(length), "relocation-reference")); }
-  private static void encodeRelocationReference(RelocationReference value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"relocation-reference"); require(bytes.length>=1&&bytes.length<=4096,"relocation-reference length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static AuthorityStoreVersion decodeAuthorityStoreVersion(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096,"authority-store-version length");   return new AuthorityStoreVersion(strictText(r.bytes(length), "authority-store-version")); }
-  private static void encodeAuthorityStoreVersion(AuthorityStoreVersion value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"authority-store-version"); require(bytes.length>=1&&bytes.length<=4096,"authority-store-version length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static CreationContentReference decodeCreationContentReference(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096L,"creation-content-reference length");   return new CreationContentReference(strictText(r.bytes(length), "creation-content-reference")); }
+  private static void encodeCreationContentReference(CreationContentReference value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"creation-content-reference"); require(bytes.length>=1&&bytes.length<=4096L,"creation-content-reference length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static RelocationReference decodeRelocationReference(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096L,"relocation-reference length");   return new RelocationReference(strictText(r.bytes(length), "relocation-reference")); }
+  private static void encodeRelocationReference(RelocationReference value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"relocation-reference"); require(bytes.length>=1&&bytes.length<=4096L,"relocation-reference length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static AuthorityStoreVersion decodeAuthorityStoreVersion(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU16(r,c,flags)); require(length>=1&&length<=4096L,"authority-store-version length");   return new AuthorityStoreVersion(strictText(r.bytes(length), "authority-store-version")); }
+  private static void encodeAuthorityStoreVersion(AuthorityStoreVersion value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=strictBytes(value.value()); require(bytes!=null,"authority-store-version"); require(bytes.length>=1&&bytes.length<=4096L,"authority-store-version length");  encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes); }
   private static AuthorityGenerationFence decodeAuthorityGenerationFence(Reader r, DecoderContext c, int flags) throws IOException {
     NonzeroU64 objectGeneration = decodeNonzeroU64(r, c, flags);
     Text8 ownerId = decodeText8(r, c, flags);
@@ -1338,11 +1372,11 @@ final class ServiceWireCodec {
   private static OptionalActorRef decodeOptionalActorRef(Reader r, DecoderContext c, int flags) throws IOException {
     OptionalText8 actorId = decodeOptionalText8(r, c, flags);
     NonzeroU64 generation = null;
-    if (actorId != null) generation = decodeNonzeroU64(r, c, flags);
+    if (actorId != null && actorId.value() != null) generation = decodeNonzeroU64(r, c, flags);
       return new OptionalActorRef(actorId, generation); }
   private static void encodeOptionalActorRef(OptionalActorRef value, Writer w, DecoderContext c, int flags) throws IOException {
     encodeOptionalText8(value.actorId(), w, c, flags);
-    if (value.actorId() != null) { require(value.generation() != null, "generation required"); encodeNonzeroU64(value.generation(), w, c, flags); } else require(value.generation() == null, "generation forbidden");
+    if (value.actorId() != null && value.actorId().value() != null) { require(value.generation() != null, "generation required"); encodeNonzeroU64(value.generation(), w, c, flags); } else require(value.generation() == null, "generation forbidden");
      }
   private static OptionalBoundSessionTail decodeOptionalBoundSessionTail(Reader r, DecoderContext c, int flags) throws IOException {
     Rid sourceSessionRid = decodeRid(r, c, flags);
@@ -1364,10 +1398,10 @@ final class ServiceWireCodec {
     encodeText8(value.channelName(), w, c, flags);
     encodeU32(value.weight(), w, c, flags);
      }
-  private static ChannelVector decodeChannelVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU16(r,c,flags));  List<ChannelEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeChannelEntry(r, c, flags)); for(int i=1;i<values.size();i++){ChannelEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeText8(previous.channelName(), left0, c, flags);encodeText8(current.channelName(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"channel-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(ChannelEntry item:values){Writer key1=new Writer();encodeText8(item.channelName(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"channel-vector unique");} return new ChannelVector(values); }
-  private static void encodeChannelVector(ChannelVector value, Writer w, DecoderContext c, int flags) throws IOException {   for(int i=1;i<value.items().size();i++){ChannelEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeText8(previous.channelName(), left0, c, flags);encodeText8(current.channelName(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"channel-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(ChannelEntry item:value.items()){Writer key1=new Writer();encodeText8(item.channelName(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"channel-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(ChannelEntry item:value.items())encodeChannelEntry(item, w, c, flags); }
-  private static SortedText8Vector decodeSortedText8Vector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU16(r,c,flags)); require(count<=1024,"sorted-text8-vector count"); List<Text8> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeText8(r, c, flags)); for(int i=1;i<values.size();i++){Text8 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeText8(previous, left0, c, flags);encodeText8(current, right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"sorted-text8-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(Text8 item:values){Writer key1=new Writer();encodeText8(item, key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"sorted-text8-vector unique");} return new SortedText8Vector(values); }
-  private static void encodeSortedText8Vector(SortedText8Vector value, Writer w, DecoderContext c, int flags) throws IOException {  require(value.items().size()<=1024,"sorted-text8-vector count"); for(int i=1;i<value.items().size();i++){Text8 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeText8(previous, left0, c, flags);encodeText8(current, right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"sorted-text8-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(Text8 item:value.items()){Writer key1=new Writer();encodeText8(item, key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"sorted-text8-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(Text8 item:value.items())encodeText8(item, w, c, flags); }
+  private static ChannelVector decodeChannelVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU16(r,c,flags));  List<ChannelEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeChannelEntry(r, c, flags)); for(int i=1;i<values.size();i++){ChannelEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.bytes(strictBytes(previous.channelName().value()));right0.bytes(strictBytes(current.channelName().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"channel-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(ChannelEntry item:values){Writer key1=new Writer();key1.bytes(strictBytes(item.channelName().value()));require(keys1.add(new ByteKey(key1.result())),"channel-vector unique");} return new ChannelVector(values); }
+  private static void encodeChannelVector(ChannelVector value, Writer w, DecoderContext c, int flags) throws IOException {    for(int i=1;i<value.items().size();i++){ChannelEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.bytes(strictBytes(previous.channelName().value()));right0.bytes(strictBytes(current.channelName().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"channel-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(ChannelEntry item:value.items()){Writer key1=new Writer();key1.bytes(strictBytes(item.channelName().value()));require(keys1.add(new ByteKey(key1.result())),"channel-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(ChannelEntry item:value.items())encodeChannelEntry(item, w, c, flags);  }
+  private static SortedText8Vector decodeSortedText8Vector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU16(r,c,flags)); require(count<=1024,"sorted-text8-vector count"); List<Text8> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeText8(r, c, flags)); for(int i=1;i<values.size();i++){Text8 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.bytes(strictBytes(previous.value()));right0.bytes(strictBytes(current.value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"sorted-text8-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(Text8 item:values){Writer key1=new Writer();key1.bytes(strictBytes(item.value()));require(keys1.add(new ByteKey(key1.result())),"sorted-text8-vector unique");} return new SortedText8Vector(values); }
+  private static void encodeSortedText8Vector(SortedText8Vector value, Writer w, DecoderContext c, int flags) throws IOException {   require(value.items().size()<=1024,"sorted-text8-vector count"); for(int i=1;i<value.items().size();i++){Text8 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.bytes(strictBytes(previous.value()));right0.bytes(strictBytes(current.value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"sorted-text8-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(Text8 item:value.items()){Writer key1=new Writer();key1.bytes(strictBytes(item.value()));require(keys1.add(new ByteKey(key1.result())),"sorted-text8-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(Text8 item:value.items())encodeText8(item, w, c, flags);  }
   private static StatefulCapabilityEntry decodeStatefulCapabilityEntry(Reader r, DecoderContext c, int flags) throws IOException {
     StatefulObjectKind objectKind = decodeStatefulObjectKind(r, c, flags);
     Text8 type = decodeText8(r, c, flags);
@@ -1386,9 +1420,9 @@ final class ServiceWireCodec {
     encodeBool8(value.hasSnapshotAdapter(), w, c, flags);
     encodeOrdinalOrZero(value.available(), w, c, flags);
      }
-  private static StatefulCapabilityVector decodeStatefulCapabilityVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU16(r,c,flags)); require(count<=1024,"stateful-capability-vector count"); List<StatefulCapabilityEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeStatefulCapabilityEntry(r, c, flags)); for(int i=1;i<values.size();i++){StatefulCapabilityEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeStatefulObjectKind(previous.objectKind(), left0, c, flags); encodeText8(previous.type(), left0, c, flags);encodeStatefulObjectKind(current.objectKind(), right0, c, flags); encodeText8(current.type(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"stateful-capability-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(StatefulCapabilityEntry item:values){Writer key1=new Writer();encodeStatefulObjectKind(item.objectKind(), key1, c, flags); encodeText8(item.type(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"stateful-capability-vector unique");} return new StatefulCapabilityVector(values); }
-  private static void encodeStatefulCapabilityVector(StatefulCapabilityVector value, Writer w, DecoderContext c, int flags) throws IOException {  require(value.items().size()<=1024,"stateful-capability-vector count"); for(int i=1;i<value.items().size();i++){StatefulCapabilityEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeStatefulObjectKind(previous.objectKind(), left0, c, flags); encodeText8(previous.type(), left0, c, flags);encodeStatefulObjectKind(current.objectKind(), right0, c, flags); encodeText8(current.type(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"stateful-capability-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(StatefulCapabilityEntry item:value.items()){Writer key1=new Writer();encodeStatefulObjectKind(item.objectKind(), key1, c, flags); encodeText8(item.type(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"stateful-capability-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(StatefulCapabilityEntry item:value.items())encodeStatefulCapabilityEntry(item, w, c, flags); }
-  private static DescriptorExtension decodeDescriptorExtension(Reader r, DecoderContext c, int flags) throws IOException { Reader body=r.slice(length(decodeU32(r,c,flags)));     RuntimeState runtimeState=null;
+  private static StatefulCapabilityVector decodeStatefulCapabilityVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU16(r,c,flags)); require(count<=1024,"stateful-capability-vector count"); List<StatefulCapabilityEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeStatefulCapabilityEntry(r, c, flags)); for(int i=1;i<values.size();i++){StatefulCapabilityEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(1,previous.objectKind().wire);left0.bytes(strictBytes(previous.type().value()));right0.uint(1,current.objectKind().wire);right0.bytes(strictBytes(current.type().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"stateful-capability-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(StatefulCapabilityEntry item:values){Writer key1=new Writer();key1.uint(1,item.objectKind().wire);key1.bytes(strictBytes(item.type().value()));require(keys1.add(new ByteKey(key1.result())),"stateful-capability-vector unique");} return new StatefulCapabilityVector(values); }
+  private static void encodeStatefulCapabilityVector(StatefulCapabilityVector value, Writer w, DecoderContext c, int flags) throws IOException {   require(value.items().size()<=1024,"stateful-capability-vector count"); for(int i=1;i<value.items().size();i++){StatefulCapabilityEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(1,previous.objectKind().wire);left0.bytes(strictBytes(previous.type().value()));right0.uint(1,current.objectKind().wire);right0.bytes(strictBytes(current.type().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"stateful-capability-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(StatefulCapabilityEntry item:value.items()){Writer key1=new Writer();key1.uint(1,item.objectKind().wire);key1.bytes(strictBytes(item.type().value()));require(keys1.add(new ByteKey(key1.result())),"stateful-capability-vector unique");} encodeU16(new U16((int)(value.items().size())),w,c,flags); for(StatefulCapabilityEntry item:value.items())encodeStatefulCapabilityEntry(item, w, c, flags);  }
+  private static DescriptorExtension decodeDescriptorExtension(Reader r, DecoderContext c, int flags) throws IOException { int start=r.at; Reader body=r.slice(length(decodeU32(r,c,flags)));     RuntimeState runtimeState=null;
     ApplicationVersion applicationVersion=null;
     SortedText8Vector spotTypes=null;
     StatefulCapabilityVector statefulCapabilities=null;
@@ -1400,8 +1434,8 @@ final class ServiceWireCodec {
     ObjectPendingCapacityLimit pendingCapacityLimit=null;
     U32 activeCapacityUsed=null;
     U32 pendingCapacityUsed=null;
-    int previous=0; while(!body.done()){int id=length(decodeU8(body,c,flags));require(id>previous,"descriptor-extension order");previous=id;Reader item=body.slice(length(decodeU32(body,c,flags)));switch(id){case 1 -> runtimeState=decodeRuntimeState(item, c, flags); case 2 -> applicationVersion=decodeApplicationVersion(item, c, flags); case 3 -> spotTypes=decodeSortedText8Vector(item, c, flags); case 4 -> statefulCapabilities=decodeStatefulCapabilityVector(item, c, flags); case 5 -> maintenanceWave=decodeOptionalText8(item, c, flags); case 6 -> protocolCapabilities=decodeSortedText8Vector(item, c, flags); case 7 -> objectRole=decodeObjectRole(item, c, flags); case 8 -> placementWeight=decodeU32(item, c, flags); case 9 -> activeCapacityLimit=decodeObjectCapacityLimit(item, c, flags); case 10 -> pendingCapacityLimit=decodeObjectPendingCapacityLimit(item, c, flags); case 11 -> activeCapacityUsed=decodeU32(item, c, flags); case 12 -> pendingCapacityUsed=decodeU32(item, c, flags); default -> item.skipRemaining(); }item.end("descriptor-extension field");} require(runtimeState!=null,"runtimeState required"); require(applicationVersion!=null,"applicationVersion required"); require(protocolCapabilities!=null,"protocolCapabilities required"); require(objectRole!=null,"objectRole required"); require(placementWeight!=null,"placementWeight required"); require(activeCapacityLimit!=null,"activeCapacityLimit required"); require(pendingCapacityLimit!=null,"pendingCapacityLimit required"); require(activeCapacityUsed!=null,"activeCapacityUsed required"); require(pendingCapacityUsed!=null,"pendingCapacityUsed required");  require(protocolCapabilities!=null&&protocolCapabilities.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability"); return new DescriptorExtension(runtimeState, applicationVersion, spotTypes, statefulCapabilities, maintenanceWave, protocolCapabilities, objectRole, placementWeight, activeCapacityLimit, pendingCapacityLimit, activeCapacityUsed, pendingCapacityUsed); }
-  private static void encodeDescriptorExtension(DescriptorExtension value, Writer w, DecoderContext c, int flags) throws IOException { Writer body=new Writer(); if(value.runtimeState()!=null){Writer item=new Writer(); encodeRuntimeState(value.runtimeState(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(1),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
+    int previous=0; while(!body.done()){int id=length(decodeU8(body,c,flags));require(id>previous,"descriptor-extension order");previous=id;Reader item=body.slice(length(decodeU32(body,c,flags)));switch(id){case 1 -> runtimeState=decodeRuntimeState(item, c, flags); case 2 -> applicationVersion=decodeApplicationVersion(item, c, flags); case 3 -> spotTypes=decodeSortedText8Vector(item, c, flags); case 4 -> statefulCapabilities=decodeStatefulCapabilityVector(item, c, flags); case 5 -> maintenanceWave=decodeOptionalText8(item, c, flags); case 6 -> protocolCapabilities=decodeSortedText8Vector(item, c, flags); case 7 -> objectRole=decodeObjectRole(item, c, flags); case 8 -> placementWeight=decodeU32(item, c, flags); case 9 -> activeCapacityLimit=decodeObjectCapacityLimit(item, c, flags); case 10 -> pendingCapacityLimit=decodeObjectPendingCapacityLimit(item, c, flags); case 11 -> activeCapacityUsed=decodeU32(item, c, flags); case 12 -> pendingCapacityUsed=decodeU32(item, c, flags); default -> item.skipRemaining(); }item.end("descriptor-extension field");} require(runtimeState!=null,"runtimeState required"); require(applicationVersion!=null,"applicationVersion required"); require(protocolCapabilities!=null,"protocolCapabilities required"); require(objectRole!=null,"objectRole required"); require(placementWeight!=null,"placementWeight required"); require(activeCapacityLimit!=null,"activeCapacityLimit required"); require(pendingCapacityLimit!=null,"pendingCapacityLimit required"); require(activeCapacityUsed!=null,"activeCapacityUsed required"); require(pendingCapacityUsed!=null,"pendingCapacityUsed required");  require(protocolCapabilities!=null&&protocolCapabilities.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(placementWeight!=null)requireUnsigned(placementWeight.value(),4,"0","100","placementWeight");require((long)(r.at-start)<=1048576L,"descriptor-extension encoded limit"); return new DescriptorExtension(runtimeState, applicationVersion, spotTypes, statefulCapabilities, maintenanceWave, protocolCapabilities, objectRole, placementWeight, activeCapacityLimit, pendingCapacityLimit, activeCapacityUsed, pendingCapacityUsed); }
+  private static void encodeDescriptorExtension(DescriptorExtension value, Writer w, DecoderContext c, int flags) throws IOException { int start=w.size();require(value.runtimeState()!=null,"runtimeState required"); require(value.applicationVersion()!=null,"applicationVersion required"); require(value.protocolCapabilities()!=null,"protocolCapabilities required"); require(value.objectRole()!=null,"objectRole required"); require(value.placementWeight()!=null,"placementWeight required"); require(value.activeCapacityLimit()!=null,"activeCapacityLimit required"); require(value.pendingCapacityLimit()!=null,"pendingCapacityLimit required"); require(value.activeCapacityUsed()!=null,"activeCapacityUsed required"); require(value.pendingCapacityUsed()!=null,"pendingCapacityUsed required");require(value.protocolCapabilities()!=null&&value.protocolCapabilities().items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(value.placementWeight()!=null)requireUnsigned(value.placementWeight().value(),4,"0","100","placementWeight"); Writer body=new Writer(); if(value.runtimeState()!=null){Writer item=new Writer(); encodeRuntimeState(value.runtimeState(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(1),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.applicationVersion()!=null){Writer item=new Writer(); encodeApplicationVersion(value.applicationVersion(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(2),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.spotTypes()!=null){Writer item=new Writer(); encodeSortedText8Vector(value.spotTypes(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(3),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.statefulCapabilities()!=null){Writer item=new Writer(); encodeStatefulCapabilityVector(value.statefulCapabilities(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(4),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
@@ -1412,7 +1446,7 @@ final class ServiceWireCodec {
     if(value.activeCapacityLimit()!=null){Writer item=new Writer(); encodeObjectCapacityLimit(value.activeCapacityLimit(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(9),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.pendingCapacityLimit()!=null){Writer item=new Writer(); encodeObjectPendingCapacityLimit(value.pendingCapacityLimit(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(10),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.activeCapacityUsed()!=null){Writer item=new Writer(); encodeU32(value.activeCapacityUsed(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(11),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
-    if(value.pendingCapacityUsed()!=null){Writer item=new Writer(); encodeU32(value.pendingCapacityUsed(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(12),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);} byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags);w.bytes(bytes); }
+    if(value.pendingCapacityUsed()!=null){Writer item=new Writer(); encodeU32(value.pendingCapacityUsed(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(12),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);} byte[] bytes=body.result(); encodeU32(new U32(bytes.length),w,c,flags);w.bytes(bytes);require((long)(w.size()-start)<=1048576L,"descriptor-extension encoded limit"); }
   private static RouteMeshAdmission decodeRouteMeshAdmission(Reader r, DecoderContext c, int flags) throws IOException {
     Text8 meshName = decodeText8(r, c, flags);
     Text8 securityIdentity = decodeText8(r, c, flags);
@@ -1462,6 +1496,7 @@ final class ServiceWireCodec {
   }
   private static void encodeClientServerAdmission(ClientServerAdmission value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ClientServerAdmissionClient item){
+      require(item.role()==ClientServerRole.CLIENT,"client-server-admission discriminator agreement");
       encodeClientServerRole(item.role(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.channelName(), selected, c, flags);
@@ -1472,6 +1507,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ClientServerAdmissionServer item){
+      require(item.role()==ClientServerRole.SERVER,"client-server-admission discriminator agreement");
       encodeClientServerRole(item.role(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.channelName(), selected, c, flags);
@@ -1506,6 +1542,7 @@ final class ServiceWireCodec {
   private static void encodeServiceAdmission(ServiceAdmission value, Writer w, DecoderContext c, int flags) throws IOException {
     int start=w.size();
     if(value instanceof ServiceAdmissionRouteMesh item){
+      require(item.topologyKind()==ServiceTopologyKind.ROUTE_MESH,"service-admission discriminator agreement");
       encodeServiceTopologyKind(item.topologyKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRouteMeshAdmission(item.routeMesh(), selected, c, flags);
@@ -1514,6 +1551,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ServiceAdmissionClientServer item){
+      require(item.topologyKind()==ServiceTopologyKind.CLIENT_SERVER,"service-admission discriminator agreement");
       encodeServiceTopologyKind(item.topologyKind(), w, c, flags);
       Writer selected=new Writer();
       encodeClientServerAdmission(item.clientServer(), selected, c, flags);
@@ -1538,9 +1576,11 @@ final class ServiceWireCodec {
   }
   private static void encodeInstanceReplyRoute(InstanceReplyRoute value, Writer w, DecoderContext c, int flags, InstanceOperationKind external0) throws IOException {
     if(value instanceof InstanceReplyRouteSend item){
+      require(external0==InstanceOperationKind.SEND,"instance-reply-route discriminator agreement");
       return;
     }
     if(value instanceof InstanceReplyRouteRequest item){
+      require(external0==InstanceOperationKind.REQUEST,"instance-reply-route discriminator agreement");
       encodeNonzeroU64(item.replyRouteId(), w, c, flags);
       return;
     }
@@ -1561,6 +1601,7 @@ final class ServiceWireCodec {
   }
   private static void encodeColdActivationReplyContext(ColdActivationReplyContext value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ColdActivationReplyContextReadyBarrier item){
+      require(item.completionKind()==ColdActivationCompletionKind.READY_BARRIER,"cold-activation-reply-context discriminator agreement");
       encodeColdActivationCompletionKind(item.completionKind(), w, c, flags);
       Writer selected=new Writer();
       encodeAuthorityGenerationFence(item.authority(), selected, c, flags);
@@ -1568,6 +1609,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ColdActivationReplyContextActivationFailure item){
+      require(item.completionKind()==ColdActivationCompletionKind.ACTIVATION_FAILURE,"cold-activation-reply-context discriminator agreement");
       encodeColdActivationCompletionKind(item.completionKind(), w, c, flags);
       Writer selected=new Writer();
       encodeAuthorityGenerationFence(item.authority(), selected, c, flags);
@@ -1595,6 +1637,7 @@ final class ServiceWireCodec {
   }
   private static void encodeReplyRelayContext(ReplyRelayContext value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ReplyRelayContextColdActivation item){
+      require(item.contextKind()==ReplyRelayContextKind.COLD_ACTIVATION,"reply-relay-context discriminator agreement");
       encodeReplyRelayContextKind(item.contextKind(), w, c, flags);
       Writer selected=new Writer();
       encodeColdActivationReplyContext(item.coldActivation(), selected, c, flags);
@@ -1602,6 +1645,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ReplyRelayContextMaintenanceRelocation item){
+      require(item.contextKind()==ReplyRelayContextKind.MAINTENANCE_RELOCATION,"reply-relay-context discriminator agreement");
       encodeReplyRelayContextKind(item.contextKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRelocationId(item.relocation(), selected, c, flags);
@@ -1642,6 +1686,7 @@ final class ServiceWireCodec {
   }
   private static void encodeSendReadyDestination(SendReadyDestination value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof SendReadyDestinationNode item){
+      require(item.destinationKind()==MeshDestinationKind.NODE,"send-ready-destination discriminator agreement");
       encodeMeshDestinationKind(item.destinationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.targetNodeRid(), selected, c, flags);
@@ -1649,6 +1694,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SendReadyDestinationChannel item){
+      require(item.destinationKind()==MeshDestinationKind.CHANNEL,"send-ready-destination discriminator agreement");
       encodeMeshDestinationKind(item.destinationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeText8(item.channelName(), selected, c, flags);
@@ -1656,6 +1702,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SendReadyDestinationSpot item){
+      require(item.destinationKind()==MeshDestinationKind.SPOT,"send-ready-destination discriminator agreement");
       encodeMeshDestinationKind(item.destinationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeSpotRouteFence(item.targetSpot(), selected, c, flags);
@@ -1663,6 +1710,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SendReadyDestinationActor item){
+      require(item.destinationKind()==MeshDestinationKind.ACTOR,"send-ready-destination discriminator agreement");
       encodeMeshDestinationKind(item.destinationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRouteFence(item.targetActor(), selected, c, flags);
@@ -1670,6 +1718,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof SendReadyDestinationBoundSession item){
+      require(item.destinationKind()==MeshDestinationKind.BOUND_SESSION,"send-ready-destination discriminator agreement");
       encodeMeshDestinationKind(item.destinationKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorRouteFence(item.targetActor(), selected, c, flags);
@@ -1702,12 +1751,14 @@ final class ServiceWireCodec {
   }
   private static void encodeOptionalActorMembershipSnapshot(OptionalActorMembershipSnapshot value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof OptionalActorMembershipSnapshotFalse item){
+      require(item.hasSnapshot()==Bool8.FALSE,"optional-actor-membership-snapshot discriminator agreement");
       encodeBool8(item.hasSnapshot(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof OptionalActorMembershipSnapshotTrue item){
+      require(item.hasSnapshot()==Bool8.TRUE,"optional-actor-membership-snapshot discriminator agreement");
       encodeBool8(item.hasSnapshot(), w, c, flags);
       Writer selected=new Writer();
       encodeActorMembershipSnapshot(item.snapshot(), selected, c, flags);
@@ -1745,6 +1796,7 @@ final class ServiceWireCodec {
   }
   private static void encodeActorControlData(ActorControlData value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof ActorControlDataCreated item){
+      require(item.lifecycleKind()==ActorLifecycleKind.CREATED,"actor-control-data discriminator agreement");
       encodeActorLifecycleKind(item.lifecycleKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorMembershipSnapshot(item.current(), selected, c, flags);
@@ -1752,6 +1804,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorControlDataJoined item){
+      require(item.lifecycleKind()==ActorLifecycleKind.JOINED,"actor-control-data discriminator agreement");
       encodeActorLifecycleKind(item.lifecycleKind(), w, c, flags);
       Writer selected=new Writer();
       encodeOptionalActorMembershipSnapshot(item.previous(), selected, c, flags);
@@ -1760,6 +1813,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorControlDataLeft item){
+      require(item.lifecycleKind()==ActorLifecycleKind.LEFT,"actor-control-data discriminator agreement");
       encodeActorLifecycleKind(item.lifecycleKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorMembershipSnapshot(item.previous(), selected, c, flags);
@@ -1768,6 +1822,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorControlDataDisconnected item){
+      require(item.lifecycleKind()==ActorLifecycleKind.DISCONNECTED,"actor-control-data discriminator agreement");
       encodeActorLifecycleKind(item.lifecycleKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorMembershipSnapshot(item.current(), selected, c, flags);
@@ -1775,6 +1830,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof ActorControlDataDestroyed item){
+      require(item.lifecycleKind()==ActorLifecycleKind.DESTROYED,"actor-control-data discriminator agreement");
       encodeActorLifecycleKind(item.lifecycleKind(), w, c, flags);
       Writer selected=new Writer();
       encodeActorMembershipSnapshot(item.previous(), selected, c, flags);
@@ -1841,6 +1897,8 @@ final class ServiceWireCodec {
   }
   private static void encodeRequestSpecificTail(RequestSpecificTail value, Writer w, DecoderContext c, int flags, MeshOperationKind external0, RequestTerminalResult external1) throws IOException {
     if(value instanceof RequestSpecificTailActorLookupOk item){
+      require(external0==MeshOperationKind.ACTOR_LOOKUP,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeActorRef(item.actor(), w, c, flags);
       encodeText8(item.spotId(), w, c, flags);
       encodeNonzeroU64(item.spotGeneration(), w, c, flags);
@@ -1849,24 +1907,34 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof RequestSpecificTailActorJoinOk item){
+      require(external0==MeshOperationKind.ACTOR_JOIN,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeActorJoinReplyTail(item.join(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailStreamBindOk item){
+      require(external0==MeshOperationKind.STREAM_BIND,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeNonzeroU64(item.bindingGeneration(), w, c, flags);
       encodeNonzeroU64(item.authorityOwnerGeneration(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailUserSpotCreateOk item){
+      require(external0==MeshOperationKind.USER_SPOT_CREATE,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeUserSpotCreateResult(item.createResult(), w, c, flags);
       encodeSpotRef(item.spot(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailUserSpotCloseOk item){
+      require(external0==MeshOperationKind.USER_SPOT_CLOSE,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeBool8(item.closed(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailActorCreateOk item){
+      require(external0==MeshOperationKind.ACTOR_CREATE,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeActorCreateTerminal(item.creation(), w, c, flags);
       return;
     }
@@ -1953,54 +2021,65 @@ final class ServiceWireCodec {
   }
   private static void encodeFrozenRecordBody(FrozenRecordBody value, Writer w, DecoderContext c, int flags, MeshRecordKind external0) throws IOException {
     if(value instanceof FrozenRecordBodyNodeSend item){
+      require(external0==MeshRecordKind.NODE_SEND,"frozen-record-body discriminator agreement");
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyNodeRequest item){
+      require(external0==MeshRecordKind.NODE_REQUEST,"frozen-record-body discriminator agreement");
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyChannelSend item){
+      require(external0==MeshRecordKind.CHANNEL_SEND,"frozen-record-body discriminator agreement");
       encodeText8(item.channelName(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyChannelRequest item){
+      require(external0==MeshRecordKind.CHANNEL_REQUEST,"frozen-record-body discriminator agreement");
       encodeText8(item.channelName(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodySpotSend item){
+      require(external0==MeshRecordKind.SPOT_SEND,"frozen-record-body discriminator agreement");
       encodeSpotRouteFence(item.targetSpot(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodySpotRequest item){
+      require(external0==MeshRecordKind.SPOT_REQUEST,"frozen-record-body discriminator agreement");
       encodeSpotRouteFence(item.targetSpot(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodySpotMulticast item){
+      require(external0==MeshRecordKind.SPOT_MULTICAST,"frozen-record-body discriminator agreement");
       encodeText8(item.channelName(), w, c, flags);
       encodeText8(item.topic(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodySpotControl item){
+      require(external0==MeshRecordKind.SPOT_CONTROL,"frozen-record-body discriminator agreement");
       encodeActorControlData(item.control(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyActorSend item){
+      require(external0==MeshRecordKind.ACTOR_SEND,"frozen-record-body discriminator agreement");
       encodeActorRouteFence(item.targetActor(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyActorRequest item){
+      require(external0==MeshRecordKind.ACTOR_REQUEST,"frozen-record-body discriminator agreement");
       encodeActorRouteFence(item.targetActor(), w, c, flags);
       encodeApplicationPayloadEnvelopeV1(item.payload(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyCompletion item){
+      require(external0==MeshRecordKind.COMPLETION,"frozen-record-body discriminator agreement");
       encodeRequestTerminalResult(item.terminalResult(), w, c, flags);
       encodeFrameworkErrorCode(item.failureCode(), w, c, flags);
       encodeBool8(item.hasPayload(), w, c, flags);
@@ -2009,14 +2088,17 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof FrozenRecordBodySendReady item){
+      require(external0==MeshRecordKind.SEND_READY,"frozen-record-body discriminator agreement");
       encodeSendReadyDestination(item.destination(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyRelocationControl item){
+      require(external0==MeshRecordKind.RELOCATION_CONTROL,"frozen-record-body discriminator agreement");
       encodeRelocationControlData(item.control(), w, c, flags);
       return;
     }
     if(value instanceof FrozenRecordBodyInstanceSpotActivation item){
+      require(external0==MeshRecordKind.INSTANCE_SPOT_ACTIVATION,"frozen-record-body discriminator agreement");
       encodeInstanceRouteV1(item.route(), w, c, flags);
       encodeNonzeroU64(item.sourceNodeGeneration(), w, c, flags);
       encodeInstanceOperationKind(item.operationKind(), w, c, flags);
@@ -2066,6 +2148,7 @@ final class ServiceWireCodec {
   }
   private static void encodeFrozenSourceIdentity(FrozenSourceIdentity value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof FrozenSourceIdentityNode item){
+      require(item.sourceKind()==FrozenSourceKind.NODE,"frozen-source-identity discriminator agreement");
       encodeFrozenSourceKind(item.sourceKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.sourceNodeRid(), selected, c, flags);
@@ -2076,6 +2159,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof FrozenSourceIdentitySpot item){
+      require(item.sourceKind()==FrozenSourceKind.SPOT,"frozen-source-identity discriminator agreement");
       encodeFrozenSourceKind(item.sourceKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.sourceNodeRid(), selected, c, flags);
@@ -2087,6 +2171,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof FrozenSourceIdentityActor item){
+      require(item.sourceKind()==FrozenSourceKind.ACTOR,"frozen-source-identity discriminator agreement");
       encodeFrozenSourceKind(item.sourceKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.sourceNodeRid(), selected, c, flags);
@@ -2098,6 +2183,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof FrozenSourceIdentityBoundSession item){
+      require(item.sourceKind()==FrozenSourceKind.BOUND_SESSION,"frozen-source-identity discriminator agreement");
       encodeFrozenSourceKind(item.sourceKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.sourceNodeRid(), selected, c, flags);
@@ -2144,30 +2230,35 @@ final class ServiceWireCodec {
   }
   private static void encodeFrozenReplyRoute(FrozenReplyRoute value, Writer w, DecoderContext c, int flags, MeshOperationKind external0) throws IOException {
     if(value instanceof FrozenReplyRouteNodeRequest item){
+      require(external0==MeshOperationKind.NODE_REQUEST,"frozen-reply-route discriminator agreement");
       Writer selected=new Writer();
       encodeNonzeroU64(item.replyRouteId(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof FrozenReplyRouteChannelRequest item){
+      require(external0==MeshOperationKind.CHANNEL_REQUEST,"frozen-reply-route discriminator agreement");
       Writer selected=new Writer();
       encodeNonzeroU64(item.replyRouteId(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof FrozenReplyRouteSpotRequest item){
+      require(external0==MeshOperationKind.SPOT_REQUEST,"frozen-reply-route discriminator agreement");
       Writer selected=new Writer();
       encodeNonzeroU64(item.replyRouteId(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof FrozenReplyRouteActorRequest item){
+      require(external0==MeshOperationKind.ACTOR_REQUEST,"frozen-reply-route discriminator agreement");
       Writer selected=new Writer();
       encodeNonzeroU64(item.replyRouteId(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof FrozenReplyRouteInstanceSpotRequest item){
+      require(external0==MeshOperationKind.INSTANCE_SPOT_REQUEST,"frozen-reply-route discriminator agreement");
       Writer selected=new Writer();
       encodeNonzeroU64(item.replyRouteId(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
@@ -2225,6 +2316,7 @@ final class ServiceWireCodec {
   }
   private static void encodeInstanceRouteV1(InstanceRouteV1 value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof InstanceRouteV1Ready item){
+      require(item.routeKind()==InstanceRouteKind.READY,"instance-route-v1 discriminator agreement");
       encodeInstanceRouteKind(item.routeKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.targetNodeRid(), selected, c, flags);
@@ -2235,6 +2327,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof InstanceRouteV1ColdActivation item){
+      require(item.routeKind()==InstanceRouteKind.COLD_ACTIVATION,"instance-route-v1 discriminator agreement");
       encodeInstanceRouteKind(item.routeKind(), w, c, flags);
       Writer selected=new Writer();
       encodeRid(item.targetNodeRid(), selected, c, flags);
@@ -2265,12 +2358,14 @@ final class ServiceWireCodec {
   }
   private static void encodeRelocationRootPointer(RelocationRootPointer value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof RelocationRootPointerFalse item){
+      require(item.hasRelocation()==Bool8.FALSE,"relocation-root-pointer discriminator agreement");
       encodeBool8(item.hasRelocation(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof RelocationRootPointerTrue item){
+      require(item.hasRelocation()==Bool8.TRUE,"relocation-root-pointer discriminator agreement");
       encodeBool8(item.hasRelocation(), w, c, flags);
       Writer selected=new Writer();
       encodeRelocationReference(item.reference(), selected, c, flags);
@@ -2318,6 +2413,7 @@ final class ServiceWireCodec {
   private static void encodeAuthorityRelocationState(AuthorityRelocationState value, Writer w, DecoderContext c, int flags) throws IOException {
     int start=w.size();
     if(value instanceof AuthorityRelocationStateFalse item){
+      require(item.hasRelocation()==Bool8.FALSE,"authority-relocation-state discriminator agreement");
       encodeBool8(item.hasRelocation(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);
@@ -2325,6 +2421,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof AuthorityRelocationStateTrue item){
+      require(item.hasRelocation()==Bool8.TRUE,"authority-relocation-state discriminator agreement");
       encodeBool8(item.hasRelocation(), w, c, flags);
       Writer selected=new Writer();
       encodeRelocationId(item.relocation(), selected, c, flags);
@@ -2373,12 +2470,14 @@ final class ServiceWireCodec {
   }
   private static void encodeAuthorityActivationRecoveryState(AuthorityActivationRecoveryState value, Writer w, DecoderContext c, int flags) throws IOException {
     if(value instanceof AuthorityActivationRecoveryStateFalse item){
+      require(item.hasActivationRecovery()==Bool8.FALSE,"authority-activation-recovery-state discriminator agreement");
       encodeBool8(item.hasActivationRecovery(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }
     if(value instanceof AuthorityActivationRecoveryStateTrue item){
+      require(item.hasActivationRecovery()==Bool8.TRUE,"authority-activation-recovery-state discriminator agreement");
       encodeBool8(item.hasActivationRecovery(), w, c, flags);
       Writer selected=new Writer();
       encodeCreationContentReference(item.reference(), selected, c, flags);
@@ -2424,12 +2523,12 @@ final class ServiceWireCodec {
     encodeNonzeroU64(value.order(), w, c, flags);
     encodeFrozenRecord(value.recordValue(), w, c, flags);
      }
-  private static SavedWorkVector decodeSavedWorkVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU32(r,c,flags));  List<SavedWorkEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeSavedWorkEntry(r, c, flags)); for(int i=1;i<values.size();i++){SavedWorkEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeNonzeroU64(previous.order(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeNonzeroU64(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"saved-work-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(SavedWorkEntry item:values){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeNonzeroU64(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"saved-work-vector unique");} return new SavedWorkVector(values); }
-  private static void encodeSavedWorkVector(SavedWorkVector value, Writer w, DecoderContext c, int flags) throws IOException {   for(int i=1;i<value.items().size();i++){SavedWorkEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeNonzeroU64(previous.order(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeNonzeroU64(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"saved-work-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(SavedWorkEntry item:value.items()){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeNonzeroU64(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"saved-work-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(SavedWorkEntry item:value.items())encodeSavedWorkEntry(item, w, c, flags); }
-  private static DurableBlob decodeDurableBlob(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=0&&length<=67108864,"durable-blob length");   return new DurableBlob(r.bytes(length)); }
-  private static void encodeDurableBlob(DurableBlob value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"durable-blob"); require(bytes.length>=0&&bytes.length<=67108864,"durable-blob length");  encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
-  private static DurableStateBlob decodeDurableStateBlob(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU64(r,c,flags)); require(length>=0&&length<=67108864,"durable-state-blob length");   return new DurableStateBlob(r.bytes(length)); }
-  private static void encodeDurableStateBlob(DurableStateBlob value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"durable-state-blob"); require(bytes.length>=0&&bytes.length<=67108864,"durable-state-blob length");  encodeU64(new U64(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static SavedWorkVector decodeSavedWorkVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU32(r,c,flags));  List<SavedWorkEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeSavedWorkEntry(r, c, flags)); for(int i=1;i<values.size();i++){SavedWorkEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.uint(8,previous.order().value());right0.uint(8,current.participantId().value());right0.uint(8,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"saved-work-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(SavedWorkEntry item:values){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.uint(8,item.order().value());require(keys1.add(new ByteKey(key1.result())),"saved-work-vector unique");} return new SavedWorkVector(values); }
+  private static void encodeSavedWorkVector(SavedWorkVector value, Writer w, DecoderContext c, int flags) throws IOException {    for(int i=1;i<value.items().size();i++){SavedWorkEntry previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.uint(8,previous.order().value());right0.uint(8,current.participantId().value());right0.uint(8,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"saved-work-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(SavedWorkEntry item:value.items()){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.uint(8,item.order().value());require(keys1.add(new ByteKey(key1.result())),"saved-work-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(SavedWorkEntry item:value.items())encodeSavedWorkEntry(item, w, c, flags);  }
+  private static DurableBlob decodeDurableBlob(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU32(r,c,flags)); require(length>=0&&length<=67108864L,"durable-blob length");   return new DurableBlob(r.bytes(length)); }
+  private static void encodeDurableBlob(DurableBlob value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"durable-blob"); require(bytes.length>=0&&bytes.length<=67108864L,"durable-blob length");  encodeU32(new U32(bytes.length),w,c,flags); w.bytes(bytes); }
+  private static DurableStateBlob decodeDurableStateBlob(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decodeU64(r,c,flags)); require(length>=0&&length<=67108864L,"durable-state-blob length");   return new DurableStateBlob(r.bytes(length)); }
+  private static void encodeDurableStateBlob(DurableStateBlob value, Writer w, DecoderContext c, int flags) throws IOException { byte[] bytes=value.value(); require(bytes!=null,"durable-state-blob"); require(bytes.length>=0&&bytes.length<=67108864L,"durable-state-blob length");  encodeU64(new U64(bytes.length),w,c,flags); w.bytes(bytes); }
   private static RelocationChunkEntryV1 decodeRelocationChunkEntryV1(Reader r, DecoderContext c, int flags) throws IOException {
     U32 order = decodeU32(r, c, flags);
     RelocationReference reference = decodeRelocationReference(r, c, flags);
@@ -2442,8 +2541,8 @@ final class ServiceWireCodec {
     encodeNonzeroU64(value.length(), w, c, flags);
     encodeU32(value.checksumCrc32c(), w, c, flags);
      }
-  private static RelocationChunkVectorV1 decodeRelocationChunkVectorV1(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU32(r,c,flags)); require(count<=4096,"relocation-chunk-vector-v1 count"); List<RelocationChunkEntryV1> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationChunkEntryV1(r, c, flags)); for(int i=1;i<values.size();i++){RelocationChunkEntryV1 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeU32(previous.order(), left0, c, flags);encodeU32(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-chunk-vector-v1 sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationChunkEntryV1 item:values){Writer key1=new Writer();encodeU32(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-chunk-vector-v1 unique");} return new RelocationChunkVectorV1(values); }
-  private static void encodeRelocationChunkVectorV1(RelocationChunkVectorV1 value, Writer w, DecoderContext c, int flags) throws IOException {  require(value.items().size()<=4096,"relocation-chunk-vector-v1 count"); for(int i=1;i<value.items().size();i++){RelocationChunkEntryV1 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeU32(previous.order(), left0, c, flags);encodeU32(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-chunk-vector-v1 sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationChunkEntryV1 item:value.items()){Writer key1=new Writer();encodeU32(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-chunk-vector-v1 unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationChunkEntryV1 item:value.items())encodeRelocationChunkEntryV1(item, w, c, flags); }
+  private static RelocationChunkVectorV1 decodeRelocationChunkVectorV1(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU32(r,c,flags)); require(count<=4096,"relocation-chunk-vector-v1 count"); List<RelocationChunkEntryV1> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationChunkEntryV1(r, c, flags)); for(int i=1;i<values.size();i++){RelocationChunkEntryV1 previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(4,previous.order().value());right0.uint(4,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-chunk-vector-v1 sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationChunkEntryV1 item:values){Writer key1=new Writer();key1.uint(4,item.order().value());require(keys1.add(new ByteKey(key1.result())),"relocation-chunk-vector-v1 unique");} return new RelocationChunkVectorV1(values); }
+  private static void encodeRelocationChunkVectorV1(RelocationChunkVectorV1 value, Writer w, DecoderContext c, int flags) throws IOException {   require(value.items().size()<=4096,"relocation-chunk-vector-v1 count"); for(int i=1;i<value.items().size();i++){RelocationChunkEntryV1 previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(4,previous.order().value());right0.uint(4,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-chunk-vector-v1 sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationChunkEntryV1 item:value.items()){Writer key1=new Writer();key1.uint(4,item.order().value());require(keys1.add(new ByteKey(key1.result())),"relocation-chunk-vector-v1 unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationChunkEntryV1 item:value.items())encodeRelocationChunkEntryV1(item, w, c, flags);  }
   private static RelocationManifestV1 decodeRelocationManifestV1(Reader r, DecoderContext c, int flags) throws IOException {
     U8 logicalFormatVersion = decodeU8(r, c, flags);
     require(logicalFormatVersion.value() == 1L, "logicalFormatVersion constant");
@@ -2484,6 +2583,7 @@ final class ServiceWireCodec {
   private static void encodeRelocationApplicationState(RelocationApplicationState value, Writer w, DecoderContext c, int flags) throws IOException {
     int start=w.size();
     if(value instanceof RelocationApplicationStateFalse item){
+      require(item.hasState()==Bool8.FALSE,"relocation-application-state discriminator agreement");
       encodeBool8(item.hasState(), w, c, flags);
       Writer selected=new Writer();
       byte[] bytes=selected.result(); encodeU64(new U64(bytes.length),w,c,flags); w.bytes(bytes);
@@ -2491,6 +2591,7 @@ final class ServiceWireCodec {
       return;
     }
     if(value instanceof RelocationApplicationStateTrue item){
+      require(item.hasState()==Bool8.TRUE,"relocation-application-state discriminator agreement");
       encodeBool8(item.hasState(), w, c, flags);
       Writer selected=new Writer();
       encodeDurableStateBlob(item.payload(), selected, c, flags);
@@ -2508,8 +2609,8 @@ final class ServiceWireCodec {
     encodeNonzeroU64(value.participantId(), w, c, flags);
     encodeRelocationApplicationState(value.applicationState(), w, c, flags);
      }
-  private static RelocationParticipantApplicationStateVector decodeRelocationParticipantApplicationStateVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU32(r,c,flags)); require(count<=1024,"relocation-participant-application-state-vector count"); List<RelocationParticipantApplicationState> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationParticipantApplicationState(r, c, flags)); for(int i=1;i<values.size();i++){RelocationParticipantApplicationState previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-participant-application-state-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationParticipantApplicationState item:values){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-participant-application-state-vector unique");} return new RelocationParticipantApplicationStateVector(values); }
-  private static void encodeRelocationParticipantApplicationStateVector(RelocationParticipantApplicationStateVector value, Writer w, DecoderContext c, int flags) throws IOException {  require(value.items().size()<=1024,"relocation-participant-application-state-vector count"); for(int i=1;i<value.items().size();i++){RelocationParticipantApplicationState previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-participant-application-state-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationParticipantApplicationState item:value.items()){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-participant-application-state-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationParticipantApplicationState item:value.items())encodeRelocationParticipantApplicationState(item, w, c, flags); }
+  private static RelocationParticipantApplicationStateVector decodeRelocationParticipantApplicationStateVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU32(r,c,flags)); require(count<=1024,"relocation-participant-application-state-vector count"); List<RelocationParticipantApplicationState> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationParticipantApplicationState(r, c, flags)); for(int i=1;i<values.size();i++){RelocationParticipantApplicationState previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());right0.uint(8,current.participantId().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-participant-application-state-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationParticipantApplicationState item:values){Writer key1=new Writer();key1.uint(8,item.participantId().value());require(keys1.add(new ByteKey(key1.result())),"relocation-participant-application-state-vector unique");} return new RelocationParticipantApplicationStateVector(values); }
+  private static void encodeRelocationParticipantApplicationStateVector(RelocationParticipantApplicationStateVector value, Writer w, DecoderContext c, int flags) throws IOException {   require(value.items().size()<=1024,"relocation-participant-application-state-vector count"); for(int i=1;i<value.items().size();i++){RelocationParticipantApplicationState previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());right0.uint(8,current.participantId().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-participant-application-state-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationParticipantApplicationState item:value.items()){Writer key1=new Writer();key1.uint(8,item.participantId().value());require(keys1.add(new ByteKey(key1.result())),"relocation-participant-application-state-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationParticipantApplicationState item:value.items())encodeRelocationParticipantApplicationState(item, w, c, flags);  }
   private static RelocationTimerRegistration decodeRelocationTimerRegistration(Reader r, DecoderContext c, int flags) throws IOException {
     NonzeroU64 participantId = decodeNonzeroU64(r, c, flags);
     Text8 name = decodeText8(r, c, flags);
@@ -2534,8 +2635,8 @@ final class ServiceWireCodec {
     encodeOrdinalOrZero(value.lastCompletedScheduledIndex(), w, c, flags);
     encodeU64(value.nextScheduledAtUnixMilliseconds(), w, c, flags);
      }
-  private static RelocationTimerRegistrationVector decodeRelocationTimerRegistrationVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU32(r,c,flags));  List<RelocationTimerRegistration> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationTimerRegistration(r, c, flags)); for(int i=1;i<values.size();i++){RelocationTimerRegistration previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeText8(previous.name(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeText8(current.name(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-timer-registration-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationTimerRegistration item:values){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeText8(item.name(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-timer-registration-vector unique");} return new RelocationTimerRegistrationVector(values); }
-  private static void encodeRelocationTimerRegistrationVector(RelocationTimerRegistrationVector value, Writer w, DecoderContext c, int flags) throws IOException {   for(int i=1;i<value.items().size();i++){RelocationTimerRegistration previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeText8(previous.name(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeText8(current.name(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-timer-registration-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationTimerRegistration item:value.items()){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeText8(item.name(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-timer-registration-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationTimerRegistration item:value.items())encodeRelocationTimerRegistration(item, w, c, flags); }
+  private static RelocationTimerRegistrationVector decodeRelocationTimerRegistrationVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU32(r,c,flags));  List<RelocationTimerRegistration> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationTimerRegistration(r, c, flags)); for(int i=1;i<values.size();i++){RelocationTimerRegistration previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.bytes(strictBytes(previous.name().value()));right0.uint(8,current.participantId().value());right0.bytes(strictBytes(current.name().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-timer-registration-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationTimerRegistration item:values){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.bytes(strictBytes(item.name().value()));require(keys1.add(new ByteKey(key1.result())),"relocation-timer-registration-vector unique");} return new RelocationTimerRegistrationVector(values); }
+  private static void encodeRelocationTimerRegistrationVector(RelocationTimerRegistrationVector value, Writer w, DecoderContext c, int flags) throws IOException {    for(int i=1;i<value.items().size();i++){RelocationTimerRegistration previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.bytes(strictBytes(previous.name().value()));right0.uint(8,current.participantId().value());right0.bytes(strictBytes(current.name().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-timer-registration-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationTimerRegistration item:value.items()){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.bytes(strictBytes(item.name().value()));require(keys1.add(new ByteKey(key1.result())),"relocation-timer-registration-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationTimerRegistration item:value.items())encodeRelocationTimerRegistration(item, w, c, flags);  }
   private static RelocationPendingTimerTick decodeRelocationPendingTimerTick(Reader r, DecoderContext c, int flags) throws IOException {
     NonzeroU64 participantId = decodeNonzeroU64(r, c, flags);
     NonzeroU64 order = decodeNonzeroU64(r, c, flags);
@@ -2554,8 +2655,8 @@ final class ServiceWireCodec {
     encodeU64(value.scheduledAtUnixMilliseconds(), w, c, flags);
     encodeOrdinalOrZero(value.skippedTicks(), w, c, flags);
      }
-  private static RelocationPendingTimerTickVector decodeRelocationPendingTimerTickVector(Reader r, DecoderContext c, int flags) throws IOException {  int count=length(decodeU32(r,c,flags));  List<RelocationPendingTimerTick> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationPendingTimerTick(r, c, flags)); for(int i=1;i<values.size();i++){RelocationPendingTimerTick previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeNonzeroU64(previous.order(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeNonzeroU64(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-pending-timer-tick-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationPendingTimerTick item:values){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeNonzeroU64(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-pending-timer-tick-vector unique");} return new RelocationPendingTimerTickVector(values); }
-  private static void encodeRelocationPendingTimerTickVector(RelocationPendingTimerTickVector value, Writer w, DecoderContext c, int flags) throws IOException {   for(int i=1;i<value.items().size();i++){RelocationPendingTimerTick previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();encodeNonzeroU64(previous.participantId(), left0, c, flags); encodeNonzeroU64(previous.order(), left0, c, flags);encodeNonzeroU64(current.participantId(), right0, c, flags); encodeNonzeroU64(current.order(), right0, c, flags);int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-pending-timer-tick-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationPendingTimerTick item:value.items()){Writer key1=new Writer();encodeNonzeroU64(item.participantId(), key1, c, flags); encodeNonzeroU64(item.order(), key1, c, flags);require(keys1.add(new ByteKey(key1.result())),"relocation-pending-timer-tick-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationPendingTimerTick item:value.items())encodeRelocationPendingTimerTick(item, w, c, flags); }
+  private static RelocationPendingTimerTickVector decodeRelocationPendingTimerTickVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU32(r,c,flags));  List<RelocationPendingTimerTick> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeRelocationPendingTimerTick(r, c, flags)); for(int i=1;i<values.size();i++){RelocationPendingTimerTick previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.uint(8,previous.order().value());right0.uint(8,current.participantId().value());right0.uint(8,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-pending-timer-tick-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationPendingTimerTick item:values){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.uint(8,item.order().value());require(keys1.add(new ByteKey(key1.result())),"relocation-pending-timer-tick-vector unique");} return new RelocationPendingTimerTickVector(values); }
+  private static void encodeRelocationPendingTimerTickVector(RelocationPendingTimerTickVector value, Writer w, DecoderContext c, int flags) throws IOException {    for(int i=1;i<value.items().size();i++){RelocationPendingTimerTick previous=value.items().get(i-1),current=value.items().get(i);Writer left0=new Writer(),right0=new Writer();left0.uint(8,previous.participantId().value());left0.uint(8,previous.order().value());right0.uint(8,current.participantId().value());right0.uint(8,current.order().value());int compared0=compareUnsigned(left0.result(),right0.result());require(compared0<=0,"relocation-pending-timer-tick-vector sorted");}Set<ByteKey> keys1=new HashSet<>();for(RelocationPendingTimerTick item:value.items()){Writer key1=new Writer();key1.uint(8,item.participantId().value());key1.uint(8,item.order().value());require(keys1.add(new ByteKey(key1.result())),"relocation-pending-timer-tick-vector unique");} encodeU32(new U32((int)(value.items().size())),w,c,flags); for(RelocationPendingTimerTick item:value.items())encodeRelocationPendingTimerTick(item, w, c, flags);  }
   private static RelocationEnvelopeV1 decodeRelocationEnvelopeV1(Reader r, DecoderContext c, int flags) throws IOException {
     RelocationId relocation = decodeRelocationId(r, c, flags);
     RelocationObjectIdentity object = decodeRelocationObjectIdentity(r, c, flags);
@@ -3415,13 +3516,13 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
   static byte[] encodeCommand(ServiceWireCommand value,DecoderContext c)throws IOException{return encodeCommandFrames(value,c).get(0);}
   static void validateReplyPredicate(RequestTerminalResult terminalResult,FrameworkErrorCode failureCode)throws IOException{require(ServiceWireConstants.validTerminalFailure(terminalResult.wire,failureCode.wire),"reply predicate");}
   static void validateReplyRelayPredicate(RequestTerminalResult terminalResult,FrameworkErrorCode failureCode)throws IOException{require(ServiceWireConstants.validTerminalFailure(terminalResult.wire,failureCode.wire),"replyRelay predicate");}
-  private static AuthorityPayloadV1 decodeDurableAuthorityPayloadV1(byte[] bytes,DecoderContext c)throws IOException{require(bytes.length<=1048576,"authority-payload-v1 encoded limit");Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==65,"magic");require(r.u8()==85,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));AuthorityPayloadV1 value=decodeAuthorityPayloadV1(bodyReader,c,0);bodyReader.end("authority-payload-v1");int checksum=(int)r.uint(4);r.end("authority-payload-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");return value;}
+  private static AuthorityPayloadV1 decodeDurableAuthorityPayloadV1(byte[] bytes,DecoderContext c)throws IOException{Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==65,"magic");require(r.u8()==85,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));require(bytes.length<=1048576,"authority-payload-v1 encoded limit");int checksum=(int)r.uint(4);r.end("authority-payload-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");AuthorityPayloadV1 value=decodeAuthorityPayloadV1(bodyReader,c,0);bodyReader.end("authority-payload-v1");return value;}
   private static byte[] encodeDurableAuthorityPayloadV1(AuthorityPayloadV1 value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encodeAuthorityPayloadV1(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();w.u8(90);w.u8(76);w.u8(65);w.u8(85);w.u8(1);encodeU16(new U16((int)(0L)),w,c,0);encodeU32(new U32((int)(body.length)),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=1048576,"authority-payload-v1 encoded limit");return result;}
-  private static InstanceActivationRecoveryV1 decodeDurableInstanceActivationRecoveryV1(byte[] bytes,DecoderContext c)throws IOException{require(bytes.length<=1048576,"instance-activation-recovery-v1 encoded limit");Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==73,"magic");require(r.u8()==65,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));InstanceActivationRecoveryV1 value=decodeInstanceActivationRecoveryV1(bodyReader,c,0);bodyReader.end("instance-activation-recovery-v1");int checksum=(int)r.uint(4);r.end("instance-activation-recovery-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");return value;}
+  private static InstanceActivationRecoveryV1 decodeDurableInstanceActivationRecoveryV1(byte[] bytes,DecoderContext c)throws IOException{Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==73,"magic");require(r.u8()==65,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));require(bytes.length<=1048576,"instance-activation-recovery-v1 encoded limit");int checksum=(int)r.uint(4);r.end("instance-activation-recovery-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");InstanceActivationRecoveryV1 value=decodeInstanceActivationRecoveryV1(bodyReader,c,0);bodyReader.end("instance-activation-recovery-v1");return value;}
   private static byte[] encodeDurableInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encodeInstanceActivationRecoveryV1(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();w.u8(90);w.u8(76);w.u8(73);w.u8(65);w.u8(1);encodeU16(new U16((int)(0L)),w,c,0);encodeU32(new U32((int)(body.length)),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=1048576,"instance-activation-recovery-v1 encoded limit");return result;}
-  private static RelocationDataChunkV1 decodeDurableRelocationDataChunkV1(byte[] bytes,DecoderContext c)throws IOException{require(bytes.length<=67108886,"relocation-data-chunk-v1 encoded limit");Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==84,"magic");require(r.u8()==67,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));RelocationDataChunkV1 value=decodeRelocationDataChunkV1(bodyReader,c,0);bodyReader.end("relocation-data-chunk-v1");int checksum=(int)r.uint(4);r.end("relocation-data-chunk-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");return value;}
+  private static RelocationDataChunkV1 decodeDurableRelocationDataChunkV1(byte[] bytes,DecoderContext c)throws IOException{Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==84,"magic");require(r.u8()==67,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));require(bytes.length<=67108886,"relocation-data-chunk-v1 encoded limit");int checksum=(int)r.uint(4);r.end("relocation-data-chunk-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");RelocationDataChunkV1 value=decodeRelocationDataChunkV1(bodyReader,c,0);bodyReader.end("relocation-data-chunk-v1");return value;}
   private static byte[] encodeDurableRelocationDataChunkV1(RelocationDataChunkV1 value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encodeRelocationDataChunkV1(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();w.u8(90);w.u8(76);w.u8(84);w.u8(67);w.u8(1);encodeU16(new U16((int)(0L)),w,c,0);encodeU32(new U32((int)(body.length)),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=67108886,"relocation-data-chunk-v1 encoded limit");return result;}
-  private static RelocationManifestV1 decodeDurableRelocationManifestV1(byte[] bytes,DecoderContext c)throws IOException{require(bytes.length<=33554432,"relocation-manifest-v1 encoded limit");Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==84,"magic");require(r.u8()==77,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));RelocationManifestV1 value=decodeRelocationManifestV1(bodyReader,c,0);bodyReader.end("relocation-manifest-v1");int checksum=(int)r.uint(4);r.end("relocation-manifest-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");return value;}
+  private static RelocationManifestV1 decodeDurableRelocationManifestV1(byte[] bytes,DecoderContext c)throws IOException{Reader r=new Reader(bytes);require(r.u8()==90,"magic");require(r.u8()==76,"magic");require(r.u8()==84,"magic");require(r.u8()==77,"magic");require(r.u8()==1,"version");U16 headerFlags=decodeU16(r,c,0);require(headerFlags.value()==0L,"flags");Reader bodyReader=r.slice(length(decodeU32(r,c,0)));require(bytes.length<=33554432,"relocation-manifest-v1 encoded limit");int checksum=(int)r.uint(4);r.end("relocation-manifest-v1");CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");RelocationManifestV1 value=decodeRelocationManifestV1(bodyReader,c,0);bodyReader.end("relocation-manifest-v1");return value;}
   private static byte[] encodeDurableRelocationManifestV1(RelocationManifestV1 value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encodeRelocationManifestV1(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();w.u8(90);w.u8(76);w.u8(84);w.u8(77);w.u8(1);encodeU16(new U16((int)(0L)),w,c,0);encodeU32(new U32((int)(body.length)),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=33554432,"relocation-manifest-v1 encoded limit");return result;}
   static Object decodeDurable(String name,byte[] bytes,DecoderContext c)throws IOException{return switch(name){case "authority-payload-v1" -> decodeDurableAuthorityPayloadV1(bytes,c); case "instance-activation-recovery-v1" -> decodeDurableInstanceActivationRecoveryV1(bytes,c); case "relocation-data-chunk-v1" -> decodeDurableRelocationDataChunkV1(bytes,c); case "relocation-manifest-v1" -> decodeDurableRelocationManifestV1(bytes,c);default->throw error("durable format");};}
   static byte[] encodeDurable(String name,Object value,DecoderContext c)throws IOException{return switch(name){case "authority-payload-v1" -> encodeDurableAuthorityPayloadV1((AuthorityPayloadV1)value,c); case "instance-activation-recovery-v1" -> encodeDurableInstanceActivationRecoveryV1((InstanceActivationRecoveryV1)value,c); case "relocation-data-chunk-v1" -> encodeDurableRelocationDataChunkV1((RelocationDataChunkV1)value,c); case "relocation-manifest-v1" -> encodeDurableRelocationManifestV1((RelocationManifestV1)value,c);default->throw error("durable format");};}
