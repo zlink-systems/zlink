@@ -2399,7 +2399,7 @@ function decodeGoldenBody(formatName, bytes) {
     const activationBody = new FixtureReader(reader.bytesOf(reader.u32()));
     if (hasActivationRecovery === 1) {
       decoded.activationRecoveryState = {
-        referenceUtf8Fixture: activationBody.text8(),
+        referenceUtf8Fixture: activationBody.text16(),
         sha256Hex: activationBody.bytesOf(activationBody.u8()).toString("hex"),
         encodedSize: activationBody.u32(),
         inboxSequence: activationBody.u64(),
@@ -2754,7 +2754,7 @@ function encodeGoldenBody(formatName, decoded) {
     const activation = new FixtureWriter();
     if (decoded.activationRecoveryState !== null) {
       const sha256 = Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex");
-      activation.text8(decoded.activationRecoveryState.referenceUtf8Fixture)
+      activation.text16(decoded.activationRecoveryState.referenceUtf8Fixture)
         .u8(sha256.length)
         .raw(sha256)
         .u32(decoded.activationRecoveryState.encodedSize)
@@ -3684,7 +3684,7 @@ function validateZljrSchemaShape(schema) {
   if (JSON.stringify(frozenFields) !== JSON.stringify([
     ["recordKind", "mesh-record-kind"], ["source", "frozen-source-identity"],
     ["hasMetadata", "bool8"], ["metadata", "metadata-frame"],
-    ["operationId", "operation-id"], ["operationKind", "mesh-operation-kind"],
+    ["operationId", "operation-id-or-zero"], ["operationKind", "mesh-operation-kind"],
     ["replyRoute", "frozen-reply-route"], ["body", "frozen-record-body"],
   ]) || JSON.stringify(nodeSource) !== JSON.stringify([
     ["sourceNodeRid", "rid"], ["sourceNodeGeneration", "nonzero-u64"],
@@ -3695,6 +3695,14 @@ function validateZljrSchemaShape(schema) {
         ["packetName", "packet-name"], ["contentType", "content-type"],
         ["payload", "application-payload-bytes"],
       ])) byteOracleError("schema-zljr-envelope-shape");
+}
+
+function zljrOperationIdOracle(schema) {
+  const types = new Map(schema.types.map((type) => [type.name, type]));
+  const bounds = new Map(schema.bounds.map((bound) => [bound.name, bound]));
+  const typeName = types.get("frozen-record")?.fields
+    ?.find((field) => field.name === "operationId")?.$ref;
+  return { typeName, types, bounds };
 }
 
 function oracleText8(reader) {
@@ -3710,6 +3718,7 @@ function oracleText8(reader) {
 
 function decodeZljrByteOracle(schema, hex) {
   validateZljrSchemaShape(schema);
+  const operationIdOracle = zljrOperationIdOracle(schema);
   if (typeof hex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(hex)) byteOracleError("invalid-hex");
   const reader = new FixtureReader(Buffer.from(hex, "hex"));
   if (oracleInteger(reader, "u8") !== 1n || oracleInteger(reader, "u8") !== 1n) {
@@ -3726,8 +3735,14 @@ function decodeZljrByteOracle(schema, hex) {
   };
   if (BigInt(source.nodeGeneration) === 0n || BigInt(source.ownerLeaseGeneration) === 0n
       || sourceReader.offset !== sourceReader.bytes.length) byteOracleError("invalid-body-length");
+  const operationId = decodeOracleType(
+    operationIdOracle.typeName,
+    reader,
+    operationIdOracle.types,
+    operationIdOracle.bounds,
+  );
   if (oracleInteger(reader, "u8") !== 0n
-      || oracleInteger(reader, "u64") !== 0n || oracleInteger(reader, "u64") !== 0n
+      || BigInt(operationId.high) !== 0n || BigInt(operationId.low) !== 0n
       || oracleInteger(reader, "u32") !== 0n || oracleInteger(reader, "u16") !== 0n) {
     byteOracleError("invalid-field");
   }
@@ -3772,6 +3787,7 @@ function decodeZljrByteOracle(schema, hex) {
 
 function encodeZljrByteOracle(schema, decoded) {
   validateZljrSchemaShape(schema);
+  const operationIdOracle = zljrOperationIdOracle(schema);
   const metadata = Buffer.from(JSON.stringify(decoded.metadata), "utf8");
   const request = Buffer.from(decoded.requestHex, "hex");
   const reply = Buffer.from(decoded.replyHex, "hex");
@@ -3786,8 +3802,15 @@ function encodeZljrByteOracle(schema, decoded) {
   const writer = new FixtureWriter();
   const sourceBytes = sourceBody.finish();
   const payloadBytes = payloadBody.finish();
-  writer.u8(1).u8(1).u16(sourceBytes.length).raw(sourceBytes).u8(0)
-    .u64(0).u64(0).u32(0).u16(0).u8(1).u32(payloadBytes.length).raw(payloadBytes);
+  writer.u8(1).u8(1).u16(sourceBytes.length).raw(sourceBytes).u8(0);
+  encodeOracleType(
+    operationIdOracle.typeName,
+    { high: "0", low: "0" },
+    writer,
+    operationIdOracle.types,
+    operationIdOracle.bounds,
+  );
+  writer.u32(0).u16(0).u8(1).u32(payloadBytes.length).raw(payloadBytes);
   return writer.finish();
 }
 
@@ -3862,6 +3885,12 @@ function runByteOracleFixtureSelfTests(schema, schemaPath) {
   const zljr = JSON.parse(fs.readFileSync(
     path.resolve(path.dirname(schemaPath), "golden/zljr-v1.json"), "utf8",
   ));
+  const zeroNodeSendBytes = encodeZljrByteOracle(schema, zljr.canonical.decoded);
+  const zeroNodeSendDecoded = decodeZljrByteOracle(schema, zeroNodeSendBytes.toString("hex"));
+  if (!zeroNodeSendBytes.equals(Buffer.from(zljr.canonical.hex, "hex"))
+      || JSON.stringify(zeroNodeSendDecoded) !== JSON.stringify(zljr.canonical.decoded)) {
+    throw new Error("schema oracle did not round-trip the zero-operation nodeSend frozen record");
+  }
   tests.push(["zljr-v1 canonical semantic drift", () => {
     const candidate = clone(zljr);
     candidate.canonical.decoded.requestHex = "00";
@@ -5911,7 +5940,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "source", $ref: "frozen-source-identity" },
     { name: "hasMetadata", $ref: "bool8" },
     { name: "metadata", $ref: "metadata-frame" },
-    { name: "operationId", $ref: "operation-id" },
+    { name: "operationId", $ref: "operation-id-or-zero" },
     { name: "operationKind", $ref: "mesh-operation-kind" },
     { name: "replyRoute", $ref: "frozen-reply-route" },
     { name: "body", $ref: "frozen-record-body" },
@@ -7698,6 +7727,26 @@ function runGoldenFixtureSelfTests(schema, schemaPath) {
         ["activation pointer missing from Ready golden", (candidate) => {
           candidate.decoded.activationRecoveryState = null;
           reencode(format, candidate);
+        }],
+        ["activation reference uses u8 length prefix", (candidate) => {
+          const encoded = Buffer.from(candidate.encodedHex, "hex");
+          const reference = Buffer.from(
+            candidate.decoded.activationRecoveryState.referenceUtf8Fixture,
+            "utf8",
+          );
+          const marker = Buffer.concat([Buffer.from([0, reference.length]), reference]);
+          const referenceOffset = encoded.indexOf(marker);
+          if (referenceOffset < 4) {
+            throw new Error("authority golden reference marker is missing");
+          }
+          const legacy = Buffer.concat([
+            encoded.subarray(0, referenceOffset),
+            encoded.subarray(referenceOffset + 1),
+          ]);
+          legacy.writeUInt32BE(legacy.readUInt32BE(referenceOffset - 4) - 1, referenceOffset - 4);
+          legacy.writeUInt32BE(legacy.readUInt32BE(7) - 1, 7);
+          legacy.writeUInt32BE(crc32c(legacy.subarray(0, -4)), legacy.length - 4);
+          candidate.encodedHex = legacy.toString("hex");
         }],
       );
     } else if (format.name === "instance-activation-recovery-v1") {

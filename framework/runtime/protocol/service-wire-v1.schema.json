@@ -5975,7 +5975,7 @@
         },
         {
           "name": "operationId",
-          "$ref": "operation-id"
+          "$ref": "operation-id-or-zero"
         },
         {
           "name": "operationKind",

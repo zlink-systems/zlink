@@ -159,6 +159,7 @@ assertEnum("reply-relay-context-kind", ["coldActivation:1", "maintenanceRelocati
 assertEnum("cold-activation-completion-kind", ["readyBarrier:1", "activationFailure:2"]);
 assertEnum("reply-relay-ack-status", ["terminalReceived:1", "alreadyTerminal:2"]);
 assertTypeFields("operation-id", ["u64", "u64"]);
+assertTypeFields("operation-id-or-zero", ["u64", "u64"]);
 assertTypeFields("relocation-id", ["u64", "u64"]);
 assertTypeFields("relocation-coordinator-fence", ["text8", "nonzero-u64", "rid", "nonzero-u64", "authority-store-version"]);
 assertTypeFields("relocation-target-fence", ["rid", "nonzero-u64", "text8", "nonzero-u64"]);
@@ -174,7 +175,7 @@ if (userSpotCloseFenceType.kind !== "versioned-length-delimited" || userSpotClos
     || userSpotCloseFenceType.trailingBytes !== "forbidden") {
   throw new Error("user-spot-close-fence-v1 layout changed; update generator before regenerating");
 }
-assertTypeFields("frozen-record", ["mesh-record-kind", "frozen-source-identity", "bool8", "metadata-frame", "operation-id", "mesh-operation-kind", "frozen-reply-route", "frozen-record-body"]);
+assertTypeFields("frozen-record", ["mesh-record-kind", "frozen-source-identity", "bool8", "metadata-frame", "operation-id-or-zero", "mesh-operation-kind", "frozen-reply-route", "frozen-record-body"]);
 assertUnionCases("session-relocation-route-update", {
   discriminator: "session-relocation-route-action",
   cases: ["commit:nonzero-u64+nonzero-u64+rid+nonzero-u64", "abort:nonzero-u64"],
