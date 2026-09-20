@@ -15,6 +15,7 @@ Framework 0.20.0은 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework �
 - service-wire-v1은 schema dialect 규칙과 생성된 정적 codec을 사용합니다. sha256은 `u8 + 32` bytes, ZLIA는 presence byte, `operation-id-or-zero`는 명시적 schema case, reference는 `u16`으로 정정되며 C++ codec은 TypeScript·C#·Java codec과 같은 byte를 생성·해석합니다. (#729, #736, #737)
 - 원격 Actor 생성은 Entry Spot type 등록과 무관하게 Framework Entry Spot ID를 게시하고, 예약·commit·abort는 authority row의 `pendingCreation` 하나로 판정합니다. target이 완료와 terminal을 소유하며 actor-create-terminal conditional union은 canonical `u16` body length를 사용합니다. (#561, #550, #763)
 - C++ binding 1.2.1은 ROUTER 수신의 typed `no_data` 결과를 그대로 전달합니다. no-data를 binding-local 실패 `-1`로 축약하지 않습니다. (#273)
+- direct send·request의 Spot resolver가 canonical Instance Spot authority(#759 형식)를 해석합니다. GameQuest처럼 Instance Spot에 직접 보내는 경로가 `Spot route was not found`로 끝나던 결함을 고쳤습니다. (#804)
 
 이 릴리스는 1.0 이전 계약입니다. 기존 계약으로의 전환 절차는 없습니다.
 

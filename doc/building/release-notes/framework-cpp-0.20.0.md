@@ -15,6 +15,7 @@ Framework 0.20.0 uses binding 1.2.1 and Core 1.2.0. Each Framework language rele
 - service-wire-v1 uses the schema-dialect rules and generated static codecs. sha256 is `u8 + 32` bytes, ZLIA has a presence byte, `operation-id-or-zero` is an explicit schema case, and reference is `u16`. The C++ codec produces and reads the same bytes as the TypeScript, C# and Java codecs. (#729, #736, #737)
 - Remote Actor creation publishes the Framework Entry Spot ID independently of Entry Spot type registration, and reserve, commit and abort are decided from the authority row's single `pendingCreation`. The target owns completion and the terminal; the actor-create-terminal conditional union uses the canonical `u16` body length. (#561, #550, #763)
 - C++ binding 1.2.1 preserves Core's typed ROUTER receive `no_data` result. It no longer reduces no-data to the binding-local failure `-1`. (#273)
+- The direct send/request Spot resolver decodes the canonical Instance Spot authority (#759 layout); direct sends to an Instance Spot, as in GameQuest, no longer end with `Spot route was not found`. (#804)
 
 This is a pre-1.0 contract release. No migration procedure is provided for the existing contract.
 
