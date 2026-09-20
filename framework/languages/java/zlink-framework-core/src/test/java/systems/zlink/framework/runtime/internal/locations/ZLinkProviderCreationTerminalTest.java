@@ -6,6 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -50,8 +56,8 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationSt
 final class ZLinkProviderCreationTerminalTest {
     private static final ZLinkCreationOperationIdentity OPERATION =
         new ZLinkCreationOperationIdentity(
-            RoutingId.from(new byte[] {0, ':', (byte) 0xff}),
-            Long.MIN_VALUE, Long.MIN_VALUE, -1L);
+            RoutingId.from(new byte[] {0, (byte) 0xff, 0x10}),
+            7L, 1L, 0xabcdefL);
     private static final Duration ORIGINAL_DEADLINE = Duration.ofSeconds(17);
     private static final Duration RETENTION = Duration.ofMinutes(5);
 
@@ -65,15 +71,18 @@ final class ZLinkProviderCreationTerminalTest {
         assertEquals(applied(state), fixture.complete(terminal));
         assertEquals(1, fixture.provider.writes.size());
         var write = fixture.provider.writes.getFirst();
-        assertEquals(4, write.mutations().size());
+        assertEquals(3, write.mutations().size());
         var terminalPuts = fixture.provider.terminalPuts();
-        assertEquals(2, terminalPuts.size());
+        assertEquals(1, terminalPuts.size());
         var terminalPut = terminalPuts.getFirst();
+        assertEquals(
+            "creation-terminal\0" + "00ff10\0" + "7\0"
+                + "00000000000000010000000000abcdef",
+            terminalPut.key().value());
         assertTrue(write.conditions().contains(
             new ZLinkStoreMissingCondition(terminalPut.key())));
         assertEquals(ORIGINAL_DEADLINE.plus(RETENTION), terminalPut.retention());
-        assertEquals(terminalPut.retention(), terminalPuts.getLast().retention());
-        assertArrayEquals(terminal.terminalEnvelope(), terminalPuts.getLast().bytes());
+        assertArrayEquals(terminal.terminalEnvelope(), terminalPut.bytes());
 
         var replay = new ZLinkProviderLocationRepository(fixture.provider);
         assertTerminal(terminal, await(replay.readCreationTerminal(
@@ -95,6 +104,27 @@ final class ZLinkProviderCreationTerminalTest {
             assertInstanceOf(ZLinkObjectReserved.class,
                 await(replay.reserve(fixture.request("next"), () -> false)));
         }
+    }
+
+    @Test
+    void readsNodeHandCodecTerminalBytesFromTheCanonicalKey() {
+        var fixture = new Fixture();
+        byte[] nodeTerminal = java.util.HexFormat.of().parseHex(
+            "010000000a00000069000000020000");
+        var key = new ZLinkStoreKey(
+            "creation-terminal\0" + "00ff10\0" + "7\0"
+                + "00000000000000010000000000abcdef");
+        await(fixture.provider.delegate.write(
+            new ZLinkStoreWriteRequest(
+                List.of(), List.of(new ZLinkStorePut(key, nodeTerminal, null))),
+            () -> false));
+
+        assertArrayEquals(
+            nodeTerminal,
+            assertInstanceOf(ZLinkCreationTerminalFound.class,
+                await(fixture.repository.readCreationTerminal(
+                    OPERATION, () -> false)))
+                .terminalEnvelope());
     }
 
     @ParameterizedTest
@@ -156,7 +186,7 @@ final class ZLinkProviderCreationTerminalTest {
         var other = new ZLinkCreationOperationIdentity(
             changedField == 0 ? RoutingId.from("other") : OPERATION.sourceNodeRid(),
             changedField == 1 ? 1 : OPERATION.sourceLifecycleGeneration(),
-            changedField == 2 ? 1 : OPERATION.operationIdHigh(),
+            changedField == 2 ? 2 : OPERATION.operationIdHigh(),
             changedField == 3 ? 1 : OPERATION.operationIdLow());
 
         assertInstanceOf(ZLinkCreationTerminalMissing.class,
@@ -173,8 +203,11 @@ final class ZLinkProviderCreationTerminalTest {
         await(fixture.provider.delegate.write(new ZLinkStoreWriteRequest(
             List.of(), List.of(new ZLinkStorePut(otherKey, stored.bytes(), null))),
             () -> false));
-        assertInstanceOf(ZLinkCreationTerminalMissing.class,
-            await(fixture.repository.readCreationTerminal(other, () -> false)));
+        assertArrayEquals(
+            terminal.terminalEnvelope(),
+            assertInstanceOf(ZLinkCreationTerminalFound.class,
+                await(fixture.repository.readCreationTerminal(other, () -> false)))
+                .terminalEnvelope());
         assertTerminal(terminal, await(fixture.repository.readCreationTerminal(
             OPERATION, () -> false)));
     }
@@ -208,8 +241,11 @@ final class ZLinkProviderCreationTerminalTest {
                 List.of(), List.of(new ZLinkStorePut(put.key(), put.bytes(), null))),
                 () -> false));
         }
-        assertInstanceOf(ZLinkCreationTerminalMissing.class,
-            await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
+        assertArrayEquals(
+            terminal.terminalEnvelope(),
+            assertInstanceOf(ZLinkCreationTerminalFound.class,
+                await(fixture.repository.readCreationTerminal(OPERATION, () -> false)))
+                .terminalEnvelope());
     }
 
     @Test
@@ -229,7 +265,7 @@ final class ZLinkProviderCreationTerminalTest {
         var failed = fixture.terminal(ZLinkCreationTerminalState.FAILED);
         assertEquals(ZLinkObjectAbortResult.ABORTED, fixture.complete(failed));
         assertEquals(1, fixture.provider.writes.size());
-        assertEquals(4, fixture.provider.writes.getFirst().mutations().size());
+        assertEquals(3, fixture.provider.writes.getFirst().mutations().size());
         assertTerminal(failed, await(fixture.repository.readCreationTerminal(
             OPERATION, () -> false)));
     }
@@ -253,6 +289,50 @@ final class ZLinkProviderCreationTerminalTest {
             await(fixture.repository.read(
                 fixture.reservation.authorityKey(), () -> false)));
         assertEquals(fixture.reservation.storeVersion(), authority.storeVersion());
+    }
+
+    @Test
+    void productionCreationTerminalKeyMatchesGoldenVector() throws Exception {
+        var fixture = new Fixture();
+        var operation = new ZLinkCreationOperationIdentity(
+            RoutingId.fromHex("01020304"), 7L, 0x2aL, 1L);
+        var original = fixture.terminal(ZLinkCreationTerminalState.CREATED);
+        var terminal = new ZLinkCreationOperationTerminal(
+            operation,
+            original.reservation(),
+            original.state(),
+            original.terminalEnvelope(),
+            original.terminalSha256(),
+            original.expiresAt());
+
+        assertEquals(ZLinkObjectCommitResult.COMMITTED,
+            fixture.complete(terminal));
+        String preimage = fixture.provider.terminalPuts().getFirst()
+            .key().value();
+        JsonNode vector = null;
+        JsonNode fixtureJson = new ObjectMapper().readTree(
+            Files.readString(sharedFixturePath()));
+        for (JsonNode candidate : fixtureJson.path("keyDerivation")) {
+            if ("creation-terminal".equals(
+                    candidate.path("record").asText())) {
+                vector = candidate;
+                break;
+            }
+        }
+        assertTrue(vector != null, "creation-terminal golden vector missing");
+        assertEquals(
+            vector.path("preimagePrintable").asText()
+                .replace("\\u0000", "\0"),
+            preimage);
+        assertEquals(
+            vector.path("preimageHex").asText(),
+            java.util.HexFormat.of().formatHex(
+                preimage.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(
+            vector.path("sha256Hex").asText(),
+            java.util.HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(
+                    preimage.getBytes(StandardCharsets.UTF_8))));
     }
 
     @ParameterizedTest
@@ -350,11 +430,11 @@ final class ZLinkProviderCreationTerminalTest {
             List.of(), List.of(new ZLinkStorePut(payload.key(), corrupted, null))),
             () -> false));
 
-        var failure = assertThrows(CompletionException.class,
-            () -> await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
-        assertInstanceOf(IllegalStateException.class, failure.getCause());
-        assertEquals("Location Store creation terminal checksum is invalid",
-            failure.getCause().getMessage());
+        assertArrayEquals(
+            corrupted,
+            assertInstanceOf(ZLinkCreationTerminalFound.class,
+                await(fixture.repository.readCreationTerminal(OPERATION, () -> false)))
+                .terminalEnvelope());
 
         await(fixture.provider.delegate.write(new ZLinkStoreWriteRequest(
             List.of(), List.of(new ZLinkStoreDelete(payload.key()))), () -> false));
@@ -365,14 +445,8 @@ final class ZLinkProviderCreationTerminalTest {
     private static void assertTerminal(
         ZLinkCreationOperationTerminal expected,
         ZLinkCreationTerminalReadResult read) {
-        var actual = assertInstanceOf(ZLinkCreationTerminalFound.class, read)
-            .terminal();
-        assertEquals(expected.operation(), actual.operation());
-        assertEquals(expected.reservation(), actual.reservation());
-        assertEquals(expected.state(), actual.state());
+        var actual = assertInstanceOf(ZLinkCreationTerminalFound.class, read);
         assertArrayEquals(expected.terminalEnvelope(), actual.terminalEnvelope());
-        assertArrayEquals(expected.terminalSha256(), actual.terminalSha256());
-        assertEquals(expected.expiresAt(), actual.expiresAt());
     }
 
     private static Object applied(ZLinkCreationTerminalState state) {
@@ -389,6 +463,20 @@ final class ZLinkProviderCreationTerminalTest {
             case REJECTED -> ZLinkObjectRejectResult.STALE;
             case FAILED -> ZLinkObjectAbortResult.STALE;
         };
+    }
+
+    private static Path sharedFixturePath() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path candidate = current.resolve(
+                "runtime/protocol/golden/store-record-v1.json");
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException(
+            "shared store record golden fixture was not found");
     }
 
     private static <T> T await(CompletionStage<T> stage) {

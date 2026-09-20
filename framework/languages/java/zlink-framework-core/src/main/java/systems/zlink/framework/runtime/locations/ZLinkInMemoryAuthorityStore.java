@@ -553,7 +553,8 @@ final class ZLinkInMemoryAuthorityStore {
             if (terminal == null) {
                 return completed(new ZLinkCreationTerminalMissing());
             }
-            return completed(new ZLinkCreationTerminalFound(terminal));
+            return completed(new ZLinkCreationTerminalFound(
+                terminal.terminalEnvelope()));
         });
     }
 

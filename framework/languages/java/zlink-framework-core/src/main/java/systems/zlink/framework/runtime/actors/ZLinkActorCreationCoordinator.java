@@ -129,7 +129,7 @@ public final class ZLinkActorCreationCoordinator
         return locations.readCreationTerminal(operation, OPEN)
             .thenCompose(read -> {
                 if (read instanceof ZLinkCreationTerminalFound found) {
-                    return completedResult(found.terminal());
+                    return completedResult(found.terminalEnvelope());
                 }
                 if (System.currentTimeMillis() >= deadline) {
                     return admissionUnavailable("Actor create deadline expired");
@@ -264,7 +264,7 @@ public final class ZLinkActorCreationCoordinator
                             .thenCompose(read ->
                                 read instanceof
                                     ZLinkCreationTerminalFound found
-                                    ? completedResult(found.terminal())
+                                    ? completedResult(found.terminalEnvelope())
                                     : CompletableFuture.failedFuture(
                                         unwrap(failure)));
                     });
@@ -321,7 +321,7 @@ public final class ZLinkActorCreationCoordinator
         return locations.readCreationTerminal(operation, OPEN)
             .thenCompose(read -> {
                 if (read instanceof ZLinkCreationTerminalFound found) {
-                    return verifiedResponse(found.terminal());
+                    return verifiedResponse(found.terminalEnvelope());
                 }
                 if (System.currentTimeMillis()
                         >= request.intent().deadlineUnixMs()) {
@@ -586,7 +586,7 @@ public final class ZLinkActorCreationCoordinator
         return locations.readCreationTerminal(operation, OPEN)
             .thenCompose(read ->
                 read instanceof ZLinkCreationTerminalFound found
-                    ? verifiedResponse(found.terminal())
+                    ? verifiedResponse(found.terminalEnvelope())
                     : CompletableFuture.failedFuture(stale(message)));
     }
 
@@ -907,16 +907,14 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        verifiedResponse(ZLinkCreationOperationTerminal terminal) {
-        if (!MessageDigest.isEqual(
-            sha256(terminal.terminalEnvelope()),
-            terminal.terminalSha256())) {
+        verifiedResponse(byte[] envelope) {
+        try {
+            wire.decodeCreationOperationTerminal(envelope);
+            return response(envelope);
+        } catch (RuntimeException invalid) {
             return CompletableFuture.failedFuture(stale(
                 "Actor creation terminal failed integrity validation"));
         }
-        wire.decodeCreationOperationTerminal(
-            terminal.terminalEnvelope());
-        return response(terminal.terminalEnvelope());
     }
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>

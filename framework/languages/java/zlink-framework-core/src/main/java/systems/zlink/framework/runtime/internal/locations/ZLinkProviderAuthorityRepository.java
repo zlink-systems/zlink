@@ -756,10 +756,7 @@ final class ZLinkProviderAuthorityRepository {
                     conditions.add(new ZLinkStoreMissingCondition(terminalKey));
                     // A full 1 MiB envelope needs its own provider value.
                     mutations.add(new ZLinkStorePut(
-                        terminalKey, encodeTerminal(terminal), retention));
-                    mutations.add(new ZLinkStorePut(
-                        creationTerminalPayloadKey(terminal.operation()),
-                        terminal.terminalEnvelope(), retention));
+                        terminalKey, terminal.terminalEnvelope(), retention));
                 }
                 return provider.write(
                         new ZLinkStoreWriteRequest(conditions, mutations),
@@ -773,30 +770,11 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(operation, "operation");
         return provider.read(creationTerminalKey(operation), adapt(cancellation))
-            .thenCompose(read -> {
+            .thenApply(read -> {
                 if (!(read instanceof ZLinkStoreReadFound found)) {
-                    return completed(new ZLinkCreationTerminalMissing());
+                    return new ZLinkCreationTerminalMissing();
                 }
-                return provider.read(
-                        creationTerminalPayloadKey(operation), adapt(cancellation))
-                    .thenApply(payload -> {
-                        if (!(payload instanceof ZLinkStoreReadFound
-                                payloadFound)) {
-                            return new ZLinkCreationTerminalMissing();
-                        }
-                        ZLinkCreationOperationTerminal terminal = decodeTerminal(
-                            found.value().bytes(), payloadFound.value().bytes());
-                        if (!terminal.operation().equals(operation)
-                            || !terminal.expiresAt().isAfter(
-                                payloadFound.value().storeNow())) {
-                            return new ZLinkCreationTerminalMissing();
-                        }
-                        if (!terminalChecksumMatches(terminal)) {
-                            throw new IllegalStateException(
-                                "Location Store creation terminal checksum is invalid");
-                        }
-                        return new ZLinkCreationTerminalFound(terminal);
-                    });
+                return new ZLinkCreationTerminalFound(found.value().bytes());
             });
     }
 
@@ -827,82 +805,12 @@ final class ZLinkProviderAuthorityRepository {
 
     private static ZLinkStoreKey creationTerminalKey(
         ZLinkCreationOperationIdentity operation) {
-        return new ZLinkStoreKey("zlink:v11:creation-terminal:"
-            + operation.sourceNodeRid().toHex() + ":"
-            + Long.toUnsignedString(operation.sourceLifecycleGeneration()) + ":"
-            + Long.toUnsignedString(operation.operationIdHigh(), 16) + ":"
-            + Long.toUnsignedString(operation.operationIdLow(), 16));
-    }
-
-    private static ZLinkStoreKey creationTerminalPayloadKey(
-        ZLinkCreationOperationIdentity operation) {
-        return new ZLinkStoreKey(
-            creationTerminalKey(operation).value() + ":payload");
-    }
-
-    private static byte[] encodeTerminal(
-        ZLinkCreationOperationTerminal terminal) {
-        try {
-            var bytes = new ByteArrayOutputStream();
-            var out = new DataOutputStream(bytes);
-            out.writeInt(1);
-            var operation = terminal.operation();
-            writeBytes(out, operation.sourceNodeRid().toBytes());
-            out.writeLong(operation.sourceLifecycleGeneration());
-            out.writeLong(operation.operationIdHigh());
-            out.writeLong(operation.operationIdLow());
-            var reservation = terminal.reservation();
-            out.writeUTF(reservation.authorityKey());
-            out.writeUTF(reservation.storeVersion());
-            out.writeLong(reservation.objectGeneration());
-            out.writeLong(reservation.authorityOwnerGeneration());
-            out.writeUTF(reservation.reservationVersion());
-            out.writeUTF(reservation.targetDescriptor().meshName());
-            writeBytes(out, reservation.targetDescriptor().rid().toBytes());
-            out.writeLong(reservation.targetDescriptorLifecycleGeneration());
-            out.writeUTF(reservation.targetOwner().ownerId());
-            out.writeLong(reservation.targetOwner().leaseGeneration());
-            out.writeUTF(terminal.state().name());
-            writeBytes(out, terminal.terminalSha256());
-            out.writeLong(terminal.expiresAt().getEpochSecond());
-            out.writeInt(terminal.expiresAt().getNano());
-            out.flush();
-            return bytes.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalStateException(
-                "Failed to encode creation terminal", failure);
-        }
-    }
-
-    private static ZLinkCreationOperationTerminal decodeTerminal(
-        byte[] bytes, byte[] envelope) {
-        try {
-            var in = new DataInputStream(new ByteArrayInputStream(bytes));
-            if (in.readInt() != 1) {
-                throw new IOException("unrecognized creation terminal record version");
-            }
-            var operation = new ZLinkCreationOperationIdentity(
-                RoutingId.from(readBytes(in)),
-                in.readLong(), in.readLong(), in.readLong());
-            var reservation = new ZLinkObjectReservation(
-                in.readUTF(), in.readUTF(), in.readLong(), in.readLong(), in.readUTF(),
-                new ZLinkMeshNodeDescriptorKey(
-                    in.readUTF(), RoutingId.from(readBytes(in))),
-                in.readLong(),
-                new ZLinkLocationOwnerToken(in.readUTF(), in.readLong()));
-            var terminal = new ZLinkCreationOperationTerminal(
-                operation, reservation,
-                ZLinkCreationTerminalState.valueOf(in.readUTF()),
-                envelope, readBytes(in),
-                Instant.ofEpochSecond(in.readLong(), in.readInt()));
-            if (in.available() != 0) {
-                throw new IOException("creation terminal record has trailing bytes");
-            }
-            return terminal;
-        } catch (IOException | IllegalArgumentException failure) {
-            throw new IllegalStateException(
-                "Location Store creation terminal is invalid", failure);
-        }
+        return ZLinkOpaqueRecordKey.of(
+            "creation-terminal",
+            operation.sourceNodeRid().toHex(),
+            Long.toUnsignedString(operation.sourceLifecycleGeneration()),
+            HexFormat.of().toHexDigits(operation.operationIdHigh())
+                + HexFormat.of().toHexDigits(operation.operationIdLow()));
     }
 
     CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
@@ -2778,9 +2686,8 @@ final class ZLinkProviderAuthorityRepository {
     private static ZLinkStoreKey authorityKey(String key) {
         ZLinkAuthorityKeyCodec.AuthorityIdentity identity =
             ZLinkAuthorityKeyCodec.decode(key);
-        return new ZLinkStoreKey(
-            AUTHORITY_PREIMAGE_PREFIX + identity.kind() + "\0"
-                + identity.id());
+        return ZLinkOpaqueRecordKey.of(
+            "authority", identity.kind(), identity.id());
     }
 
     private static ZLinkStoreKey capacityKey(

@@ -110,7 +110,6 @@ class ZLinkInMemoryLocationStoreTest {
                 ZLinkCreationTerminalFound.class,
                 store.readCreationTerminal(firstOperation, () -> false)
                     .toCompletableFuture().get())
-                .terminal()
                 .terminalEnvelope());
         assertInstanceOf(
             ZLinkCreationTerminalMissing.class,
