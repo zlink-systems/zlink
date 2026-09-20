@@ -85,7 +85,10 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("Channel(ZoneWorldNames.ZoneChannel).Client()", ops, StringComparison.Ordinal);
         Assert.Contains("Channel(ZoneWorldNames.ReportChannel).Client()", zoneNode, StringComparison.Ordinal);
         Assert.Contains("Channel(ZoneWorldNames.ReportChannel).Server()", ops, StringComparison.Ordinal);
-        Assert.Contains("Objects().Server()", zoneNode, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("Objects().Server()"),
+            NormalizeWhitespace(zoneNode),
+            StringComparison.Ordinal);
         Assert.Contains("AddHandlerGroup(HandlerGroups.Ops)", ops, StringComparison.Ordinal);
         Assert.Contains(".EnablePublisher()", ops, StringComparison.Ordinal);
         Assert.Contains(".EnableSubscriber()", zoneNode, StringComparison.Ordinal);
@@ -99,7 +102,10 @@ public sealed partial class RegressionTests
         // subscriber. It returns before RouteMesh configuration and is not a
         // second physical mesh exception.
         Assert.Contains("if (!hostsZones)", zoneNode, StringComparison.Ordinal);
-        Assert.Contains("options.AddFanoutChannel", zoneNode, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("options.AddFanoutChannel"),
+            NormalizeWhitespace(zoneNode),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -176,22 +182,25 @@ public sealed partial class RegressionTests
         // That callback owns the relocated Actor and its bound session; ordinary fanout below
         // must still resolve the current Actor owner through the global route.
         Assert.Contains(
-            "actor.Context.BoundSession\n                .Send(new ZoneChangedNotify",
-            spot,
+            NormalizeWhitespace("actor.Context.BoundSession.Send(new ZoneChangedNotify"),
+            NormalizeWhitespace(spot),
             StringComparison.Ordinal);
         // The sample resolves the owner per delivery through the fluent call, so the
         // send spans two lines. Pin the call itself rather than a single-line form.
         Assert.Contains(".SendToActor(playerId, message)", spot, StringComparison.Ordinal);
         Assert.Contains("PlayerZoneStateDeliveryHandler", actorHandlers, StringComparison.Ordinal);
         Assert.Contains("PlayerWorldAnnouncementDeliveryHandler", actorHandlers, StringComparison.Ordinal);
-        Assert.Contains("actor.Context.BoundSession", actorHandlers, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("actor.Context.BoundSession"),
+            NormalizeWhitespace(actorHandlers),
+            StringComparison.Ordinal);
         Assert.Contains(
             ".GetOrCreate(playerId, ZoneWorldNames.PlayerActorType)",
             playerSession,
             StringComparison.Ordinal);
         Assert.Contains(
-            "spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)",
-            botSpawner,
+            NormalizeWhitespace("spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)"),
+            NormalizeWhitespace(botSpawner),
             StringComparison.Ordinal);
         Assert.Contains(
             ".GetOrCreate(route.PlayerId, ZoneWorldNames.PlayerActorType)",
@@ -227,8 +236,14 @@ public sealed partial class RegressionTests
         Assert.Contains("before.ObjectGeneration == after.ObjectGeneration", scenarios, StringComparison.Ordinal);
         Assert.Contains("RequestMessageFollowProbeAsync", scenarios, StringComparison.Ordinal);
         Assert.Contains("SendMessageFollowProbeAsync", scenarios, StringComparison.Ordinal);
-        Assert.Contains("connector.Send(new MessageFollowProbeMsg", support, StringComparison.Ordinal);
-        Assert.Contains("connector.Request(new MessageFollowProbeReq", support, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Send(new MessageFollowProbeMsg"),
+            NormalizeWhitespace(support),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Request(new MessageFollowProbeReq"),
+            NormalizeWhitespace(support),
+            StringComparison.Ordinal);
         Assert.Contains("record MessageFollowProbeMsg", contracts, StringComparison.Ordinal);
         Assert.Contains("record MessageFollowProbeReq", contracts, StringComparison.Ordinal);
         Assert.Contains("record EnterZoneReq", contracts, StringComparison.Ordinal);
