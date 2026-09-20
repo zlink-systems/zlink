@@ -8,16 +8,15 @@ function numeric(value: unknown): bigint { return typeof value === "bigint" ? va
 function same(left: unknown, right: unknown): boolean { return typeof left === "bigint" || typeof right === "bigint" ? numeric(left) === numeric(right) : left === right; }
 function requireContext(context: ServiceWireDecoderContext, name: string): unknown { const value = (context as any)[name]; if (value === undefined) fail("missing decoder context " + name); return value; }
 function runtimePredicate(context: ServiceWireDecoderContext, name: string, terminal: number, failure: number): boolean { const predicate = context.runtimePredicates[name]; if (!predicate) fail("missing runtime predicate " + name); return predicate(terminal, failure); }
-const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true });
-function utf8(value: unknown): Uint8Array { return encoder.encode(value as string); }
+const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
 class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.slice(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
-class Writer { readonly bytes: number[] = []; get length(): number { return this.bytes.length; } put(bytes: Iterable<number>): void { this.bytes.push(...bytes); } u(value: bigint, width: number): void { const bytes = new Array<number>(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { return Uint8Array.from(this.bytes); } }
+class Writer { readonly bytes: number[] = []; get length(): number { return this.bytes.length; } put(bytes: Iterable<number>): void { for (const byte of bytes) this.bytes.push(byte); } u(value: bigint, width: number): void { const bytes = new Array<number>(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { return Uint8Array.from(this.bytes); } }
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
-function compareBigints(left: readonly bigint[], right: readonly bigint[]): number { for (let index = 0; index < left.length; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return 0; }
-function compareByteLists(left: readonly Uint8Array[], right: readonly Uint8Array[]): number { for (let index = 0; index < left.length; ++index) { const result = compareBytes(left[index], right[index]); if (result) return result; } return 0; }
-function compareWireText(left: number | bigint, right: number | bigint, leftText: string, rightText: string): number { const wire = numeric(left) < numeric(right) ? -1 : numeric(left) > numeric(right) ? 1 : 0; return wire || compareBytes(utf8(leftText), utf8(rightText)); }
-function encoded(write: (writer: Writer) => void): Uint8Array { const writer = new Writer(); write(writer); return writer.result(); }
+function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
+function compareResults(results: readonly number[]): number { for (const result of results) if (result) return result; return 0; }
+function canonicalAuthorityKey(prefix: string, separator: string, wire: string, components: readonly Uint8Array[], minimum: number, maximum: number, maximumEncoded: number): Uint8Array { const parts = [prefix, wire]; for (const component of components) { if (component.length < minimum || component.length > maximum) fail("authority key component length"); let escaped = ""; for (const byte of component) escaped += (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a) || (byte >= 0x30 && byte <= 0x39) || byte === 0x2d || byte === 0x2e || byte === 0x5f || byte === 0x7e ? String.fromCharCode(byte) : "%" + byte.toString(16).toUpperCase().padStart(2, "0"); parts.push(String(component.length), escaped); } const result = utf8(parts.join(separator)); if (result.length > maximumEncoded) fail("authority key maximum"); return result; }
 function crc32c(bytes: Uint8Array): number { let crc = 0xffffffff; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; ++bit) crc = (crc >>> 1) ^ ((crc & 1) ? 0x82f63b78 : 0); } return (~crc) >>> 0; }
 
 export type U8 = number;
@@ -356,24 +355,29 @@ export type ApplicationPayloadEnvelopeV1 = { readonly packetName: PacketName; re
 
 function readApplicationPayloadEnvelopeV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ApplicationPayloadEnvelopeV1 {
   void context; void enclosing; void flags;
-  const encodedStart = reader.offset; const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("application-payload-envelope-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 4294967295) fail("application-payload-envelope-v1 maximum"); const body = reader.bounded(length); const value: any = {};
-  value["packetName"] = readPacketName(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const encodedStart = reader.offset; const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("application-payload-envelope-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
+    value["packetName"] = readPacketName(body, context, value, flags);
 
 
-  value["contentType"] = readContentType(body, context, value, flags);
+    value["contentType"] = readContentType(body, context, value, flags);
 
 
-  value["payload"] = readApplicationPayloadBytes(body, context, value, flags);
+    value["payload"] = readApplicationPayloadBytes(body, context, value, flags);
 
 
-  body.done("application-payload-envelope-v1");
-  const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytes")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294967295n || BigInt(reader.offset - encodedStart) > negotiatedMaximum) fail("application-payload-envelope-v1 negotiated maximum");
+    body.done("application-payload-envelope-v1");
+    const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytes")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294967295n || BigInt(reader.offset - encodedStart) > negotiatedMaximum) fail("application-payload-envelope-v1 negotiated maximum");
 
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 4294967295) fail("application-payload-envelope-v1 maximum");
+  return decoded;
 }
 function writeApplicationPayloadEnvelopeV1(input: ApplicationPayloadEnvelopeV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
   const encodedStart = writer.length;
 
 
@@ -390,8 +394,9 @@ function writeApplicationPayloadEnvelopeV1(input: ApplicationPayloadEnvelopeV1, 
 
 
   writeApplicationPayloadBytes(value["payload"], body, context, value, flags);
-  const bytes = body.result(); if (bytes.length > 4294967295) fail("application-payload-envelope-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
   const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytes")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294967295n || BigInt(writer.length - encodedStart) > negotiatedMaximum) fail("application-payload-envelope-v1 negotiated maximum");
+  if (writer.length - limitStart > 4294967295) fail("application-payload-envelope-v1 maximum");
 }
 export function decodeApplicationPayloadEnvelopeV1(bytes: Uint8Array, context: ServiceWireDecoderContext): ApplicationPayloadEnvelopeV1 { const reader = new Reader(bytes); const value = readApplicationPayloadEnvelopeV1(reader, context, {}, 0); reader.done("application-payload-envelope-v1"); return value; }
 export function encodeApplicationPayloadEnvelopeV1(value: ApplicationPayloadEnvelopeV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationPayloadEnvelopeV1(value, writer, context, {}, 0); return writer.result(); }
@@ -444,22 +449,25 @@ export type MetadataFrame = { readonly entries: readonly MetadataEntry[] };
 
 function readMetadataFrame(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MetadataFrame {
   void context; void enclosing; void flags;
-  const start = reader.offset; const layout: any = {}; const value: any = {};
-  layout.version = readU8(reader, context, enclosing, flags); if (!same(layout.version, 1)) fail("metadata-frame constant");
-  layout.count = readU8(reader, context, enclosing, flags);
-  value.entries = Array.from({ length: Number(layout.count) }, () => readMetadataEntry(reader, context, enclosing, flags));
-  if (reader.offset - start > 1024) fail("metadata-frame maximum");
-  for (let left = 0; left < value.entries.length; ++left) for (let right = left + 1; right < value.entries.length; ++right) if (same(value.entries[left]["key"], value.entries[right]["key"])) fail("metadata-frame unique");
-  return value;
+  const limitStart = reader.offset; const decoded = (() => {
+    const layout: any = {}; const value: any = {};
+    layout.version = readU8(reader, context, enclosing, flags); if (!same(layout.version, 1)) fail("metadata-frame constant");
+    layout.count = readU8(reader, context, enclosing, flags);
+    value.entries = Array.from({ length: Number(layout.count) }, () => readMetadataEntry(reader, context, enclosing, flags));
+    for (let left = 0; left < value.entries.length; ++left) for (let right = left + 1; right < value.entries.length; ++right) if (compareResults([compareBytes(utf8(value.entries[left]["key"]), utf8(value.entries[right]["key"]))]) === 0) fail("metadata-frame unique");
+    return value;
+  })();
+  if (reader.offset - limitStart > 1024) fail("metadata-frame maximum");
+  return decoded;
 }
 function writeMetadataFrame(input: MetadataFrame, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const start = writer.length;
-  for (let left = 0; left < value.entries.length; ++left) for (let right = left + 1; right < value.entries.length; ++right) if (same(value.entries[left]["key"], value.entries[right]["key"])) fail("metadata-frame unique");
+  const limitStart = writer.length;
+  for (let left = 0; left < value.entries.length; ++left) for (let right = left + 1; right < value.entries.length; ++right) if (compareResults([compareBytes(utf8(value.entries[left]["key"]), utf8(value.entries[right]["key"]))]) === 0) fail("metadata-frame unique");
   writeU8(1, writer, context, enclosing, flags);
   writeU8(value.entries.length, writer, context, enclosing, flags);
   for (const item of value.entries) writeMetadataEntry(item, writer, context, enclosing, flags);
-  if (writer.length - start > 1024) fail("metadata-frame maximum");
+  if (writer.length - limitStart > 1024) fail("metadata-frame maximum");
 }
 export function decodeMetadataFrame(bytes: Uint8Array, context: ServiceWireDecoderContext): MetadataFrame { const reader = new Reader(bytes); const value = readMetadataFrame(reader, context, {}, 0); reader.done("metadata-frame"); return value; }
 export function encodeMetadataFrame(value: MetadataFrame, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMetadataFrame(value, writer, context, {}, 0); return writer.result(); }
@@ -776,7 +784,6 @@ function readActorJoinReplyTail(reader: Reader, context: ServiceWireDecoderConte
   } else fail("actor-join-reply-tail discriminator");
   body.done("actor-join-reply-tail");
 
-
   return value;
 }
 function writeActorJoinReplyTail(input: ActorJoinReplyTail, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -785,6 +792,7 @@ function writeActorJoinReplyTail(input: ActorJoinReplyTail, writer: Writer, cont
   writeActorJoinResult(value["joinResult"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["joinResult"], "accepted")) {
+
     if (value["spot"] === undefined) fail("spot required");
 
 
@@ -798,13 +806,13 @@ function writeActorJoinReplyTail(input: ActorJoinReplyTail, writer: Writer, cont
 
     writeU32(value["receiveChunkLimitBytes"], body, context, value, flags);
   } else if (same(value["joinResult"], "rejected")) {
+    if (value["membershipEpoch"] !== undefined || value["receiveChunkLimitBytes"] !== undefined) fail("actor-join-reply-tail discriminator agreement");
     if (value["spot"] === undefined) fail("spot required");
 
 
     writeOptionalSpotRef(value["spot"], body, context, value, flags);
   } else fail("actor-join-reply-tail discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeActorJoinReplyTail(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorJoinReplyTail { const reader = new Reader(bytes); const value = readActorJoinReplyTail(reader, context, {}, 0); reader.done("actor-join-reply-tail"); return value; }
 export function encodeActorJoinReplyTail(value: ActorJoinReplyTail, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorJoinReplyTail(value, writer, context, {}, 0); return writer.result(); }
@@ -1559,7 +1567,6 @@ function readActorCreateTerminal(reader: Reader, context: ServiceWireDecoderCont
   } else fail("actor-create-terminal discriminator");
   body.done("actor-create-terminal");
 
-
   return value;
 }
 function writeActorCreateTerminal(input: ActorCreateTerminal, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1568,20 +1575,22 @@ function writeActorCreateTerminal(input: ActorCreateTerminal, writer: Writer, co
   writeActorCreateResult(value["createResult"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["createResult"], "existing")) {
+
     if (value["actor"] === undefined) fail("actor required");
 
 
     writeActorRef(value["actor"], body, context, value, flags);
   } else if (same(value["createResult"], "created")) {
+
     if (value["actor"] === undefined) fail("actor required");
 
 
     writeActorRef(value["actor"], body, context, value, flags);
   } else if (same(value["createResult"], "rejected")) {
+    if (value["actor"] !== undefined) fail("actor-create-terminal discriminator agreement");
 
   } else fail("actor-create-terminal discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeActorCreateTerminal(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorCreateTerminal { const reader = new Reader(bytes); const value = readActorCreateTerminal(reader, context, {}, 0); reader.done("actor-create-terminal"); return value; }
 export function encodeActorCreateTerminal(value: ActorCreateTerminal, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorCreateTerminal(value, writer, context, {}, 0); return writer.result(); }
@@ -1590,39 +1599,44 @@ export type CreationOperationTerminalV1 = { readonly terminalResult: RequestTerm
 
 function readCreationOperationTerminalV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): CreationOperationTerminalV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("creation-operation-terminal-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 1048576) fail("creation-operation-terminal-v1 maximum"); const body = reader.bounded(length); const value: any = {};
-  value["terminalResult"] = readRequestTerminalResult(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("creation-operation-terminal-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
+    value["terminalResult"] = readRequestTerminalResult(body, context, value, flags);
 
 
-  value["failureCode"] = readFrameworkErrorCode(body, context, value, flags);
+    value["failureCode"] = readFrameworkErrorCode(body, context, value, flags);
 
 
-  value["hasCreation"] = readBool8(body, context, value, flags);
+    value["hasCreation"] = readBool8(body, context, value, flags);
 
 
-  if (same(value["hasCreation"], "true")) {
-    value["creation"] = readActorCreateTerminal(body, context, value, flags);
+    if (same(value["hasCreation"], "true")) {
+      value["creation"] = readActorCreateTerminal(body, context, value, flags);
 
 
-  }
-  value["hasApplicationPayload"] = readBool8(body, context, value, flags);
+    }
+    value["hasApplicationPayload"] = readBool8(body, context, value, flags);
 
 
-  if (same(value["hasApplicationPayload"], "true")) {
-    value["applicationPayload"] = readApplicationPayloadEnvelopeV1(body, context, value, flags);
+    if (same(value["hasApplicationPayload"], "true")) {
+      value["applicationPayload"] = readApplicationPayloadEnvelopeV1(body, context, value, flags);
 
 
-  }
-  body.done("creation-operation-terminal-v1");
+    }
+    body.done("creation-operation-terminal-v1");
 
-  if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
-  if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
-  if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
+    if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
+    if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
+    if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("creation-operation-terminal-v1 maximum");
+  return decoded;
 }
 function writeCreationOperationTerminalV1(input: CreationOperationTerminalV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
   if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
   if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
   if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
@@ -1656,8 +1670,9 @@ function writeCreationOperationTerminalV1(input: CreationOperationTerminalV1, wr
 
     writeApplicationPayloadEnvelopeV1(value["applicationPayload"], body, context, value, flags);
   } else if (value["applicationPayload"] !== undefined) fail("applicationPayload forbidden");
-  const bytes = body.result(); if (bytes.length > 1048576) fail("creation-operation-terminal-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 
+  if (writer.length - limitStart > 1048576) fail("creation-operation-terminal-v1 maximum");
 }
 export function decodeCreationOperationTerminalV1(bytes: Uint8Array, context: ServiceWireDecoderContext): CreationOperationTerminalV1 { const reader = new Reader(bytes); const value = readCreationOperationTerminalV1(reader, context, {}, 0); reader.done("creation-operation-terminal-v1"); return value; }
 export function encodeCreationOperationTerminalV1(value: CreationOperationTerminalV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeCreationOperationTerminalV1(value, writer, context, {}, 0); return writer.result(); }
@@ -1678,7 +1693,6 @@ function readOptionalSpotRef(reader: Reader, context: ServiceWireDecoderContext,
   } else fail("optional-spot-ref discriminator");
   body.done("optional-spot-ref");
 
-
   return value;
 }
 function writeOptionalSpotRef(input: OptionalSpotRef, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1687,15 +1701,16 @@ function writeOptionalSpotRef(input: OptionalSpotRef, writer: Writer, context: S
   writeBool8(value["hasSpot"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasSpot"], "false")) {
+    if (value["spot"] !== undefined) fail("optional-spot-ref discriminator agreement");
 
   } else if (same(value["hasSpot"], "true")) {
+
     if (value["spot"] === undefined) fail("spot required");
 
 
     writeSpotRef(value["spot"], body, context, value, flags);
   } else fail("optional-spot-ref discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeOptionalSpotRef(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalSpotRef { const reader = new Reader(bytes); const value = readOptionalSpotRef(reader, context, {}, 0); reader.done("optional-spot-ref"); return value; }
 export function encodeOptionalSpotRef(value: OptionalSpotRef, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalSpotRef(value, writer, context, {}, 0); return writer.result(); }
@@ -1740,7 +1755,6 @@ function readOptionalSpotMembership(reader: Reader, context: ServiceWireDecoderC
   } else fail("optional-spot-membership discriminator");
   body.done("optional-spot-membership");
 
-
   return value;
 }
 function writeOptionalSpotMembership(input: OptionalSpotMembership, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1749,15 +1763,16 @@ function writeOptionalSpotMembership(input: OptionalSpotMembership, writer: Writ
   writeBool8(value["hasMembership"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasMembership"], "false")) {
+    if (value["membership"] !== undefined) fail("optional-spot-membership discriminator agreement");
 
   } else if (same(value["hasMembership"], "true")) {
+
     if (value["membership"] === undefined) fail("membership required");
 
 
     writeSpotMembership(value["membership"], body, context, value, flags);
   } else fail("optional-spot-membership discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeOptionalSpotMembership(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalSpotMembership { const reader = new Reader(bytes); const value = readOptionalSpotMembership(reader, context, {}, 0); reader.done("optional-spot-membership"); return value; }
 export function encodeOptionalSpotMembership(value: OptionalSpotMembership, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalSpotMembership(value, writer, context, {}, 0); return writer.result(); }
@@ -1780,7 +1795,6 @@ function readBoundSessionBindingTransition(reader: Reader, context: ServiceWireD
   } else fail("bound-session-binding-transition discriminator");
   body.done("bound-session-binding-transition");
 
-
   return value;
 }
 function writeBoundSessionBindingTransition(input: BoundSessionBindingTransition, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1789,18 +1803,19 @@ function writeBoundSessionBindingTransition(input: BoundSessionBindingTransition
   writeBoundSessionBindingState(value["bindingState"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["bindingState"], "active")) {
+    if (value["retiredBindingGeneration"] !== undefined) fail("bound-session-binding-transition discriminator agreement");
     if (value["bindingGeneration"] === undefined) fail("bindingGeneration required");
 
 
     writeNonzeroU64(numeric(value["bindingGeneration"]), body, context, value, flags);
   } else if (same(value["bindingState"], "tombstone")) {
+    if (value["bindingGeneration"] !== undefined) fail("bound-session-binding-transition discriminator agreement");
     if (value["retiredBindingGeneration"] === undefined) fail("retiredBindingGeneration required");
 
 
     writeNonzeroU64(numeric(value["retiredBindingGeneration"]), body, context, value, flags);
   } else fail("bound-session-binding-transition discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeBoundSessionBindingTransition(bytes: Uint8Array, context: ServiceWireDecoderContext): BoundSessionBindingTransition { const reader = new Reader(bytes); const value = readBoundSessionBindingTransition(reader, context, {}, 0); reader.done("bound-session-binding-transition"); return value; }
 export function encodeBoundSessionBindingTransition(value: BoundSessionBindingTransition, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBoundSessionBindingTransition(value, writer, context, {}, 0); return writer.result(); }
@@ -1891,7 +1906,6 @@ function readSessionRelocationRouteUpdate(reader: Reader, context: ServiceWireDe
   } else fail("session-relocation-route-update discriminator");
   body.done("session-relocation-route-update");
 
-
   return value;
 }
 function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1900,6 +1914,7 @@ function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, 
   writeSessionRelocationRouteAction(value["action"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["action"], "commit")) {
+    if (value["currentAuthorityOwnerGeneration"] !== undefined) fail("session-relocation-route-update discriminator agreement");
     if (value["previousAuthorityOwnerGeneration"] === undefined) fail("previousAuthorityOwnerGeneration required");
 
 
@@ -1917,13 +1932,13 @@ function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, 
 
     writeNonzeroU64(numeric(value["targetNodeGeneration"]), body, context, value, flags);
   } else if (same(value["action"], "abort")) {
+    if (value["previousAuthorityOwnerGeneration"] !== undefined || value["targetAuthorityOwnerGeneration"] !== undefined || value["targetNodeRid"] !== undefined || value["targetNodeGeneration"] !== undefined) fail("session-relocation-route-update discriminator agreement");
     if (value["currentAuthorityOwnerGeneration"] === undefined) fail("currentAuthorityOwnerGeneration required");
 
 
     writeNonzeroU64(numeric(value["currentAuthorityOwnerGeneration"]), body, context, value, flags);
   } else fail("session-relocation-route-update discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeSessionRelocationRouteUpdate(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionRelocationRouteUpdate { const reader = new Reader(bytes); const value = readSessionRelocationRouteUpdate(reader, context, {}, 0); reader.done("session-relocation-route-update"); return value; }
 export function encodeSessionRelocationRouteUpdate(value: SessionRelocationRouteUpdate, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionRelocationRouteUpdate(value, writer, context, {}, 0); return writer.result(); }
@@ -1950,7 +1965,6 @@ function readObjectCreationKey(reader: Reader, context: ServiceWireDecoderContex
   } else fail("object-creation-key discriminator");
   body.done("object-creation-key");
 
-
   return value;
 }
 function writeObjectCreationKey(input: ObjectCreationKey, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1959,23 +1973,25 @@ function writeObjectCreationKey(input: ObjectCreationKey, writer: Writer, contex
   writeStatefulObjectKind(value["objectKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["objectKind"], "actor")) {
+    if (value["spotId"] !== undefined) fail("object-creation-key discriminator agreement");
     if (value["actorId"] === undefined) fail("actorId required");
 
 
     writeText8(value["actorId"], body, context, value, flags);
   } else if (same(value["objectKind"], "userSpot")) {
+    if (value["actorId"] !== undefined) fail("object-creation-key discriminator agreement");
     if (value["spotId"] === undefined) fail("spotId required");
 
 
     writeText8(value["spotId"], body, context, value, flags);
   } else if (same(value["objectKind"], "instanceSpot")) {
+    if (value["actorId"] !== undefined) fail("object-creation-key discriminator agreement");
     if (value["spotId"] === undefined) fail("spotId required");
 
 
     writeText8(value["spotId"], body, context, value, flags);
   } else fail("object-creation-key discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeObjectCreationKey(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectCreationKey { const reader = new Reader(bytes); const value = readObjectCreationKey(reader, context, {}, 0); reader.done("object-creation-key"); return value; }
 export function encodeObjectCreationKey(value: ObjectCreationKey, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectCreationKey(value, writer, context, {}, 0); return writer.result(); }
@@ -1984,33 +2000,38 @@ export type ObjectCreationIntentV1 = { readonly key: ObjectCreationKey; readonly
 
 function readObjectCreationIntentV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ObjectCreationIntentV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("object-creation-intent-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 1048576) fail("object-creation-intent-v1 maximum"); const body = reader.bounded(length); const value: any = {};
-  value["key"] = readObjectCreationKey(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("object-creation-intent-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
+    value["key"] = readObjectCreationKey(body, context, value, flags);
 
 
-  value["stableType"] = readText8(body, context, value, flags);
+    value["stableType"] = readText8(body, context, value, flags);
 
 
-  value["initialMeshName"] = readText8(body, context, value, flags);
+    value["initialMeshName"] = readText8(body, context, value, flags);
 
 
-  value["requestContentReference"] = readCreationContentReference(body, context, value, flags);
+    value["requestContentReference"] = readCreationContentReference(body, context, value, flags);
 
 
-  value["requestSha256"] = readSha256Bytes(body, context, value, flags);
+    value["requestSha256"] = readSha256Bytes(body, context, value, flags);
 
 
-  value["requestEncodedSize"] = readCreationRequestSize(body, context, value, flags);
+    value["requestEncodedSize"] = readCreationRequestSize(body, context, value, flags);
 
 
-  body.done("object-creation-intent-v1");
+    body.done("object-creation-intent-v1");
 
 
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("object-creation-intent-v1 maximum");
+  return decoded;
 }
 function writeObjectCreationIntentV1(input: ObjectCreationIntentV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
 
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
@@ -2038,8 +2059,9 @@ function writeObjectCreationIntentV1(input: ObjectCreationIntentV1, writer: Writ
 
 
   writeCreationRequestSize(value["requestEncodedSize"], body, context, value, flags);
-  const bytes = body.result(); if (bytes.length > 1048576) fail("object-creation-intent-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 
+  if (writer.length - limitStart > 1048576) fail("object-creation-intent-v1 maximum");
 }
 export function decodeObjectCreationIntentV1(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectCreationIntentV1 { const reader = new Reader(bytes); const value = readObjectCreationIntentV1(reader, context, {}, 0); reader.done("object-creation-intent-v1"); return value; }
 export function encodeObjectCreationIntentV1(value: ObjectCreationIntentV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectCreationIntentV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2145,68 +2167,73 @@ export type InstanceActivationRecoveryV1 = { readonly targetSpotId: Text8; reado
 
 function readInstanceActivationRecoveryV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceActivationRecoveryV1 {
   void context; void enclosing; void flags;
-  const value: any = {};
-  value["targetSpotId"] = readText8(reader, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const value: any = {};
+    value["targetSpotId"] = readText8(reader, context, value, flags);
 
 
-  value["stableType"] = readText8(reader, context, value, flags);
+    value["stableType"] = readText8(reader, context, value, flags);
 
 
-  value["targetMeshName"] = readText8(reader, context, value, flags);
+    value["targetMeshName"] = readText8(reader, context, value, flags);
 
 
-  value["targetNodeRid"] = readRid(reader, context, value, flags);
+    value["targetNodeRid"] = readRid(reader, context, value, flags);
 
 
-  value["targetNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
+    value["targetNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
 
 
-  value["targetDescriptorVersion"] = readText8(reader, context, value, flags);
+    value["targetDescriptorVersion"] = readText8(reader, context, value, flags);
 
 
-  value["sourceNodeRid"] = readRid(reader, context, value, flags);
+    value["sourceNodeRid"] = readRid(reader, context, value, flags);
 
 
-  value["sourceNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
+    value["sourceNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
 
 
-  value["hasSourceSpotId"] = readBool8(reader, context, value, flags);
+    value["hasSourceSpotId"] = readBool8(reader, context, value, flags);
 
 
-  if (same(value["hasSourceSpotId"], "true")) {
-    value["sourceSpotId"] = readText8(reader, context, value, flags);
+    if (same(value["hasSourceSpotId"], "true")) {
+      value["sourceSpotId"] = readText8(reader, context, value, flags);
 
 
-  }
-  value["operationKind"] = readInstanceOperationKind(reader, context, value, flags);
+    }
+    value["operationKind"] = readInstanceOperationKind(reader, context, value, flags);
 
 
-  value["operation"] = readOperationId(reader, context, value, flags);
+    value["operation"] = readOperationId(reader, context, value, flags);
 
 
-  value["replyRoute"] = readInstanceReplyRoute(reader, context, value, flags);
+    value["replyRoute"] = readInstanceReplyRoute(reader, context, value, flags);
 
 
-  value["deadlineUnixMs"] = readNonzeroU64(reader, context, value, flags);
+    value["deadlineUnixMs"] = readNonzeroU64(reader, context, value, flags);
 
 
-  value["hasMetadata"] = readBool8(reader, context, value, flags);
+    value["hasMetadata"] = readBool8(reader, context, value, flags);
 
 
-  if (same(value["hasMetadata"], "true")) {
-    value["metadata"] = readMetadataFrame(reader, context, value, flags);
+    if (same(value["hasMetadata"], "true")) {
+      value["metadata"] = readMetadataFrame(reader, context, value, flags);
 
 
-  }
-  value["applicationPayload"] = readApplicationPayloadEnvelopeV1(reader, context, value, flags);
+    }
+    value["applicationPayload"] = readApplicationPayloadEnvelopeV1(reader, context, value, flags);
 
 
 
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("instance-activation-recovery-v1 maximum");
+  return decoded;
 }
 function writeInstanceActivationRecoveryV1(input: InstanceActivationRecoveryV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
 
 
   if (value["targetSpotId"] === undefined) fail("targetSpotId required");
@@ -2281,6 +2308,7 @@ function writeInstanceActivationRecoveryV1(input: InstanceActivationRecoveryV1, 
 
 
   writeApplicationPayloadEnvelopeV1(value["applicationPayload"], writer, context, value, flags);
+  if (writer.length - limitStart > 1048576) fail("instance-activation-recovery-v1 maximum");
 }
 export function decodeInstanceActivationRecoveryV1(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceActivationRecoveryV1 { const reader = new Reader(bytes); const value = readInstanceActivationRecoveryV1(reader, context, {}, 0); reader.done("instance-activation-recovery-v1"); return value; }
 export function encodeInstanceActivationRecoveryV1(value: InstanceActivationRecoveryV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceActivationRecoveryV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2391,49 +2419,53 @@ export type GenericObjectReservationV1 = { readonly operationKind: "reserve"; re
 
 function readGenericObjectReservationV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): GenericObjectReservationV1 {
   void context; void enclosing; void flags;
-  const encodedStart = reader.offset; const value: any = {};
-  value["operationKind"] = readGenericReservationOperationKind(reader, context, enclosing, flags);
-  const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
-  if (same(value["operationKind"], "reserve")) {
-    value["intent"] = readObjectCreationIntentV1(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const value: any = {};
+    value["operationKind"] = readGenericReservationOperationKind(reader, context, enclosing, flags);
+    const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
+    if (same(value["operationKind"], "reserve")) {
+      value["intent"] = readObjectCreationIntentV1(body, context, value, flags);
 
 
-    value["target"] = readObjectCreationTargetV1(body, context, value, flags);
+      value["target"] = readObjectCreationTargetV1(body, context, value, flags);
 
 
-    value["creatingPayload"] = readDurableBlob(body, context, value, flags);
+      value["creatingPayload"] = readDurableBlob(body, context, value, flags);
 
 
-    value["pendingCapacityDelta"] = readNonzeroU32(body, context, value, flags);
+      value["pendingCapacityDelta"] = readNonzeroU32(body, context, value, flags);
 
 
-  } else if (same(value["operationKind"], "commit")) {
-    value["key"] = readObjectCreationKey(body, context, value, flags);
+    } else if (same(value["operationKind"], "commit")) {
+      value["key"] = readObjectCreationKey(body, context, value, flags);
 
 
-    value["fence"] = readObjectReservationFence(body, context, value, flags);
+      value["fence"] = readObjectReservationFence(body, context, value, flags);
 
 
-  } else if (same(value["operationKind"], "abort")) {
-    value["key"] = readObjectCreationKey(body, context, value, flags);
+    } else if (same(value["operationKind"], "abort")) {
+      value["key"] = readObjectCreationKey(body, context, value, flags);
 
 
-    value["fence"] = readObjectReservationFence(body, context, value, flags);
+      value["fence"] = readObjectReservationFence(body, context, value, flags);
 
 
-  } else fail("generic-object-reservation-v1 discriminator");
-  body.done("generic-object-reservation-v1");
-  if (reader.offset - encodedStart > 1048576) fail("generic-object-reservation-v1 maximum");
+    } else fail("generic-object-reservation-v1 discriminator");
+    body.done("generic-object-reservation-v1");
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("generic-object-reservation-v1 maximum");
+  return decoded;
 }
 function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const encodedStart = writer.length;
+  const limitStart = writer.length;
 
   writeGenericReservationOperationKind(value["operationKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["operationKind"], "reserve")) {
+    if (value["key"] !== undefined || value["fence"] !== undefined) fail("generic-object-reservation-v1 discriminator agreement");
     if (value["intent"] === undefined) fail("intent required");
 
 
@@ -2451,6 +2483,7 @@ function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writ
 
     writeNonzeroU32(value["pendingCapacityDelta"], body, context, value, flags);
   } else if (same(value["operationKind"], "commit")) {
+    if (value["intent"] !== undefined || value["target"] !== undefined || value["creatingPayload"] !== undefined || value["pendingCapacityDelta"] !== undefined) fail("generic-object-reservation-v1 discriminator agreement");
     if (value["key"] === undefined) fail("key required");
 
 
@@ -2460,6 +2493,7 @@ function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writ
 
     writeObjectReservationFence(value["fence"], body, context, value, flags);
   } else if (same(value["operationKind"], "abort")) {
+    if (value["intent"] !== undefined || value["target"] !== undefined || value["creatingPayload"] !== undefined || value["pendingCapacityDelta"] !== undefined) fail("generic-object-reservation-v1 discriminator agreement");
     if (value["key"] === undefined) fail("key required");
 
 
@@ -2470,7 +2504,7 @@ function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writ
     writeObjectReservationFence(value["fence"], body, context, value, flags);
   } else fail("generic-object-reservation-v1 discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-  if (writer.length - encodedStart > 1048576) fail("generic-object-reservation-v1 maximum");
+  if (writer.length - limitStart > 1048576) fail("generic-object-reservation-v1 maximum");
 }
 export function decodeGenericObjectReservationV1(bytes: Uint8Array, context: ServiceWireDecoderContext): GenericObjectReservationV1 { const reader = new Reader(bytes); const value = readGenericObjectReservationV1(reader, context, {}, 0); reader.done("generic-object-reservation-v1"); return value; }
 export function encodeGenericObjectReservationV1(value: GenericObjectReservationV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeGenericObjectReservationV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2562,15 +2596,15 @@ export type AggregateParticipantVector = readonly MaintenanceAggregateParticipan
 function readAggregateParticipantVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AggregateParticipantVector {
   void context; void enclosing; void flags;
   const count = Number(readU16(reader, context, enclosing, flags)); if (count > 1024) fail("aggregate-participant-vector count"); const value: any = Array.from({ length: count }, () => readMaintenanceAggregateParticipantV1(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareBytes(encoded((writer) => writeRelocationObjectIdentity(value[index - 1]["object"], writer, context, {}, flags)), encoded((writer) => writeRelocationObjectIdentity(value[index]["object"], writer, context, {}, flags))) >= 0) fail("aggregate-participant-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareBytes(encoded((writer) => writeRelocationObjectIdentity(value[left]["object"], writer, context, {}, flags)), encoded((writer) => writeRelocationObjectIdentity(value[right]["object"], writer, context, {}, flags))) === 0) fail("aggregate-participant-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareBytes((same(value[index - 1]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[index - 1]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[index - 1]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index - 1]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[index - 1]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index - 1]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant")), (same(value[index]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[index]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[index]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[index]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant"))) >= 0) fail("aggregate-participant-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareBytes((same(value[left]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[left]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[left]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[left]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[left]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[left]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant")), (same(value[right]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[right]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[right]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[right]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[right]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[right]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant"))) === 0) fail("aggregate-participant-vector unique");
   return value;
 }
 function writeAggregateParticipantVector(input: AggregateParticipantVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value) || value.length > 1024) fail("aggregate-participant-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareBytes(encoded((writer) => writeRelocationObjectIdentity(value[index - 1]["object"], writer, context, {}, flags)), encoded((writer) => writeRelocationObjectIdentity(value[index]["object"], writer, context, {}, flags))) >= 0) fail("aggregate-participant-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareBytes(encoded((writer) => writeRelocationObjectIdentity(value[left]["object"], writer, context, {}, flags)), encoded((writer) => writeRelocationObjectIdentity(value[right]["object"], writer, context, {}, flags))) === 0) fail("aggregate-participant-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareBytes((same(value[index - 1]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[index - 1]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[index - 1]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index - 1]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[index - 1]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index - 1]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant")), (same(value[index]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[index]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[index]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[index]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[index]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant"))) >= 0) fail("aggregate-participant-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareBytes((same(value[left]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[left]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[left]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[left]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[left]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[left]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant")), (same(value[right]["object"]["objectKind"], "actor") ? canonicalAuthorityKey("zla1", ":", "a", [utf8(value[right]["object"]["actor"]["actorId"])], 1, 255, 776) : same(value[right]["object"]["objectKind"], "userSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[right]["object"]["spot"]["spotId"])], 1, 255, 776) : same(value[right]["object"]["objectKind"], "instanceSpot") ? canonicalAuthorityKey("zla1", ":", "s", [utf8(value[right]["object"]["spotId"])], 1, 255, 776) : fail("aggregate-participant-vector authority key variant"))) === 0) fail("aggregate-participant-vector unique");
   writeU16(value.length, writer, context, enclosing, flags); for (const item of value) writeMaintenanceAggregateParticipantV1(item, writer, context, enclosing, flags);
 }
 export function decodeAggregateParticipantVector(bytes: Uint8Array, context: ServiceWireDecoderContext): AggregateParticipantVector { const reader = new Reader(bytes); const value = readAggregateParticipantVector(reader, context, {}, 0); reader.done("aggregate-participant-vector"); return value; }
@@ -2580,30 +2614,35 @@ export type MaintenanceAggregateV1 = { readonly aggregateId: AggregateId; readon
 
 function readMaintenanceAggregateV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MaintenanceAggregateV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("maintenance-aggregate-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 1048576) fail("maintenance-aggregate-v1 maximum"); const body = reader.bounded(length); const value: any = {};
-  value["aggregateId"] = readAggregateId(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("maintenance-aggregate-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
+    value["aggregateId"] = readAggregateId(body, context, value, flags);
 
 
-  value["aggregateGeneration"] = readNonzeroU64(body, context, value, flags);
+    value["aggregateGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
-  value["ownerSpot"] = readSpotRef(body, context, value, flags);
+    value["ownerSpot"] = readSpotRef(body, context, value, flags);
 
 
-  value["participants"] = readAggregateParticipantVector(body, context, value, flags);
+    value["participants"] = readAggregateParticipantVector(body, context, value, flags);
 
 
-  value["inventoryDigestSha256"] = readSha256Bytes(body, context, value, flags);
+    value["inventoryDigestSha256"] = readSha256Bytes(body, context, value, flags);
 
 
-  body.done("maintenance-aggregate-v1");
+    body.done("maintenance-aggregate-v1");
 
 
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("maintenance-aggregate-v1 maximum");
+  return decoded;
 }
 function writeMaintenanceAggregateV1(input: MaintenanceAggregateV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
 
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
@@ -2627,8 +2666,9 @@ function writeMaintenanceAggregateV1(input: MaintenanceAggregateV1, writer: Writ
 
 
   writeSha256Bytes(value["inventoryDigestSha256"], body, context, value, flags);
-  const bytes = body.result(); if (bytes.length > 1048576) fail("maintenance-aggregate-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 
+  if (writer.length - limitStart > 1048576) fail("maintenance-aggregate-v1 maximum");
 }
 export function decodeMaintenanceAggregateV1(bytes: Uint8Array, context: ServiceWireDecoderContext): MaintenanceAggregateV1 { const reader = new Reader(bytes); const value = readMaintenanceAggregateV1(reader, context, {}, 0); reader.done("maintenance-aggregate-v1"); return value; }
 export function encodeMaintenanceAggregateV1(value: MaintenanceAggregateV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMaintenanceAggregateV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2741,7 +2781,7 @@ export type UserSpotCloseFenceV1 = { readonly spot: SpotRef; readonly targetNode
 
 function readUserSpotCloseFenceV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): UserSpotCloseFenceV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("user-spot-close-fence-v1 version"); const length = Number(readU16(reader, context, enclosing, flags));  const body = reader.bounded(length); const value: any = {};
+  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("user-spot-close-fence-v1 version"); const length = Number(readU16(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
   value["spot"] = readSpotRef(body, context, value, flags);
 
 
@@ -2788,7 +2828,7 @@ function writeUserSpotCloseFenceV1(input: UserSpotCloseFenceV1, writer: Writer, 
 
 
   writeAuthorityStoreVersion(value["expectedStoreVersion"], body, context, value, flags);
-  const bytes = body.result();  writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 
 }
 export function decodeUserSpotCloseFenceV1(bytes: Uint8Array, context: ServiceWireDecoderContext): UserSpotCloseFenceV1 { const reader = new Reader(bytes); const value = readUserSpotCloseFenceV1(reader, context, {}, 0); reader.done("user-spot-close-fence-v1"); return value; }
@@ -2812,7 +2852,6 @@ function readMessageFollowRoute(reader: Reader, context: ServiceWireDecoderConte
   } else fail("message-follow-route discriminator");
   body.done("message-follow-route");
 
-
   return value;
 }
 function writeMessageFollowRoute(input: MessageFollowRoute, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -2821,18 +2860,19 @@ function writeMessageFollowRoute(input: MessageFollowRoute, writer: Writer, cont
   writeAuthorityObjectKind(value["objectKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["objectKind"], "actor")) {
+    if (value["spot"] !== undefined) fail("message-follow-route discriminator agreement");
     if (value["actor"] === undefined) fail("actor required");
 
 
     writeActorRouteFence(value["actor"], body, context, value, flags);
   } else if (same(value["objectKind"], "spot")) {
+    if (value["actor"] !== undefined) fail("message-follow-route discriminator agreement");
     if (value["spot"] === undefined) fail("spot required");
 
 
     writeSpotRouteFence(value["spot"], body, context, value, flags);
   } else fail("message-follow-route discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeMessageFollowRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): MessageFollowRoute { const reader = new Reader(bytes); const value = readMessageFollowRoute(reader, context, {}, 0); reader.done("message-follow-route"); return value; }
 export function encodeMessageFollowRoute(value: MessageFollowRoute, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMessageFollowRoute(value, writer, context, {}, 0); return writer.result(); }
@@ -2841,36 +2881,41 @@ export type MessageFollowRouteV1 = { readonly source: MessageFollowRoute; readon
 
 function readMessageFollowRouteV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MessageFollowRouteV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("message-follow-route-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 16777216) fail("message-follow-route-v1 maximum"); const body = reader.bounded(length); const value: any = {};
-  value["source"] = readMessageFollowRoute(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("message-follow-route-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(length); const value: any = {};
+    value["source"] = readMessageFollowRoute(body, context, value, flags);
 
 
-  value["target"] = readMessageFollowRoute(body, context, value, flags);
+    value["target"] = readMessageFollowRoute(body, context, value, flags);
 
 
-  value["hopCount"] = readU8(body, context, value, flags);
-  if (numeric(value["hopCount"]) < 1n || numeric(value["hopCount"]) > 8n) fail("hopCount constraint");
+    value["hopCount"] = readU8(body, context, value, flags);
+    if (numeric(value["hopCount"]) < 1n || numeric(value["hopCount"]) > 8n) fail("hopCount constraint");
 
-  value["queuedMessages"] = readU32(body, context, value, flags);
-  if (numeric(value["queuedMessages"]) < 0n) fail("queuedMessages constraint");
+    value["queuedMessages"] = readU32(body, context, value, flags);
+    if (numeric(value["queuedMessages"]) < 0n) fail("queuedMessages constraint");
 
-  value["queuedBytes"] = readU32(body, context, value, flags);
-  if (numeric(value["queuedBytes"]) < 0n) fail("queuedBytes constraint");
+    value["queuedBytes"] = readU32(body, context, value, flags);
+    if (numeric(value["queuedBytes"]) < 0n) fail("queuedBytes constraint");
 
-  value["originalOperation"] = readOperationId(body, context, value, flags);
-
-
-  value["originalReplyRouteId"] = readU64(body, context, value, flags);
+    value["originalOperation"] = readOperationId(body, context, value, flags);
 
 
-  body.done("message-follow-route-v1");
+    value["originalReplyRouteId"] = readU64(body, context, value, flags);
+
+
+    body.done("message-follow-route-v1");
 
 
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 16777216) fail("message-follow-route-v1 maximum");
+  return decoded;
 }
 function writeMessageFollowRouteV1(input: MessageFollowRouteV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
 
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
@@ -2902,8 +2947,9 @@ function writeMessageFollowRouteV1(input: MessageFollowRouteV1, writer: Writer, 
 
 
   writeU64(numeric(value["originalReplyRouteId"]), body, context, value, flags);
-  const bytes = body.result(); if (bytes.length > 16777216) fail("message-follow-route-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 
+  if (writer.length - limitStart > 16777216) fail("message-follow-route-v1 maximum");
 }
 export function decodeMessageFollowRouteV1(bytes: Uint8Array, context: ServiceWireDecoderContext): MessageFollowRouteV1 { const reader = new Reader(bytes); const value = readMessageFollowRouteV1(reader, context, {}, 0); reader.done("message-follow-route-v1"); return value; }
 export function encodeMessageFollowRouteV1(value: MessageFollowRouteV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMessageFollowRouteV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2942,7 +2988,6 @@ function readRelocationObjectIdentity(reader: Reader, context: ServiceWireDecode
   } else fail("relocation-object-identity discriminator");
   body.done("relocation-object-identity");
 
-
   return value;
 }
 function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -2951,6 +2996,7 @@ function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: 
   writeStatefulObjectKind(value["objectKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["objectKind"], "actor")) {
+    if (value["spot"] !== undefined || value["instanceType"] !== undefined || value["spotId"] !== undefined || value["objectGeneration"] !== undefined) fail("relocation-object-identity discriminator agreement");
     if (value["actor"] === undefined) fail("actor required");
 
 
@@ -2960,6 +3006,7 @@ function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: 
 
     writeNonzeroU64(numeric(value["expectedAuthorityOwnerGeneration"]), body, context, value, flags);
   } else if (same(value["objectKind"], "userSpot")) {
+    if (value["actor"] !== undefined || value["instanceType"] !== undefined || value["spotId"] !== undefined || value["objectGeneration"] !== undefined) fail("relocation-object-identity discriminator agreement");
     if (value["spot"] === undefined) fail("spot required");
 
 
@@ -2969,6 +3016,7 @@ function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: 
 
     writeNonzeroU64(numeric(value["expectedAuthorityOwnerGeneration"]), body, context, value, flags);
   } else if (same(value["objectKind"], "instanceSpot")) {
+    if (value["actor"] !== undefined || value["expectedAuthorityOwnerGeneration"] !== undefined || value["spot"] !== undefined) fail("relocation-object-identity discriminator agreement");
     if (value["instanceType"] === undefined) fail("instanceType required");
 
 
@@ -2983,7 +3031,6 @@ function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: 
     writeNonzeroU64(numeric(value["objectGeneration"]), body, context, value, flags);
   } else fail("relocation-object-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeRelocationObjectIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationObjectIdentity { const reader = new Reader(bytes); const value = readRelocationObjectIdentity(reader, context, {}, 0); reader.done("relocation-object-identity"); return value; }
 export function encodeRelocationObjectIdentity(value: RelocationObjectIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationObjectIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3078,7 +3125,6 @@ function readInstanceAuthorityIdentity(reader: Reader, context: ServiceWireDecod
   } else fail("instance-authority-identity discriminator");
   body.done("instance-authority-identity");
 
-
   return value;
 }
 function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -3087,6 +3133,7 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
   writeInstanceAuthorityState(value["authorityState"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["authorityState"], "coldActivating")) {
+
     if (value["instanceType"] === undefined) fail("instanceType required");
 
 
@@ -3096,6 +3143,7 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
 
     writeText8(value["spotId"], body, context, value, flags);
   } else if (same(value["authorityState"], "ready")) {
+
     if (value["instanceType"] === undefined) fail("instanceType required");
 
 
@@ -3105,6 +3153,7 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
 
     writeText8(value["spotId"], body, context, value, flags);
   } else if (same(value["authorityState"], "closing")) {
+
     if (value["instanceType"] === undefined) fail("instanceType required");
 
 
@@ -3114,6 +3163,7 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
 
     writeText8(value["spotId"], body, context, value, flags);
   } else if (same(value["authorityState"], "relocating")) {
+
     if (value["instanceType"] === undefined) fail("instanceType required");
 
 
@@ -3124,7 +3174,6 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
     writeText8(value["spotId"], body, context, value, flags);
   } else fail("instance-authority-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeInstanceAuthorityIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceAuthorityIdentity { const reader = new Reader(bytes); const value = readInstanceAuthorityIdentity(reader, context, {}, 0); reader.done("instance-authority-identity"); return value; }
 export function encodeInstanceAuthorityIdentity(value: InstanceAuthorityIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceAuthorityIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3163,7 +3212,6 @@ function readSpotAuthorityIdentity(reader: Reader, context: ServiceWireDecoderCo
   } else fail("spot-authority-identity discriminator");
   body.done("spot-authority-identity");
 
-
   return value;
 }
 function writeSpotAuthorityIdentity(input: SpotAuthorityIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -3172,6 +3220,7 @@ function writeSpotAuthorityIdentity(input: SpotAuthorityIdentity, writer: Writer
   writeSpotKind(value["spotKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["spotKind"], "entry")) {
+    if (value["instance"] !== undefined) fail("spot-authority-identity discriminator agreement");
     if (value["spotId"] === undefined) fail("spotId required");
 
 
@@ -3185,6 +3234,7 @@ function writeSpotAuthorityIdentity(input: SpotAuthorityIdentity, writer: Writer
 
     writeEntryUserSpotAuthorityState(value["state"], body, context, value, flags);
   } else if (same(value["spotKind"], "user")) {
+    if (value["instance"] !== undefined) fail("spot-authority-identity discriminator agreement");
     if (value["spotId"] === undefined) fail("spotId required");
 
 
@@ -3198,13 +3248,13 @@ function writeSpotAuthorityIdentity(input: SpotAuthorityIdentity, writer: Writer
 
     writeEntryUserSpotAuthorityState(value["state"], body, context, value, flags);
   } else if (same(value["spotKind"], "instance")) {
+    if (value["spotId"] !== undefined || value["spotType"] !== undefined || value["state"] !== undefined) fail("spot-authority-identity discriminator agreement");
     if (value["instance"] === undefined) fail("instance required");
 
 
     writeInstanceAuthorityIdentity(value["instance"], body, context, value, flags);
   } else fail("spot-authority-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeSpotAuthorityIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): SpotAuthorityIdentity { const reader = new Reader(bytes); const value = readSpotAuthorityIdentity(reader, context, {}, 0); reader.done("spot-authority-identity"); return value; }
 export function encodeSpotAuthorityIdentity(value: SpotAuthorityIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSpotAuthorityIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3227,7 +3277,6 @@ function readAuthorityObjectIdentity(reader: Reader, context: ServiceWireDecoder
   } else fail("authority-object-identity discriminator");
   body.done("authority-object-identity");
 
-
   return value;
 }
 function writeAuthorityObjectIdentity(input: AuthorityObjectIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -3236,18 +3285,19 @@ function writeAuthorityObjectIdentity(input: AuthorityObjectIdentity, writer: Wr
   writeAuthorityObjectKind(value["objectKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["objectKind"], "actor")) {
+    if (value["spot"] !== undefined) fail("authority-object-identity discriminator agreement");
     if (value["actor"] === undefined) fail("actor required");
 
 
     writeActorAuthorityIdentity(value["actor"], body, context, value, flags);
   } else if (same(value["objectKind"], "spot")) {
+    if (value["actor"] !== undefined) fail("authority-object-identity discriminator agreement");
     if (value["spot"] === undefined) fail("spot required");
 
 
     writeSpotAuthorityIdentity(value["spot"], body, context, value, flags);
   } else fail("authority-object-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeAuthorityObjectIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityObjectIdentity { const reader = new Reader(bytes); const value = readAuthorityObjectIdentity(reader, context, {}, 0); reader.done("authority-object-identity"); return value; }
 export function encodeAuthorityObjectIdentity(value: AuthorityObjectIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityObjectIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3586,7 +3636,7 @@ function readOptionalActorRef(reader: Reader, context: ServiceWireDecoderContext
   value["actorId"] = readOptionalText8(reader, context, value, flags);
 
 
-  if (value["actorId"] !== undefined) {
+  if (value["actorId"] !== null) {
     value["generation"] = readNonzeroU64(reader, context, value, flags);
 
 
@@ -3603,12 +3653,12 @@ function writeOptionalActorRef(input: OptionalActorRef, writer: Writer, context:
 
 
   writeOptionalText8(value["actorId"], writer, context, value, flags);
-  if (value["actorId"] !== undefined) {
+  if (value["actorId"] !== null) {
     if (value["generation"] === undefined) fail("generation required");
 
 
     writeNonzeroU64(numeric(value["generation"]), writer, context, value, flags);
-  } else if (value["generation"] !== undefined) fail("generation forbidden");
+  } else if (value["generation"] !== undefined && !same(value["generation"], null)) fail("generation forbidden");
 }
 export function decodeOptionalActorRef(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalActorRef { const reader = new Reader(bytes); const value = readOptionalActorRef(reader, context, {}, 0); reader.done("optional-actor-ref"); return value; }
 export function encodeOptionalActorRef(value: OptionalActorRef, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalActorRef(value, writer, context, {}, 0); return writer.result(); }
@@ -3687,15 +3737,15 @@ export type ChannelVector = readonly ChannelEntry[];
 function readChannelVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ChannelVector {
   void context; void enclosing; void flags;
   const count = Number(readU16(reader, context, enclosing, flags));  const value: any = Array.from({ length: count }, () => readChannelEntry(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareByteLists([utf8(value[index - 1]["channelName"])], [utf8(value[index]["channelName"])]) >= 0) fail("channel-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["channelName"], value[right]["channelName"])) fail("channel-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBytes(utf8(value[index - 1]["channelName"]), utf8(value[index]["channelName"]))]) >= 0) fail("channel-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBytes(utf8(value[left]["channelName"]), utf8(value[right]["channelName"]))]) === 0) fail("channel-vector unique");
   return value;
 }
 function writeChannelVector(input: ChannelVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value)) fail("channel-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareByteLists([utf8(value[index - 1]["channelName"])], [utf8(value[index]["channelName"])]) >= 0) fail("channel-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["channelName"], value[right]["channelName"])) fail("channel-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBytes(utf8(value[index - 1]["channelName"]), utf8(value[index]["channelName"]))]) >= 0) fail("channel-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBytes(utf8(value[left]["channelName"]), utf8(value[right]["channelName"]))]) === 0) fail("channel-vector unique");
   writeU16(value.length, writer, context, enclosing, flags); for (const item of value) writeChannelEntry(item, writer, context, enclosing, flags);
 }
 export function decodeChannelVector(bytes: Uint8Array, context: ServiceWireDecoderContext): ChannelVector { const reader = new Reader(bytes); const value = readChannelVector(reader, context, {}, 0); reader.done("channel-vector"); return value; }
@@ -3706,15 +3756,15 @@ export type SortedText8Vector = readonly Text8[];
 function readSortedText8Vector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SortedText8Vector {
   void context; void enclosing; void flags;
   const count = Number(readU16(reader, context, enclosing, flags)); if (count > 1024) fail("sorted-text8-vector count"); const value: any = Array.from({ length: count }, () => readText8(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareByteLists([utf8(value[index - 1])], [utf8(value[index])]) >= 0) fail("sorted-text8-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left], value[right])) fail("sorted-text8-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBytes(utf8(value[index - 1]), utf8(value[index]))]) >= 0) fail("sorted-text8-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBytes(utf8(value[left]), utf8(value[right]))]) === 0) fail("sorted-text8-vector unique");
   return value;
 }
 function writeSortedText8Vector(input: SortedText8Vector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value) || value.length > 1024) fail("sorted-text8-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareByteLists([utf8(value[index - 1])], [utf8(value[index])]) >= 0) fail("sorted-text8-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left], value[right])) fail("sorted-text8-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBytes(utf8(value[index - 1]), utf8(value[index]))]) >= 0) fail("sorted-text8-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBytes(utf8(value[left]), utf8(value[right]))]) === 0) fail("sorted-text8-vector unique");
   writeU16(value.length, writer, context, enclosing, flags); for (const item of value) writeText8(item, writer, context, enclosing, flags);
 }
 export function decodeSortedText8Vector(bytes: Uint8Array, context: ServiceWireDecoderContext): SortedText8Vector { const reader = new Reader(bytes); const value = readSortedText8Vector(reader, context, {}, 0); reader.done("sorted-text8-vector"); return value; }
@@ -3791,15 +3841,15 @@ export type StatefulCapabilityVector = readonly StatefulCapabilityEntry[];
 function readStatefulCapabilityVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): StatefulCapabilityVector {
   void context; void enclosing; void flags;
   const count = Number(readU16(reader, context, enclosing, flags)); if (count > 1024) fail("stateful-capability-vector count"); const value: any = Array.from({ length: count }, () => readStatefulCapabilityEntry(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareWireText(enumWireStatefulObjectKind(value[index - 1]["objectKind"]), enumWireStatefulObjectKind(value[index]["objectKind"]), value[index - 1]["type"], value[index]["type"]) >= 0) fail("stateful-capability-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["objectKind"], value[right]["objectKind"]) && same(value[left]["type"], value[right]["type"])) fail("stateful-capability-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(enumWireStatefulObjectKind(value[index - 1]["objectKind"])), numeric(enumWireStatefulObjectKind(value[index]["objectKind"]))), compareBytes(utf8(value[index - 1]["type"]), utf8(value[index]["type"]))]) >= 0) fail("stateful-capability-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(enumWireStatefulObjectKind(value[left]["objectKind"])), numeric(enumWireStatefulObjectKind(value[right]["objectKind"]))), compareBytes(utf8(value[left]["type"]), utf8(value[right]["type"]))]) === 0) fail("stateful-capability-vector unique");
   return value;
 }
 function writeStatefulCapabilityVector(input: StatefulCapabilityVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value) || value.length > 1024) fail("stateful-capability-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareWireText(enumWireStatefulObjectKind(value[index - 1]["objectKind"]), enumWireStatefulObjectKind(value[index]["objectKind"]), value[index - 1]["type"], value[index]["type"]) >= 0) fail("stateful-capability-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["objectKind"], value[right]["objectKind"]) && same(value[left]["type"], value[right]["type"])) fail("stateful-capability-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(enumWireStatefulObjectKind(value[index - 1]["objectKind"])), numeric(enumWireStatefulObjectKind(value[index]["objectKind"]))), compareBytes(utf8(value[index - 1]["type"]), utf8(value[index]["type"]))]) >= 0) fail("stateful-capability-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(enumWireStatefulObjectKind(value[left]["objectKind"])), numeric(enumWireStatefulObjectKind(value[right]["objectKind"]))), compareBytes(utf8(value[left]["type"]), utf8(value[right]["type"]))]) === 0) fail("stateful-capability-vector unique");
   writeU16(value.length, writer, context, enclosing, flags); for (const item of value) writeStatefulCapabilityEntry(item, writer, context, enclosing, flags);
 }
 export function decodeStatefulCapabilityVector(bytes: Uint8Array, context: ServiceWireDecoderContext): StatefulCapabilityVector { const reader = new Reader(bytes); const value = readStatefulCapabilityVector(reader, context, {}, 0); reader.done("stateful-capability-vector"); return value; }
@@ -3809,76 +3859,81 @@ export type DescriptorExtension = { readonly runtimeState: RuntimeState; readonl
 
 function readDescriptorExtension(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DescriptorExtension {
   void context; void enclosing; void flags;
-  const total = Number(readU32(reader, context, enclosing, flags)); if (total > 1048576) fail("descriptor-extension maximum"); const body = reader.bounded(total); const value: any = {}; let previous = -1;
-  while (body.remaining > 0) { const fieldId = Number(readU8(body, context, value, flags)); const length = Number(readU32(body, context, value, flags)); if (fieldId <= previous) fail("descriptor-extension order"); previous = fieldId; const item = body.bounded(length); switch (fieldId) {
-    case 1:
-          if (value["runtimeState"] !== undefined) fail("descriptor-extension duplicate"); value["runtimeState"] = readRuntimeState(item, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const total = Number(readU32(reader, context, enclosing, flags)); const body = reader.bounded(total); const value: any = {}; let previous = -1;
+    while (body.remaining > 0) { const fieldId = Number(readU8(body, context, value, flags)); const length = Number(readU32(body, context, value, flags)); if (fieldId <= previous) fail("descriptor-extension order"); previous = fieldId; const item = body.bounded(length); switch (fieldId) {
+      case 1:
+            if (value["runtimeState"] !== undefined) fail("descriptor-extension duplicate"); value["runtimeState"] = readRuntimeState(item, context, value, flags);
 
 
-          item.done("runtimeState"); break;
-    case 2:
-          if (value["applicationVersion"] !== undefined) fail("descriptor-extension duplicate"); value["applicationVersion"] = readApplicationVersion(item, context, value, flags);
+            item.done("runtimeState"); break;
+      case 2:
+            if (value["applicationVersion"] !== undefined) fail("descriptor-extension duplicate"); value["applicationVersion"] = readApplicationVersion(item, context, value, flags);
 
 
-          item.done("applicationVersion"); break;
-    case 3:
-          if (value["spotTypes"] !== undefined) fail("descriptor-extension duplicate"); value["spotTypes"] = readSortedText8Vector(item, context, value, flags);
+            item.done("applicationVersion"); break;
+      case 3:
+            if (value["spotTypes"] !== undefined) fail("descriptor-extension duplicate"); value["spotTypes"] = readSortedText8Vector(item, context, value, flags);
 
 
-          item.done("spotTypes"); break;
-    case 4:
-          if (value["statefulCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["statefulCapabilities"] = readStatefulCapabilityVector(item, context, value, flags);
+            item.done("spotTypes"); break;
+      case 4:
+            if (value["statefulCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["statefulCapabilities"] = readStatefulCapabilityVector(item, context, value, flags);
 
 
-          item.done("statefulCapabilities"); break;
-    case 5:
-          if (value["maintenanceWave"] !== undefined) fail("descriptor-extension duplicate"); value["maintenanceWave"] = readOptionalText8(item, context, value, flags);
+            item.done("statefulCapabilities"); break;
+      case 5:
+            if (value["maintenanceWave"] !== undefined) fail("descriptor-extension duplicate"); value["maintenanceWave"] = readOptionalText8(item, context, value, flags);
 
 
-          item.done("maintenanceWave"); break;
-    case 6:
-          if (value["protocolCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["protocolCapabilities"] = readSortedText8Vector(item, context, value, flags);
+            item.done("maintenanceWave"); break;
+      case 6:
+            if (value["protocolCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["protocolCapabilities"] = readSortedText8Vector(item, context, value, flags);
 
-          if (!value["protocolCapabilities"].includes("framework-service-v13")) fail("protocolCapabilities required capability");
-          item.done("protocolCapabilities"); break;
-    case 7:
-          if (value["objectRole"] !== undefined) fail("descriptor-extension duplicate"); value["objectRole"] = readObjectRole(item, context, value, flags);
-
-
-          item.done("objectRole"); break;
-    case 8:
-          if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
-          if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
-
-          item.done("placementWeight"); break;
-    case 9:
-          if (value["activeCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityLimit"] = readObjectCapacityLimit(item, context, value, flags);
+            if (!value["protocolCapabilities"].includes("framework-service-v13")) fail("protocolCapabilities required capability");
+            item.done("protocolCapabilities"); break;
+      case 7:
+            if (value["objectRole"] !== undefined) fail("descriptor-extension duplicate"); value["objectRole"] = readObjectRole(item, context, value, flags);
 
 
-          item.done("activeCapacityLimit"); break;
-    case 10:
-          if (value["pendingCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityLimit"] = readObjectPendingCapacityLimit(item, context, value, flags);
+            item.done("objectRole"); break;
+      case 8:
+            if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
+            if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
+
+            item.done("placementWeight"); break;
+      case 9:
+            if (value["activeCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityLimit"] = readObjectCapacityLimit(item, context, value, flags);
 
 
-          item.done("pendingCapacityLimit"); break;
-    case 11:
-          if (value["activeCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityUsed"] = readU32(item, context, value, flags);
+            item.done("activeCapacityLimit"); break;
+      case 10:
+            if (value["pendingCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityLimit"] = readObjectPendingCapacityLimit(item, context, value, flags);
 
 
-          item.done("activeCapacityUsed"); break;
-    case 12:
-          if (value["pendingCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityUsed"] = readU32(item, context, value, flags);
+            item.done("pendingCapacityLimit"); break;
+      case 11:
+            if (value["activeCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityUsed"] = readU32(item, context, value, flags);
 
 
-          item.done("pendingCapacityUsed"); break;
-    default: item.take(item.remaining); break;
-  } }
-  if (value["runtimeState"] === undefined || value["applicationVersion"] === undefined || value["protocolCapabilities"] === undefined || value["objectRole"] === undefined || value["placementWeight"] === undefined || value["activeCapacityLimit"] === undefined || value["pendingCapacityLimit"] === undefined || value["activeCapacityUsed"] === undefined || value["pendingCapacityUsed"] === undefined) fail("descriptor-extension required");
+            item.done("activeCapacityUsed"); break;
+      case 12:
+            if (value["pendingCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityUsed"] = readU32(item, context, value, flags);
 
-  return value;
+
+            item.done("pendingCapacityUsed"); break;
+      default: item.take(item.remaining); break;
+    } }
+    if (value["runtimeState"] === undefined || value["applicationVersion"] === undefined || value["protocolCapabilities"] === undefined || value["objectRole"] === undefined || value["placementWeight"] === undefined || value["activeCapacityLimit"] === undefined || value["pendingCapacityLimit"] === undefined || value["activeCapacityUsed"] === undefined || value["pendingCapacityUsed"] === undefined) fail("descriptor-extension required");
+
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("descriptor-extension maximum");
+  return decoded;
 }
 function writeDescriptorExtension(input: DescriptorExtension, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const limitStart = writer.length;
   if (value["runtimeState"] === undefined || value["applicationVersion"] === undefined || value["protocolCapabilities"] === undefined || value["objectRole"] === undefined || value["placementWeight"] === undefined || value["activeCapacityLimit"] === undefined || value["pendingCapacityLimit"] === undefined || value["activeCapacityUsed"] === undefined || value["pendingCapacityUsed"] === undefined) fail("descriptor-extension required");
 
   const body = new Writer();
@@ -3942,7 +3997,8 @@ function writeDescriptorExtension(input: DescriptorExtension, writer: Writer, co
 
     const item = new Writer(); writeU32(value["pendingCapacityUsed"], item, context, value, flags); const itemBytes = item.result(); writeU8(12, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
-  const bytes = body.result(); if (bytes.length > 1048576) fail("descriptor-extension maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (writer.length - limitStart > 1048576) fail("descriptor-extension maximum");
 }
 export function decodeDescriptorExtension(bytes: Uint8Array, context: ServiceWireDecoderContext): DescriptorExtension { const reader = new Reader(bytes); const value = readDescriptorExtension(reader, context, {}, 0); reader.done("descriptor-extension"); return value; }
 export function encodeDescriptorExtension(value: DescriptorExtension, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeDescriptorExtension(value, writer, context, {}, 0); return writer.result(); }
@@ -4067,7 +4123,6 @@ function readClientServerAdmission(reader: Reader, context: ServiceWireDecoderCo
   } else fail("client-server-admission discriminator");
   body.done("client-server-admission");
 
-
   return value;
 }
 function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4076,6 +4131,7 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
   writeClientServerRole(value["role"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["role"], "client")) {
+    if (value["serverRid"] !== undefined || value["lifecycleGeneration"] !== undefined || value["descriptorRevision"] !== undefined || value["weight"] !== undefined || value["runtimeState"] !== undefined || value["advertisedEndpoint"] !== undefined) fail("client-server-admission discriminator agreement");
     if (value["channelName"] === undefined) fail("channelName required");
 
 
@@ -4093,6 +4149,7 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
 
     writeNonzeroU32(value["normalizedEffectiveMaxMessageBytes"], body, context, value, flags);
   } else if (same(value["role"], "server")) {
+
     if (value["channelName"] === undefined) fail("channelName required");
 
 
@@ -4135,7 +4192,6 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
     writeEndpoint(value["advertisedEndpoint"], body, context, value, flags);
   } else fail("client-server-admission discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeClientServerAdmission(bytes: Uint8Array, context: ServiceWireDecoderContext): ClientServerAdmission { const reader = new Reader(bytes); const value = readClientServerAdmission(reader, context, {}, 0); reader.done("client-server-admission"); return value; }
 export function encodeClientServerAdmission(value: ClientServerAdmission, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerAdmission(value, writer, context, {}, 0); return writer.result(); }
@@ -4144,42 +4200,47 @@ export type ServiceAdmission = { readonly topologyKind: "routeMesh"; readonly ro
 
 function readServiceAdmission(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ServiceAdmission {
   void context; void enclosing; void flags;
-  const encodedStart = reader.offset; const value: any = {};
-  value["topologyKind"] = readServiceTopologyKind(reader, context, enclosing, flags);
-  const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
-  if (same(value["topologyKind"], "routeMesh")) {
-    value["routeMesh"] = readRouteMeshAdmission(body, context, value, flags);
+  const limitStart = reader.offset; const decoded = (() => {
+    const value: any = {};
+    value["topologyKind"] = readServiceTopologyKind(reader, context, enclosing, flags);
+    const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
+    if (same(value["topologyKind"], "routeMesh")) {
+      value["routeMesh"] = readRouteMeshAdmission(body, context, value, flags);
 
 
-  } else if (same(value["topologyKind"], "clientServer")) {
-    value["clientServer"] = readClientServerAdmission(body, context, value, flags);
+    } else if (same(value["topologyKind"], "clientServer")) {
+      value["clientServer"] = readClientServerAdmission(body, context, value, flags);
 
 
-  } else fail("service-admission discriminator");
-  body.done("service-admission");
-  if (reader.offset - encodedStart > 1048576) fail("service-admission maximum");
+    } else fail("service-admission discriminator");
+    body.done("service-admission");
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("service-admission maximum");
+  return decoded;
 }
 function writeServiceAdmission(input: ServiceAdmission, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const encodedStart = writer.length;
+  const limitStart = writer.length;
 
   writeServiceTopologyKind(value["topologyKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["topologyKind"], "routeMesh")) {
+    if (value["clientServer"] !== undefined) fail("service-admission discriminator agreement");
     if (value["routeMesh"] === undefined) fail("routeMesh required");
 
 
     writeRouteMeshAdmission(value["routeMesh"], body, context, value, flags);
   } else if (same(value["topologyKind"], "clientServer")) {
+    if (value["routeMesh"] !== undefined) fail("service-admission discriminator agreement");
     if (value["clientServer"] === undefined) fail("clientServer required");
 
 
     writeClientServerAdmission(value["clientServer"], body, context, value, flags);
   } else fail("service-admission discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-  if (writer.length - encodedStart > 1048576) fail("service-admission maximum");
+  if (writer.length - limitStart > 1048576) fail("service-admission maximum");
 }
 export function decodeServiceAdmission(bytes: Uint8Array, context: ServiceWireDecoderContext): ServiceAdmission { const reader = new Reader(bytes); const value = readServiceAdmission(reader, context, {}, 0); reader.done("service-admission"); return value; }
 export function encodeServiceAdmission(value: ServiceAdmission, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeServiceAdmission(value, writer, context, {}, 0); return writer.result(); }
@@ -4200,7 +4261,6 @@ function readInstanceReplyRoute(reader: Reader, context: ServiceWireDecoderConte
   } else fail("instance-reply-route discriminator");
 
 
-
   return value;
 }
 function writeInstanceReplyRoute(input: InstanceReplyRoute, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4209,14 +4269,15 @@ function writeInstanceReplyRoute(input: InstanceReplyRoute, writer: Writer, cont
 
   const body = writer;
   if (same(value["operationKind"], "send")) {
+    if (value["replyRouteId"] !== undefined) fail("instance-reply-route discriminator agreement");
 
   } else if (same(value["operationKind"], "request")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else fail("instance-reply-route discriminator");
-
 
 }
 export function decodeInstanceReplyRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceReplyRoute { const reader = new Reader(bytes); const value = readInstanceReplyRoute(reader, context, {}, 0); reader.done("instance-reply-route"); return value; }
@@ -4240,7 +4301,6 @@ function readColdActivationReplyContext(reader: Reader, context: ServiceWireDeco
   } else fail("cold-activation-reply-context discriminator");
   body.done("cold-activation-reply-context");
 
-
   return value;
 }
 function writeColdActivationReplyContext(input: ColdActivationReplyContext, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4249,18 +4309,19 @@ function writeColdActivationReplyContext(input: ColdActivationReplyContext, writ
   writeColdActivationCompletionKind(value["completionKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["completionKind"], "readyBarrier")) {
+
     if (value["authority"] === undefined) fail("authority required");
 
 
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
   } else if (same(value["completionKind"], "activationFailure")) {
+
     if (value["authority"] === undefined) fail("authority required");
 
 
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
   } else fail("cold-activation-reply-context discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeColdActivationReplyContext(bytes: Uint8Array, context: ServiceWireDecoderContext): ColdActivationReplyContext { const reader = new Reader(bytes); const value = readColdActivationReplyContext(reader, context, {}, 0); reader.done("cold-activation-reply-context"); return value; }
 export function encodeColdActivationReplyContext(value: ColdActivationReplyContext, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeColdActivationReplyContext(value, writer, context, {}, 0); return writer.result(); }
@@ -4295,7 +4356,6 @@ function readReplyRelayContext(reader: Reader, context: ServiceWireDecoderContex
   } else fail("reply-relay-context discriminator");
   body.done("reply-relay-context");
 
-
   return value;
 }
 function writeReplyRelayContext(input: ReplyRelayContext, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4304,11 +4364,13 @@ function writeReplyRelayContext(input: ReplyRelayContext, writer: Writer, contex
   writeReplyRelayContextKind(value["contextKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["contextKind"], "coldActivation")) {
+    if (value["relocation"] !== undefined || value["targetAttemptGeneration"] !== undefined || value["coordinator"] !== undefined || value["participantId"] !== undefined || value["sequence"] !== undefined) fail("reply-relay-context discriminator agreement");
     if (value["coldActivation"] === undefined) fail("coldActivation required");
 
 
     writeColdActivationReplyContext(value["coldActivation"], body, context, value, flags);
   } else if (same(value["contextKind"], "maintenanceRelocation")) {
+    if (value["coldActivation"] !== undefined) fail("reply-relay-context discriminator agreement");
     if (value["relocation"] === undefined) fail("relocation required");
 
 
@@ -4331,7 +4393,6 @@ function writeReplyRelayContext(input: ReplyRelayContext, writer: Writer, contex
     writeNonzeroU64(numeric(value["sequence"]), body, context, value, flags);
   } else fail("reply-relay-context discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeReplyRelayContext(bytes: Uint8Array, context: ServiceWireDecoderContext): ReplyRelayContext { const reader = new Reader(bytes); const value = readReplyRelayContext(reader, context, {}, 0); reader.done("reply-relay-context"); return value; }
 export function encodeReplyRelayContext(value: ReplyRelayContext, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayContext(value, writer, context, {}, 0); return writer.result(); }
@@ -4369,7 +4430,6 @@ function readSendReadyDestination(reader: Reader, context: ServiceWireDecoderCon
   } else fail("send-ready-destination discriminator");
   body.done("send-ready-destination");
 
-
   return value;
 }
 function writeSendReadyDestination(input: SendReadyDestination, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4378,26 +4438,31 @@ function writeSendReadyDestination(input: SendReadyDestination, writer: Writer, 
   writeMeshDestinationKind(value["destinationKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["destinationKind"], "node")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["targetActor"] !== undefined || value["bindingGeneration"] !== undefined) fail("send-ready-destination discriminator agreement");
     if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
 
 
     writeRid(value["targetNodeRid"], body, context, value, flags);
   } else if (same(value["destinationKind"], "channel")) {
+    if (value["targetNodeRid"] !== undefined || value["targetSpot"] !== undefined || value["targetActor"] !== undefined || value["bindingGeneration"] !== undefined) fail("send-ready-destination discriminator agreement");
     if (value["channelName"] === undefined) fail("channelName required");
 
 
     writeText8(value["channelName"], body, context, value, flags);
   } else if (same(value["destinationKind"], "spot")) {
+    if (value["targetNodeRid"] !== undefined || value["channelName"] !== undefined || value["targetActor"] !== undefined || value["bindingGeneration"] !== undefined) fail("send-ready-destination discriminator agreement");
     if (value["targetSpot"] === undefined) fail("targetSpot required");
 
 
     writeSpotRouteFence(value["targetSpot"], body, context, value, flags);
   } else if (same(value["destinationKind"], "actor")) {
+    if (value["targetNodeRid"] !== undefined || value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["bindingGeneration"] !== undefined) fail("send-ready-destination discriminator agreement");
     if (value["targetActor"] === undefined) fail("targetActor required");
 
 
     writeActorRouteFence(value["targetActor"], body, context, value, flags);
   } else if (same(value["destinationKind"], "boundSession")) {
+    if (value["targetNodeRid"] !== undefined || value["channelName"] !== undefined || value["targetSpot"] !== undefined) fail("send-ready-destination discriminator agreement");
     if (value["targetActor"] === undefined) fail("targetActor required");
 
 
@@ -4408,7 +4473,6 @@ function writeSendReadyDestination(input: SendReadyDestination, writer: Writer, 
     writeNonzeroU64(numeric(value["bindingGeneration"]), body, context, value, flags);
   } else fail("send-ready-destination discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeSendReadyDestination(bytes: Uint8Array, context: ServiceWireDecoderContext): SendReadyDestination { const reader = new Reader(bytes); const value = readSendReadyDestination(reader, context, {}, 0); reader.done("send-ready-destination"); return value; }
 export function encodeSendReadyDestination(value: SendReadyDestination, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSendReadyDestination(value, writer, context, {}, 0); return writer.result(); }
@@ -4460,7 +4524,6 @@ function readOptionalActorMembershipSnapshot(reader: Reader, context: ServiceWir
   } else fail("optional-actor-membership-snapshot discriminator");
   body.done("optional-actor-membership-snapshot");
 
-
   return value;
 }
 function writeOptionalActorMembershipSnapshot(input: OptionalActorMembershipSnapshot, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4469,15 +4532,16 @@ function writeOptionalActorMembershipSnapshot(input: OptionalActorMembershipSnap
   writeBool8(value["hasSnapshot"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasSnapshot"], "false")) {
+    if (value["snapshot"] !== undefined) fail("optional-actor-membership-snapshot discriminator agreement");
 
   } else if (same(value["hasSnapshot"], "true")) {
+
     if (value["snapshot"] === undefined) fail("snapshot required");
 
 
     writeActorMembershipSnapshot(value["snapshot"], body, context, value, flags);
   } else fail("optional-actor-membership-snapshot discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeOptionalActorMembershipSnapshot(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalActorMembershipSnapshot { const reader = new Reader(bytes); const value = readOptionalActorMembershipSnapshot(reader, context, {}, 0); reader.done("optional-actor-membership-snapshot"); return value; }
 export function encodeOptionalActorMembershipSnapshot(value: OptionalActorMembershipSnapshot, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalActorMembershipSnapshot(value, writer, context, {}, 0); return writer.result(); }
@@ -4518,7 +4582,6 @@ function readActorControlData(reader: Reader, context: ServiceWireDecoderContext
   } else fail("actor-control-data discriminator");
   body.done("actor-control-data");
 
-
   return value;
 }
 function writeActorControlData(input: ActorControlData, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4527,11 +4590,13 @@ function writeActorControlData(input: ActorControlData, writer: Writer, context:
   writeActorLifecycleKind(value["lifecycleKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["lifecycleKind"], "created")) {
+    if (value["previous"] !== undefined) fail("actor-control-data discriminator agreement");
     if (value["current"] === undefined) fail("current required");
 
 
     writeActorMembershipSnapshot(value["current"], body, context, value, flags);
   } else if (same(value["lifecycleKind"], "joined")) {
+
     if (value["previous"] === undefined) fail("previous required");
 
 
@@ -4541,6 +4606,7 @@ function writeActorControlData(input: ActorControlData, writer: Writer, context:
 
     writeActorMembershipSnapshot(value["current"], body, context, value, flags);
   } else if (same(value["lifecycleKind"], "left")) {
+
     if (value["previous"] === undefined) fail("previous required");
 
 
@@ -4550,18 +4616,19 @@ function writeActorControlData(input: ActorControlData, writer: Writer, context:
 
     writeActorMembershipSnapshot(value["current"], body, context, value, flags);
   } else if (same(value["lifecycleKind"], "disconnected")) {
+    if (value["previous"] !== undefined) fail("actor-control-data discriminator agreement");
     if (value["current"] === undefined) fail("current required");
 
 
     writeActorMembershipSnapshot(value["current"], body, context, value, flags);
   } else if (same(value["lifecycleKind"], "destroyed")) {
+    if (value["current"] !== undefined) fail("actor-control-data discriminator agreement");
     if (value["previous"] === undefined) fail("previous required");
 
 
     writeActorMembershipSnapshot(value["previous"], body, context, value, flags);
   } else fail("actor-control-data discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeActorControlData(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorControlData { const reader = new Reader(bytes); const value = readActorControlData(reader, context, {}, 0); reader.done("actor-control-data"); return value; }
 export function encodeActorControlData(value: ActorControlData, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorControlData(value, writer, context, {}, 0); return writer.result(); }
@@ -4680,7 +4747,6 @@ function readRequestSpecificTail(reader: Reader, context: ServiceWireDecoderCont
   }
 
 
-
   return value;
 }
 function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4689,6 +4755,7 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
   const body = writer;
   if (same(value["originalOperationKind"], "actorLookup") && same(value["terminalResult"], "ok")) {
+    if (value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["actor"] === undefined) fail("actor required");
 
 
@@ -4710,11 +4777,13 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
     writeNonzeroU64(numeric(value["authorityOwnerGeneration"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "actorJoin") && same(value["terminalResult"], "ok")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["join"] === undefined) fail("join required");
 
 
     writeActorJoinReplyTail(value["join"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "streamBind") && same(value["terminalResult"], "ok")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["join"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["bindingGeneration"] === undefined) fail("bindingGeneration required");
 
 
@@ -4724,6 +4793,7 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
     writeNonzeroU64(numeric(value["authorityOwnerGeneration"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "userSpotCreate") && same(value["terminalResult"], "ok")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["createResult"] === undefined) fail("createResult required");
 
 
@@ -4733,19 +4803,21 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
     writeSpotRef(value["spot"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "userSpotClose") && same(value["terminalResult"], "ok")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["closed"] === undefined) fail("closed required");
 
 
     writeBool8(value["closed"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "actorCreate") && same(value["terminalResult"], "ok")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["creation"] === undefined) fail("creation required");
 
 
     writeActorCreateTerminal(value["creation"], body, context, value, flags);
   } else {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
 
   }
-
 
 }
 export function decodeRequestSpecificTail(bytes: Uint8Array, context: ServiceWireDecoderContext): RequestSpecificTail { const reader = new Reader(bytes); const value = readRequestSpecificTail(reader, context, {}, 0); reader.done("request-specific-tail"); return value; }
@@ -4860,7 +4932,6 @@ function readFrozenRecordBody(reader: Reader, context: ServiceWireDecoderContext
 
   } else fail("frozen-record-body discriminator");
 
-
   if (same(value["recordKind"], "completion") && !(runtimePredicate(context, "service-wire-constants.valid-terminal-failure", enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("frozen-record-body runtime predicate");
   return value;
 }
@@ -4870,16 +4941,19 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
   const body = writer;
   if (same(value["recordKind"], "nodeSend")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["payload"] === undefined) fail("payload required");
 
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "nodeRequest")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["payload"] === undefined) fail("payload required");
 
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "channelSend")) {
+    if (value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["channelName"] === undefined) fail("channelName required");
 
 
@@ -4889,6 +4963,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "channelRequest")) {
+    if (value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["channelName"] === undefined) fail("channelName required");
 
 
@@ -4898,6 +4973,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "spotSend")) {
+    if (value["channelName"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["targetSpot"] === undefined) fail("targetSpot required");
 
 
@@ -4907,6 +4983,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "spotRequest")) {
+    if (value["channelName"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["targetSpot"] === undefined) fail("targetSpot required");
 
 
@@ -4916,6 +4993,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "spotMulticast")) {
+    if (value["targetSpot"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["channelName"] === undefined) fail("channelName required");
 
 
@@ -4929,11 +5007,13 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "spotControl")) {
+    if (value["payload"] !== undefined || value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["control"] === undefined) fail("control required");
 
 
     writeActorControlData(value["control"], body, context, value, flags);
   } else if (same(value["recordKind"], "actorSend")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["targetActor"] === undefined) fail("targetActor required");
 
 
@@ -4943,6 +5023,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "actorRequest")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["targetActor"] === undefined) fail("targetActor required");
 
 
@@ -4952,6 +5033,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else if (same(value["recordKind"], "completion")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["terminalResult"] === undefined) fail("terminalResult required");
 
 
@@ -4971,16 +5053,19 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
       writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
     } else if (value["payload"] !== undefined) fail("payload forbidden");
   } else if (same(value["recordKind"], "sendReady")) {
+    if (value["payload"] !== undefined || value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["destination"] === undefined) fail("destination required");
 
 
     writeSendReadyDestination(value["destination"], body, context, value, flags);
   } else if (same(value["recordKind"], "relocationControl")) {
+    if (value["payload"] !== undefined || value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined || value["route"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["operationKind"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["control"] === undefined) fail("control required");
 
 
     writeRelocationControlData(value["control"], body, context, value, flags);
   } else if (same(value["recordKind"], "instanceSpotActivation")) {
+    if (value["channelName"] !== undefined || value["targetSpot"] !== undefined || value["topic"] !== undefined || value["control"] !== undefined || value["targetActor"] !== undefined || value["terminalResult"] !== undefined || value["failureCode"] !== undefined || value["hasPayload"] !== undefined || value["destination"] !== undefined) fail("frozen-record-body discriminator agreement");
     if (value["route"] === undefined) fail("route required");
 
 
@@ -4998,7 +5083,6 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
 
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else fail("frozen-record-body discriminator");
-
 
 }
 export function decodeFrozenRecordBody(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenRecordBody { const reader = new Reader(bytes); const value = readFrozenRecordBody(reader, context, {}, 0); reader.done("frozen-record-body"); return value; }
@@ -5084,7 +5168,6 @@ function readFrozenSourceIdentity(reader: Reader, context: ServiceWireDecoderCon
   } else fail("frozen-source-identity discriminator");
   body.done("frozen-source-identity");
 
-
   return value;
 }
 function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5093,6 +5176,7 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
   writeFrozenSourceKind(value["sourceKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["sourceKind"], "node")) {
+    if (value["sourceSpotId"] !== undefined || value["sourceActor"] !== undefined || value["sourceSessionRid"] !== undefined || value["sourceBindingGeneration"] !== undefined || value["sourceSessionSequence"] !== undefined) fail("frozen-source-identity discriminator agreement");
     if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
 
 
@@ -5110,6 +5194,7 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
 
     writeNonzeroU64(numeric(value["sourceOwnerLeaseGeneration"]), body, context, value, flags);
   } else if (same(value["sourceKind"], "spot")) {
+    if (value["sourceActor"] !== undefined || value["sourceSessionRid"] !== undefined || value["sourceBindingGeneration"] !== undefined || value["sourceSessionSequence"] !== undefined) fail("frozen-source-identity discriminator agreement");
     if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
 
 
@@ -5131,6 +5216,7 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
 
     writeText8(value["sourceSpotId"], body, context, value, flags);
   } else if (same(value["sourceKind"], "actor")) {
+    if (value["sourceSpotId"] !== undefined || value["sourceSessionRid"] !== undefined || value["sourceBindingGeneration"] !== undefined || value["sourceSessionSequence"] !== undefined) fail("frozen-source-identity discriminator agreement");
     if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
 
 
@@ -5152,6 +5238,7 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
 
     writeActorRef(value["sourceActor"], body, context, value, flags);
   } else if (same(value["sourceKind"], "boundSession")) {
+    if (value["sourceSpotId"] !== undefined) fail("frozen-source-identity discriminator agreement");
     if (value["sourceNodeRid"] === undefined) fail("sourceNodeRid required");
 
 
@@ -5186,7 +5273,6 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
     writeNonzeroU64(numeric(value["sourceSessionSequence"]), body, context, value, flags);
   } else fail("frozen-source-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeFrozenSourceIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenSourceIdentity { const reader = new Reader(bytes); const value = readFrozenSourceIdentity(reader, context, {}, 0); reader.done("frozen-source-identity"); return value; }
 export function encodeFrozenSourceIdentity(value: FrozenSourceIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenSourceIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -5223,7 +5309,6 @@ function readFrozenReplyRoute(reader: Reader, context: ServiceWireDecoderContext
   }
   body.done("frozen-reply-route");
 
-
   return value;
 }
 function writeFrozenReplyRoute(input: FrozenReplyRoute, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5232,35 +5317,40 @@ function writeFrozenReplyRoute(input: FrozenReplyRoute, writer: Writer, context:
 
   const body = new Writer();
   if (same(value["originalOperationKind"], "nodeRequest")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "channelRequest")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "spotRequest")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "actorRequest")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "instanceSpotRequest")) {
+
     if (value["replyRouteId"] === undefined) fail("replyRouteId required");
 
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else {
+    if (value["replyRouteId"] !== undefined) fail("frozen-reply-route discriminator agreement");
 
   }
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeFrozenReplyRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenReplyRoute { const reader = new Reader(bytes); const value = readFrozenReplyRoute(reader, context, {}, 0); reader.done("frozen-reply-route"); return value; }
 export function encodeFrozenReplyRoute(value: FrozenReplyRoute, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenReplyRoute(value, writer, context, {}, 0); return writer.result(); }
@@ -5387,7 +5477,6 @@ function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext,
   } else fail("instance-route-v1 discriminator");
   body.done("instance-route-v1");
 
-
   return value;
 }
 function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5396,6 +5485,7 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
   writeInstanceRouteKind(value["routeKind"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["routeKind"], "ready")) {
+    if (value["targetMeshName"] !== undefined || value["stableType"] !== undefined || value["targetDescriptorVersion"] !== undefined || value["deadlineUnixMs"] !== undefined) fail("instance-route-v1 discriminator agreement");
     if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
 
 
@@ -5413,6 +5503,7 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
 
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
   } else if (same(value["routeKind"], "coldActivation")) {
+    if (value["authority"] !== undefined) fail("instance-route-v1 discriminator agreement");
     if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
 
 
@@ -5443,7 +5534,6 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
     writeNonzeroU64(numeric(value["deadlineUnixMs"]), body, context, value, flags);
   } else fail("instance-route-v1 discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeInstanceRouteV1(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceRouteV1 { const reader = new Reader(bytes); const value = readInstanceRouteV1(reader, context, {}, 0); reader.done("instance-route-v1"); return value; }
 export function encodeInstanceRouteV1(value: InstanceRouteV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceRouteV1(value, writer, context, {}, 0); return writer.result(); }
@@ -5467,7 +5557,6 @@ function readRelocationRootPointer(reader: Reader, context: ServiceWireDecoderCo
   } else fail("relocation-root-pointer discriminator");
   body.done("relocation-root-pointer");
 
-
   return value;
 }
 function writeRelocationRootPointer(input: RelocationRootPointer, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5476,8 +5565,10 @@ function writeRelocationRootPointer(input: RelocationRootPointer, writer: Writer
   writeBool8(value["hasRelocation"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasRelocation"], "false")) {
+    if (value["reference"] !== undefined || value["checksumCrc32c"] !== undefined) fail("relocation-root-pointer discriminator agreement");
 
   } else if (same(value["hasRelocation"], "true")) {
+
     if (value["reference"] === undefined) fail("reference required");
 
 
@@ -5488,7 +5579,6 @@ function writeRelocationRootPointer(input: RelocationRootPointer, writer: Writer
     writeU32(value["checksumCrc32c"], body, context, value, flags);
   } else fail("relocation-root-pointer discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeRelocationRootPointer(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationRootPointer { const reader = new Reader(bytes); const value = readRelocationRootPointer(reader, context, {}, 0); reader.done("relocation-root-pointer"); return value; }
 export function encodeRelocationRootPointer(value: RelocationRootPointer, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationRootPointer(value, writer, context, {}, 0); return writer.result(); }
@@ -5497,90 +5587,95 @@ export type AuthorityRelocationState = { readonly hasRelocation: "false" } | { r
 
 function readAuthorityRelocationState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityRelocationState {
   void context; void enclosing; void flags;
-  const encodedStart = reader.offset; const value: any = {};
-  value["hasRelocation"] = readBool8(reader, context, enclosing, flags);
-  const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
-  if (same(value["hasRelocation"], "false")) {
+  const limitStart = reader.offset; const decoded = (() => {
+    const value: any = {};
+    value["hasRelocation"] = readBool8(reader, context, enclosing, flags);
+    const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
+    if (same(value["hasRelocation"], "false")) {
 
-  } else if (same(value["hasRelocation"], "true")) {
-    value["relocation"] = readRelocationId(body, context, value, flags);
-
-
-    value["aggregateGeneration"] = readOrdinalOrZero(body, context, value, flags);
-    if (numeric(value["aggregateGeneration"]) > 9223372036854775806n) fail("aggregateGeneration constraint");
-
-    value["targetAttemptGeneration"] = readOrdinalOrZero(body, context, value, flags);
+    } else if (same(value["hasRelocation"], "true")) {
+      value["relocation"] = readRelocationId(body, context, value, flags);
 
 
-    value["relocationReference"] = readRelocationReference(body, context, value, flags);
+      value["aggregateGeneration"] = readOrdinalOrZero(body, context, value, flags);
+      if (numeric(value["aggregateGeneration"]) > 9223372036854775806n) fail("aggregateGeneration constraint");
+
+      value["targetAttemptGeneration"] = readOrdinalOrZero(body, context, value, flags);
 
 
-    value["relocationChecksumCrc32c"] = readU32(body, context, value, flags);
+      value["relocationReference"] = readRelocationReference(body, context, value, flags);
 
 
-    value["sourceNodeRid"] = readRid(body, context, value, flags);
+      value["relocationChecksumCrc32c"] = readU32(body, context, value, flags);
 
 
-    value["sourceNodeGeneration"] = readNonzeroU64(body, context, value, flags);
+      value["sourceNodeRid"] = readRid(body, context, value, flags);
 
 
-    value["sourceOwnerId"] = readText8(body, context, value, flags);
+      value["sourceNodeGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
-    value["sourceOwnerLeaseGeneration"] = readNonzeroU64(body, context, value, flags);
+      value["sourceOwnerId"] = readText8(body, context, value, flags);
 
 
-    value["targetNodeRid"] = readOptionalRid(body, context, value, flags);
+      value["sourceOwnerLeaseGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
-    value["targetNodeGeneration"] = readOrdinalOrZero(body, context, value, flags);
+      value["targetNodeRid"] = readOptionalRid(body, context, value, flags);
 
 
-    value["targetOwnerId"] = readOptionalText8(body, context, value, flags);
+      value["targetNodeGeneration"] = readOrdinalOrZero(body, context, value, flags);
 
 
-    value["targetOwnerLeaseGeneration"] = readOrdinalOrZero(body, context, value, flags);
+      value["targetOwnerId"] = readOptionalText8(body, context, value, flags);
 
 
-    value["coordinatorOwnerId"] = readText8(body, context, value, flags);
+      value["targetOwnerLeaseGeneration"] = readOrdinalOrZero(body, context, value, flags);
 
 
-    value["coordinatorLeaseGeneration"] = readNonzeroU64(body, context, value, flags);
+      value["coordinatorOwnerId"] = readText8(body, context, value, flags);
 
 
-    value["coordinatorNodeRid"] = readRid(body, context, value, flags);
+      value["coordinatorLeaseGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
-    value["coordinatorNodeGeneration"] = readNonzeroU64(body, context, value, flags);
+      value["coordinatorNodeRid"] = readRid(body, context, value, flags);
 
 
-    value["coordinatorExpectedStoreVersion"] = readOptionalText8(body, context, value, flags);
+      value["coordinatorNodeGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
-    value["phase"] = readRelocationPhase(body, context, value, flags);
+      value["coordinatorExpectedStoreVersion"] = readOptionalText8(body, context, value, flags);
 
 
-    value["applicationVersion"] = readApplicationVersion(body, context, value, flags);
+      value["phase"] = readRelocationPhase(body, context, value, flags);
 
 
-    value["sourceCleanupState"] = readSourceCleanupState(body, context, value, flags);
+      value["applicationVersion"] = readApplicationVersion(body, context, value, flags);
 
 
-  } else fail("authority-relocation-state discriminator");
-  body.done("authority-relocation-state");
-  if (reader.offset - encodedStart > 1048576) fail("authority-relocation-state maximum");
+      value["sourceCleanupState"] = readSourceCleanupState(body, context, value, flags);
 
-  return value;
+
+    } else fail("authority-relocation-state discriminator");
+    body.done("authority-relocation-state");
+
+    return value;
+  })();
+  if (reader.offset - limitStart > 1048576) fail("authority-relocation-state maximum");
+  return decoded;
 }
 function writeAuthorityRelocationState(input: AuthorityRelocationState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const encodedStart = writer.length;
+  const limitStart = writer.length;
 
   writeBool8(value["hasRelocation"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasRelocation"], "false")) {
+    if (value["relocation"] !== undefined || value["aggregateGeneration"] !== undefined || value["targetAttemptGeneration"] !== undefined || value["relocationReference"] !== undefined || value["relocationChecksumCrc32c"] !== undefined || value["sourceNodeRid"] !== undefined || value["sourceNodeGeneration"] !== undefined || value["sourceOwnerId"] !== undefined || value["sourceOwnerLeaseGeneration"] !== undefined || value["targetNodeRid"] !== undefined || value["targetNodeGeneration"] !== undefined || value["targetOwnerId"] !== undefined || value["targetOwnerLeaseGeneration"] !== undefined || value["coordinatorOwnerId"] !== undefined || value["coordinatorLeaseGeneration"] !== undefined || value["coordinatorNodeRid"] !== undefined || value["coordinatorNodeGeneration"] !== undefined || value["coordinatorExpectedStoreVersion"] !== undefined || value["phase"] !== undefined || value["applicationVersion"] !== undefined || value["sourceCleanupState"] !== undefined) fail("authority-relocation-state discriminator agreement");
 
   } else if (same(value["hasRelocation"], "true")) {
+
     if (value["relocation"] === undefined) fail("relocation required");
 
 
@@ -5667,7 +5762,7 @@ function writeAuthorityRelocationState(input: AuthorityRelocationState, writer: 
     writeSourceCleanupState(value["sourceCleanupState"], body, context, value, flags);
   } else fail("authority-relocation-state discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-  if (writer.length - encodedStart > 1048576) fail("authority-relocation-state maximum");
+  if (writer.length - limitStart > 1048576) fail("authority-relocation-state maximum");
 }
 export function decodeAuthorityRelocationState(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityRelocationState { const reader = new Reader(bytes); const value = readAuthorityRelocationState(reader, context, {}, 0); reader.done("authority-relocation-state"); return value; }
 export function encodeAuthorityRelocationState(value: AuthorityRelocationState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityRelocationState(value, writer, context, {}, 0); return writer.result(); }
@@ -5701,7 +5796,6 @@ function readAuthorityActivationRecoveryState(reader: Reader, context: ServiceWi
   } else fail("authority-activation-recovery-state discriminator");
   body.done("authority-activation-recovery-state");
 
-
   return value;
 }
 function writeAuthorityActivationRecoveryState(input: AuthorityActivationRecoveryState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5710,8 +5804,10 @@ function writeAuthorityActivationRecoveryState(input: AuthorityActivationRecover
   writeBool8(value["hasActivationRecovery"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasActivationRecovery"], "false")) {
+    if (value["reference"] !== undefined || value["sha256"] !== undefined || value["encodedSize"] !== undefined || value["inboxSequence"] !== undefined || value["replayCursor"] !== undefined) fail("authority-activation-recovery-state discriminator agreement");
 
   } else if (same(value["hasActivationRecovery"], "true")) {
+
     if (value["reference"] === undefined) fail("reference required");
 
 
@@ -5735,7 +5831,6 @@ function writeAuthorityActivationRecoveryState(input: AuthorityActivationRecover
     if (numeric(value["replayCursor"]) > numeric(value["inboxSequence"])) fail("types.authority-activation-recovery-state.cases.{\"hasActivationRecovery\":\"true\"} field order");
   } else fail("authority-activation-recovery-state discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
-
 }
 export function decodeAuthorityActivationRecoveryState(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityActivationRecoveryState { const reader = new Reader(bytes); const value = readAuthorityActivationRecoveryState(reader, context, {}, 0); reader.done("authority-activation-recovery-state"); return value; }
 export function encodeAuthorityActivationRecoveryState(value: AuthorityActivationRecoveryState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityActivationRecoveryState(value, writer, context, {}, 0); return writer.result(); }
@@ -5863,15 +5958,15 @@ export type SavedWorkVector = readonly SavedWorkEntry[];
 function readSavedWorkVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SavedWorkVector {
   void context; void enclosing; void flags;
   const count = Number(readU32(reader, context, enclosing, flags));  const value: any = Array.from({ length: count }, () => readSavedWorkEntry(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"]),numeric(value[index - 1]["order"])], [numeric(value[index]["participantId"]),numeric(value[index]["order"])]) >= 0) fail("saved-work-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["order"], value[right]["order"])) fail("saved-work-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"])), compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("saved-work-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"])), compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("saved-work-vector unique");
   return value;
 }
 function writeSavedWorkVector(input: SavedWorkVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value)) fail("saved-work-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"]),numeric(value[index - 1]["order"])], [numeric(value[index]["participantId"]),numeric(value[index]["order"])]) >= 0) fail("saved-work-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["order"], value[right]["order"])) fail("saved-work-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"])), compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("saved-work-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"])), compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("saved-work-vector unique");
   writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeSavedWorkEntry(item, writer, context, enclosing, flags);
 }
 export function decodeSavedWorkVector(bytes: Uint8Array, context: ServiceWireDecoderContext): SavedWorkVector { const reader = new Reader(bytes); const value = readSavedWorkVector(reader, context, {}, 0); reader.done("saved-work-vector"); return value; }
@@ -5953,15 +6048,15 @@ export type RelocationChunkVectorV1 = readonly RelocationChunkEntryV1[];
 function readRelocationChunkVectorV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationChunkVectorV1 {
   void context; void enclosing; void flags;
   const count = Number(readU32(reader, context, enclosing, flags)); if (count > 4096) fail("relocation-chunk-vector-v1 count"); const value: any = Array.from({ length: count }, () => readRelocationChunkEntryV1(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["order"])], [numeric(value[index]["order"])]) >= 0) fail("relocation-chunk-vector-v1 sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["order"], value[right]["order"])) fail("relocation-chunk-vector-v1 unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("relocation-chunk-vector-v1 sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("relocation-chunk-vector-v1 unique");
   return value;
 }
 function writeRelocationChunkVectorV1(input: RelocationChunkVectorV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value) || value.length > 4096) fail("relocation-chunk-vector-v1 count");
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["order"])], [numeric(value[index]["order"])]) >= 0) fail("relocation-chunk-vector-v1 sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["order"], value[right]["order"])) fail("relocation-chunk-vector-v1 unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("relocation-chunk-vector-v1 sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("relocation-chunk-vector-v1 unique");
   writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeRelocationChunkEntryV1(item, writer, context, enclosing, flags);
 }
 export function decodeRelocationChunkVectorV1(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationChunkVectorV1 { const reader = new Reader(bytes); const value = readRelocationChunkVectorV1(reader, context, {}, 0); reader.done("relocation-chunk-vector-v1"); return value; }
@@ -6054,37 +6149,42 @@ export type RelocationApplicationState = { readonly hasState: "false" } | { read
 
 function readRelocationApplicationState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationApplicationState {
   void context; void enclosing; void flags;
-  const encodedStart = reader.offset; const value: any = {};
-  value["hasState"] = readBool8(reader, context, enclosing, flags);
-  const body = reader.bounded(Number(readU64(reader, context, enclosing, flags)));
-  if (same(value["hasState"], "false")) {
+  const limitStart = reader.offset; const decoded = (() => {
+    const value: any = {};
+    value["hasState"] = readBool8(reader, context, enclosing, flags);
+    const body = reader.bounded(Number(readU64(reader, context, enclosing, flags)));
+    if (same(value["hasState"], "false")) {
 
-  } else if (same(value["hasState"], "true")) {
-    value["payload"] = readDurableStateBlob(body, context, value, flags);
+    } else if (same(value["hasState"], "true")) {
+      value["payload"] = readDurableStateBlob(body, context, value, flags);
 
 
-  } else fail("relocation-application-state discriminator");
-  body.done("relocation-application-state");
-  if (reader.offset - encodedStart > 274877906944) fail("relocation-application-state maximum");
+    } else fail("relocation-application-state discriminator");
+    body.done("relocation-application-state");
 
-  return value;
+    return value;
+  })();
+  if (reader.offset - limitStart > 274877906944) fail("relocation-application-state maximum");
+  return decoded;
 }
 function writeRelocationApplicationState(input: RelocationApplicationState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-  const encodedStart = writer.length;
+  const limitStart = writer.length;
 
   writeBool8(value["hasState"], writer, context, enclosing, flags);
   const body = new Writer();
   if (same(value["hasState"], "false")) {
+    if (value["payload"] !== undefined) fail("relocation-application-state discriminator agreement");
 
   } else if (same(value["hasState"], "true")) {
+
     if (value["payload"] === undefined) fail("payload required");
 
 
     writeDurableStateBlob(value["payload"], body, context, value, flags);
   } else fail("relocation-application-state discriminator");
   const bytes = body.result(); writeU64(numeric(bytes.length), writer, context, enclosing, flags); writer.put(bytes);
-  if (writer.length - encodedStart > 274877906944) fail("relocation-application-state maximum");
+  if (writer.length - limitStart > 274877906944) fail("relocation-application-state maximum");
 }
 export function decodeRelocationApplicationState(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationApplicationState { const reader = new Reader(bytes); const value = readRelocationApplicationState(reader, context, {}, 0); reader.done("relocation-application-state"); return value; }
 export function encodeRelocationApplicationState(value: RelocationApplicationState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationApplicationState(value, writer, context, {}, 0); return writer.result(); }
@@ -6125,15 +6225,15 @@ export type RelocationParticipantApplicationStateVector = readonly RelocationPar
 function readRelocationParticipantApplicationStateVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationParticipantApplicationStateVector {
   void context; void enclosing; void flags;
   const count = Number(readU32(reader, context, enclosing, flags)); if (count > 1024) fail("relocation-participant-application-state-vector count"); const value: any = Array.from({ length: count }, () => readRelocationParticipantApplicationState(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"])], [numeric(value[index]["participantId"])]) >= 0) fail("relocation-participant-application-state-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"])) fail("relocation-participant-application-state-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]))]) >= 0) fail("relocation-participant-application-state-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"]))]) === 0) fail("relocation-participant-application-state-vector unique");
   return value;
 }
 function writeRelocationParticipantApplicationStateVector(input: RelocationParticipantApplicationStateVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value) || value.length > 1024) fail("relocation-participant-application-state-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"])], [numeric(value[index]["participantId"])]) >= 0) fail("relocation-participant-application-state-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"])) fail("relocation-participant-application-state-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]))]) >= 0) fail("relocation-participant-application-state-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"]))]) === 0) fail("relocation-participant-application-state-vector unique");
   writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeRelocationParticipantApplicationState(item, writer, context, enclosing, flags);
 }
 export function decodeRelocationParticipantApplicationStateVector(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationParticipantApplicationStateVector { const reader = new Reader(bytes); const value = readRelocationParticipantApplicationStateVector(reader, context, {}, 0); reader.done("relocation-participant-application-state-vector"); return value; }
@@ -6231,15 +6331,15 @@ export type RelocationTimerRegistrationVector = readonly RelocationTimerRegistra
 function readRelocationTimerRegistrationVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationTimerRegistrationVector {
   void context; void enclosing; void flags;
   const count = Number(readU32(reader, context, enclosing, flags));  const value: any = Array.from({ length: count }, () => readRelocationTimerRegistration(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareWireText(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]), value[index - 1]["name"], value[index]["name"]) >= 0) fail("relocation-timer-registration-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["name"], value[right]["name"])) fail("relocation-timer-registration-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(numeric(value[index - 1]["participantId"])), numeric(numeric(value[index]["participantId"]))), compareBytes(utf8(value[index - 1]["name"]), utf8(value[index]["name"]))]) >= 0) fail("relocation-timer-registration-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(numeric(value[left]["participantId"])), numeric(numeric(value[right]["participantId"]))), compareBytes(utf8(value[left]["name"]), utf8(value[right]["name"]))]) === 0) fail("relocation-timer-registration-vector unique");
   return value;
 }
 function writeRelocationTimerRegistrationVector(input: RelocationTimerRegistrationVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value)) fail("relocation-timer-registration-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareWireText(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]), value[index - 1]["name"], value[index]["name"]) >= 0) fail("relocation-timer-registration-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["name"], value[right]["name"])) fail("relocation-timer-registration-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(numeric(value[index - 1]["participantId"])), numeric(numeric(value[index]["participantId"]))), compareBytes(utf8(value[index - 1]["name"]), utf8(value[index]["name"]))]) >= 0) fail("relocation-timer-registration-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(numeric(value[left]["participantId"])), numeric(numeric(value[right]["participantId"]))), compareBytes(utf8(value[left]["name"]), utf8(value[right]["name"]))]) === 0) fail("relocation-timer-registration-vector unique");
   writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeRelocationTimerRegistration(item, writer, context, enclosing, flags);
 }
 export function decodeRelocationTimerRegistrationVector(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationTimerRegistrationVector { const reader = new Reader(bytes); const value = readRelocationTimerRegistrationVector(reader, context, {}, 0); reader.done("relocation-timer-registration-vector"); return value; }
@@ -6316,15 +6416,15 @@ export type RelocationPendingTimerTickVector = readonly RelocationPendingTimerTi
 function readRelocationPendingTimerTickVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationPendingTimerTickVector {
   void context; void enclosing; void flags;
   const count = Number(readU32(reader, context, enclosing, flags));  const value: any = Array.from({ length: count }, () => readRelocationPendingTimerTick(reader, context, enclosing, flags));
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"]),numeric(value[index - 1]["order"])], [numeric(value[index]["participantId"]),numeric(value[index]["order"])]) >= 0) fail("relocation-pending-timer-tick-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["order"], value[right]["order"])) fail("relocation-pending-timer-tick-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"])), compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("relocation-pending-timer-tick-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"])), compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("relocation-pending-timer-tick-vector unique");
   return value;
 }
 function writeRelocationPendingTimerTickVector(input: RelocationPendingTimerTickVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
   if (!Array.isArray(value)) fail("relocation-pending-timer-tick-vector count");
-  for (let index = 1; index < value.length; ++index) if (compareBigints([numeric(value[index - 1]["participantId"]),numeric(value[index - 1]["order"])], [numeric(value[index]["participantId"]),numeric(value[index]["order"])]) >= 0) fail("relocation-pending-timer-tick-vector sorted");
-  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (same(value[left]["participantId"], value[right]["participantId"]) && same(value[left]["order"], value[right]["order"])) fail("relocation-pending-timer-tick-vector unique");
+  for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"])), compareBigint(numeric(value[index - 1]["order"]), numeric(value[index]["order"]))]) >= 0) fail("relocation-pending-timer-tick-vector sorted");
+  for (let left = 0; left < value.length; ++left) for (let right = left + 1; right < value.length; ++right) if (compareResults([compareBigint(numeric(value[left]["participantId"]), numeric(value[right]["participantId"])), compareBigint(numeric(value[left]["order"]), numeric(value[right]["order"]))]) === 0) fail("relocation-pending-timer-tick-vector unique");
   writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeRelocationPendingTimerTick(item, writer, context, enclosing, flags);
 }
 export function decodeRelocationPendingTimerTickVector(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationPendingTimerTickVector { const reader = new Reader(bytes); const value = readRelocationPendingTimerTickVector(reader, context, {}, 0); reader.done("relocation-pending-timer-tick-vector"); return value; }

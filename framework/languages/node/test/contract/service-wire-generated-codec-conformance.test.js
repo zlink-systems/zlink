@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -91,6 +92,56 @@ const typeCodecs = new Map([
   ['text8', [codec.decodeText8, codec.encodeText8]]
 ]);
 
+function generatedName(name) {
+  return name.split(/[^A-Za-z0-9]+/).filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1)).join('');
+}
+
+function codecForType(name) {
+  const generated = generatedName(name);
+  return typeCodecs.get(name) ?? [codec[`decode${generated}`], codec[`encode${generated}`]];
+}
+
+function recipeBytes(recipe) {
+  const bytes = Buffer.alloc(recipe.encodedBytes);
+  let offset = 0;
+  for (const segment of recipe.segments) {
+    if (segment.hex !== undefined) {
+      const value = Buffer.from(segment.hex, 'hex');
+      value.copy(bytes, offset);
+      offset += value.length;
+    } else {
+      bytes.fill(segment.repeatByte, offset, offset + segment.count);
+      offset += segment.count;
+    }
+  }
+  assert.equal(offset, recipe.encodedBytes);
+  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), recipe.sha256);
+  return bytes;
+}
+
+function operationBytes(entry) {
+  if (entry.hex !== undefined) return Buffer.from(entry.hex, 'hex');
+  if (entry.byteRecipe !== undefined) return recipeBytes(entry.byteRecipe);
+  if (entry.chunksHex !== undefined) {
+    return Buffer.concat(entry.chunksHex.map((hex) => Buffer.from(hex, 'hex')));
+  }
+  return undefined;
+}
+
+function semanticInput(value) {
+  if (Array.isArray(value)) return value.map(semanticInput);
+  if (value && typeof value === 'object') {
+    if (Number.isInteger(value.repeatByte) && Number.isInteger(value.count)) {
+      return Uint8Array.from({ length: value.count }, () => value.repeatByte);
+    }
+    return Object.fromEntries(Object.entries(value).map(([name, entry]) => name.endsWith('Hex')
+      ? [name.slice(0, -3), Buffer.from(entry, 'hex')]
+      : [name, semanticInput(entry)]));
+  }
+  return value;
+}
+
 function oracleRoundTrip(format, bytes) {
   switch (format) {
     case 'authority-payload-v1':
@@ -130,12 +181,57 @@ function indexedCases() {
   return cases;
 }
 
+function operationCodec(entry) {
+  if (entry.surface.format === 'type') return codecForType(entry.surface.type);
+  if (entry.surface.format === 'command') return commands.get(entry.surface.commandId);
+  if (entry.surface.format === 'relocation-envelope-v1') {
+    return [codec.decodeRelocationEnvelopeV1LogicalStream,
+      codec.encodeRelocationEnvelopeV1LogicalStream];
+  }
+  if (entry.surface.format === 'semantic') {
+    const validate = (value, operationContext) => {
+      codec.validateReplyCommandRuntimePredicates(value, operationContext);
+      return value;
+    };
+    return [validate, validate];
+  }
+  return durable.get(entry.surface.format);
+}
+
+function operationWire(entry) {
+  if (entry.surface.format === 'command') {
+    return entry.framesHex.map((hex) => Buffer.from(hex, 'hex'));
+  }
+  return operationBytes(entry);
+}
+
+function assertWireEqual(actual, expected, label) {
+  if (Array.isArray(expected)) {
+    assert.deepEqual(actual.map((frame) => Buffer.from(frame)), expected, label);
+  } else {
+    assert.deepEqual(Buffer.from(actual), expected, label);
+  }
+}
+
 test('generated TypeScript codec consumes every indexed conformance case', () => {
-  assert.equal(catalog.version, 2);
+  assert.equal(catalog.version, 3);
   assert.equal(catalog.fixtures.length, 9);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
-  assert.equal(catalog.operationCases.length, 19);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 28);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 49);
+  const boundaryPairs = new Map();
+  for (const entry of catalog.operationCases.filter((candidate) =>
+    candidate.boundaryPair !== undefined)) {
+    const entries = boundaryPairs.get(entry.boundaryPair) ?? [];
+    entries.push(entry);
+    boundaryPairs.set(entry.boundaryPair, entries);
+  }
+  assert.equal(boundaryPairs.size, 25);
+  for (const [operation, entries] of boundaryPairs) {
+    assert.deepEqual(new Set(entries.map((entry) => entry.expect)),
+      new Set(['accept', 'reject']), operation);
+  }
 
   for (const item of indexedCases()) {
     const operation = item.kind === 'operation' ? item.entry.operation : item.kind;
@@ -178,44 +274,32 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     }
 
     const entry = item.entry;
-    if (entry.operation === 'negotiated-bound') {
-      const bytes = Buffer.from(entry.hex, 'hex');
-      const [decode, encode] = typeCodecs.get(entry.surface.type);
-      const value = decode(bytes, context);
-      const negotiatedContext = {
-        runtimePredicates: context.runtimePredicates,
-        ...entry.context
-      };
-      for (const direction of entry.directions) {
-        const action = direction === 'decode'
-          ? () => decode(bytes, negotiatedContext)
-          : () => encode(value, negotiatedContext);
-        const directionLabel = `${label}:${direction}`;
-        if (entry.expect === 'reject') assert.throws(action, undefined, directionLabel);
-        else assert.doesNotThrow(action, directionLabel);
+    const pair = operationCodec(entry);
+    assert.ok(pair, `${label}:codec`);
+    const [decode, encode] = pair;
+    const wire = operationWire(entry);
+    const operationContext = entry.operation === 'negotiated-bound'
+      ? { runtimePredicates: context.runtimePredicates, ...entry.context }
+      : { ...context, ...entry.context };
+    let encodeValue;
+    if (entry.input !== undefined) encodeValue = semanticInput(entry.input);
+    else if ((entry.directions ?? []).includes('encode')) encodeValue = decode(wire, context);
+    for (const direction of entry.directions ?? ['decode']) {
+      const directionLabel = `${label}:${direction}`;
+      const action = direction === 'decode'
+        ? () => decode(entry.surface.format === 'semantic' ? encodeValue : wire, operationContext)
+        : () => encode(encodeValue, operationContext);
+      if (entry.expect === 'reject') {
+        assert.throws(action, undefined, directionLabel);
+      } else {
+        const result = action();
+        if (direction === 'encode' && entry.surface.format !== 'semantic') {
+          assertWireEqual(result, wire, directionLabel);
+        }
+        if (direction === 'decode' && entry.decoded !== undefined) {
+          assert.deepEqual(result, semanticInput(entry.decoded), directionLabel);
+        }
       }
-      continue;
     }
-    const decodeContext = { ...context, ...entry.context };
-    const action = () => {
-      if (entry.surface.format === 'type') {
-        const [decode] = typeCodecs.get(entry.surface.type);
-        return decode(Buffer.from(entry.hex, 'hex'), decodeContext);
-      }
-      if (entry.surface.format === 'semantic') {
-        return codec.validateReplyCommandRuntimePredicates(entry.input, decodeContext);
-      }
-      if (entry.surface.format === 'command') {
-        const [decode] = commands.get(entry.surface.commandId);
-        return decode(entry.framesHex.map((hex) => Buffer.from(hex, 'hex')), decodeContext);
-      }
-      if (entry.surface.format === 'relocation-envelope-v1') {
-        return codec.decodeRelocationEnvelopeV1LogicalStream(Buffer.from(entry.hex, 'hex'), decodeContext);
-      }
-      const [decode] = durable.get(entry.surface.format);
-      return decode(Buffer.from(entry.hex, 'hex'), decodeContext);
-    };
-    if (entry.expect === 'reject') assert.throws(action, undefined, label);
-    else assert.doesNotThrow(action, label);
   }
 });
