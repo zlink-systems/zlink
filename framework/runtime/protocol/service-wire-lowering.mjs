@@ -751,7 +751,6 @@ function runSelfTests(schemaPath) {
 
   assert.deepEqual(types.get("operation-id").constraints, [{
     kind: "not-both-zero",
-    unless: "one-way-record-without-terminal-completion",
     fields: [fieldOperand("high"), fieldOperand("low")],
   }]);
   assert.deepEqual(types.get("aggregate-participant-vector").constraints.map((entry) => entry.kind),
@@ -870,7 +869,7 @@ function runSelfTests(schemaPath) {
   unknownDurableKeyword.durableFormats[0].futureKeyword = true;
   assert.throws(() => lowerSchema(unknownDurableKeyword), LoweringCoverageError);
   assert.deepEqual(JSON.parse(JSON.stringify(ir)), ir);
-  assert.equal(ir.types.length, 155);
+  assert.equal(ir.types.length, 156);
   assert.equal(ir.commands.length, 40);
   assert.equal(ir.semanticConstraints.filter((constraint) => constraint.runtimePredicate).length, 1);
   assert.equal(

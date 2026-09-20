@@ -5,7 +5,7 @@
     {
       "kind": "durable",
       "goldenFixture": "golden/durable-authority-v1.json",
-      "goldenSha256": "05639baf414186418c53e52d79e0f4cdade661a0ecfb1d99bbeb9e7eea08f098",
+      "goldenSha256": "a4b27dac35ebe5ae4ca56b5aca666fb17491e676bff0effcdd81c926842afffc",
       "surface": {
         "format": "authority-payload-v1",
         "type": "authority-payload-v1",

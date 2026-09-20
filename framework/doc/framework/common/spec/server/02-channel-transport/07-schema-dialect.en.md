@@ -188,7 +188,7 @@ bytes, not code points.
 | Key | Meaning |
 |---|---|
 | `fields` | the field list. Declaration order is byte order ([§5](#5-field-keywords)) |
-| `constraints` | constraints across fields: `not-both-zero` (`fields`, optional `unless`), `field-less-than-or-equal` (two fields of the same struct) |
+| `constraints` | constraints across fields: `not-both-zero` (`fields`), `field-less-than-or-equal` (two fields of the same struct) |
 | `maximumEncodedBytes` | the encoded bound |
 | `trailingBytes` | `forbidden`. Rejects leftover bytes in a struct whose length is fixed from outside |
 | `presence`, `scope`, `storage`, `metadataMeaning`, `queueMeaning` | literals stating where this layout appears and what it means. No effect on byte layout; referenced by the rules in [§8](#8-semantic-declarations) and [§9](#9-profiles-and-owning-clauses) |

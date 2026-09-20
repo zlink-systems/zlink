@@ -112,6 +112,11 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             RoutingId.from("node-b"),
             17,
             java.util.Optional.of(recovery))).orElseThrow();
+        var recovered = ready.activationRecoveryState().orElseThrow();
+        assertEquals(recovery.reference(), recovered.reference());
+        assertArrayEquals(recovery.sha256(), recovered.sha256());
+        assertEquals(recovery.encodedSize(), recovered.encodedSize());
+        assertEquals(recovery.inboxSequence(), recovered.inboxSequence());
 
         byte[] closing = codec.encodeInstance(
             ZLinkServiceAuthorityPayloadCodec.State.CLOSING,

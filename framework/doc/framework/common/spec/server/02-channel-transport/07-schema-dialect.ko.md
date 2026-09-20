@@ -175,7 +175,7 @@ byte 수다.
 | 키 | 뜻 |
 |---|---|
 | `fields` | field 목록. 선언 순서가 byte 순서다([§5](#5-field-keyword)) |
-| `constraints` | 여러 field에 걸친 제약. `not-both-zero`(`fields`, 선택적 `unless`), `field-less-than-or-equal`(같은 struct의 두 field) |
+| `constraints` | 여러 field에 걸친 제약. `not-both-zero`(`fields`), `field-less-than-or-equal`(같은 struct의 두 field) |
 | `maximumEncodedBytes` | encoded 상한 |
 | `trailingBytes` | `forbidden`. 길이가 밖에서 정해지는 struct에서 남는 byte를 거부한다 |
 | `presence`, `scope`, `storage`, `metadataMeaning`, `queueMeaning` | 이 layout이 어디에 나타나고 무엇을 뜻하는지 적은 literal. 바이트 배치에 영향이 없고 [§8](#8-semantic-선언)·[§9](#9-profile과-소유-조항)의 규칙이 참조한다 |

@@ -383,7 +383,7 @@ public final class ZLinkServiceAuthorityPayloadCodec {
                 "invalid activation recovery discriminator");
         }
         String reference = recovery.text8();
-        byte[] sha256 = recovery.bytes(32);
+        byte[] sha256 = recovery.bytes(recovery.u8());
         long encodedSize = recovery.unsignedU32();
         long inboxSequence = recovery.nonzeroU64();
         if (!recovery.end()) {
@@ -398,7 +398,9 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         ActivationRecoveryState recovery) {
         Writer writer = new Writer();
         writer.text8(recovery.reference());
-        writer.raw(recovery.sha256());
+        byte[] sha256 = recovery.sha256();
+        writer.u8(sha256.length);
+        writer.raw(sha256);
         writer.u32(recovery.encodedSize());
         writer.nonzeroU64(recovery.inboxSequence());
         return writer.bytes();

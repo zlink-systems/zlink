@@ -602,9 +602,8 @@ function validateStructConstraints(type, location, fail) {
       if ((type.fields ?? []).length < 2) {
         fail(constraintLocation, "not-both-zero requires at least two fields");
       }
-      if (hasOwn(constraint, "unless")
-          && constraint.unless !== "one-way-record-without-terminal-completion") {
-        fail(`${constraintLocation}.unless`, "unknown not-both-zero exception");
+      if (hasOwn(constraint, "unless")) {
+        fail(`${constraintLocation}.unless`, "not-both-zero does not allow exceptions");
       }
       return;
     }
@@ -2401,7 +2400,7 @@ function decodeGoldenBody(formatName, bytes) {
     if (hasActivationRecovery === 1) {
       decoded.activationRecoveryState = {
         referenceUtf8Fixture: activationBody.text8(),
-        sha256Hex: activationBody.bytesOf(32).toString("hex"),
+        sha256Hex: activationBody.bytesOf(activationBody.u8()).toString("hex"),
         encodedSize: activationBody.u32(),
         inboxSequence: activationBody.u64(),
       };
@@ -2754,8 +2753,10 @@ function encodeGoldenBody(formatName, decoded) {
     writer.u8(decoded.relocationState === null ? 0 : 1).u32(bytes.length).raw(bytes);
     const activation = new FixtureWriter();
     if (decoded.activationRecoveryState !== null) {
+      const sha256 = Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex");
       activation.text8(decoded.activationRecoveryState.referenceUtf8Fixture)
-        .raw(Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex"))
+        .u8(sha256.length)
+        .raw(sha256)
         .u32(decoded.activationRecoveryState.encodedSize)
         .u64(decoded.activationRecoveryState.inboxSequence);
     }
@@ -4905,7 +4906,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceSpotId", $ref: "optional-text8" },
     { name: "operationKind", $ref: "instance-operation-kind" },
-    { name: "operation", $ref: "operation-id" },
+    { name: "operation", $ref: "operation-id-or-zero" },
     { name: "replyRoute", $ref: "instance-reply-route" },
   ], "$.commands", "Instance operation must use the closed Ready-or-cold-activation route union");
 
@@ -5165,7 +5166,8 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetDescriptorVersion", $ref: "text8" },
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceNodeGeneration", $ref: "nonzero-u64" },
-    { name: "sourceSpotId", $ref: "optional-text8" },
+    { name: "hasSourceSpotId", $ref: "bool8" },
+    { name: "sourceSpotId", $ref: "text8" },
     { name: "operationKind", $ref: "instance-operation-kind" },
     { name: "operation", $ref: "operation-id" },
     { name: "replyRoute", $ref: "instance-reply-route" },
@@ -5178,6 +5180,10 @@ function validateServiceInvariants(schema, types, fail) {
   if (activationRecoveryEnvelope?.scope !== "target-owned-instance-spot-cold-activation-only"
       || activationRecoveryEnvelope?.metadataMeaning
         !== "exact-command-39-metadata-flag-presence-and-immutable-frame-bytes"
+      || activationRecoveryEnvelope?.fields?.find((field) => field.name === "sourceSpotId")?.when
+        ?.fieldEquals?.name !== "hasSourceSpotId"
+      || activationRecoveryEnvelope?.fields?.find((field) => field.name === "sourceSpotId")
+        ?.otherwise !== "forbidden"
       || activationRecoveryEnvelope?.fields?.find((field) => field.name === "metadata")?.when
         ?.fieldEquals?.name !== "hasMetadata"
       || activationRecoveryEnvelope?.fields?.find((field) => field.name === "metadata")
@@ -7072,6 +7078,10 @@ function runSelfTests(schema) {
       const operation = candidate.types.find((type) => type.name === "operation-id");
       operation.constraints.push({ kind: "accept-anything" });
     }],
+    ["not-both-zero exception", (candidate) => {
+      const operation = candidate.types.find((type) => type.name === "operation-id");
+      operation.constraints[0].unless = "one-way-record-without-terminal-completion";
+    }],
     ["relocation state graph skip", (candidate) => {
       candidate.relocationStateMachine.transitions.push({ from: "preparing", to: "completed" });
     }],
@@ -7179,6 +7189,12 @@ function runSelfTests(schema) {
         (type) => type.name === "instance-activation-recovery-v1",
       );
       recovery.fields = recovery.fields.filter((field) => field.name !== "metadata");
+    }],
+    ["ZLIA source Spot presence omitted", (candidate) => {
+      const recovery = candidate.types.find(
+        (type) => type.name === "instance-activation-recovery-v1",
+      );
+      recovery.fields = recovery.fields.filter((field) => field.name !== "hasSourceSpotId");
     }],
     ["Cold Instance route and ZLIA placement intent diverge", (candidate) => {
       const recovery = candidate.types.find(
