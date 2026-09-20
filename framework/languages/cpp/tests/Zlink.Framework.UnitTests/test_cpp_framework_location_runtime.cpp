@@ -47,9 +47,26 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
         _cancellation = &cancellation;
     }
 
+    void fail_owner_lease_reads () noexcept { _fail_reads = true; }
+
     int claim_calls () const noexcept { return _claim_calls.load (); }
 
     int release_calls () const noexcept { return _release_calls.load (); }
+
+    int read_calls () const noexcept { return _read_calls.load (); }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        _read_calls.fetch_add (1);
+        if (_fail_reads) {
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable,
+                "injected owner lease confirmation read failure"));
+        }
+        return in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
 
     zlink::framework::task_t<zlink::framework::owner_lease_claim_result_t> claim_owner_lease (
       std::string owner_id,
@@ -104,6 +121,8 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     std::thread _delayed_claim;
     std::atomic_int _claim_calls = 0;
     std::atomic_int _release_calls = 0;
+    std::atomic_int _read_calls = 0;
+    bool _fail_reads = false;
 };
 
 TEST (ZLinkFrameworkLocationRuntime, ClaimsAndReleasesOwnerLease)
@@ -151,6 +170,25 @@ TEST (ZLinkFrameworkLocationRuntime, StartsDegradedAfterInitialOwnerLeaseClaimFa
     EXPECT_TRUE (runtime.owner_lease_healthy ());
     EXPECT_TRUE (runtime.current_owner_token ().has_value ());
     EXPECT_GE (store.claim_calls (), 2);
+
+    runtime.stop ();
+}
+
+TEST (ZLinkFrameworkLocationRuntime, RecordsInitialClaimConfirmationReadFailure)
+{
+    startup_owner_lease_repository_t store;
+    store.fail_owner_lease_reads ();
+    location_runtime_t runtime (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::seconds (1),
+                         .owner_lease_ttl = std::chrono::seconds (15)},
+      "owner-a");
+
+    EXPECT_NO_THROW (runtime.start (zlink::routing_id_t::from ("node-a")));
+    ASSERT_TRUE (runtime.last_error ().has_value ());
+    EXPECT_EQ ("injected owner lease confirmation read failure", *runtime.last_error ());
+    EXPECT_EQ (1, store.read_calls ());
+    EXPECT_FALSE (runtime.current_owner_token ().has_value ());
 
     runtime.stop ();
 }

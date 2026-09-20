@@ -514,11 +514,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             _runtime->record_runtime_failure (error.what ());
             return false;
         }
-        catch (...) {
-            _runtime->record_runtime_failure (
-              "Location descriptor publication failed with an unknown exception");
-            return false;
-        }
     }
 
     static std::map<std::string, target_t>
