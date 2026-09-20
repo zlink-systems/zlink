@@ -573,6 +573,83 @@ test('Actor creation replays a retained terminal after uncertain remote completi
   }
 });
 
+test('Actor callback failure records and replays a typed failed terminal', async () => {
+  const target = {
+    meshName: 'mesh',
+    nodeRid: 'node-b',
+    nodeGeneration: 2n,
+    entrySpotId: 'entry-node-b',
+    owner: owner('owner-b', 2n),
+    isLocal: false,
+    sourceNodeRid: 'source-node',
+    sourceNodeGeneration: 7n
+  };
+  const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
+  const callbackFailure = new Error('actor factory failed');
+  let operation: ZLinkCreationOperationIdentity | undefined;
+  const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    store,
+    target: async () => undefined,
+    remoteCreate: async () => {
+      throw new Error('target coordinator does not issue remote creates');
+    }
+  });
+  const coordinator = new ZLinkActorPlacementCoordinator({
+    store,
+    target: async () => target,
+    remoteCreate: async (_mesh, _node, request) => {
+      operation = {
+        sourceNodeRid: request.sourceNodeRid,
+        sourceNodeGeneration: request.sourceNodeGeneration,
+        operationId: request.operation
+      };
+      return await targetCoordinator.handleRemoteCreate(
+        { kind: 'actorCreate', correlation: 1n, ...request },
+        async () => {
+          throw callbackFailure;
+        },
+        AbortSignal.timeout(1_000)
+      );
+    }
+  });
+
+  await assert.rejects(
+    () => coordinator.create(
+      'actor-callback-failed',
+      'player',
+      false,
+      'mesh',
+      Buffer.from('create'),
+      1_000
+    ),
+    (error: unknown) => error instanceof ZLinkFrameworkException
+      && error.kind === ZLinkFrameworkErrorKind.InternalFailure
+      && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorCreateFailed
+  );
+
+  if (operation === undefined) throw new Error('Requester omitted the creation operation.');
+  const retained = await store.readCreationTerminal(operation);
+  assert.equal(retained.kind, 'found');
+  if (retained.kind === 'found') {
+    assert.deepEqual(
+      decodeCreationOperationTerminalV1(
+        retained.terminalEnvelope,
+        { runtimePredicates: {} }
+      ),
+      {
+        terminalResult: 'internalError',
+        failureCode: 'actorCreateFailed',
+        hasCreation: 'false',
+        hasApplicationPayload: 'false'
+      }
+    );
+  }
+  assert.equal(
+    (await store.readAuthority(authorityKey('actor-callback-failed'))).kind,
+    'missing'
+  );
+});
+
 test('public User Spot coordinator hides Pending, runs one factory, then publishes Ready generation', async () => {
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const publicationOrder: string[] = [];

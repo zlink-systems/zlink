@@ -318,41 +318,67 @@ export class ZLinkActorPlacementCoordinator {
       pending.requestSha256,
       pending.requestEncodedSize
     );
-    let local: Awaited<ReturnType<typeof materialize>>;
+    let materialization:
+      | {
+          readonly kind: 'completed';
+          readonly value: Awaited<ReturnType<typeof materialize>>;
+        }
+      | { readonly kind: 'failed'; readonly error: unknown };
+    try {
+      materialization = {
+        kind: 'completed',
+        value: await materialize(requestPayload, current, signal)
+      };
+    } catch (error) {
+      materialization = { kind: 'failed', error };
+    }
     let completion: Awaited<ReturnType<ZLinkObjectCreationStore['completeCreation']>>;
     try {
-      local = await materialize(requestPayload, current, signal);
-      const terminal = encodeActorTerminal(local.result === 'created'
-        ? { result: 'created', actor: local.actor, reply: local.reply }
-        : { result: 'rejected', reply: local.reply });
-      completion = await this.options.store.completeCreation({
-        key,
-        reservationId: record.reservation.reservationId,
-        expectedStoreVersion: current.storeVersion.value,
-        target: creationTarget(current),
-        completion: local.result === 'created'
-          ? {
-              kind: 'created',
-              readyPayload: encodeActorAuthorityIdentity({
-                actorType: record.stableType,
-                actor: local.actor,
-                meshName: current.allocation.descriptor.meshName,
-                ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
-                owner: {
-                  ownerId: current.ownerId,
-                  leaseGeneration: current.ownerLeaseGeneration
-                },
-                spotId: local.entrySpotId,
-                spotGeneration: local.entrySpotGeneration,
-                spotKind: ZLinkSpotKind.Entry
-              }),
-              terminal: terminalPublication(record, terminal)
-            }
-          : {
-              kind: 'rejected',
-              terminal: terminalPublication(record, terminal)
-            }
-      }, signal);
+      if (materialization.kind === 'failed') {
+        completion = await this.options.store.completeCreation({
+          key,
+          reservationId: record.reservation.reservationId,
+          expectedStoreVersion: current.storeVersion.value,
+          target: creationTarget(current),
+          completion: {
+            kind: 'failed',
+            terminal: terminalPublication(record, encodeActorTerminal({ result: 'failed' }))
+          }
+        }, signal);
+      } else {
+        const local = materialization.value;
+        const terminal = encodeActorTerminal(local.result === 'created'
+          ? { result: 'created', actor: local.actor, reply: local.reply }
+          : { result: 'rejected', reply: local.reply });
+        completion = await this.options.store.completeCreation({
+          key,
+          reservationId: record.reservation.reservationId,
+          expectedStoreVersion: current.storeVersion.value,
+          target: creationTarget(current),
+          completion: local.result === 'created'
+            ? {
+                kind: 'created',
+                readyPayload: encodeActorAuthorityIdentity({
+                  actorType: record.stableType,
+                  actor: local.actor,
+                  meshName: current.allocation.descriptor.meshName,
+                  ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
+                  owner: {
+                    ownerId: current.ownerId,
+                    leaseGeneration: current.ownerLeaseGeneration
+                  },
+                  spotId: local.entrySpotId,
+                  spotGeneration: local.entrySpotGeneration,
+                  spotKind: ZLinkSpotKind.Entry
+                }),
+                terminal: terminalPublication(record, terminal)
+              }
+            : {
+                kind: 'rejected',
+                terminal: terminalPublication(record, terminal)
+              }
+        }, signal);
+      }
     } catch (error) {
       const cleanup = createDeadline(1_000);
       try {
@@ -372,6 +398,16 @@ export class ZLinkActorPlacementCoordinator {
       }
       throw error;
     }
+    if (materialization.kind === 'failed') {
+      if (completion.kind !== 'failed' && completion.kind !== 'alreadyCompleted') {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
+          `Actor '${record.actorId}' failed creation did not record its terminal.`
+        );
+      }
+      throw materialization.error;
+    }
+    const local = materialization.value;
     if (
       local.result === 'created'
         ? completion.kind !== 'created' && completion.kind !== 'alreadyCompleted'
@@ -565,9 +601,18 @@ function isCompletedActorCreate(result: ServiceUserSpotOperationResult): boolean
 
 type ActorTerminal =
   | { readonly result: 'created'; readonly actor: ActorRef; readonly reply?: Uint8Array }
-  | { readonly result: 'rejected'; readonly reply?: Uint8Array };
+  | { readonly result: 'rejected'; readonly reply?: Uint8Array }
+  | { readonly result: 'failed' };
 
 function encodeActorTerminal(terminal: ActorTerminal): Buffer {
+  if (terminal.result === 'failed') {
+    return Buffer.from(encodeCreationOperationTerminalV1({
+      terminalResult: 'internalError',
+      failureCode: 'actorCreateFailed',
+      hasCreation: 'false',
+      hasApplicationPayload: 'false'
+    }, CREATION_TERMINAL_CODEC_CONTEXT));
+  }
   return Buffer.from(encodeCreationOperationTerminalV1({
     terminalResult: 'ok',
     failureCode: 'none',
