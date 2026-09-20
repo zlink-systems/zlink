@@ -1572,6 +1572,34 @@ test('reserved Actor factory failure destroys native staging before capacity is 
   assert.equal(manager.activeActorCount('play-mesh'), 0);
 });
 
+test('reserved Actor onCreateActor failure is tagged as an application failure', async () => {
+  const callbackFailure = new Error('injected onCreateActor failure');
+  class PlayerFactory {
+    create(context) {
+      return { context };
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    actorCreatedNodeRidProvider: () => zlink.RoutingId.from('node-a'),
+    async actorCreatedNotifier() {
+      throw callbackFailure;
+    }
+  });
+
+  const failed = await manager.createReservedActorResult(
+    'callback-failed',
+    'player',
+    undefined
+  );
+
+  assert.equal(failed.status, 'failed');
+  if (failed.status === 'failed') {
+    assert.equal(failed.error, callbackFailure);
+  }
+  assert.equal(manager.activeActorCount('play-mesh'), 0);
+});
+
 test('reserved Actor admission failure is not tagged as an application failure', async () => {
   const admissionFailure = new Error('actor admission denied');
   let factoryCalls = 0;

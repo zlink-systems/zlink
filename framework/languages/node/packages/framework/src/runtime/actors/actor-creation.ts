@@ -3,6 +3,7 @@ import type {
   RoutingId,
   Type,
   ZLinkActor,
+  ZLinkActorCreateResponse,
   ZLinkActorFactory,
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -143,26 +144,34 @@ export class ZLinkActorCreationCoordinator {
       await this.discardStagingActor(state, nativeActorNode);
       return { status: 'failed', error };
     }
+    let meshName: string;
+    let nodeRid: RoutingId | undefined;
     try {
       if (actor.context !== context || actor.context.actorId !== context.actorId) {
         throw new ZLinkConfigurationException(
           `Actor factory '${actorType}' must return an Actor bound to the exact supplied context.`
         );
       }
-      const meshName = state.meshName ?? '';
+      meshName = state.meshName ?? '';
       if (meshName.length === 0 && state.nativeActorRef === undefined) {
         throw new ZLinkConfigurationException(
           `Actor '${actorId}' has no RouteMesh identity.`
         );
       }
-      let nodeRid: RoutingId | undefined;
       if (nativeActorNode !== undefined) {
         const actorRef = state.ensureNativeActorRef(nativeActorNode, createRequest.nativeRequest);
         nodeRid = toFrameworkRoutingId(actorRef.nodeRid);
       } else {
         nodeRid = this.options.actorCreatedNodeRidProvider?.();
       }
-      const response = nodeRid === undefined
+    } catch (error) {
+      await this.discardStagingActor(state, nativeActorNode);
+      throw error;
+    }
+
+    let response: ZLinkActorCreateResponse;
+    try {
+      response = nodeRid === undefined
         ? { accepted: true }
         : await this.options.actorCreatedNotifier?.(
           nodeRid,
@@ -170,11 +179,16 @@ export class ZLinkActorCreationCoordinator {
           createRequest.callbackRequest,
           signal
         ) ?? { accepted: true };
-      if (!response.accepted) {
-        await this.discardStagingActor(state, nativeActorNode);
-        return { status: 'rejected', reply: response.reply };
-      }
+    } catch (error) {
+      await this.discardStagingActor(state, nativeActorNode);
+      return { status: 'failed', error };
+    }
+    if (!response.accepted) {
+      await this.discardStagingActor(state, nativeActorNode);
+      return { status: 'rejected', reply: response.reply };
+    }
 
+    try {
       state.bindActor(actor, context);
       if (nativeActorNode !== undefined) {
         const actorRef = state.nativeActorRef!;
