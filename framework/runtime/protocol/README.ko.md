@@ -16,8 +16,8 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   legacy pilot 산출물의 단일 output manifest
 - `generate-service-wire-codecs.mjs`: lowering부터 네 renderer, fixture index, 상수 asset과 legacy pilot을
   순서대로 생성하고 전체 drift·orphan을 확인하는 통합 진입점
-- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: operation IR의 검증·직렬화 의미를 추가로
-  해석하지 않고 각 언어의 정적 codec 문법으로 내는 emitter
+- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: operation IR을 각 언어의 정적 codec 문법으로
+  내는 emitter. 지원하지 않는 operation 키가 있으면 생성을 중단한다.
 - `generate-service-wire-pilot-codecs.mjs`: 기존 runtime adapter가 소비하며 4단계 adapter 교체 뒤 제거하는
   legacy codec generator
 - `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden과 operation별
@@ -74,9 +74,18 @@ Operation IR은 검증·직렬화 의미의 단일 소유자다. Renderer는 다
 self-test는 위 25개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
 검사한다. Field condition은 `when`과 encoder·decoder의 `whenFalse` 동작을 함께 보존한다.
 Conditional-union case는 field operation 뒤에 owner path가 있는 `constraint`를 실행한다.
+`fieldPresent`는 wire의 zero-length absence sentinel과 내부 null 부재 기준을 함께 가진다. Vector의
+`sorted`·`unique` 제약은 comparison별 key를 명시하며 UTF-8 key에서는 length prefix를 제외하고,
+authority key에서는 generation과 객체 wire prefix를 제외한 canonical authority key를 사용한다.
+`encoded-limit`는 전체 encoded value를 측정하며 TLV에서는 `totalLength` 자체를 포함한다.
+Conditional-union encoder는 선택한 variant와 wire·enclosing·context discriminator의 일치를 검사한다.
+Text validation은 BOM을 보존하고 overlong UTF-8·surrogate code point와 encode 입력의 lone surrogate를
+거부한다. Durable operation 순서는 checksum 검증 뒤에만 body를 해석하도록 고정한다.
 `negotiated-bound`는 encoder·decoder application이 같은 비교 규칙과 context policy를 사용하도록
 명시한다. Context 값이 없거나 음수이거나 선언된 absolute maximum을 초과하면 protocol error이며,
 유효한 협상값과 실제 content 또는 encoded byte 수를 비교한다.
+Fixture catalog v3는 닫힌 25개 operation마다 정상 경계 accept와 단일 규칙 위반 reject를 한 쌍 이상
+포함하며, encode 전용 invalid DTO와 큰 입력은 `directions`와 compact byte recipe로 표현한다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는

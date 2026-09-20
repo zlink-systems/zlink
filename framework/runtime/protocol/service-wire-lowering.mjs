@@ -195,9 +195,35 @@ function fieldPathOperand(path) {
   return { kind: "fieldPath", path };
 }
 
-function lowerPredicateAtom(kind, value, model) {
+function fieldPresence(fieldName, fields, model) {
+  const field = fields.find((entry) => entry.name === fieldName);
+  const type = field === undefined ? null : resolveReference({ $ref: field.$ref }, model.types);
+  if (field === undefined || type?.zeroLengthMeaning !== "absent") {
+    throw new LoweringCoverageError([
+      `fieldPresent:${fieldName}: no wire absence declaration is available`,
+    ]);
+  }
+  return {
+    wire: {
+      kind: "length-prefix-sentinel",
+      lengthType: lowerValue(type.lengthType, model),
+      absent: 0,
+      present: { minimum: 1 },
+    },
+    internal: {
+      absent: null,
+      present: "non-null",
+    },
+  };
+}
+
+function lowerPredicateAtom(kind, value, model, fields = []) {
   if (kind === "fieldPresent") {
-    return { kind, operand: { kind: "field", name: value } };
+    return {
+      kind,
+      operand: { kind: "field", name: value },
+      presence: fieldPresence(value, fields, model),
+    };
   }
   if (kind === "fieldEquals") {
     return {
@@ -216,11 +242,11 @@ function lowerPredicateAtom(kind, value, model) {
   };
 }
 
-function lowerCondition(condition, model) {
+function lowerCondition(condition, model, fields = []) {
   return {
     all: [...CONDITION_KINDS]
       .filter((kind) => hasOwn(condition, kind))
-      .map((kind) => lowerPredicateAtom(kind, condition[kind], model)),
+      .map((kind) => lowerPredicateAtom(kind, condition[kind], model, fields)),
   };
 }
 
@@ -257,7 +283,25 @@ function negotiatedBoundOperation(runtimeMaximum, measured) {
   };
 }
 
-function fieldOperation(field, model) {
+function encodedLimitOperation(maximumEncodedBytes, kind) {
+  const includes = kind === "tlv32"
+    ? ["totalLength", "fields"]
+    : kind === "durable-format"
+      ? ["header", "body", "checksum"]
+      : kind === "logical-stream"
+        ? ["logical-stream-bytes"]
+        : ["all-prefixes", "body"];
+  return {
+    op: "encoded-limit",
+    maximumEncodedBytes,
+    measured: "complete-encoded-value",
+    includes,
+    applications: ["encode", "decode"],
+    exceeded: "protocol-error",
+  };
+}
+
+function fieldOperation(field, model, fields) {
   const operation = {
     op: "field",
     name: field.name,
@@ -269,7 +313,7 @@ function fieldOperation(field, model) {
     }
   }
   if (hasOwn(field, "when")) {
-    operation.when = lowerCondition(field.when, model);
+    operation.when = lowerCondition(field.when, model, fields);
     operation.whenFalse = { ...CONDITIONAL_FALSE_BEHAVIOR };
   }
   if (hasOwn(field, "constraints")) {
@@ -281,7 +325,7 @@ function fieldOperation(field, model) {
 }
 
 function fieldOperations(fields, model) {
-  return fields.map((field) => fieldOperation(field, model));
+  return fields.map((field) => fieldOperation(field, model, fields));
 }
 
 function runtimePredicateOperation(predicate, targets) {
@@ -301,6 +345,100 @@ function ownerRuntimePredicates(name, runtimePredicates) {
     }))
     .filter((predicate) => predicate.targets.length > 0)
     .map((predicate) => runtimePredicateOperation(predicate.reference, predicate.targets));
+}
+
+function vectorComparisonSources(constraint) {
+  if (hasOwn(constraint, "fields")) return constraint.fields;
+  if (hasOwn(constraint, "field")) return [constraint.field];
+  return [null];
+}
+
+function vectorItemFieldType(owner, fieldName, model) {
+  const itemReference = owner.item
+    ?? owner.layout?.find((entry) => entry.kind === "repeat")?.item;
+  const item = resolveReference(itemReference, model.types);
+  if (fieldName === null) return item;
+  const field = item?.fields?.find((entry) => entry.name === fieldName);
+  return field === undefined ? null : resolveReference({ $ref: field.$ref }, model.types);
+}
+
+function comparisonPart(owner, fieldName, comparison, model) {
+  const source = fieldName === null ? { kind: "item" } : fieldPathOperand(fieldName);
+  const type = vectorItemFieldType(owner, fieldName, model);
+  if (comparison === "utf-8-bytes") {
+    return {
+      kind: "utf-8-bytes",
+      source,
+      lengthPrefix: "excluded",
+    };
+  }
+  if (comparison === "unsigned-wire-value") {
+    return {
+      kind: "unsigned-wire-value",
+      source,
+      encoding: type?.encoding,
+      byteOrder: "big-endian",
+    };
+  }
+  if (comparison === "wire-value-then-utf-8-bytes") {
+    if (type?.kind === "length-prefixed-text") {
+      return { kind: "utf-8-bytes", source, lengthPrefix: "excluded" };
+    }
+    return {
+      kind: "wire-value",
+      source,
+      encoding: type?.encoding,
+      byteOrder: "big-endian",
+    };
+  }
+  throw new LoweringCoverageError([
+    `type:${owner.name}: unsupported comparison ${JSON.stringify(comparison)}`,
+  ]);
+}
+
+function comparisonKey(constraint, owner, model) {
+  if (constraint.comparison === "canonical-authority-key-bytes") {
+    return {
+      kind: "canonical-authority-key-bytes",
+      source: fieldPathOperand(constraint.field),
+      format: lowerValue(model.authorityKeyFormat, model),
+      variants: {
+        actor: { objectKind: "actor", components: ["actor.actorId"] },
+        userSpot: { objectKind: "spot", components: ["spot.spotId"] },
+        instanceSpot: { objectKind: "spot", components: ["spotId"] },
+      },
+      excluded: [
+        "wire-length-prefixes",
+        "object-generation",
+        "expected-authority-owner-generation",
+      ],
+    };
+  }
+  return {
+    kind: "tuple",
+    parts: vectorComparisonSources(constraint).map(
+      (fieldName) => comparisonPart(owner, fieldName, constraint.comparison, model),
+    ),
+  };
+}
+
+function lowerConstraints(constraints, owner, model) {
+  let inheritedComparison = null;
+  return constraints.map((constraint) => {
+    const effective = constraint.comparison ?? inheritedComparison;
+    if (constraint.comparison !== undefined) inheritedComparison = constraint.comparison;
+    const node = lowerConstraint(constraint, owner, model);
+    if (constraint.kind === "sorted" || constraint.kind === "unique") {
+      if (effective === null) {
+        throw new LoweringCoverageError([
+          `type:${owner.name}: ${constraint.kind} has no comparison key`,
+        ]);
+      }
+      node.comparison = effective;
+      node.key = comparisonKey({ ...constraint, comparison: effective }, owner, model);
+    }
+    return node;
+  });
 }
 
 function lowerConstraint(constraint, owner, model) {
@@ -325,10 +463,10 @@ function lowerConstraint(constraint, owner, model) {
   return node;
 }
 
-function lowerField(field, model) {
+function lowerField(field, model, fields) {
   const node = lowerValue(field, model);
   if (hasOwn(field, "when")) {
-    node.when = lowerCondition(field.when, model);
+    node.when = lowerCondition(field.when, model, fields);
     node.whenFalse = { ...CONDITIONAL_FALSE_BEHAVIOR };
   }
   if (hasOwn(field, "constraints")) {
@@ -340,7 +478,7 @@ function lowerField(field, model) {
 }
 
 function lowerFields(fields, model) {
-  return fields.map((field) => lowerField(field, model));
+  return fields.map((field) => lowerField(field, model, fields));
 }
 
 function lowerDiscriminator(discriminator, model) {
@@ -397,6 +535,10 @@ function typeOperations(type, node, model, runtimePredicates) {
       ...(hasOwn(node, "zeroLengthMeaning")
         ? { zeroLengthMeaning: node.zeroLengthMeaning }
         : {}),
+      encodeCapacity: {
+        throughMaximumBytes: node.maximumBytes,
+        implementationLimitBelowMaximum: "forbidden",
+      },
     }];
     if (hasOwn(node, "runtimeMaximumBytes")) {
       operations.push(negotiatedBoundOperation(node.runtimeMaximumBytes, "content-bytes"));
@@ -407,6 +549,14 @@ function typeOperations(type, node, model, runtimePredicates) {
         encoding: node.encoding,
         malformed: "protocol-error",
         nul: node.nul,
+        decode: {
+          bom: "preserve",
+          overlong: "protocol-error",
+          surrogateCodePoint: "protocol-error",
+        },
+        encode: {
+          loneSurrogate: "protocol-error",
+        },
       });
     }
     return [...operations, ...predicates];
@@ -418,10 +568,9 @@ function typeOperations(type, node, model, runtimePredicates) {
       fields: fieldOperations(type.fields, model),
       constraints: (node.constraints ?? []).map(constraintOperation),
       trailingBytes: node.trailingBytes ?? "allowed",
-      ...(hasOwn(node, "maximumEncodedBytes")
-        ? { maximumEncodedBytes: node.maximumEncodedBytes }
-        : {}),
-    }, ...predicates];
+    }, ...(hasOwn(node, "maximumEncodedBytes")
+      ? [encodedLimitOperation(node.maximumEncodedBytes, type.kind)]
+      : []), ...predicates];
   }
   if (type.kind === "vector") {
     return [{
@@ -438,9 +587,8 @@ function typeOperations(type, node, model, runtimePredicates) {
       order: "sequential",
       layout: lowerValue(type.layout, model),
       constraints: (node.constraints ?? []).map(constraintOperation),
-      maximumEncodedBytes: node.maximumEncodedBytes,
       trailingBytes: node.trailingBytes,
-    }, ...predicates];
+    }, encodedLimitOperation(node.maximumEncodedBytes, type.kind), ...predicates];
   }
   if (type.kind === "versioned-length-delimited") {
     const operations = [{
@@ -454,10 +602,10 @@ function typeOperations(type, node, model, runtimePredicates) {
       },
       fields: fieldOperations(type.body, model),
       constraints: (node.constraints ?? []).map(constraintOperation),
-      ...(hasOwn(node, "maximumEncodedBytes")
-        ? { maximumEncodedBytes: node.maximumEncodedBytes }
-        : {}),
     }];
+    if (hasOwn(node, "maximumEncodedBytes")) {
+      operations.push(encodedLimitOperation(node.maximumEncodedBytes, type.kind));
+    }
     if (hasOwn(node, "runtimeMaximumEncodedBytes")) {
       operations.push(negotiatedBoundOperation(
         node.runtimeMaximumEncodedBytes,
@@ -501,14 +649,14 @@ function typeOperations(type, node, model, runtimePredicates) {
       otherwise: type.otherwise === "protocol-error"
         ? { kind: "protocol-error" }
         : { kind: "fields", fields: fieldOperations(type.otherwise.fields, model) },
+      encode: {
+        selection: "variant",
+        discriminatorAgreement: "required",
+        mismatch: "protocol-error",
+      },
     }];
     if (hasOwn(node, "maximumEncodedBytes")) {
-      operations.push({
-        op: "encoded-limit",
-        maximumEncodedBytes: node.maximumEncodedBytes,
-        boundary: "complete-value",
-        trailingBytes: node.trailingBytes,
-      });
+      operations.push(encodedLimitOperation(node.maximumEncodedBytes, type.kind));
     }
     return [...operations, ...predicates];
   }
@@ -525,8 +673,7 @@ function typeOperations(type, node, model, runtimePredicates) {
       encodingOrder: node.encodingOrder,
       duplicateField: node.duplicateField,
       unknownField: node.unknownField,
-      maximumEncodedBytes: node.maximumEncodedBytes,
-    }, ...predicates];
+    }, encodedLimitOperation(node.maximumEncodedBytes, type.kind), ...predicates];
   }
   throw new LoweringCoverageError([`type:${type.name}: no operation lowering for ${type.kind}`]);
 }
@@ -571,7 +718,7 @@ function lowerType(type, model, runtimePredicates) {
     }
   }
   if (hasOwn(type, "constraints")) {
-    node.constraints = type.constraints.map((constraint) => lowerConstraint(constraint, type, model));
+    node.constraints = lowerConstraints(type.constraints, type, model);
   }
   node.operations = typeOperations(type, node, model, runtimePredicates);
   return node;
@@ -643,19 +790,21 @@ function lowerDurableFormat(format, model, runtimePredicates) {
     flagsType: node.flagsType,
     byteOrder: node.byteOrder,
     bodyLengthType: node.bodyLengthType,
-    body: node.body,
     flagsComparison: "exact",
   }, {
     op: "bounded-reader",
     boundary: "bodyLength",
     trailingBytes: "checksum-only",
-  }, {
+  }, encodedLimitOperation(node.maximumEncodedBytes, "durable-format"), {
     op: "checksum",
     ...node.checksum,
     mismatch: "protocol-error",
+    verification: "before-body-interpretation",
   }, {
-    op: "encoded-limit",
-    maximumEncodedBytes: node.maximumEncodedBytes,
+    op: "field",
+    name: "body",
+    type: node.body,
+    interpretation: "after-checksum-verification",
   }, ...ownerRuntimePredicates(format.name, runtimePredicates)];
   return node;
 }
@@ -670,10 +819,8 @@ function lowerLogicalStreamFormat(format, model, runtimePredicates) {
     chunkSplit: node.chunkSplit,
     replay: node.replay,
     generatedObjectTree: node.generatedObjectTree,
-  }, {
-    op: "encoded-limit",
-    maximumEncodedBytes: node.maximumBytes,
-  }, ...ownerRuntimePredicates(format.name, runtimePredicates)];
+  }, encodedLimitOperation(node.maximumBytes, "logical-stream"),
+  ...ownerRuntimePredicates(format.name, runtimePredicates)];
   return node;
 }
 
@@ -922,12 +1069,50 @@ function assertLoweringCoverage(schema, ir) {
         errors.push(`type:${source.name}: case ${signature} constraints did not reach ordered operations`);
       }
     }
-    if (hasOwn(source, "maximumEncodedBytes")) {
-      const limit = lowered.operations.find((operation) => operation.op === "encoded-limit");
-      if (limit?.maximumEncodedBytes !== lowered.maximumEncodedBytes
-          || limit.boundary !== "complete-value"
-          || limit.trailingBytes !== lowered.trailingBytes) {
-        errors.push(`type:${source.name}: encoded limit or trailing contract did not reach operations`);
+  }
+  for (const source of schema.types.filter((type) => hasOwn(type, "maximumEncodedBytes"))) {
+    const lowered = ir.types.find((type) => type.name === source.name);
+    const limit = lowered.operations.find((operation) => operation.op === "encoded-limit");
+    if (JSON.stringify(limit) !== JSON.stringify(
+      encodedLimitOperation(lowered.maximumEncodedBytes, source.kind),
+    )) {
+      errors.push(`type:${source.name}: complete encoded limit did not reach operations`);
+    }
+  }
+  for (const source of schema.types) {
+    const lowered = ir.types.find((type) => type.name === source.name);
+    let inheritedComparison = null;
+    for (const [index, constraint] of (source.constraints ?? []).entries()) {
+      if (constraint.comparison !== undefined) inheritedComparison = constraint.comparison;
+      if (["sorted", "unique"].includes(constraint.kind)) {
+        const candidate = lowered.constraints[index];
+        if (candidate.comparison !== inheritedComparison || candidate.key === undefined) {
+          errors.push(`type:${source.name}: ${constraint.kind} comparison key did not reach operations`);
+        }
+      }
+    }
+    const fields = source.fields ?? source.body ?? [];
+    for (const field of fields.filter((entry) => entry.when?.fieldPresent !== undefined)) {
+      const loweredField = (lowered.fields ?? lowered.body).find((entry) => entry.name === field.name);
+      const atom = loweredField.when?.all.find((entry) => entry.kind === "fieldPresent");
+      if (atom?.presence?.wire?.absent !== 0 || atom?.presence?.internal?.absent !== null) {
+        errors.push(`type:${source.name}.${field.name}: field presence meaning did not reach IR`);
+      }
+    }
+    if (source.kind === "length-prefixed-text") {
+      const validation = lowered.operations.find((operation) => operation.op === "text-validation");
+      if (validation?.decode?.bom !== "preserve"
+          || validation.decode.overlong !== "protocol-error"
+          || validation.decode.surrogateCodePoint !== "protocol-error"
+          || validation.encode?.loneSurrogate !== "protocol-error") {
+        errors.push(`type:${source.name}: strict UTF-8 rules did not reach operations`);
+      }
+    }
+    if (source.kind === "conditional-union") {
+      const union = lowered.operations.find((operation) => operation.op === "conditional-union");
+      if (union?.encode?.discriminatorAgreement !== "required"
+          || union.encode.mismatch !== "protocol-error") {
+        errors.push(`type:${source.name}: encode discriminator agreement did not reach operations`);
       }
     }
   }
@@ -969,6 +1154,14 @@ function assertLoweringCoverage(schema, ir) {
         || JSON.stringify(lowered.checksum) !== JSON.stringify(source.checksum)) {
       errors.push(`durableFormat:${source.name}: envelope declaration did not reach the IR`);
     }
+    const checksumIndex = lowered?.operations.findIndex((operation) => operation.op === "checksum");
+    const bodyIndex = lowered?.operations.findIndex(
+      (operation) => operation.op === "field" && operation.name === "body",
+    );
+    if (checksumIndex < 0 || bodyIndex <= checksumIndex
+        || lowered.operations[checksumIndex].verification !== "before-body-interpretation") {
+      errors.push(`durableFormat:${source.name}: checksum must precede body interpretation`);
+    }
   }
   const sourceLogical = schema.relocationLogicalStreamFormat;
   const loweredLogical = ir.relocationLogicalStreamFormat;
@@ -1004,6 +1197,7 @@ function lowerSchema(schemaPathOrObject) {
     types: namedMap(schema.types, "types"),
     flags: namedMap(schema.flags, "flags"),
     protocol: schema.protocol,
+    authorityKeyFormat: schema.authorityKeyFormat,
   };
   const runtimePredicates = schema.semanticConstraints
     .filter((constraint) => constraint.kind === "terminal-failure-integrity")
@@ -1089,7 +1283,19 @@ function runSelfTests(schemaPath) {
   const optionalActor = types.get("optional-actor-ref");
   const fieldPresent = optionalActor.fields.find((field) => field.name === "generation");
   assert.deepEqual(fieldPresent.when, {
-    all: [{ kind: "fieldPresent", operand: { kind: "field", name: "actorId" } }],
+    all: [{
+      kind: "fieldPresent",
+      operand: { kind: "field", name: "actorId" },
+      presence: {
+        wire: {
+          kind: "length-prefix-sentinel",
+          lengthType: { $ref: "u8" },
+          absent: 0,
+          present: { minimum: 1 },
+        },
+        internal: { absent: null, present: "non-null" },
+      },
+    }],
   });
   assert.deepEqual(fieldPresent.whenFalse, CONDITIONAL_FALSE_BEHAVIOR);
 
@@ -1195,8 +1401,10 @@ function runSelfTests(schemaPath) {
     {
       op: "encoded-limit",
       maximumEncodedBytes: 1048576,
-      boundary: "complete-value",
-      trailingBytes: "forbidden",
+      measured: "complete-encoded-value",
+      includes: ["all-prefixes", "body"],
+      applications: ["encode", "decode"],
+      exceeded: "protocol-error",
     },
   );
   assert.deepEqual(
@@ -1319,6 +1527,40 @@ function runSelfTests(schemaPath) {
     ["sorted", "unique"]);
   assert.deepEqual(types.get("aggregate-participant-vector").constraints.map((entry) => entry.field),
     [fieldPathOperand("object"), fieldPathOperand("object")]);
+  const authorityKeyConstraint = types.get("aggregate-participant-vector").constraints[0];
+  assert.equal(authorityKeyConstraint.key.kind, "canonical-authority-key-bytes");
+  assert.deepEqual(authorityKeyConstraint.key.excluded, [
+    "wire-length-prefixes",
+    "object-generation",
+    "expected-authority-owner-generation",
+  ]);
+  assert.deepEqual(
+    types.get("sorted-text8-vector").constraints[0].key.parts,
+    [{
+      kind: "utf-8-bytes",
+      source: { kind: "item" },
+      lengthPrefix: "excluded",
+    }],
+  );
+  assert.deepEqual(
+    types.get("stateful-capability-vector").constraints[0].key.parts.map(
+      (part) => [part.kind, part.encoding ?? part.lengthPrefix],
+    ),
+    [["wire-value", "u8"], ["utf-8-bytes", "excluded"]],
+  );
+  assert.deepEqual(
+    types.get("saved-work-vector").constraints[0].key.parts.map(
+      (part) => [part.kind, part.encoding, part.byteOrder],
+    ),
+    [
+      ["unsigned-wire-value", "u64", "big-endian"],
+      ["unsigned-wire-value", "u64", "big-endian"],
+    ],
+  );
+  assert.deepEqual(
+    types.get("aggregate-participant-vector").constraints[1].key,
+    authorityKeyConstraint.key,
+  );
   assert.deepEqual(types.get("metadata-frame").constraints[0].field,
     fieldPathOperand("key"));
   assert.deepEqual(creationTerminal.constraints.map((entry) => entry.kind), [
@@ -1328,11 +1570,46 @@ function runSelfTests(schemaPath) {
   ]);
   const descriptor = types.get("descriptor-extension");
   assert.deepEqual(
+    descriptor.operations.find((operation) => operation.op === "encoded-limit"),
+    {
+      op: "encoded-limit",
+      maximumEncodedBytes: 1048576,
+      measured: "complete-encoded-value",
+      includes: ["totalLength", "fields"],
+      applications: ["encode", "decode"],
+      exceeded: "protocol-error",
+    },
+  );
+  assert.deepEqual(
     descriptor.fields.find((field) => field.name === "protocolCapabilities").constraints,
     [{
       kind: "contains-protocol-required-capability",
       requiredCapability: { kind: "protocol", name: "requiredCapability" },
     }],
+  );
+  const textValidation = types.get("text8").operations.find(
+    (operation) => operation.op === "text-validation",
+  );
+  assert.deepEqual(textValidation.decode, {
+    bom: "preserve",
+    overlong: "protocol-error",
+    surrogateCodePoint: "protocol-error",
+  });
+  assert.deepEqual(textValidation.encode, { loneSurrogate: "protocol-error" });
+  assert.deepEqual(
+    types.get("application-payload-bytes").operations[0].encodeCapacity,
+    {
+      throughMaximumBytes: 4294966774,
+      implementationLimitBelowMaximum: "forbidden",
+    },
+  );
+  assert.deepEqual(
+    types.get("relocation-object-identity").operations[0].encode,
+    {
+      selection: "variant",
+      discriminatorAgreement: "required",
+      mismatch: "protocol-error",
+    },
   );
 
   const comparisonSchema = structuredClone(schema);
@@ -1401,8 +1678,10 @@ function runSelfTests(schemaPath) {
     providerInterpretation: "opaque-bytes",
   });
   assert.deepEqual(authorityOperations.map((operation) => operation.op), [
-    "durable-header", "bounded-reader", "checksum", "encoded-limit",
+    "durable-header", "bounded-reader", "encoded-limit", "checksum", "field",
   ]);
+  assert.equal(authorityOperations[3].verification, "before-body-interpretation");
+  assert.equal(authorityOperations[4].interpretation, "after-checksum-verification");
   assert(ir.durableFormats.every((format) => format.checksum.algorithm === "crc32c-castagnoli"
     && format.checksum.position === "trailing"));
   const { operations: logicalOperations, ...logicalDeclaration } = ir.relocationLogicalStreamFormat;

@@ -1,6 +1,6 @@
 {
   "schema": "service-wire-v1",
-  "version": 2,
+  "version": 3,
   "fixtures": [
     {
       "kind": "durable",
@@ -296,6 +296,1302 @@
   ],
   "operationCases": [
     {
+      "name": "boundary-integer-accept",
+      "operation": "integer",
+      "rule": "signed-maximum",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "application-version",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "7fffffffffffffff",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "integer"
+    },
+    {
+      "name": "boundary-integer-reject",
+      "operation": "integer",
+      "rule": "negative-forbidden",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-version",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "ffffffffffffffff",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "integer"
+    },
+    {
+      "name": "boundary-enum-accept",
+      "operation": "enum",
+      "rule": "known-value",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "bool8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "01",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "enum"
+    },
+    {
+      "name": "boundary-enum-reject",
+      "operation": "enum",
+      "rule": "unknown-value",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "bool8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "02",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "enum"
+    },
+    {
+      "name": "boundary-length-prefixed-accept",
+      "operation": "length-prefixed",
+      "rule": "minimum-bytes",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "rid",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0172",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "length-prefixed"
+    },
+    {
+      "name": "boundary-length-prefixed-reject",
+      "operation": "length-prefixed",
+      "rule": "below-minimum-bytes",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "rid",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "00",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "length-prefixed"
+    },
+    {
+      "name": "boundary-text-validation-accept",
+      "operation": "text-validation",
+      "rule": "bom-preserved",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "text8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "04efbbbf61",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "decoded": "﻿a",
+      "boundaryPair": "text-validation"
+    },
+    {
+      "name": "boundary-text-validation-reject",
+      "operation": "text-validation",
+      "rule": "overlong-utf-8",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "text8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "02c0af",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "text-validation"
+    },
+    {
+      "name": "boundary-field-accept",
+      "operation": "field",
+      "rule": "absent-field-sentinel",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "optional-actor-ref",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "00",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": {
+        "actorId": null,
+        "generation": null
+      },
+      "boundaryPair": "field"
+    },
+    {
+      "name": "boundary-field-reject",
+      "operation": "field",
+      "rule": "field-forbidden-when-absent",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "optional-actor-ref",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000000000000001",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "field"
+    },
+    {
+      "name": "boundary-struct-accept",
+      "operation": "struct",
+      "rule": "sequential-complete",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "actor-ref",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "01610000000000000001",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "struct"
+    },
+    {
+      "name": "boundary-struct-reject",
+      "operation": "struct",
+      "rule": "sequential-truncated",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "actor-ref",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "016100000000000000",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "struct"
+    },
+    {
+      "name": "boundary-vector-accept",
+      "operation": "vector",
+      "rule": "count-matches-items",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "sorted-text8-vector",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0002026161017a",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "vector"
+    },
+    {
+      "name": "boundary-vector-reject",
+      "operation": "vector",
+      "rule": "count-exceeds-items",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "sorted-text8-vector",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0002026161",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "vector"
+    },
+    {
+      "name": "boundary-versioned-vector-accept",
+      "operation": "versioned-vector",
+      "rule": "version-and-count",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "metadata-frame",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0102014100056669727374014200067365636f6e64",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "versioned-vector"
+    },
+    {
+      "name": "boundary-versioned-vector-reject",
+      "operation": "versioned-vector",
+      "rule": "version-mismatch",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "metadata-frame",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0202014100056669727374014200067365636f6e64",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "versioned-vector"
+    },
+    {
+      "name": "boundary-bounded-reader-accept",
+      "operation": "bounded-reader",
+      "rule": "exact-boundary",
+      "expect": "accept",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "bounded-reader"
+    },
+    {
+      "name": "boundary-bounded-reader-reject",
+      "operation": "bounded-reader",
+      "rule": "trailing-byte",
+      "expect": "reject",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e00",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "bounded-reader"
+    },
+    {
+      "name": "boundary-versioned-length-delimited-accept",
+      "operation": "versioned-length-delimited",
+      "rule": "version-and-body-length",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "versioned-length-delimited"
+    },
+    {
+      "name": "boundary-versioned-length-delimited-reject",
+      "operation": "versioned-length-delimited",
+      "rule": "version-mismatch",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "020000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "versioned-length-delimited"
+    },
+    {
+      "name": "boundary-discriminator-accept",
+      "operation": "discriminator",
+      "rule": "variant-tag-agreement",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "relocation-object-identity",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010012016100000000000000010000000000000001",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "discriminator"
+    },
+    {
+      "name": "boundary-discriminator-reject",
+      "operation": "discriminator",
+      "rule": "variant-tag-mismatch",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "relocation-object-identity",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010012016100000000000000010000000000000001",
+      "directions": [
+        "encode"
+      ],
+      "input": {
+        "objectKind": "userSpot",
+        "actor": {
+          "actorId": "a",
+          "objectGeneration": 1
+        },
+        "expectedAuthorityOwnerGeneration": 1,
+        "variant": "actor"
+      },
+      "boundaryPair": "discriminator"
+    },
+    {
+      "name": "boundary-conditional-union-accept",
+      "operation": "conditional-union",
+      "rule": "selected-case-complete",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "relocation-object-identity",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010012016100000000000000010000000000000001",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "conditional-union"
+    },
+    {
+      "name": "boundary-conditional-union-reject",
+      "operation": "conditional-union",
+      "rule": "selected-case-trailing",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "relocation-object-identity",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "01001301610000000000000001000000000000000100",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "conditional-union"
+    },
+    {
+      "name": "boundary-tlv32-accept",
+      "operation": "tlv32",
+      "rule": "required-fields-present",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000630100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000c0000000400000000",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": {
+        "runtimeState": "serving",
+        "applicationVersion": 0,
+        "protocolCapabilities": [
+          "framework-service-v13"
+        ],
+        "objectRole": "none",
+        "placementWeight": 1,
+        "activeCapacityLimit": 1,
+        "pendingCapacityLimit": 0,
+        "activeCapacityUsed": 0,
+        "pendingCapacityUsed": 0
+      },
+      "boundaryPair": "tlv32"
+    },
+    {
+      "name": "boundary-tlv32-reject",
+      "operation": "tlv32",
+      "rule": "required-field-missing",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "00000000",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "tlv32"
+    },
+    {
+      "name": "boundary-constraint-accept",
+      "operation": "constraint",
+      "rule": "canonical-authority-key-order",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "aggregate-participant-vector",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000201001b0a61616161616161616161000000000000000100000000000000010001760000000101010013027a7a000000000000000100000000000000010001760000000101",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "comparisonKeys": [
+        "zla1:a:10:aaaaaaaaaa",
+        "zla1:a:2:zz"
+      ],
+      "input": [
+        {
+          "object": {
+            "objectKind": "actor",
+            "actor": {
+              "actorId": "aaaaaaaaaa",
+              "objectGeneration": 1
+            },
+            "expectedAuthorityOwnerGeneration": 1
+          },
+          "expectedStoreVersion": "v",
+          "mutationHex": "01"
+        },
+        {
+          "object": {
+            "objectKind": "actor",
+            "actor": {
+              "actorId": "zz",
+              "objectGeneration": 1
+            },
+            "expectedAuthorityOwnerGeneration": 1
+          },
+          "expectedStoreVersion": "v",
+          "mutationHex": "01"
+        }
+      ],
+      "boundaryPair": "constraint"
+    },
+    {
+      "name": "boundary-constraint-reject",
+      "operation": "constraint",
+      "rule": "canonical-authority-key-order",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "aggregate-participant-vector",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0002010013027a7a00000000000000010000000000000001000176000000010101001b0a61616161616161616161000000000000000100000000000000010001760000000101",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "comparisonKeys": [
+        "zla1:a:2:zz",
+        "zla1:a:10:aaaaaaaaaa"
+      ],
+      "input": [
+        {
+          "object": {
+            "objectKind": "actor",
+            "actor": {
+              "actorId": "zz",
+              "objectGeneration": 1
+            },
+            "expectedAuthorityOwnerGeneration": 1
+          },
+          "expectedStoreVersion": "v",
+          "mutationHex": "01"
+        },
+        {
+          "object": {
+            "objectKind": "actor",
+            "actor": {
+              "actorId": "aaaaaaaaaa",
+              "objectGeneration": 1
+            },
+            "expectedAuthorityOwnerGeneration": 1
+          },
+          "expectedStoreVersion": "v",
+          "mutationHex": "01"
+        }
+      ],
+      "boundaryPair": "constraint"
+    },
+    {
+      "name": "boundary-command-header-accept",
+      "operation": "command-header",
+      "rule": "magic-major-command",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011000",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "command-header"
+    },
+    {
+      "name": "boundary-command-header-reject",
+      "operation": "command-header",
+      "rule": "magic-mismatch",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5b4d011000",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "command-header"
+    },
+    {
+      "name": "boundary-flags-accept",
+      "operation": "flags",
+      "rule": "allowed-flags",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011000",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "flags"
+    },
+    {
+      "name": "boundary-flags-reject",
+      "operation": "flags",
+      "rule": "unknown-command-flag",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011008",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "flags"
+    },
+    {
+      "name": "boundary-flag-constraint-accept",
+      "operation": "flag-constraint",
+      "rule": "all-or-none",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "actorSend",
+        "commandId": 24
+      },
+      "framesHex": [
+        "5a4d01180000000000000000010000000000000001000001610000000000000001016e000000000000000100000000000000010000000000000001",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "flag-constraint"
+    },
+    {
+      "name": "boundary-flag-constraint-reject",
+      "operation": "flag-constraint",
+      "rule": "all-or-none",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "actorSend",
+        "commandId": 24
+      },
+      "framesHex": [
+        "5a4d01180200000000000000010000000000000001000001610000000000000001016e000000000000000100000000000000010000000000000001",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "flag-constraint"
+    },
+    {
+      "name": "boundary-metadata-flag-frame-accept",
+      "operation": "metadata-flag-frame",
+      "rule": "frame-required",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011001",
+        "0102014100056669727374014200067365636f6e64",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "metadata-flag-frame"
+    },
+    {
+      "name": "boundary-metadata-flag-frame-reject",
+      "operation": "metadata-flag-frame",
+      "rule": "frame-required",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011001",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "metadata-flag-frame"
+    },
+    {
+      "name": "boundary-payload-accept",
+      "operation": "payload",
+      "rule": "required-payload",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011000",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
+      ],
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "payload"
+    },
+    {
+      "name": "boundary-payload-reject",
+      "operation": "payload",
+      "rule": "required-payload-missing",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "nodeSend",
+        "commandId": 16
+      },
+      "framesHex": [
+        "5a4d011000"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "payload"
+    },
+    {
+      "name": "boundary-durable-header-accept",
+      "operation": "durable-header",
+      "rule": "exact-header",
+      "expect": "accept",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "boundaryPair": "durable-header"
+    },
+    {
+      "name": "boundary-durable-header-reject",
+      "operation": "durable-header",
+      "rule": "flags-exact",
+      "expect": "reject",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100010000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af00000000000000010000000000000000fc6bab6a",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "durable-header"
+    },
+    {
+      "name": "boundary-checksum-accept",
+      "operation": "checksum",
+      "rule": "checksum-match-before-body",
+      "expect": "accept",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "checksum"
+    },
+    {
+      "name": "boundary-checksum-reject",
+      "operation": "checksum",
+      "rule": "checksum-mismatch",
+      "expect": "reject",
+      "surface": {
+        "format": "authority-payload-v1",
+        "type": "authority-payload-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720f",
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "checksum"
+    },
+    {
+      "name": "boundary-encoded-limit-accept",
+      "operation": "encoded-limit",
+      "rule": "complete-tlv-encoded-maximum",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "byteRecipe": {
+        "segments": [
+          {
+            "hex": "000ffffc"
+          },
+          {
+            "hex": "010000000101"
+          },
+          {
+            "hex": "02000000080000000000000000"
+          },
+          {
+            "hex": "06000000180001156672616d65776f726b2d736572766963652d763133"
+          },
+          {
+            "hex": "070000000100"
+          },
+          {
+            "hex": "080000000400000001"
+          },
+          {
+            "hex": "090000000400000001"
+          },
+          {
+            "hex": "0a0000000400000000"
+          },
+          {
+            "hex": "0b0000000400000000"
+          },
+          {
+            "hex": "0c0000000400000000"
+          },
+          {
+            "hex": "0d000fff94"
+          },
+          {
+            "repeatByte": 127,
+            "count": 1048468
+          }
+        ],
+        "encodedBytes": 1048576,
+        "sha256": "5c7be7619dd60d7e09372c516007299844e89c93c379ca4d5ea56359b36945b1"
+      },
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "encoded-limit"
+    },
+    {
+      "name": "boundary-encoded-limit-reject",
+      "operation": "encoded-limit",
+      "rule": "complete-tlv-encoded-over-maximum",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "byteRecipe": {
+        "segments": [
+          {
+            "hex": "00100000"
+          },
+          {
+            "hex": "010000000101"
+          },
+          {
+            "hex": "02000000080000000000000000"
+          },
+          {
+            "hex": "06000000180001156672616d65776f726b2d736572766963652d763133"
+          },
+          {
+            "hex": "070000000100"
+          },
+          {
+            "hex": "080000000400000001"
+          },
+          {
+            "hex": "090000000400000001"
+          },
+          {
+            "hex": "0a0000000400000000"
+          },
+          {
+            "hex": "0b0000000400000000"
+          },
+          {
+            "hex": "0c0000000400000000"
+          },
+          {
+            "hex": "0d000fff98"
+          },
+          {
+            "repeatByte": 127,
+            "count": 1048472
+          }
+        ],
+        "encodedBytes": 1048580,
+        "sha256": "639cbbc7d2df4bbadd87e026efe617d5cb3e44c2698b7b47d01a297e77186ebf"
+      },
+      "directions": [
+        "decode"
+      ],
+      "boundaryPair": "encoded-limit"
+    },
+    {
+      "name": "boundary-negotiated-bound-accept",
+      "operation": "negotiated-bound",
+      "rule": "measured-equals-context",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 4
+      },
+      "boundaryPair": "negotiated-bound"
+    },
+    {
+      "name": "boundary-negotiated-bound-reject",
+      "operation": "negotiated-bound",
+      "rule": "measured-exceeds-context",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0000000401020304",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 3
+      },
+      "boundaryPair": "negotiated-bound"
+    },
+    {
+      "name": "boundary-logical-stream-accept",
+      "operation": "logical-stream",
+      "rule": "mid-field-chunk-split",
+      "expect": "accept",
+      "surface": {
+        "format": "relocation-envelope-v1",
+        "type": "relocation-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "chunksHex": [
+        "00",
+        "00000000000000000000000000000902001504726f6f6d0000000000000001000000000000000700000000000000010000000300000000000000010100000000000000080000000000000000000000000000000201000000000000000a00000000000000027b7d0000000000000003000000000000000000000000010000000000000002000000000000000106010021016e00000000000000010e726571756573742d736f757263650000000000000006000000000000000000000000000000002a000000030008000000000000006304726f6f6d000000",
+        "0000000001016d00000000000000020000000000000007000000000000000101000000290b4368617452657175657374106170706c69636174696f6e2f6a736f6e000000087b226964223a317d000000010000000000000003096865617274626561740e48656172746265617454696d657200000000000003e8010000000000000001000000000000000004000000000000000500000199c82cc0000000000100000000000000030000000000000002096865617274626561740000000000000005000000000000000600000199c82cc00000000000000000",
+        "01"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "chunkSplit": "within-field",
+      "boundaryPair": "logical-stream"
+    },
+    {
+      "name": "boundary-logical-stream-reject",
+      "operation": "logical-stream",
+      "rule": "truncated-final-chunk",
+      "expect": "reject",
+      "surface": {
+        "format": "relocation-envelope-v1",
+        "type": "relocation-envelope-v1",
+        "command": null,
+        "commandId": null
+      },
+      "chunksHex": [
+        "00",
+        "00000000000000000000000000000902001504726f6f6d0000000000000001000000000000000700000000000000010000000300000000000000010100000000000000080000000000000000000000000000000201000000000000000a00000000000000027b7d0000000000000003000000000000000000000000010000000000000002000000000000000106010021016e00000000000000010e726571756573742d736f757263650000000000000006000000000000000000000000000000002a000000030008000000000000006304726f6f6d000000",
+        "0000000001016d00000000000000020000000000000007000000000000000101000000290b4368617452657175657374106170706c69636174696f6e2f6a736f6e000000087b226964223a317d000000010000000000000003096865617274626561740e48656172746265617454696d657200000000000003e8010000000000000001000000000000000004000000000000000500000199c82cc0000000000100000000000000030000000000000002096865617274626561740000000000000005000000000000000600000199c82cc00000000000000000"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "final": true,
+      "boundaryPair": "logical-stream"
+    },
+    {
+      "name": "boundary-runtime-predicate-accept",
+      "operation": "runtime-predicate",
+      "rule": "terminal-success-integrity",
+      "expect": "accept",
+      "surface": {
+        "format": "semantic",
+        "type": null,
+        "command": "reply",
+        "commandId": 20
+      },
+      "hex": "",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": {
+        "terminalResult": "ok",
+        "failureCode": "none"
+      },
+      "boundaryPair": "runtime-predicate"
+    },
+    {
+      "name": "boundary-runtime-predicate-reject",
+      "operation": "runtime-predicate",
+      "rule": "terminal-failure-integrity",
+      "expect": "reject",
+      "surface": {
+        "format": "semantic",
+        "type": null,
+        "command": "reply",
+        "commandId": 20
+      },
+      "hex": "",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": {
+        "terminalResult": "ok",
+        "failureCode": "actorRouteNotFound"
+      },
+      "boundaryPair": "runtime-predicate"
+    },
+    {
+      "name": "text-lone-surrogate",
+      "operation": "text-validation",
+      "rule": "lone-surrogate",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "text8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "",
+      "directions": [
+        "encode"
+      ],
+      "input": "\ud800"
+    },
+    {
+      "name": "text-surrogate-code-point",
+      "operation": "text-validation",
+      "rule": "surrogate-code-point",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "text8",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "03eda080",
+      "directions": [
+        "decode"
+      ]
+    },
+    {
+      "name": "field-absent-with-internal-generation",
+      "operation": "field",
+      "rule": "internal-absence",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "optional-actor-ref",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "00",
+      "directions": [
+        "encode"
+      ],
+      "input": {
+        "actorId": null,
+        "generation": 1
+      }
+    },
+    {
+      "name": "constraint-utf8-length-independent-order",
+      "operation": "constraint",
+      "rule": "utf-8-bytes",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "sorted-text8-vector",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "0002026161017a",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": [
+        "aa",
+        "z"
+      ]
+    },
+    {
+      "name": "tlv-encode-required-missing",
+      "operation": "tlv32",
+      "rule": "required-field",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000630100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000c0000000400000000",
+      "directions": [
+        "encode"
+      ],
+      "input": {
+        "runtimeState": null,
+        "applicationVersion": 0,
+        "protocolCapabilities": [
+          "framework-service-v13"
+        ],
+        "objectRole": "none",
+        "placementWeight": 1,
+        "activeCapacityLimit": 1,
+        "pendingCapacityLimit": 0,
+        "activeCapacityUsed": 0,
+        "pendingCapacityUsed": 0
+      }
+    },
+    {
+      "name": "tlv-encode-capability-missing",
+      "operation": "constraint",
+      "rule": "contains-protocol-required-capability",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000630100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000c0000000400000000",
+      "directions": [
+        "encode"
+      ],
+      "input": {
+        "runtimeState": "serving",
+        "applicationVersion": 0,
+        "protocolCapabilities": [
+          "other"
+        ],
+        "objectRole": "none",
+        "placementWeight": 1,
+        "activeCapacityLimit": 1,
+        "pendingCapacityLimit": 0,
+        "activeCapacityUsed": 0,
+        "pendingCapacityUsed": 0
+      }
+    },
+    {
+      "name": "tlv-encode-field-range",
+      "operation": "field",
+      "rule": "maximum",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000630100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000c0000000400000000",
+      "directions": [
+        "encode"
+      ],
+      "input": {
+        "runtimeState": "serving",
+        "applicationVersion": 0,
+        "protocolCapabilities": [
+          "framework-service-v13"
+        ],
+        "objectRole": "none",
+        "placementWeight": 101,
+        "activeCapacityLimit": 1,
+        "pendingCapacityLimit": 0,
+        "activeCapacityUsed": 0,
+        "pendingCapacityUsed": 0
+      }
+    },
+    {
+      "name": "length-prefixed-large-payload",
+      "operation": "length-prefixed",
+      "rule": "encode-through-declared-maximum",
+      "expect": "accept",
+      "surface": {
+        "format": "type",
+        "type": "application-payload-bytes",
+        "command": null,
+        "commandId": null
+      },
+      "byteRecipe": {
+        "segments": [
+          {
+            "hex": "00100000"
+          },
+          {
+            "repeatByte": 127,
+            "count": 1048576
+          }
+        ],
+        "encodedBytes": 1048580,
+        "sha256": "ba8edab5c3c04c65978959442ca335c6298f5fce5be000f16249d6b4572e2f3e"
+      },
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead": 1048576
+      },
+      "input": {
+        "repeatByte": 127,
+        "count": 1048576
+      }
+    },
+    {
       "name": "vector-ordering",
       "operation": "constraint",
       "rule": "sorted",
@@ -385,7 +1681,8 @@
         "commandId": 24
       },
       "framesHex": [
-        "5a4d011802"
+        "5a4d01180200000000000000010000000000000001000001610000000000000001016e000000000000000100000000000000010000000000000001",
+        "010000002d0e666978747572652e7061636b6574186170706c69636174696f6e2f6f637465742d73747265616d000000017f"
       ]
     },
     {
@@ -555,7 +1852,7 @@
         "command": null,
         "commandId": null
       },
-      "hex": "5a4c41550100010000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e"
+      "hex": "5a4c41550100010000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af00000000000000010000000000000000fc6bab6a"
     },
     {
       "name": "durable-checksum",
