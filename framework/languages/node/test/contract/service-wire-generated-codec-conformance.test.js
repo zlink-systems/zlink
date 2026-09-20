@@ -7,14 +7,11 @@ const { after, test } = require('node:test');
 
 const nodeRoot = path.resolve(__dirname, '../..');
 const protocolRoot = path.resolve(nodeRoot, '../../runtime/protocol');
-const generatedSource = path.join(protocolRoot, 'generated/node/service_wire_codec.generated.ts');
-const compiler = process.env.ZLINK_TYPESCRIPT_COMPILER
-  ?? path.join(nodeRoot, 'node_modules/typescript/bin/tsc');
 const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-service-wire-ts-'));
-
+const compiler = path.join(nodeRoot, 'node_modules/typescript/bin/tsc');
 execFileSync(process.execPath, [
   compiler,
-  generatedSource,
+  path.join(protocolRoot, 'generated/node/service_wire_codec.generated.ts'),
   '--target', 'ES2022',
   '--module', 'commonjs',
   '--moduleResolution', 'node',
@@ -23,6 +20,7 @@ execFileSync(process.execPath, [
 ], { cwd: nodeRoot, stdio: 'inherit' });
 
 const codec = require(path.join(outputDirectory, 'service_wire_codec.generated.js'));
+const constants = require('../../../../runtime/protocol/generated/node/service_wire_constants.js');
 const pilot = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
 const {
   decodeCanonicalAuthorityPayload,
@@ -36,6 +34,11 @@ const catalog = JSON.parse(fs.readFileSync(
   path.join(protocolRoot, 'generated/fixtures/index.json'),
   'utf8'
 ));
+const context = {
+  runtimePredicates: {
+    'service-wire-constants.valid-terminal-failure': constants.isValidServiceWireTerminalFailure
+  }
+};
 
 after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
 
@@ -44,25 +47,46 @@ function pointer(document, value) {
     current[segment.replaceAll('~1', '/').replaceAll('~0', '~')], document);
 }
 
-function frames(entry, fixture) {
-  const pointers = entry.pointers;
-  const hex = pointer(fixture, pointers.framesHex ?? pointers.hex);
-  const values = Array.isArray(hex) ? hex : [hex];
-  return values.map((value) => Buffer.from(value, 'hex'));
+function frameBytes(entry, fixture) {
+  const hex = pointer(fixture, entry.pointers.framesHex ?? entry.pointers.hex);
+  return (Array.isArray(hex) ? hex : [hex]).map((value) => Buffer.from(value, 'hex'));
 }
 
+const commands = new Map([
+  [16, [codec.decodeNodeSendCommand, codec.encodeNodeSendCommand]],
+  [20, [codec.decodeReplyCommand, codec.encodeReplyCommand]],
+  [24, [codec.decodeActorSendCommand, codec.encodeActorSendCommand]],
+  [28, [codec.decodeActorJoinCommand, codec.encodeActorJoinCommand]],
+  [47, [codec.decodeUserSpotCreateCommand, codec.encodeUserSpotCreateCommand]],
+  [48, [codec.decodeUserSpotCloseCommand, codec.encodeUserSpotCloseCommand]],
+  [49, [codec.decodeActorCreateCommand, codec.encodeActorCreateCommand]]
+]);
 const commandOracles = new Map([
   [28, [pilot.decodeActorJoin28, pilot.encodeActorJoin28]],
-  [47, [(value) => pilot.decodeUserSpotCreate47(value[0]),
+  [47, [(frames) => pilot.decodeUserSpotCreate47(frames[0]),
     (value) => [pilot.encodeUserSpotCreate47(value)]]],
-  [48, [(value) => pilot.decodeUserSpotClose48(value[0]),
+  [48, [(frames) => pilot.decodeUserSpotClose48(frames[0]),
     (value) => [pilot.encodeUserSpotClose48(value)]]],
-  [49, [(value) => pilot.decodeActorCreate49(value[0]),
+  [49, [(frames) => pilot.decodeActorCreate49(frames[0]),
     (value) => [pilot.encodeActorCreate49(value)]]]
 ]);
+const durable = new Map([
+  ['authority-payload-v1', [codec.decodeAuthorityPayloadV1DurableFormat,
+    codec.encodeAuthorityPayloadV1DurableFormat]],
+  ['instance-activation-recovery-v1', [codec.decodeInstanceActivationRecoveryV1DurableFormat,
+    codec.encodeInstanceActivationRecoveryV1DurableFormat]],
+  ['relocation-data-chunk-v1', [codec.decodeRelocationDataChunkV1DurableFormat,
+    codec.encodeRelocationDataChunkV1DurableFormat]],
+  ['relocation-manifest-v1', [codec.decodeRelocationManifestV1DurableFormat,
+    codec.encodeRelocationManifestV1DurableFormat]]
+]);
+const typeCodecs = new Map([
+  ['descriptor-extension', [codec.decodeDescriptorExtension, codec.encodeDescriptorExtension]],
+  ['text8', [codec.decodeText8, codec.encodeText8]]
+]);
 
-function oracleRoundTrip(indexed, bytes) {
-  switch (indexed.surface.format) {
+function oracleRoundTrip(format, bytes) {
+  switch (format) {
     case 'authority-payload-v1':
       return encodeCanonicalAuthorityPayload(decodeCanonicalAuthorityPayload(bytes));
     case 'instance-activation-recovery-v1':
@@ -76,74 +100,94 @@ function oracleRoundTrip(indexed, bytes) {
     case 'relocation-envelope-v1':
       return pilot.encodeRelocationEnvelopeV1(pilot.decodeRelocationEnvelopeV1([bytes]));
     default:
-      throw new RangeError(`missing hand-codec oracle for ${indexed.surface.format}`);
+      throw new RangeError(`missing hand-codec oracle for ${format}`);
   }
 }
 
-test('generated TypeScript codec round-trips every indexed canonical fixture byte-exactly', () => {
+function indexedCases() {
+  const cases = [];
+  for (const indexed of catalog.fixtures) {
+    const fixture = JSON.parse(fs.readFileSync(
+      path.join(protocolRoot, indexed.goldenFixture),
+      'utf8'
+    ));
+    for (const canonical of indexed.canonical) {
+      cases.push({ kind: 'canonical', indexed, fixture, entry: canonical });
+    }
+    for (const malformed of indexed.malformed) {
+      cases.push({ kind: 'malformed', indexed, fixture, entry: malformed });
+    }
+  }
+  for (const entry of catalog.operationCases) {
+    cases.push({ kind: 'operation', entry });
+  }
+  return cases;
+}
+
+test('generated TypeScript codec consumes every indexed conformance case', () => {
+  assert.equal(catalog.version, 2);
   assert.equal(catalog.fixtures.length, 9);
 
-  for (const indexed of catalog.fixtures) {
-    const fixture = JSON.parse(fs.readFileSync(
-      path.join(protocolRoot, indexed.goldenFixture),
-      'utf8'
-    ));
-
-    for (const canonical of indexed.canonical) {
-      const label = `${indexed.surface.format}:${canonical.name}`;
-      if (indexed.kind === 'durable') {
-        const bytes = Buffer.from(pointer(fixture, canonical.pointers.encodedHex), 'hex');
-        const decoded = codec.decodeServiceWireDurableFormat(indexed.surface.format, bytes);
-        assert.deepEqual(Buffer.from(
-          codec.encodeServiceWireDurableFormat(indexed.surface.format, decoded)
-        ), bytes, label);
-        assert.deepEqual(Buffer.from(oracleRoundTrip(indexed, bytes)), bytes, `${label}:oracle`);
-      } else if (indexed.kind === 'logical') {
-        const bytes = Buffer.from(pointer(fixture, canonical.pointers.logicalHex), 'hex');
-        const decoded = codec.decodeRelocationLogicalStream(bytes);
-        assert.deepEqual(Buffer.from(codec.encodeRelocationLogicalStream(decoded)), bytes, label);
-        assert.deepEqual(Buffer.from(oracleRoundTrip(indexed, bytes)), bytes, `${label}:oracle`);
+  for (const item of indexedCases()) {
+    const operation = item.kind === 'operation' ? item.entry.operation : item.kind;
+    const label = `${operation}:${item.entry.name}`;
+    if (item.kind === 'canonical') {
+      const { indexed, fixture, entry } = item;
+      if (indexed.kind === 'command') {
+        const bytes = frameBytes(entry, fixture);
+        const [decode, encode] = commands.get(indexed.surface.commandId);
+        assert.deepEqual(encode(decode(bytes, context), context)
+          .map((frame) => Buffer.from(frame)), bytes, label);
+        const [oracleDecode, oracleEncode] = commandOracles.get(indexed.surface.commandId);
+        assert.deepEqual(oracleEncode(oracleDecode(bytes))
+          .map((frame) => Buffer.from(frame)), bytes, `${label}:oracle`);
       } else {
-        const bytes = frames(canonical, fixture);
-        const decoded = codec.decodeServiceWireCommand(bytes);
-        assert.deepEqual(
-          codec.encodeServiceWireCommand(decoded).map((frame) => Buffer.from(frame)),
-          bytes,
-          label
-        );
-        const [decode, encode] = commandOracles.get(indexed.surface.commandId);
-        assert.deepEqual(
-          encode(decode(bytes)).map((frame) => Buffer.from(frame)),
-          bytes,
-          `${label}:oracle`
-        );
+        const hex = pointer(fixture, entry.pointers.encodedHex ?? entry.pointers.logicalHex);
+        const bytes = Buffer.from(hex, 'hex');
+        if (indexed.kind === 'durable') {
+          const [decode, encode] = durable.get(indexed.surface.format);
+          assert.deepEqual(Buffer.from(encode(decode(bytes, context), context)), bytes, label);
+        } else {
+          const decoded = codec.decodeRelocationEnvelopeV1LogicalStream(bytes, context);
+          assert.deepEqual(Buffer.from(
+            codec.encodeRelocationEnvelopeV1LogicalStream(decoded, context)
+          ), bytes, label);
+        }
+        assert.deepEqual(Buffer.from(oracleRoundTrip(indexed.surface.format, bytes)), bytes,
+          `${label}:oracle`);
       }
+      continue;
     }
-  }
-});
 
-test('generated TypeScript codec rejects every indexed malformed fixture', () => {
-  let malformedCount = 0;
-  for (const indexed of catalog.fixtures) {
-    const fixture = JSON.parse(fs.readFileSync(
-      path.join(protocolRoot, indexed.goldenFixture),
-      'utf8'
-    ));
-
-    for (const malformed of indexed.malformed) {
-      malformedCount += 1;
-      assert.throws(
-        () => codec.decodeServiceWireCommand(frames(malformed, fixture)),
-        undefined,
-        `${indexed.surface.format}:${malformed.name}`
-      );
-      const [decode] = commandOracles.get(indexed.surface.commandId);
-      assert.throws(
-        () => decode(frames(malformed, fixture)),
-        undefined,
-        `${indexed.surface.format}:${malformed.name}:oracle`
-      );
+    if (item.kind === 'malformed') {
+      const bytes = frameBytes(item.entry, item.fixture);
+      const [decode] = commands.get(item.indexed.surface.commandId);
+      assert.throws(() => decode(bytes, context), undefined, label);
+      const [oracleDecode] = commandOracles.get(item.indexed.surface.commandId);
+      assert.throws(() => oracleDecode(bytes), undefined, `${label}:oracle`);
+      continue;
     }
+
+    const entry = item.entry;
+    const action = () => {
+      if (entry.surface.format === 'type') {
+        const [decode] = typeCodecs.get(entry.surface.type);
+        return decode(Buffer.from(entry.hex, 'hex'), context);
+      }
+      if (entry.surface.format === 'semantic') {
+        return codec.validateReplyCommandRuntimePredicates(entry.input, context);
+      }
+      if (entry.surface.format === 'command') {
+        const [decode] = commands.get(entry.surface.commandId);
+        return decode(entry.framesHex.map((hex) => Buffer.from(hex, 'hex')), context);
+      }
+      if (entry.surface.format === 'relocation-envelope-v1') {
+        return codec.decodeRelocationEnvelopeV1LogicalStream(Buffer.from(entry.hex, 'hex'), context);
+      }
+      const [decode] = durable.get(entry.surface.format);
+      return decode(Buffer.from(entry.hex, 'hex'), context);
+    };
+    if (entry.expect === 'reject') assert.throws(action, undefined, label);
+    else assert.doesNotThrow(action, label);
   }
-  assert.equal(malformedCount, 12);
 });
