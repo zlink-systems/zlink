@@ -32,6 +32,6 @@ test('sample sessions construct named wire response messages', () => {
     const contract = read(item.contract);
     const source = read(item.source);
     assert.match(contract, new RegExp(`class ${item.response} \\{`));
-    assert.match(source, new RegExp(`reply\\(new ${item.response}\\(`));
+    assert.match(source, new RegExp(`reply\\(\\s*new ${item.response}\\(`));
   }
 });
