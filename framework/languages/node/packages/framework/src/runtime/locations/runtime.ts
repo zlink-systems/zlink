@@ -508,6 +508,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         signal
       );
     } catch (error) {
+      if (error instanceof OwnerLeaseRenewTimeoutError) throw error;
       const confirmed = await this.confirmOwnerLease(error, timeoutDeadline, signal);
       if (confirmed !== undefined) return confirmed;
       throw error;
@@ -522,11 +523,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     timeoutDeadline: number,
     signal?: AbortSignal
   ): Promise<Extract<Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>, { kind: 'claimed' }> | undefined> {
+    const confirmationTimeoutMs = remainingTimeoutMs(timeoutDeadline);
+    if (confirmationTimeoutMs <= 0) throw originalError;
     let confirmed: Awaited<ReturnType<ZLinkOwnerLeaseStore['readOwnerLease']>>;
     try {
       confirmed = await withTimeout(
         readSignal => this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, readSignal),
-        remainingTimeoutMs(timeoutDeadline)
+        confirmationTimeoutMs
       );
     } catch (confirmationError) {
       this.recordFailure(
@@ -1176,7 +1179,7 @@ async function withTimeout<T>(
   let abort: (() => void) | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
-      const error = new Error(`Owner lease renewal exceeded ${timeoutMs}ms.`);
+      const error = new OwnerLeaseRenewTimeoutError(timeoutMs);
       timeoutController.abort(error);
       reject(error);
     }, timeoutMs);
@@ -1198,6 +1201,13 @@ async function withTimeout<T>(
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     if (abort !== undefined) signal?.removeEventListener('abort', abort);
+  }
+}
+
+class OwnerLeaseRenewTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Owner lease renewal exceeded ${timeoutMs}ms.`);
+    this.name = 'OwnerLeaseRenewTimeoutError';
   }
 }
 

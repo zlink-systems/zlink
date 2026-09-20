@@ -308,11 +308,15 @@ test('location runtime installs the same late-committed lease after heartbeat Co
   clearTimeout(keepAlive);
 });
 
-test('location runtime bounds non-cooperative claim and confirmation read by one renew deadline', async () => {
+test('location runtime does not start confirmation read after claim consumes renew deadline', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
+  let readCalls = 0;
   const leaseStore = {
     async claimOwnerLease() { return await new Promise(() => {}); },
-    async readOwnerLease() { return await new Promise(() => {}); },
+    async readOwnerLease() {
+      readCalls += 1;
+      return await new Promise(() => {});
+    },
     renewOwnerLease: store.renewOwnerLease.bind(store),
     releaseOwnerLease: store.releaseOwnerLease.bind(store)
   };
@@ -326,6 +330,7 @@ test('location runtime bounds non-cooperative claim and confirmation read by one
   await runtime.start(rid('node-non-cooperative'));
 
   assert.ok(performance.now() - startedAt < 100);
+  assert.equal(readCalls, 0);
   assert.equal(runtime.ownerLeaseUsable, false);
   leaseStore.readOwnerLease = store.readOwnerLease.bind(store);
   await runtime.stop();
