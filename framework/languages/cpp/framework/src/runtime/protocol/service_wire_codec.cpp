@@ -3837,16 +3837,19 @@ std::vector<std::uint8_t> encode_actor_create_reply (
     if (encoded < 1 || encoded > 3)
         throw service_wire_error_t (
           "invalid Actor create result");
-    bytes.push_back (encoded);
+    std::vector<std::uint8_t> selected;
     if (result != actor_create_result_t::rejected) {
         if (node_routing_id.empty () || actor_id.empty ()
             || object_generation == 0)
             throw service_wire_error_t (
               "invalid Actor create success reply");
-        append_bytes8 (bytes, node_routing_id, "Actor node RID");
-        append_text8 (bytes, actor_id, "actor ID");
-        append_u64 (bytes, object_generation);
+        append_bytes8 (selected, node_routing_id, "Actor node RID");
+        append_text8 (selected, actor_id, "actor ID");
+        append_u64 (selected, object_generation);
     }
+    bytes.push_back (encoded);
+    append_u16 (bytes, static_cast<std::uint16_t> (selected.size ()));
+    bytes.insert (bytes.end (), selected.begin (), selected.end ());
     return bytes;
 }
 
@@ -3872,19 +3875,29 @@ actor_create_reply_t decode_actor_create_reply (
           "invalid Actor create result");
     reply.result = static_cast<actor_create_result_t> (
       bytes[offset++]);
+    const auto selected_length = read_u16 (bytes, offset);
+    if (bytes.size () - offset < selected_length)
+        throw service_wire_error_t (
+          "truncated Actor create selected body");
+    const auto selected = bytes.subspan (offset, selected_length);
+    offset += selected_length;
+    if (offset != bytes.size ())
+        throw service_wire_error_t (
+          "Actor create reply has trailing bytes");
+    std::size_t selected_offset = 0;
     if (reply.result != actor_create_result_t::rejected) {
         reply.node_routing_id =
-          read_bytes8 (bytes, offset, "Actor node RID");
-        reply.actor_id = read_text8 (bytes, offset, "actor ID");
-        reply.object_generation = read_u64 (bytes, offset);
+          read_bytes8 (selected, selected_offset, "Actor node RID");
+        reply.actor_id = read_text8 (selected, selected_offset, "actor ID");
+        reply.object_generation = read_u64 (selected, selected_offset);
         if (reply.node_routing_id.empty () || reply.actor_id.empty ()
             || reply.object_generation == 0)
             throw service_wire_error_t (
               "invalid Actor create success reply");
     }
-    if (offset != bytes.size ())
+    if (selected_offset != selected.size ())
         throw service_wire_error_t (
-          "Actor create reply has trailing bytes");
+          "Actor create selected body has trailing bytes");
     return reply;
 }
 
