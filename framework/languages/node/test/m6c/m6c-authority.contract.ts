@@ -38,10 +38,8 @@ import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locatio
 import {
   ZLinkUserSpotCreationCoordinator
 } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
-import {
-  randomOperationId,
-  ZLinkActorPlacementCoordinator
-} from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
+import { ZLinkActorPlacementCoordinator } from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
+import { randomOperationId } from '../../packages/framework/src/runtime/locations/creation-operation-id';
 import {
   decodeCreationOperationTerminalV1,
   encodeCreationOperationTerminalV1
@@ -272,6 +270,12 @@ test('Actor creation terminal is scoped to the exact source operation and publis
     }
   });
   assert.equal(committed.kind, 'created');
+  if (committed.kind === 'created') {
+    assert.deepEqual(
+      Object.keys(committed.terminal).sort(),
+      ['expiresAt', 'operation', 'storeNow', 'terminalEnvelope']
+    );
+  }
   const found = await store.readCreationTerminal(operation);
   assert.equal(found.kind, 'found');
   if (found.kind === 'found') assert.deepEqual(found.terminalEnvelope, envelope);
@@ -363,6 +367,27 @@ test('creation terminal uses the cross-language key and retains only terminal en
   const rows = await provider.scan({ prefix: key, limit: 10 });
   assert.equal(rows.kind, 'page');
   if (rows.kind === 'page') assert.equal(rows.value.items.length, 1);
+
+  const maximumGenerationOperation = {
+    ...operation,
+    sourceNodeGeneration: 0xffff_ffff_ffff_ffffn,
+    operationId: { high: 0x2n, low: 0x1n }
+  };
+  const maximumGenerationKey = [
+    'creation-terminal',
+    '00ff10',
+    '18446744073709551615',
+    '00000000000000020000000000000001'
+  ].join('\0');
+  await provider.write({
+    conditions: [],
+    mutations: [{ kind: 'put', key: storeKey(maximumGenerationKey), bytes: envelope }]
+  });
+  const maximumGenerationFound = await store.readCreationTerminal(maximumGenerationOperation);
+  assert.equal(maximumGenerationFound.kind, 'found');
+  if (maximumGenerationFound.kind === 'found') {
+    assert.deepEqual(maximumGenerationFound.terminalEnvelope, envelope);
+  }
 });
 
 test('Actor creation operation ID replaces the all-zero random value', () => {
@@ -372,12 +397,44 @@ test('Actor creation operation ID replaces the all-zero random value', () => {
   );
 });
 
+test('creation terminal codec round-trips failure and rejects malformed envelopes', () => {
+  const failure = {
+    terminalResult: 'timedOut' as const,
+    failureCode: 'requestFailed' as const,
+    hasCreation: 'false' as const,
+    hasApplicationPayload: 'false' as const
+  };
+  const encoded = Buffer.from(encodeCreationOperationTerminalV1(
+    failure,
+    { runtimePredicates: {} }
+  ));
+  assert.deepEqual(
+    decodeCreationOperationTerminalV1(encoded, { runtimePredicates: {} }),
+    failure
+  );
+  assert.throws(
+    () => decodeCreationOperationTerminalV1(
+      Buffer.concat([encoded, Buffer.from([0])]),
+      { runtimePredicates: {} }
+    ),
+    /trailing/
+  );
+  const wrongVersion = Buffer.from(encoded);
+  wrongVersion[0] = 2;
+  assert.throws(
+    () => decodeCreationOperationTerminalV1(wrongVersion, { runtimePredicates: {} }),
+    /version/
+  );
+});
+
 test('initial Actor authority publication stores a schema creation terminal', async () => {
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const completeCreation = store.completeCreation.bind(store);
   let terminalEnvelope: Uint8Array | undefined;
+  let terminalOperation: ZLinkCreationOperationIdentity | undefined;
   store.completeCreation = async (request, signal) => {
     terminalEnvelope = request.completion.terminal.terminalEnvelope;
+    terminalOperation = request.completion.terminal.operation;
     return await completeCreation(request, signal);
   };
 
@@ -398,6 +455,11 @@ test('initial Actor authority publication stores a schema creation terminal', as
   });
 
   if (terminalEnvelope === undefined) throw new Error('Publication omitted creation terminal.');
+  if (terminalOperation === undefined) throw new Error('Publication omitted creation operation.');
+  assert.equal(
+    terminalOperation.operationId.high === 0n && terminalOperation.operationId.low === 0n,
+    false
+  );
   const decoded = decodeCreationOperationTerminalV1(
     terminalEnvelope,
     { runtimePredicates: {} }
@@ -408,6 +470,37 @@ test('initial Actor authority publication stores a schema creation terminal', as
     assert.equal(decoded.creation.actor.actorId, 'actor-published');
     assert.equal(decoded.creation.actor.objectGeneration, 1n);
   }
+});
+
+test('initial Actor authority publication does not hide abort transport failure', async () => {
+  const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
+  const completionFailure = new Error('completion transport failed');
+  const abortFailure = new Error('abort transport failed');
+  store.completeCreation = async () => {
+    throw completionFailure;
+  };
+  store.abort = async () => {
+    throw abortFailure;
+  };
+
+  await assert.rejects(
+    () => publishInitialActorAuthority(store, {
+      actorType: 'player',
+      actor: {
+        actorId: 'actor-publication-abort-failure',
+        objectGeneration: 1n,
+        meshName: 'mesh',
+        nodeRid: 'node-a'
+      },
+      meshName: 'mesh',
+      ownerNodeGeneration: 1n,
+      owner: owner('owner-a', 1n),
+      spotId: 'entry-node-a',
+      spotGeneration: 1n,
+      spotKind: ZLinkSpotKind.Entry
+    }),
+    abortFailure
+  );
 });
 
 test('Actor creation replays a retained terminal after uncertain remote completion', async () => {
@@ -424,6 +517,14 @@ test('Actor creation replays a retained terminal after uncertain remote completi
   for (const outcome of ['exception', 'abnormalTerminal'] as const) {
     const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
     const actorId = `actor-replayed-${outcome}`;
+    const reply = Buffer.from(`reply-${outcome}`);
+    const targetCoordinator = new ZLinkActorPlacementCoordinator({
+      store,
+      target: async () => undefined,
+      remoteCreate: async () => {
+        throw new Error('target coordinator does not issue remote creates');
+      }
+    });
     const coordinator = new ZLinkActorPlacementCoordinator({
       store,
       target: async () => target,
@@ -431,44 +532,29 @@ test('Actor creation replays a retained terminal after uncertain remote completi
         assert.equal(request.sourceNodeRid, 'source-node');
         assert.equal(request.sourceNodeGeneration, 7n);
         assert.equal(request.operation.high === 0n && request.operation.low === 0n, false);
-        const operation: ZLinkCreationOperationIdentity = {
-          sourceNodeRid: request.sourceNodeRid,
-          sourceNodeGeneration: request.sourceNodeGeneration,
-          operationId: request.operation
-        };
-        const terminalEnvelope = Buffer.from(encodeCreationOperationTerminalV1({
-          terminalResult: 'ok',
-          failureCode: 'none',
-          hasCreation: 'true',
-          creation: {
-            createResult: 'created',
-            actor: { actorId: request.actorId, objectGeneration: 1n }
+        await targetCoordinator.handleRemoteCreate(
+          { kind: 'actorCreate', correlation: 1n, ...request },
+          async requestPayload => {
+            assert.deepEqual(requestPayload, Buffer.from('create'));
+            return {
+              result: 'created',
+              actor: {
+                actorId: request.actorId,
+                objectGeneration: 1n,
+                meshName: target.meshName,
+                nodeRid: target.nodeRid
+              },
+              reply,
+              entrySpotId: target.entrySpotId,
+              entrySpotGeneration: target.nodeGeneration
+            };
           },
-          hasApplicationPayload: 'false'
-        }, { runtimePredicates: {} }));
-        await store.completeCreation({
-          key: { kind: 'actor', globalId: request.actorId },
-          reservationId: request.reservation.reservationId,
-          expectedStoreVersion: request.reservation.expectedStoreVersion,
-          target: {
-            meshName: target.meshName,
-            nodeRid: target.nodeRid,
-            nodeLifecycleGeneration: target.nodeGeneration,
-            owner: target.owner
-          },
-          completion: {
-            kind: 'created',
-            readyPayload: Buffer.from('ready'),
-            terminal: {
-              operation,
-              terminalEnvelope,
-              operationDeadline: new Date(Date.now() + 1_000)
-            }
-          }
-        });
+          AbortSignal.timeout(1_000)
+        );
         if (outcome === 'exception') throw new Error('remote response lost');
         return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
-      }
+      },
+      decodeRemoteReply: payload => Buffer.from(payload)
     });
 
     const result = await coordinator.create(
@@ -482,6 +568,7 @@ test('Actor creation replays a retained terminal after uncertain remote completi
     assert.equal(result.status, 'created');
     if (result.status === 'created') {
       assert.equal(result.actor.actorId, actorId);
+      assert.deepEqual(result.reply, reply);
     }
   }
 });

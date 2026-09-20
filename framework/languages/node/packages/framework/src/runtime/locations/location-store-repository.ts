@@ -1407,8 +1407,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return {
           kind: 'alreadyCompleted',
           terminal: retainedCreationTerminal(
-            terminal,
+            terminal.operation,
             existingTerminal.value.bytes,
+            existingTerminal.value.expiresAt,
             existingTerminal.value.storeNow
           )
         };
@@ -3710,14 +3711,11 @@ function createTerminalRecord(
     validatePayloadSize(request.completion.readyPayload, 'Actor ready payload');
   }
   return {
-    state: request.completion.kind,
     operation: {
       sourceNodeRid: publication.operation.sourceNodeRid,
       sourceNodeGeneration: publication.operation.sourceNodeGeneration,
       operationId: { ...publication.operation.operationId }
     },
-    reservationId: requireText(request.reservationId, 'creation reservation ID'),
-    objectKind: request.key.kind,
     terminalEnvelope: Buffer.from(publication.terminalEnvelope),
     expiresAt: new Date(expiresAtMs),
     storeNow: new Date(now)
@@ -3725,13 +3723,22 @@ function createTerminalRecord(
 }
 
 function retainedCreationTerminal(
-  template: ZLinkCreationTerminalRecord,
+  operation: ZLinkCreationOperationIdentity,
   terminalEnvelope: Uint8Array,
+  expiresAt: Date | undefined,
   storeNow: Date
 ): ZLinkCreationTerminalRecord {
+  if (expiresAt === undefined) {
+    throw new Error('Retained creation terminal is missing its expiration.');
+  }
   return {
-    ...template,
+    operation: {
+      sourceNodeRid: operation.sourceNodeRid,
+      sourceNodeGeneration: operation.sourceNodeGeneration,
+      operationId: { ...operation.operationId }
+    },
     terminalEnvelope: Buffer.from(terminalEnvelope),
+    expiresAt: new Date(expiresAt),
     storeNow: new Date(storeNow)
   };
 }
@@ -3746,7 +3753,7 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
   }
   if (
     operation.sourceNodeGeneration < 1n
-    || operation.sourceNodeGeneration > MAX_GENERATION
+    || operation.sourceNodeGeneration > MAX_U64
     || operation.operationId.high < 0n
     || operation.operationId.high > MAX_U64
     || operation.operationId.low < 0n

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type {
   ActorRef
 } from '../../contracts';
@@ -6,6 +6,7 @@ import { ZLinkSpotKind } from '../../contracts';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
 import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
+import { randomOperationId } from '../locations/creation-operation-id';
 import {
   actorRelocationAuthorityApplicationPayload,
   decodeActorAuthorityPayload,
@@ -88,7 +89,7 @@ export async function publishInitialActorAuthority(
       },
       hasApplicationPayload: 'false'
     }, { runtimePredicates: {} }));
-    const operationBytes = randomBytes(16);
+    const operationId = randomOperationId();
     const completed = await store.completeCreation({
       key: { kind: 'actor', globalId: identity.actor.actorId },
       reservationId: reserved.reservationId,
@@ -101,10 +102,7 @@ export async function publishInitialActorAuthority(
           operation: {
             sourceNodeRid: identity.actor.nodeRid,
             sourceNodeGeneration: identity.ownerNodeGeneration,
-            operationId: {
-              high: operationBytes.readBigUInt64BE(0),
-              low: operationBytes.readBigUInt64BE(8)
-            }
+            operationId
           },
           terminalEnvelope,
           operationDeadline: new Date(Date.now() + CREATION_OPERATION_TIMEOUT_MS)
@@ -119,16 +117,13 @@ export async function publishInitialActorAuthority(
     requireActorAuthority(completed.ready, identity);
     return completed.ready;
   } catch (error) {
-    try {
-      await store.abort({
-        key: { kind: 'actor', globalId: identity.actor.actorId },
-        reservationId: reserved.reservationId,
-        expectedStoreVersion: reserved.creating.storeVersion.value,
-        target
-      }, signal);
-    } catch {
-      // A completed creation cannot be aborted; the validated authority remains.
-    }
+    const aborted = await store.abort({
+      key: { kind: 'actor', globalId: identity.actor.actorId },
+      reservationId: reserved.reservationId,
+      expectedStoreVersion: reserved.creating.storeVersion.value,
+      target
+    }, signal);
+    if (aborted.kind === 'stale') throw error;
     throw error;
   }
 }

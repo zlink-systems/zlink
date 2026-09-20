@@ -395,9 +395,6 @@ export class ZLinkInMemoryAuthorityStore {
     }
     const terminalRecord = validateTerminalForMutation(
       request.completion.terminal,
-      request.completion.kind,
-      request.reservationId,
-      request.key.kind,
       this.now()
     )!;
     const existingTerminal = this.operationTerminals.get(
@@ -844,7 +841,7 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
   }
   if (
     operation.sourceNodeGeneration < 1n
-    || operation.sourceNodeGeneration > MAX_GENERATION
+    || operation.sourceNodeGeneration > MAX_U64
     || operation.operationId.high < 0n
     || operation.operationId.high > MAX_U64
     || operation.operationId.low < 0n
@@ -857,9 +854,6 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
 
 function validateTerminalForMutation(
   publication: ZLinkCreationTerminalPublication | undefined,
-  state: ZLinkCreationTerminalRecord['state'],
-  reservationId: string,
-  objectKind: ZLinkPlacementAllocation['objectKind'],
   storeNow: Date
 ): ZLinkCreationTerminalRecord | undefined {
   if (publication === undefined) return undefined;
@@ -877,10 +871,7 @@ function validateTerminalForMutation(
     throw new RangeError('Creation terminal expiry must be the live operation deadline plus five minutes.');
   }
   return {
-    state,
     operation: copyCreationOperation(publication.operation),
-    reservationId: requireText(reservationId, 'creation reservation ID'),
-    objectKind,
     terminalEnvelope: Buffer.from(publication.terminalEnvelope),
     expiresAt: new Date(expiresAtMs),
     storeNow: new Date(storeNow.getTime())

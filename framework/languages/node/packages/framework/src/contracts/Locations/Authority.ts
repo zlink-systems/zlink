@@ -154,8 +154,6 @@ export interface ZLinkCreationOperationIdentity {
   readonly operationId: ZLinkCreationOperationId;
 }
 
-export type ZLinkCreationTerminalState = 'created' | 'rejected' | 'failed';
-
 export interface ZLinkCreationTerminalPublication {
   readonly operation: ZLinkCreationOperationIdentity;
   readonly terminalEnvelope: Uint8Array;
@@ -167,10 +165,7 @@ export interface ZLinkCreationTerminalPublication {
 }
 
 export interface ZLinkCreationTerminalRecord {
-  readonly state: ZLinkCreationTerminalState;
   readonly operation: ZLinkCreationOperationIdentity;
-  readonly reservationId: string;
-  readonly objectKind: ZLinkPlacementObjectKind;
   readonly terminalEnvelope: Uint8Array;
   readonly expiresAt: Date;
   readonly storeNow: Date;

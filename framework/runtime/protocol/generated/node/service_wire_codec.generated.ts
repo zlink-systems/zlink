@@ -1629,7 +1629,7 @@ function readCreationOperationTerminalV1(reader: Reader, context: ServiceWireDec
 
     if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
     if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
-    if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
+    if (value["creation"] !== undefined && same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
 
     return value;
   })();
@@ -1641,7 +1641,7 @@ function writeCreationOperationTerminalV1(input: CreationOperationTerminalV1, wr
   const limitStart = writer.length;
   if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
   if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
-  if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
+  if (value["creation"] !== undefined && same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
   if (value["terminalResult"] === undefined) fail("terminalResult required");

@@ -3,7 +3,7 @@ import {
   createInternalFrameworkException,
   wireReplyFailureException
 } from '../framework-errors-internal';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { RequestResult } from '../backend/runtime-values';
 import type {
   ActorRef,
@@ -22,6 +22,7 @@ import type {
   ZLinkObjectCreationStore
 } from '../locations/internal-store-contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
+import { randomOperationId } from '../locations/creation-operation-id';
 import type {
   ServiceActorCreateRecord,
   ServiceUserSpotReservationFence
@@ -43,6 +44,12 @@ import {
   enumWireFrameworkErrorCode,
   enumWireRequestTerminalResult
 } from '../protocol/service_wire_codec.generated';
+
+const CREATION_TERMINAL_CODEC_CONTEXT = {
+  effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 1024 * 1024,
+  effectiveCompleteMessageBytes: 1024 * 1024,
+  runtimePredicates: {}
+} as const;
 
 export interface ZLinkActorPlacementTarget {
   readonly meshName: string;
@@ -316,8 +323,8 @@ export class ZLinkActorPlacementCoordinator {
     try {
       local = await materialize(requestPayload, current, signal);
       const terminal = encodeActorTerminal(local.result === 'created'
-        ? { result: 'created', actor: local.actor }
-        : { result: 'rejected' });
+        ? { result: 'created', actor: local.actor, reply: local.reply }
+        : { result: 'rejected', reply: local.reply });
       completion = await this.options.store.completeCreation({
         key,
         reservationId: record.reservation.reservationId,
@@ -557,8 +564,8 @@ function isCompletedActorCreate(result: ServiceUserSpotOperationResult): boolean
 }
 
 type ActorTerminal =
-  | { readonly result: 'created'; readonly actor: ActorRef }
-  | { readonly result: 'rejected' };
+  | { readonly result: 'created'; readonly actor: ActorRef; readonly reply?: Uint8Array }
+  | { readonly result: 'rejected'; readonly reply?: Uint8Array };
 
 function encodeActorTerminal(terminal: ActorTerminal): Buffer {
   return Buffer.from(encodeCreationOperationTerminalV1({
@@ -574,8 +581,17 @@ function encodeActorTerminal(terminal: ActorTerminal): Buffer {
             objectGeneration: terminal.actor.objectGeneration
           }
         },
-    hasApplicationPayload: 'false'
-  }, { runtimePredicates: {} }));
+    hasApplicationPayload: terminal.reply === undefined ? 'false' : 'true',
+    ...(terminal.reply === undefined
+      ? {}
+      : {
+          applicationPayload: {
+            packetName: 'ZLinkFrameworkActorCreateReply',
+            contentType: 'application/octet-stream',
+            payload: Buffer.from(terminal.reply)
+          }
+        })
+  }, CREATION_TERMINAL_CODEC_CONTEXT));
 }
 
 function remoteActorCreateResult(
@@ -584,7 +600,7 @@ function remoteActorCreateResult(
 ): ServiceUserSpotOperationResult {
   const terminal = decodeCreationOperationTerminalV1(
     terminalEnvelope,
-    { runtimePredicates: {} }
+    CREATION_TERMINAL_CODEC_CONTEXT
   );
   const terminalResult = enumWireRequestTerminalResult(terminal.terminalResult);
   const failureCode = enumWireFrameworkErrorCode(terminal.failureCode);
@@ -630,16 +646,6 @@ function terminalPublication(record: ServiceActorCreateRecord, terminalEnvelope:
     terminalEnvelope,
     operationDeadline: new Date(Number(record.deadlineUnixMs))
   };
-}
-
-export function randomOperationId(
-  entropy: Uint8Array = randomBytes(16)
-): { readonly high: bigint; readonly low: bigint } {
-  if (entropy.byteLength !== 16) throw new RangeError('Operation ID entropy must be 16 bytes.');
-  const bytes = Buffer.from(entropy);
-  const high = bytes.readBigUInt64BE(0);
-  const low = bytes.readBigUInt64BE(8);
-  return high === 0n && low === 0n ? { high, low: 1n } : { high, low };
 }
 
 function createDeadline(timeoutMs: number, parent?: AbortSignal) {
