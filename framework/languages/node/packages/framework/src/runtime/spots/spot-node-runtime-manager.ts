@@ -574,8 +574,7 @@ export class ZLinkSpotNodeRuntimeManager {
     meshName: string,
     registration: ZLinkSpotNodeOptions
   ): string | undefined {
-    if (effectiveObjectRole(registration) !== ZLinkObjectRole.Server
-      || registration.entrySpotType === undefined) {
+    if (effectiveObjectRole(registration) !== ZLinkObjectRole.Server) {
       return undefined;
     }
     let entrySpotId = this.entrySpotIds.get(meshName);

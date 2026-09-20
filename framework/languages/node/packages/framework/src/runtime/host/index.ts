@@ -2394,6 +2394,13 @@ export class ZLinkFrameworkRuntimeHost implements
                 requestPayload,
                 this.options.registration.messageSerializers
               );
+              const entrySpotId = this.spotNodeRuntime
+                ?.meshNodeDescriptor(meshName)?.entrySpotId;
+              if (entrySpotId === undefined) {
+                throw new ZLinkConfigurationException(
+                  `Remote Actor creation requires the '${meshName}' MeshNode Entry Spot descriptor.`
+                );
+              }
               const entrySpot = node.entrySpot().status();
               const nativeActorRef = node.restoreActorAuthority?.(
                 record.actorId,
@@ -2461,7 +2468,7 @@ export class ZLinkFrameworkRuntimeHost implements
                   ...local.actorRef,
                   meshName
                 },
-                entrySpotId: String(entrySpot.routingId),
+                entrySpotId,
                 entrySpotGeneration: entrySpot.lifecycleGeneration,
                 ...(reply === undefined ? {} : { reply }),
                 onPublished: () => actors.adoptCreatedAuthority(
