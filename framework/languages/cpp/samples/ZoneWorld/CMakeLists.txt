@@ -80,7 +80,8 @@ foreach(_target IN LISTS _sample_targets)
     # DLL (zlink.dll) that no package manager deploys for us, so copy every
     # runtime DLL this target links, Core included, beside it.
     add_custom_command(TARGET ${_target} POST_BUILD
-      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      COMMAND "${CMAKE_COMMAND}" -E
+        "$<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:${_target}>>,copy_if_different,true>"
         $<TARGET_RUNTIME_DLLS:${_target}> $<TARGET_FILE_DIR:${_target}>
       COMMAND_EXPAND_LISTS)
   endif()

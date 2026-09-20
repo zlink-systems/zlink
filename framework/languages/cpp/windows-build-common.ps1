@@ -71,12 +71,12 @@ function Get-ZlinkCppWindowsSampleTargets {
             "sample_cpp_framework_bingo_client"
         )
         DeliveryDispatch = @(
-            "sample_cpp_framework_deliverydispatch_dispatch",
-            "sample_cpp_framework_deliverydispatch_courier_actor_node",
-            "sample_cpp_framework_deliverydispatch_customer_gateway",
-            "sample_cpp_framework_deliverydispatch_courier_session",
-            "sample_cpp_framework_deliverydispatch_tracking",
-            "sample_cpp_framework_deliverydispatch_client"
+            "zdd_dispatch",
+            "zdd_courier_actor_node",
+            "zdd_customer_gateway",
+            "zdd_courier_session",
+            "zdd_tracking",
+            "zdd_client"
         )
         SupportChat = @(
             "sample_cpp_framework_supportchat_api",

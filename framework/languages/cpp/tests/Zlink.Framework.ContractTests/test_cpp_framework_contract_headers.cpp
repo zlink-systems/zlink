@@ -1386,18 +1386,18 @@ static_assert (!has_destroy_actor<zlink::framework::spot_context_t>);
 static_assert (has_destroy_actor<zlink::framework::entry_spot_context_t>);
 static_assert (!has_run_worker<zlink::framework::entry_spot_context_t>);
 static_assert (has_split_workers<zlink::framework::entry_spot_context_t>);
-static_assert (!has_http_async<zlink::http_client::request_builder_t>);
+static_assert (has_http_async<zlink::http_client::request_builder_t>);
 static_assert (!has_http_yield<zlink::http_client::request_builder_t>);
 static_assert (has_http_response_submit<zlink::http_client::request_builder_t>);
 static_assert (!has_http_one_way_submit<zlink::http_client::request_builder_t>);
 static_assert (has_http_fetch<zlink::http_client::request_builder_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::http_client::request_builder_t &> ()
                                           .template fetch<int> ()),
-                              int>);
-static_assert (!has_http_async<zlink::http_client::server_request_builder_t>);
+                              zlink::framework::task_t<int>>);
+static_assert (has_http_async<zlink::http_client::server_request_builder_t>);
 static_assert (has_http_yield<zlink::http_client::server_request_builder_t>);
 static_assert (has_http_response_submit<zlink::http_client::server_request_builder_t>);
-static_assert (has_http_one_way_submit<zlink::http_client::server_request_builder_t>);
+static_assert (!has_http_one_way_submit<zlink::http_client::server_request_builder_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::http_client::client_builder_t &> ().build_server (
                    std::declval<std::shared_ptr<zlink::http_client::execution_turn_t>> ())),
