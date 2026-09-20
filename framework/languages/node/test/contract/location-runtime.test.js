@@ -17,15 +17,10 @@ const authorityKeys = require(
 );
 const msgpack = require('@msgpack/msgpack');
 
-// Target-contract pin for checklist C-3 (store record golden fixture). This
-// test consumes golden/store-record-v1.json directly — it is decode-side
-// only, independent of any production opaque-record store codec, because no
-// language has implemented the zlink-location-v3 opaque record write path
-// yet (checklist C-4). It stays green today: sha256 key derivation and
-// cmsgpack value decoding need nothing from C-4. Once a node production
-// codec exists, this test should be extended (or a sibling added) to also
-// exercise that codec against the same fixture.
-test('store record golden fixture: key derivation and value byte vectors decode as pinned', () => {
+// Target-contract pin for checklist C-3 (store record golden fixture). The
+// generic value vectors remain decode-side pins; creation-terminal also
+// exercises the production logical-key builder added to the opaque store.
+test('store record golden fixture: key derivation and value byte vectors decode as pinned', async () => {
   const fixture = JSON.parse(fs.readFileSync(path.resolve(
     __dirname,
     '../../../../runtime/protocol/golden/store-record-v1.json'
@@ -46,6 +41,32 @@ test('store record golden fixture: key derivation and value byte vectors decode 
     );
   }
   assert.equal(fixture.namespace, '{zlink-location-v3}:opaque');
+
+  const creation = fixture.keyDerivation.find((item) => item.record === 'creation-terminal');
+  assert.ok(creation);
+  let actualCreationPreimage;
+  const repository = new internal.ZLinkLocationStoreRepository({
+    async read(key) {
+      actualCreationPreimage = key.value;
+      return { kind: 'missing', storeNow: new Date(0) };
+    }
+  });
+  await repository.readCreationTerminal({
+    sourceNodeRid: {
+      toHex: () => creation.components.sourceNodeRidHex,
+      toString: () => creation.components.sourceNodeRidHex
+    },
+    sourceNodeGeneration: BigInt(creation.components.sourceHostGeneration),
+    operationId: {
+      high: BigInt(creation.components.operationIdHigh),
+      low: BigInt(creation.components.operationIdLow)
+    }
+  });
+  assert.equal(
+    Buffer.from(actualCreationPreimage, 'utf8').toString('hex'),
+    creation.preimageHex,
+    'production key builder mismatch: creation-terminal'
+  );
 
   const relocationBlobBytes = Buffer.from(fixture.relocationBlob.rawBytesHex, 'hex');
   assert.ok(relocationBlobBytes.length > 0);

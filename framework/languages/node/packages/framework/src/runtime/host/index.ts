@@ -2165,17 +2165,24 @@ export class ZLinkFrameworkRuntimeHost implements
         );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
+        if (localStatus === undefined) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
+            `RouteMesh '${meshName}' has no local client node.`
+          );
+        }
         return {
           meshName,
           nodeRid: selected.rid,
           nodeGeneration: selected.lifecycleGeneration,
+          sourceNodeRid: String(localStatus.routingId),
+          sourceNodeGeneration: localStatus.lifecycleGeneration,
           entrySpotId: selected.entrySpotId!,
           owner: {
             ownerId: selected.ownerId,
             leaseGeneration: selected.leaseGeneration
           },
-          isLocal: localStatus !== undefined
-            && String(localStatus.routingId) === String(selected.rid)
+          isLocal: String(localStatus.routingId) === String(selected.rid)
             && localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }

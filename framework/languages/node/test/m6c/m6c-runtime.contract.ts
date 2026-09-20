@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
@@ -1239,7 +1238,6 @@ async function createActorAuthority(
           operationId: { high: 1n, low: 2n }
         },
         terminalEnvelope,
-        terminalEnvelopeSha256: createHash('sha256').update(terminalEnvelope).digest(),
         operationDeadline: new Date(Date.now() + 60_000)
       }
     }

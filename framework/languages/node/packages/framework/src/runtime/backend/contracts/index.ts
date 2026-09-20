@@ -157,7 +157,7 @@ export interface ZLinkBackendMeshNode {
   ): Promise<ServiceUserSpotOperationResult>;
   requestActorCreate(
     targetNodeRid: string,
-    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation' | 'operation'>,
+    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult>;
   connectPeer(options: {

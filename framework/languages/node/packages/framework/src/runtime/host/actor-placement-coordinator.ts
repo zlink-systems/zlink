@@ -3,7 +3,7 @@ import {
   createInternalFrameworkException,
   wireReplyFailureException
 } from '../framework-errors-internal';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { RequestResult } from '../backend/runtime-values';
 import type {
   ActorRef,
@@ -13,6 +13,7 @@ import type {
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
+  ZLinkCreationOperationIdentity,
   ZLinkLocationOwnerToken,
   ZLinkObjectReserveResult
 } from '../locations/internal-location-contracts';
@@ -36,6 +37,12 @@ import {
   decodeLocationCreationContent,
   encodeLocationCreationContent
 } from './user-spot-creation-coordinator';
+import {
+  decodeCreationOperationTerminalV1,
+  encodeCreationOperationTerminalV1,
+  enumWireFrameworkErrorCode,
+  enumWireRequestTerminalResult
+} from '../protocol/service_wire_codec.generated';
 
 export interface ZLinkActorPlacementTarget {
   readonly meshName: string;
@@ -44,6 +51,8 @@ export interface ZLinkActorPlacementTarget {
   readonly entrySpotId: string;
   readonly owner: ZLinkLocationOwnerToken;
   readonly isLocal: boolean;
+  readonly sourceNodeRid: RoutingId;
+  readonly sourceNodeGeneration: bigint;
 }
 
 export interface ZLinkActorPlacementCoordinatorOptions {
@@ -57,7 +66,7 @@ export interface ZLinkActorPlacementCoordinatorOptions {
   readonly remoteCreate: (
     meshName: string,
     targetNodeRid: string,
-    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation' | 'operation'>,
+    request: Omit<ServiceActorCreateRecord, 'kind' | 'correlation'>,
     timeoutMs: number
   ) => Promise<ServiceUserSpotOperationResult>;
   readonly decodeRemoteReply?: (payload: Uint8Array) => unknown;
@@ -81,6 +90,7 @@ export class ZLinkActorPlacementCoordinator {
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
     const excluded = new Set<string>();
+    const operationId = randomOperationId();
     try {
       for (;;) {
         const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
@@ -150,18 +160,39 @@ export class ZLinkActorPlacementCoordinator {
             true
           );
         }
-        const remote = await this.options.remoteCreate(
-          target.meshName,
-          String(target.nodeRid),
-          actorCreateRecord(
-            actorId,
-            stableType,
-            reserved.creating,
-            target,
-            deadlineUnixMs
-          ),
-          Math.max(1, Math.ceil(deadlineMs - performance.now()))
-        );
+        const operation: ZLinkCreationOperationIdentity = {
+          sourceNodeRid: target.sourceNodeRid,
+          sourceNodeGeneration: target.sourceNodeGeneration,
+          operationId
+        };
+        let remote: ServiceUserSpotOperationResult | undefined;
+        let transportFailure: unknown;
+        try {
+          remote = await this.options.remoteCreate(
+            target.meshName,
+            String(target.nodeRid),
+            actorCreateRecord(
+              actorId,
+              stableType,
+              reserved.creating,
+              target,
+              deadlineUnixMs,
+              operation
+            ),
+            Math.max(1, Math.ceil(deadlineMs - performance.now()))
+          );
+        } catch (error) {
+          transportFailure = error;
+        }
+        if (
+          remote === undefined || !isCompletedActorCreate(remote)
+        ) {
+          const retained = await this.options.store.readCreationTerminal(operation);
+          if (retained.kind === 'found') {
+            remote = remoteActorCreateResult(retained.terminalEnvelope, target);
+          }
+        }
+        if (remote === undefined) throw transportFailure;
         if (
           remote.terminalResult !== RequestResult.Ok
           || remote.failureCode !== 0
@@ -235,14 +266,21 @@ export class ZLinkActorPlacementCoordinator {
       requestPayload: Uint8Array,
       authority: ZLinkAuthoritySnapshot,
       signal: AbortSignal
-    ) => Promise<{
-      readonly result: 'created' | 'rejected';
-      readonly actor?: ActorRef;
-      readonly reply?: Uint8Array;
-      readonly onPublished?: () => void;
-      readonly entrySpotId?: string;
-      readonly entrySpotGeneration?: bigint;
-    }>,
+    ) => Promise<
+      | {
+          readonly result: 'created';
+          readonly actor: ActorRef;
+          readonly reply?: Uint8Array;
+          readonly onPublished?: () => void;
+          readonly entrySpotId: string;
+          readonly entrySpotGeneration: bigint;
+        }
+      | {
+          readonly result: 'rejected';
+          readonly reply?: Uint8Array;
+          readonly onPublished?: () => void;
+        }
+    >,
     signal: AbortSignal
   ): Promise<ServiceUserSpotOperationResult> {
     const key = { kind: 'actor' as const, globalId: record.actorId };
@@ -277,11 +315,9 @@ export class ZLinkActorPlacementCoordinator {
     let completion: Awaited<ReturnType<ZLinkObjectCreationStore['completeCreation']>>;
     try {
       local = await materialize(requestPayload, current, signal);
-      const terminal = encodeActorTerminal(
-        record.correlation,
-        local.result,
-        local.actor
-      );
+      const terminal = encodeActorTerminal(local.result === 'created'
+        ? { result: 'created', actor: local.actor }
+        : { result: 'rejected' });
       completion = await this.options.store.completeCreation({
         key,
         reservationId: record.reservation.reservationId,
@@ -292,15 +328,15 @@ export class ZLinkActorPlacementCoordinator {
               kind: 'created',
               readyPayload: encodeActorAuthorityIdentity({
                 actorType: record.stableType,
-                actor: local.actor!,
+                actor: local.actor,
                 meshName: current.allocation.descriptor.meshName,
                 ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
                 owner: {
                   ownerId: current.ownerId,
                   leaseGeneration: current.ownerLeaseGeneration
                 },
-                spotId: local.entrySpotId!,
-                spotGeneration: local.entrySpotGeneration!,
+                spotId: local.entrySpotId,
+                spotGeneration: local.entrySpotGeneration,
                 spotKind: ZLinkSpotKind.Entry
               }),
               terminal: terminalPublication(record, terminal)
@@ -339,8 +375,11 @@ export class ZLinkActorPlacementCoordinator {
         `Actor '${record.actorId}' creation completion lost its reservation.`
       );
     }
-    if (local.result === 'created') local.onPublished?.();
-    return actorResult(local.result, local.actor, local.reply);
+    if (local.result === 'created') {
+      local.onPublished?.();
+      return actorResult('created', local.actor, local.reply);
+    }
+    return actorResult('rejected', undefined, local.reply);
   }
 }
 
@@ -404,13 +443,15 @@ function actorCreateRecord(
   stableType: string,
   snapshot: ZLinkAuthoritySnapshot,
   target: ZLinkActorPlacementTarget,
-  deadlineUnixMs: number
-): Omit<ServiceActorCreateRecord, 'kind' | 'correlation' | 'operation'> {
+  deadlineUnixMs: number,
+  operation: ZLinkCreationOperationIdentity
+): Omit<ServiceActorCreateRecord, 'kind' | 'correlation'> {
   const pending = snapshot.pendingCreation;
   if (pending === undefined) throw new Error('Actor reservation omitted Pending creation.');
   return {
-    sourceNodeRid: '',
-    sourceNodeGeneration: 1n,
+    sourceNodeRid: String(operation.sourceNodeRid),
+    sourceNodeGeneration: operation.sourceNodeGeneration,
+    operation: operation.operationId,
     actorId,
     stableType,
     reservation: reservationFence(snapshot, target, pending.reservationId),
@@ -509,23 +550,74 @@ function actorResult(
   };
 }
 
-function encodeActorTerminal(
-  correlation: bigint,
-  result: 'created' | 'rejected',
-  actor?: ActorRef
-): Buffer {
-  return Buffer.from(JSON.stringify({
-    correlation: correlation.toString(),
-    result,
-    actor: actor === undefined
-      ? undefined
+function isCompletedActorCreate(result: ServiceUserSpotOperationResult): boolean {
+  return result.terminalResult === RequestResult.Ok
+    && result.failureCode === 0
+    && result.tail?.kind === 'actorCreate';
+}
+
+type ActorTerminal =
+  | { readonly result: 'created'; readonly actor: ActorRef }
+  | { readonly result: 'rejected' };
+
+function encodeActorTerminal(terminal: ActorTerminal): Buffer {
+  return Buffer.from(encodeCreationOperationTerminalV1({
+    terminalResult: 'ok',
+    failureCode: 'none',
+    hasCreation: 'true',
+    creation: terminal.result === 'rejected'
+      ? { createResult: 'rejected' }
       : {
-          actorId: actor.actorId,
-          generation: actor.objectGeneration.toString(),
-          meshName: actor.meshName,
-          nodeRid: String(actor.nodeRid)
-        }
-  }));
+          createResult: 'created',
+          actor: {
+            actorId: terminal.actor.actorId,
+            objectGeneration: terminal.actor.objectGeneration
+          }
+        },
+    hasApplicationPayload: 'false'
+  }, { runtimePredicates: {} }));
+}
+
+function remoteActorCreateResult(
+  terminalEnvelope: Uint8Array,
+  target: ZLinkActorPlacementTarget
+): ServiceUserSpotOperationResult {
+  const terminal = decodeCreationOperationTerminalV1(
+    terminalEnvelope,
+    { runtimePredicates: {} }
+  );
+  const terminalResult = enumWireRequestTerminalResult(terminal.terminalResult);
+  const failureCode = enumWireFrameworkErrorCode(terminal.failureCode);
+  if (terminal.hasCreation === 'false' || terminal.creation === undefined) {
+    return { terminalResult, failureCode };
+  }
+  const creation = terminal.creation;
+  return {
+    terminalResult,
+    failureCode,
+    tail: {
+      kind: 'actorCreate',
+      createResult: creation.createResult,
+      ...(creation.createResult === 'rejected'
+        ? {}
+        : {
+            actor: {
+              actorId: creation.actor.actorId,
+              generation: creation.actor.objectGeneration,
+              nodeRid: String(target.nodeRid)
+            }
+          })
+    },
+    ...(terminal.applicationPayload === undefined
+      ? {}
+      : {
+          payload: {
+            packetName: terminal.applicationPayload.packetName,
+            contentType: terminal.applicationPayload.contentType,
+            payload: Buffer.from(terminal.applicationPayload.payload)
+          }
+        })
+  };
 }
 
 function terminalPublication(record: ServiceActorCreateRecord, terminalEnvelope: Uint8Array) {
@@ -536,9 +628,18 @@ function terminalPublication(record: ServiceActorCreateRecord, terminalEnvelope:
       operationId: record.operation
     },
     terminalEnvelope,
-    terminalEnvelopeSha256: createHash('sha256').update(terminalEnvelope).digest(),
     operationDeadline: new Date(Number(record.deadlineUnixMs))
   };
+}
+
+export function randomOperationId(
+  entropy: Uint8Array = randomBytes(16)
+): { readonly high: bigint; readonly low: bigint } {
+  if (entropy.byteLength !== 16) throw new RangeError('Operation ID entropy must be 16 bytes.');
+  const bytes = Buffer.from(entropy);
+  const high = bytes.readBigUInt64BE(0);
+  const low = bytes.readBigUInt64BE(8);
+  return high === 0n && low === 0n ? { high, low: 1n } : { high, low };
 }
 
 function createDeadline(timeoutMs: number, parent?: AbortSignal) {

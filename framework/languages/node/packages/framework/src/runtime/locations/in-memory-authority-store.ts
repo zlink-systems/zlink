@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   ZLinkAggregateAbortResult,
   ZLinkAggregateCommitResult,
@@ -31,6 +31,7 @@ import type {
   ZLinkPlacementAllocation
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
+import { creationTerminalPreimage } from './opaque-record-key';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -486,7 +487,7 @@ export class ZLinkInMemoryAuthorityStore {
       this.operationTerminals.delete(key);
       return { kind: 'missing', storeNow: this.now() };
     }
-    return { kind: 'found', record: copyTerminalRecord(record) };
+    return { kind: 'found', terminalEnvelope: Buffer.from(record.terminalEnvelope) };
   }
 
   private creationTerminalAvailable(record: ZLinkCreationTerminalRecord): boolean {
@@ -863,15 +864,8 @@ function validateTerminalForMutation(
 ): ZLinkCreationTerminalRecord | undefined {
   if (publication === undefined) return undefined;
   validateCreationOperation(publication.operation);
-  if (
-    publication.terminalEnvelope.byteLength > MAX_PAYLOAD_BYTES
-    || publication.terminalEnvelopeSha256.byteLength !== 32
-  ) {
-    throw new RangeError('Creation terminal envelope must not exceed 1 MiB and requires a SHA-256 digest.');
-  }
-  const actualSha = createHash('sha256').update(publication.terminalEnvelope).digest();
-  if (!timingSafeEqual(actualSha, Buffer.from(publication.terminalEnvelopeSha256))) {
-    throw new TypeError('Creation terminal envelope SHA-256 does not match its bytes.');
+  if (publication.terminalEnvelope.byteLength > MAX_PAYLOAD_BYTES) {
+    throw new RangeError('Creation terminal envelope must not exceed 1 MiB.');
   }
   const deadlineMs = publication.operationDeadline.getTime();
   const expiresAtMs = deadlineMs + CREATION_TERMINAL_RETENTION_MS;
@@ -888,19 +882,13 @@ function validateTerminalForMutation(
     reservationId: requireText(reservationId, 'creation reservation ID'),
     objectKind,
     terminalEnvelope: Buffer.from(publication.terminalEnvelope),
-    terminalEnvelopeSha256: Buffer.from(publication.terminalEnvelopeSha256),
     expiresAt: new Date(expiresAtMs),
     storeNow: new Date(storeNow.getTime())
   };
 }
 
 function creationOperationKey(operation: ZLinkCreationOperationIdentity): string {
-  return [
-    String(operation.sourceNodeRid),
-    operation.sourceNodeGeneration.toString(),
-    operation.operationId.high.toString(16).padStart(16, '0'),
-    operation.operationId.low.toString(16).padStart(16, '0')
-  ].join('\0');
+  return creationTerminalPreimage(operation);
 }
 
 function copyCreationOperation(
@@ -921,7 +909,6 @@ function copyTerminalRecord(record: ZLinkCreationTerminalRecord): ZLinkCreationT
     ...record,
     operation: copyCreationOperation(record.operation),
     terminalEnvelope: Buffer.from(record.terminalEnvelope),
-    terminalEnvelopeSha256: Buffer.from(record.terminalEnvelopeSha256),
     expiresAt: new Date(record.expiresAt),
     storeNow: new Date(record.storeNow)
   };

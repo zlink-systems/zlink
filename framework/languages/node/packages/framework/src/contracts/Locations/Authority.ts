@@ -159,7 +159,6 @@ export type ZLinkCreationTerminalState = 'created' | 'rejected' | 'failed';
 export interface ZLinkCreationTerminalPublication {
   readonly operation: ZLinkCreationOperationIdentity;
   readonly terminalEnvelope: Uint8Array;
-  readonly terminalEnvelopeSha256: Uint8Array;
   /**
    * The original operation deadline. Providers retain the terminal for five
    * minutes after this absolute instant.
@@ -173,14 +172,13 @@ export interface ZLinkCreationTerminalRecord {
   readonly reservationId: string;
   readonly objectKind: ZLinkPlacementObjectKind;
   readonly terminalEnvelope: Uint8Array;
-  readonly terminalEnvelopeSha256: Uint8Array;
   readonly expiresAt: Date;
   readonly storeNow: Date;
 }
 
 export type ZLinkCreationTerminalReadResult =
   | { readonly kind: 'missing'; readonly storeNow: Date }
-  | { readonly kind: 'found'; readonly record: ZLinkCreationTerminalRecord };
+  | { readonly kind: 'found'; readonly terminalEnvelope: Uint8Array };
 
 export interface ZLinkObjectReserveRequest {
   readonly key: ZLinkObjectCreationKey;

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createHash } from 'node:crypto';
 import { RequestResult } from '@zlink-systems/zlink';
 import type {
   ZLinkAggregateId,
   ZLinkAuthorityKey,
+  ZLinkCreationOperationIdentity,
   ZLinkLocationOwnerToken,
   ZLinkObjectCreationTarget
 } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
@@ -13,6 +13,7 @@ import {
   ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
+  ZLinkSpotKind,
   ZLinkSpotCloseReason,
   ZLinkSpotCreateState
 } from '../../packages/framework/src/contracts';
@@ -26,10 +27,28 @@ import {
 import {
   ZLinkInMemoryLocationStore
 } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
+import {
+  ZLinkInMemoryProviderLocationStore,
+  storeKey
+} from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
+import {
+  ZLinkLocationStoreRepository
+} from '../../packages/framework/src/runtime/locations/location-store-repository';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import {
   ZLinkUserSpotCreationCoordinator
 } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
+import {
+  randomOperationId,
+  ZLinkActorPlacementCoordinator
+} from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
+import {
+  decodeCreationOperationTerminalV1,
+  encodeCreationOperationTerminalV1
+} from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
+import {
+  publishInitialActorAuthority
+} from '../../packages/framework/src/runtime/actors/actor-authority-publication';
 import {
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
@@ -248,7 +267,6 @@ test('Actor creation terminal is scoped to the exact source operation and publis
       terminal: {
         operation,
         terminalEnvelope: envelope,
-        terminalEnvelopeSha256: createHash('sha256').update(envelope).digest(),
         operationDeadline: new Date(1_000)
       }
     }
@@ -256,7 +274,7 @@ test('Actor creation terminal is scoped to the exact source operation and publis
   assert.equal(committed.kind, 'created');
   const found = await store.readCreationTerminal(operation);
   assert.equal(found.kind, 'found');
-  if (found.kind === 'found') assert.equal(found.record.state, 'created');
+  if (found.kind === 'found') assert.deepEqual(found.terminalEnvelope, envelope);
   assert.equal((await store.readCreationTerminal(distinctOperation)).kind, 'missing');
 });
 
@@ -291,7 +309,6 @@ test('Actor rejection removes Creating authority and does not leak its reply to 
       terminal: {
         operation,
         terminalEnvelope: envelope,
-        terminalEnvelopeSha256: createHash('sha256').update(envelope).digest(),
         operationDeadline: new Date(1_000)
       }
     }
@@ -302,11 +319,171 @@ test('Actor rejection removes Creating authority and does not leak its reply to 
   )).kind, 'missing');
   const terminal = await store.readCreationTerminal(operation);
   assert.equal(terminal.kind, 'found');
-  if (terminal.kind === 'found') assert.equal(terminal.record.state, 'rejected');
+  if (terminal.kind === 'found') assert.deepEqual(terminal.terminalEnvelope, envelope);
   assert.equal((await store.readCreationTerminal({
     ...operation,
     operationId: { high: 0n, low: 4n }
   })).kind, 'missing');
+});
+
+test('creation terminal uses the cross-language key and retains only terminal envelope bytes', async () => {
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(1_000));
+  const store = new ZLinkLocationStoreRepository(provider, () => new Date(1_000));
+  const operation: ZLinkCreationOperationIdentity = {
+    sourceNodeRid: {
+      toHex: () => '00ff10',
+      toString: () => 'source-node'
+    } as unknown as ZLinkCreationOperationIdentity['sourceNodeRid'],
+    sourceNodeGeneration: 7n,
+    operationId: { high: 0x1n, low: 0xabcdefn }
+  };
+  const key = [
+    'creation-terminal',
+    '00ff10',
+    '7',
+    '00000000000000010000000000abcdef'
+  ].join('\0');
+  const envelope = Buffer.from(encodeCreationOperationTerminalV1({
+    terminalResult: 'ok',
+    failureCode: 'none',
+    hasCreation: 'true',
+    creation: {
+      createResult: 'rejected'
+    },
+    hasApplicationPayload: 'false'
+  }, { runtimePredicates: {} }));
+  await provider.write({
+    conditions: [],
+    mutations: [{ kind: 'put', key: storeKey(key), bytes: envelope }]
+  });
+
+  const found = await store.readCreationTerminal(operation);
+  assert.equal(found.kind, 'found');
+  if (found.kind === 'found') assert.deepEqual(found.terminalEnvelope, envelope);
+  const rows = await provider.scan({ prefix: key, limit: 10 });
+  assert.equal(rows.kind, 'page');
+  if (rows.kind === 'page') assert.equal(rows.value.items.length, 1);
+});
+
+test('Actor creation operation ID replaces the all-zero random value', () => {
+  assert.deepEqual(
+    randomOperationId(Buffer.alloc(16)),
+    { high: 0n, low: 1n }
+  );
+});
+
+test('initial Actor authority publication stores a schema creation terminal', async () => {
+  const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
+  const completeCreation = store.completeCreation.bind(store);
+  let terminalEnvelope: Uint8Array | undefined;
+  store.completeCreation = async (request, signal) => {
+    terminalEnvelope = request.completion.terminal.terminalEnvelope;
+    return await completeCreation(request, signal);
+  };
+
+  await publishInitialActorAuthority(store, {
+    actorType: 'player',
+    actor: {
+      actorId: 'actor-published',
+      objectGeneration: 1n,
+      meshName: 'mesh',
+      nodeRid: 'node-a'
+    },
+    meshName: 'mesh',
+    ownerNodeGeneration: 1n,
+    owner: owner('owner-a', 1n),
+    spotId: 'entry-node-a',
+    spotGeneration: 1n,
+    spotKind: ZLinkSpotKind.Entry
+  });
+
+  if (terminalEnvelope === undefined) throw new Error('Publication omitted creation terminal.');
+  const decoded = decodeCreationOperationTerminalV1(
+    terminalEnvelope,
+    { runtimePredicates: {} }
+  );
+  assert.equal(decoded.terminalResult, 'ok');
+  assert.equal(decoded.creation?.createResult, 'created');
+  if (decoded.creation?.createResult === 'created') {
+    assert.equal(decoded.creation.actor.actorId, 'actor-published');
+    assert.equal(decoded.creation.actor.objectGeneration, 1n);
+  }
+});
+
+test('Actor creation replays a retained terminal after uncertain remote completion', async () => {
+  const target = {
+    meshName: 'mesh',
+    nodeRid: 'node-b',
+    nodeGeneration: 2n,
+    entrySpotId: 'entry-node-b',
+    owner: owner('owner-b', 2n),
+    isLocal: false,
+    sourceNodeRid: 'source-node',
+    sourceNodeGeneration: 7n
+  };
+  for (const outcome of ['exception', 'abnormalTerminal'] as const) {
+    const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
+    const actorId = `actor-replayed-${outcome}`;
+    const coordinator = new ZLinkActorPlacementCoordinator({
+      store,
+      target: async () => target,
+      remoteCreate: async (_mesh, _node, request) => {
+        assert.equal(request.sourceNodeRid, 'source-node');
+        assert.equal(request.sourceNodeGeneration, 7n);
+        assert.equal(request.operation.high === 0n && request.operation.low === 0n, false);
+        const operation: ZLinkCreationOperationIdentity = {
+          sourceNodeRid: request.sourceNodeRid,
+          sourceNodeGeneration: request.sourceNodeGeneration,
+          operationId: request.operation
+        };
+        const terminalEnvelope = Buffer.from(encodeCreationOperationTerminalV1({
+          terminalResult: 'ok',
+          failureCode: 'none',
+          hasCreation: 'true',
+          creation: {
+            createResult: 'created',
+            actor: { actorId: request.actorId, objectGeneration: 1n }
+          },
+          hasApplicationPayload: 'false'
+        }, { runtimePredicates: {} }));
+        await store.completeCreation({
+          key: { kind: 'actor', globalId: request.actorId },
+          reservationId: request.reservation.reservationId,
+          expectedStoreVersion: request.reservation.expectedStoreVersion,
+          target: {
+            meshName: target.meshName,
+            nodeRid: target.nodeRid,
+            nodeLifecycleGeneration: target.nodeGeneration,
+            owner: target.owner
+          },
+          completion: {
+            kind: 'created',
+            readyPayload: Buffer.from('ready'),
+            terminal: {
+              operation,
+              terminalEnvelope,
+              operationDeadline: new Date(Date.now() + 1_000)
+            }
+          }
+        });
+        if (outcome === 'exception') throw new Error('remote response lost');
+        return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
+      }
+    });
+
+    const result = await coordinator.create(
+      actorId,
+      'player',
+      false,
+      'mesh',
+      Buffer.from('create'),
+      1_000
+    );
+    assert.equal(result.status, 'created');
+    if (result.status === 'created') {
+      assert.equal(result.actor.actorId, actorId);
+    }
+  }
 });
 
 test('public User Spot coordinator hides Pending, runs one factory, then publishes Ready generation', async () => {

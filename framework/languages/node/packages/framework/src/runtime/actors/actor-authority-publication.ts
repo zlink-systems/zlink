@@ -18,6 +18,7 @@ import {
   replaceServiceRelocationAuthorityApplicationPayload,
   serviceRelocationAuthorityApplicationPayload
 } from '../foundation/service-relocation-runtime';
+import { encodeCreationOperationTerminalV1 } from '../protocol/service_wire_codec.generated';
 
 const CREATION_OPERATION_TIMEOUT_MS = 30_000;
 
@@ -74,11 +75,19 @@ export async function publishInitialActorAuthority(
   }
 
   try {
-    const terminalEnvelope = Buffer.from(JSON.stringify({
-      status: 'created',
-      actorId: identity.actor.actorId,
-      actorGeneration: identity.actor.objectGeneration.toString()
-    }), 'utf8');
+    const terminalEnvelope = Buffer.from(encodeCreationOperationTerminalV1({
+      terminalResult: 'ok',
+      failureCode: 'none',
+      hasCreation: 'true',
+      creation: {
+        createResult: 'created',
+        actor: {
+          actorId: identity.actor.actorId,
+          objectGeneration: identity.actor.objectGeneration
+        }
+      },
+      hasApplicationPayload: 'false'
+    }, { runtimePredicates: {} }));
     const operationBytes = randomBytes(16);
     const completed = await store.completeCreation({
       key: { kind: 'actor', globalId: identity.actor.actorId },
@@ -98,7 +107,6 @@ export async function publishInitialActorAuthority(
             }
           },
           terminalEnvelope,
-          terminalEnvelopeSha256: createHash('sha256').update(terminalEnvelope).digest(),
           operationDeadline: new Date(Date.now() + CREATION_OPERATION_TIMEOUT_MS)
         }
       }

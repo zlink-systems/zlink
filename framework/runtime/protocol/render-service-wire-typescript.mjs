@@ -230,7 +230,7 @@ function enumeration(owner, operation) {
   const values = operation.values.map((entry) => JSON.stringify(entry.name)).join(" | ");
   const decode = operation.values.map((entry) => `case ${wide ? `${entry.value}n` : entry.value}: return ${JSON.stringify(entry.name)};`).join("\n");
   const encode = operation.values.map((entry) => `case ${JSON.stringify(entry.name)}: return ${wide ? `${entry.value}n` : entry.value};`).join("\n");
-  return { type: `export type ${name} = ${values};`, extra: `function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
+  return { type: `export type ${name} = ${values};`, extra: `export function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
     read: `const raw = ${operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`}; switch (${wide ? "raw" : "Number(raw)"}) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
     write: `${operation.encoding === "i64" ? "writer.i64" : "writer.u"}(numeric(enumWire${name}(value))${operation.encoding === "i64" ? "" : `, ${operation.width}`});` };
 }
