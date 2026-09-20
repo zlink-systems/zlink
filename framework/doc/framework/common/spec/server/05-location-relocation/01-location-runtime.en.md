@@ -916,7 +916,7 @@ exists before creation.
 
 | Stored final result | Contract |
 |---|---|
-| Format | Uses `creation-operation-terminal-v1` and SHA-256. Network correlation and reply route aren't stored. |
+| Format | `creation-operation-terminal-v1`. Network correlation and reply route aren't stored. |
 | Storage | One opaque record, `creation-terminal` in §3.4. No companion meta/payload key exists. |
 | Size | At most 1,048,576 bytes. |
 | Retention | Up to 5 minutes after the original deadline. Uses the Store time the provider returned. |
