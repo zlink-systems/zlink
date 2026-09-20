@@ -209,7 +209,7 @@ jobs:
           # believed to fail on main; they pass, and both read only the source
           # tree, so BUILD_SAMPLES=OFF above does not change their result.
           ctest --preset linux-ninja-release \
-            -L 'framework-unit|framework-contract'
+            -L '^(unit|contract)$'
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
@@ -322,7 +322,7 @@ jobs:
             --test-dir $env:FRAMEWORK_CPP_BUILD_DIR `
             -C Release `
             -N `
-            -L "framework-unit|framework-contract")
+            -L "^(unit|contract)$")
           $exitCode = $LASTEXITCODE
           $listing | ForEach-Object { Write-Host $_ }
           if ($exitCode -ne 0) {
@@ -375,7 +375,7 @@ jobs:
             --test-dir $env:FRAMEWORK_CPP_BUILD_DIR `
             -C Release `
             --output-on-failure `
-            -L "framework-unit|framework-contract"
+            -L "^(unit|contract)$"
           if ($LASTEXITCODE -ne 0) {
             throw "Framework C++ tests failed with exit code $LASTEXITCODE"
           }
