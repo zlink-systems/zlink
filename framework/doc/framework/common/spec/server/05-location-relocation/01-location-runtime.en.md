@@ -912,6 +912,7 @@ exists before creation.
 | Stored final result | Contract |
 |---|---|
 | Format | Uses `creation-operation-terminal-v1` and SHA-256. Network correlation and reply route aren't stored. |
+| Storage | One logical key `zlink:v11:creation-terminal:{hex(SourceNodeRid)}:{SourceHostGeneration}:{OperationIdHigh}:{OperationIdLow}` holds the `creation-operation-terminal-v1` bytes as they are. `hex(...)` is the lowercase hex of the raw bytes, the generation is decimal, and each half of the `OperationId` is 16 lowercase hex digits. The key is derived from these four elements only; no companion meta/payload key exists. A result written by another language is read through this same key (§3.4). |
 | Size | At most 1,048,576 bytes. |
 | Retention | Up to 5 minutes after the original deadline. Uses the Store time the provider returned. |
 | Re-response | Only the same request can be read. The response is freshly built with the current connection's correlation and reply route. |

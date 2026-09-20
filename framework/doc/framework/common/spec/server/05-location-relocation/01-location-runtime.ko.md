@@ -823,6 +823,7 @@ RID, source host 실행 세대와 128-bit `OperationId`를 요청 식별자로 �
 | 저장한 최종 결과 | 계약 |
 |---|---|
 | 형식 | `creation-operation-terminal-v1`과 SHA-256을 사용한다. Network correlation과 reply route는 저장하지 않는다. |
+| 저장 위치 | logical key 하나 `zlink:v11:creation-terminal:{hex(SourceNodeRid)}:{SourceHostGeneration}:{OperationIdHigh}:{OperationIdLow}`에 `creation-operation-terminal-v1` bytes를 그대로 둔다. `hex(...)`는 raw bytes의 소문자 16진수, generation은 10진수, `OperationId`의 두 half는 각각 16자리 소문자 16진수다. 이 네 요소만으로 key를 유도하며 meta·payload를 나눈 보조 key를 두지 않는다. 다른 언어가 쓴 결과도 이 key로 읽는다(§3.4). |
 | 크기 | 최대 1,048,576 bytes다. |
 | 보관 기한 | 최초 deadline에서 5분 뒤까지다. Provider가 반환한 Store 시각을 사용한다. |
 | 재응답 | 같은 요청만 읽을 수 있다. 현재 connection의 correlation과 reply route로 응답을 새로 만든다. |
