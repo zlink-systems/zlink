@@ -173,7 +173,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(77, operationCases.size());
+        assertEquals(78, operationCases.size());
         Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
