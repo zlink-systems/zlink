@@ -1733,22 +1733,15 @@ stage_cpp_source_java_target_user_spot_join() {
 # authority slot and every decoding target refused with
 # `protocol_error|Remote Actor creation target rejected the operation`.
 #
-# STATUS: these cells do NOT pass yet, which is why the default `all` run does
-# not include them. The #549 fix moves the .NET cell from "refused at the
-# authority payload" to "Actor materialized on the .NET target", and then the
-# reservation commit is fenced. What is left is owned by the peer runtimes,
-# not by C++, and the `remote-actor-create-dotnet-java` cell below is the
-# control that proves it -- it takes C++ out of the picture entirely and still
-# fails:
-#   * Java's `inline-v1:` creation-intent reference carries no CRC32C segment
-#     (ZLinkActorCreationCoordinator.java:957-972), while C++, .NET and Node
-#     all write `inline-v1:<crc32c hex8>:<base64url>`. Java therefore refuses
-#     every foreign reservation with "Actor create payload is invalid".
-#   * .NET's provider repository looks the reservation row up by reservation
-#     id (`creation-reservation:<reservationId>`), C++ writes it keyed by the
-#     object key, and Java keeps no such row at all. .NET therefore answers
-#     `Stale` to any completion of a foreign reservation.
-# Put these cells into the default run once those are settled.
+# STATUS: three C++ requester cells remain quarantined, so the default `all`
+# run keeps them out while the guard executes them explicitly. All four
+# implementations currently use the same creation-intent form,
+# `inline-v1:<base64url>`; none appends a CRC32C segment. The
+# `remote-actor-create-dotnet-java` control cell passes, while the three C++
+# requester cells still fail after peer discovery: C++ reports that transport
+# completion did not arrive for the .NET and Java targets, and maps the Node
+# target's terminal rejection to a framework failure. Keep the three cells
+# quarantined until #763 resolves the C++ requester path.
 assert_remote_actor_create() {
   local source_events="$1"
   local requester_rid="$2"
@@ -1875,9 +1868,9 @@ stage_cpp_source_java_target_remote_actor_create() {
 #
 # Each entry names the issue that owns the remaining cause.
 QUARANTINED_CELLS=(
-  "remote-actor-create-cpp-dotnet|#560 -- the Location Store creation-reservation row's key derivation and field set are unspecified, so .NET answers Stale to a reservation another runtime made"
-  "remote-actor-create-cpp-java|#560 -- with the reference grammar settled the Java target no longer refuses the reference (its control cell, remote-actor-create-dotnet-java, now passes), and what is left is the same unspecified reservation row that holds remote-actor-create-cpp-dotnet: a C++-written reservation the peer runtime cannot act on"
-  "remote-actor-create-cpp-node|#561 and #562 -- the Node target registers an Actor factory but no Entry Spot, and publishes entrySpotId only when an Entry Spot type is registered; which of the two owns its refusal is not isolated yet"
+  "remote-actor-create-cpp-dotnet|#763 -- the C++ requester reports protocol_error: the creation transport does not reach its completed terminal after peer-ready (mesh_node_host_service.cpp:450)"
+  "remote-actor-create-cpp-java|#763 -- same as remote-actor-create-cpp-dotnet"
+  "remote-actor-create-cpp-node|#763 -- the C++ requester maps the Node target's terminal rejection to internal_failure after peer-ready (mesh_node_host_service.cpp:464)"
 )
 
 run_quarantine_guard() {
