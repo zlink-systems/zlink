@@ -343,12 +343,6 @@ public final class ZLinkFrameworkRuntime
                         this.registration,
                         this.meshNodes.nodesByName())
                 : null;
-        if (this.locationRuntime != null && this.objectDescriptors != null) {
-            this.locationRuntime.setOwnerLeaseRecoveryListener(() ->
-                this.objectDescriptors.recoverAfterOwnerLease(
-                    this.runtimeState.get(),
-                    this.locationRuntime.recoveryPreviousOwnerToken()));
-        }
         this.routeMeshRuntimeOptions =
             new systems.zlink.framework.runtime.channels
                 .ZLinkRouteMeshRuntimeOptionsRuntime(
@@ -490,59 +484,30 @@ public final class ZLinkFrameworkRuntime
                 applicationJobQueue::pressureMetrics);
         this.meshTopologyMetricRegistration =
             ZLinkRuntimeMetrics.registerMeshTopology(this::meshTopologyMetrics);
+        if (this.locationRuntime != null && this.objectDescriptors != null) {
+            this.locationRuntime.setOwnerLeaseRecoveryListener(() -> {
+                if (runtimeState.get()
+                    != ZLinkFrameworkRuntimeState.PREPARING) {
+                    return this.objectDescriptors.recoverAfterOwnerLease(
+                        this.runtimeState.get(),
+                        this.locationRuntime.recoveryPreviousOwnerToken());
+                }
+                return startOwnerBoundRuntime(spotSubsystem)
+                    .thenRun(this::completeOwnerBoundStartup);
+            });
+        }
         locationSubsystem.startup()
-            .thenCompose(ignored ->
-                this.objectDescriptors == null
-                    ? CompletableFuture
-                        .completedFuture(null)
-                    : this.objectDescriptors.publish(
-                        ZLinkFrameworkRuntimeState.PREPARING))
-            .thenCompose(ignored ->
-                this.locationStores == null
-                    || this.locationStores.unifiedStore() == null
-                    ? CompletableFuture
-                        .completedFuture(null)
-                    : CompletableFuture.allOf(
-                        this.meshNodes.nodesByName().values().stream()
-                            .map(node -> node
-                                .refreshLocalAuthorityFence()
-                                .toCompletableFuture())
-                            .toArray(
-                                CompletableFuture[]::new)))
-            .thenCompose(ignored -> connectManualObjectPeers())
-            .thenCompose(ignored -> spotSubsystem.startup())
-            .thenCompose(ignored ->
-                this.spotRetire == null
-                    ? CompletableFuture
-                        .completedFuture(null)
-                    : this.spotRetire.startup())
-            .thenCompose(ignored ->
-                this.authorityRouteRuntime == null
-                    ? CompletableFuture
-                        .completedFuture(null)
-                    : this.authorityRouteRuntime.start())
-            .thenCompose(ignored -> ZLinkFrameworkAutoConnectSubsystem.start(
-                this.locationAutoConnectHost,
-                this.registration,
-                this.channels,
-                this.meshNodes,
-                this.spots))
-            .thenCompose(ignored ->
-                this.objectDescriptors == null
-                    ? CompletableFuture
-                        .completedFuture(null)
-                    : this.objectDescriptors.publish(
-                        ZLinkFrameworkRuntimeState.SERVING))
-            .thenRun(() -> this.meshNodes.nodesByName().values().forEach(
-                ZLinkInternalMeshNode::markServiceReady))
-            .whenComplete((ignored, failure) -> {
-                if (failure == null && !drainStarted.get()) {
-                    publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
+            .thenCompose(ignored -> {
+                if (this.locationRuntime != null
+                    && !this.locationRuntime.ownerLeaseHealthy()) {
                     startupReady.complete(null);
-                    Logger.getLogger(
-                        ZLinkFrameworkRuntime.class.getName())
-                        .info("ZLINK_FRAMEWORK_READY");
-                } else if (failure != null) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return startOwnerBoundRuntime(spotSubsystem)
+                    .thenRun(this::completeOwnerBoundStartup);
+            })
+            .whenComplete((ignored, failure) -> {
+                if (failure != null) {
                     startupReady.completeExceptionally(
                         unwrapCompletionFailure(failure));
                     publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
@@ -551,12 +516,56 @@ public final class ZLinkFrameworkRuntime
                         .warning(
                         "Framework startup failed: "
                             + failure.getMessage());
-                } else {
-                    startupReady.completeExceptionally(
-                        new IllegalStateException(
-                            "Framework startup was interrupted by shutdown"));
                 }
             });
+    }
+
+    private void completeOwnerBoundStartup() {
+        if (drainStarted.get()) {
+            throw new IllegalStateException(
+                "Framework startup was interrupted by shutdown");
+        }
+        publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
+        startupReady.complete(null);
+        Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+            .info("ZLINK_FRAMEWORK_READY");
+    }
+
+    private CompletionStage<Void> startOwnerBoundRuntime(
+        ZLinkFrameworkSpotSubsystem spotSubsystem) {
+        return (this.objectDescriptors == null
+                ? CompletableFuture.completedFuture(null)
+                : this.objectDescriptors.publish(
+                    ZLinkFrameworkRuntimeState.PREPARING))
+            .thenCompose(ignored ->
+                this.locationStores == null
+                    || this.locationStores.unifiedStore() == null
+                    ? CompletableFuture.completedFuture(null)
+                    : CompletableFuture.allOf(
+                        this.meshNodes.nodesByName().values().stream()
+                            .map(node -> node.refreshLocalAuthorityFence()
+                                .toCompletableFuture())
+                            .toArray(CompletableFuture[]::new)))
+            .thenCompose(ignored -> connectManualObjectPeers())
+            .thenCompose(ignored -> spotSubsystem.startup())
+            .thenCompose(ignored -> this.spotRetire == null
+                ? CompletableFuture.completedFuture(null)
+                : this.spotRetire.startup())
+            .thenCompose(ignored -> this.authorityRouteRuntime == null
+                ? CompletableFuture.completedFuture(null)
+                : this.authorityRouteRuntime.start())
+            .thenCompose(ignored -> ZLinkFrameworkAutoConnectSubsystem.start(
+                this.locationAutoConnectHost,
+                this.registration,
+                this.channels,
+                this.meshNodes,
+                this.spots))
+            .thenCompose(ignored -> this.objectDescriptors == null
+                ? CompletableFuture.completedFuture(null)
+                : this.objectDescriptors.publish(
+                    ZLinkFrameworkRuntimeState.SERVING))
+            .thenRun(() -> this.meshNodes.nodesByName().values().forEach(
+                ZLinkInternalMeshNode::markServiceReady));
     }
 
     private CompletionStage<Void>
@@ -2140,6 +2149,10 @@ public final class ZLinkFrameworkRuntime
 
     public boolean isReady() {
         return runtimeState.get().isReadyState();
+    }
+
+    CompletionStage<Void> startupCompletion() {
+        return independentWaiter(startupReady);
     }
 
     private void runDrain() {

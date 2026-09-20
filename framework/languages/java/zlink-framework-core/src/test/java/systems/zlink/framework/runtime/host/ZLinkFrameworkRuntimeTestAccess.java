@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 
+import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
@@ -22,6 +23,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         DefaultZLinkFrameworkOptions options,
         ZLinkBackendAdapterProvider backendProvider) {
         return ZLinkFrameworkRuntime.start(options, backendProvider);
+    }
+
+    public static CompletionStage<Void> startupCompletion(
+        ZLinkFrameworkRuntime runtime) {
+        return runtime.startupCompletion();
     }
 
     public static ZLinkFrameworkRuntime start(
