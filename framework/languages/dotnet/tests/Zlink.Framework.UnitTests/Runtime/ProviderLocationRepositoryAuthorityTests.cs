@@ -1463,6 +1463,35 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                         RoutingId.From("node")))),
             codecs);
         Assert.Equal(nodeEnvelope, dotnetEnvelope);
+
+        var boundaryFailure = Convert.FromHexString(
+            "010000000a00000065000000000000");
+        Assert.True(ZLinkActorCreationTerminalCodec.TryDecode(
+            boundaryFailure,
+            codecs,
+            out var decodedBoundary));
+        Assert.Equal(RequestResult.TimedOut, decodedBoundary.Result);
+        Assert.Equal(
+            ServiceWireConstants.FrameworkErrorCode.None,
+            decodedBoundary.FailureCode);
+        Assert.Null(decodedBoundary.Completion);
+        Assert.Null(decodedBoundary.ReplyParts);
+        Assert.Equal(
+            boundaryFailure,
+            ZLinkActorCreationTerminalCodec.Encode(
+                new ActorCreateOperationTerminal(
+                    RequestResult.TimedOut,
+                    ServiceWireConstants.FrameworkErrorCode.None),
+                codecs));
+
+        Assert.False(ZLinkActorCreationTerminalCodec.TryDecode(
+            Convert.FromHexString("010000000affffffff000000020000"),
+            codecs,
+            out _));
+        Assert.False(ZLinkActorCreationTerminalCodec.TryDecode(
+            Convert.FromHexString("010000000a00000069ffffffff0000"),
+            codecs,
+            out _));
     }
 
     [Fact]

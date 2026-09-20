@@ -125,10 +125,9 @@ internal static class ZLinkActorCreationTerminalCodec
         }
         if (offset != span.Length
             || result == RequestResult.Ok != (completion is not null)
-            || result == RequestResult.Ok
-                && failure != ServiceWireConstants.FrameworkErrorCode.None
-            || result != RequestResult.Ok
-                && failure == ServiceWireConstants.FrameworkErrorCode.None
+            || !ServiceWireConstants.ValidTerminalFailure(
+                (uint)result,
+                (uint)failure)
             || result != RequestResult.Ok && hasPayload
             || completion?.Result == ActorCreateResult.Existing && hasPayload)
             return false;
