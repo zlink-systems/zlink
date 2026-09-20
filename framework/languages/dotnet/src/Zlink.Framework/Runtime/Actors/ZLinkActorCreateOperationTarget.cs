@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -311,7 +310,6 @@ internal sealed class ZLinkActorOperationTarget(
         var publication = new ZLinkCreationTerminalPublication(
             operationId,
             envelope,
-            SHA256.HashData(envelope),
             DateTimeOffset.FromUnixTimeMilliseconds(
                     checked((long)operation.DeadlineUnixMs))
                 .Add(TerminalRetention));
@@ -381,16 +379,27 @@ internal sealed class ZLinkActorOperationTarget(
 
     private ActorCreateOperationTerminal DecodeTerminal(ZLinkCreationTerminalRecord record)
     {
-        if (record.ObjectKind != ZLinkPlacementObjectKind.Actor
-            || !CryptographicOperations.FixedTimeEquals(
-                SHA256.HashData(record.TerminalEnvelope.Span),
-                record.TerminalEnvelopeSha256.Span)
-            || !ZLinkActorCreationTerminalCodec.TryDecode(
+        if (!ZLinkActorCreationTerminalCodec.TryDecode(
                 record.TerminalEnvelope,
                 codecs,
-                out var terminal))
+                out var decoded))
             throw Protocol(string.Empty, "The retained Actor creation terminal is invalid.");
-        return terminal;
+        ActorCreateCompletion? completion = null;
+        if (decoded.Completion is { } retained)
+            completion = new ActorCreateCompletion(
+                retained.Result,
+                retained.Result == ActorCreateResult.Rejected
+                    ? default
+                    : new ActorRef(
+                        retained.ActorId,
+                        retained.ObjectGeneration,
+                        meshName,
+                        node.RoutingId));
+        return new ActorCreateOperationTerminal(
+            decoded.Result,
+            decoded.FailureCode,
+            completion,
+            decoded.ReplyParts);
     }
 
     private IReadOnlyList<ReadOnlyMemory<byte>>? EncodeReply(

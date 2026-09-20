@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Zlink.Framework.ContractTests.Support;
 
 namespace Zlink.Framework.ContractTests.Locations;
@@ -57,7 +58,7 @@ public sealed class AuthorityStoreContracts
         var readyPayload = Encoding.UTF8.GetBytes(
             """{"actorType":"player","spotId":"battle-1042","rating":1873}""");
         var terminalEnvelope = Encoding.UTF8.GetBytes(
-            """{"state":"created","actorId":"player-8821"}""");
+            """{"terminalResult":"created","actorId":"player-8821"}""");
         var created = Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
             await store.CompleteCreationAsync(
                 reservation,
@@ -66,7 +67,6 @@ public sealed class AuthorityStoreContracts
                     new ZLinkCreationTerminalPublication(
                         operation,
                         terminalEnvelope,
-                        SHA256.HashData(terminalEnvelope),
                         StoreNow.AddHours(1)))));
         Assert.Equal(ZLinkPlacementAllocationState.Active, created.Snapshot.Allocation.State);
         Assert.Equal(OwnerB.OwnerId, created.Snapshot.OwnerId);
@@ -74,7 +74,13 @@ public sealed class AuthorityStoreContracts
 
         var replayed = Assert.IsType<ZLinkCreationTerminalReadResult.Found>(
             await store.ReadCreationTerminalAsync(operation));
-        Assert.Equal(ZLinkCreationTerminalState.Created, replayed.Record.State);
+        using var replayedEnvelope =
+            JsonDocument.Parse(replayed.Record.TerminalEnvelope);
+        Assert.Equal(
+            "created",
+            replayedEnvelope.RootElement
+                .GetProperty("terminalResult")
+                .GetString());
 
         // 3. Preserve keeps both generations and refreshes only the payload.
         //    It carries neither a target owner nor a target allocation.
@@ -641,19 +647,9 @@ public sealed class AuthorityStoreContracts
                     new ZLinkObjectCreationCompleteResult.Stale());
             }
 
-            var state = completion switch
-            {
-                ZLinkObjectCreationCompletion.Created => ZLinkCreationTerminalState.Created,
-                ZLinkObjectCreationCompletion.Rejected => ZLinkCreationTerminalState.Rejected,
-                _ => ZLinkCreationTerminalState.Failed
-            };
             var record = new ZLinkCreationTerminalRecord(
                 publication.Operation,
-                reservation.ReservationVersion,
-                row.Allocation.ObjectKind,
-                state,
                 publication.TerminalEnvelope,
-                publication.TerminalEnvelopeSha256,
                 publication.ExpiresAt,
                 StoreNow);
             _terminals[publication.Operation] = record;
@@ -662,7 +658,7 @@ public sealed class AuthorityStoreContracts
             {
                 _rows.Remove(reservation.Key.Value);
                 return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    state == ZLinkCreationTerminalState.Rejected
+                    completion is ZLinkObjectCreationCompletion.Rejected
                         ? new ZLinkObjectCreationCompleteResult.Rejected(record)
                         : new ZLinkObjectCreationCompleteResult.Failed(record));
             }

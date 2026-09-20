@@ -11,7 +11,6 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed partial class ZLinkProviderLocationRepository
 {
     private const string AuthorityPrefix = Prefix + "authority:";
-    private const string TerminalPrefix = Prefix + "creation-terminal:";
     private const string AggregatePrefix = Prefix + "aggregate:";
     private static readonly TimeSpan AmbiguousReconciliationTimeout =
         TimeSpan.FromSeconds(5);
@@ -734,30 +733,11 @@ internal sealed partial class ZLinkProviderLocationRepository
             current.Snapshot.Allocation,
             pendingDelta: -1,
             activeDelta: completion is ZLinkObjectCreationCompletion.Created ? 1 : 0);
-        var state = completion switch
-        {
-            ZLinkObjectCreationCompletion.Created =>
-                ZLinkCreationTerminalState.Created,
-            ZLinkObjectCreationCompletion.Rejected =>
-                ZLinkCreationTerminalState.Rejected,
-            _ => ZLinkCreationTerminalState.Failed
-        };
         var terminal = new ZLinkCreationTerminalRecord(
             publication.Operation,
-            reservation.ReservationVersion,
-            current.Snapshot.Allocation.ObjectKind,
-            state,
             publication.TerminalEnvelope.ToArray(),
-            publication.TerminalEnvelopeSha256.ToArray(),
             publication.ExpiresAt,
             current.Snapshot.StoreNow);
-        var terminalMeta = new TerminalMeta(
-            terminal with
-            {
-                TerminalEnvelope = ReadOnlyMemory<byte>.Empty,
-                StoreNow = default
-            },
-            Sha256(publication.TerminalEnvelope));
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(
@@ -772,10 +752,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             new ZLinkStoreMutation.Put(
                 terminalKey,
-                Encode(terminalMeta),
-                publication.ExpiresAt - current.Snapshot.StoreNow),
-            new ZLinkStoreMutation.Put(
-                TerminalPayloadKey(publication.Operation),
                 publication.TerminalEnvelope.ToArray(),
                 publication.ExpiresAt - current.Snapshot.StoreNow),
             new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null)
@@ -4246,39 +4222,21 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken)
     {
         var key = TerminalKey(operation);
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            var metaRead = await provider.ReadAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-            if (metaRead is not ZLinkStoreReadResult.Found metaFound)
-                return null;
-            var meta = Decode<TerminalMeta>(metaFound.Value.Bytes);
-            var payloadRead = await provider.ReadAsync(
-                    TerminalPayloadKey(operation),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (payloadRead is not ZLinkStoreReadResult.Found payloadFound)
-                return null;
-            var verify = await provider.ReadAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-            if (verify is not ZLinkStoreReadResult.Found verified
-                || verified.Value.Version != metaFound.Value.Version)
-                continue;
-            if (!CryptographicOperations.FixedTimeEquals(
-                    meta.PayloadSha256,
-                    Sha256(payloadFound.Value.Bytes)))
-                throw new InvalidDataException(
-                    "The creation terminal payload checksum is invalid.");
-            return new StoredTerminal(
-                meta.Record with
-                {
-                    TerminalEnvelope = payloadFound.Value.Bytes,
-                    StoreNow = verified.Value.StoreNow
-                },
-                metaFound.Value.Version);
-        }
-        throw new IOException(
-            "The creation terminal changed continuously while it was read.");
+        var read = await provider.ReadAsync(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (read is not ZLinkStoreReadResult.Found found)
+            return null;
+        if (found.Value.ExpiresAt is not { } expiresAt)
+            throw new InvalidDataException(
+                "The creation terminal store value has no expiration.");
+        var envelope = found.Value.Bytes.ToArray();
+        return new StoredTerminal(
+            new ZLinkCreationTerminalRecord(
+                operation,
+                envelope,
+                expiresAt,
+                found.Value.StoreNow),
+            found.Value.Version);
     }
 
     private static async ValueTask DelayCounterRetryAsync(
@@ -4658,18 +4616,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkCreationTerminalPublication publication)
     {
         ValidateCreationOperation(publication.Operation);
-        if (publication.TerminalEnvelope.Length > 1024 * 1024
-            || publication.TerminalEnvelopeSha256.Length != 32)
+        if (publication.TerminalEnvelope.Length > 1024 * 1024)
             throw new ArgumentException(
                 "The creation terminal publication is invalid.",
-                nameof(publication));
-        Span<byte> hash = stackalloc byte[32];
-        SHA256.HashData(publication.TerminalEnvelope.Span, hash);
-        if (!CryptographicOperations.FixedTimeEquals(
-                hash,
-                publication.TerminalEnvelopeSha256.Span))
-            throw new ArgumentException(
-                "The creation terminal checksum is invalid.",
                 nameof(publication));
     }
 
@@ -4902,17 +4851,14 @@ internal sealed partial class ZLinkProviderLocationRepository
     // in-process identity handle (equality, dictionary keys, wire framing);
     // this method and DecodeAuthorityKey below are the only place that
     // handle is translated to/from the canonical preimage. Visibility is
-    // `internal` for the same reason as the four key builders above --
+    // `internal` for the same reason as the other key builders above --
     // StoreRecordGoldenTests drives this production preimage directly.
-    internal static ZLinkStoreKey AuthorityMetaKey(ZLinkAuthorityKey key) =>
-        Key(AuthorityCanonicalPreimage(key));
-
-    private static string AuthorityCanonicalPreimage(ZLinkAuthorityKey key)
+    internal static ZLinkStoreKey AuthorityMetaKey(ZLinkAuthorityKey key)
     {
         if (ZLinkAuthorityKeyCodec.TryDecodeActor(key, out var actorId))
-            return $"authority\0actor\0{actorId}";
+            return OpaqueRecordKey("authority", "actor", actorId);
         if (ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var spotId))
-            return $"authority\0spot\0{spotId}";
+            return OpaqueRecordKey("authority", "spot", spotId);
         throw new InvalidDataException(
             $"Authority key '{key.Value}' is not canonical authority-key-v1.");
     }
@@ -4974,18 +4920,18 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
     }
 
-    private static ZLinkStoreKey TerminalKey(
+    internal static ZLinkStoreKey TerminalKey(
         ZLinkCreationOperationId operation) =>
-        Key($"{TerminalPrefix}meta:{CreationOperationSegment(operation)}");
+        OpaqueRecordKey(
+            "creation-terminal",
+            operation.SourceNodeRid.ToHex().ToLowerInvariant(),
+            operation.SourceNodeGeneration.ToString(CultureInfo.InvariantCulture),
+            CreationOperationIdHex(operation));
 
-    private static ZLinkStoreKey TerminalPayloadKey(
+    private static string CreationOperationIdHex(
         ZLinkCreationOperationId operation) =>
-        Key($"{TerminalPrefix}payload:{CreationOperationSegment(operation)}");
-
-    private static string CreationOperationSegment(
-        ZLinkCreationOperationId operation) =>
-        $"{operation.SourceNodeRid.ToHex()}:{operation.SourceNodeGeneration}:"
-        + $"{operation.OperationIdHigh}:{operation.OperationIdLow}";
+        operation.OperationIdHigh.ToString("x16", CultureInfo.InvariantCulture)
+        + $"{operation.OperationIdLow.ToString("x16", CultureInfo.InvariantCulture)}";
 
     private static ZLinkStoreKey AggregateKey(ZLinkAggregateFence fence) =>
         Key($"{AggregatePrefix}{fence.AggregateId:N}:"
@@ -5116,10 +5062,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         AuthorityMeta Meta,
         ZLinkStoreVersion Version,
         ZLinkAuthoritySnapshot Snapshot);
-
-    private sealed record TerminalMeta(
-        ZLinkCreationTerminalRecord Record,
-        byte[] PayloadSha256);
 
     private sealed record StoredTerminal(
         ZLinkCreationTerminalRecord Record,

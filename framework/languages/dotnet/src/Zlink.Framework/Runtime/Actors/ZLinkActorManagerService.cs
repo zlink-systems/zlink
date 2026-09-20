@@ -1,6 +1,9 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
@@ -413,6 +416,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     ZLinkRetryAdvice.RetryAfterBackoff);
 
             var reservation = reserved.Reservation;
+            ZLinkCreationOperationId? creationOperation = null;
             try
             {
                 var fence = new ObjectReservationFence(
@@ -426,6 +430,12 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     checked((ulong)owner.LeaseGeneration),
                     1);
                 var deadlineUnixMs = checked((ulong)deadlineAt.ToUnixTimeMilliseconds());
+                var operationId = CreateOperationId();
+                creationOperation = new ZLinkCreationOperationId(
+                    source.Node.RoutingId,
+                    source.Node.MeshStatus().LifecycleGeneration,
+                    operationId.High,
+                    operationId.Low);
                 if (target.Rid == source.Node.RoutingId)
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -437,6 +447,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                                 actorId,
                                 actorType,
                                 fence,
+                                creationOperation.Value,
                                 deadlineUnixMs,
                                 deadline.Token)
                             .ConfigureAwait(false);
@@ -462,36 +473,38 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         fence,
+                        creationOperation.Value,
                         deadlineUnixMs,
                         remaining,
                         cancellationToken)
                     .ConfigureAwait(false);
-                return DecodeRemoteResult(remote.Completion, remote.Reply);
+                if (remote.Completion is { } completion)
+                    return DecodeRemoteResult(completion, remote.Reply);
+                ZLinkMessageParts.DisposeAll(remote.Reply);
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InternalFailure,
+                    "Remote Actor create returned an incomplete response.",
+                    ZLinkRetryAdvice.DoNotRetry);
             }
-            catch (ZlinkSubmitException)
+            catch (Exception error)
             {
-                await store.AbortAsync(reservation, CancellationToken.None)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            catch (OperationCanceledException)
-            {
-                await store.AbortAsync(reservation, CancellationToken.None)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            catch (TimeoutException)
-            {
-                await store.AbortAsync(reservation, CancellationToken.None)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            catch (ZLinkFrameworkException)
-            {
-                await store.AbortAsync(reservation, CancellationToken.None)
-                    .ConfigureAwait(false);
-                // A received Failed terminal also ends the operation. Target
-                // reselection here would create a different durable identity.
+                if (creationOperation is { } operationIdentity)
+                {
+                    var retained = await ReadCreationTerminalAsync(
+                            store,
+                            operationIdentity,
+                            selectedMesh,
+                            target.Rid)
+                        .ConfigureAwait(false);
+                    if (retained is not null)
+                        return retained;
+                }
+                if (error is ZlinkSubmitException
+                    or OperationCanceledException
+                    or TimeoutException
+                    or ZLinkFrameworkException)
+                    await store.AbortAsync(reservation, CancellationToken.None)
+                        .ConfigureAwait(false);
                 throw;
             }
         }
@@ -504,6 +517,26 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             $"Actor '{actorId}' creation was not admitted before its deadline.",
             ZLinkRetryAdvice.RetryAfterBackoff,
             innerException);
+
+    private static MeshOperationId CreateOperationId()
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        RandomNumberGenerator.Fill(bytes);
+        return CreateOperationId(bytes);
+    }
+
+    internal static MeshOperationId CreateOperationId(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 16)
+            throw new ArgumentException(
+                "An Actor creation operation id requires exactly 16 bytes.",
+                nameof(bytes));
+        var high = BinaryPrimitives.ReadUInt64BigEndian(bytes[..8]);
+        var low = BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]);
+        if (high == 0 && low == 0)
+            low = 1;
+        return new MeshOperationId(high, low);
+    }
 
     internal static ZLinkFrameworkException CreateActorCreationDeadlineException(
         string actorId,
@@ -663,6 +696,63 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 new ZLinkActorCreateResult.Created(completion.Actor, reply),
             _ => new ZLinkActorCreateResult.Rejected(reply)
         };
+    }
+
+    private ZLinkActorCreateResult DecodeCreationTerminal(
+        ZLinkCreationTerminalRecord record,
+        string meshName,
+        RoutingId targetNodeRid)
+    {
+        if (!ZLinkActorCreationTerminalCodec.TryDecode(
+                record.TerminalEnvelope,
+                runtime.Registration.Codecs,
+                out var terminal))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "The retained Actor creation terminal is invalid.",
+                ZLinkRetryAdvice.DoNotRetry);
+        if (terminal.Result != RequestResult.Ok
+            || terminal.Completion is not { } retained)
+        {
+            var kind = ZLinkBackendSpotNodeWrapper.MapLifecycleFailure(
+                (int)terminal.Result,
+                (int)terminal.FailureCode);
+            throw new ZLinkFrameworkException(
+                kind,
+                $"Remote Actor create failed. result={(int)terminal.Result}; "
+                + $"failure={terminal.FailureCode}.",
+                ZLinkBackendSpotNodeWrapper.RetryAdviceFor(kind));
+        }
+        var completion = new ActorCreateCompletion(
+            retained.Result,
+            retained.Result == ActorCreateResult.Rejected
+                ? default
+                : new ActorRef(
+                    retained.ActorId,
+                    retained.ObjectGeneration,
+                    meshName,
+                    targetNodeRid));
+        var reply = terminal.ReplyParts is null
+            ? Array.Empty<Message>()
+            : terminal.ReplyParts
+                .Select(static part => Message.From(part.Span))
+                .ToArray();
+        return DecodeRemoteResult(completion, reply);
+    }
+
+    private async ValueTask<ZLinkActorCreateResult?> ReadCreationTerminalAsync(
+        IZLinkLocationRepository store,
+        ZLinkCreationOperationId operation,
+        string meshName,
+        RoutingId targetNodeRid)
+    {
+        var replay = await store.ReadCreationTerminalAsync(
+                operation,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        return replay is ZLinkCreationTerminalReadResult.Found found
+            ? DecodeCreationTerminal(found.Record, meshName, targetNodeRid)
+            : null;
     }
 
 

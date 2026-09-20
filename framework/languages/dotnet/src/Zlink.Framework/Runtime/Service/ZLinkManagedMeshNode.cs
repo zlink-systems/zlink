@@ -1703,6 +1703,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string actorId,
         string stableType,
         ObjectReservationFence reservation,
+        ZLinkCreationOperationId creationOperation,
         ulong deadlineUnixMs,
         MeshOperationId correlationId,
         TimeSpan timeout = default)
@@ -1715,16 +1716,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentException(
                 "The reservation target must match the command target.",
                 nameof(reservation));
+        if (creationOperation.SourceNodeRid != _routingId
+            || creationOperation.SourceNodeGeneration != _lifecycleGeneration
+            || creationOperation.OperationIdHigh == 0
+                && creationOperation.OperationIdLow == 0)
+            throw new ArgumentException(
+                "The creation operation identity must belong to this source node.",
+                nameof(creationOperation));
         return SubmitInfrastructureOperation(
             targetNodeRid,
             reservation.TargetNodeGeneration,
             MeshOperationKind.ActorCreate,
-            (correlation, operation) => ZLinkServiceWireCodec.EncodeActorCreate(
+            (correlation, _) => ZLinkServiceWireCodec.EncodeActorCreate(
                 new ActorCreateOperation(
                     correlation,
-                    operation,
-                    _routingId,
-                    _lifecycleGeneration,
+                    new MeshOperationId(
+                        creationOperation.OperationIdHigh,
+                        creationOperation.OperationIdLow),
+                    creationOperation.SourceNodeRid,
+                    creationOperation.SourceNodeGeneration,
                     actorId,
                     stableType,
                     reservation,

@@ -59,6 +59,11 @@ public sealed partial class StatefulServiceRuntimeTests
             .ToUnixTimeMilliseconds());
         Assert.Equal(SubmitResult.Ok, source.CreateActorRemote(target.RoutingId,
             "lifecycle-actor", "Sample.LifecycleActor", reservation,
+            new ZLinkCreationOperationId(
+                source.RoutingId,
+                source.Status().LifecycleGeneration,
+                41,
+                43),
             deadlineUnixMs,
             operation, timeout));
         await WaitUntilAsync(() => Volatile.Read(ref replySubmissions) == 1);
@@ -177,7 +182,13 @@ public sealed partial class StatefulServiceRuntimeTests
                     7, "ZLinkFrameworkActorJoinRequest", "application/json",
                     "{}"u8.ToArray()), operation, timeout),
             MeshOperationKind.ActorCreate => source.CreateActorRemote(target.RoutingId,
-                "matrix-actor", "Sample.MatrixActor", reservation, deadline, operation,
+                "matrix-actor", "Sample.MatrixActor", reservation,
+                new ZLinkCreationOperationId(
+                    source.RoutingId,
+                    source.Status().LifecycleGeneration,
+                    41,
+                    43),
+                deadline, operation,
                 timeout),
             MeshOperationKind.UserSpotCreate => source.CreateUserSpot(target.RoutingId,
                 "matrix-user-spot", "Sample.MatrixSpot", reservation, deadline,

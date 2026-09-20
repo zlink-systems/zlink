@@ -333,12 +333,13 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
             CancellationToken cancellationToken) =>
         throw new NotSupportedException();
 
-    ValueTask<(ActorCreateCompletion Completion, IReadOnlyList<Message> Reply)>
+    ValueTask<(ActorCreateCompletion? Completion, IReadOnlyList<Message> Reply)>
         CreateActorRemoteAsync(
             RoutingId targetNodeRid,
             string actorId,
             string stableType,
             ObjectReservationFence reservation,
+            ZLinkCreationOperationId operation,
             ulong deadlineUnixMs,
             TimeSpan timeout,
             CancellationToken cancellationToken) =>

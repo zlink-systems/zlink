@@ -195,26 +195,14 @@ internal readonly record struct ZLinkCreationOperationId(
     ulong OperationIdHigh,
     ulong OperationIdLow);
 
-internal enum ZLinkCreationTerminalState
-{
-    Created = 1,
-    Rejected = 2,
-    Failed = 3
-}
-
 internal sealed record ZLinkCreationTerminalPublication(
     ZLinkCreationOperationId Operation,
     ReadOnlyMemory<byte> TerminalEnvelope,
-    ReadOnlyMemory<byte> TerminalEnvelopeSha256,
     DateTimeOffset ExpiresAt);
 
 internal sealed record ZLinkCreationTerminalRecord(
     ZLinkCreationOperationId Operation,
-    string ReservationId,
-    ZLinkPlacementObjectKind ObjectKind,
-    ZLinkCreationTerminalState State,
     ReadOnlyMemory<byte> TerminalEnvelope,
-    ReadOnlyMemory<byte> TerminalEnvelopeSha256,
     DateTimeOffset ExpiresAt,
     DateTimeOffset StoreNow);
 

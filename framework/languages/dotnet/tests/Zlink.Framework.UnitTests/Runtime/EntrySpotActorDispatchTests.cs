@@ -10667,6 +10667,42 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public Func<ValueTask>? NodeDisposeHandler { get; set; }
 
+        public Func<
+            RoutingId,
+            string,
+            string,
+            ObjectReservationFence,
+            ZLinkCreationOperationId,
+            ulong,
+            TimeSpan,
+            CancellationToken,
+            ValueTask<(ActorCreateCompletion? Completion, IReadOnlyList<Message> Reply)>>?
+            ActorCreateRemoteHandler { get; set; }
+
+        public ValueTask<(
+            ActorCreateCompletion? Completion,
+            IReadOnlyList<Message> Reply)> CreateActorRemoteAsync(
+            RoutingId targetNodeRid,
+            string actorId,
+            string stableType,
+            ObjectReservationFence reservation,
+            ZLinkCreationOperationId operation,
+            ulong deadlineUnixMs,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) =>
+            ActorCreateRemoteHandler?.Invoke(
+                targetNodeRid,
+                actorId,
+                stableType,
+                reservation,
+                operation,
+                deadlineUnixMs,
+                timeout,
+                cancellationToken)
+            ?? ValueTask.FromException<(
+                ActorCreateCompletion?,
+                IReadOnlyList<Message>)>(new NotSupportedException());
+
         public ValueTask DisposeAsync() =>
             NodeDisposeHandler?.Invoke() ?? ValueTask.CompletedTask;
 
@@ -10938,6 +10974,23 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkBackendActorRef CreateActor(string actorId, Message createRequest)
         {
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, 1);
+            CreatedActors.Add(actor);
+            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            return actor;
+        }
+
+        public ZLinkBackendActorRef CreateReservedActor(
+            string actorId,
+            ulong objectGeneration,
+            ulong authorityOwnerGeneration,
+            Message createRequest)
+        {
+            _ = authorityOwnerGeneration;
+            _ = createRequest;
+            var actor = new ZLinkBackendActorRef(
+                RoutingId,
+                actorId,
+                objectGeneration);
             CreatedActors.Add(actor);
             CreatedActorEntryRids.Add(_entrySpot.RoutingId);
             return actor;

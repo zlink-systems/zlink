@@ -144,7 +144,7 @@ public sealed class StoreRecordGoldenTests
     /// Checklist C-4/C-4e (dotnet store convergence): unlike the test above,
     /// which is a pure-function fixture self-test, this drives the actual
     /// production key builders (ZLinkProviderLocationRepository.OwnerKey/
-    /// MeshKey/ClientServerKey/FanoutKey/AuthorityMetaKey) and the
+    /// MeshKey/ClientServerKey/FanoutKey/AuthorityMetaKey/TerminalKey) and the
     /// production owner-lease JSON envelope encoder, so a regression in the
     /// real Redis provider's key derivation or envelope shape fails here.
     /// AuthorityMetaKey is driven through ZLinkAuthorityKeyCodec.EncodeActor
@@ -191,6 +191,14 @@ public sealed class StoreRecordGoldenTests
             byRecord["authority-spot"],
             ZLinkProviderLocationRepository.AuthorityMetaKey(
                 ZLinkAuthorityKeyCodec.EncodeSpot("room:1")).Value);
+        AssertPreimage(
+            byRecord["creation-terminal"],
+            ZLinkProviderLocationRepository.TerminalKey(
+                new ZLinkCreationOperationId(
+                    RoutingId.FromHex("01020304"),
+                    7,
+                    0x2a,
+                    1)).Value);
 
         var ownerLeaseValueVector = root.GetProperty("valueVectors")
             .GetProperty("genericOpaqueRecord").EnumerateArray()
