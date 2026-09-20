@@ -47,6 +47,7 @@ import {
 import {
   publishInitialActorAuthority
 } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
+import { decodeFrameworkCreationPayload } from '../../packages/framework/src/runtime/messaging/creation-payload-codec';
 import {
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
@@ -605,9 +606,7 @@ test('Actor callback failure records and replays a typed failed terminal', async
       };
       return await targetCoordinator.handleRemoteCreate(
         { kind: 'actorCreate', correlation: 1n, ...request },
-        async () => {
-          throw callbackFailure;
-        },
+        async () => ({ result: 'failed', error: callbackFailure }),
         AbortSignal.timeout(1_000)
       );
     }
@@ -646,6 +645,68 @@ test('Actor callback failure records and replays a typed failed terminal', async
   }
   assert.equal(
     (await store.readAuthority(authorityKey('actor-callback-failed'))).kind,
+    'missing'
+  );
+});
+
+test('Actor payload decode failure aborts without recording a terminal', async () => {
+  const target = {
+    meshName: 'mesh',
+    nodeRid: 'node-b',
+    nodeGeneration: 2n,
+    entrySpotId: 'entry-node-b',
+    owner: owner('owner-b', 2n),
+    isLocal: false,
+    sourceNodeRid: 'source-node',
+    sourceNodeGeneration: 7n
+  };
+  const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
+  let operation: ZLinkCreationOperationIdentity | undefined;
+  const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    store,
+    target: async () => undefined,
+    remoteCreate: async () => {
+      throw new Error('target coordinator does not issue remote creates');
+    }
+  });
+  const coordinator = new ZLinkActorPlacementCoordinator({
+    store,
+    target: async () => target,
+    remoteCreate: async (_mesh, _node, request) => {
+      operation = {
+        sourceNodeRid: request.sourceNodeRid,
+        sourceNodeGeneration: request.sourceNodeGeneration,
+        operationId: request.operation
+      };
+      return await targetCoordinator.handleRemoteCreate(
+        { kind: 'actorCreate', correlation: 1n, ...request },
+        async requestPayload => {
+          decodeFrameworkCreationPayload(requestPayload);
+          throw new Error('invalid payload must not reach the application callback');
+        },
+        AbortSignal.timeout(1_000)
+      );
+    }
+  });
+
+  await assert.rejects(
+    () => coordinator.create(
+      'actor-payload-decode-failed',
+      'player',
+      false,
+      'mesh',
+      Buffer.from('invalid'),
+      1_000
+    ),
+    (error: unknown) => error instanceof ZLinkFrameworkException
+      && error.kind === ZLinkFrameworkErrorKind.ProtocolError
+      && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
+  );
+
+  if (operation === undefined) throw new Error('Requester omitted the creation operation.');
+  assert.equal((await store.readCreationTerminal(operation)).kind, 'missing');
+  assert.equal(
+    (await store.readAuthority(authorityKey('actor-payload-decode-failed'))).kind,
     'missing'
   );
 });

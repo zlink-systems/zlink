@@ -287,6 +287,7 @@ export class ZLinkActorPlacementCoordinator {
           readonly reply?: Uint8Array;
           readonly onPublished?: () => void;
         }
+      | { readonly result: 'failed'; readonly error: unknown }
     >,
     signal: AbortSignal
   ): Promise<ServiceUserSpotOperationResult> {
@@ -318,23 +319,11 @@ export class ZLinkActorPlacementCoordinator {
       pending.requestSha256,
       pending.requestEncodedSize
     );
-    let materialization:
-      | {
-          readonly kind: 'completed';
-          readonly value: Awaited<ReturnType<typeof materialize>>;
-        }
-      | { readonly kind: 'failed'; readonly error: unknown };
-    try {
-      materialization = {
-        kind: 'completed',
-        value: await materialize(requestPayload, current, signal)
-      };
-    } catch (error) {
-      materialization = { kind: 'failed', error };
-    }
+    let local: Awaited<ReturnType<typeof materialize>>;
     let completion: Awaited<ReturnType<ZLinkObjectCreationStore['completeCreation']>>;
     try {
-      if (materialization.kind === 'failed') {
+      local = await materialize(requestPayload, current, signal);
+      if (local.result === 'failed') {
         completion = await this.options.store.completeCreation({
           key,
           reservationId: record.reservation.reservationId,
@@ -346,7 +335,6 @@ export class ZLinkActorPlacementCoordinator {
           }
         }, signal);
       } else {
-        const local = materialization.value;
         const terminal = encodeActorTerminal(local.result === 'created'
           ? { result: 'created', actor: local.actor, reply: local.reply }
           : { result: 'rejected', reply: local.reply });
@@ -398,16 +386,15 @@ export class ZLinkActorPlacementCoordinator {
       }
       throw error;
     }
-    if (materialization.kind === 'failed') {
+    if (local.result === 'failed') {
       if (completion.kind !== 'failed' && completion.kind !== 'alreadyCompleted') {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
           `Actor '${record.actorId}' failed creation did not record its terminal.`
         );
       }
-      throw materialization.error;
+      throw local.error;
     }
-    const local = materialization.value;
     if (
       local.result === 'created'
         ? completion.kind !== 'created' && completion.kind !== 'alreadyCompleted'
