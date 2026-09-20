@@ -83,6 +83,10 @@ const durable = new Map([
     codec.encodeRelocationManifestV1DurableFormat]]
 ]);
 const typeCodecs = new Map([
+  ['application-payload-bytes', [codec.decodeApplicationPayloadBytes,
+    codec.encodeApplicationPayloadBytes]],
+  ['application-payload-envelope-v1', [codec.decodeApplicationPayloadEnvelopeV1,
+    codec.encodeApplicationPayloadEnvelopeV1]],
   ['descriptor-extension', [codec.decodeDescriptorExtension, codec.encodeDescriptorExtension]],
   ['text8', [codec.decodeText8, codec.encodeText8]]
 ]);
@@ -131,7 +135,7 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
   assert.equal(catalog.fixtures.length, 9);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
-  assert.equal(catalog.operationCases.length, 16);
+  assert.equal(catalog.operationCases.length, 19);
 
   for (const item of indexedCases()) {
     const operation = item.kind === 'operation' ? item.entry.operation : item.kind;
@@ -174,7 +178,25 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     }
 
     const entry = item.entry;
-    const decodeContext = { ...context, ...entry.decodeContext };
+    if (entry.operation === 'negotiated-bound') {
+      const bytes = Buffer.from(entry.hex, 'hex');
+      const [decode, encode] = typeCodecs.get(entry.surface.type);
+      const value = decode(bytes, context);
+      const negotiatedContext = {
+        runtimePredicates: context.runtimePredicates,
+        ...entry.context
+      };
+      for (const direction of entry.directions) {
+        const action = direction === 'decode'
+          ? () => decode(bytes, negotiatedContext)
+          : () => encode(value, negotiatedContext);
+        const directionLabel = `${label}:${direction}`;
+        if (entry.expect === 'reject') assert.throws(action, undefined, directionLabel);
+        else assert.doesNotThrow(action, directionLabel);
+      }
+      continue;
+    }
+    const decodeContext = { ...context, ...entry.context };
     const action = () => {
       if (entry.surface.format === 'type') {
         const [decode] = typeCodecs.get(entry.surface.type);

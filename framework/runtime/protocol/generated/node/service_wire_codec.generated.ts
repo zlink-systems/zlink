@@ -347,7 +347,7 @@ function readApplicationPayloadBytes(reader: Reader, context: ServiceWireDecoder
 }
 function writeApplicationPayloadBytes(input: ApplicationPayloadBytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
-   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 4294966774) fail("application-payload-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+   const bytes = value as Uint8Array;  if (bytes.length < 0 || bytes.length > 4294966774) fail("application-payload-bytes length"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(bytes.length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum");
 }
 export function decodeApplicationPayloadBytes(bytes: Uint8Array, context: ServiceWireDecoderContext): ApplicationPayloadBytes { const reader = new Reader(bytes); const value = readApplicationPayloadBytes(reader, context, {}, 0); reader.done("application-payload-bytes"); return value; }
 export function encodeApplicationPayloadBytes(value: ApplicationPayloadBytes, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationPayloadBytes(value, writer, context, {}, 0); return writer.result(); }
@@ -374,6 +374,7 @@ function readApplicationPayloadEnvelopeV1(reader: Reader, context: ServiceWireDe
 }
 function writeApplicationPayloadEnvelopeV1(input: ApplicationPayloadEnvelopeV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const encodedStart = writer.length;
 
 
   writeU8(1, writer, context, enclosing, flags); const body = new Writer();
@@ -390,6 +391,7 @@ function writeApplicationPayloadEnvelopeV1(input: ApplicationPayloadEnvelopeV1, 
 
   writeApplicationPayloadBytes(value["payload"], body, context, value, flags);
   const bytes = body.result(); if (bytes.length > 4294967295) fail("application-payload-envelope-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytes")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294967295n || BigInt(writer.length - encodedStart) > negotiatedMaximum) fail("application-payload-envelope-v1 negotiated maximum");
 }
 export function decodeApplicationPayloadEnvelopeV1(bytes: Uint8Array, context: ServiceWireDecoderContext): ApplicationPayloadEnvelopeV1 { const reader = new Reader(bytes); const value = readApplicationPayloadEnvelopeV1(reader, context, {}, 0); reader.done("application-payload-envelope-v1"); return value; }
 export function encodeApplicationPayloadEnvelopeV1(value: ApplicationPayloadEnvelopeV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeApplicationPayloadEnvelopeV1(value, writer, context, {}, 0); return writer.result(); }
@@ -1655,6 +1657,7 @@ function writeCreationOperationTerminalV1(input: CreationOperationTerminalV1, wr
     writeApplicationPayloadEnvelopeV1(value["applicationPayload"], body, context, value, flags);
   } else if (value["applicationPayload"] !== undefined) fail("applicationPayload forbidden");
   const bytes = body.result(); if (bytes.length > 1048576) fail("creation-operation-terminal-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeCreationOperationTerminalV1(bytes: Uint8Array, context: ServiceWireDecoderContext): CreationOperationTerminalV1 { const reader = new Reader(bytes); const value = readCreationOperationTerminalV1(reader, context, {}, 0); reader.done("creation-operation-terminal-v1"); return value; }
 export function encodeCreationOperationTerminalV1(value: CreationOperationTerminalV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeCreationOperationTerminalV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2036,6 +2039,7 @@ function writeObjectCreationIntentV1(input: ObjectCreationIntentV1, writer: Writ
 
   writeCreationRequestSize(value["requestEncodedSize"], body, context, value, flags);
   const bytes = body.result(); if (bytes.length > 1048576) fail("object-creation-intent-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeObjectCreationIntentV1(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectCreationIntentV1 { const reader = new Reader(bytes); const value = readObjectCreationIntentV1(reader, context, {}, 0); reader.done("object-creation-intent-v1"); return value; }
 export function encodeObjectCreationIntentV1(value: ObjectCreationIntentV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectCreationIntentV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2624,6 +2628,7 @@ function writeMaintenanceAggregateV1(input: MaintenanceAggregateV1, writer: Writ
 
   writeSha256Bytes(value["inventoryDigestSha256"], body, context, value, flags);
   const bytes = body.result(); if (bytes.length > 1048576) fail("maintenance-aggregate-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeMaintenanceAggregateV1(bytes: Uint8Array, context: ServiceWireDecoderContext): MaintenanceAggregateV1 { const reader = new Reader(bytes); const value = readMaintenanceAggregateV1(reader, context, {}, 0); reader.done("maintenance-aggregate-v1"); return value; }
 export function encodeMaintenanceAggregateV1(value: MaintenanceAggregateV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMaintenanceAggregateV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2784,6 +2789,7 @@ function writeUserSpotCloseFenceV1(input: UserSpotCloseFenceV1, writer: Writer, 
 
   writeAuthorityStoreVersion(value["expectedStoreVersion"], body, context, value, flags);
   const bytes = body.result();  writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeUserSpotCloseFenceV1(bytes: Uint8Array, context: ServiceWireDecoderContext): UserSpotCloseFenceV1 { const reader = new Reader(bytes); const value = readUserSpotCloseFenceV1(reader, context, {}, 0); reader.done("user-spot-close-fence-v1"); return value; }
 export function encodeUserSpotCloseFenceV1(value: UserSpotCloseFenceV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeUserSpotCloseFenceV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2897,6 +2903,7 @@ function writeMessageFollowRouteV1(input: MessageFollowRouteV1, writer: Writer, 
 
   writeU64(numeric(value["originalReplyRouteId"]), body, context, value, flags);
   const bytes = body.result(); if (bytes.length > 16777216) fail("message-follow-route-v1 maximum"); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeMessageFollowRouteV1(bytes: Uint8Array, context: ServiceWireDecoderContext): MessageFollowRouteV1 { const reader = new Reader(bytes); const value = readMessageFollowRouteV1(reader, context, {}, 0); reader.done("message-follow-route-v1"); return value; }
 export function encodeMessageFollowRouteV1(value: MessageFollowRouteV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMessageFollowRouteV1(value, writer, context, {}, 0); return writer.result(); }

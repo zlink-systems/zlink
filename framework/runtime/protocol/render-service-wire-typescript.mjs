@@ -156,10 +156,15 @@ function encodedLimit(owner, operation, measured) {
   return `if (${measured} > ${operation.maximumEncodedBytes}) fail(${JSON.stringify(owner.name + " maximum")});`;
 }
 function negotiatedBound(owner, operation, measurements) {
-  if (operation.topology !== "clientServer" || operation.maximum?.kind !== "decoder-context" || operation.comparison !== "less-than-or-equal" || operation.direction !== "decode") throw new Error(`${owner.name}: unsupported negotiated bound`);
-  const measured = measurements[operation.measured];
-  if (!measured) throw new Error(`${owner.name}: unsupported negotiated measurement ${operation.measured}`);
-  return `const negotiatedMaximum = numeric(requireContext(context, ${JSON.stringify(operation.maximum.name)})); if (negotiatedMaximum < 0n || negotiatedMaximum > ${BigInt(operation.absoluteMaximum)}n || BigInt(${measured}) > negotiatedMaximum) fail(${JSON.stringify(owner.name + " negotiated maximum")});`;
+  if (operation.topology !== "clientServer" || operation.comparison !== "less-than-or-equal"
+      || operation.context?.missing !== "protocol-error" || operation.context?.negative !== "protocol-error"
+      || operation.context?.aboveAbsoluteMaximum !== "protocol-error") throw new Error(`${owner.name}: unsupported negotiated bound`);
+  return Object.fromEntries(Object.entries(operation.applications).map(([application, applied]) => {
+    const measured = measurements[application]?.[operation.measured];
+    if (!measured || applied.context?.kind !== `${application}r-context`) throw new Error(`${owner.name}: unsupported negotiated ${application} application`);
+    const syntax = `const negotiatedMaximum = numeric(requireContext(context, ${JSON.stringify(applied.context.name)})); if (negotiatedMaximum < 0n || negotiatedMaximum > ${BigInt(operation.context.absoluteMaximum)}n || BigInt(${measured}) > negotiatedMaximum) fail(${JSON.stringify(owner.name + " negotiated maximum")});`;
+    return [application, syntax];
+  }));
 }
 function predicateChecks(owner, value = "value") {
   return owner.operations.filter((entry) => entry.op === "runtime-predicate").flatMap((entry) => {
@@ -206,10 +211,15 @@ function lengthPrefixed(owner, operation) {
   const text = operation.content === "text"; const validation = owner.operations.find((entry) => entry.op === "text-validation");
   const decode = text ? `const bytes = reader.take(length); ${validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} return decodeUtf8(bytes, ${JSON.stringify(owner.name)});` : "return reader.take(length);";
   const negotiated = owner.operations.filter((entry) => entry.op === "negotiated-bound")
-    .map((entry) => emitters[entry.op].syntax(owner, entry, { "content-bytes": "length" })).join("\n");
+    .map((entry) => emitters[entry.op].syntax(owner, entry, {
+      encode: { "content-bytes": "bytes.length" }, decode: { "content-bytes": "length" },
+    }));
+  const decodeNegotiated = negotiated.map((entry) => entry.decode).join("\n");
+  const encodeNegotiated = negotiated.map((entry) => entry.encode).join("\n");
+  const encodeCheck = encodeNegotiated ? ` ${encodeNegotiated}` : "";
   return { type: `export type ${name} = ${text ? "string" : "Uint8Array"}${nullable ? " | null" : ""};`,
-    read: `const length = Number(${readRef(operation.lengthType)}); ${nullable ? "if (length === 0) return null;" : ""} if (length < ${operation.minimumBytes} || length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${negotiated} ${decode}`,
-    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} if (bytes.length < ${operation.minimumBytes} || bytes.length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);` };
+    read: `const length = Number(${readRef(operation.lengthType)}); ${nullable ? "if (length === 0) return null;" : ""} if (length < ${operation.minimumBytes} || length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${decodeNegotiated} ${decode}`,
+    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} if (bytes.length < ${operation.minimumBytes} || bytes.length > ${operation.maximumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);${encodeCheck}` };
 }
 function structure(owner, operation) {
   const checks = objectChecks(owner, operation.constraints);
@@ -237,10 +247,15 @@ function versionedVector(owner, operation) {
 function versionedLength(owner, operation) {
   const checks = objectChecks(owner, operation.constraints); const maximum = operation.maximumEncodedBytes;
   const negotiated = owner.operations.filter((entry) => entry.op === "negotiated-bound")
-    .map((entry) => emitters[entry.op].syntax(owner, entry, { "encoded-bytes": "reader.offset - encodedStart" })).join("\n");
+    .map((entry) => emitters[entry.op].syntax(owner, entry, {
+      encode: { "encoded-bytes": "writer.length - encodedStart" },
+      decode: { "encoded-bytes": "reader.offset - encodedStart" },
+    }));
+  const decodeNegotiated = negotiated.map((entry) => entry.decode).join("\n");
+  const encodeNegotiated = negotiated.map((entry) => entry.encode).join("\n");
   return { type: `export type ${id(owner.name)} = ${fieldsType(operation.fields)};`,
-    read: `${negotiated ? "const encodedStart = reader.offset; " : ""}const version = ${readRef(operation.version)}; if (!same(version, ${literal(operation.version.constant)})) fail(${JSON.stringify(owner.name + " version")}); const length = Number(${readRef(operation.length)}); ${maximum ? `if (length > ${maximum}) fail(${JSON.stringify(owner.name + " maximum")});` : ""} const body = reader.bounded(length); const value: any = {};\n${operation.fields.map((field) => readField(field, "body")).join("\n")}\nbody.done(${JSON.stringify(owner.name)});\n${negotiated}\n${checks}\n${predicateChecks(owner)}\nreturn value;`,
-    write: `${checks}\n${predicateChecks(owner)}\n${writeRef(operation.version, literal(operation.version.constant))}; const body = new Writer();\n${operation.fields.map((field) => writeField(field, "body")).join("\n")}\nconst bytes = body.result(); ${maximum ? `if (bytes.length > ${maximum}) fail(${JSON.stringify(owner.name + " maximum")});` : ""} ${writeRef(operation.length, "bytes.length")}; writer.put(bytes);` };
+    read: `${negotiated.length ? "const encodedStart = reader.offset; " : ""}const version = ${readRef(operation.version)}; if (!same(version, ${literal(operation.version.constant)})) fail(${JSON.stringify(owner.name + " version")}); const length = Number(${readRef(operation.length)}); ${maximum ? `if (length > ${maximum}) fail(${JSON.stringify(owner.name + " maximum")});` : ""} const body = reader.bounded(length); const value: any = {};\n${operation.fields.map((field) => readField(field, "body")).join("\n")}\nbody.done(${JSON.stringify(owner.name)});\n${decodeNegotiated}\n${checks}\n${predicateChecks(owner)}\nreturn value;`,
+    write: `${negotiated.length ? "const encodedStart = writer.length;\n" : ""}${checks}\n${predicateChecks(owner)}\n${writeRef(operation.version, literal(operation.version.constant))}; const body = new Writer();\n${operation.fields.map((field) => writeField(field, "body")).join("\n")}\nconst bytes = body.result(); ${maximum ? `if (bytes.length > ${maximum}) fail(${JSON.stringify(owner.name + " maximum")});` : ""} ${writeRef(operation.length, "bytes.length")}; writer.put(bytes);\n${encodeNegotiated}` };
 }
 function discriminator(entry, reader) {
   if (entry.source.kind === "wire") return readRef(entry.type, reader);
@@ -381,7 +396,8 @@ function renderLogical(format) {
 function renderRuntime() {
   const negotiatedContext = [...new Set(ir.types.flatMap((owner) => owner.operations
     .filter((operation) => operation.op === "negotiated-bound")
-    .map((operation) => operation.maximum.name)))]
+    .flatMap((operation) => Object.values(operation.applications)
+      .map((application) => application.context.name))))]
     .map((name) => `readonly ${prop(name)}?: number | bigint;`).join(" ");
   return String.raw`
 export type ServiceWireRuntimePredicate = (terminalResult: number, failureCode: number) => boolean;
