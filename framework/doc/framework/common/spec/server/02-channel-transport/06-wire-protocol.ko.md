@@ -75,10 +75,8 @@ self-test, generated-asset check, decoder-fixture check와 schema의 golden fixt
 [07. Service wire schema dialect](07-schema-dialect.ko.md)가 소유한다. 이 장은 그 규칙을 다시 적지
 않는다.
 
-현재 schema에는 모든 기존 layout을 같은 방식으로 generator가 내릴 규칙이나 언어별 output mapping이
-완전하게 선언되어 있지는 않다. W-2는 모든 layout kind의 완전한 lowering 범위, conditional·semantic
-constraint 처리, generated asset과 fixture mapping을 포함한 이 generator-input 빈틈을 채워야 한다. Private
-syntax나 손으로 작성한 codec 예외를 도입하지 말고 schema를 확장해야 한다.
+Generator가 아직 내리지 못하는 layout이 있어도 그 자리를 private syntax나 손으로 작성한 codec 예외로
+채우지 않는다 — schema를 확장하고 generator가 따라간다.
 
 ### Validator
 
