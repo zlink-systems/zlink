@@ -3255,6 +3255,72 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task OwnerLeaseAdmission_BlocksAndResumesObjectTimerFactoryAndRelocationPaths()
+    {
+        var time = new ManualTimeProvider();
+        ZLinkLocationRuntime? locations = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            userSpotType: typeof(EmptyUserSpot),
+            locationTimeProvider: time,
+            locationRuntimeCapture: value => locations = value);
+        try
+        {
+            var locationRuntime = Assert.IsType<ZLinkLocationRuntime>(locations);
+            time.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+
+            var objectMessage = runtime.TryEnterInboundOperation(
+                countAsRequest: true,
+                ownsObjectWork: true);
+            var objectTimer = runtime.TryEnterInboundOperation(
+                countAsRequest: false,
+                ownsObjectWork: true);
+            Assert.False(objectMessage.Accepted);
+            Assert.False(objectTimer.Accepted);
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await runtime.GetOrCreateAsync<EmptyUserSpot>("lease-gated-factory"));
+            Assert.Throws<InvalidOperationException>(() => runtime.EnterOperation());
+
+            Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+
+            objectMessage = runtime.TryEnterInboundOperation(
+                countAsRequest: true,
+                ownsObjectWork: true);
+            objectTimer = runtime.TryEnterInboundOperation(
+                countAsRequest: false,
+                ownsObjectWork: true);
+            Assert.True(objectMessage.Accepted);
+            Assert.True(objectTimer.Accepted);
+            objectMessage.Lease.Dispose();
+            objectTimer.Lease.Dispose();
+            var created = await runtime.GetOrCreateAsync<EmptyUserSpot>(
+                "lease-gated-factory");
+            Assert.Equal(ZLinkSpotCreateState.Created, created.State);
+
+            var operation = runtime.EnterOperation();
+            try
+            {
+                var fence = await runtime.TryBeginRelocationAdmissionFenceAsync(
+                    runtime.SnapshotOperationAdmissions(),
+                    runtime.DrainAdmission.SnapshotActorAdmissions(),
+                    new ZLinkActorHandoffDrainSnapshot(0, true),
+                    CancellationToken.None);
+                Assert.NotNull(fence);
+                operation.Dispose();
+                Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(fence.Value));
+            }
+            finally
+            {
+                operation.Dispose();
+            }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Relocation_fence_rejects_stale_operation_baseline_and_reopens_by_owner()
     {
         var (runtime, _) = await CreateStartedRuntimeAsync(
@@ -8234,7 +8300,8 @@ public sealed partial class EntrySpotActorDispatchTests
         bool includeEntryChannelMembership = false,
         bool includeImmediateIngressHandlers = false,
         bool includeEntrySpotActivation = true,
-        ManualTimeProvider? locationTimeProvider = null)
+        ManualTimeProvider? locationTimeProvider = null,
+        Action<ZLinkLocationRuntime>? locationRuntimeCapture = null)
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
         var locationTime = locationTimeProvider ?? new ManualTimeProvider();
@@ -8264,6 +8331,7 @@ public sealed partial class EntrySpotActorDispatchTests
             locationOptions,
             runtimeLocationStore,
             locationTime);
+        locationRuntimeCapture?.Invoke(locationRuntime);
         Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
         var locationLifecycle = new ZLinkLocationLifecycle(
             locationRuntime,
