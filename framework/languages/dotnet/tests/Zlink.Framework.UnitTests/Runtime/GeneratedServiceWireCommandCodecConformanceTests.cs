@@ -6,7 +6,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class GeneratedServiceWireCommandCodecConformanceTests
 {
     private static readonly ServiceWireCodec.DecodeContext Context =
-        ServiceWireCodec.DecodeContext.Empty;
+        new(null, null, null, 4294966774UL, uint.MaxValue);
 
     [Fact]
     public void Generated_codec_conforms_to_every_indexed_vector()
@@ -51,7 +51,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(35, cases.Count);
+        Assert.Equal(39, cases.Count);
         foreach (var testCase in cases)
         {
             Assert.True(testCase.Expect is "accept" or "reject", testCase.Label);
@@ -117,6 +117,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         var bytes = Convert.FromHexString(vector.TryGetProperty("hex", out var hex)
             ? hex.GetString()!
             : vector.GetProperty("framesHex")[0].GetString()!);
+        var context = DecodeContextFor(vector);
         switch (name)
         {
             case "vector-ordering":
@@ -139,6 +140,18 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                     vector.GetProperty("framesHex").EnumerateArray()
                         .Select(item => Convert.FromHexString(item.GetString()!)).ToArray(), Context);
                 break;
+            case "conditional-union-case-constraint":
+                ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, context);
+                break;
+            case "metadata-nonadjacent-duplicate-key":
+                ServiceWireCodec.DecodeMetadataFrame(bytes, context);
+                break;
+            case "client-server-negotiated-payload-bound":
+                ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context);
+                break;
+            case "client-server-negotiated-envelope-bound":
+                ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context);
+                break;
             case "durable-flags":
             case "durable-checksum":
             case "durable-trailing":
@@ -147,6 +160,22 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             default:
                 throw new ConformanceHarnessException($"unhandled operation case {name}");
         }
+    }
+
+    private static ServiceWireCodec.DecodeContext DecodeContextFor(JsonElement vector)
+    {
+        if (!vector.TryGetProperty("decodeContext", out var values))
+            return Context;
+
+        var payloadMaximum = values.TryGetProperty(
+            "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead", out var payload)
+            ? payload.GetUInt64()
+            : 4294966774UL;
+        var envelopeMaximum = values.TryGetProperty(
+            "effectiveCompleteMessageBytes", out var envelope)
+            ? envelope.GetUInt64()
+            : uint.MaxValue;
+        return new(null, null, null, payloadMaximum, envelopeMaximum);
     }
 
     private static byte[][] GeneratedCommandRoundTrip(int commandId, byte[][] frames) =>

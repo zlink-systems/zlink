@@ -9,7 +9,7 @@ using System.Text;
 namespace Systems.Zlink.Framework.Runtime.Protocol;
 internal static class ServiceWireCodec
 {
-    internal sealed record DecodeContext(MeshOperationKind? OriginalOperationKind,bool? DurableRelocationPresent,bool? ApplicationSnapshotPresent){internal static readonly DecodeContext Empty=new(null,null,null);}
+    internal sealed record DecodeContext(MeshOperationKind? OriginalOperationKind,bool? DurableRelocationPresent,bool? ApplicationSnapshotPresent,ulong? EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead,ulong? EffectiveCompleteMessageBytes){internal static readonly DecodeContext Empty=new(null,null,null,null,null);}
 
     internal sealed record U8(byte Value);
 
@@ -1149,10 +1149,11 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeApplicationPayloadBytes(ApplicationPayloadBytes value, DecodeContext context) { var writer = new Writer(); WriteApplicationPayloadBytes(writer, value, context); return writer.ToArray(); }
     private static ApplicationPayloadBytes ReadApplicationPayloadBytes(Reader reader, DecodeContext context)
     {
+        var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
         var length = checked((int)ReadU32(reader, context).Value);
         if ((ulong)length < 0UL || (ulong)length > 4294966774UL) throw Error("application-payload-bytes: length");
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        if (negotiatedMaximum > 4294966774UL || (ulong)(bytes.LongLength) > negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes);
     }
     private static void WriteApplicationPayloadBytes(Writer writer, ApplicationPayloadBytes value, DecodeContext context)
     {
@@ -1167,6 +1168,8 @@ internal static class ServiceWireCodec
     private static ApplicationPayloadEnvelopeV1 ReadApplicationPayloadEnvelopeV1(Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
+        var negotiatedMaximum = context.EffectiveCompleteMessageBytes ?? throw Error("missing context effectiveCompleteMessageBytes");
+        var negotiatedStart = reader.Remaining;
         var version = ReadU8(reader, context);
         if (version != new U8(1)) throw Error("application-payload-envelope-v1: version");
         var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
@@ -1175,7 +1178,7 @@ internal static class ServiceWireCodec
         var Payload = ReadApplicationPayloadBytes(body, context);
         var value = new ApplicationPayloadEnvelopeV1(PacketName, ContentType, Payload);
         body.End("application-payload-envelope-v1");
-        if ((ulong)(encodedStart - reader.Remaining) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit"); return value;
+        if (negotiatedMaximum > 4294967295UL || (ulong)(negotiatedStart - reader.Remaining) > negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound"); if ((ulong)(encodedStart - reader.Remaining) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit"); return value;
     }
     private static void WriteApplicationPayloadEnvelopeV1(Writer writer, ApplicationPayloadEnvelopeV1 value, DecodeContext context)
     {
@@ -1451,14 +1454,16 @@ internal static class ServiceWireCodec
             var MembershipEpoch = ReadNonzeroU64(selected, context);
             var ReceiveChunkLimitBytes = ReadU32(selected, context);
             selected.End("actor-join-reply-tail");
-            ActorJoinReplyTail value = new ActorJoinReplyTailCase0(Spot, MembershipEpoch, ReceiveChunkLimitBytes);
+            var caseValue = new ActorJoinReplyTailCase0(Spot, MembershipEpoch, ReceiveChunkLimitBytes);
+            ActorJoinReplyTail value = caseValue;
             return value;
         }
         else if (JoinResult == ActorJoinResult.Rejected)
         {
             var Spot = ReadOptionalSpotRef(selected, context);
             selected.End("actor-join-reply-tail");
-            ActorJoinReplyTail value = new ActorJoinReplyTailCase1(Spot);
+            var caseValue = new ActorJoinReplyTailCase1(Spot);
+            ActorJoinReplyTail value = caseValue;
             return value;
         }
         throw Error("actor-join-reply-tail: discriminator");
@@ -1843,20 +1848,23 @@ internal static class ServiceWireCodec
         {
             var Actor = ReadActorRef(selected, context);
             selected.End("actor-create-terminal");
-            ActorCreateTerminal value = new ActorCreateTerminalCase0(Actor);
+            var caseValue = new ActorCreateTerminalCase0(Actor);
+            ActorCreateTerminal value = caseValue;
             return value;
         }
         else if (CreateResult == ActorCreateResult.Created)
         {
             var Actor = ReadActorRef(selected, context);
             selected.End("actor-create-terminal");
-            ActorCreateTerminal value = new ActorCreateTerminalCase1(Actor);
+            var caseValue = new ActorCreateTerminalCase1(Actor);
+            ActorCreateTerminal value = caseValue;
             return value;
         }
         else if (CreateResult == ActorCreateResult.Rejected)
         {
             selected.End("actor-create-terminal");
-            ActorCreateTerminal value = new ActorCreateTerminalCase2();
+            var caseValue = new ActorCreateTerminalCase2();
+            ActorCreateTerminal value = caseValue;
             return value;
         }
         throw Error("actor-create-terminal: discriminator");
@@ -1964,14 +1972,16 @@ internal static class ServiceWireCodec
         if (HasSpot == Bool8.False)
         {
             selected.End("optional-spot-ref");
-            OptionalSpotRef value = new OptionalSpotRefCase0();
+            var caseValue = new OptionalSpotRefCase0();
+            OptionalSpotRef value = caseValue;
             return value;
         }
         else if (HasSpot == Bool8.True)
         {
             var Spot = ReadSpotRef(selected, context);
             selected.End("optional-spot-ref");
-            OptionalSpotRef value = new OptionalSpotRefCase1(Spot);
+            var caseValue = new OptionalSpotRefCase1(Spot);
+            OptionalSpotRef value = caseValue;
             return value;
         }
         throw Error("optional-spot-ref: discriminator");
@@ -2023,14 +2033,16 @@ internal static class ServiceWireCodec
         if (HasMembership == Bool8.False)
         {
             selected.End("optional-spot-membership");
-            OptionalSpotMembership value = new OptionalSpotMembershipCase0();
+            var caseValue = new OptionalSpotMembershipCase0();
+            OptionalSpotMembership value = caseValue;
             return value;
         }
         else if (HasMembership == Bool8.True)
         {
             var Membership = ReadSpotMembership(selected, context);
             selected.End("optional-spot-membership");
-            OptionalSpotMembership value = new OptionalSpotMembershipCase1(Membership);
+            var caseValue = new OptionalSpotMembershipCase1(Membership);
+            OptionalSpotMembership value = caseValue;
             return value;
         }
         throw Error("optional-spot-membership: discriminator");
@@ -2070,14 +2082,16 @@ internal static class ServiceWireCodec
         {
             var BindingGeneration = ReadNonzeroU64(selected, context);
             selected.End("bound-session-binding-transition");
-            BoundSessionBindingTransition value = new BoundSessionBindingTransitionCase0(BindingGeneration);
+            var caseValue = new BoundSessionBindingTransitionCase0(BindingGeneration);
+            BoundSessionBindingTransition value = caseValue;
             return value;
         }
         else if (BindingState == BoundSessionBindingState.Tombstone)
         {
             var RetiredBindingGeneration = ReadNonzeroU64(selected, context);
             selected.End("bound-session-binding-transition");
-            BoundSessionBindingTransition value = new BoundSessionBindingTransitionCase1(RetiredBindingGeneration);
+            var caseValue = new BoundSessionBindingTransitionCase1(RetiredBindingGeneration);
+            BoundSessionBindingTransition value = caseValue;
             return value;
         }
         throw Error("bound-session-binding-transition: discriminator");
@@ -2144,14 +2158,16 @@ internal static class ServiceWireCodec
             var TargetNodeRid = ReadRid(selected, context);
             var TargetNodeGeneration = ReadNonzeroU64(selected, context);
             selected.End("session-relocation-route-update");
-            SessionRelocationRouteUpdate value = new SessionRelocationRouteUpdateCase0(PreviousAuthorityOwnerGeneration, TargetAuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration);
+            var caseValue = new SessionRelocationRouteUpdateCase0(PreviousAuthorityOwnerGeneration, TargetAuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration);
+            SessionRelocationRouteUpdate value = caseValue;
             return value;
         }
         else if (Action == SessionRelocationRouteAction.Abort)
         {
             var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
             selected.End("session-relocation-route-update");
-            SessionRelocationRouteUpdate value = new SessionRelocationRouteUpdateCase1(CurrentAuthorityOwnerGeneration);
+            var caseValue = new SessionRelocationRouteUpdateCase1(CurrentAuthorityOwnerGeneration);
+            SessionRelocationRouteUpdate value = caseValue;
             return value;
         }
         throw Error("session-relocation-route-update: discriminator");
@@ -2195,21 +2211,24 @@ internal static class ServiceWireCodec
         {
             var ActorId = ReadText8(selected, context);
             selected.End("object-creation-key");
-            ObjectCreationKey value = new ObjectCreationKeyCase0(ActorId);
+            var caseValue = new ObjectCreationKeyCase0(ActorId);
+            ObjectCreationKey value = caseValue;
             return value;
         }
         else if (ObjectKind == StatefulObjectKind.UserSpot)
         {
             var SpotId = ReadText8(selected, context);
             selected.End("object-creation-key");
-            ObjectCreationKey value = new ObjectCreationKeyCase1(SpotId);
+            var caseValue = new ObjectCreationKeyCase1(SpotId);
+            ObjectCreationKey value = caseValue;
             return value;
         }
         else if (ObjectKind == StatefulObjectKind.InstanceSpot)
         {
             var SpotId = ReadText8(selected, context);
             selected.End("object-creation-key");
-            ObjectCreationKey value = new ObjectCreationKeyCase2(SpotId);
+            var caseValue = new ObjectCreationKeyCase2(SpotId);
+            ObjectCreationKey value = caseValue;
             return value;
         }
         throw Error("object-creation-key: discriminator");
@@ -2437,6 +2456,7 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeGenericObjectReservationV1(GenericObjectReservationV1 value, DecodeContext context) { var writer = new Writer(); WriteGenericObjectReservationV1(writer, value, context); return writer.ToArray(); }
     private static GenericObjectReservationV1 ReadGenericObjectReservationV1(Reader reader, DecodeContext context)
     {
+        var encodedStart = reader.Remaining;
         var OperationKind = ReadGenericReservationOperationKind(reader, context);
         var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
         if (OperationKind == GenericReservationOperationKind.Reserve)
@@ -2446,29 +2466,33 @@ internal static class ServiceWireCodec
             var CreatingPayload = ReadDurableBlob(selected, context);
             var PendingCapacityDelta = ReadNonzeroU32(selected, context);
             selected.End("generic-object-reservation-v1");
-            GenericObjectReservationV1 value = new GenericObjectReservationV1Case0(Intent, Target, CreatingPayload, PendingCapacityDelta);
-            return value;
+            var caseValue = new GenericObjectReservationV1Case0(Intent, Target, CreatingPayload, PendingCapacityDelta);
+            GenericObjectReservationV1 value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("generic-object-reservation-v1: encoded limit"); return value;
         }
         else if (OperationKind == GenericReservationOperationKind.Commit)
         {
             var Key = ReadObjectCreationKey(selected, context);
             var Fence = ReadObjectReservationFence(selected, context);
             selected.End("generic-object-reservation-v1");
-            GenericObjectReservationV1 value = new GenericObjectReservationV1Case1(Key, Fence);
-            return value;
+            var caseValue = new GenericObjectReservationV1Case1(Key, Fence);
+            GenericObjectReservationV1 value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("generic-object-reservation-v1: encoded limit"); return value;
         }
         else if (OperationKind == GenericReservationOperationKind.Abort)
         {
             var Key = ReadObjectCreationKey(selected, context);
             var Fence = ReadObjectReservationFence(selected, context);
             selected.End("generic-object-reservation-v1");
-            GenericObjectReservationV1 value = new GenericObjectReservationV1Case2(Key, Fence);
-            return value;
+            var caseValue = new GenericObjectReservationV1Case2(Key, Fence);
+            GenericObjectReservationV1 value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("generic-object-reservation-v1: encoded limit"); return value;
         }
         throw Error("generic-object-reservation-v1: discriminator");
     }
     private static void WriteGenericObjectReservationV1(Writer writer, GenericObjectReservationV1 value, DecodeContext context)
     {
+        var encodedStart = writer.Length;
         switch (value)
         {
         case GenericObjectReservationV1Case0 item:
@@ -2505,6 +2529,7 @@ internal static class ServiceWireCodec
         }
         default: throw Error("generic-object-reservation-v1: variant");
         }
+        if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("generic-object-reservation-v1: encoded limit");
     }
 
     internal static AggregateId DecodeAggregateId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateId(reader, context); reader.End("aggregate-id"); return value; }
@@ -2708,14 +2733,16 @@ internal static class ServiceWireCodec
         {
             var Actor = ReadActorRouteFence(selected, context);
             selected.End("message-follow-route");
-            MessageFollowRoute value = new MessageFollowRouteCase0(Actor);
+            var caseValue = new MessageFollowRouteCase0(Actor);
+            MessageFollowRoute value = caseValue;
             return value;
         }
         else if (ObjectKind == AuthorityObjectKind.Spot)
         {
             var Spot = ReadSpotRouteFence(selected, context);
             selected.End("message-follow-route");
-            MessageFollowRoute value = new MessageFollowRouteCase1(Spot);
+            var caseValue = new MessageFollowRouteCase1(Spot);
+            MessageFollowRoute value = caseValue;
             return value;
         }
         throw Error("message-follow-route: discriminator");
@@ -2801,7 +2828,8 @@ internal static class ServiceWireCodec
             var Actor = ReadActorRef(selected, context);
             var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
             selected.End("relocation-object-identity");
-            RelocationObjectIdentity value = new RelocationObjectIdentityCase0(Actor, ExpectedAuthorityOwnerGeneration);
+            var caseValue = new RelocationObjectIdentityCase0(Actor, ExpectedAuthorityOwnerGeneration);
+            RelocationObjectIdentity value = caseValue;
             return value;
         }
         else if (ObjectKind == StatefulObjectKind.UserSpot)
@@ -2809,7 +2837,8 @@ internal static class ServiceWireCodec
             var Spot = ReadSpotRef(selected, context);
             var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
             selected.End("relocation-object-identity");
-            RelocationObjectIdentity value = new RelocationObjectIdentityCase1(Spot, ExpectedAuthorityOwnerGeneration);
+            var caseValue = new RelocationObjectIdentityCase1(Spot, ExpectedAuthorityOwnerGeneration);
+            RelocationObjectIdentity value = caseValue;
             return value;
         }
         else if (ObjectKind == StatefulObjectKind.InstanceSpot)
@@ -2818,7 +2847,8 @@ internal static class ServiceWireCodec
             var SpotId = ReadText8(selected, context);
             var ObjectGeneration = ReadNonzeroU64(selected, context);
             selected.End("relocation-object-identity");
-            RelocationObjectIdentity value = new RelocationObjectIdentityCase2(InstanceType, SpotId, ObjectGeneration);
+            var caseValue = new RelocationObjectIdentityCase2(InstanceType, SpotId, ObjectGeneration);
+            RelocationObjectIdentity value = caseValue;
             return value;
         }
         throw Error("relocation-object-identity: discriminator");
@@ -2894,7 +2924,8 @@ internal static class ServiceWireCodec
             var InstanceType = ReadText8(selected, context);
             var SpotId = ReadText8(selected, context);
             selected.End("instance-authority-identity");
-            InstanceAuthorityIdentity value = new InstanceAuthorityIdentityCase0(InstanceType, SpotId);
+            var caseValue = new InstanceAuthorityIdentityCase0(InstanceType, SpotId);
+            InstanceAuthorityIdentity value = caseValue;
             return value;
         }
         else if (AuthorityState == InstanceAuthorityState.Ready)
@@ -2902,7 +2933,8 @@ internal static class ServiceWireCodec
             var InstanceType = ReadText8(selected, context);
             var SpotId = ReadText8(selected, context);
             selected.End("instance-authority-identity");
-            InstanceAuthorityIdentity value = new InstanceAuthorityIdentityCase1(InstanceType, SpotId);
+            var caseValue = new InstanceAuthorityIdentityCase1(InstanceType, SpotId);
+            InstanceAuthorityIdentity value = caseValue;
             return value;
         }
         else if (AuthorityState == InstanceAuthorityState.Closing)
@@ -2910,7 +2942,8 @@ internal static class ServiceWireCodec
             var InstanceType = ReadText8(selected, context);
             var SpotId = ReadText8(selected, context);
             selected.End("instance-authority-identity");
-            InstanceAuthorityIdentity value = new InstanceAuthorityIdentityCase2(InstanceType, SpotId);
+            var caseValue = new InstanceAuthorityIdentityCase2(InstanceType, SpotId);
+            InstanceAuthorityIdentity value = caseValue;
             return value;
         }
         else if (AuthorityState == InstanceAuthorityState.Relocating)
@@ -2918,7 +2951,8 @@ internal static class ServiceWireCodec
             var InstanceType = ReadText8(selected, context);
             var SpotId = ReadText8(selected, context);
             selected.End("instance-authority-identity");
-            InstanceAuthorityIdentity value = new InstanceAuthorityIdentityCase3(InstanceType, SpotId);
+            var caseValue = new InstanceAuthorityIdentityCase3(InstanceType, SpotId);
+            InstanceAuthorityIdentity value = caseValue;
             return value;
         }
         throw Error("instance-authority-identity: discriminator");
@@ -2983,7 +3017,8 @@ internal static class ServiceWireCodec
             var SpotType = ReadText8(selected, context);
             var State = ReadEntryUserSpotAuthorityState(selected, context);
             selected.End("spot-authority-identity");
-            SpotAuthorityIdentity value = new SpotAuthorityIdentityCase0(SpotId, SpotType, State);
+            var caseValue = new SpotAuthorityIdentityCase0(SpotId, SpotType, State);
+            SpotAuthorityIdentity value = caseValue;
             return value;
         }
         else if (SpotKind == SpotKind.User)
@@ -2992,14 +3027,16 @@ internal static class ServiceWireCodec
             var SpotType = ReadText8(selected, context);
             var State = ReadEntryUserSpotAuthorityState(selected, context);
             selected.End("spot-authority-identity");
-            SpotAuthorityIdentity value = new SpotAuthorityIdentityCase1(SpotId, SpotType, State);
+            var caseValue = new SpotAuthorityIdentityCase1(SpotId, SpotType, State);
+            SpotAuthorityIdentity value = caseValue;
             return value;
         }
         else if (SpotKind == SpotKind.Instance)
         {
             var Instance = ReadInstanceAuthorityIdentity(selected, context);
             selected.End("spot-authority-identity");
-            SpotAuthorityIdentity value = new SpotAuthorityIdentityCase2(Instance);
+            var caseValue = new SpotAuthorityIdentityCase2(Instance);
+            SpotAuthorityIdentity value = caseValue;
             return value;
         }
         throw Error("spot-authority-identity: discriminator");
@@ -3053,14 +3090,16 @@ internal static class ServiceWireCodec
         {
             var Actor = ReadActorAuthorityIdentity(selected, context);
             selected.End("authority-object-identity");
-            AuthorityObjectIdentity value = new AuthorityObjectIdentityCase0(Actor);
+            var caseValue = new AuthorityObjectIdentityCase0(Actor);
+            AuthorityObjectIdentity value = caseValue;
             return value;
         }
         else if (ObjectKind == AuthorityObjectKind.Spot)
         {
             var Spot = ReadSpotAuthorityIdentity(selected, context);
             selected.End("authority-object-identity");
-            AuthorityObjectIdentity value = new AuthorityObjectIdentityCase1(Spot);
+            var caseValue = new AuthorityObjectIdentityCase1(Spot);
+            AuthorityObjectIdentity value = caseValue;
             return value;
         }
         throw Error("authority-object-identity: discriminator");
@@ -3725,7 +3764,8 @@ internal static class ServiceWireCodec
             var SecurityIdentity = ReadText8(selected, context);
             var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(selected, context);
             selected.End("client-server-admission");
-            ClientServerAdmission value = new ClientServerAdmissionCase0(ChannelName, Direction, SecurityIdentity, NormalizedEffectiveMaxMessageBytes);
+            var caseValue = new ClientServerAdmissionCase0(ChannelName, Direction, SecurityIdentity, NormalizedEffectiveMaxMessageBytes);
+            ClientServerAdmission value = caseValue;
             return value;
         }
         else if (Role == ClientServerRole.Server)
@@ -3744,7 +3784,8 @@ internal static class ServiceWireCodec
             var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(selected, context);
             var AdvertisedEndpoint = ReadEndpoint(selected, context);
             selected.End("client-server-admission");
-            ClientServerAdmission value = new ClientServerAdmissionCase1(ChannelName, Direction, ServerRid, LifecycleGeneration, DescriptorRevision, Weight, RuntimeState, SecurityIdentity, NormalizedEffectiveMaxMessageBytes, AdvertisedEndpoint);
+            var caseValue = new ClientServerAdmissionCase1(ChannelName, Direction, ServerRid, LifecycleGeneration, DescriptorRevision, Weight, RuntimeState, SecurityIdentity, NormalizedEffectiveMaxMessageBytes, AdvertisedEndpoint);
+            ClientServerAdmission value = caseValue;
             return value;
         }
         throw Error("client-server-admission: discriminator");
@@ -3795,26 +3836,30 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeServiceAdmission(ServiceAdmission value, DecodeContext context) { var writer = new Writer(); WriteServiceAdmission(writer, value, context); return writer.ToArray(); }
     private static ServiceAdmission ReadServiceAdmission(Reader reader, DecodeContext context)
     {
+        var encodedStart = reader.Remaining;
         var TopologyKind = ReadServiceTopologyKind(reader, context);
         var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
         if (TopologyKind == ServiceTopologyKind.RouteMesh)
         {
             var RouteMesh = ReadRouteMeshAdmission(selected, context);
             selected.End("service-admission");
-            ServiceAdmission value = new ServiceAdmissionCase0(RouteMesh);
-            return value;
+            var caseValue = new ServiceAdmissionCase0(RouteMesh);
+            ServiceAdmission value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("service-admission: encoded limit"); return value;
         }
         else if (TopologyKind == ServiceTopologyKind.ClientServer)
         {
             var ClientServer = ReadClientServerAdmission(selected, context);
             selected.End("service-admission");
-            ServiceAdmission value = new ServiceAdmissionCase1(ClientServer);
-            return value;
+            var caseValue = new ServiceAdmissionCase1(ClientServer);
+            ServiceAdmission value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("service-admission: encoded limit"); return value;
         }
         throw Error("service-admission: discriminator");
     }
     private static void WriteServiceAdmission(Writer writer, ServiceAdmission value, DecodeContext context)
     {
+        var encodedStart = writer.Length;
         switch (value)
         {
         case ServiceAdmissionCase0 item:
@@ -3837,6 +3882,7 @@ internal static class ServiceWireCodec
         }
         default: throw Error("service-admission: variant");
         }
+        if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("service-admission: encoded limit");
     }
 
     internal static InstanceReplyRoute DecodeInstanceReplyRoute(byte[] bytes, DecodeContext context, InstanceOperationKind enclosingOperationKind) { var reader = new Reader(bytes); var value = ReadInstanceReplyRoute(reader, context, enclosingOperationKind); reader.End("instance-reply-route"); return value; }
@@ -3847,13 +3893,15 @@ internal static class ServiceWireCodec
         var selected = reader;
         if (OperationKind == InstanceOperationKind.Send)
         {
-            InstanceReplyRoute value = new InstanceReplyRouteCase0();
+            var caseValue = new InstanceReplyRouteCase0();
+            InstanceReplyRoute value = caseValue;
             return value;
         }
         else if (OperationKind == InstanceOperationKind.Request)
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
-            InstanceReplyRoute value = new InstanceReplyRouteCase1(ReplyRouteId);
+            var caseValue = new InstanceReplyRouteCase1(ReplyRouteId);
+            InstanceReplyRoute value = caseValue;
             return value;
         }
         throw Error("instance-reply-route: discriminator");
@@ -3887,14 +3935,16 @@ internal static class ServiceWireCodec
         {
             var Authority = ReadAuthorityGenerationFence(selected, context);
             selected.End("cold-activation-reply-context");
-            ColdActivationReplyContext value = new ColdActivationReplyContextCase0(Authority);
+            var caseValue = new ColdActivationReplyContextCase0(Authority);
+            ColdActivationReplyContext value = caseValue;
             return value;
         }
         else if (CompletionKind == ColdActivationCompletionKind.ActivationFailure)
         {
             var Authority = ReadAuthorityGenerationFence(selected, context);
             selected.End("cold-activation-reply-context");
-            ColdActivationReplyContext value = new ColdActivationReplyContextCase1(Authority);
+            var caseValue = new ColdActivationReplyContextCase1(Authority);
+            ColdActivationReplyContext value = caseValue;
             return value;
         }
         throw Error("cold-activation-reply-context: discriminator");
@@ -3935,7 +3985,8 @@ internal static class ServiceWireCodec
         {
             var ColdActivation = ReadColdActivationReplyContext(selected, context);
             selected.End("reply-relay-context");
-            ReplyRelayContext value = new ReplyRelayContextCase0(ColdActivation);
+            var caseValue = new ReplyRelayContextCase0(ColdActivation);
+            ReplyRelayContext value = caseValue;
             return value;
         }
         else if (ContextKind == ReplyRelayContextKind.MaintenanceRelocation)
@@ -3946,7 +3997,8 @@ internal static class ServiceWireCodec
             var ParticipantId = ReadNonzeroU64(selected, context);
             var Sequence = ReadNonzeroU64(selected, context);
             selected.End("reply-relay-context");
-            ReplyRelayContext value = new ReplyRelayContextCase1(Relocation, TargetAttemptGeneration, Coordinator, ParticipantId, Sequence);
+            var caseValue = new ReplyRelayContextCase1(Relocation, TargetAttemptGeneration, Coordinator, ParticipantId, Sequence);
+            ReplyRelayContext value = caseValue;
             return value;
         }
         throw Error("reply-relay-context: discriminator");
@@ -3991,28 +4043,32 @@ internal static class ServiceWireCodec
         {
             var TargetNodeRid = ReadRid(selected, context);
             selected.End("send-ready-destination");
-            SendReadyDestination value = new SendReadyDestinationCase0(TargetNodeRid);
+            var caseValue = new SendReadyDestinationCase0(TargetNodeRid);
+            SendReadyDestination value = caseValue;
             return value;
         }
         else if (DestinationKind == MeshDestinationKind.Channel)
         {
             var ChannelName = ReadText8(selected, context);
             selected.End("send-ready-destination");
-            SendReadyDestination value = new SendReadyDestinationCase1(ChannelName);
+            var caseValue = new SendReadyDestinationCase1(ChannelName);
+            SendReadyDestination value = caseValue;
             return value;
         }
         else if (DestinationKind == MeshDestinationKind.Spot)
         {
             var TargetSpot = ReadSpotRouteFence(selected, context);
             selected.End("send-ready-destination");
-            SendReadyDestination value = new SendReadyDestinationCase2(TargetSpot);
+            var caseValue = new SendReadyDestinationCase2(TargetSpot);
+            SendReadyDestination value = caseValue;
             return value;
         }
         else if (DestinationKind == MeshDestinationKind.Actor)
         {
             var TargetActor = ReadActorRouteFence(selected, context);
             selected.End("send-ready-destination");
-            SendReadyDestination value = new SendReadyDestinationCase3(TargetActor);
+            var caseValue = new SendReadyDestinationCase3(TargetActor);
+            SendReadyDestination value = caseValue;
             return value;
         }
         else if (DestinationKind == MeshDestinationKind.BoundSession)
@@ -4020,7 +4076,8 @@ internal static class ServiceWireCodec
             var TargetActor = ReadActorRouteFence(selected, context);
             var BindingGeneration = ReadNonzeroU64(selected, context);
             selected.End("send-ready-destination");
-            SendReadyDestination value = new SendReadyDestinationCase4(TargetActor, BindingGeneration);
+            var caseValue = new SendReadyDestinationCase4(TargetActor, BindingGeneration);
+            SendReadyDestination value = caseValue;
             return value;
         }
         throw Error("send-ready-destination: discriminator");
@@ -4103,14 +4160,16 @@ internal static class ServiceWireCodec
         if (HasSnapshot == Bool8.False)
         {
             selected.End("optional-actor-membership-snapshot");
-            OptionalActorMembershipSnapshot value = new OptionalActorMembershipSnapshotCase0();
+            var caseValue = new OptionalActorMembershipSnapshotCase0();
+            OptionalActorMembershipSnapshot value = caseValue;
             return value;
         }
         else if (HasSnapshot == Bool8.True)
         {
             var Snapshot = ReadActorMembershipSnapshot(selected, context);
             selected.End("optional-actor-membership-snapshot");
-            OptionalActorMembershipSnapshot value = new OptionalActorMembershipSnapshotCase1(Snapshot);
+            var caseValue = new OptionalActorMembershipSnapshotCase1(Snapshot);
+            OptionalActorMembershipSnapshot value = caseValue;
             return value;
         }
         throw Error("optional-actor-membership-snapshot: discriminator");
@@ -4150,7 +4209,8 @@ internal static class ServiceWireCodec
         {
             var Current = ReadActorMembershipSnapshot(selected, context);
             selected.End("actor-control-data");
-            ActorControlData value = new ActorControlDataCase0(Current);
+            var caseValue = new ActorControlDataCase0(Current);
+            ActorControlData value = caseValue;
             return value;
         }
         else if (LifecycleKind == ActorLifecycleKind.Joined)
@@ -4158,7 +4218,8 @@ internal static class ServiceWireCodec
             var Previous = ReadOptionalActorMembershipSnapshot(selected, context);
             var Current = ReadActorMembershipSnapshot(selected, context);
             selected.End("actor-control-data");
-            ActorControlData value = new ActorControlDataCase1(Previous, Current);
+            var caseValue = new ActorControlDataCase1(Previous, Current);
+            ActorControlData value = caseValue;
             return value;
         }
         else if (LifecycleKind == ActorLifecycleKind.Left)
@@ -4166,21 +4227,24 @@ internal static class ServiceWireCodec
             var Previous = ReadActorMembershipSnapshot(selected, context);
             var Current = ReadActorMembershipSnapshot(selected, context);
             selected.End("actor-control-data");
-            ActorControlData value = new ActorControlDataCase2(Previous, Current);
+            var caseValue = new ActorControlDataCase2(Previous, Current);
+            ActorControlData value = caseValue;
             return value;
         }
         else if (LifecycleKind == ActorLifecycleKind.Disconnected)
         {
             var Current = ReadActorMembershipSnapshot(selected, context);
             selected.End("actor-control-data");
-            ActorControlData value = new ActorControlDataCase3(Current);
+            var caseValue = new ActorControlDataCase3(Current);
+            ActorControlData value = caseValue;
             return value;
         }
         else if (LifecycleKind == ActorLifecycleKind.Destroyed)
         {
             var Previous = ReadActorMembershipSnapshot(selected, context);
             selected.End("actor-control-data");
-            ActorControlData value = new ActorControlDataCase4(Previous);
+            var caseValue = new ActorControlDataCase4(Previous);
+            ActorControlData value = caseValue;
             return value;
         }
         throw Error("actor-control-data: discriminator");
@@ -4279,39 +4343,45 @@ internal static class ServiceWireCodec
             var SpotGeneration = ReadNonzeroU64(selected, context);
             var MembershipEpoch = ReadNonzeroU64(selected, context);
             var AuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase0(Actor, SpotId, SpotGeneration, MembershipEpoch, AuthorityOwnerGeneration);
+            var caseValue = new RequestSpecificTailCase0(Actor, SpotId, SpotGeneration, MembershipEpoch, AuthorityOwnerGeneration);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorJoin && TerminalResult == RequestTerminalResult.Ok)
         {
             var Join = ReadActorJoinReplyTail(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase1(Join);
+            var caseValue = new RequestSpecificTailCase1(Join);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.StreamBind && TerminalResult == RequestTerminalResult.Ok)
         {
             var BindingGeneration = ReadNonzeroU64(selected, context);
             var AuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase2(BindingGeneration, AuthorityOwnerGeneration);
+            var caseValue = new RequestSpecificTailCase2(BindingGeneration, AuthorityOwnerGeneration);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.UserSpotCreate && TerminalResult == RequestTerminalResult.Ok)
         {
             var CreateResult = ReadUserSpotCreateResult(selected, context);
             var Spot = ReadSpotRef(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase3(CreateResult, Spot);
+            var caseValue = new RequestSpecificTailCase3(CreateResult, Spot);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.UserSpotClose && TerminalResult == RequestTerminalResult.Ok)
         {
             var Closed = ReadBool8(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase4(Closed);
+            var caseValue = new RequestSpecificTailCase4(Closed);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorCreate && TerminalResult == RequestTerminalResult.Ok)
         {
             var Creation = ReadActorCreateTerminal(selected, context);
-            RequestSpecificTail value = new RequestSpecificTailCase5(Creation);
+            var caseValue = new RequestSpecificTailCase5(Creation);
+            RequestSpecificTail value = caseValue;
             return value;
         }
         return new RequestSpecificTailOtherwise();
@@ -4391,14 +4461,16 @@ internal static class ServiceWireCodec
         if (RecordKind == MeshRecordKind.NodeSend)
         {
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase0(Payload);
+            var caseValue = new FrozenRecordBodyCase0(Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.NodeRequest)
         {
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase1(Payload);
+            var caseValue = new FrozenRecordBodyCase1(Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4406,7 +4478,8 @@ internal static class ServiceWireCodec
         {
             var ChannelName = ReadText8(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase2(ChannelName, Payload);
+            var caseValue = new FrozenRecordBodyCase2(ChannelName, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4414,7 +4487,8 @@ internal static class ServiceWireCodec
         {
             var ChannelName = ReadText8(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase3(ChannelName, Payload);
+            var caseValue = new FrozenRecordBodyCase3(ChannelName, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4422,7 +4496,8 @@ internal static class ServiceWireCodec
         {
             var TargetSpot = ReadSpotRouteFence(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase4(TargetSpot, Payload);
+            var caseValue = new FrozenRecordBodyCase4(TargetSpot, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4430,7 +4505,8 @@ internal static class ServiceWireCodec
         {
             var TargetSpot = ReadSpotRouteFence(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase5(TargetSpot, Payload);
+            var caseValue = new FrozenRecordBodyCase5(TargetSpot, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4439,14 +4515,16 @@ internal static class ServiceWireCodec
             var ChannelName = ReadText8(selected, context);
             var Topic = ReadText8(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase6(ChannelName, Topic, Payload);
+            var caseValue = new FrozenRecordBodyCase6(ChannelName, Topic, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotControl)
         {
             var Control = ReadActorControlData(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase7(Control);
+            var caseValue = new FrozenRecordBodyCase7(Control);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4454,7 +4532,8 @@ internal static class ServiceWireCodec
         {
             var TargetActor = ReadActorRouteFence(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase8(TargetActor, Payload);
+            var caseValue = new FrozenRecordBodyCase8(TargetActor, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4462,7 +4541,8 @@ internal static class ServiceWireCodec
         {
             var TargetActor = ReadActorRouteFence(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase9(TargetActor, Payload);
+            var caseValue = new FrozenRecordBodyCase9(TargetActor, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4477,21 +4557,24 @@ internal static class ServiceWireCodec
                 Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             }
             else Payload = null;
-            FrozenRecordBody value = new FrozenRecordBodyCase10(TerminalResult, FailureCode, HasPayload, Payload);
+            var caseValue = new FrozenRecordBodyCase10(TerminalResult, FailureCode, HasPayload, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SendReady)
         {
             var Destination = ReadSendReadyDestination(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase11(Destination);
+            var caseValue = new FrozenRecordBodyCase11(Destination);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.RelocationControl)
         {
             var Control = ReadRelocationControlData(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase12(Control);
+            var caseValue = new FrozenRecordBodyCase12(Control);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4501,7 +4584,8 @@ internal static class ServiceWireCodec
             var SourceNodeGeneration = ReadNonzeroU64(selected, context);
             var OperationKind = ReadInstanceOperationKind(selected, context);
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
-            FrozenRecordBody value = new FrozenRecordBodyCase13(Route, SourceNodeGeneration, OperationKind, Payload);
+            var caseValue = new FrozenRecordBodyCase13(Route, SourceNodeGeneration, OperationKind, Payload);
+            FrozenRecordBody value = caseValue;
             if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
@@ -4632,7 +4716,8 @@ internal static class ServiceWireCodec
             var SourceOwnerId = ReadText8(selected, context);
             var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
             selected.End("frozen-source-identity");
-            FrozenSourceIdentity value = new FrozenSourceIdentityCase0(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration);
+            var caseValue = new FrozenSourceIdentityCase0(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration);
+            FrozenSourceIdentity value = caseValue;
             return value;
         }
         else if (SourceKind == FrozenSourceKind.Spot)
@@ -4643,7 +4728,8 @@ internal static class ServiceWireCodec
             var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
             var SourceSpotId = ReadText8(selected, context);
             selected.End("frozen-source-identity");
-            FrozenSourceIdentity value = new FrozenSourceIdentityCase1(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceSpotId);
+            var caseValue = new FrozenSourceIdentityCase1(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceSpotId);
+            FrozenSourceIdentity value = caseValue;
             return value;
         }
         else if (SourceKind == FrozenSourceKind.Actor)
@@ -4654,7 +4740,8 @@ internal static class ServiceWireCodec
             var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
             var SourceActor = ReadActorRef(selected, context);
             selected.End("frozen-source-identity");
-            FrozenSourceIdentity value = new FrozenSourceIdentityCase2(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor);
+            var caseValue = new FrozenSourceIdentityCase2(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor);
+            FrozenSourceIdentity value = caseValue;
             return value;
         }
         else if (SourceKind == FrozenSourceKind.BoundSession)
@@ -4668,7 +4755,8 @@ internal static class ServiceWireCodec
             var SourceBindingGeneration = ReadNonzeroU64(selected, context);
             var SourceSessionSequence = ReadNonzeroU64(selected, context);
             selected.End("frozen-source-identity");
-            FrozenSourceIdentity value = new FrozenSourceIdentityCase3(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor, SourceSessionRid, SourceBindingGeneration, SourceSessionSequence);
+            var caseValue = new FrozenSourceIdentityCase3(SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor, SourceSessionRid, SourceBindingGeneration, SourceSessionSequence);
+            FrozenSourceIdentity value = caseValue;
             return value;
         }
         throw Error("frozen-source-identity: discriminator");
@@ -4745,35 +4833,40 @@ internal static class ServiceWireCodec
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
             selected.End("frozen-reply-route");
-            FrozenReplyRoute value = new FrozenReplyRouteCase0(ReplyRouteId);
+            var caseValue = new FrozenReplyRouteCase0(ReplyRouteId);
+            FrozenReplyRoute value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ChannelRequest)
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
             selected.End("frozen-reply-route");
-            FrozenReplyRoute value = new FrozenReplyRouteCase1(ReplyRouteId);
+            var caseValue = new FrozenReplyRouteCase1(ReplyRouteId);
+            FrozenReplyRoute value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.SpotRequest)
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
             selected.End("frozen-reply-route");
-            FrozenReplyRoute value = new FrozenReplyRouteCase2(ReplyRouteId);
+            var caseValue = new FrozenReplyRouteCase2(ReplyRouteId);
+            FrozenReplyRoute value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorRequest)
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
             selected.End("frozen-reply-route");
-            FrozenReplyRoute value = new FrozenReplyRouteCase3(ReplyRouteId);
+            var caseValue = new FrozenReplyRouteCase3(ReplyRouteId);
+            FrozenReplyRoute value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.InstanceSpotRequest)
         {
             var ReplyRouteId = ReadNonzeroU64(selected, context);
             selected.End("frozen-reply-route");
-            FrozenReplyRoute value = new FrozenReplyRouteCase4(ReplyRouteId);
+            var caseValue = new FrozenReplyRouteCase4(ReplyRouteId);
+            FrozenReplyRoute value = caseValue;
             return value;
         }
         selected.End("frozen-reply-route");
@@ -4894,7 +4987,8 @@ internal static class ServiceWireCodec
             var TargetSpotId = ReadText8(selected, context);
             var Authority = ReadAuthorityGenerationFence(selected, context);
             selected.End("instance-route-v1");
-            InstanceRouteV1 value = new InstanceRouteV1Case0(TargetNodeRid, TargetNodeGeneration, TargetSpotId, Authority);
+            var caseValue = new InstanceRouteV1Case0(TargetNodeRid, TargetNodeGeneration, TargetSpotId, Authority);
+            InstanceRouteV1 value = caseValue;
             return value;
         }
         else if (RouteKind == InstanceRouteKind.ColdActivation)
@@ -4907,7 +5001,8 @@ internal static class ServiceWireCodec
             var TargetDescriptorVersion = ReadText8(selected, context);
             var DeadlineUnixMs = ReadNonzeroU64(selected, context);
             selected.End("instance-route-v1");
-            InstanceRouteV1 value = new InstanceRouteV1Case1(TargetNodeRid, TargetNodeGeneration, TargetSpotId, TargetMeshName, StableType, TargetDescriptorVersion, DeadlineUnixMs);
+            var caseValue = new InstanceRouteV1Case1(TargetNodeRid, TargetNodeGeneration, TargetSpotId, TargetMeshName, StableType, TargetDescriptorVersion, DeadlineUnixMs);
+            InstanceRouteV1 value = caseValue;
             return value;
         }
         throw Error("instance-route-v1: discriminator");
@@ -4956,7 +5051,8 @@ internal static class ServiceWireCodec
         if (HasRelocation == Bool8.False)
         {
             selected.End("relocation-root-pointer");
-            RelocationRootPointer value = new RelocationRootPointerCase0();
+            var caseValue = new RelocationRootPointerCase0();
+            RelocationRootPointer value = caseValue;
             return value;
         }
         else if (HasRelocation == Bool8.True)
@@ -4964,7 +5060,8 @@ internal static class ServiceWireCodec
             var Reference = ReadRelocationReference(selected, context);
             var ChecksumCrc32c = ReadU32(selected, context);
             selected.End("relocation-root-pointer");
-            RelocationRootPointer value = new RelocationRootPointerCase1(Reference, ChecksumCrc32c);
+            var caseValue = new RelocationRootPointerCase1(Reference, ChecksumCrc32c);
+            RelocationRootPointer value = caseValue;
             return value;
         }
         throw Error("relocation-root-pointer: discriminator");
@@ -4999,13 +5096,15 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeAuthorityRelocationState(AuthorityRelocationState value, DecodeContext context) { var writer = new Writer(); WriteAuthorityRelocationState(writer, value, context); return writer.ToArray(); }
     private static AuthorityRelocationState ReadAuthorityRelocationState(Reader reader, DecodeContext context)
     {
+        var encodedStart = reader.Remaining;
         var HasRelocation = ReadBool8(reader, context);
         var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
         if (HasRelocation == Bool8.False)
         {
             selected.End("authority-relocation-state");
-            AuthorityRelocationState value = new AuthorityRelocationStateCase0();
-            return value;
+            var caseValue = new AuthorityRelocationStateCase0();
+            AuthorityRelocationState value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("authority-relocation-state: encoded limit"); return value;
         }
         else if (HasRelocation == Bool8.True)
         {
@@ -5032,13 +5131,15 @@ internal static class ServiceWireCodec
             var ApplicationVersion = ReadApplicationVersion(selected, context);
             var SourceCleanupState = ReadSourceCleanupState(selected, context);
             selected.End("authority-relocation-state");
-            AuthorityRelocationState value = new AuthorityRelocationStateCase1(Relocation, AggregateGeneration, TargetAttemptGeneration, RelocationReference, RelocationChecksumCrc32c, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerId, TargetOwnerLeaseGeneration, CoordinatorOwnerId, CoordinatorLeaseGeneration, CoordinatorNodeRid, CoordinatorNodeGeneration, CoordinatorExpectedStoreVersion, Phase, ApplicationVersion, SourceCleanupState);
-            return value;
+            var caseValue = new AuthorityRelocationStateCase1(Relocation, AggregateGeneration, TargetAttemptGeneration, RelocationReference, RelocationChecksumCrc32c, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerId, TargetOwnerLeaseGeneration, CoordinatorOwnerId, CoordinatorLeaseGeneration, CoordinatorNodeRid, CoordinatorNodeGeneration, CoordinatorExpectedStoreVersion, Phase, ApplicationVersion, SourceCleanupState);
+            AuthorityRelocationState value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("authority-relocation-state: encoded limit"); return value;
         }
         throw Error("authority-relocation-state: discriminator");
     }
     private static void WriteAuthorityRelocationState(Writer writer, AuthorityRelocationState value, DecodeContext context)
     {
+        var encodedStart = writer.Length;
         switch (value)
         {
         case AuthorityRelocationStateCase0 item:
@@ -5081,6 +5182,7 @@ internal static class ServiceWireCodec
         }
         default: throw Error("authority-relocation-state: variant");
         }
+        if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("authority-relocation-state: encoded limit");
     }
 
     internal static AuthorityActivationRecoveryState DecodeAuthorityActivationRecoveryState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityActivationRecoveryState(reader, context); reader.End("authority-activation-recovery-state"); return value; }
@@ -5092,7 +5194,8 @@ internal static class ServiceWireCodec
         if (HasActivationRecovery == Bool8.False)
         {
             selected.End("authority-activation-recovery-state");
-            AuthorityActivationRecoveryState value = new AuthorityActivationRecoveryStateCase0();
+            var caseValue = new AuthorityActivationRecoveryStateCase0();
+            AuthorityActivationRecoveryState value = caseValue;
             return value;
         }
         else if (HasActivationRecovery == Bool8.True)
@@ -5103,7 +5206,9 @@ internal static class ServiceWireCodec
             var InboxSequence = ReadNonzeroU64(selected, context);
             var ReplayCursor = ReadU64(selected, context);
             selected.End("authority-activation-recovery-state");
-            AuthorityActivationRecoveryState value = new AuthorityActivationRecoveryStateCase1(Reference, Sha256, EncodedSize, InboxSequence, ReplayCursor);
+            var caseValue = new AuthorityActivationRecoveryStateCase1(Reference, Sha256, EncodedSize, InboxSequence, ReplayCursor);
+            if (caseValue.ReplayCursor.Value > caseValue.InboxSequence.Value) throw Error("field order");
+            AuthorityActivationRecoveryState value = caseValue;
             return value;
         }
         throw Error("authority-activation-recovery-state: discriminator");
@@ -5122,6 +5227,7 @@ internal static class ServiceWireCodec
         }
         case AuthorityActivationRecoveryStateCase1 item:
         {
+            if (item.ReplayCursor.Value > item.InboxSequence.Value) throw Error("field order");
             WriteBool8(writer, Bool8.True, context);
             var body = new Writer();
             WriteCreationContentReference(body, item.Reference, context);
@@ -5352,25 +5458,29 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeRelocationApplicationState(RelocationApplicationState value, DecodeContext context) { var writer = new Writer(); WriteRelocationApplicationState(writer, value, context); return writer.ToArray(); }
     private static RelocationApplicationState ReadRelocationApplicationState(Reader reader, DecodeContext context)
     {
+        var encodedStart = reader.Remaining;
         var HasState = ReadBool8(reader, context);
         var selected = reader.Slice(checked((int)ReadU64(reader, context).Value));
         if (HasState == Bool8.False)
         {
             selected.End("relocation-application-state");
-            RelocationApplicationState value = new RelocationApplicationStateCase0();
-            return value;
+            var caseValue = new RelocationApplicationStateCase0();
+            RelocationApplicationState value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 274877906944UL) throw Error("relocation-application-state: encoded limit"); return value;
         }
         else if (HasState == Bool8.True)
         {
             var Payload = ReadDurableStateBlob(selected, context);
             selected.End("relocation-application-state");
-            RelocationApplicationState value = new RelocationApplicationStateCase1(Payload);
-            return value;
+            var caseValue = new RelocationApplicationStateCase1(Payload);
+            RelocationApplicationState value = caseValue;
+            if ((ulong)(encodedStart - reader.Remaining) > 274877906944UL) throw Error("relocation-application-state: encoded limit"); return value;
         }
         throw Error("relocation-application-state: discriminator");
     }
     private static void WriteRelocationApplicationState(Writer writer, RelocationApplicationState value, DecodeContext context)
     {
+        var encodedStart = writer.Length;
         switch (value)
         {
         case RelocationApplicationStateCase0 item:
@@ -5392,6 +5502,7 @@ internal static class ServiceWireCodec
         }
         default: throw Error("relocation-application-state: variant");
         }
+        if ((ulong)(writer.Length - encodedStart) > 274877906944UL) throw Error("relocation-application-state: encoded limit");
     }
 
     internal static RelocationParticipantApplicationState DecodeRelocationParticipantApplicationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationParticipantApplicationState(reader, context); reader.End("relocation-participant-application-state"); return value; }
