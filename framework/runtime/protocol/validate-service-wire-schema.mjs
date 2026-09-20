@@ -5,6 +5,16 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  buildNamedMap,
+  conditionSignature,
+  hasOwn,
+  isObject,
+  resolveInteger,
+  resolveReference,
+  resolveReferencedMaximum,
+  toBigInt,
+} from "./service-wire-schema-model.mjs";
 
 const PAYLOAD_POLICIES = new Set(["forbidden", "optional", "required"]);
 const COMMAND_DOMAINS = new Set(["application", "infrastructure"]);
@@ -43,26 +53,8 @@ class SchemaValidationError extends Error {
   }
 }
 
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(value, key) {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
 function clone(value) {
   return structuredClone(value);
-}
-
-function toBigInt(value) {
-  if (typeof value === "number" && Number.isSafeInteger(value)) {
-    return BigInt(value);
-  }
-  if (typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)) {
-    return BigInt(value);
-  }
-  return null;
 }
 
 function validateSchema(schema) {
@@ -156,7 +148,7 @@ function validateSchema(schema) {
       return;
     }
     if (hasOwn(value, "$ref")) {
-      if (typeof value.$ref !== "string" || !types.has(value.$ref)) {
+      if (resolveReference(value, types) === null) {
         fail(`${location}.$ref`, `undefined type ${JSON.stringify(value.$ref)}`);
       }
     }
@@ -231,35 +223,6 @@ function validateProtocol(protocol, fail) {
   if (typeof protocol.requiredCapability !== "string" || protocol.requiredCapability.length === 0) {
     fail("$.protocol.requiredCapability", "must be a non-empty string");
   }
-}
-
-function buildNamedMap(entries, label, location, fail) {
-  const result = new Map();
-  if (!Array.isArray(entries)) {
-    fail(location, `${label} must be an array so duplicate names remain detectable`);
-    return result;
-  }
-  entries.forEach((entry, index) => {
-    if (!isObject(entry)) {
-      fail(`${location}[${index}]`, "must be an object");
-      return;
-    }
-    if (typeof entry.name !== "string" || entry.name.length === 0) {
-      fail(`${location}[${index}].name`, "must be a non-empty string");
-      return;
-    }
-    if (result.has(entry.name)) {
-      fail(`${location}[${index}].name`, `duplicates ${entry.name}`);
-      return;
-    }
-    Object.defineProperty(entry, "__index", {
-      configurable: true,
-      enumerable: false,
-      value: index,
-    });
-    result.set(entry.name, entry);
-  });
-  return result;
 }
 
 function validateType(name, type, types, bounds, contexts, fail) {
@@ -372,21 +335,6 @@ function validateType(name, type, types, bounds, contexts, fail) {
   validateContainerCapacity(type, location, types, bounds, fail);
 
   validateConditions(type, location, contexts, null, fail);
-}
-
-function resolveInteger(value, bounds) {
-  if (isObject(value) && typeof value.$bound === "string" && bounds.has(value.$bound)) {
-    return toBigInt(bounds.get(value.$bound).value);
-  }
-  return toBigInt(value);
-}
-
-function resolveReferencedMaximum(typeName, types, bounds) {
-  const type = types.get(typeName);
-  if (!type || type.kind !== "integer") {
-    return null;
-  }
-  return resolveInteger(type.maximum, bounds);
 }
 
 function validateLengthCapacity(typeName, requestedMaximum, types, bounds, location, fail) {
@@ -897,12 +845,6 @@ function validateConditionalUnion(type, location, types, bounds, contexts, fail)
           || type.bodyLengthCovers !== "selected-case")) {
     fail(location, "closed wire union must length-delimit the selected case body");
   }
-}
-
-function conditionSignature(value) {
-  return JSON.stringify(
-    Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))),
-  );
 }
 
 function discriminatorCombinations(domains, index = 0, current = {}) {

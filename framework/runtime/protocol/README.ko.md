@@ -8,6 +8,10 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `validate-service-wire-schema.mjs`: integer encoding, 재귀 aggregate length capacity, field reference,
   정렬·중복, closed union, TLV 순서, durable checksum·semantic relation과 exact relocation state rule을 확인하는 생성
   전 gate
+- `service-wire-schema-model.mjs`: validator와 lowering이 함께 쓰는 named-map 조회, type·bound 해소와
+  condition signature 모델
+- `service-wire-lowering.mjs`: 검증된 schema의 type·command·flag·semantic 선언을 언어 중립 JSON IR로
+  변환하고 coverage를 확인하는 도구
 - `golden/durable-authority-v1.json`: 네 runtime이 Ready Instance cold activation recovery pointer를
   읽고 쓰는 golden fixture
 - `golden/instance-activation-recovery-v1.json`: target-owned cold activation의 source·target lifecycle,
