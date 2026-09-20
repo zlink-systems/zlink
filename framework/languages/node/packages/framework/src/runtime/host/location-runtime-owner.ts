@@ -212,14 +212,16 @@ export class ZLinkLocationRuntimeOwner {
       this.options.registration.locations.options,
       this.currentEvents
     );
-    await spotNodeRuntime.startLocationAutoConnect();
     channelRuntime.configureLocationAutoConnect(
       runtime,
       stores,
       this.options.registration.locations.options,
       this.currentEvents
     );
-    await channelRuntime.startLocationAutoConnect();
+    if (runtime.ownerLeaseUsable) {
+      await spotNodeRuntime.startLocationAutoConnect();
+      await channelRuntime.startLocationAutoConnect();
+    }
     return runtime;
   }
 

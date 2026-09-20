@@ -192,11 +192,16 @@ test('framework host republishes the current lifecycle state after owner lease r
   const spotNodeRuntime = {
     async publishMeshNodeState(state) {
       publishedStates.push(state);
-    }
+    },
+    async startLocationAutoConnect() {}
+  };
+  const channelRuntime = {
+    async startLocationAutoConnect() {},
+    async reclaimLocationOwnerRows() {}
   };
 
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Draining;
-  host.installOwnerLeaseRecoveryPublication(runtime, spotNodeRuntime);
+  host.installOwnerLeaseRecoveryPublication(runtime, spotNodeRuntime, channelRuntime);
   currentToken = secondToken;
   recoveryHandler();
   await new Promise((resolve) => setImmediate(resolve));
@@ -263,6 +268,80 @@ test('framework runtime host starts location runtime and injects lifecycle into 
     'spot:dispose',
     'context:dispose'
   ]);
+});
+
+test('framework host publishes every local descriptor after degraded startup recovers its owner lease', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
+  const store = new framework.ZLinkLocationStoreRepository(inner, now);
+  let unavailable = true;
+  const provider = {
+    read(key, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.read(key, signal);
+    },
+    write(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.write(request, signal);
+    },
+    scan(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.scan(request, signal);
+    }
+  };
+  const calls = [];
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: {
+        storeInstance: provider,
+        options: {
+          ownerLeaseRenewIntervalMs: 20,
+          ownerLeaseRenewTimeoutMs: 5,
+          pollingIntervalMs: 20
+        }
+      },
+      channels: {
+        api: {
+          routingId: 'api-node',
+          server: { bind: 'tcp://local-api' },
+          sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+        },
+        events: {
+          routingId: 'events-node',
+          publisher: { bind: 'tcp://local-events' }
+        }
+      },
+      spotNodes: {
+        play: {
+          router: { bind: 'tcp://local-play', routingId: 'play-node' }
+        }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
+  });
+
+  try {
+    await runtime.start();
+    assert.equal((await store.listMeshNodes('play')).items.length, 0);
+    assert.equal((await store.listClientServers('api')).items.length, 0);
+    assert.equal((await store.listFanoutPublishers('events')).items.length, 0);
+
+    unavailable = false;
+    await waitForCondition(async () => {
+      const [meshNodes, servers, publishers] = await Promise.all([
+        store.listMeshNodes('play'),
+        store.listClientServers('api'),
+        store.listFanoutPublishers('events')
+      ]);
+      return meshNodes.items.length === 1
+        && servers.items.length === 1
+        && publishers.items.length === 1;
+    });
+  } finally {
+    unavailable = false;
+    await runtime.stop();
+  }
 });
 
 test('framework host startup begins a lifecycle flow', async () => {
@@ -522,6 +601,14 @@ test('concurrent relocation with a different deadline joins the running operatio
 
 function rid(value) {
   return zlink.RoutingId.from(value);
+}
+
+async function waitForCondition(predicate) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for the expected host state.');
 }
 
 function fakeBackendAdapterFactory(calls, nodeRid) {

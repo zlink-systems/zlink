@@ -188,6 +188,143 @@ test('location runtime renews owner lease, records store failure, and recovers',
   assert.equal(runtime.lastError, undefined);
 });
 
+test('location runtime completes startup without a lease after the initial claim times out', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const timers = [];
+  const leaseStore = {
+    async claimOwnerLease(_ownerId, _leaseTtlMs, signal) {
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    releaseOwnerLease: store.releaseOwnerLease.bind(store)
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-startup-timeout',
+    ownerLeaseStore: leaseStore,
+    timers,
+    locationOptions: {
+      ownerLeaseRenewIntervalMs: 25,
+      ownerLeaseRenewTimeoutMs: 5
+    }
+  });
+  const keepAlive = setTimeout(() => {}, 100);
+
+  await runtime.start(rid('node-startup-timeout'));
+  clearTimeout(keepAlive);
+
+  assert.equal(runtime.isStarted, true);
+  assert.equal(runtime.currentOwnerToken, undefined);
+  assert.equal(runtime.ownerLeaseUsable, false);
+  assert.ok(timers[0].delayMs > 0 && timers[0].delayMs <= 25);
+  await runtime.stop();
+});
+
+test('location runtime claims on the next heartbeat after startup Store recovery', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const timers = [];
+  let unavailable = true;
+  const leaseStore = {
+    async claimOwnerLease(ownerId, leaseTtlMs, signal) {
+      if (unavailable) throw new Error('transport unavailable');
+      return await store.claimOwnerLease(ownerId, leaseTtlMs, signal);
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    releaseOwnerLease: store.releaseOwnerLease.bind(store)
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-startup-recovery',
+    ownerLeaseStore: leaseStore,
+    timers,
+    locationOptions: {
+      ownerLeaseRenewIntervalMs: 25,
+      ownerLeaseRenewTimeoutMs: 5
+    }
+  });
+  let recovered = 0;
+  runtime.addOwnerLeaseRenewedHandler(() => { recovered += 1; });
+
+  await runtime.start(rid('node-startup-recovery'));
+  unavailable = false;
+  timers.shift().callback();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(runtime.currentOwnerToken?.ownerId, 'owner-startup-recovery');
+  assert.equal(recovered, 1);
+  assert.equal(runtime.ownerLeaseUsable, true);
+  await runtime.stop();
+});
+
+test('location runtime fails startup for terminal owner lease claim results', async () => {
+  for (const kind of ['conflict', 'generationExhausted']) {
+    const store = new internal.ZLinkInMemoryLocationStore();
+    const leaseStore = {
+      async claimOwnerLease() { return { kind }; },
+      readOwnerLease: store.readOwnerLease.bind(store),
+      renewOwnerLease: store.renewOwnerLease.bind(store),
+      releaseOwnerLease: store.releaseOwnerLease.bind(store)
+    };
+    const runtime = runtimeFor(store, {
+      ownerLeaseStore: leaseStore,
+      ownerId: `owner-startup-${kind}`
+    });
+
+    await assert.rejects(
+      runtime.start(rid(`node-startup-${kind}`)),
+      new RegExp(`Owner lease claim failed with '${kind}'`)
+    );
+    assert.equal(runtime.isStarted, false);
+    assert.equal(runtime.currentOwnerToken, undefined);
+  }
+});
+
+test('location runtime releases a claim confirmed after startup cancellation without starting heartbeat', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const timers = [];
+  const controller = new AbortController();
+  let claimStarted;
+  let releaseCount = 0;
+  const leaseStore = {
+    async claimOwnerLease(ownerId, leaseTtlMs, signal) {
+      claimStarted?.();
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', async () => {
+          await store.claimOwnerLease(ownerId, leaseTtlMs);
+          reject(signal.reason);
+        }, { once: true });
+      });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease(token, signal) {
+      releaseCount += 1;
+      return await store.releaseOwnerLease(token, signal);
+    }
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-startup-cancel',
+    ownerLeaseStore: leaseStore,
+    timers,
+    locationOptions: { ownerLeaseRenewTimeoutMs: 50 }
+  });
+  const keepAlive = setTimeout(() => {}, 100);
+  const started = new Promise(resolve => { claimStarted = resolve; });
+  const starting = runtime.start(rid('node-startup-cancel'), controller.signal);
+  await started;
+  controller.abort();
+
+  await assert.rejects(starting, error => error?.name === 'AbortError');
+  clearTimeout(keepAlive);
+  assert.equal(releaseCount, 1);
+  assert.equal(runtime.isStarted, false);
+  assert.equal(runtime.currentOwnerToken, undefined);
+  assert.equal(timers.length, 0);
+  assert.deepEqual(await store.readOwnerLease('owner-startup-cancel'), { kind: 'missing' });
+});
+
 test('location runtime reclaims immediately after the Store rejects a stale owner token', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   let stale = true;
@@ -2819,7 +2956,7 @@ function resolversFor(store, events, ownerLeaseStore = store) {
 }
 
 function runtimeFor(store, options = {}) {
-  const timers = [];
+  const timers = options.timers ?? [];
   return new internal.ZLinkLocationRuntime({
     stores: {
       locationStore: options.locationStore ?? store,
@@ -2835,11 +2972,11 @@ function runtimeFor(store, options = {}) {
     options: options.locationOptions,
     monotonicNowMs: options.monotonicNowMs,
     now: () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)),
-    setTimer(callback, delayMs) {
+    setTimer: options.setTimer ?? ((callback, delayMs) => {
       timers.push({ callback, delayMs });
       return timers.length - 1;
-    },
-    clearTimer() {}
+    }),
+    clearTimer: options.clearTimer ?? (() => {})
   });
 }
 

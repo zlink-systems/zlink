@@ -1581,6 +1581,7 @@ export class ZLinkFrameworkRuntimeHost implements
           return spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
         })
         .then(() => spotNodeRuntime.startLocationAutoConnect(signal))
+        .then(() => channelRuntime.startLocationAutoConnect(signal))
         .then(() => channelRuntime.reclaimLocationOwnerRows(signal))
         .then(() => this.locationOwner.currentLifecycle?.reclaimOwnerRows() ?? Promise.resolve())
         .then(
