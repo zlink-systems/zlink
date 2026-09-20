@@ -122,7 +122,7 @@ function typeByName(schema, name) {
 
 function unsignedBytes(schema, typeName, value) {
   const type = typeByName(schema, typeName);
-  const width = { u8: 1, u16: 2, u32: 4, u64: 8 }[type.encoding];
+  const width = { u8: 1, u16: 2, u32: 4, u64: 8, i64: 8 }[type.encoding];
   if (!width) throw new Error(`operation fixture integer is unsupported: ${typeName}`);
   let remaining = BigInt(value);
   const bytes = Buffer.alloc(width);
@@ -148,6 +148,45 @@ function prefixedText(schema, typeName, value) {
   const type = typeByName(schema, typeName);
   const bytes = Buffer.from(value, "utf8");
   return Buffer.concat([unsignedBytes(schema, type.lengthType.$ref, bytes.length), bytes]);
+}
+
+function encodeSchemaValue(schema, typeName, value) {
+  const type = typeByName(schema, typeName);
+  if (type.kind === "integer") {
+    return unsignedBytes(schema, typeName, value);
+  }
+  if (type.kind === "enum") {
+    const selected = type.values.find((entry) => entry.name === value);
+    if (!selected) throw new Error(`operation fixture enum value is missing: ${typeName}.${value}`);
+    return unsignedBytes(schema, typeName, selected.value);
+  }
+  if (type.kind === "length-prefixed-text") {
+    return prefixedText(schema, typeName, value);
+  }
+  if (type.kind === "vector") {
+    return Buffer.concat([
+      unsignedBytes(schema, type.countType.$ref, value.length),
+      ...value.map((entry) => encodeSchemaValue(schema, type.item.$ref, entry)),
+    ]);
+  }
+  throw new Error(`operation fixture schema encoder does not support ${typeName}:${type.kind}`);
+}
+
+function tlvItem(schema, type, field, value) {
+  const body = encodeSchemaValue(schema, field.$ref, value);
+  return Buffer.concat([
+    unsignedBytes(schema, type.fieldIdType.$ref, field.id),
+    unsignedBytes(schema, type.fieldLengthType.$ref, body.length),
+    body,
+  ]);
+}
+
+function tlvEnvelope(schema, type, items) {
+  const body = Buffer.concat(items);
+  return Buffer.concat([
+    unsignedBytes(schema, type.totalLengthType.$ref, body.length),
+    body,
+  ]);
 }
 
 function applicationPayloadBytes(schema) {
@@ -179,6 +218,24 @@ function buildOperationCases(schema) {
   const unordered = structuredClone(logicalFixture.decoded);
   unordered.applicationStates.reverse();
   const tlv = typeByName(schema, "descriptor-extension");
+  const requiredValues = new Map([
+    ["runtimeState", "serving"],
+    ["applicationVersion", 0],
+    ["protocolCapabilities", [schema.protocol.requiredCapability]],
+    ["objectRole", "none"],
+    ["placementWeight", 1],
+    ["activeCapacityLimit", 1],
+    ["pendingCapacityLimit", 0],
+    ["activeCapacityUsed", 0],
+    ["pendingCapacityUsed", 0],
+  ]);
+  const requiredFields = tlv.fields.filter((field) => field.required);
+  const requiredItems = requiredFields.map((field) => tlvItem(
+    schema,
+    tlv,
+    field,
+    requiredValues.get(field.name),
+  ));
   const unknownId = Math.max(...tlv.fields.map((field) => field.id)) + 1;
   const unknownBody = Buffer.from([0x7f]);
   const unknownItem = Buffer.concat([
@@ -186,8 +243,10 @@ function buildOperationCases(schema) {
     unsignedBytes(schema, tlv.fieldLengthType.$ref, unknownBody.length),
     unknownBody,
   ]);
-  const unknownTlv = Buffer.concat([
-    unsignedBytes(schema, tlv.totalLengthType.$ref, unknownItem.length),
+  const unknownTlv = tlvEnvelope(schema, tlv, [...requiredItems, unknownItem]);
+  const omittedRequiredField = requiredFields.at(-1);
+  const unknownWithMissingRequired = tlvEnvelope(schema, tlv, [
+    ...requiredItems.slice(0, -1),
     unknownItem,
   ]);
   const missingRequiredTlv = unsignedBytes(schema, tlv.totalLengthType.$ref, 0);
@@ -241,6 +300,14 @@ function buildOperationCases(schema) {
       "reject",
       surface("type", tlv.name),
       missingRequiredTlv,
+    ),
+    operationCase(
+      "tlv-unknown-with-missing-required",
+      "tlv32",
+      `required-field:${omittedRequiredField.name}`,
+      "reject",
+      surface("type", tlv.name),
+      unknownWithMissingRequired,
     ),
     operationCase("invalid-utf8", "text-validation", "strict-utf-8", "reject",
       surface("type", text.name), invalidUtf8),

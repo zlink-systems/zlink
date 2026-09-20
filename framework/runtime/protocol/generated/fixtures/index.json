@@ -319,7 +319,7 @@
         "command": null,
         "commandId": null
       },
-      "hex": "000000060d000000017f"
+      "hex": "000000690100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000c00000004000000000d000000017f"
     },
     {
       "name": "tlv-required-field-presence",
@@ -333,6 +333,19 @@
         "commandId": null
       },
       "hex": "00000000"
+    },
+    {
+      "name": "tlv-unknown-with-missing-required",
+      "operation": "tlv32",
+      "rule": "required-field:pendingCapacityUsed",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "descriptor-extension",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "000000600100000001010200000008000000000000000006000000180001156672616d65776f726b2d736572766963652d7631330700000001000800000004000000010900000004000000010a00000004000000000b00000004000000000d000000017f"
     },
     {
       "name": "invalid-utf8",
