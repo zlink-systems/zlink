@@ -1,3 +1,16 @@
+const CONDITION_KINDS = new Set([
+  "fieldPresent",
+  "fieldEquals",
+  "allFlagsSet",
+  "anyFlagsSet",
+  "contextEquals",
+]);
+const FLAG_CONDITION_KINDS = new Set(["allFlagsSet", "anyFlagsSet"]);
+const VECTOR_CONSTRAINT_KINDS = new Set(["sorted", "unique"]);
+const STRUCT_CONSTRAINT_KINDS = new Set(["not-both-zero", "field-less-than-or-equal"]);
+const FIELD_CONSTRAINT_KINDS = new Set(["contains-protocol-required-capability"]);
+const FLAG_CONSTRAINT_KINDS = new Set(["all-or-none", "implies"]);
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -75,11 +88,17 @@ function conditionSignature(value) {
 
 export {
   buildNamedMap,
+  CONDITION_KINDS,
   conditionSignature,
+  FIELD_CONSTRAINT_KINDS,
+  FLAG_CONDITION_KINDS,
+  FLAG_CONSTRAINT_KINDS,
   hasOwn,
   isObject,
   resolveInteger,
   resolveReference,
   resolveReferencedMaximum,
+  STRUCT_CONSTRAINT_KINDS,
   toBigInt,
+  VECTOR_CONSTRAINT_KINDS,
 };

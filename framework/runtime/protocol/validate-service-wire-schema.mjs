@@ -8,12 +8,17 @@ import { fileURLToPath } from "node:url";
 import {
   buildNamedMap,
   conditionSignature,
+  FIELD_CONSTRAINT_KINDS,
+  FLAG_CONDITION_KINDS,
+  FLAG_CONSTRAINT_KINDS,
   hasOwn,
   isObject,
   resolveInteger,
   resolveReference,
   resolveReferencedMaximum,
+  STRUCT_CONSTRAINT_KINDS,
   toBigInt,
+  VECTOR_CONSTRAINT_KINDS,
 } from "./service-wire-schema-model.mjs";
 
 const PAYLOAD_POLICIES = new Set(["forbidden", "optional", "required"]);
@@ -553,7 +558,7 @@ function validateVectorConstraints(type, location, types, fail, repeatedFieldNam
   const signatures = new Set();
   type.constraints.forEach((constraint, index) => {
     const constraintLocation = `${location}.constraints[${index}]`;
-    if (!isObject(constraint) || !["sorted", "unique"].includes(constraint.kind)) {
+    if (!isObject(constraint) || !VECTOR_CONSTRAINT_KINDS.has(constraint.kind)) {
       fail(constraintLocation, "vector constraint must be sorted or unique");
       return;
     }
@@ -589,6 +594,10 @@ function validateStructConstraints(type, location, fail) {
   const fields = new Set((type.fields ?? []).map((field) => field.name));
   type.constraints.forEach((constraint, index) => {
     const constraintLocation = `${location}.constraints[${index}]`;
+    if (!STRUCT_CONSTRAINT_KINDS.has(constraint.kind)) {
+      fail(constraintLocation, `unknown struct constraint ${JSON.stringify(constraint.kind)}`);
+      return;
+    }
     if (constraint.kind === "not-both-zero") {
       if ((type.fields ?? []).length < 2) {
         fail(constraintLocation, "not-both-zero requires at least two fields");
@@ -605,7 +614,6 @@ function validateStructConstraints(type, location, fail) {
       }
       return;
     }
-    fail(constraintLocation, `unknown struct constraint ${JSON.stringify(constraint.kind)}`);
   });
 }
 
@@ -718,7 +726,7 @@ function validateFieldConstraints(field, location, types, fail) {
   const signatures = new Set();
   for (const [index, constraint] of field.constraints.entries()) {
     const constraintLocation = `${location}.constraints[${index}]`;
-    if (!isObject(constraint) || constraint.kind !== "contains-protocol-required-capability") {
+    if (!isObject(constraint) || !FIELD_CONSTRAINT_KINDS.has(constraint.kind)) {
       fail(constraintLocation, `unknown field constraint ${JSON.stringify(constraint?.kind)}`);
       continue;
     }
@@ -6060,7 +6068,7 @@ function validateCommands(commands, ranges, flags, contexts, types, bounds, fail
       } else {
         command.flagConstraints.forEach((constraint, constraintIndex) => {
           const constraintLocation = `${location}.flagConstraints[${constraintIndex}]`;
-          if (!isObject(constraint) || !["all-or-none", "implies"].includes(constraint.kind)) {
+          if (!isObject(constraint) || !FLAG_CONSTRAINT_KINDS.has(constraint.kind)) {
             fail(constraintLocation, "unknown flag constraint");
             return;
           }
@@ -6664,7 +6672,7 @@ function validateConditions(value, location, contexts, allowedFlags, fail) {
     if (!isObject(candidate)) {
       return;
     }
-    for (const key of ["allFlagsSet", "anyFlagsSet"]) {
+    for (const key of FLAG_CONDITION_KINDS) {
       if (!hasOwn(candidate, key)) {
         continue;
       }

@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   buildNamedMap,
+  CONDITION_KINDS,
   conditionSignature,
   hasOwn,
   isObject,
@@ -75,13 +76,15 @@ const DISCRIMINATOR_KEYS = new Set(["name", "source", "$ref"]);
 const CASE_KEYS = new Set(["when", "fields"]);
 const PRESENCE_RULE_KEYS = new Set(["when", "require", "forbid"]);
 const TYPE_CONSTRAINT_KEYS = new Set([
-  "kind", "field", "fields", "comparison", "unless", "requires", "when",
+  "kind", "field", "fields", "left", "right", "comparison", "unless", "requires", "when",
 ]);
 const FIELD_CONSTRAINT_KEYS = new Set(["kind"]);
 const FLAG_CONSTRAINT_KEYS = new Set(["kind", "flags", "if", "then"]);
-const CONDITION_KEYS = new Set([
-  "fieldPresent", "fieldEquals", "allFlagsSet", "anyFlagsSet", "contextEquals",
-]);
+const CONDITION_KEYS = CONDITION_KINDS;
+const CONDITIONAL_FALSE_BEHAVIOR = {
+  encoder: "reject-present-value",
+  decoder: "consume-no-bytes",
+};
 
 class LoweringCoverageError extends Error {
   constructor(errors) {
@@ -138,8 +141,107 @@ function lowerValue(value, model) {
   );
 }
 
+function flagOperand(name) {
+  return { kind: "flag", name };
+}
+
+function fieldOperand(name) {
+  return { kind: "field", name };
+}
+
+function fieldPathOperand(path) {
+  return { kind: "fieldPath", path };
+}
+
+function lowerPredicateAtom(kind, value, model) {
+  if (kind === "fieldPresent") {
+    return { kind, operand: { kind: "field", name: value } };
+  }
+  if (kind === "fieldEquals") {
+    return {
+      kind,
+      operand: { kind: "field", name: value.name },
+      value: lowerValue(value.value, model),
+    };
+  }
+  if (kind === "allFlagsSet" || kind === "anyFlagsSet") {
+    return { kind, operands: value.map(flagOperand) };
+  }
+  return {
+    kind,
+    operand: { kind: "context", name: value.name },
+    value: lowerValue(value.value, model),
+  };
+}
+
+function lowerCondition(condition, model) {
+  return {
+    all: [...CONDITION_KINDS]
+      .filter((kind) => hasOwn(condition, kind))
+      .map((kind) => lowerPredicateAtom(kind, condition[kind], model)),
+  };
+}
+
+function lowerConstraint(constraint, owner, model) {
+  const node = lowerValue(constraint, model);
+  if (owner.kind === "struct") {
+    if (constraint.kind === "not-both-zero") {
+      node.fields = owner.fields.map((field) => fieldOperand(field.name));
+    } else {
+      node.left = fieldOperand(constraint.left);
+      node.right = fieldOperand(constraint.right);
+    }
+  } else if (owner.kind === "vector" || owner.kind === "versioned-vector") {
+    if (hasOwn(constraint, "field")) {
+      node.field = fieldPathOperand(constraint.field);
+    }
+    if (hasOwn(constraint, "fields")) {
+      node.fields = constraint.fields.map(fieldPathOperand);
+    }
+  } else if (owner.kind === "field") {
+    node.requiredCapability = { kind: "protocol", name: "requiredCapability" };
+  }
+  return node;
+}
+
+function lowerField(field, model) {
+  const node = lowerValue(field, model);
+  if (hasOwn(field, "when")) {
+    node.when = lowerCondition(field.when, model);
+    node.whenFalse = { ...CONDITIONAL_FALSE_BEHAVIOR };
+  }
+  if (hasOwn(field, "constraints")) {
+    node.constraints = field.constraints.map(
+      (constraint) => lowerConstraint(constraint, { kind: "field" }, model),
+    );
+  }
+  return node;
+}
+
 function lowerFields(fields, model) {
-  return fields.map((field) => lowerValue(field, model));
+  return fields.map((field) => lowerField(field, model));
+}
+
+function lowerDiscriminator(discriminator, model) {
+  const node = lowerValue(discriminator, model);
+  if (discriminator.source === "wire") {
+    node.source = { kind: "wire" };
+  } else if (hasOwn(discriminator.source, "enclosingField")) {
+    node.source = {
+      kind: "enclosingField",
+      name: discriminator.source.enclosingField,
+    };
+  } else {
+    node.source = { kind: "context", name: discriminator.source.context };
+  }
+  return node;
+}
+
+function lowerUnionOtherwise(otherwise, model) {
+  if (otherwise === "protocol-error") {
+    return { kind: "protocol-error" };
+  }
+  return { kind: "fields", fields: lowerFields(otherwise.fields, model) };
 }
 
 function lowerType(type, model) {
@@ -152,17 +254,41 @@ function lowerType(type, model) {
   } else if (type.kind === "versioned-length-delimited") {
     node.body = lowerFields(type.body, model);
   } else if (type.kind === "conditional-union") {
-    node.cases = type.cases.map((entry) => ({
-      when: JSON.parse(conditionSignature(lowerValue(entry.when, model))),
-      fields: lowerFields(entry.fields, model),
-    }));
-    if (isObject(type.otherwise)) {
-      node.otherwise = { fields: lowerFields(type.otherwise.fields, model) };
-    }
+    node.discriminators = type.discriminators.map((entry) => lowerDiscriminator(entry, model));
+    node.bodyLengthType = hasOwn(type, "bodyLengthType")
+      ? lowerValue(type.bodyLengthType, model)
+      : null;
+    node.bodyLengthCovers = type.bodyLengthCovers ?? null;
+    node.cases = Object.fromEntries(type.cases.map((entry) => [
+      conditionSignature(entry.when),
+      { fields: lowerFields(entry.fields, model) },
+    ]));
+    node.otherwise = lowerUnionOtherwise(type.otherwise, model);
   } else if (type.kind === "tlv32") {
     node.fields = lowerFields(type.fields, model);
+    if (hasOwn(type, "presenceRules")) {
+      node.presenceRules = type.presenceRules.map((rule) => ({
+        when: lowerCondition(rule.when, model),
+        ...(hasOwn(rule, "require") ? { require: [...rule.require] } : {}),
+        ...(hasOwn(rule, "forbid") ? { forbid: [...rule.forbid] } : {}),
+      }));
+    }
+  }
+  if (hasOwn(type, "constraints")) {
+    node.constraints = type.constraints.map((constraint) => lowerConstraint(constraint, type, model));
   }
   return node;
+}
+
+function lowerFlagConstraint(constraint) {
+  if (constraint.kind === "all-or-none") {
+    return { kind: constraint.kind, flags: constraint.flags.map(flagOperand) };
+  }
+  return {
+    kind: constraint.kind,
+    if: flagOperand(constraint.if),
+    then: constraint.then.map(flagOperand),
+  };
 }
 
 function lowerCommand(command, model) {
@@ -172,6 +298,16 @@ function lowerCommand(command, model) {
       .map((key) => [key, lowerValue(command[key], model)]),
   );
   node.body = lowerFields(command.body, model);
+  node.allowedFlags = command.allowedFlags.map(flagOperand);
+  node.requiredFlags = command.requiredFlags.map(flagOperand);
+  if (hasOwn(command, "flagConstraints")) {
+    node.flagConstraints = command.flagConstraints.map(lowerFlagConstraint);
+  }
+  node.payload = { policy: command.payload };
+  if (hasOwn(command, "payloadType")) {
+    node.payload.type = lowerValue(command.payloadType, model);
+    delete node.payloadType;
+  }
   return node;
 }
 
@@ -321,6 +457,19 @@ function assertLoweringCoverage(schema, ir) {
   if (ir.semanticConstraints.length !== schema.semanticConstraints.length) {
     errors.push(`$.semanticConstraints: lowered constraint inventory differs from the schema`);
   }
+  const sourceUnions = schema.types.filter((type) => type.kind === "conditional-union");
+  const loweredUnions = ir.types.filter((type) => type.kind === "conditional-union");
+  if (loweredUnions.length !== sourceUnions.length) {
+    errors.push(`$.types: lowered conditional-union inventory differs from the schema`);
+  }
+  for (const source of sourceUnions) {
+    const lowered = loweredUnions.find((type) => type.name === source.name);
+    if (lowered === undefined
+        || Object.keys(lowered.cases).length !== source.cases.length
+        || lowered.discriminators.length !== source.discriminators.length) {
+      errors.push(`type:${source.name}: conditional-union cases or discriminators did not reach the IR`);
+    }
+  }
   if (errors.length > 0) {
     throw new LoweringCoverageError(errors);
   }
@@ -328,6 +477,7 @@ function assertLoweringCoverage(schema, ir) {
     types: ir.types.length,
     commands: ir.commands.length,
     kinds: kinds.size,
+    conditionalUnions: loweredUnions.length,
   };
 }
 
@@ -347,10 +497,19 @@ function lowerSchema(schemaPathOrObject) {
       value: jsonInteger(resolveInteger(bound.value, model.bounds)),
     })),
     flags: schema.flags.map((flag) => lowerValue(flag, model)),
-    semanticContexts: schema.semanticContexts.map((context) => lowerValue(context, model)),
+    semanticContexts: schema.semanticContexts.map((context) => ({
+      ...lowerValue(context, model),
+      parameter: "decoder-context",
+    })),
     semanticConstraints: schema.semanticConstraints.map((constraint) => constraint.kind
       === "terminal-failure-integrity"
-      ? { kind: constraint.kind, runtime: true }
+      ? {
+        kind: constraint.kind,
+        runtimePredicate: {
+          asset: "service-wire-constants",
+          name: "valid-terminal-failure",
+        },
+      }
       : { kind: constraint.kind }),
     types: schema.types.map((type) => lowerType(type, model)),
     commands: schema.commands.map((command) => lowerCommand(command, model)),
@@ -378,7 +537,7 @@ function runSelfTests(schemaPath) {
     ["vector", "aggregate-participant-vector", (type) => [type.countType.$ref, type.maximumItems, type.item.$ref], ["u16", 1024, "maintenance-aggregate-participant-v1"]],
     ["versioned-vector", "metadata-frame", (type) => [type.maximumEncodedBytes, type.layout[2].countFrom, type.layout[2].item.$ref], [1024, "count", "metadata-entry"]],
     ["versioned-length-delimited", "application-payload-envelope-v1", (type) => [type.version.constant, type.length.$ref, type.maximumEncodedBytes], [1, "u32", 4294967295]],
-    ["conditional-union", "actor-join-reply-tail", (type) => [type.discriminators[0].$ref, type.cases.map((entry) => entry.when.joinResult), type.otherwise], ["actor-join-result", ["accepted", "rejected"], "protocol-error"]],
+    ["conditional-union", "actor-join-reply-tail", (type) => [type.discriminators[0].source.kind, Object.keys(type.cases), type.otherwise.kind], ["wire", ["{\"joinResult\":\"accepted\"}", "{\"joinResult\":\"rejected\"}"], "protocol-error"]],
     ["tlv32", "descriptor-extension", (type) => [type.totalLengthType.$ref, type.fields[0].id, type.fields[0].required, type.maximumEncodedBytes], ["u32", 1, true, 1048576]],
   ];
   for (const [kind, name, project, wanted] of expected) {
@@ -393,22 +552,222 @@ function runSelfTests(schemaPath) {
   expectValidatorFailure(schema, (candidate) => {
     candidate.commands[0].body[0].$ref = "undefined-type";
   });
-  expectValidatorFailure(schema, (candidate) => {
-    candidate.commands[0].body[0].when = { fieldPresent: "laterField" };
-    candidate.commands[0].body[0].otherwise = "forbidden";
+  const optionalActor = types.get("optional-actor-ref");
+  const fieldPresent = optionalActor.fields.find((field) => field.name === "generation");
+  assert.deepEqual(fieldPresent.when, {
+    all: [{ kind: "fieldPresent", operand: { kind: "field", name: "actorId" } }],
   });
+  assert.deepEqual(fieldPresent.whenFalse, CONDITIONAL_FALSE_BEHAVIOR);
+
+  const creationTerminal = types.get("creation-operation-terminal-v1");
+  const fieldEquals = creationTerminal.body.find((field) => field.name === "creation");
+  assert.deepEqual(fieldEquals.when, {
+    all: [{
+      kind: "fieldEquals",
+      operand: { kind: "field", name: "hasCreation" },
+      value: "true",
+    }],
+  });
+  assert.deepEqual(fieldEquals.whenFalse, CONDITIONAL_FALSE_BEHAVIOR);
+
+  const commands = new Map(ir.commands.map((command) => [command.name, command]));
+  const actorSend = commands.get("actorSend");
+  const allFlagsSet = actorSend.body.find((field) => field.name === "boundSessionTail");
+  assert.deepEqual(allFlagsSet.when, {
+    all: [{
+      kind: "allFlagsSet",
+      operands: [flagOperand("boundSession"), flagOperand("sourceSpotId")],
+    }],
+  });
+  assert.deepEqual(allFlagsSet.whenFalse, CONDITIONAL_FALSE_BEHAVIOR);
+
+  const anyFlagsSchema = structuredClone(schema);
+  const anyFlagsCommand = anyFlagsSchema.commands.find((command) => command.name === "actorSend");
+  anyFlagsCommand.body.at(-1).when = { anyFlagsSet: ["boundSession", "sourceSpotId"] };
+  const anyFlagsIr = lowerSchema(anyFlagsSchema);
+  const anyFlagsSet = anyFlagsIr.commands.find((command) => command.name === "actorSend")
+    .body.at(-1);
+  assert.deepEqual(anyFlagsSet.when, {
+    all: [{
+      kind: "anyFlagsSet",
+      operands: [flagOperand("boundSession"), flagOperand("sourceSpotId")],
+    }],
+  });
+  assert.deepEqual(anyFlagsSet.whenFalse, CONDITIONAL_FALSE_BEHAVIOR);
+
+  expectValidatorFailure(schema, (candidate) => {
+    const type = candidate.types.find((entry) => entry.name === "optional-actor-ref");
+    type.fields.find((field) => field.name === "generation").when.fieldPresent = "missing";
+  });
+  expectValidatorFailure(schema, (candidate) => {
+    const type = candidate.types.find((entry) => entry.name === "creation-operation-terminal-v1");
+    type.body.find((field) => field.name === "creation").when.fieldEquals.value = "unknown";
+  });
+  expectValidatorFailure(schema, (candidate) => {
+    const command = candidate.commands.find((entry) => entry.name === "actorSend");
+    command.body.at(-1).when.allFlagsSet.push("extension");
+  });
+  expectValidatorFailure(schema, (candidate) => {
+    const command = candidate.commands.find((entry) => entry.name === "actorSend");
+    command.body.at(-1).when = { anyFlagsSet: ["extension"] };
+  });
+
+  const schemaUnions = schema.types.filter((type) => type.kind === "conditional-union");
+  const irUnions = ir.types.filter((type) => type.kind === "conditional-union");
+  assert.equal(irUnions.length, 30);
+  for (const source of schemaUnions) {
+    const lowered = irUnions.find((type) => type.name === source.name);
+    assert.deepEqual(Object.keys(lowered.cases), source.cases.map((entry) => conditionSignature(entry.when)));
+    assert.equal(lowered.bodyLengthType === null, !hasOwn(source, "bodyLengthType"));
+    assert.equal(lowered.bodyLengthCovers, source.bodyLengthCovers ?? null);
+    assert.equal(
+      lowered.otherwise.kind,
+      source.otherwise === "protocol-error" ? "protocol-error" : "fields",
+    );
+  }
+  assert.deepEqual(
+    new Set(irUnions.flatMap((type) => type.discriminators.map((entry) => entry.source.kind))),
+    new Set(["wire", "enclosingField", "context"]),
+  );
+  assert(irUnions.some((type) => type.otherwise.kind === "fields"
+    && type.otherwise.fields.length === 0));
+
+  assert(ir.semanticContexts.every((context) => context.parameter === "decoder-context"));
+  assert.deepEqual(actorSend.allowedFlags, [
+    flagOperand("metadata"),
+    flagOperand("boundSession"),
+    flagOperand("sourceSpotId"),
+  ]);
+  assert.deepEqual(actorSend.requiredFlags, []);
+  assert.deepEqual(actorSend.flagConstraints, [{
+    kind: "all-or-none",
+    flags: [flagOperand("boundSession"), flagOperand("sourceSpotId")],
+  }]);
+  assert.deepEqual(actorSend.payload, {
+    policy: "required",
+    type: { $ref: "application-payload-envelope-v1" },
+  });
+  const requiredFlagSchema = structuredClone(schema);
+  requiredFlagSchema.commands.find((command) => command.name === "nodeSend")
+    .requiredFlags.push("metadata");
+  const requiredFlagIr = lowerSchema(requiredFlagSchema);
+  assert.deepEqual(
+    requiredFlagIr.commands.find((command) => command.name === "nodeSend").requiredFlags,
+    [flagOperand("metadata")],
+  );
+  const impliesSchema = structuredClone(schema);
+  impliesSchema.commands.find((command) => command.name === "actorSend").flagConstraints.push({
+    kind: "implies",
+    if: "boundSession",
+    then: ["sourceSpotId"],
+  });
+  const impliesIr = lowerSchema(impliesSchema);
+  assert.deepEqual(
+    impliesIr.commands.find((command) => command.name === "actorSend").flagConstraints.at(-1),
+    {
+      kind: "implies",
+      if: flagOperand("boundSession"),
+      then: [flagOperand("sourceSpotId")],
+    },
+  );
+  assert.deepEqual(
+    new Set(ir.commands.map((command) => command.payload.policy)),
+    new Set(["forbidden", "optional", "required"]),
+  );
+  assert.deepEqual(
+    ir.commands.find((command) => command.name === "instanceSpot").semanticConstraints,
+    schema.commands.find((command) => command.name === "instanceSpot").semanticConstraints,
+  );
+
+  assert.deepEqual(types.get("operation-id").constraints, [{
+    kind: "not-both-zero",
+    unless: "one-way-record-without-terminal-completion",
+    fields: [fieldOperand("high"), fieldOperand("low")],
+  }]);
+  assert.deepEqual(types.get("aggregate-participant-vector").constraints.map((entry) => entry.kind),
+    ["sorted", "unique"]);
+  assert.deepEqual(types.get("aggregate-participant-vector").constraints.map((entry) => entry.field),
+    [fieldPathOperand("object"), fieldPathOperand("object")]);
+  assert.deepEqual(types.get("metadata-frame").constraints[0].field,
+    fieldPathOperand("key"));
+  assert.deepEqual(creationTerminal.constraints.map((entry) => entry.kind), [
+    "terminal-success-shape",
+    "terminal-failure-shape",
+    "existing-has-no-application-payload",
+  ]);
+  const descriptor = types.get("descriptor-extension");
+  assert.deepEqual(
+    descriptor.fields.find((field) => field.name === "protocolCapabilities").constraints,
+    [{
+      kind: "contains-protocol-required-capability",
+      requiredCapability: { kind: "protocol", name: "requiredCapability" },
+    }],
+  );
+
+  const comparisonSchema = structuredClone(schema);
+  comparisonSchema.types.find((type) => type.name === "retired-bound-session-route-fence")
+    .constraints = [{
+      kind: "field-less-than-or-equal",
+      left: "sessionOwnerNodeGeneration",
+      right: "sessionOwnerLeaseGeneration",
+    }];
+  const comparisonIr = lowerSchema(comparisonSchema);
+  assert.deepEqual(
+    comparisonIr.types.find((type) => type.name === "retired-bound-session-route-fence").constraints,
+    [{
+      kind: "field-less-than-or-equal",
+      left: fieldOperand("sessionOwnerNodeGeneration"),
+      right: fieldOperand("sessionOwnerLeaseGeneration"),
+    }],
+  );
+
+  const presenceSchema = structuredClone(schema);
+  presenceSchema.types.find((type) => type.name === "descriptor-extension").presenceRules = [{
+    when: { contextEquals: { name: "durableRelocationPresent", value: true } },
+    require: ["runtimeState"],
+    forbid: ["spotTypes"],
+  }];
+  const presenceIr = lowerSchema(presenceSchema);
+  assert.deepEqual(
+    presenceIr.types.find((type) => type.name === "descriptor-extension").presenceRules,
+    [{
+      when: {
+        all: [{
+          kind: "contextEquals",
+          operand: { kind: "context", name: "durableRelocationPresent" },
+          value: true,
+        }],
+      },
+      require: ["runtimeState"],
+      forbid: ["spotTypes"],
+    }],
+  );
+
   const unknownKeyword = structuredClone(schema);
   unknownKeyword.types[0].futureKeyword = true;
   assert.throws(() => lowerSchema(unknownKeyword), LoweringCoverageError);
   assert.deepEqual(JSON.parse(JSON.stringify(ir)), ir);
   assert.equal(ir.types.length, 155);
   assert.equal(ir.commands.length, 40);
-  assert.equal(ir.semanticConstraints.filter((constraint) => constraint.runtime).length, 1);
+  assert.equal(ir.semanticConstraints.filter((constraint) => constraint.runtimePredicate).length, 1);
   assert.equal(
-    ir.semanticConstraints.find((constraint) => constraint.runtime).kind,
+    ir.semanticConstraints.find((constraint) => constraint.runtimePredicate).kind,
     "terminal-failure-integrity",
   );
-  return 15;
+  assert.deepEqual(
+    ir.semanticConstraints.find((constraint) => constraint.runtimePredicate).runtimePredicate,
+    { asset: "service-wire-constants", name: "valid-terminal-failure" },
+  );
+  assert(ir.semanticConstraints
+    .filter((constraint) => constraint.kind !== "terminal-failure-integrity")
+    .every((constraint) => Object.keys(constraint).length === 1));
+  return {
+    conditionForms: 4,
+    validatorNegativeConditions: 4,
+    conditionalUnions: irUnions.length,
+    layoutConstraintKinds: 8,
+    tlvPresenceRules: 1,
+  };
 }
 
 function printFailure(error) {
@@ -435,10 +794,13 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
   );
   try {
     if (selfTest) {
-      const count = runSelfTests(schemaPath);
+      const result = runSelfTests(schemaPath);
       console.log(
-        `service wire lowering self-test passed: ${count} cases `
-          + `(10 kinds, 3 validator-negative, 1 coverage-negative, JSON round-trip)`,
+        `service wire lowering self-test passed: ${result.conditionForms} condition forms, `
+          + `${result.validatorNegativeConditions} validator-negative conditions, `
+          + `${result.conditionalUnions} conditional unions, `
+          + `${result.layoutConstraintKinds} layout constraint kinds, `
+          + `${result.tlvPresenceRules} TLV presence rule, JSON round-trip`,
       );
     } else {
       const schema = readSchema(schemaPath);
@@ -446,7 +808,7 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
       const coverage = assertLoweringCoverage(schema, ir);
       console.log(
         `service wire lowering valid: ${coverage.types} types, ${coverage.commands} commands, `
-          + `${coverage.kinds} kinds`,
+          + `${coverage.kinds} kinds, ${coverage.conditionalUnions} conditional unions`,
       );
     }
   } catch (error) {
