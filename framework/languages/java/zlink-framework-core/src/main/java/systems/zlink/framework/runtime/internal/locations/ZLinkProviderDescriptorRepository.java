@@ -1009,12 +1009,12 @@ final class ZLinkProviderDescriptorRepository {
     private static ZLinkStoreKey meshKey(
         String meshName,
         RoutingId rid) {
-        return new ZLinkStoreKey(
-            meshPrefix(meshName) + rid.toHex());
+        return ZLinkOpaqueRecordKey.of(
+            "mesh-node", meshName, rid.toHex());
     }
 
     private static String meshPrefix(String meshName) {
-        return "mesh-node\0" + requireNoNul(meshName, "meshName") + "\0";
+        return ZLinkOpaqueRecordKey.of("mesh-node", meshName).value() + "\0";
     }
 
     // Canonical cross-language logical key preimage
@@ -1023,13 +1023,13 @@ final class ZLinkProviderDescriptorRepository {
     private static ZLinkStoreKey clientServerKey(
         String channelName,
         RoutingId rid) {
-        return new ZLinkStoreKey(
-            clientServerPrefix(channelName) + rid.toHex());
+        return ZLinkOpaqueRecordKey.of(
+            "client-server", channelName, rid.toHex());
     }
 
     private static String clientServerPrefix(String channelName) {
-        return "client-server\0"
-            + requireNoNul(channelName, "channelName") + "\0";
+        return ZLinkOpaqueRecordKey.of(
+            "client-server", channelName).value() + "\0";
     }
 
     // Canonical cross-language logical key preimage
@@ -1038,24 +1038,13 @@ final class ZLinkProviderDescriptorRepository {
     private static ZLinkStoreKey fanoutKey(
         String channelName,
         RoutingId rid) {
-        return new ZLinkStoreKey(
-            fanoutPrefix(channelName) + rid.toHex());
+        return ZLinkOpaqueRecordKey.of(
+            "fanout-publisher", channelName, rid.toHex());
     }
 
     private static String fanoutPrefix(String channelName) {
-        return "fanout-publisher\0"
-            + requireNoNul(channelName, "channelName") + "\0";
-    }
-
-    // A NUL-preimage segment's boundary is the NUL byte itself
-    // (21-location-runtime.md#2.4), so the segment value must not contain
-    // one.
-    private static String requireNoNul(String value, String field) {
-        if (value.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException(
-                field + " must not contain a NUL byte");
-        }
-        return value;
+        return ZLinkOpaqueRecordKey.of(
+            "fanout-publisher", channelName).value() + "\0";
     }
 
     private static String encodeContinuation(

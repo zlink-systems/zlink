@@ -28,11 +28,7 @@ final class ZLinkOwnerLeaseRecordCodec {
     }
 
     static ZLinkStoreKey key(String ownerId) {
-        if (ownerId.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException(
-                "ownerId must not contain a NUL byte");
-        }
-        return new ZLinkStoreKey("owner-lease\0" + ownerId);
+        return ZLinkOpaqueRecordKey.of("owner-lease", ownerId);
     }
 
     static byte[] encode(String ownerId, long leaseGeneration) {

@@ -785,65 +785,31 @@ public final class ZLinkServiceM6BWireCodec {
             terminal.failureCode(),
             terminal.creation(),
             terminal.applicationPayloadFrame());
-        Writer body = new Writer();
-        body.u32(terminal.terminalResult(), "terminalResult");
-        body.u32(terminal.failureCode(), "failureCode");
-        body.u8(terminal.creation() == null ? 0 : 1);
-        if (terminal.creation() != null) {
-            writeActorCreationOperationTerminal(body, terminal.creation());
-        }
-        body.u8(terminal.applicationPayloadFrame() == null ? 0 : 1);
-        if (terminal.applicationPayloadFrame() != null) {
-            body.bytes(terminal.applicationPayloadFrame());
-        }
-        Writer envelope = new Writer();
-        envelope.u8(1);
-        envelope.u32(body.toByteArray().length, "bodyLength");
-        envelope.bytes(body.toByteArray());
-        byte[] result = envelope.toByteArray();
-        if (result.length > 1024 * 1024) {
+        try {
+            return ServiceWireCodec.encodeCreationOperationTerminalV1(
+                generatedTerminal(terminal), generatedContext());
+        } catch (IOException failure) {
             throw protocol(
-                "creation operation terminal exceeds 1 MiB");
+                "creation operation terminal could not be encoded: "
+                    + failure.getMessage());
         }
-        return result;
     }
 
     public ActorCreationTerminal decodeCreationOperationTerminal(
-        byte[] envelope) {
-        Reader reader = new Reader(envelope);
-        if (reader.u8("version") != 1) {
+        byte[] envelope,
+        String targetMeshName,
+        RoutingId targetNodeRid) {
+        try {
+            return terminalFromGenerated(
+                ServiceWireCodec.decodeCreationOperationTerminalV1(
+                    envelope, generatedContext()),
+                targetMeshName,
+                targetNodeRid);
+        } catch (IOException failure) {
             throw protocol(
-                "unknown creation operation terminal version");
+                "creation operation terminal could not be decoded: "
+                    + failure.getMessage());
         }
-        Reader body = reader.reader(reader.u32("bodyLength"));
-        reader.end();
-        int terminalResult = body.u32("terminalResult");
-        int failureCode = body.u32("failureCode");
-        int hasCreation = body.u8("hasCreation");
-        if (hasCreation != 0 && hasCreation != 1) {
-            throw protocol("hasCreation must be bool8");
-        }
-        ActorCreateTerminal creation = hasCreation == 1
-            ? readActorCreationOperationTerminal(body)
-            : null;
-        int hasPayload = body.u8("hasApplicationPayload");
-        if (hasPayload != 0 && hasPayload != 1) {
-            throw protocol("hasApplicationPayload must be bool8");
-        }
-        byte[] applicationPayload = hasPayload == 1
-            ? body.remainingBytes()
-            : null;
-        body.end();
-        requireActorTerminalShape(
-            terminalResult,
-            failureCode,
-            creation,
-            applicationPayload);
-        return new ActorCreationTerminal(
-            terminalResult,
-            failureCode,
-            creation,
-            applicationPayload);
     }
 
     private static void writeActorCreateTerminal(
@@ -885,39 +851,150 @@ public final class ZLinkServiceM6BWireCodec {
         return new ActorCreateTerminal(result, actor);
     }
 
-    private static void writeActorCreationOperationTerminal(
-        Writer writer,
-        ActorCreateTerminal terminal) {
-        writer.u8(terminal.result().wireValue);
-        Writer selected = new Writer();
-        if (terminal.result() != ActorCreateResult.REJECTED) {
-            ActorRef actor = Objects.requireNonNull(
-                terminal.actor(), "actor");
-            selected.text8(actor.actorId(), "actor.actorId");
-            selected.nonzero(
-                actor.objectGeneration(), "actor.objectGeneration");
-            selected.text8(actor.meshName(), "actor.meshName");
-            selected.rid(actor.nodeRid(), "actor.nodeRid");
-        }
-        writer.u16(selected.toByteArray().length);
-        writer.bytes(selected.toByteArray());
+    private static ServiceWireCodec.CreationOperationTerminalV1
+        generatedTerminal(ActorCreationTerminal terminal) {
+        ServiceWireCodec.ActorCreateTerminal creation =
+            generatedCreation(terminal.creation());
+        ServiceWireCodec.ApplicationPayloadEnvelopeV1 application =
+            generatedApplication(terminal.applicationPayloadFrame());
+        return new ServiceWireCodec.CreationOperationTerminalV1(
+            generatedTerminalResult(terminal.terminalResult()),
+            generatedFailureCode(terminal.failureCode()),
+            creation == null
+                ? ServiceWireCodec.Bool8.FALSE
+                : ServiceWireCodec.Bool8.TRUE,
+            creation,
+            application == null
+                ? ServiceWireCodec.Bool8.FALSE
+                : ServiceWireCodec.Bool8.TRUE,
+            application);
     }
 
-    private static ActorCreateTerminal readActorCreationOperationTerminal(
-        Reader reader) {
-        ActorCreateResult result = ActorCreateResult.fromWire(
-            reader.u8("createResult"));
-        Reader selected = reader.reader(reader.u16("creationLength"));
-        ActorRef actor = null;
-        if (result != ActorCreateResult.REJECTED) {
-            actor = new ActorRef(
-                selected.text8("actor.actorId"),
-                selected.nonzeroU64("actor.objectGeneration"),
-                selected.text8("actor.meshName"),
-                selected.rid("actor.nodeRid"));
+    private static ServiceWireCodec.ActorCreateTerminal generatedCreation(
+        ActorCreateTerminal terminal) {
+        if (terminal == null) {
+            return null;
         }
-        selected.end();
-        return new ActorCreateTerminal(result, actor);
+        if (terminal.result() == ActorCreateResult.REJECTED) {
+            return new ServiceWireCodec.ActorCreateTerminalRejected(
+                ServiceWireCodec.ActorCreateResult.REJECTED);
+        }
+        ActorRef actor = Objects.requireNonNull(terminal.actor(), "actor");
+        var generatedActor = new ServiceWireCodec.ActorRef(
+            new ServiceWireCodec.Text8(actor.actorId()),
+            new ServiceWireCodec.NonzeroU64(actor.objectGeneration()));
+        return terminal.result() == ActorCreateResult.CREATED
+            ? new ServiceWireCodec.ActorCreateTerminalCreated(
+                ServiceWireCodec.ActorCreateResult.CREATED,
+                generatedActor)
+            : new ServiceWireCodec.ActorCreateTerminalExisting(
+                ServiceWireCodec.ActorCreateResult.EXISTING,
+                generatedActor);
+    }
+
+    private static ServiceWireCodec.ApplicationPayloadEnvelopeV1
+        generatedApplication(byte[] frame) {
+        if (frame == null) {
+            return null;
+        }
+        var payload = new ZLinkServiceM6AWireCodec()
+            .decodeApplicationPayload(frame);
+        return new ServiceWireCodec.ApplicationPayloadEnvelopeV1(
+            new ServiceWireCodec.PacketName(payload.packetName()),
+            new ServiceWireCodec.ContentType(payload.contentType()),
+            new ServiceWireCodec.ApplicationPayloadBytes(payload.payload()));
+    }
+
+    private static ActorCreationTerminal terminalFromGenerated(
+        ServiceWireCodec.CreationOperationTerminalV1 terminal,
+        String targetMeshName,
+        RoutingId targetNodeRid) {
+        ActorCreateTerminal creation = creationFromGenerated(
+            terminal.creation(), targetMeshName, targetNodeRid);
+        byte[] application = applicationFromGenerated(
+            terminal.applicationPayload());
+        return new ActorCreationTerminal(
+            Math.toIntExact(terminal.terminalResult().wire),
+            Math.toIntExact(terminal.failureCode().wire),
+            creation,
+            application);
+    }
+
+    private static ActorCreateTerminal creationFromGenerated(
+        ServiceWireCodec.ActorCreateTerminal terminal,
+        String targetMeshName,
+        RoutingId targetNodeRid) {
+        if (terminal == null) {
+            return null;
+        }
+        if (terminal instanceof
+                ServiceWireCodec.ActorCreateTerminalRejected) {
+            return new ActorCreateTerminal(ActorCreateResult.REJECTED, null);
+        }
+        ServiceWireCodec.ActorRef actor;
+        ActorCreateResult result;
+        if (terminal instanceof
+                ServiceWireCodec.ActorCreateTerminalCreated created) {
+            actor = created.actor();
+            result = ActorCreateResult.CREATED;
+        } else if (terminal instanceof
+                ServiceWireCodec.ActorCreateTerminalExisting existing) {
+            actor = existing.actor();
+            result = ActorCreateResult.EXISTING;
+        } else {
+            throw protocol("unknown generated Actor create terminal");
+        }
+        if (targetMeshName == null || targetNodeRid == null) {
+            throw protocol("Actor create terminal target route is required");
+        }
+        return new ActorCreateTerminal(
+            result,
+            new ActorRef(
+                actor.actorId().value(),
+                actor.objectGeneration().value(),
+                targetMeshName,
+                targetNodeRid));
+    }
+
+    private static byte[] applicationFromGenerated(
+        ServiceWireCodec.ApplicationPayloadEnvelopeV1 payload) {
+        if (payload == null) {
+            return null;
+        }
+        return new ZLinkServiceM6AWireCodec().encodeApplicationPayload(
+            new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                payload.packetName().value(),
+                payload.contentType().value(),
+                payload.payload().value()));
+    }
+
+    private static ServiceWireCodec.RequestTerminalResult
+        generatedTerminalResult(int wire) {
+        for (var value : ServiceWireCodec.RequestTerminalResult.values()) {
+            if (value.wire == Integer.toUnsignedLong(wire)) {
+                return value;
+            }
+        }
+        throw protocol("unknown terminalResult");
+    }
+
+    private static ServiceWireCodec.FrameworkErrorCode generatedFailureCode(
+        int wire) {
+        for (var value : ServiceWireCodec.FrameworkErrorCode.values()) {
+            if (value.wire == Integer.toUnsignedLong(wire)) {
+                return value;
+            }
+        }
+        throw protocol("unknown failureCode");
+    }
+
+    private static ServiceWireCodec.DecoderContext generatedContext() {
+        return new ServiceWireCodec.DecoderContext(
+            null,
+            null,
+            null,
+            0xffff_ffffL,
+            4_294_966_774L);
     }
 
     private static void requireActorTerminalShape(

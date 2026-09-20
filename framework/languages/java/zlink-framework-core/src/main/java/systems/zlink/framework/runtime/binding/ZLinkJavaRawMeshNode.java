@@ -5872,7 +5872,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         }
         var terminal =
             statefulWire.decodeCreationOperationTerminal(
-                terminalEnvelope);
+                terminalEnvelope, meshName, routingId());
         List<byte[]> frames = new ArrayList<>();
         frames.add(statefulWire.encodeActorCreateReply(
             command.correlation(), terminal));

@@ -1,6 +1,4 @@
 package systems.zlink.framework.runtime.locations;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
 
@@ -553,7 +551,8 @@ final class ZLinkInMemoryAuthorityStore {
             if (terminal == null) {
                 return completed(new ZLinkCreationTerminalMissing());
             }
-            return completed(new ZLinkCreationTerminalFound(terminal));
+            return completed(new ZLinkCreationTerminalFound(
+                terminal.terminalEnvelope()));
         });
     }
 
@@ -571,9 +570,6 @@ final class ZLinkInMemoryAuthorityStore {
             && Arrays.equals(
                 stored.terminalEnvelope(),
                 terminal.terminalEnvelope())
-            && Arrays.equals(
-                stored.terminalSha256(),
-                terminal.terminalSha256())
             && stored.expiresAt().equals(terminal.expiresAt());
     }
 
@@ -605,18 +601,6 @@ final class ZLinkInMemoryAuthorityStore {
         if (!terminal.expiresAt().isAfter(clock.instant())) {
             throw new IllegalArgumentException(
                 "terminal expiresAt must be later than provider store time");
-        }
-        byte[] computed;
-        try {
-            computed = MessageDigest
-                .getInstance("SHA-256")
-                .digest(terminal.terminalEnvelope());
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-        if (!Arrays.equals(computed, terminal.terminalSha256())) {
-            throw new IllegalArgumentException(
-                "terminalSha256 does not match terminalEnvelope");
         }
     }
 

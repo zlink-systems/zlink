@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.locations;
-import java.security.MessageDigest;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.framework.locations.ZLinkPageRequest;
@@ -110,7 +109,6 @@ class ZLinkInMemoryLocationStoreTest {
                 ZLinkCreationTerminalFound.class,
                 store.readCreationTerminal(firstOperation, () -> false)
                     .toCompletableFuture().get())
-                .terminal()
                 .terminalEnvelope());
         assertInstanceOf(
             ZLinkCreationTerminalMissing.class,
@@ -754,9 +752,6 @@ class ZLinkInMemoryLocationStoreTest {
             reservation,
             state,
             envelope,
-            MessageDigest
-                .getInstance("SHA-256")
-                .digest(envelope),
             NOW.plus(Duration.ofMinutes(5)));
     }
 

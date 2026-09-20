@@ -48,6 +48,9 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
@@ -60,6 +63,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /**
@@ -770,6 +774,107 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
                 expected,
                 actual,
                 "canonical JSON field mismatch against the golden vector");
+        }
+    }
+
+    @Test
+    void productionCreationTerminalMatchesGoldenKeyAndRawValue()
+        throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector = keyDerivationVector(
+            fixture, "creation-terminal");
+        String preimage = keyVector.path("preimagePrintable").asText()
+            .replace("\\u0000", "\0");
+        byte[] envelope = HexFormat.of().parseHex(
+            "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+                + "000000000000000100");
+        String storePrefix =
+            "goldenconf-creation-terminal:" + UUID.randomUUID();
+
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        "creation-terminal-owner", Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+            var descriptorKey = new ZLinkMeshNodeDescriptorKey(
+                "creation-terminal-mesh", RoutingId.fromHex("01020304"));
+            assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                repository.updateMeshNode(
+                        unlimitedMeshDescriptor(
+                            descriptorKey,
+                            1L,
+                            ZLinkPlacementObjectKind.ACTOR,
+                            "creation-terminal-actor",
+                            owner.token()),
+                        ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture().get().status());
+            var reserved = assertInstanceOf(
+                ZLinkObjectReserved.class,
+                repository.reserve(
+                        new ZLinkObjectReservationRequest(
+                            ZLinkPlacementObjectKind.ACTOR,
+                            ZLinkAuthorityKeyCodec.actor(
+                                "creation-terminal-golden"),
+                            "creation-terminal-actor",
+                            "creation-terminal-content",
+                            new byte[32],
+                            0,
+                            descriptorKey,
+                            1L,
+                            owner.token(),
+                            new byte[] {1},
+                            ZLinkPlacementCapacityBundle.actor(1)),
+                        () -> false)
+                    .toCompletableFuture().get());
+            var operation = new ZLinkCreationOperationIdentity(
+                RoutingId.fromHex("01020304"), 7L, 0x2aL, 1L);
+            var terminal = new ZLinkCreationOperationTerminal(
+                operation,
+                reserved.reservation(),
+                ZLinkCreationTerminalState.CREATED,
+                envelope,
+                Instant.now().plus(Duration.ofMinutes(5)));
+
+            assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository.commit(
+                        reserved.reservation(),
+                        new byte[] {9},
+                        terminal,
+                        () -> false)
+                    .toCompletableFuture().get());
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            assertArrayEquals(envelope, raw.value().bytes());
+            var decoded = new ZLinkServiceM6BWireCodec()
+                .decodeCreationOperationTerminal(
+                    raw.value().bytes(),
+                    "canonical-mesh",
+                    RoutingId.from("canonical-node"));
+            assertEquals(
+                "actor-canonical",
+                decoded.creation().actor().actorId());
+            assertEquals(
+                1L,
+                decoded.creation().actor().objectGeneration());
+            assertInstanceOf(
+                ZLinkStoreReadMissing.class,
+                store.read(
+                        new ZLinkStoreKey(preimage + ":payload"),
+                        () -> false)
+                    .toCompletableFuture().get());
         }
     }
 

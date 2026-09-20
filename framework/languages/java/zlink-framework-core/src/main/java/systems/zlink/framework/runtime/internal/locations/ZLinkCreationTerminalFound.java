@@ -1,11 +1,14 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import java.util.Objects;
-
 public record ZLinkCreationTerminalFound(
-    ZLinkCreationOperationTerminal terminal)
+    byte[] terminalEnvelope)
     implements ZLinkCreationTerminalReadResult {
     public ZLinkCreationTerminalFound {
-        Objects.requireNonNull(terminal, "terminal");
+        terminalEnvelope = terminalEnvelope.clone();
+    }
+
+    @Override
+    public byte[] terminalEnvelope() {
+        return terminalEnvelope.clone();
     }
 }
