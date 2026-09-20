@@ -53,10 +53,17 @@ export class ZLinkActorCreationCoordinator {
           this.options.actorDestroyedCleanup?.(actorId);
           state.clearAfterDestroy();
         },
-        () => this.createActorAfterClaim(actorId, actorType, state, createRequest, true, signal)
+        () => this.createActorAfterClaim(
+          actorId,
+          actorType,
+          state,
+          createRequest,
+          true,
+          signal
+        )
       );
       if (activation.activated !== undefined) {
-        if (activation.activated.status === 'rejected') {
+        if (activation.activated.status !== 'created') {
           await lifecycle.releaseActor(actorType, actorId);
           return activation.activated;
         }
@@ -77,7 +84,14 @@ export class ZLinkActorCreationCoordinator {
       );
     }
 
-    return await this.createActorAfterClaim(actorId, actorType, state, createRequest, claimLocation, signal);
+    return await this.createActorAfterClaim(
+      actorId,
+      actorType,
+      state,
+      createRequest,
+      claimLocation,
+      signal
+    );
   }
 
   async materializeTransferredActor(
@@ -122,8 +136,14 @@ export class ZLinkActorCreationCoordinator {
       this.options.actorMeshNameProvider
     ));
     const nativeActorNode = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
+    let actor: ZLinkActor;
     try {
-      const actor = await factory.create(context, signal);
+      actor = await factory.create(context, signal);
+    } catch (error) {
+      await this.discardStagingActor(state, nativeActorNode);
+      return { status: 'failed', error };
+    }
+    try {
       if (actor.context !== context || actor.context.actorId !== context.actorId) {
         throw new ZLinkConfigurationException(
           `Actor factory '${actorType}' must return an Actor bound to the exact supplied context.`

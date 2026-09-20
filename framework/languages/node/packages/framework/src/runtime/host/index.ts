@@ -2423,17 +2423,15 @@ export class ZLinkFrameworkRuntimeHost implements
                   'Remote Actor creation requires native authority restoration support.'
                 );
               }
-              let local: Awaited<ReturnType<typeof actors.createReservedActorResult>>;
-              try {
-                local = await actors.createReservedActorResult(
-                  record.actorId,
-                  record.stableType,
-                  request,
-                  createSignal,
-                  nativeActorRef
-                );
-              } catch (error) {
-                return { result: 'failed' as const, error };
+              const local = await actors.createReservedActorResult(
+                record.actorId,
+                record.stableType,
+                request,
+                createSignal,
+                nativeActorRef
+              );
+              if (local.status === 'failed') {
+                return { result: 'failed' as const, error: local.error };
               }
               if (local.status === 'rejected') {
                 let reply: Buffer | undefined;
