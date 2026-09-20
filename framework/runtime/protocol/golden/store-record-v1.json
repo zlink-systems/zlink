@@ -68,7 +68,7 @@
         "operationIdHigh": "42",
         "operationIdLow": "1"
       },
-      "note": "key vector only; the value is creation-operation-terminal-v1 bytes as-is, owned by the service-wire schema fixtures (22-location-store-redis.md#10)"
+      "note": "key vector only; the value is creation-operation-terminal-v1 bytes as-is, whose format the service-wire schema owns (22-location-store-redis.md#10)"
     }
   ],
   "counterVectors": {

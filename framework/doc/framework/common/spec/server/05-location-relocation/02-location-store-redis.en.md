@@ -376,8 +376,8 @@ record golden fixture. Each item maps to one test.
   (`framework/runtime/protocol/golden/store-record-v1.json`) key-derivation
   vectors (preimage → SHA-256 → full key string) as-is; the five records
   with a canonical JSON value also consume its value byte vectors (including
-  tombstone and expired variants). The service-wire schema's fixtures own the
-  creation terminal's value bytes.
+  tombstone and expired variants). The service-wire schema owns the creation
+  terminal's value byte format.
 - An unrecognized format tag or `recordVersion` fails explicitly, and
   there's no backward-compatible path that reads the old key/value format
   and converts it to the new opaque record.

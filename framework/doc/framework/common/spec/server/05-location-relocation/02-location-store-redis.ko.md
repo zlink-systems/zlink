@@ -312,7 +312,7 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
 - §9의 여섯 record는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
   key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)를, 그중 canonical JSON value를 갖는 다섯
   record는 value byte 벡터(tombstone·만료 variant 포함)도 그대로 소비하는 conformance test로
-  검증한다. Creation terminal의 value bytes는 service-wire schema의 fixture가 소유한다.
+  검증한다. Creation terminal의 value byte 형식은 service-wire schema가 소유한다.
 - 인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을
   읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.
 
