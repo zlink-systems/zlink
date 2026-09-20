@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HexFormat;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 
@@ -33,6 +34,7 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             recovery.sha256());
         assertEquals(175, recovery.encodedSize());
         assertEquals(1, recovery.inboxSequence());
+        assertEquals(0, recovery.replayCursor());
         assertArrayEquals(encoded, codec.encode(decoded));
     }
 
@@ -101,7 +103,8 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             HexFormat.of().parseHex(
                 "d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e"),
             175,
-            1);
+            1,
+            0);
         var ready = codec.decode(codec.encodeInstance(
             ZLinkServiceAuthorityPayloadCodec.State.READY,
             "game.room",
@@ -137,7 +140,8 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             HexFormat.of().parseHex(
                 "d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e"),
             175,
-            1);
+            1,
+            0);
 
         assertThrows(IllegalArgumentException.class, () -> codec.encodeInstance(
             ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
@@ -165,6 +169,64 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
         updateChecksum(closingWithRecovery);
 
         assertTrue(codec.decode(closingWithRecovery).isEmpty());
+    }
+
+    @Test
+    void activationRecoveryRoundTripsCanonicalPointer() {
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        String reference = "r".repeat(300);
+        var recovery = new ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState(
+            reference,
+            HexFormat.of().parseHex(
+                "d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e"),
+            175,
+            7,
+            3);
+
+        var decoded = codec.decode(codec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.READY,
+            "game.room",
+            "room-17",
+            "owner-b",
+            31,
+            "game",
+            RoutingId.from("node-b"),
+            17,
+            Optional.of(recovery))).orElseThrow()
+            .activationRecoveryState().orElseThrow();
+
+        assertEquals(reference, decoded.reference());
+        assertEquals(7, decoded.inboxSequence());
+        assertEquals(3, decoded.replayCursor());
+        assertArrayEquals(recovery.sha256(), decoded.sha256());
+    }
+
+    @Test
+    void activationRecoveryRejectsCursorBeyondInboxSequence() {
+        assertThrows(IllegalArgumentException.class, () ->
+            new ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState(
+                "activation-17",
+                new byte[32],
+                175,
+                7,
+                8));
+    }
+
+    @Test
+    void activationRecoveryBytesMatchNodeCodec() {
+        byte[] nodeBytes = HexFormat.of().parseHex(
+            "5a4c41550100000000008e000200180300150200120967616d652e726f6f6d"
+                + "07726f6f6d2d3137076f776e65722d62000000000000001f0467616d6506"
+                + "6e6f64652d62000000000000001100000000000100000044000d61637469"
+                + "766174696f6e2d313720d71bdc8539d184b7ea5a91006b49bee290fcd6a5"
+                + "811bb2061a29c5a09ec9399e000000af0000000000000001000000000000"
+                + "00006e3d3fe0");
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var decoded = codec.decode(nodeBytes).orElseThrow();
+
+        assertEquals("activation-17",
+            decoded.activationRecoveryState().orElseThrow().reference());
+        assertArrayEquals(nodeBytes, codec.encode(decoded));
     }
 
     private static void updateChecksum(byte[] payload) {

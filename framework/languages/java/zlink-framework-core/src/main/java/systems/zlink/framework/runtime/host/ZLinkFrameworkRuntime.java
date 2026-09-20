@@ -395,6 +395,7 @@ public final class ZLinkFrameworkRuntime
                 && !this.meshNodes.nodesByName().isEmpty()
             ? new ZLinkStatefulAuthorityRouteRuntime(
                 this.locationStores.authorityStore(),
+                this.registration.relocationStore(),
                 this.meshNodes.nodesByName(),
                 this.registration.locations().options()
                     .pollingInterval(),

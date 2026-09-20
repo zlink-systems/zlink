@@ -104,16 +104,18 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         String reference,
         byte[] sha256,
         long encodedSize,
-        long inboxSequence) {
+        long inboxSequence,
+        long replayCursor) {
         public ActivationRecoveryState {
             byte[] digest = Objects.requireNonNull(sha256, "sha256").clone();
             if (digest.length != 32
                 || encodedSize < 0 || encodedSize > 1024 * 1024
-                || inboxSequence <= 0) {
+                || inboxSequence == 0
+                || Long.compareUnsigned(replayCursor, inboxSequence) > 0) {
                 throw new IllegalArgumentException(
                     "invalid activation recovery state");
             }
-            validateText8(reference);
+            validateText16(reference);
             sha256 = digest;
         }
 
@@ -382,30 +384,45 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             throw new IllegalArgumentException(
                 "invalid activation recovery discriminator");
         }
-        String reference = recovery.text8();
+        String reference = recovery.text16();
+        if (recovery.u8() != 32) {
+            throw new IllegalArgumentException(
+                "invalid activation recovery digest length");
+        }
         byte[] sha256 = recovery.bytes(32);
         long encodedSize = recovery.unsignedU32();
-        long inboxSequence = recovery.nonzeroU64();
+        long inboxSequence = recovery.opaqueNonzeroU64();
+        long replayCursor = recovery.opaqueU64();
+        if (Long.compareUnsigned(replayCursor, inboxSequence) > 0) {
+            throw new IllegalArgumentException(
+                "activation recovery cursor exceeds inbox sequence");
+        }
         if (!recovery.end()) {
             throw new IllegalArgumentException(
                 "invalid activation recovery");
         }
         return Optional.of(new ActivationRecoveryState(
-            reference, sha256, encodedSize, inboxSequence));
+            reference, sha256, encodedSize, inboxSequence, replayCursor));
     }
 
     private static byte[] encodeActivationRecovery(
         ActivationRecoveryState recovery) {
         Writer writer = new Writer();
-        writer.text8(recovery.reference());
+        writer.text16(recovery.reference());
+        writer.u8(32);
         writer.raw(recovery.sha256());
         writer.u32(recovery.encodedSize());
-        writer.nonzeroU64(recovery.inboxSequence());
+        writer.opaqueNonzeroU64(recovery.inboxSequence());
+        writer.opaqueU64(recovery.replayCursor());
         return writer.bytes();
     }
 
     private static void validateText8(String value) {
         Writer.bounded(value);
+    }
+
+    private static void validateText16(String value) {
+        Writer.bounded16(value);
     }
 
     private sealed interface DecodedSpot
@@ -513,9 +530,30 @@ public final class ZLinkServiceAuthorityPayloadCodec {
                 .array());
         }
 
+        void opaqueNonzeroU64(long value) {
+            if (value == 0) {
+                throw new IllegalArgumentException(
+                    "authority nonzero u64 is zero");
+            }
+            opaqueU64(value);
+        }
+
+        void opaqueU64(long value) {
+            raw(ByteBuffer.allocate(8)
+                .order(ByteOrder.BIG_ENDIAN)
+                .putLong(value)
+                .array());
+        }
+
         void text8(String value) {
             byte[] bytes = bounded(value);
             u8(bytes.length);
+            raw(bytes);
+        }
+
+        void text16(String value) {
+            byte[] bytes = bounded16(value);
+            u16(bytes.length);
             raw(bytes);
         }
 
@@ -555,10 +593,18 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         }
 
         private static byte[] bounded(String value) {
+            return bounded(value, 0xff);
+        }
+
+        private static byte[] bounded16(String value) {
+            return bounded(value, 0xffff);
+        }
+
+        private static byte[] bounded(String value, int maximum) {
             byte[] bytes = Objects.requireNonNull(value, "text")
                 .getBytes(StandardCharsets.UTF_8);
             if (bytes.length == 0
-                || bytes.length > 0xff
+                || bytes.length > maximum
                 || value.indexOf('\0') >= 0) {
                 throw new IllegalArgumentException(
                     "authority text exceeds bounds");
@@ -636,6 +682,24 @@ public final class ZLinkServiceAuthorityPayloadCodec {
                 throw new IllegalArgumentException(
                     "authority u64 exceeds JVM bound");
             }
+            return value;
+        }
+
+        long opaqueNonzeroU64() {
+            long value = opaqueU64();
+            if (value == 0) {
+                throw new IllegalArgumentException(
+                    "authority nonzero u64 is zero");
+            }
+            return value;
+        }
+
+        long opaqueU64() {
+            require(8);
+            long value = ByteBuffer.wrap(bytes, offset, 8)
+                .order(ByteOrder.BIG_ENDIAN)
+                .getLong();
+            offset += 8;
             return value;
         }
 

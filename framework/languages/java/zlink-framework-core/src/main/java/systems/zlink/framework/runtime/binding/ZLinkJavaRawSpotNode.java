@@ -47,6 +47,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -2396,6 +2398,83 @@ final class ZLinkJavaRawSpotNode
             instanceAuthorities.remove(
                 route.targetSpotId(), current);
         }
+    }
+
+    CompletionStage<Void> recoverInstanceSpot(
+        ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+        ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        reconcileInstanceSpotAuthority(envelope.stableType(), route);
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload =
+            new ZLinkServiceM6AWireCodec().decodeApplicationPayload(
+                envelope.applicationPayloadFrame());
+        List<Message> parts = ZLinkServiceM6AWireCodec
+            .decodeFrameworkMultipart(payload);
+        ZLinkServiceM6BWireCodec.InstanceSpotMessage header =
+            new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                0,
+                route,
+                envelope.stableType(),
+                envelope.sourceNodeGeneration(),
+                envelope.sourceNodeRid(),
+                envelope.sourceSpotId().orElse(null),
+                envelope.request(),
+                envelope.operationHigh(),
+                envelope.operationLow(),
+                envelope.replyRouteId());
+        CompletableFuture<Void> terminal = new CompletableFuture<>();
+        try {
+            owner.executeApplication(() -> {
+                CompletionStage<ZLinkJavaInstanceSpotRegistry.Activation> activation;
+                try {
+                    activation = instanceSpots.activate(
+                        route.targetSpotId(), envelope.stableType(),
+                        route.objectGeneration());
+                } catch (Throwable failure) {
+                    parts.forEach(Message::close);
+                    terminal.completeExceptionally(failure);
+                    return;
+                }
+                activation.whenComplete((value, activationFailure) -> {
+                    if (activationFailure != null) {
+                        parts.forEach(Message::close);
+                        terminal.completeExceptionally(activationFailure);
+                        return;
+                    }
+                    if (value == null
+                        || !(value.spot() instanceof ZLinkJavaRawSpot target)) {
+                        parts.forEach(Message::close);
+                        terminal.completeExceptionally(new IllegalStateException(
+                            "Recovered Instance activation returned an invalid Spot"));
+                        return;
+                    }
+                    ZLinkBackendReceived received = new ZLinkBackendReceived(
+                        ZLinkBackendRequestResult.OK,
+                        Optional.of(envelope.sourceNodeRid()),
+                        envelope.sourceSpotId(),
+                        Optional.ofNullable(envelope.replyRouteId()),
+                        envelope.metadataFrame(),
+                        new byte[0],
+                        parts,
+                        envelope.request()
+                            ? reply -> reply.forEach(Message::close)
+                            : null,
+                        () -> { },
+                        payload.contentType());
+                    target.enqueueRoute(received).whenComplete(
+                        (ignored, dispatchFailure) -> {
+                            if (dispatchFailure == null) {
+                                terminal.complete(null);
+                            } else {
+                                terminal.completeExceptionally(dispatchFailure);
+                            }
+                        });
+                });
+            });
+        } catch (RuntimeException failure) {
+            parts.forEach(Message::close);
+            terminal.completeExceptionally(failure);
+        }
+        return terminal;
     }
 
     boolean enqueueRemoteInstanceSpot(

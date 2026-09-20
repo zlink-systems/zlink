@@ -1,5 +1,12 @@
 package systems.zlink.framework.runtime.locations;
 import java.util.concurrent.atomic.AtomicReference;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.CRC32C;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 
@@ -20,6 +27,15 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationDeleteResult;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
@@ -101,6 +117,48 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         }
     }
 
+    @Test
+    void readyRecoveryReplaysBeforeCursorAndPointerCas() throws Exception {
+        byte[] envelope = recoveryEnvelope();
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(envelope);
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var entries = new AtomicReference<>(List.of(entry(
+            "v1",
+            ZLinkPlacementAllocationState.ACTIVE,
+            codec.encodeInstance(
+                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                STABLE_TYPE,
+                SPOT_RID.toString(),
+                OWNER_ID,
+                OWNER_LEASE_GENERATION,
+                MESH_NAME,
+                NODE_RID,
+                NODE_GENERATION,
+                Optional.of(new ZLinkServiceAuthorityPayloadCodec
+                    .ActivationRecoveryState(
+                        "activation-root", digest, envelope.length, 1, 0))))));
+        var versions = new AtomicInteger(1);
+        var events = new CopyOnWriteArrayList<String>();
+        ZLinkLocationRepository store = authorityStore(entries, versions, events);
+        ZLinkRelocationStore relocation = relocationStore(envelope, events);
+        var recorded = new RecordedNode(events);
+
+        try (var runtime = new ZLinkStatefulAuthorityRouteRuntime(
+                 store,
+                 relocation,
+                 Map.of(MESH_NAME, recorded.proxy()),
+                 Duration.ofHours(1),
+                 failure -> { throw new AssertionError(failure); })) {
+            runtime.start().toCompletableFuture().join();
+        }
+
+        assertEquals(List.of("replay", "cursor", "release", "delete"), events);
+        var recovered = codec.decode(entries.get().getFirst().snapshot().payload())
+            .orElseThrow();
+        assertTrue(recovered.activationRecoveryState().isEmpty());
+        assertEquals(1, recorded.registered.size());
+    }
+
     private static ZLinkAuthorityEntry entry(
         String storeVersion,
         ZLinkPlacementAllocationState state,
@@ -149,6 +207,122 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
             });
     }
 
+    private static ZLinkLocationRepository authorityStore(
+        AtomicReference<List<ZLinkAuthorityEntry>> entries,
+        AtomicInteger versions,
+        List<String> events) {
+        return (ZLinkLocationRepository) Proxy.newProxyInstance(
+            ZLinkLocationRepository.class.getClassLoader(),
+            new Class<?>[] {ZLinkLocationRepository.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("list")) {
+                    return CompletableFuture.completedFuture(
+                        new ZLinkAuthorityPage(entries.get(), Optional.empty()));
+                }
+                if (method.getName().equals("compareExchange")) {
+                    ZLinkAuthorityEntry current = entries.get().getFirst();
+                    ZLinkAuthorityExpectFound expected =
+                        (ZLinkAuthorityExpectFound) arguments[1];
+                    assertEquals(current.snapshot().storeVersion(),
+                        expected.storeVersion());
+                    ZLinkAuthorityPut put = (ZLinkAuthorityPut) arguments[2];
+                    String version = "v" + versions.incrementAndGet();
+                    var snapshot = current.snapshot();
+                    var stored = new ZLinkAuthorityStored(
+                        version, put.payload(), snapshot.objectGeneration(),
+                        snapshot.authorityOwnerGeneration(), snapshot.ownerId(),
+                        snapshot.ownerLeaseGeneration(), snapshot.allocation(),
+                        Instant.EPOCH);
+                    entries.set(List.of(new ZLinkAuthorityEntry(
+                        current.key(), new ZLinkAuthoritySnapshot(
+                            stored.storeVersion(), stored.payload(),
+                            stored.objectGeneration(),
+                            stored.authorityOwnerGeneration(), stored.ownerId(),
+                            stored.ownerLeaseGeneration(), stored.allocation(),
+                            stored.storeNow()))));
+                    var decoded = new ZLinkServiceAuthorityPayloadCodec()
+                        .decode(stored.payload()).orElseThrow();
+                    events.add(decoded.activationRecoveryState().isPresent()
+                        ? "cursor" : "release");
+                    return CompletableFuture.completedFuture(stored);
+                }
+                if (method.getDeclaringClass() == Object.class) {
+                    return method.invoke(entries, arguments);
+                }
+                throw new UnsupportedOperationException(method.getName());
+            });
+    }
+
+    private static ZLinkRelocationStore relocationStore(
+        byte[] envelope,
+        List<String> events) {
+        return (ZLinkRelocationStore) Proxy.newProxyInstance(
+            ZLinkRelocationStore.class.getClassLoader(),
+            new Class<?>[] {ZLinkRelocationStore.class},
+            (proxy, method, arguments) -> switch (method.getName()) {
+                case "get" -> CompletableFuture.completedFuture(
+                    new ZLinkRelocationFound(envelope));
+                case "delete" -> {
+                    events.add("delete");
+                    yield CompletableFuture.completedFuture(
+                        ZLinkRelocationDeleteResult.DELETED);
+                }
+                case "toString" -> "RecoveryStore";
+                case "hashCode" -> System.identityHashCode(proxy);
+                case "equals" -> proxy == arguments[0];
+                default -> throw new UnsupportedOperationException(method.getName());
+            });
+    }
+
+    private static byte[] recoveryEnvelope() {
+        var payloadCodec = new ZLinkServiceM6AWireCodec();
+        byte[] application = payloadCodec.encodeApplicationPayload(
+            new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                "packet", "application/json",
+                "{}".getBytes(StandardCharsets.UTF_8)));
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        text8(body, SPOT_RID.toString());
+        text8(body, STABLE_TYPE);
+        text8(body, MESH_NAME);
+        text8(body, NODE_RID.toString());
+        u64(body, NODE_GENERATION);
+        text8(body, "41");
+        text8(body, "source-node");
+        u64(body, 19);
+        body.write(0);
+        body.write(1);
+        u64(body, 1);
+        u64(body, 2);
+        u64(body, 1000);
+        body.write(0);
+        body.writeBytes(application);
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        result.writeBytes(new byte[] {0x5a, 0x4c, 0x49, 0x41, 1, 0, 0});
+        u32(result, body.size());
+        result.writeBytes(body.toByteArray());
+        CRC32C crc = new CRC32C();
+        byte[] withoutChecksum = result.toByteArray();
+        crc.update(withoutChecksum, 0, withoutChecksum.length);
+        u32(result, crc.getValue());
+        return result.toByteArray();
+    }
+
+    private static void text8(ByteArrayOutputStream output, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        output.write(bytes.length);
+        output.writeBytes(bytes);
+    }
+
+    private static void u32(ByteArrayOutputStream output, long value) {
+        output.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
+            .putInt((int) value).array());
+    }
+
+    private static void u64(ByteArrayOutputStream output, long value) {
+        output.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+            .putLong(value).array());
+    }
+
     private static void assertFence(
         ZLinkServiceM6BWireCodec.InstanceRouteFence fence) {
         assertEquals(NODE_RID, fence.targetNodeRid());
@@ -173,6 +347,7 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     }
 
     private static final class RecordedNode {
+        private final List<String> events;
         private final List<ZLinkInternalMeshNode.SpotAuthorityRoute>
             remembered = new CopyOnWriteArrayList<>();
         private final List<ZLinkInternalMeshNode.SpotAuthorityRoute>
@@ -181,6 +356,14 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
             registered = new CopyOnWriteArrayList<>();
         private final List<ZLinkServiceM6BWireCodec.InstanceRouteFence>
             forgottenIntents = new CopyOnWriteArrayList<>();
+
+        RecordedNode() {
+            this(new CopyOnWriteArrayList<>());
+        }
+
+        RecordedNode(List<String> events) {
+            this.events = events;
+        }
 
         ZLinkInternalMeshNode proxy() {
             return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
@@ -204,6 +387,22 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                             forgottenIntents.add(
                                 (ZLinkServiceM6BWireCodec.InstanceRouteFence)
                                     arguments[0]);
+                        case "recoverInstanceActivation" -> {
+                            events.add("replay");
+                            return CompletableFuture.completedFuture(null);
+                        }
+                        case "routingId" -> {
+                            return NODE_RID;
+                        }
+                        case "lifecycleGeneration" -> {
+                            return NODE_GENERATION;
+                        }
+                        case "status" -> {
+                            return new MeshNodeStatus(
+                                MeshNodeState.READY, NODE_RID, MESH_NAME,
+                                "", NODE_GENERATION, 41, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0);
+                        }
                         case "name" -> {
                             return "recorded-node";
                         }

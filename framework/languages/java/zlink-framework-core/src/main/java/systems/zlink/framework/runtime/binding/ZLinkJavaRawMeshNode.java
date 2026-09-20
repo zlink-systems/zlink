@@ -3795,6 +3795,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             .forgetInstanceSpotAuthority(route);
     }
 
+    @Override
+    public CompletionStage<Void> recoverInstanceActivation(
+        systems.zlink.framework.runtime.internal.service
+            .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+        ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        return ((ZLinkJavaRawSpotNode) spotNode())
+            .recoverInstanceSpot(envelope, route);
+    }
+
     private void completeUserSpotCreate(
         UUID operationId,
         long correlation,
