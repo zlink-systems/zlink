@@ -19,7 +19,7 @@ test('Bingo retrieves and reports player records through yielded API requests', 
     'samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts'
   );
   assert.match(room, /requestToChannel\(\s*SampleNames\.apiChannel,\s*new GetPlayerRecordReq/);
-  assert.match(room, /requestToChannel\(SampleNames\.apiChannel, new ReportBingoResultReq/);
+  assert.match(room, /requestToChannel\(\s*SampleNames\.apiChannel,\s*new ReportBingoResultReq/);
   assert.match(room, /new GetPlayerRecordReq\(\{ actorId \}\)[\s\S]*?\.yield<GetPlayerRecordRes>\(\)/);
   assert.doesNotMatch(room, /new GetPlayerRecordReq\(\{ actorId \}\)[\s\S]*?\.submit<GetPlayerRecordRes>\(\)/);
   assert.match(room, /!this\.playerIds\.has\(actorId\) \|\| this\.snapshot\(\)\.status === BingoRoomStatus\.Finished/);

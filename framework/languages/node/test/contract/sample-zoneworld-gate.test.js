@@ -214,7 +214,7 @@ test('ZoneWorld human state pushes cross the ActorRef boundary before the bound 
   const actor = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Actors/player-actor.ts');
   const spot = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Spots/zone-spot.ts');
   assert.match(actor, /push\(payload: unknown\): void/);
-  assert.match(actor, /this\.context\.boundSession\.send\(payload\)\.submit\(\)/);
+  assert.match(actor, /this\.context\.boundSession\s*\.send\(payload\)\s*\.submit\(\)/);
   assert.doesNotMatch(actor, /await[\s\S]*?boundSession\.send/);
   assert.match(spot, /sendToActor\(actorId, new DeliverZoneNotificationMsg\(payload\)\)/);
   assert.doesNotMatch(spot, /Map<string, PlayerActor>/);

@@ -25,8 +25,8 @@ test('SupportChat preserves the domain conversation state through the open respo
   assert.match(contracts, /type OpenConversationApiRes = \{ conversationId: string; status: ConversationStatus \};/);
   assert.match(api, /\.create\(SampleNames\.conversationSpotType\)/);
   assert.match(api, /\.inMesh\(SampleNames\.meshName\)/);
-  assert.match(entry, /actor\.scheduleConversationJoin\(new JoinSupportConversation\(/);
-  assert.match(actor, /this\.context\.joinSpot\([\s\S]*?\)\.defer\(\)/);
+  assert.match(entry, /actor\.scheduleConversationJoin\(\s*new JoinSupportConversation\(/);
+  assert.match(actor, /this\.context\s*\.joinSpot\([\s\S]*?\)\s*\.defer\(\)/);
   assert.match(actor, /JoinConversationFailedNotify/);
   assert.match(api, /status:\s*ConversationStatuses\.WaitingForAgent/);
   assert.doesNotMatch(api, /requestToChannel|supportChannel|nodeRid/);
