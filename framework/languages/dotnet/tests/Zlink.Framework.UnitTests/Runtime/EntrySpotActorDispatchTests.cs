@@ -10676,11 +10676,11 @@ public sealed partial class EntrySpotActorDispatchTests
             ulong,
             TimeSpan,
             CancellationToken,
-            ValueTask<(ActorCreateCompletion Completion, IReadOnlyList<Message> Reply)>>?
+            ValueTask<(ActorCreateCompletion? Completion, IReadOnlyList<Message> Reply)>>?
             ActorCreateRemoteHandler { get; set; }
 
         public ValueTask<(
-            ActorCreateCompletion Completion,
+            ActorCreateCompletion? Completion,
             IReadOnlyList<Message> Reply)> CreateActorRemoteAsync(
             RoutingId targetNodeRid,
             string actorId,
@@ -10700,7 +10700,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 timeout,
                 cancellationToken)
             ?? ValueTask.FromException<(
-                ActorCreateCompletion,
+                ActorCreateCompletion?,
                 IReadOnlyList<Message>)>(new NotSupportedException());
 
         public ValueTask DisposeAsync() =>
@@ -10974,6 +10974,23 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkBackendActorRef CreateActor(string actorId, Message createRequest)
         {
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, 1);
+            CreatedActors.Add(actor);
+            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            return actor;
+        }
+
+        public ZLinkBackendActorRef CreateReservedActor(
+            string actorId,
+            ulong objectGeneration,
+            ulong authorityOwnerGeneration,
+            Message createRequest)
+        {
+            _ = authorityOwnerGeneration;
+            _ = createRequest;
+            var actor = new ZLinkBackendActorRef(
+                RoutingId,
+                actorId,
+                objectGeneration);
             CreatedActors.Add(actor);
             CreatedActorEntryRids.Add(_entrySpot.RoutingId);
             return actor;

@@ -545,7 +545,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     }
 
     public async ValueTask<(
-        ActorCreateCompletion Completion,
+        ActorCreateCompletion? Completion,
         IReadOnlyList<Message> Reply)> CreateActorRemoteAsync(
         RoutingId targetNodeRid,
         string actorId,
@@ -558,22 +558,22 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     {
         EnsureStarted();
         var terminal = new TaskCompletionSource<(
-            ActorCreateCompletion, IReadOnlyList<Message>)>(
+            ActorCreateCompletion?, IReadOnlyList<Message>)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
             (record, parts) =>
         {
-            if (record.TerminalResult == (int)RequestResult.Ok
-                && record.ActorCreateCompletion is { } completion)
+            if (record.TerminalResult == (int)RequestResult.Ok)
             {
-                var actor = completion.Result is ActorCreateResult.Existing
+                var completion = record.ActorCreateCompletion;
+                var actor = completion?.Result is ActorCreateResult.Existing
                     or ActorCreateResult.Created
                     ? completion.Actor
                     : default;
                 terminal.TrySetResult((
-                    completion with { Actor = actor },
+                    completion is null ? null : completion with { Actor = actor },
                     parts));
             }
             else

@@ -362,6 +362,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         string actorId,
         string stableType,
         ObjectReservationFence reservation,
+        ZLinkCreationOperationId creationOperation,
         ulong deadlineUnixMs,
         CancellationToken cancellationToken)
     {
@@ -374,9 +375,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (remaining <= 0)
             throw new TimeoutException("The Actor create deadline elapsed.");
 
-        var operationId = Node.AllocateOperationId();
-        var correlation = operationId.Low;
         var status = Node.MeshStatus();
+        if (creationOperation.SourceNodeRid != Node.RoutingId
+            || creationOperation.SourceNodeGeneration != status.LifecycleGeneration
+            || creationOperation.OperationIdHigh == 0
+                && creationOperation.OperationIdLow == 0)
+            throw new ArgumentException(
+                "The creation operation identity must belong to this source node.",
+                nameof(creationOperation));
+        var correlation = Node.AllocateOperationId().Low;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             _stopSource.Token);
@@ -384,9 +391,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         var terminal = await target.CreateAsync(
                 new ActorCreateOperation(
                     correlation,
-                    operationId,
-                    Node.RoutingId,
-                    status.LifecycleGeneration,
+                    new MeshOperationId(
+                        creationOperation.OperationIdHigh,
+                        creationOperation.OperationIdLow),
+                    creationOperation.SourceNodeRid,
+                    creationOperation.SourceNodeGeneration,
                     actorId,
                     stableType,
                     reservation,

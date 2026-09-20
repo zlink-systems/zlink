@@ -427,7 +427,69 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task ActorManager_ResponseLoss_ReturnsStoredCreationTerminal()
+    public Task ActorManager_ResponseLoss_ReturnsStoredCreationTerminal() =>
+        AssertRemoteCreationTerminalReconciledAsync(responseLost: true);
+
+    [Fact]
+    public Task ActorManager_IncompleteResponse_ReturnsStoredCreationTerminal() =>
+        AssertRemoteCreationTerminalReconciledAsync(responseLost: false);
+
+    [Fact]
+    public async Task ActorManager_LocalCompletionException_ReturnsStoredCreationTerminal()
+    {
+        ThrowAfterCreationCompleteStore? failingStore = null;
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            preseedActorOwnership: false,
+            locationStoreWrapper: inner => failingStore = new(inner));
+        try
+        {
+            var store = RequireLocationStore(runtime);
+            var local = Assert.Single(
+                (await store.ListMeshNodesAsync(
+                    "entry",
+                    new ZLinkPageRequest(100))).Items,
+                descriptor => descriptor.Rid == node.RoutingId);
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                (await store.UpdateMeshNodeAsync(
+                    local with
+                    {
+                        DescriptorRevision = checked(local.DescriptorRevision + 1),
+                        ObjectCapabilities =
+                        [
+                            ..local.ObjectCapabilities,
+                            new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.Actor,
+                                "probe",
+                                ZLinkObjectMaintenancePolicyKind.Disabled,
+                                false,
+                                0)
+                        ]
+                    },
+                    ZLinkLocationWriteIntent.Renew)).Status);
+            failingStore!.Enabled = true;
+            var manager = new ZLinkActorManagerService(runtime);
+
+            var result = await manager.GetOrCreate(
+                    "local-completion-exception",
+                    "probe")
+                .InMesh("entry")
+                .Async();
+
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(result);
+            Assert.Equal("local-completion-exception", created.Actor.ActorId);
+            Assert.True(failingStore.ThrewAfterCreationComplete);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task AssertRemoteCreationTerminalReconciledAsync(
+        bool responseLost)
     {
         const string actorId = "response-loss-actor";
         const string actorType = "response-loss-probe";
@@ -510,7 +572,9 @@ public sealed partial class EntrySpotActorDispatchTests
                                     checked((long)deadlineUnixMs))
                                 .AddMinutes(1))));
                 Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(completed);
-                throw new TimeoutException("response lost after terminal storage");
+                if (responseLost)
+                    throw new TimeoutException("response lost after terminal storage");
+                return (null, Array.Empty<Message>());
             };
 
             var manager = new ZLinkActorManagerService(runtime);
@@ -772,6 +836,44 @@ public sealed partial class EntrySpotActorDispatchTests
             if (CorruptStore is not null) CorruptStore.Enabled = false;
             await Runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private sealed class ThrowAfterCreationCompleteStore(IZLinkLocationStore inner)
+        : IZLinkLocationStore
+    {
+        private int _thrown;
+
+        public bool Enabled { get; set; }
+
+        public bool ThrewAfterCreationComplete => Volatile.Read(ref _thrown) != 0;
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var result = await inner.WriteAsync(request, cancellationToken);
+            if (Enabled
+                && result is ZLinkStoreWriteResult.Applied
+                && request.Mutations.Any(static mutation =>
+                    mutation is ZLinkStoreMutation.Put put
+                    && put.Key.Value.StartsWith(
+                        "creation-terminal\0",
+                        StringComparison.Ordinal))
+                && Interlocked.CompareExchange(ref _thrown, 1, 0) == 0)
+                throw new InvalidOperationException(
+                    "completion failed after the terminal was stored");
+            return result;
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 
     private sealed class ToggleMissingOwnerLeaseExpiryStore(
