@@ -150,7 +150,7 @@ class location_runtime_t
                   "location runtime startup was cancelled");
             const auto deadline_at =
               std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout;
-            renew_owner_lease_once (deadline_at);
+            renew_owner_lease_once (deadline_at, cancellation);
             if (cancellation.stop_requested ()) {
                 release_cancelled_claim (deadline_at);
                 throw detail::make_boundary_exception (
@@ -237,7 +237,8 @@ class location_runtime_t
     }
 
     owner_lease_renew_result_t renew_owner_lease_once (
-      std::optional<std::chrono::steady_clock::time_point> requested_deadline_at = std::nullopt)
+      std::optional<std::chrono::steady_clock::time_point> requested_deadline_at = std::nullopt,
+      std::stop_token cancellation = {})
     {
         runtime_metrics_t metrics (_monitoring);
         const auto metrics_enabled = metrics.enabled ();
@@ -267,8 +268,11 @@ class location_runtime_t
         const auto confirm_claim = [&] (std::string &failure)
           -> std::optional<owner_lease_found_t> {
             try {
+                const auto remaining = remaining_until (deadline_at);
+                if (remaining <= std::chrono::milliseconds::zero ())
+                    return std::nullopt;
                 auto read_task = _store->read_owner_lease (_owner_id);
-                const auto read_response = read_task.result_for (remaining_until (deadline_at));
+                const auto read_response = read_task.result_for (remaining, cancellation);
                 if (!read_response)
                     return std::nullopt;
                 if (!read_response->has_value ()) {
@@ -316,8 +320,13 @@ class location_runtime_t
             std::optional<owner_lease_renew_result_t> result;
             std::string failure = "owner lease renewal timed out";
             try {
+                const auto remaining = remaining_until (deadline_at);
+                if (remaining <= std::chrono::milliseconds::zero ()) {
+                    record_failure (std::move (failure));
+                    return owner_lease_renew_result_t{owner_lease_stale_t{}};
+                }
                 auto renew_task = _store->renew_owner_lease (*token, _options.owner_lease_ttl);
-                const auto renew_response = renew_task.result_for (remaining_until (deadline_at));
+                const auto renew_response = renew_task.result_for (remaining, cancellation);
                 if (renew_response)
                     result = renew_response->value ();
             }
@@ -365,8 +374,13 @@ class location_runtime_t
         std::optional<owner_lease_claim_result_t> claim;
         std::string failure = "owner lease claim timed out";
         try {
+            const auto remaining = remaining_until (deadline_at);
+            if (remaining <= std::chrono::milliseconds::zero ()) {
+                record_failure (std::move (failure));
+                return owner_lease_renew_result_t{owner_lease_stale_t{}};
+            }
             auto claim_task = _store->claim_owner_lease (_owner_id, _options.owner_lease_ttl);
-            const auto claim_response = claim_task.result_for (remaining_until (deadline_at));
+            const auto claim_response = claim_task.result_for (remaining, cancellation);
             if (claim_response)
                 claim = claim_response->value ();
         }
@@ -374,9 +388,11 @@ class location_runtime_t
             failure = error.what ();
         }
         if (!claim) {
-            if (const auto confirmed = confirm_claim (failure))
-                return accept_lease (confirmed->token, confirmed->lease_expires_at,
-                                     confirmed->store_now);
+            if (!cancellation.stop_requested ()) {
+                if (const auto confirmed = confirm_claim (failure))
+                    return accept_lease (confirmed->token, confirmed->lease_expires_at,
+                                         confirmed->store_now);
+            }
             if (metrics_enabled)
                 metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1);
             record_failure (std::move (failure));
@@ -451,8 +467,11 @@ class location_runtime_t
     {
         const auto started_at = std::chrono::steady_clock::now ();
         try {
+            const auto remaining = remaining_until (deadline_at);
+            if (remaining <= std::chrono::milliseconds::zero ())
+                return;
             auto read_task = _store->read_owner_lease (_owner_id);
-            const auto read_response = read_task.result_for (remaining_until (deadline_at));
+            const auto read_response = read_task.result_for (remaining);
             if (!read_response) {
                 record_failure ("owner lease conflict confirmation read timed out");
                 return;
@@ -498,34 +517,42 @@ class location_runtime_t
         try {
             auto token = current_owner_token_unchecked ();
             if (!token) {
-                auto read_task = _store->read_owner_lease (_owner_id);
-                const auto read_response =
-                  read_task.result_for (remaining_until (deadline_at));
-                if (!read_response) {
+                const auto remaining = remaining_until (deadline_at);
+                if (remaining <= std::chrono::milliseconds::zero ()) {
                     record_failure ("owner lease cancellation read timed out");
-                } else if (!read_response->has_value ()) {
-                    record_store_error ();
-                    record_failure (
-                      read_response->error ()
-                        ? read_response->error ()->what ()
-                        : "owner lease cancellation read failed");
-                } else if (const auto *found =
-                             std::get_if<owner_lease_found_t> (&read_response->value ());
-                           found != nullptr && found->token.owner_id == _owner_id) {
-                    token = found->token;
+                } else {
+                    auto read_task = _store->read_owner_lease (_owner_id);
+                    const auto read_response = read_task.result_for (remaining);
+                    if (!read_response) {
+                        record_failure ("owner lease cancellation read timed out");
+                    } else if (!read_response->has_value ()) {
+                        record_store_error ();
+                        record_failure (
+                          read_response->error ()
+                            ? read_response->error ()->what ()
+                            : "owner lease cancellation read failed");
+                    } else if (const auto *found =
+                                 std::get_if<owner_lease_found_t> (&read_response->value ());
+                               found != nullptr && found->token.owner_id == _owner_id) {
+                        token = found->token;
+                    }
                 }
             }
             if (token) {
-                auto release_task = _store->release_owner_lease (*token);
-                const auto released =
-                  release_task.result_for (remaining_until (deadline_at));
-                if (!released) {
+                const auto remaining = remaining_until (deadline_at);
+                if (remaining <= std::chrono::milliseconds::zero ()) {
                     record_failure ("owner lease cancellation release timed out");
-                } else if (!released->has_value ()) {
-                    record_store_error ();
-                    record_failure (
-                      released->error () ? released->error ()->what ()
-                                         : "owner lease cancellation release failed");
+                } else {
+                    auto release_task = _store->release_owner_lease (*token);
+                    const auto released = release_task.result_for (remaining);
+                    if (!released) {
+                        record_failure ("owner lease cancellation release timed out");
+                    } else if (!released->has_value ()) {
+                        record_store_error ();
+                        record_failure (
+                          released->error () ? released->error ()->what ()
+                                             : "owner lease cancellation release failed");
+                    }
                 }
             }
         }

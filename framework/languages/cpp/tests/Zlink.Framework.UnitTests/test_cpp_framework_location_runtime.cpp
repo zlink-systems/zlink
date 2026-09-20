@@ -55,8 +55,6 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
 
     void block_owner_lease_releases () noexcept { _block_releases = true; }
 
-    void hide_next_owner_lease_read () noexcept { _hide_next_read = true; }
-
     int claim_calls () const noexcept { return _claim_calls.load (); }
 
     int release_calls () const noexcept { return _release_calls.load (); }
@@ -67,13 +65,6 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     read_owner_lease (std::string owner_id) override
     {
         _read_calls.fetch_add (1);
-        if (_hide_next_read) {
-            _hide_next_read = false;
-            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
-              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::success (
-                zlink::framework::owner_lease_read_result_t{
-                  zlink::framework::owner_lease_missing_t{}}));
-        }
         if (_fail_reads) {
             return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
               zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::failure (
@@ -181,7 +172,6 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     bool _fail_reads = false;
     bool _fail_releases = false;
     bool _block_releases = false;
-    bool _hide_next_read = false;
 };
 
 TEST (ZLinkFrameworkLocationRuntime, ClaimsAndReleasesOwnerLease)
@@ -348,8 +338,8 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeClaimAndPreservesCancel
     catch (const zlink::framework::framework_exception_t &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
-    EXPECT_LT (std::chrono::steady_clock::now () - started_at,
-               renew_timeout + std::chrono::milliseconds (60));
+    EXPECT_LT (std::chrono::steady_clock::now () - started_at, renew_timeout);
+    EXPECT_EQ (1, store.read_calls ());
     EXPECT_FALSE (runtime.current_owner_token ().has_value ());
     std::this_thread::sleep_for (std::chrono::milliseconds (10));
     EXPECT_EQ (1, store.claim_calls ());
@@ -419,7 +409,6 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesLateCommitWithoutInstalledTokenOnCa
 {
     startup_owner_lease_repository_t store;
     store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::commit_then_fail);
-    store.hide_next_owner_lease_read ();
     std::stop_source cancellation;
     store.cancel_after_next_claim (cancellation);
     location_runtime_t runtime (
@@ -436,7 +425,7 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesLateCommitWithoutInstalledTokenOnCa
     catch (const zlink::framework::framework_exception_t &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
-    EXPECT_EQ (2, store.read_calls ());
+    EXPECT_EQ (1, store.read_calls ());
     EXPECT_EQ (1, store.release_calls ());
     EXPECT_FALSE (runtime.current_owner_token ().has_value ());
     const auto remaining = store.read_owner_lease ("owner-a").result ().value ();
@@ -444,6 +433,27 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesLateCommitWithoutInstalledTokenOnCa
       std::holds_alternative<zlink::framework::owner_lease_missing_t> (remaining));
     std::this_thread::sleep_for (std::chrono::milliseconds (10));
     EXPECT_EQ (1, store.claim_calls ());
+}
+
+TEST (ZLinkFrameworkLocationRuntime, DoesNotReadAfterClaimConsumesRenewDeadline)
+{
+    startup_owner_lease_repository_t store;
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::never_complete);
+    const auto renew_timeout = std::chrono::milliseconds (20);
+    location_runtime_t runtime (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::seconds (1),
+                         .owner_lease_ttl = std::chrono::seconds (15),
+                         .owner_lease_renew_timeout = renew_timeout},
+      "owner-a");
+
+    const auto started_at = std::chrono::steady_clock::now ();
+    EXPECT_NO_THROW (runtime.start (zlink::routing_id_t::from ("node-a")));
+    EXPECT_GE (std::chrono::steady_clock::now () - started_at, renew_timeout);
+    EXPECT_EQ (0, store.read_calls ());
+    EXPECT_FALSE (runtime.current_owner_token ().has_value ());
+
+    runtime.stop ();
 }
 
 } // namespace
