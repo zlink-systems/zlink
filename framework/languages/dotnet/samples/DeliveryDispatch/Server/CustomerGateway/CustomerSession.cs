@@ -2,8 +2,7 @@ using Zlink.Framework.Contracts.Streams;
 
 namespace DeliveryDispatch.Server.CustomerGateway;
 
-internal sealed class CustomerSession(
-    IZLinkSessionContext context) : IZLinkSession
+internal sealed class CustomerSession(IZLinkSessionContext context) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -20,9 +19,7 @@ internal sealed class CustomerSession(
         }
     }
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         return ValueTask.CompletedTask;
     }
@@ -30,7 +27,8 @@ internal sealed class CustomerSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         Zlink.Framework.Contracts.Messaging.ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken))
         {

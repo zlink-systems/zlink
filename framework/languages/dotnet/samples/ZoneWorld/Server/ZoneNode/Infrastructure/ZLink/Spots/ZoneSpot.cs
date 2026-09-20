@@ -26,7 +26,8 @@ public sealed class ZoneSpot(
     NodeMaintenancePolicy maintenance,
     NodePlayerCensus census,
     IZLinkActorClient actors,
-    ILogger<ZoneSpot> logger) : IZLinkSpot<PlayerActor>
+    ILogger<ZoneSpot> logger
+) : IZLinkSpot<PlayerActor>
 {
     private readonly ZoneState _state = new(context.SpotId);
     private readonly Dictionary<string, EnterZoneReq> _pendingJoins = new(StringComparer.Ordinal);
@@ -49,7 +50,8 @@ public sealed class ZoneSpot(
         {
             Context.Handlers.AddSubscribe<ZoneBorderSubscriptionHandler>(
                 ZoneWorldNames.ZoneChannel,
-                ZoneWorldNames.NorthWestToNorthEastBorder);
+                ZoneWorldNames.NorthWestToNorthEastBorder
+            );
             return;
         }
 
@@ -57,7 +59,8 @@ public sealed class ZoneSpot(
         foreach (var fromZoneId in World.AdjacentZones(ZoneId))
             Context.Handlers.AddSubscribe<ZoneBorderSubscriptionHandler>(
                 ZoneWorldNames.ZoneChannel,
-                ZoneWorldNames.BorderTopic(fromZoneId, ZoneId));
+                ZoneWorldNames.BorderTopic(fromZoneId, ZoneId)
+            );
         // --8<-- [end:doc-zw-border-subscribe]
     }
 
@@ -67,28 +70,33 @@ public sealed class ZoneSpot(
         _tick = await Context.AddTimer<ZoneTickHandler>(
             $"zone-tick-{ZoneId}",
             TimeSpan.FromMilliseconds(ZoneWorldSpec.TickPeriodMs),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
         _botTick = await Context.AddTimer<BotTickHandler>(
             $"bot-tick-{ZoneId}",
             TimeSpan.FromMilliseconds(ZoneWorldSpec.BotTickPeriodMs),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
         logger.LogInformation("zone spot ready. zone={ZoneId}, node={NodeId}", ZoneId, NodeId);
     }
 
     public async ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
+        CancellationToken cleanupCancellationToken
+    )
     {
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
-        if (_tick is not null) await _tick.CancelAsync();
-        if (_botTick is not null) await _botTick.CancelAsync();
+        if (_tick is not null)
+            await _tick.CancelAsync();
+        if (_botTick is not null)
+            await _botTick.CancelAsync();
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
         ZLinkMessage request,
-        CancellationToken cancellationToken) =>
-        ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
 
     /// <summary>
     /// Admission (§2.3). This node is the authority on its own maintenance state, so a
@@ -100,7 +108,8 @@ public sealed class ZoneSpot(
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var enter = request.Decode<EnterZoneReq>();
         if (enter.CrashBoundaryProbe)
@@ -108,7 +117,8 @@ public sealed class ZoneSpot(
             logger.LogInformation(
                 "crash-boundary join pending. zone={ZoneId}, player={PlayerId}",
                 ZoneId,
-                enter.PlayerId);
+                enter.PlayerId
+            );
             await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
         }
         // --8<-- [start:doc-zw-admission]
@@ -118,9 +128,11 @@ public sealed class ZoneSpot(
                 "zone spot: join rejected, node under maintenance. zone={ZoneId}, player={PlayerId}, from_zone={FromZoneId}",
                 ZoneId,
                 enter.PlayerId,
-                enter.FromZoneId ?? "<new>");
+                enter.FromZoneId ?? "<new>"
+            );
             return ZLinkSpotActorJoinResult.Reject(
-                new EnterZoneRes(ZoneId, MoveRejectReasons.ZoneMaintenance));
+                new EnterZoneRes(ZoneId, MoveRejectReasons.ZoneMaintenance)
+            );
         }
 
         _pendingJoins[actorId] = enter;
@@ -128,9 +140,13 @@ public sealed class ZoneSpot(
         // --8<-- [end:doc-zw-admission]
     }
 
-    public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
+    public async ValueTask OnJoinedActorAsync(
+        PlayerActor actor,
+        CancellationToken cancellationToken
+    )
     {
-        if (!_pendingJoins.Remove(actor.ActorId, out var enter)) return;
+        if (!_pendingJoins.Remove(actor.ActorId, out var enter))
+            return;
 
         actor.Restore(enter.X, enter.Y, ZoneId, enter.IsBot, actor.DirX, actor.DirY);
         _state.Enter(enter.PlayerId, enter.X, enter.Y, enter.IsBot);
@@ -141,8 +157,8 @@ public sealed class ZoneSpot(
         // after the handoff commits, making the notification a safe boundary for the client's
         // next command.
         if (!enter.IsBot && !enter.InitialEntry)
-            await actor.Context.BoundSession
-                .Send(new ZoneChangedNotify(enter.PlayerId, ZoneId))
+            await actor
+                .Context.BoundSession.Send(new ZoneChangedNotify(enter.PlayerId, ZoneId))
                 .Async(cancellationToken);
 
         logger.LogInformation(
@@ -150,7 +166,8 @@ public sealed class ZoneSpot(
             ZoneId,
             enter.PlayerId,
             enter.IsBot,
-            enter.InitialEntry);
+            enter.InitialEntry
+        );
     }
 
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken)
@@ -171,7 +188,8 @@ public sealed class ZoneSpot(
         logger.LogInformation(
             "zone spot: player left, client gone. zone={ZoneId}, player={PlayerId}",
             ZoneId,
-            actor.ActorId);
+            actor.ActorId
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -195,12 +213,7 @@ public sealed class ZoneSpot(
         _state.Enter(actor.ActorId, position.X, position.Y, actor.IsBot);
         census.Record(ZoneId, _state.PlayerCount);
 
-        return new JoinWorldRes(
-            actor.ActorId,
-            ZoneId,
-            position.X,
-            position.Y,
-            null);
+        return new JoinWorldRes(actor.ActorId, ZoneId, position.X, position.Y, null);
     }
 
     internal void ApplyBorderSnapshot(ZoneBorderEvent snapshot)
@@ -210,7 +223,8 @@ public sealed class ZoneSpot(
             logger.LogInformation(
                 "border subscription ready. zone={ZoneId}, from={FromZoneId}",
                 ZoneId,
-                snapshot.FromZoneId);
+                snapshot.FromZoneId
+            );
     }
 
     internal async ValueTask TickAsync(CancellationToken cancellationToken)
@@ -222,21 +236,23 @@ public sealed class ZoneSpot(
             new DeliverZoneStateMsg(
                 output.Notify.ZoneId,
                 output.Notify.Tick,
-                output.Notify.Players),
-            cancellationToken);
+                output.Notify.Players
+            ),
+            cancellationToken
+        );
 
         // --8<-- [start:doc-zw-border-publish]
         foreach (var borderEvent in output.BorderEvents)
         {
-            await Context.Outbound
-                .Publish(
+            await Context
+                .Outbound.Publish(
                     ZoneWorldNames.ZoneChannel,
                     ZoneWorldNames.BorderTopic(ZoneId, borderEvent.ToZoneId),
-                    borderEvent)
+                    borderEvent
+                )
                 .Async(cancellationToken);
         }
         // --8<-- [end:doc-zw-border-publish]
-
     }
 
     /// <summary>
@@ -250,28 +266,29 @@ public sealed class ZoneSpot(
     {
         foreach (var playerId in ZoneTickUseCase.Bots(_state))
         {
-            await actors
-                .SendToActor(playerId, new BotTickMsg())
-                .Async(cancellationToken);
+            await actors.SendToActor(playerId, new BotTickMsg()).Async(cancellationToken);
         }
     }
 
     /// <summary>Delivers an announcement to every human in this zone (§8.2).</summary>
     internal async ValueTask DeliverAnnounceAsync(
         DeliverAnnounceMsg announce,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // The canonical asks that *every* zone spot receive the announcement (§11 ZW-D1), and
         // no client can see another zone's spot — so the spot says so where the runner can read it.
         logger.LogInformation(
             "zone spot: announcement delivered. zone={ZoneId}, announcement={AnnouncementId}",
             ZoneId,
-            announce.AnnouncementId);
+            announce.AnnouncementId
+        );
 
         await PushToClientsAsync(
             ZoneTickUseCase.Humans(_state),
             new DeliverWorldAnnounceMsg(announce.AnnouncementId, announce.Text),
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     /// <summary>
@@ -282,7 +299,8 @@ public sealed class ZoneSpot(
     private async ValueTask PushToClientsAsync<TMessage>(
         IReadOnlyList<string> playerIds,
         TMessage message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var playerId in playerIds)
         {
@@ -290,9 +308,7 @@ public sealed class ZoneSpot(
             {
                 // PlayerId is the global ActorId. Resolve the current owner for every
                 // delivery instead of retaining an Actor instance from a lifecycle callback.
-                await actors
-                    .SendToActor(playerId, message)
-                    .Async(cancellationToken);
+                await actors.SendToActor(playerId, message).Async(cancellationToken);
             }
             catch (Exception error)
             {
@@ -302,9 +318,9 @@ public sealed class ZoneSpot(
                     error,
                     "actor delivery skipped. zone={ZoneId}, player={PlayerId}",
                     ZoneId,
-                    playerId);
+                    playerId
+                );
             }
         }
     }
-
 }

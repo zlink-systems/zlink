@@ -19,19 +19,21 @@ namespace ZoneWorld.Server.Ops.Infrastructure.ZLink.Monitoring;
 internal sealed class SocketEventHandler(
     NodeRegistry nodes,
     IZLinkRouteMeshRuntime runtime,
-    ILogger<SocketEventHandler> logger)
-    : BackgroundService
+    ILogger<SocketEventHandler> logger
+) : BackgroundService
 {
     // --8<-- [start:doc-zw-observe-peers]
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var previous = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var status in runtime
-                           .ObserveAsync(ZoneWorldNames.MeshName, stoppingToken)
-                           .ConfigureAwait(false))
+        await foreach (
+            var status in runtime
+                .ObserveAsync(ZoneWorldNames.MeshName, stoppingToken)
+                .ConfigureAwait(false)
+        )
         {
-            var current = status.Status.Peers
-                .Where(static peer => peer.State == ZLinkPeerState.Ready)
+            var current = status
+                .Status.Peers.Where(static peer => peer.State == ZLinkPeerState.Ready)
                 .Select(static peer => peer.NodeRid.ToString())
                 .ToHashSet(StringComparer.Ordinal);
             await nodes.ApplyLiveRoutingIdsAsync(current, stoppingToken);
@@ -42,12 +44,10 @@ internal sealed class SocketEventHandler(
             previous = current;
         }
     }
+
     // --8<-- [end:doc-zw-observe-peers]
 
-    private async Task ApplyAsync(
-        string rid,
-        bool connected,
-        CancellationToken cancellationToken)
+    private async Task ApplyAsync(string rid, bool connected, CancellationToken cancellationToken)
     {
         var nodeId = nodes.NodeIdOf(rid);
         if (nodeId is null)
@@ -56,13 +56,15 @@ internal sealed class SocketEventHandler(
         logger.LogInformation(
             "node connection observed. node={NodeId}, connected={Connected}",
             nodeId,
-            connected);
+            connected
+        );
     }
 }
 
 /// <summary>Pushes node state to the consoles as it changes. The console never polls
 /// (§10.2), so every change has to leave through here.</summary>
-internal sealed class NodeStatusBroadcaster(NodeRegistry nodes, OpsConsoleRegistry consoles) : IHostedService
+internal sealed class NodeStatusBroadcaster(NodeRegistry nodes, OpsConsoleRegistry consoles)
+    : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -77,13 +79,17 @@ internal sealed class NodeStatusBroadcaster(NodeRegistry nodes, OpsConsoleRegist
     }
 
     private async ValueTask Push(NodeView node, CancellationToken cancellationToken) =>
-        await consoles.BroadcastAsync(new NodeStatusNotify(
-            node.NodeId,
-            node.Registered,
-            node.Connected,
-            node.Maintenance,
-            node.Zones,
-            node.PlayerCount), cancellationToken);
+        await consoles.BroadcastAsync(
+            new NodeStatusNotify(
+                node.NodeId,
+                node.Registered,
+                node.Connected,
+                node.Maintenance,
+                node.Zones,
+                node.PlayerCount
+            ),
+            cancellationToken
+        );
 }
 
 /// <summary>Applies the explicit-report 15-second registration TTL (§2.2).</summary>

@@ -14,7 +14,8 @@ internal sealed class ConversationIdleTimerHandler : IZLinkSpotTimerHandler<Conv
     public ValueTask HandleAsync(
         ConversationSpot spot,
         ZLinkTimerTick tick,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = tick;
         return spot.CheckIdleAsync(cancellationToken);

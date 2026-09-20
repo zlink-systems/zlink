@@ -7,7 +7,8 @@ internal sealed class PlayerActorFactory : IZLinkActorFactory<PlayerActor>
 {
     public ValueTask<PlayerActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(new PlayerActor(context.ActorId, context));
@@ -17,48 +18,53 @@ internal sealed class PlayerActorFactory : IZLinkActorFactory<PlayerActor>
 /// <summary>
 /// Captures the player-owned coordinate and movement state for relocation.
 /// </summary>
-internal sealed class PlayerActorRelocationAdapter
-    : IZLinkActorRelocationAdapter<PlayerActor>
+internal sealed class PlayerActorRelocationAdapter : IZLinkActorRelocationAdapter<PlayerActor>
 {
     // --8<-- [start:doc-zw-actor-capture]
-    public ValueTask<byte[]> CaptureAsync(
-        PlayerActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask<byte[]> CaptureAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(JsonSerializer.SerializeToUtf8Bytes(
-            new PlayerRelocationState(
-                actor.Position.X,
-                actor.Position.Y,
-                actor.ZoneId,
-                actor.IsBot,
-                actor.DirX,
-                actor.DirY,
-                actor.PendingJoins,
-                actor.ProcessedJoinOperations)));
+        return ValueTask.FromResult(
+            JsonSerializer.SerializeToUtf8Bytes(
+                new PlayerRelocationState(
+                    actor.Position.X,
+                    actor.Position.Y,
+                    actor.ZoneId,
+                    actor.IsBot,
+                    actor.DirX,
+                    actor.DirY,
+                    actor.PendingJoins,
+                    actor.ProcessedJoinOperations
+                )
+            )
+        );
     }
+
     // --8<-- [end:doc-zw-actor-capture]
 
     public ValueTask RestoreAsync(
         PlayerActor actor,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (payload.IsEmpty)
             throw new InvalidOperationException(
-                $"Player '{actor.Context.ActorId}' has no relocation state.");
+                $"Player '{actor.Context.ActorId}' has no relocation state."
+            );
 
-        var restored = JsonSerializer.Deserialize<PlayerRelocationState>(
-            payload.Span) ?? throw new InvalidDataException(
-            "Player relocation state is empty.");
+        var restored =
+            JsonSerializer.Deserialize<PlayerRelocationState>(payload.Span)
+            ?? throw new InvalidDataException("Player relocation state is empty.");
         actor.Restore(
             restored.X,
             restored.Y,
             restored.ZoneId,
             restored.IsBot,
             restored.DirX,
-            restored.DirY);
+            restored.DirY
+        );
         actor.RestoreProcessedJoinOperations(restored.ProcessedJoinOperations);
         actor.RestorePendingJoins(restored.PendingJoins);
         return ValueTask.CompletedTask;
@@ -72,5 +78,6 @@ internal sealed class PlayerActorRelocationAdapter
         int DirX,
         int DirY,
         IReadOnlyCollection<PendingPlayerJoin> PendingJoins,
-        IReadOnlyCollection<ZLinkActorJoinOperationId> ProcessedJoinOperations);
+        IReadOnlyCollection<ZLinkActorJoinOperationId> ProcessedJoinOperations
+    );
 }

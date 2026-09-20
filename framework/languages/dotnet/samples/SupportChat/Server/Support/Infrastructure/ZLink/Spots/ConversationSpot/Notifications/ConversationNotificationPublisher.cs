@@ -13,9 +13,11 @@ internal sealed class ConversationNotificationPublisher
     public async ValueTask PublishAsync(
         IReadOnlyList<ConversationEvent> events,
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        foreach (var conversationEvent in events) await PublishAsync(conversationEvent, actors, cancellationToken);
+        foreach (var conversationEvent in events)
+            await PublishAsync(conversationEvent, actors, cancellationToken);
     }
 
     // Sent when a conversation is assigned to an agent, before the agent joins. It goes
@@ -24,25 +26,33 @@ internal sealed class ConversationNotificationPublisher
     public async ValueTask PublishAssignedToRosterAsync(
         SupportUserActor roster,
         ConversationSnapshot snapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var state = ConversationContracts.ToState(snapshot);
-        await roster.Context.BoundSession
-            .Send(new ConversationAssignedNotify(state.ConversationId, state))
+        await roster
+            .Context.BoundSession.Send(new ConversationAssignedNotify(state.ConversationId, state))
             .Async(cancellationToken);
     }
+
     // --8<-- [end:doc-sc-roster-push]
 
     private async ValueTask PublishAsync(
         ConversationEvent conversationEvent,
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var state = ConversationContracts.ToState(conversationEvent.State);
         switch (conversationEvent.Kind)
         {
             case ConversationEventKind.ParticipantJoined:
-                await PublishParticipantJoinedAsync(conversationEvent, state, actors, cancellationToken);
+                await PublishParticipantJoinedAsync(
+                    conversationEvent,
+                    state,
+                    actors,
+                    cancellationToken
+                );
                 break;
             case ConversationEventKind.MessageAppended:
                 await PublishMessageAsync(conversationEvent, state, actors, cancellationToken);
@@ -55,10 +65,13 @@ internal sealed class ConversationNotificationPublisher
                     actors,
                     async actor =>
                     {
-                        await actor.Context.BoundSession
-                            .Send(new ConversationIdleNotify(state.ConversationId, state))
+                        await actor
+                            .Context.BoundSession.Send(
+                                new ConversationIdleNotify(state.ConversationId, state)
+                            )
                             .Async(cancellationToken);
-                    });
+                    }
+                );
                 break;
             case ConversationEventKind.Closed:
                 // An explicit close carries the requester's participant id: that client
@@ -71,13 +84,18 @@ internal sealed class ConversationNotificationPublisher
                         : Exclude(actors, conversationEvent.ActorId),
                     async actor =>
                     {
-                        await actor.Context.BoundSession
-                            .Send(new ConversationClosedNotify(state.ConversationId, state))
+                        await actor
+                            .Context.BoundSession.Send(
+                                new ConversationClosedNotify(state.ConversationId, state)
+                            )
                             .Async(cancellationToken);
-                    });
+                    }
+                );
                 break;
             default:
-                throw new InvalidOperationException($"Unsupported conversation event {conversationEvent.Kind}.");
+                throw new InvalidOperationException(
+                    $"Unsupported conversation event {conversationEvent.Kind}."
+                );
         }
     }
 
@@ -85,10 +103,13 @@ internal sealed class ConversationNotificationPublisher
         ConversationEvent conversationEvent,
         ConversationState state,
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (conversationEvent.ActorId is null || conversationEvent.Role is null)
-            throw new InvalidOperationException("Participant joined event requires actor id and role.");
+            throw new InvalidOperationException(
+                "Participant joined event requires actor id and role."
+            );
 
         // Membership commit is observable by every participant, including the
         // joining agent. The deferred Join reply only reports scheduling.
@@ -96,14 +117,18 @@ internal sealed class ConversationNotificationPublisher
             actors,
             async actor =>
             {
-                await actor.Context.BoundSession
-                    .Send(new ParticipantJoinedNotify(
-                        state.ConversationId,
-                        conversationEvent.ActorId,
-                        ConversationContracts.ToRole(conversationEvent.Role.Value),
-                        state))
+                await actor
+                    .Context.BoundSession.Send(
+                        new ParticipantJoinedNotify(
+                            state.ConversationId,
+                            conversationEvent.ActorId,
+                            ConversationContracts.ToRole(conversationEvent.Role.Value),
+                            state
+                        )
+                    )
                     .Async(cancellationToken);
-            });
+            }
+        );
     }
 
     // --8<-- [start:doc-sc-message-push]
@@ -111,27 +136,34 @@ internal sealed class ConversationNotificationPublisher
         ConversationEvent conversationEvent,
         ConversationState state,
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var message = conversationEvent.Message
-                      ?? throw new InvalidOperationException("Message event requires a chat message.");
+        var message =
+            conversationEvent.Message
+            ?? throw new InvalidOperationException("Message event requires a chat message.");
         var chatMessage = ConversationContracts.ToMessage(message);
         await PublishAllAsync(
             Exclude(actors, message.SenderActorId),
             async actor =>
             {
-                await actor.Context.BoundSession
-                    .Send(new ChatMessageNotify(state.ConversationId, chatMessage, state))
+                await actor
+                    .Context.BoundSession.Send(
+                        new ChatMessageNotify(state.ConversationId, chatMessage, state)
+                    )
                     .Async(cancellationToken);
-            });
+            }
+        );
     }
+
     // --8<-- [end:doc-sc-message-push]
 
     private static async ValueTask PublishTypingAsync(
         ConversationEvent conversationEvent,
         ConversationState state,
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (conversationEvent.ActorId is null || conversationEvent.IsTyping is null)
             throw new InvalidOperationException("Typing event requires actor id and typing state.");
@@ -140,29 +172,40 @@ internal sealed class ConversationNotificationPublisher
             Exclude(actors, conversationEvent.ActorId),
             async actor =>
             {
-                await actor.Context.BoundSession
-                    .Send(new TypingChangedNotify(
-                        state.ConversationId,
-                        conversationEvent.ActorId,
-                        conversationEvent.IsTyping.Value,
-                        state))
+                await actor
+                    .Context.BoundSession.Send(
+                        new TypingChangedNotify(
+                            state.ConversationId,
+                            conversationEvent.ActorId,
+                            conversationEvent.IsTyping.Value,
+                            state
+                        )
+                    )
                     .Async(cancellationToken);
-            });
+            }
+        );
     }
 
     private static IReadOnlyDictionary<string, SupportUserActor> Exclude(
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        string participantId)
+        string participantId
+    )
     {
         return actors
             .Where(actor => !string.Equals(actor.Key, participantId, StringComparison.Ordinal))
-            .ToDictionary(static actor => actor.Key, static actor => actor.Value, StringComparer.Ordinal);
+            .ToDictionary(
+                static actor => actor.Key,
+                static actor => actor.Value,
+                StringComparer.Ordinal
+            );
     }
 
     private static async ValueTask PublishAllAsync(
         IReadOnlyDictionary<string, SupportUserActor> actors,
-        Func<SupportUserActor, ValueTask> publish)
+        Func<SupportUserActor, ValueTask> publish
+    )
     {
-        foreach (var actor in actors.Values) await publish(actor);
+        foreach (var actor in actors.Values)
+            await publish(actor);
     }
 }

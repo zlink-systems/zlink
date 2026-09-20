@@ -7,14 +7,9 @@ namespace ZoneWorld.Server.Configuration;
 public static class ZoneTopology
 {
     public static IReadOnlyList<string> Zones { get; } =
-    [
-        ZoneIds.NorthWest,
-        ZoneIds.NorthEast,
-        ZoneIds.SouthWest,
-        ZoneIds.SouthEast
-    ];
+    [ZoneIds.NorthWest, ZoneIds.NorthEast, ZoneIds.SouthWest, ZoneIds.SouthEast];
 
     /// <summary>The zone a new player spawns into (§2, spawn coordinate is fixed).</summary>
-    public static string SpawnZone => ZoneWorldSpec.ZoneOf(ZoneWorldSpec.SpawnX, ZoneWorldSpec.SpawnY);
-
+    public static string SpawnZone =>
+        ZoneWorldSpec.ZoneOf(ZoneWorldSpec.SpawnX, ZoneWorldSpec.SpawnY);
 }

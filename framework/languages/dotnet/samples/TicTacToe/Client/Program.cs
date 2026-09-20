@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Samples.Logging;
 
@@ -12,11 +12,9 @@ internal static class Program
         var configuration = TicTacToeClientConfiguration.Load(args);
         var options = TicTacToeClientOptions.CreateDefault() with
         {
-            ApiUrl = new Uri(configuration.ApiPublicUrls[0])
+            ApiUrl = new Uri(configuration.ApiPublicUrls[0]),
         };
-        using var loggerFactory = SampleLogging.CreateFactory(
-            configuration.LogDirectory,
-            "client");
+        using var loggerFactory = SampleLogging.CreateFactory(configuration.LogDirectory, "client");
         var logger = loggerFactory.CreateLogger("TicTacToe.Client");
         await new TicTacToeClientScenario(logger).RunAsync(options);
         logger.LogInformation("tictactoe=completed");
@@ -33,14 +31,17 @@ internal sealed class TicTacToeClientConfiguration
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var settings = new ConfigurationBuilder()
-            .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-            .Build()
-            .GetRequiredSection("Sample")
-            .Get<TicTacToeClientConfiguration>()
+        var settings =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Sample")
+                .Get<TicTacToeClientConfiguration>()
             ?? throw new InvalidOperationException("Sample client configuration is missing.");
-        if (settings.ApiPublicUrls.Length == 0
-            || !Uri.TryCreate(settings.ApiPublicUrls[0], UriKind.Absolute, out _))
+        if (
+            settings.ApiPublicUrls.Length == 0
+            || !Uri.TryCreate(settings.ApiPublicUrls[0], UriKind.Absolute, out _)
+        )
             throw new InvalidOperationException("Sample.ApiPublicUrls[0] is required.");
         if (string.IsNullOrWhiteSpace(settings.LogDirectory))
             throw new InvalidOperationException("Sample.LogDirectory is required.");
@@ -55,7 +56,8 @@ public sealed record TicTacToeClientOptions(
     string OActorId,
     string ObserverActorId,
     TimeSpan HttpTimeout,
-    TimeSpan StreamTimeout)
+    TimeSpan StreamTimeout
+)
 {
     public static TicTacToeClientOptions CreateDefault()
     {
@@ -66,7 +68,8 @@ public sealed record TicTacToeClientOptions(
             "player-o",
             "observer",
             TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5)
+        );
     }
 }
 
@@ -74,15 +77,18 @@ public static class TicTacToeClientConnections
 {
     public static IZlinkStreamConnector CreateStreamClient(
         string streamEndpoint,
-        TicTacToeClientOptions options)
+        TicTacToeClientOptions options
+    )
     {
-        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(streamEndpoint),
-            ConnectTimeout = options.StreamTimeout,
-            RequestTimeout = options.StreamTimeout,
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(streamEndpoint),
+                ConnectTimeout = options.StreamTimeout,
+                RequestTimeout = options.StreamTimeout,
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
         return connector;
     }
 }

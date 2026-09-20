@@ -1,6 +1,6 @@
+using TicTacToe.Server.Configuration;
 using TicTacToe.Server.Play.Infrastructure.ZLink.Actors;
 using TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
-using TicTacToe.Server.Configuration;
 using TicTacToe.Shared.Contracts;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
@@ -8,9 +8,8 @@ using Zlink.Framework.Contracts.Spots;
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot;
 
 // --8<-- [start:doc-entry-spot]
-internal sealed class PlayEntrySpot(
-    IZLinkEntrySpotContext context,
-    ILogger<PlayEntrySpot> logger) : IZLinkEntrySpot<PlayActor>
+internal sealed class PlayEntrySpot(IZLinkEntrySpotContext context, ILogger<PlayEntrySpot> logger)
+    : IZLinkEntrySpot<PlayActor>
 {
     private readonly MilestoneObserverRegistry _milestoneObservers = new();
 
@@ -28,93 +27,84 @@ internal sealed class PlayEntrySpot(
         // subscribe: forwards milestone publications to observing actors.
         Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
             SampleTopics.PlayerMilestoneChannel,
-            SampleTopics.PlayerMilestone);
+            SampleTopics.PlayerMilestone
+        );
         // --8<-- [end:doc-multicast-subscribe]
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         PlayActor actor,
         ZLinkMessage createRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.ApplyPlayer(createRequest.Decode<PlayerActorCreateReq>().Player);
-        logger.LogInformation(
-            "entry spot: actor created. actor={ActorId}",
-            actor.ActorId);
+        logger.LogInformation("entry spot: actor created. actor={ActorId}", actor.ActorId);
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
     }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
     }
 
     // --8<-- [start:doc-ttt-entry-destroy]
-    public async ValueTask OnJoinedActorAsync(
-        PlayActor actor,
-        CancellationToken cancellationToken)
+    public async ValueTask OnJoinedActorAsync(PlayActor actor, CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "entry spot: actor joined. actor={ActorId}",
-            actor.ActorId);
-        if (!actor.DestroyAfterEntrySpotJoin) return;
+        logger.LogInformation("entry spot: actor joined. actor={ActorId}", actor.ActorId);
+        if (!actor.DestroyAfterEntrySpotJoin)
+            return;
 
         logger.LogInformation(
             "entry spot: actor destroy requested. actor={ActorId}",
-            actor.ActorId);
+            actor.ActorId
+        );
         // Finished-room cleanup is server lifecycle work. It must finish even
         // when the client closes immediately after receiving the leave reply.
         await Context.DestroyActorAsync(actor, CancellationToken.None);
         logger.LogInformation(
             "tictactoe-lifecycle actor-destroy-complete actor={ActorId}",
-            actor.ActorId);
+            actor.ActorId
+        );
     }
+
     // --8<-- [end:doc-ttt-entry-destroy]
 
-    public ValueTask OnLeaveActorAsync(
-        PlayActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask OnLeaveActorAsync(PlayActor actor, CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "entry spot: actor left. actor={ActorId}",
-            actor.ActorId);
+        logger.LogInformation("entry spot: actor left. actor={ActorId}", actor.ActorId);
         _milestoneObservers.Remove(actor);
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnDisconnectActorAsync(
-        PlayActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask OnDisconnectActorAsync(PlayActor actor, CancellationToken cancellationToken)
     {
         actor.MarkDisconnected();
         _milestoneObservers.Remove(actor);
-        logger.LogInformation(
-            "entry spot: actor disconnected. actor={ActorId}",
-            actor.ActorId);
+        logger.LogInformation("entry spot: actor disconnected. actor={ActorId}", actor.ActorId);
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask SubscribeMilestoneAsync(
-        PlayActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask SubscribeMilestoneAsync(PlayActor actor, CancellationToken cancellationToken)
     {
         _milestoneObservers.Subscribe(actor);
         logger.LogInformation(
             "entry spot: milestone observer subscribed. actor={ActorId}",
-            actor.ActorId);
+            actor.ActorId
+        );
         return ValueTask.CompletedTask;
     }
 
     public async ValueTask NotifyMilestoneAsync(
         PlayerWinMilestoneEvent milestone,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await _milestoneObservers.NotifyAsync(
-            milestone,
-            cancellationToken);
+        await _milestoneObservers.NotifyAsync(milestone, cancellationToken);
     }
 
     private sealed class MilestoneObserverRegistry
@@ -134,18 +124,19 @@ internal sealed class PlayEntrySpot(
         // --8<-- [start:doc-ttt-milestone-notify]
         public async ValueTask NotifyAsync(
             PlayerWinMilestoneEvent milestone,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var notify = new WinMilestoneNotify(
                 milestone.RoomId,
                 milestone.ActorId,
                 milestone.DisplayName,
-                milestone.Wins);
+                milestone.Wins
+            );
 
             var observers = _observers.Values.ToArray();
             foreach (var observer in observers)
-                await observer.Context.BoundSession.Send(notify)
-                    .Async(cancellationToken);
+                await observer.Context.BoundSession.Send(notify).Async(cancellationToken);
         }
         // --8<-- [end:doc-ttt-milestone-notify]
     }

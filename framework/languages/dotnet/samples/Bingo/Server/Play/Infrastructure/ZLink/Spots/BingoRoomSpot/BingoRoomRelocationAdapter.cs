@@ -6,36 +6,40 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 
-internal sealed class BingoRoomRelocationAdapter
-    : IZLinkSpotRelocationAdapter<BingoRoom>
+internal sealed class BingoRoomRelocationAdapter : IZLinkSpotRelocationAdapter<BingoRoom>
 {
     // --8<-- [start:doc-bingo-relocation-adapter]
-    public ValueTask<byte[]> CaptureAsync(
-        BingoRoom spot,
-        CancellationToken cancellationToken)
+    public ValueTask<byte[]> CaptureAsync(BingoRoom spot, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var state = spot.CaptureRelocationState();
-        return ValueTask.FromResult(JsonSerializer.SerializeToUtf8Bytes(
-            new Payload(
-                state.Settings.RoomName,
-                state.Settings.Mode,
-                state.Settings.RequiredPlayers,
-                state.Settings.MaxDrawNumber,
-                state.Settings.Purpose,
-                state.Settings.ObservedRoomId,
-                Convert.ToBase64String(state.State.ToByteArray()))));
+        return ValueTask.FromResult(
+            JsonSerializer.SerializeToUtf8Bytes(
+                new Payload(
+                    state.Settings.RoomName,
+                    state.Settings.Mode,
+                    state.Settings.RequiredPlayers,
+                    state.Settings.MaxDrawNumber,
+                    state.Settings.Purpose,
+                    state.Settings.ObservedRoomId,
+                    Convert.ToBase64String(state.State.ToByteArray())
+                )
+            )
+        );
     }
+
     // --8<-- [end:doc-bingo-relocation-adapter]
 
     public ValueTask RestoreAsync(
         BingoRoom spot,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var state = JsonSerializer.Deserialize<Payload>(payload.Span)
-                    ?? throw new InvalidDataException("Bingo room relocation payload is empty.");
+        var state =
+            JsonSerializer.Deserialize<Payload>(payload.Span)
+            ?? throw new InvalidDataException("Bingo room relocation payload is empty.");
         spot.RestoreRelocationState(
             new BingoRoomSettings(
                 state.RoomName,
@@ -43,8 +47,10 @@ internal sealed class BingoRoomRelocationAdapter
                 state.RequiredPlayers,
                 state.MaxDrawNumber,
                 state.Purpose,
-                state.ObservedRoomId),
-            BingoRoomState.Parser.ParseFrom(Convert.FromBase64String(state.State)));
+                state.ObservedRoomId
+            ),
+            BingoRoomState.Parser.ParseFrom(Convert.FromBase64String(state.State))
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -55,5 +61,6 @@ internal sealed class BingoRoomRelocationAdapter
         int MaxDrawNumber,
         string Purpose,
         string? ObservedRoomId,
-        string State);
+        string State
+    );
 }

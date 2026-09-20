@@ -1,9 +1,6 @@
 namespace ShoppingMall.Server.Shared.Domain;
 
-public abstract record OrderDomainEvent(
-    string EventId,
-    string OrderId,
-    long CreatedAtUnixMs);
+public abstract record OrderDomainEvent(string EventId, string OrderId, long CreatedAtUnixMs);
 
 public sealed record OrderStartedEvent(
     string EventId,
@@ -14,69 +11,66 @@ public sealed record OrderStartedEvent(
     OrderLine[] Lines,
     decimal Amount,
     string Currency,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
 public sealed record InventoryReservedEvent(
     string EventId,
     string OrderId,
     string ReservationId,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
 public sealed record InventoryReservationFailedEvent(
     string EventId,
     string OrderId,
     string Reason,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
 public sealed record PaymentAuthorizedEvent(
     string EventId,
     string OrderId,
     string PaymentId,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
 public sealed record PaymentFailedEvent(
     string EventId,
     string OrderId,
     string Reason,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
 public sealed record InventoryReleasedEvent(
     string EventId,
     string OrderId,
     string ReservationId,
     string Reason,
-    long CreatedAtUnixMs) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
+    long CreatedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, CreatedAtUnixMs);
 
-public sealed record OrderConfirmedEvent(
-    string EventId,
-    string OrderId,
-    long ConfirmedAtUnixMs) : OrderDomainEvent(EventId, OrderId, ConfirmedAtUnixMs);
+public sealed record OrderConfirmedEvent(string EventId, string OrderId, long ConfirmedAtUnixMs)
+    : OrderDomainEvent(EventId, OrderId, ConfirmedAtUnixMs);
 
 public sealed record OrderFailedEvent(
     string EventId,
     string OrderId,
     string Reason,
-    long FailedAtUnixMs) : OrderDomainEvent(EventId, OrderId, FailedAtUnixMs);
+    long FailedAtUnixMs
+) : OrderDomainEvent(EventId, OrderId, FailedAtUnixMs);
 
-public sealed record ReserveInventoryResult(
-    bool Accepted,
-    string? ReservationId,
-    string? Reason);
+public sealed record ReserveInventoryResult(bool Accepted, string? ReservationId, string? Reason);
 
-public sealed record AuthorizePaymentResult(
-    bool Accepted,
-    string? PaymentId,
-    string? Reason);
+public sealed record AuthorizePaymentResult(bool Accepted, string? PaymentId, string? Reason);
 
 public sealed record ReserveInventoryCommand(
     string OrderId,
     string ReservationId,
-    IReadOnlyList<OrderLine> Lines);
+    IReadOnlyList<OrderLine> Lines
+);
 
-public sealed record ReleaseInventoryCommand(
-    string OrderId,
-    string ReservationId,
-    string Reason);
+public sealed record ReleaseInventoryCommand(string OrderId, string ReservationId, string Reason);
 
 public sealed record ReleaseInventoryResult(bool Released);
 
@@ -85,7 +79,8 @@ public sealed record AuthorizePaymentCommand(
     string PaymentId,
     string PaymentMethodId,
     decimal Amount,
-    string Currency);
+    string Currency
+);
 
 public sealed record OrderLine(string Sku, int Quantity);
 
@@ -97,7 +92,7 @@ public enum OrderStatus
     PaymentFailed,
     InventoryReleased,
     Confirmed,
-    Failed
+    Failed,
 }
 
 public sealed record OrderProjectionState(
@@ -109,4 +104,5 @@ public sealed record OrderProjectionState(
     string? Reason,
     decimal? Amount,
     string? Currency,
-    long UpdatedAtUnixMs);
+    long UpdatedAtUnixMs
+);

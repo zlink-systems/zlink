@@ -29,26 +29,23 @@ public sealed class AnnouncementService(IWorldOperationsPort operations)
 public sealed class MaintenanceService(
     IMaintenanceStorePort store,
     IWorldOperationsPort operations,
-    NodeRegistry nodes)
+    NodeRegistry nodes
+)
 {
     public async ValueTask<SetMaintenanceRes> SetAsync(
         string nodeId,
         bool enabled,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await store.WriteAsync(nodeId, enabled, cancellationToken);
         await operations.PublishMaintenanceChangeAsync(nodeId, enabled, cancellationToken);
 
         // The application addresses a logical node ID only. Fanout applies the
         // desired state; no sample code translates it to a transport NodeRid.
-        var node = nodes.Snapshot()
-            .SingleOrDefault(candidate => candidate.NodeId == nodeId);
+        var node = nodes.Snapshot().SingleOrDefault(candidate => candidate.NodeId == nodeId);
         return node is not { Registered: true, Connected: true }
-            ? new SetMaintenanceRes(
-                nodeId,
-                enabled,
-                [],
-                ZoneWorldErrors.NodeUnavailable)
+            ? new SetMaintenanceRes(nodeId, enabled, [], ZoneWorldErrors.NodeUnavailable)
             : new SetMaintenanceRes(node.NodeId, enabled, node.Zones);
     }
 }
@@ -61,23 +58,26 @@ public sealed class NodeDiagnosticsService(NodeRegistry nodes)
 {
     public ValueTask<NodeDiagnosticsRes> GetAsync(
         string nodeId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var node = nodes.Snapshot()
-            .SingleOrDefault(candidate => candidate.NodeId == nodeId);
+        var node = nodes.Snapshot().SingleOrDefault(candidate => candidate.NodeId == nodeId);
         return ValueTask.FromResult(
             node is not { Registered: true, Connected: true }
                 ? new NodeDiagnosticsRes(
-                nodeId,
-                [],
-                PlayerCount: 0,
-                Maintenance: false,
-                ZoneWorldErrors.NodeUnavailable)
+                    nodeId,
+                    [],
+                    PlayerCount: 0,
+                    Maintenance: false,
+                    ZoneWorldErrors.NodeUnavailable
+                )
                 : new NodeDiagnosticsRes(
                     node.NodeId,
                     node.Zones,
                     node.PlayerCount,
-                    node.Maintenance));
+                    node.Maintenance
+                )
+        );
     }
 }

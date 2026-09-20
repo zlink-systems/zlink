@@ -15,7 +15,8 @@ internal sealed record BingoRoomSettings(
     int RequiredPlayers,
     int MaxDrawNumber,
     string Purpose,
-    string? ObservedRoomId)
+    string? ObservedRoomId
+)
 {
     public const string GamePurpose = "Game";
     public const string ObserverPurpose = "Observer";
@@ -27,13 +28,7 @@ internal sealed record BingoRoomSettings(
         if (!string.Equals(mode, BingoSampleModes.TwoPlayer, StringComparison.Ordinal))
             throw new InvalidOperationException($"Unsupported bingo mode. mode={mode}");
 
-        return new BingoRoomSettings(
-            $"Bingo Room {roomSeq:000}",
-            mode,
-            2,
-            15,
-            GamePurpose,
-            null);
+        return new BingoRoomSettings($"Bingo Room {roomSeq:000}", mode, 2, 15, GamePurpose, null);
     }
 
     public static BingoRoomSettings CreateObserver(string observedRoomId, string observerActorId)
@@ -47,7 +42,8 @@ internal sealed record BingoRoomSettings(
             0,
             0,
             ObserverPurpose,
-            observedRoomId);
+            observedRoomId
+        );
     }
 }
 
@@ -56,7 +52,7 @@ internal enum BingoRoomEventKind
     PlayerJoined,
     GameStarted,
     NumberDrawn,
-    GameEnded
+    GameEnded,
 }
 
 internal sealed record BingoGameEvent(
@@ -67,9 +63,11 @@ internal sealed record BingoGameEvent(
     string? JoinedDisplayName = null,
     int Seat = -1,
     bool IsHost = false,
-    int DrawnNumber = 0);
+    int DrawnNumber = 0
+);
 
 internal sealed record BingoGameChange(
     BingoRoomState State,
     IReadOnlyList<BingoGameEvent> Events,
-    bool ShouldStopDrawTimer = false);
+    bool ShouldStopDrawTimer = false
+);

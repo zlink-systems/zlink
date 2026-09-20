@@ -1,20 +1,18 @@
-using Microsoft.Extensions.Configuration;
-
 using Bingo.Server.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
-using Zlink.Framework.Locations.Redis;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Locations.Redis;
 using Zlink.Samples.Logging;
 
 namespace Bingo.Server.Api;
 
 public static class ApiServerHostFactory
 {
-    public static IHost Build(
-        SampleRuntimeConfiguration<SampleApiNode> configuration)
+    public static IHost Build(SampleRuntimeConfiguration<SampleApiNode> configuration)
     {
         var node = configuration.Node;
         var nodeName = configuration.NodeName;
@@ -23,48 +21,58 @@ public static class ApiServerHostFactory
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddInMemoryCollection();
-        SampleLogging.Configure(
-            builder.Logging,
-            logDirectory,
-            traceLabel);
+        SampleLogging.Configure(builder.Logging, logDirectory, traceLabel);
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton<BingoPlayerRecordStore>();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-            {
-                redis.ConnectionString = configuration.RedisEndpoint;
-                redis.KeyPrefix = configuration.RedisKeyPrefix;
-            }));
-            options.ConfigureDispatch()
-                .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.AddLocationStore(
+                new ZLinkRedisLocationStore(redis =>
+                {
+                    redis.ConnectionString = configuration.RedisEndpoint;
+                    redis.KeyPrefix = configuration.RedisKeyPrefix;
+                })
+            );
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(ApiServerHostFactory));
             // --8<-- [start:doc-codec-register]
             // Every payload this process sends is encoded with Protobuf instead of the default codec.
             options.Codecs.Use(ZLinkProtobufCodec.Default);
             // --8<-- [end:doc-codec-register]
-            options.AddRouteMesh(SampleNames.PlayMeshName)
+            options
+                .AddRouteMesh(SampleNames.PlayMeshName)
                 .SetRoutingIdPrefix("api")
                 .Listen(node.PlayMeshEndpoint)
-                .Objects().Client();
-            options.AddRouteMesh(SampleNames.MatchmakingMeshName)
+                .Objects()
+                .Client();
+            options
+                .AddRouteMesh(SampleNames.MatchmakingMeshName)
                 .SetRoutingIdPrefix("api-matchmaking")
                 .Listen(node.MatchmakingMeshEndpoint)
-                .Objects().Client();
-            options.AddClientServerChannel(SampleNames.ApiChannel).Server()
+                .Objects()
+                .Client();
+            options
+                .AddClientServerChannel(SampleNames.ApiChannel)
+                .Server()
                 .Listen()
                 .AddHandlerGroup("api");
         });
-        builder.Services.AddSingleton(new BingoReadyReport(
-            BingoReadyKind.MeshRoute,
-            $"api-{nodeName}",
-            SampleNames.MatchmakingMeshName,
-            "matchmaking"));
-        builder.Services.AddSingleton(new BingoReadyReport(
-            BingoReadyKind.MeshRoute,
-            $"api-{nodeName}",
-            SampleNames.PlayMeshName,
-            "room"));
+        builder.Services.AddSingleton(
+            new BingoReadyReport(
+                BingoReadyKind.MeshRoute,
+                $"api-{nodeName}",
+                SampleNames.MatchmakingMeshName,
+                "matchmaking"
+            )
+        );
+        builder.Services.AddSingleton(
+            new BingoReadyReport(
+                BingoReadyKind.MeshRoute,
+                $"api-{nodeName}",
+                SampleNames.PlayMeshName,
+                "room"
+            )
+        );
         builder.Services.AddHostedService<BingoMeshStatusReporter>();
         return builder.Build();
     }

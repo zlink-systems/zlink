@@ -22,14 +22,13 @@ public static class BotPatrolPolicy
         new(BotIds.SouthWestX, 10, 85, +1, 0, ZoneIds.SouthWest),
         new(BotIds.SouthWestY, 15, 90, 0, -1, ZoneIds.SouthWest),
         new(BotIds.SouthEastX, 90, 85, -1, 0, ZoneIds.SouthEast),
-        new(BotIds.SouthEastY, 85, 90, 0, -1, ZoneIds.SouthEast)
+        new(BotIds.SouthEastY, 85, 90, 0, -1, ZoneIds.SouthEast),
     ];
 
     public static IReadOnlyList<BotRoute> RoutesOf(string zoneId) =>
         Routes.Where(route => route.ZoneId == zoneId).ToArray();
 
-    public static bool IsBot(string playerId) =>
-        Routes.Any(route => route.PlayerId == playerId);
+    public static bool IsBot(string playerId) => Routes.Any(route => route.PlayerId == playerId);
 
     public static PlayerPosition NextStep(PlayerPosition from, int dirX, int dirY) =>
         new(from.X + dirX * ZoneWorldSpec.BotStep, from.Y + dirY * ZoneWorldSpec.BotStep);

@@ -6,7 +6,8 @@ internal sealed class SupportUserActorFactory : IZLinkActorFactory<SupportUserAc
 {
     public ValueTask<SupportUserActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(new SupportUserActor(context.ActorId, context));

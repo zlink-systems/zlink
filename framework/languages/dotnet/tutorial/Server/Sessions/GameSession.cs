@@ -6,9 +6,8 @@ namespace Tutorial.Server.Sessions;
 
 // --8<-- [start:session-class]
 // One connected game client. Callbacks for the same connection run in order.
-public sealed class GameSession(
-    IZLinkSessionContext context,
-    ILogger<GameSession> logger) : IZLinkSession
+public sealed class GameSession(IZLinkSessionContext context, ILogger<GameSession> logger)
+    : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -43,7 +42,8 @@ public sealed class GameSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken))
             return;

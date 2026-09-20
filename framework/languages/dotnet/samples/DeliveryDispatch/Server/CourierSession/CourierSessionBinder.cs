@@ -10,33 +10,34 @@ namespace DeliveryDispatch.Server.CourierSession;
 
 internal sealed class CourierSessionBinder(
     IZLinkActorManager actors,
-    ILogger<CourierSessionBinder> logger)
+    ILogger<CourierSessionBinder> logger
+)
 {
     // --8<-- [start:doc-dd-session-bind]
     public async ValueTask<BindCourierSessionRes> BindAsync(
         string courierId,
         IZLinkSessionContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var actor = await FindOrEnsureActorAsync(courierId, cancellationToken);
         logger.LogInformation(
             "deliverydispatch-courier bind-relayed courier={CourierId}",
-            courierId);
-        await context.Actors.BindOrGetAsync(
-            actor,
-            cancellationToken);
+            courierId
+        );
+        await context.Actors.BindOrGetAsync(actor, cancellationToken);
 
-        logger.LogInformation(
-            "deliverydispatch-courier bound courier={CourierId}",
-            courierId);
+        logger.LogInformation("deliverydispatch-courier bound courier={CourierId}", courierId);
 
         return new BindCourierSessionRes(courierId);
     }
+
     // --8<-- [end:doc-dd-session-bind]
 
     private async ValueTask<ActorRef> FindOrEnsureActorAsync(
         string courierId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await actors
             .GetOrCreate(courierId, SampleNames.CourierActorType)
@@ -48,9 +49,11 @@ internal sealed class CourierSessionBinder(
             ZLinkActorCreateResult.Existing existing => existing.Actor,
             ZLinkActorCreateResult.Created created => created.Actor,
             ZLinkActorCreateResult.Rejected => throw new InvalidOperationException(
-                $"Courier actor '{courierId}' creation was rejected."),
+                $"Courier actor '{courierId}' creation was rejected."
+            ),
             _ => throw new InvalidOperationException(
-                $"Courier actor '{courierId}' returned an unknown creation result.")
+                $"Courier actor '{courierId}' returned an unknown creation result."
+            ),
         };
         return actor;
     }

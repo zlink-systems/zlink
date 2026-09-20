@@ -7,7 +7,6 @@ internal static class Program
     private static async Task Main(string[] args)
     {
         var configuration = SampleConfigurationLoader.LoadApi(args);
-        await ApiServerHostFactory.Build(configuration)
-            .RunAsync();
+        await ApiServerHostFactory.Build(configuration).RunAsync();
     }
 }

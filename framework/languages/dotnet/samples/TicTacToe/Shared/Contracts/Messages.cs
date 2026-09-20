@@ -15,11 +15,7 @@ public static class TicTacToeGameStatuses
     public const string TurnTimedOut = "TurnTimedOut";
 }
 
-public sealed record PlayerInfo(
-    string ActorId,
-    string DisplayName,
-    int Level,
-    int Wins);
+public sealed record PlayerInfo(string ActorId, string DisplayName, int Level, int Wins);
 
 public sealed record PlayerActorCreateReq(PlayerInfo Player);
 
@@ -32,11 +28,10 @@ public sealed record CreateGameHttpRes(
     IReadOnlyList<string> PlayEndpoints,
     IReadOnlyList<PlayNodeInfo> PlayNodes,
     string GameName,
-    int RequiredLevel);
+    int RequiredLevel
+);
 
-public sealed record TicTacToeGameCreateReq(
-    string GameName,
-    int RequiredLevel);
+public sealed record TicTacToeGameCreateReq(string GameName, int RequiredLevel);
 
 public sealed record AuthenticatePlayerReq(string AccessToken);
 
@@ -46,9 +41,7 @@ public sealed record AuthenticateReq(string AccessToken);
 
 public sealed record AuthenticateRes(PlayerInfo Player);
 
-public sealed record TicTacToeGameJoinReq(
-    string RoomId,
-    PlayerInfo Player);
+public sealed record TicTacToeGameJoinReq(string RoomId, PlayerInfo Player);
 
 public sealed record TicTacToeGameJoinRes(GameState State);
 
@@ -56,9 +49,7 @@ public sealed record JoinGameMsg(string RoomId);
 
 public sealed record JoinGameNotify(GameState State);
 
-public sealed record JoinGameFailedNotify(
-    string RoomId,
-    string Error);
+public sealed record JoinGameFailedNotify(string RoomId, string Error);
 
 public sealed record ObserveMilestoneReq;
 
@@ -76,7 +67,8 @@ public sealed record PlayerJoinedNotify(
     string DisplayName,
     int Level,
     string Mark,
-    GameState State);
+    GameState State
+);
 
 public sealed record GameStateNotify(GameState State);
 
@@ -84,13 +76,15 @@ public sealed record WinMilestoneNotify(
     string RoomId,
     string ActorId,
     string DisplayName,
-    int Wins);
+    int Wins
+);
 
 public sealed record PlayerWinMilestoneEvent(
     string RoomId,
     string ActorId,
     string DisplayName,
-    int Wins);
+    int Wins
+);
 
 public sealed record GameState(
     string RoomId,
@@ -101,4 +95,5 @@ public sealed record GameState(
     string? XActorId,
     string? OActorId,
     string? LastMoveActorId,
-    int? LastMoveCell);
+    int? LastMoveCell
+);

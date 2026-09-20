@@ -5,24 +5,23 @@ internal enum ConversationStatus
     WaitingForAgent,
     Active,
     WaitingForClose,
-    Closed
+    Closed,
 }
 
 internal enum ParticipantRole
 {
     Customer,
-    Agent
+    Agent,
 }
 
 internal sealed record ConversationPolicy(
     TimeSpan IdleTimeout,
     TimeSpan CloseGraceTimeout,
-    int MaxMessageLength)
+    int MaxMessageLength
+)
 {
-    public static ConversationPolicy Sample { get; } = new(
-        TimeSpan.FromSeconds(3),
-        TimeSpan.FromSeconds(2),
-        500);
+    public static ConversationPolicy Sample { get; } =
+        new(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(2), 500);
 }
 
 internal sealed record ConversationParticipant(
@@ -30,14 +29,16 @@ internal sealed record ConversationParticipant(
     ParticipantRole Role,
     string DisplayName,
     long JoinedAtUnixMs,
-    bool IsTyping);
+    bool IsTyping
+);
 
 internal sealed record ConversationMessage(
     string ConversationId,
     ulong MessageSeq,
     string SenderActorId,
     string Text,
-    long SentAtUnixMs);
+    long SentAtUnixMs
+);
 
 // Domain-owned view of a conversation's state. Infrastructure adapters map this to the
 // ConversationState wire contract.
@@ -49,7 +50,8 @@ internal sealed record ConversationSnapshot(
     string? AgentActorId,
     ulong LastMessageSeq,
     long? LastMessageAtUnixMs,
-    long? IdleDeadlineUnixMs);
+    long? IdleDeadlineUnixMs
+);
 
 internal enum ConversationEventKind
 {
@@ -57,7 +59,7 @@ internal enum ConversationEventKind
     MessageAppended,
     TypingChanged,
     Idle,
-    Closed
+    Closed,
 }
 
 internal sealed record ConversationEvent(
@@ -66,8 +68,10 @@ internal sealed record ConversationEvent(
     string? ActorId = null,
     ParticipantRole? Role = null,
     ConversationMessage? Message = null,
-    bool? IsTyping = null);
+    bool? IsTyping = null
+);
 
 internal sealed record ConversationChange(
     ConversationSnapshot State,
-    IReadOnlyList<ConversationEvent> Events);
+    IReadOnlyList<ConversationEvent> Events
+);

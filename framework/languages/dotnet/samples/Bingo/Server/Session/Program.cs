@@ -8,7 +8,6 @@ internal static class Program
     {
         var configuration = SampleConfigurationLoader.LoadSession(args);
 
-        await SessionServerHostFactory.Build(configuration)
-            .RunAsync();
+        await SessionServerHostFactory.Build(configuration).RunAsync();
     }
 }

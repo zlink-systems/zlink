@@ -12,10 +12,10 @@ internal sealed class WatchNodesHandler(NodeRegistry nodes, OpsConsoleRegistry c
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         WatchNodesReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await context.Client.Reply(new WatchNodesRes(nodes.Snapshot()))
-            .Async(cancellationToken);
+        await context.Client.Reply(new WatchNodesRes(nodes.Snapshot())).Async(cancellationToken);
         await consoles.ReplayNodesAsync(context, cancellationToken);
         await consoles.ReplayAlertsAsync(context, cancellationToken);
     }
@@ -28,23 +28,24 @@ internal sealed class WatchNodesHandler(NodeRegistry nodes, OpsConsoleRegistry c
 /// </summary>
 internal sealed class AnnounceWorldHandler(
     AnnouncementService announcements,
-    ILogger<AnnounceWorldHandler> logger)
-    : IZLinkSessionPacketHandler<IZLinkSessionContext, AnnounceWorldReq>
+    ILogger<AnnounceWorldHandler> logger
+) : IZLinkSessionPacketHandler<IZLinkSessionContext, AnnounceWorldReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         AnnounceWorldReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var announcementId = await announcements.PublishAsync(request.Text, cancellationToken);
 
         logger.LogInformation(
             "announcement published. announcement={AnnouncementId}",
-            announcementId);
+            announcementId
+        );
 
-        await context.Client.Reply(new AnnounceWorldRes(announcementId))
-            .Async(cancellationToken);
+        await context.Client.Reply(new AnnounceWorldRes(announcementId)).Async(cancellationToken);
     }
 }
 
@@ -54,30 +55,30 @@ internal sealed class AnnounceWorldHandler(
 /// node itself goes to the channel named after that node, so it reaches that node and no
 /// other — a plain client-server channel would spread it across peers.
 /// </summary>
-internal sealed class SetMaintenanceHandler(
-    MaintenanceService maintenance)
+internal sealed class SetMaintenanceHandler(MaintenanceService maintenance)
     : IZLinkSessionPacketHandler<IZLinkSessionContext, SetMaintenanceReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         SetMaintenanceReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var reply = await maintenance.SetAsync(request.NodeId, request.Enabled, cancellationToken);
         await context.Client.Reply(reply).Async(cancellationToken);
     }
 }
 
-internal sealed class NodeDiagnosticsHandler(
-    NodeDiagnosticsService diagnostics)
+internal sealed class NodeDiagnosticsHandler(NodeDiagnosticsService diagnostics)
     : IZLinkSessionPacketHandler<IZLinkSessionContext, NodeDiagnosticsReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         NodeDiagnosticsReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var reply = await diagnostics.GetAsync(request.NodeId, cancellationToken);
         await context.Client.Reply(reply).Async(cancellationToken);

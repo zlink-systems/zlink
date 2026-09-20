@@ -55,7 +55,8 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
         if (position.ZoneId != zoneId)
             throw new InvalidOperationException(
                 $"Relocated state for '{ActorId}' disagrees with itself: ({x},{y}) is in "
-                + $"'{position.ZoneId}', but the state says '{zoneId}'.");
+                    + $"'{position.ZoneId}', but the state says '{zoneId}'."
+            );
 
         Position = position;
         IsBot = isBot;
@@ -80,14 +81,16 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
 
     internal void RestorePendingJoins(IEnumerable<PendingPlayerJoin> pendingJoins)
     {
-        foreach (var pending in pendingJoins) _pendingJoins.Enqueue(pending);
+        foreach (var pending in pendingJoins)
+            _pendingJoins.Enqueue(pending);
     }
 
     internal IReadOnlyCollection<ZLinkActorJoinOperationId> ProcessedJoinOperations =>
         _processedJoinOperationOrder;
 
     internal void RestoreProcessedJoinOperations(
-        IEnumerable<ZLinkActorJoinOperationId> operationIds)
+        IEnumerable<ZLinkActorJoinOperationId> operationIds
+    )
     {
         foreach (var operationId in operationIds)
             RememberJoinOperation(operationId);
@@ -96,16 +99,20 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
     // --8<-- [start:doc-zw-join-completed]
     public async ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var operationId = GetOperationId(completion);
-        if (_processedJoinOperations.Contains(operationId)) return;
+        if (_processedJoinOperations.Contains(operationId))
+            return;
 
-        var pending = _pendingJoins.Count > 0
-            ? _pendingJoins.Peek()
-            : throw new InvalidOperationException(
-                $"Deferred Actor Join completion has no application intent. actor={ActorId}");
+        var pending =
+            _pendingJoins.Count > 0
+                ? _pendingJoins.Peek()
+                : throw new InvalidOperationException(
+                    $"Deferred Actor Join completion has no application intent. actor={ActorId}"
+                );
 
         switch (completion)
         {
@@ -120,32 +127,34 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
                 await NotifyJoinFailureAsync(
                     pending,
                     reply.Decode<EnterZoneRes>().Error ?? MoveRejectReasons.ZoneMaintenance,
-                    cancellationToken);
+                    cancellationToken
+                );
                 break;
 
             case ZLinkActorJoinCompletion.Rejected:
                 await NotifyJoinFailureAsync(
                     pending,
                     MoveRejectReasons.ZoneMaintenance,
-                    cancellationToken);
+                    cancellationToken
+                );
                 break;
 
             case ZLinkActorJoinCompletion.Failed failed:
-                await NotifyJoinFailureAsync(
-                    pending,
-                    failed.Kind.ToString(),
-                    cancellationToken);
+                await NotifyJoinFailureAsync(pending, failed.Kind.ToString(), cancellationToken);
                 break;
         }
 
         RememberJoinOperation(operationId);
-        if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
+        if (_pendingJoins.Count > 0)
+            _pendingJoins.Dequeue();
     }
+
     // --8<-- [end:doc-zw-join-completed]
 
     private bool RememberJoinOperation(ZLinkActorJoinOperationId operationId)
     {
-        if (!_processedJoinOperations.Add(operationId)) return false;
+        if (!_processedJoinOperations.Add(operationId))
+            return false;
 
         _processedJoinOperationOrder.Enqueue(operationId);
         while (_processedJoinOperationOrder.Count > ProcessedJoinOperationRetention)
@@ -153,20 +162,20 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
         return true;
     }
 
-    private static ZLinkActorJoinOperationId GetOperationId(
-        ZLinkActorJoinCompletion completion) =>
+    private static ZLinkActorJoinOperationId GetOperationId(ZLinkActorJoinCompletion completion) =>
         completion switch
         {
             ZLinkActorJoinCompletion.Accepted accepted => accepted.OperationId,
             ZLinkActorJoinCompletion.Rejected rejected => rejected.OperationId,
             ZLinkActorJoinCompletion.Failed failed => failed.OperationId,
-            _ => throw new ArgumentOutOfRangeException(nameof(completion))
+            _ => throw new ArgumentOutOfRangeException(nameof(completion)),
         };
 
     private async ValueTask NotifyJoinFailureAsync(
         PendingPlayerJoin pending,
         string reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (pending.Purpose is PlayerJoinPurpose.InitialHumanEntry)
         {
@@ -186,24 +195,26 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
             return;
         }
 
-        await Context.BoundSession
-            .Send(new MoveRejectedNotify(reason, Position.X, Position.Y))
+        await Context
+            .BoundSession.Send(new MoveRejectedNotify(reason, Position.X, Position.Y))
             .Async(cancellationToken);
     }
 
     private async ValueTask SendJoinWorldResultAsync(
         PlayerPosition target,
         string? error,
-        CancellationToken cancellationToken) =>
-        await Context.BoundSession
-            .Send(new JoinWorldRes(ActorId, target.ZoneId, target.X, target.Y, error))
+        CancellationToken cancellationToken
+    ) =>
+        await Context
+            .BoundSession.Send(new JoinWorldRes(ActorId, target.ZoneId, target.X, target.Y, error))
             .Async(cancellationToken);
 
     private async ValueTask SendCrashProbeResultAsync(
         string? error,
-        CancellationToken cancellationToken) =>
-        await Context.BoundSession
-            .Send(new CrashRelocationProbeRes(error))
+        CancellationToken cancellationToken
+    ) =>
+        await Context
+            .BoundSession.Send(new CrashRelocationProbeRes(error))
             .Async(cancellationToken);
 
     public void ReverseDirection()
@@ -218,7 +229,7 @@ internal enum PlayerJoinPurpose
     InitialHumanEntry,
     InitialBotEntry,
     ZoneChange,
-    CrashBoundaryProbe
+    CrashBoundaryProbe,
 }
 
 internal sealed record PendingPlayerJoin(PlayerPosition Target, PlayerJoinPurpose Purpose);

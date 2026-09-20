@@ -30,9 +30,11 @@ internal sealed class OrderAggregate
         decimal amount,
         string currency,
         string eventId,
-        long nowUnixMs)
+        long nowUnixMs
+    )
     {
-        if (HasStarted) return [];
+        if (HasStarted)
+            return [];
 
         return
         [
@@ -45,7 +47,8 @@ internal sealed class OrderAggregate
                 lines,
                 amount,
                 currency,
-                nowUnixMs)
+                nowUnixMs
+            ),
         ];
     }
 
@@ -53,9 +56,11 @@ internal sealed class OrderAggregate
         ReserveInventoryResult result,
         string eventId,
         string failureEventId,
-        long nowUnixMs)
+        long nowUnixMs
+    )
     {
-        if (IsTerminal || Status != OrderStatus.Created) return [];
+        if (IsTerminal || Status != OrderStatus.Created)
+            return [];
 
         if (!result.Accepted)
         {
@@ -63,7 +68,7 @@ internal sealed class OrderAggregate
             return
             [
                 new InventoryReservationFailedEvent(eventId, OrderId, reason, nowUnixMs),
-                new OrderFailedEvent(failureEventId, OrderId, reason, nowUnixMs)
+                new OrderFailedEvent(failureEventId, OrderId, reason, nowUnixMs),
             ];
         }
 
@@ -72,17 +77,21 @@ internal sealed class OrderAggregate
             new InventoryReservedEvent(
                 eventId,
                 OrderId,
-                result.ReservationId ?? throw new InvalidOperationException("Accepted reservation requires an id."),
-                nowUnixMs)
+                result.ReservationId
+                    ?? throw new InvalidOperationException("Accepted reservation requires an id."),
+                nowUnixMs
+            ),
         ];
     }
 
     public IReadOnlyList<OrderDomainEvent> ApplyPaymentResult(
         AuthorizePaymentResult result,
         string eventId,
-        long nowUnixMs)
+        long nowUnixMs
+    )
     {
-        if (IsTerminal || Status != OrderStatus.InventoryReserved) return [];
+        if (IsTerminal || Status != OrderStatus.InventoryReserved)
+            return [];
 
         if (!result.Accepted)
         {
@@ -95,40 +104,45 @@ internal sealed class OrderAggregate
             new PaymentAuthorizedEvent(
                 eventId,
                 OrderId,
-                result.PaymentId ?? throw new InvalidOperationException("Accepted payment requires an id."),
-                nowUnixMs)
+                result.PaymentId
+                    ?? throw new InvalidOperationException("Accepted payment requires an id."),
+                nowUnixMs
+            ),
         ];
     }
 
     public IReadOnlyList<OrderDomainEvent> Confirm(string eventId, long nowUnixMs)
     {
-        if (IsTerminal || Status != OrderStatus.PaymentAuthorized) return [];
+        if (IsTerminal || Status != OrderStatus.PaymentAuthorized)
+            return [];
 
         return [new OrderConfirmedEvent(eventId, OrderId, nowUnixMs)];
     }
 
-    public IReadOnlyList<OrderDomainEvent> ReleaseInventory(
-        string eventId,
-        long nowUnixMs)
+    public IReadOnlyList<OrderDomainEvent> ReleaseInventory(string eventId, long nowUnixMs)
     {
-        if (IsTerminal || Status != OrderStatus.PaymentFailed) return [];
+        if (IsTerminal || Status != OrderStatus.PaymentFailed)
+            return [];
 
         return
         [
             new InventoryReleasedEvent(
                 eventId,
                 OrderId,
-                ReservationId ?? throw new InvalidOperationException("Reservation is required for compensation."),
+                ReservationId
+                    ?? throw new InvalidOperationException(
+                        "Reservation is required for compensation."
+                    ),
                 "payment failed",
-                nowUnixMs)
+                nowUnixMs
+            ),
         ];
     }
 
-    public IReadOnlyList<OrderDomainEvent> FailAfterInventoryRelease(
-        string eventId,
-        long nowUnixMs)
+    public IReadOnlyList<OrderDomainEvent> FailAfterInventoryRelease(string eventId, long nowUnixMs)
     {
-        if (IsTerminal || Status != OrderStatus.InventoryReleased) return [];
+        if (IsTerminal || Status != OrderStatus.InventoryReleased)
+            return [];
 
         return [new OrderFailedEvent(eventId, OrderId, "payment failed", nowUnixMs)];
     }
@@ -170,7 +184,8 @@ internal sealed class OrderAggregate
     public static OrderAggregate Rehydrate(IEnumerable<OrderDomainEvent> events)
     {
         var aggregate = new OrderAggregate();
-        foreach (var domainEvent in events) aggregate.Apply(domainEvent);
+        foreach (var domainEvent in events)
+            aggregate.Apply(domainEvent);
 
         return aggregate;
     }

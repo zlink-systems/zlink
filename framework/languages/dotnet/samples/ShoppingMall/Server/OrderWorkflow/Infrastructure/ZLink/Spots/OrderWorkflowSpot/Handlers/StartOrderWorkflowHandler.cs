@@ -4,13 +4,14 @@ using Zlink.Framework.Contracts.Spots;
 namespace ShoppingMall.Server.OrderWorkflow.Infrastructure.ZLink.Spots.OrderWorkflowSpot.Handlers;
 
 // --8<-- [start:doc-sm-start-handler]
-internal sealed class StartOrderWorkflowHandler :
-    IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
+internal sealed class StartOrderWorkflowHandler
+    : IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
 {
     public ValueTask<StartOrderWorkflowRes> HandleAsync(
         OrderWorkflowSpot spot,
         StartOrderWorkflowReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return spot.StartOrderWorkflowAsync(request, cancellationToken);
     }

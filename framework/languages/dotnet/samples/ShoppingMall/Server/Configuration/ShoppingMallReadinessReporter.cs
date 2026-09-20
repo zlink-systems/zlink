@@ -12,7 +12,8 @@ namespace ShoppingMall.Server.Configuration;
 public sealed class ShoppingMallReadinessReporter(
     ApiInstanceTopology instance,
     IZLinkRouteMeshRuntime routeMesh,
-    ILogger<ShoppingMallReadinessReporter> logger) : IHostedService
+    ILogger<ShoppingMallReadinessReporter> logger
+) : IHostedService
 {
     private CancellationTokenSource? stopping;
     private Task? reporting;
@@ -26,12 +27,19 @@ public sealed class ShoppingMallReadinessReporter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (stopping is null || reporting is null) return;
+        if (stopping is null || reporting is null)
+            return;
 
         await stopping.CancelAsync();
-        try { await reporting.WaitAsync(cancellationToken); }
+        try
+        {
+            await reporting.WaitAsync(cancellationToken);
+        }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
-        finally { stopping.Dispose(); }
+        finally
+        {
+            stopping.Dispose();
+        }
     }
 
     private async Task ReportAsync(CancellationToken cancellationToken)
@@ -41,10 +49,19 @@ public sealed class ShoppingMallReadinessReporter(
             try
             {
                 var status = routeMesh.GetStatus(SampleNames.MeshName);
-                if (status.IsReady && status.Peers.Count(static peer => peer.State == ZLinkPeerState.Ready) >= 2)
+                if (
+                    status.IsReady
+                    && status.Peers.Count(static peer => peer.State == ZLinkPeerState.Ready) >= 2
+                )
                 {
-                    logger.LogInformation("shoppingmall-ready kind=object-route node={NodeId} target=workflow-a", instance.InstanceId);
-                    logger.LogInformation("shoppingmall-ready kind=object-route node={NodeId} target=workflow-b", instance.InstanceId);
+                    logger.LogInformation(
+                        "shoppingmall-ready kind=object-route node={NodeId} target=workflow-a",
+                        instance.InstanceId
+                    );
+                    logger.LogInformation(
+                        "shoppingmall-ready kind=object-route node={NodeId} target=workflow-b",
+                        instance.InstanceId
+                    );
                     return;
                 }
             }

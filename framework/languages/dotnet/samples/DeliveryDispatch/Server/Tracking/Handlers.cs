@@ -10,13 +10,14 @@ namespace DeliveryDispatch.Server.Tracking;
 internal sealed class DeliveryStatusChangedHandler(
     EvidenceStore evidence,
     IZLinkActorClient actors,
-    ILogger<DeliveryStatusChangedHandler> logger)
-    : IZLinkRequestHandler<DeliveryStatusChangedReq, DeliveryStatusChangedRes>
+    ILogger<DeliveryStatusChangedHandler> logger
+) : IZLinkRequestHandler<DeliveryStatusChangedReq, DeliveryStatusChangedRes>
 {
     public async ValueTask<DeliveryStatusChangedRes> HandleAsync(
         DeliveryStatusChangedReq request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-dd-tracking-forward]
         evidence.Append(request);
@@ -25,14 +26,15 @@ internal sealed class DeliveryStatusChangedHandler(
             request.CustomerId,
             request.Status,
             request.CourierId,
-            request.OccurredAtUnixMs);
-        await actors.SendToActor(request.CustomerId, updated)
-            .Async(cancellationToken);
+            request.OccurredAtUnixMs
+        );
+        await actors.SendToActor(request.CustomerId, updated).Async(cancellationToken);
         // --8<-- [end:doc-dd-tracking-forward]
         logger.LogInformation(
             "deliverydispatch-tracking status={Status} delivery={DeliveryId}",
             request.Status,
-            request.DeliveryId);
+            request.DeliveryId
+        );
         return new DeliveryStatusChangedRes(request.DeliveryId, request.Status);
     }
 }

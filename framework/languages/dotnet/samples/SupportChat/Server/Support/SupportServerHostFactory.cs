@@ -1,6 +1,4 @@
-using Systems.Zlink;
 using Microsoft.Extensions.Configuration;
-
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using SupportChat.Server.Configuration;
@@ -9,10 +7,11 @@ using SupportChat.Server.Support.Infrastructure.ZLink.Actors;
 using SupportChat.Server.Support.Infrastructure.ZLink.Spots.ConversationSpot;
 using SupportChat.Server.Support.Infrastructure.ZLink.Spots.ConversationSpot.Notifications;
 using SupportChat.Server.Support.Infrastructure.ZLink.Spots.EntrySpot;
+using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Actors;
-using Zlink.Framework.Locations.Redis;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Locations.Redis;
 using Zlink.Samples.Logging;
 
 namespace SupportChat.Server.Support;
@@ -24,18 +23,15 @@ public static class SupportServerHostFactory
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddInMemoryCollection();
-        SampleLogging.Configure(
-            builder.Logging,
-            logDirectory,
-            "support");
+        SampleLogging.Configure(builder.Logging, logDirectory, "support");
         builder.Services.AddSingleton(topology);
         builder.Services.AddSingleton(new AgentAvailabilityDirectory(SampleNames.AgentCapacity));
         builder.Services.AddSingleton<AgentAssignmentService>();
         builder.Services.AddSingleton<SupportActorDirectory>();
         builder.Services.AddSingleton<ConversationNotificationPublisher>();
-        builder.Services.AddSingleton(new SupportChatReadiness(
-            SupportChatReadyKind.Public,
-            "support"));
+        builder.Services.AddSingleton(
+            new SupportChatReadiness(SupportChatReadyKind.Public, "support")
+        );
         builder.Services.AddHostedService<SupportChatReadinessReporter>();
 
         builder.Services.AddZLinkFramework(options =>
@@ -44,27 +40,35 @@ public static class SupportServerHostFactory
             var locations = options.ConfigureLocations();
             locations.RouteCacheMaxAge = TimeSpan.Zero;
             locations.MessageFollowDuration = TimeSpan.FromSeconds(5);
-            options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-            {
-                redis.ConnectionString = topology.RedisEndpoint;
-                redis.KeyPrefix = topology.RedisKeyPrefix;
-            }));
-            options.ConfigureDispatch()
-                .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.AddLocationStore(
+                new ZLinkRedisLocationStore(redis =>
+                {
+                    redis.ConnectionString = topology.RedisEndpoint;
+                    redis.KeyPrefix = topology.RedisKeyPrefix;
+                })
+            );
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             // --8<-- [start:doc-sc-support-register]
-            options.ConfigureMetadata()
+            options
+                .ConfigureMetadata()
                 .AllowSessionToActor(SampleNames.ConversationIdMetadataKey)
                 .AllowActorToSession(SampleNames.ConversationIdMetadataKey);
             options.AddHandlersFromAssemblyOf(typeof(SupportServerHostFactory));
-            var mesh = options.AddRouteMesh(SampleNames.MeshName)
+            var mesh = options
+                .AddRouteMesh(SampleNames.MeshName)
                 .Listen(topology.MeshEndpoint)
                 .SetRoutingIdPrefix("support-owner");
-            mesh.Objects().Server()
+            mesh.Objects()
+                .Server()
                 .AddEntrySpot<SupportEntrySpot>()
                 .AddActorFactory<SupportUserActor, SupportUserActorFactory>(
-                    SampleNames.SupportActorType, factory => factory.DisableRelocation())
+                    SampleNames.SupportActorType,
+                    factory => factory.DisableRelocation()
+                )
                 .AddSpotFactory<ConversationSpot>(
-                    SampleNames.ConversationSpotType, factory => factory.DisableRelocation());
+                    SampleNames.ConversationSpotType,
+                    factory => factory.DisableRelocation()
+                );
             // --8<-- [end:doc-sc-support-register]
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });

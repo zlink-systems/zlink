@@ -20,18 +20,20 @@ public static class SampleTimings
 public sealed record ShoppingMallClientConfiguration(
     string LogDirectory,
     string ApiAHttpUrl,
-    string ApiBHttpUrl)
+    string ApiBHttpUrl
+)
 {
     public static ShoppingMallClientConfiguration Load(string[] args)
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var options = new ConfigurationBuilder()
-                          .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                          .Build()
-                          .GetRequiredSection("Client")
-                          .Get<ShoppingMallClientConfiguration>()
-                      ?? throw new InvalidOperationException("ShoppingMall client configuration is empty.");
+        var options =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Client")
+                .Get<ShoppingMallClientConfiguration>()
+            ?? throw new InvalidOperationException("ShoppingMall client configuration is empty.");
         foreach (var property in typeof(ShoppingMallClientConfiguration).GetProperties())
             if (string.IsNullOrWhiteSpace((string?)property.GetValue(options)))
                 throw new InvalidOperationException($"Client.{property.Name} is required.");

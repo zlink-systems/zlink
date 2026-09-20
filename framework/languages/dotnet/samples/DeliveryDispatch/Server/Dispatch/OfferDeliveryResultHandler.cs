@@ -15,13 +15,14 @@ namespace DeliveryDispatch.Server.Dispatch;
 internal sealed class OfferDeliveryResultHandler(
     DeliveryOfferStore offers,
     DispatchWorker worker,
-    ILogger<OfferDeliveryResultHandler> logger)
-    : IZLinkSendHandler<OfferDeliveryResultMsg>
+    ILogger<OfferDeliveryResultHandler> logger
+) : IZLinkSendHandler<OfferDeliveryResultMsg>
 {
     public async ValueTask HandleAsync(
         OfferDeliveryResultMsg message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-dd-decision-settle]
         var offer = offers.Settle(message.DeliveryId, message.Attempt);
@@ -31,7 +32,8 @@ internal sealed class OfferDeliveryResultHandler(
                 "deliverydispatch-dispatch stale-decision-ignored delivery={DeliveryId} courier={CourierId} attempt={Attempt}",
                 message.DeliveryId,
                 message.CourierId,
-                message.Attempt);
+                message.Attempt
+            );
             return;
         }
 
@@ -40,7 +42,8 @@ internal sealed class OfferDeliveryResultHandler(
             message.DeliveryId,
             message.CourierId,
             message.Attempt,
-            message.Accepted);
+            message.Accepted
+        );
         await worker.SettleAsync(offer, message.Accepted, message.Reason, cancellationToken);
         // --8<-- [end:doc-dd-decision-settle]
     }

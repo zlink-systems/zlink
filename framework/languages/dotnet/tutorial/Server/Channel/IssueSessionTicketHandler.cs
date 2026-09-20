@@ -12,7 +12,7 @@ public sealed class IssueSessionTicketHandler
     public ValueTask<SessionTicket> HandleAsync(
         IssueSessionTicket request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
-        => ValueTask.FromResult(new SessionTicket($"ticket-{request.PlayerId}"));
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(new SessionTicket($"ticket-{request.PlayerId}"));
 }
 // --8<-- [end:clientserver-handler]

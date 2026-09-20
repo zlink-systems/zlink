@@ -6,7 +6,9 @@ namespace SupportChat.Server.Support.Domain.SupportChat;
 internal sealed class Conversation
 {
     private readonly List<ConversationMessage> _messages = [];
-    private readonly Dictionary<string, ConversationParticipant> _participants = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ConversationParticipant> _participants = new(
+        StringComparer.Ordinal
+    );
     private readonly ConversationPolicy _policy;
     private long? _closeDeadlineUnixMs;
     private long? _idleDeadlineUnixMs;
@@ -19,7 +21,8 @@ internal sealed class Conversation
         string customerActorId,
         string customerDisplayName,
         long createdAtUnixMs,
-        ConversationPolicy? policy = null)
+        ConversationPolicy? policy = null
+    )
     {
         if (string.IsNullOrWhiteSpace(subject))
             throw new InvalidOperationException("Conversation subject is required.");
@@ -34,7 +37,8 @@ internal sealed class Conversation
             ParticipantRole.Customer,
             customerDisplayName,
             createdAtUnixMs,
-            false);
+            false
+        );
     }
 
     public string ConversationId { get; }
@@ -57,16 +61,21 @@ internal sealed class Conversation
             AgentActorId,
             _lastMessageSeq,
             _lastMessageAtUnixMs,
-            _idleDeadlineUnixMs);
+            _idleDeadlineUnixMs
+        );
     }
 
     public ConversationChange JoinAgent(
         string agentActorId,
         string agentDisplayName,
-        long joinedAtUnixMs)
+        long joinedAtUnixMs
+    )
     {
         EnsureNotClosed("join an agent");
-        if (AgentActorId is not null && !string.Equals(AgentActorId, agentActorId, StringComparison.Ordinal))
+        if (
+            AgentActorId is not null
+            && !string.Equals(AgentActorId, agentActorId, StringComparison.Ordinal)
+        )
             throw new InvalidOperationException("Conversation already has an assigned agent.");
 
         AgentActorId = agentActorId;
@@ -76,7 +85,8 @@ internal sealed class Conversation
             ParticipantRole.Agent,
             agentDisplayName,
             joinedAtUnixMs,
-            false);
+            false
+        );
 
         var state = Snapshot();
         return new ConversationChange(
@@ -86,22 +96,23 @@ internal sealed class Conversation
                     ConversationEventKind.ParticipantJoined,
                     state,
                     agentActorId,
-                    ParticipantRole.Agent)
-            ]);
+                    ParticipantRole.Agent
+                ),
+            ]
+        );
     }
 
-    public ConversationChange SendMessage(
-        string senderActorId,
-        string text,
-        long sentAtUnixMs)
+    public ConversationChange SendMessage(string senderActorId, string text, long sentAtUnixMs)
     {
         EnsureParticipant(senderActorId);
         if (Status == ConversationStatus.Closed)
             throw new InvalidOperationException("Closed conversation cannot accept messages.");
         if (Status == ConversationStatus.WaitingForAgent)
             throw new InvalidOperationException("Conversation is waiting for an agent.");
-        if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("Message text is required.");
-        if (text.Length > _policy.MaxMessageLength) throw new InvalidOperationException("Message text is too long.");
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Message text is required.");
+        if (text.Length > _policy.MaxMessageLength)
+            throw new InvalidOperationException("Message text is too long.");
 
         Status = ConversationStatus.Active;
         _lastMessageSeq += 1;
@@ -113,7 +124,8 @@ internal sealed class Conversation
             _lastMessageSeq,
             senderActorId,
             text,
-            sentAtUnixMs);
+            sentAtUnixMs
+        );
         _messages.Add(message);
 
         var state = Snapshot();
@@ -124,17 +136,20 @@ internal sealed class Conversation
                     ConversationEventKind.MessageAppended,
                     state,
                     senderActorId,
-                    Message: message)
-            ]);
+                    Message: message
+                ),
+            ]
+        );
     }
 
-    public ConversationChange SetTyping(
-        string actorId,
-        bool isTyping)
+    public ConversationChange SetTyping(string actorId, bool isTyping)
     {
         // Typing is a one-way send: a closed conversation or a non-participant sender
         // is silently ignored (no event, no error) rather than rejected.
-        if (Status == ConversationStatus.Closed || !_participants.TryGetValue(actorId, out var participant))
+        if (
+            Status == ConversationStatus.Closed
+            || !_participants.TryGetValue(actorId, out var participant)
+        )
             return new ConversationChange(Snapshot(), []);
 
         _participants[actorId] = participant with { IsTyping = isTyping };
@@ -147,8 +162,10 @@ internal sealed class Conversation
                     state,
                     actorId,
                     participant.Role,
-                    IsTyping: isTyping)
-            ]);
+                    IsTyping: isTyping
+                ),
+            ]
+        );
     }
 
     // Called on a timer tick. Advances the idle lifecycle one stage at a time:
@@ -156,35 +173,39 @@ internal sealed class Conversation
     // deadline; WaitingForClose past the grace deadline closes the conversation.
     public ConversationChange MarkIdle(long nowUnixMs)
     {
-        if (Status == ConversationStatus.Active
+        if (
+            Status == ConversationStatus.Active
             && _idleDeadlineUnixMs is not null
-            && nowUnixMs >= _idleDeadlineUnixMs)
+            && nowUnixMs >= _idleDeadlineUnixMs
+        )
         {
             Status = ConversationStatus.WaitingForClose;
             _closeDeadlineUnixMs = nowUnixMs + (long)_policy.CloseGraceTimeout.TotalMilliseconds;
             var idleState = Snapshot();
             return new ConversationChange(
                 idleState,
-                [new ConversationEvent(ConversationEventKind.Idle, idleState)]);
+                [new ConversationEvent(ConversationEventKind.Idle, idleState)]
+            );
         }
 
-        if (Status == ConversationStatus.WaitingForClose
+        if (
+            Status == ConversationStatus.WaitingForClose
             && _closeDeadlineUnixMs is not null
-            && nowUnixMs >= _closeDeadlineUnixMs)
+            && nowUnixMs >= _closeDeadlineUnixMs
+        )
         {
             Status = ConversationStatus.Closed;
             var closedState = Snapshot();
             return new ConversationChange(
                 closedState,
-                [new ConversationEvent(ConversationEventKind.Closed, closedState)]);
+                [new ConversationEvent(ConversationEventKind.Closed, closedState)]
+            );
         }
 
         return new ConversationChange(Snapshot(), []);
     }
 
-    public ConversationChange Close(
-        string actorId,
-        string? reason)
+    public ConversationChange Close(string actorId, string? reason)
     {
         _ = reason;
         EnsureParticipant(actorId);
@@ -195,7 +216,8 @@ internal sealed class Conversation
         var state = Snapshot();
         return new ConversationChange(
             state,
-            [new ConversationEvent(ConversationEventKind.Closed, state, actorId)]);
+            [new ConversationEvent(ConversationEventKind.Closed, state, actorId)]
+        );
     }
 
     private ConversationParticipant EnsureParticipant(string actorId)

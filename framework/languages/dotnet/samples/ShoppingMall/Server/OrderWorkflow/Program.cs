@@ -12,7 +12,8 @@ internal static class Program
             configuration.Topology,
             instance,
             configuration.LogDirectory,
-            args);
+            args
+        );
         await app.RunAsync();
     }
 }

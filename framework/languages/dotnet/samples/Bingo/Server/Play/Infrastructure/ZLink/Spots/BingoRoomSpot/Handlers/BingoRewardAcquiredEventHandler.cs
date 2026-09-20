@@ -8,14 +8,15 @@ namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot.Handlers;
 
 // --8<-- [start:doc-bingo-reward-subscribe]
 [ZLinkSpotSubscriptionHandler(SampleNames.RoomChannel, SampleNames.RewardTopic)]
-internal sealed class
-    BingoRewardAcquiredEventHandler : IZLinkSpotSubscriptionHandler<BingoRoom, BingoRewardAcquiredEvent>
+internal sealed class BingoRewardAcquiredEventHandler
+    : IZLinkSpotSubscriptionHandler<BingoRoom, BingoRewardAcquiredEvent>
 {
     public ValueTask HandleAsync(
         BingoRoom spot,
         BingoRewardAcquiredEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return spot.AnnounceRewardAsync(message, cancellationToken);
     }

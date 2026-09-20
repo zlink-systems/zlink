@@ -1,17 +1,16 @@
-using Microsoft.Extensions.Configuration;
-
 using GameQuest.QuestMission.Application;
 using GameQuest.QuestMission.Infrastructure.Store;
 using GameQuest.QuestMission.Infrastructure.ZLink;
 using GameQuest.QuestMission.Infrastructure.ZLink.Spots.PlayerQuestSpot;
 using GameQuest.Server.Configuration;
 using GameQuest.Shared;
+using Microsoft.Extensions.Configuration;
 using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Actors;
-using Zlink.Framework.Locations.Redis;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.Locations.Redis;
 using Zlink.Samples.Logging;
 
 namespace GameQuest.QuestMission;
@@ -28,10 +27,7 @@ internal static class Program
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddInMemoryCollection();
         builder.WebHost.UseUrls(topology.MissionHttpBaseUrl(missionName));
-        SampleLogging.Configure(
-            builder.Logging,
-            configuration.LogDirectory,
-            missionName);
+        SampleLogging.Configure(builder.Logging, configuration.LogDirectory, missionName);
 
         builder.Services.AddSingleton(topology);
         builder.Services.AddSingleton(instance);
@@ -43,49 +39,65 @@ internal static class Program
         builder.Services.AddScoped<QuestEventProcessor>();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-            {
-                redis.ConnectionString = topology.RedisEndpoint;
-                redis.KeyPrefix = topology.RedisKeyPrefix;
-            }));
-            options.AddRelocationStore(new ZLinkRedisRelocationStore(redis =>
-            {
-                redis.ConnectionString = topology.RedisEndpoint;
-                redis.KeyPrefix = $"{topology.RedisKeyPrefix}relocation:";
-            }));
-            options.ConfigureDispatch()
-                .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.AddLocationStore(
+                new ZLinkRedisLocationStore(redis =>
+                {
+                    redis.ConnectionString = topology.RedisEndpoint;
+                    redis.KeyPrefix = topology.RedisKeyPrefix;
+                })
+            );
+            options.AddRelocationStore(
+                new ZLinkRedisRelocationStore(redis =>
+                {
+                    redis.ConnectionString = topology.RedisEndpoint;
+                    redis.KeyPrefix = $"{topology.RedisKeyPrefix}relocation:";
+                })
+            );
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(Program));
             // --8<-- [start:doc-gq-mission-register]
-            var mesh = options.AddRouteMesh(SampleNames.MeshName)
+            var mesh = options
+                .AddRouteMesh(SampleNames.MeshName)
                 .Listen(instance.MeshEndpoint)
                 .SetRoutingIdPrefix("quest-mission");
-            mesh.Objects().Server().AddInstanceSpotFactory<PlayerQuestSpot>(
-                SampleNames.PlayerQuestSpotType, factory => factory.RecreateOnRelocation());
+            mesh.Objects()
+                .Server()
+                .AddInstanceSpotFactory<PlayerQuestSpot>(
+                    SampleNames.PlayerQuestSpotType,
+                    factory => factory.RecreateOnRelocation()
+                );
             // --8<-- [end:doc-gq-mission-register]
         });
 
         var app = builder.Build();
 
-        app.MapGet("/health", () => Results.Ok(new { status = "ok", mission = instance.MissionName }));
+        app.MapGet(
+            "/health",
+            () => Results.Ok(new { status = "ok", mission = instance.MissionName })
+        );
         app.Lifetime.ApplicationStarted.Register(() =>
             app.Logger.LogInformation(
                 "gamequest-ready kind=instance-factory node={NodeId}",
-                missionName));
-        app.MapGet("/self-check/events",
+                missionName
+            )
+        );
+        app.MapGet(
+            "/self-check/events",
             async (QuestStore store, CancellationToken cancellationToken) =>
             {
                 return Results.Ok(await store.ReadStoredEventsAsync(cancellationToken));
-            });
-        app.MapPost("/self-check/owner/{playerId}/close", async (
-            string playerId,
-            IZLinkSpotClient spots,
-            CancellationToken cancellationToken) =>
-        {
-            await spots.SendToSpot(playerId, new ClosePlayerQuestMsg())
-                .Async(cancellationToken);
-            return Results.Ok();
-        });
+            }
+        );
+        app.MapPost(
+            "/self-check/owner/{playerId}/close",
+            async (string playerId, IZLinkSpotClient spots, CancellationToken cancellationToken) =>
+            {
+                await spots
+                    .SendToSpot(playerId, new ClosePlayerQuestMsg())
+                    .Async(cancellationToken);
+                return Results.Ok();
+            }
+        );
         await app.RunAsync();
     }
 }

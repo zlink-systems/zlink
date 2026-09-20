@@ -18,7 +18,8 @@ public sealed class PlayerSession(
     PlayerSessionBinder binder,
     RelocationProbeService relocationProbes,
     IZLinkActorClient actors,
-    ILogger<PlayerSession> logger) : IZLinkSession
+    ILogger<PlayerSession> logger
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -44,23 +45,26 @@ public sealed class PlayerSession(
             "stream error. session={SessionId}, code={Code}, message={Message}",
             Context.SessionId,
             error.Error,
-            error.Message);
+            error.Message
+        );
         return ValueTask.CompletedTask;
     }
 
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "session packet received. session={SessionId}, packet={PacketName}",
             Context.SessionId,
-            dispatch.PacketName);
+            dispatch.PacketName
+        );
         if (dispatch.PacketName == nameof(RelocationPairReq))
         {
-            await Context.Client
-                .Reply(await relocationProbes.SelectPairAsync(cancellationToken))
+            await Context
+                .Client.Reply(await relocationProbes.SelectPairAsync(cancellationToken))
                 .Async(cancellationToken);
             return;
         }
@@ -68,8 +72,10 @@ public sealed class PlayerSession(
         if (dispatch.PacketName == nameof(ActorLocationProbeReq))
         {
             var request = payload.Decode<ActorLocationProbeReq>();
-            await Context.Client
-                .Reply(await relocationProbes.FindActorAsync(request.ActorId, cancellationToken))
+            await Context
+                .Client.Reply(
+                    await relocationProbes.FindActorAsync(request.ActorId, cancellationToken)
+                )
                 .Async(cancellationToken);
             return;
         }
@@ -77,10 +83,10 @@ public sealed class PlayerSession(
         if (dispatch.PacketName == nameof(FreshActorProbeReq))
         {
             var request = payload.Decode<FreshActorProbeReq>();
-            await Context.Client
-                .Reply(await relocationProbes.CreateFreshActorAsync(
-                    request.ActorId,
-                    cancellationToken))
+            await Context
+                .Client.Reply(
+                    await relocationProbes.CreateFreshActorAsync(request.ActorId, cancellationToken)
+                )
                 .Async(cancellationToken);
             return;
         }
@@ -98,9 +104,7 @@ public sealed class PlayerSession(
         if (dispatch.PacketName == nameof(MessageFollowProbeMsg))
         {
             var message = payload.Decode<MessageFollowProbeMsg>();
-            await actors
-                .SendToActor(message.ActorId, message)
-                .Async(cancellationToken);
+            await actors.SendToActor(message.ActorId, message).Async(cancellationToken);
             return;
         }
 
@@ -108,9 +112,14 @@ public sealed class PlayerSession(
         {
             if (dispatch.PacketName != nameof(JoinWorldReq))
                 throw new InvalidOperationException(
-                    $"Client must join the world before sending '{dispatch.PacketName}'.");
+                    $"Client must join the world before sending '{dispatch.PacketName}'."
+                );
 
-            await binder.BindAsync(Context, payload.Decode<JoinWorldReq>().PlayerId, cancellationToken);
+            await binder.BindAsync(
+                Context,
+                payload.Decode<JoinWorldReq>().PlayerId,
+                cancellationToken
+            );
         }
 
         var actor = Context.Actors.Bound.Single();
@@ -130,12 +139,14 @@ public sealed class PlayerSession(
 /// </summary>
 public sealed class PlayerSessionBinder(
     IZLinkActorManager actors,
-    ILogger<PlayerSessionBinder> logger)
+    ILogger<PlayerSessionBinder> logger
+)
 {
     public async ValueTask BindAsync(
         IZLinkSessionContext context,
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-zw-session-bind]
         var actorRef = await actors
@@ -146,7 +157,7 @@ public sealed class PlayerSessionBinder(
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
-            _ => throw new InvalidOperationException("Player Actor creation was rejected.")
+            _ => throw new InvalidOperationException("Player Actor creation was rejected."),
         };
 
         await context.Actors.BindOrGetAsync(actorRef, cancellationToken);

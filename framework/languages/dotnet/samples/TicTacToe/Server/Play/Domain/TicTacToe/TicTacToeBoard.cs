@@ -19,7 +19,8 @@ internal sealed class TicTacToeBoard
         if ((uint)cell >= _cells.Length)
             throw new ArgumentOutOfRangeException(nameof(cell), "Cell must be between 0 and 8.");
 
-        if (_cells[cell] != Empty) throw new InvalidOperationException($"Cell {cell} is already occupied.");
+        if (_cells[cell] != Empty)
+            throw new InvalidOperationException($"Cell {cell} is already occupied.");
 
         _cells[cell] = mark[0];
     }
@@ -28,21 +29,39 @@ internal sealed class TicTacToeBoard
     {
         ReadOnlySpan<int> lines =
         [
-            0, 1, 2,
-            3, 4, 5,
-            6, 7, 8,
-            0, 3, 6,
-            1, 4, 7,
-            2, 5, 8,
-            0, 4, 8,
-            2, 4, 6
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            3,
+            6,
+            1,
+            4,
+            7,
+            2,
+            5,
+            8,
+            0,
+            4,
+            8,
+            2,
+            4,
+            6,
         ];
 
         var symbol = mark[0];
         for (var i = 0; i < lines.Length; i += 3)
-            if (_cells[lines[i]] == symbol
+            if (
+                _cells[lines[i]] == symbol
                 && _cells[lines[i + 1]] == symbol
-                && _cells[lines[i + 2]] == symbol)
+                && _cells[lines[i + 2]] == symbol
+            )
                 return true;
 
         return false;

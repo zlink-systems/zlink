@@ -11,49 +11,53 @@ internal sealed class JoinConversationActorHandler
         SupportEntrySpot,
         SupportUserActor,
         JoinConversationReq,
-        JoinConversationRes>
+        JoinConversationRes
+    >
 {
     public ValueTask<JoinConversationRes> HandleAsync(
         SupportEntrySpot entrySpot,
         SupportUserActor actor,
         IZLinkMessageContext context,
         JoinConversationReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = entrySpot;
         _ = message;
         cancellationToken.ThrowIfCancellationRequested();
-        if (!string.Equals(
-                actor.Role,
-                SupportChatRoles.Agent,
-                StringComparison.Ordinal))
+        if (!string.Equals(actor.Role, SupportChatRoles.Agent, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Only agent conversation actors can join through this handler.");
+                "Only agent conversation actors can join through this handler."
+            );
         }
 
-        var conversationId = context.Metadata.Find(
-            SampleNames.ConversationIdMetadataKey)
+        var conversationId =
+            context.Metadata.Find(SampleNames.ConversationIdMetadataKey)
             ?? throw new InvalidOperationException(
-                "Conversation Join is missing the ConversationId metadata.");
+                "Conversation Join is missing the ConversationId metadata."
+            );
         actor.TrackDeferredJoin(conversationId, notifyBoundSession: true);
-        actor.Context.JoinSpot(
+        actor
+            .Context.JoinSpot(
                 conversationId,
-                new JoinConversationReq(
-                    actor.ParticipantId,
-                    actor.Role,
-                    actor.DisplayName))
+                new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName)
+            )
             .Defer();
-        return ValueTask.FromResult(new JoinConversationRes(
-            true,
-            new ConversationState(
-                conversationId,
-                string.Empty,
-                ConversationStatuses.WaitingForAgent,
-                string.Empty,
-                null,
-                0,
-                null,
-                null)));
+        return ValueTask.FromResult(
+            new JoinConversationRes(
+                true,
+                new ConversationState(
+                    conversationId,
+                    string.Empty,
+                    ConversationStatuses.WaitingForAgent,
+                    string.Empty,
+                    null,
+                    0,
+                    null,
+                    null
+                )
+            )
+        );
     }
 }

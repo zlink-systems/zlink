@@ -21,20 +21,22 @@ internal sealed class WorldAnnounceSubscriber(
     IZLinkSpotClient routes,
     NodeMaintenancePolicy maintenance,
     NodePlayerCensus census,
-    ILogger<WorldAnnounceSubscriber> logger)
-    : IZLinkFanoutHandler<WorldAnnounceEvent>
+    ILogger<WorldAnnounceSubscriber> logger
+) : IZLinkFanoutHandler<WorldAnnounceEvent>
 {
     public async ValueTask HandleAsync(
         WorldAnnounceEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var zones = census.ZoneIds;
         logger.LogInformation(
             "fanout subscriber received announcement. node={NodeId}, announcement={AnnouncementId}, zones={ZoneCount}",
             maintenance.OwnNodeId,
             message.AnnouncementId,
-            zones.Count);
+            zones.Count
+        );
 
         foreach (var zoneId in zones)
         {
@@ -46,7 +48,10 @@ internal sealed class WorldAnnounceSubscriber(
                 // Async waits only for transport admission, not handler execution. Awaiting
                 // it keeps an admission failure visible without extending the remote handler turn.
                 await routes
-                    .SendToSpot(zoneId, new DeliverAnnounceMsg(message.AnnouncementId, message.Text))
+                    .SendToSpot(
+                        zoneId,
+                        new DeliverAnnounceMsg(message.AnnouncementId, message.Text)
+                    )
                     .Async(cancellationToken);
             }
             catch (Exception error)
@@ -54,7 +59,8 @@ internal sealed class WorldAnnounceSubscriber(
                 logger.LogError(
                     error,
                     "announcement dropped: delivering to the node's own zone spot failed. zone={ZoneId}",
-                    zoneId);
+                    zoneId
+                );
             }
         }
     }
@@ -68,19 +74,21 @@ internal sealed class WorldAnnounceSubscriber(
 [ZLinkHandlerGroup(HandlerGroups.BroadcastProbe)]
 internal sealed class BroadcastProbeSubscriber(
     NodeMaintenancePolicy maintenance,
-    ILogger<BroadcastProbeSubscriber> logger)
-    : IZLinkFanoutHandler<WorldAnnounceEvent>
+    ILogger<BroadcastProbeSubscriber> logger
+) : IZLinkFanoutHandler<WorldAnnounceEvent>
 {
     public ValueTask HandleAsync(
         WorldAnnounceEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "fanout subscriber received announcement. node={NodeId}, announcement={AnnouncementId}, zones={ZoneCount}",
             maintenance.OwnNodeId,
             message.AnnouncementId,
-            0);
+            0
+        );
         return ValueTask.CompletedTask;
     }
 }
@@ -94,20 +102,22 @@ internal sealed class BroadcastProbeSubscriber(
 // --8<-- [start:doc-zw-maintenance-subscriber]
 internal sealed class NodeMaintenanceChangedSubscriber(
     NodeMaintenancePolicy maintenance,
-    ILogger<NodeMaintenanceChangedSubscriber> logger)
-    : IZLinkFanoutHandler<NodeMaintenanceChangedEvent>
+    ILogger<NodeMaintenanceChangedSubscriber> logger
+) : IZLinkFanoutHandler<NodeMaintenanceChangedEvent>
 {
     public ValueTask HandleAsync(
         NodeMaintenanceChangedEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         maintenance.Apply(message.NodeId, message.Enabled);
         logger.LogInformation(
             "maintenance cache updated. observer={ObserverNodeId}, node={NodeId}, enabled={Enabled}",
             maintenance.OwnNodeId,
             message.NodeId,
-            message.Enabled);
+            message.Enabled
+        );
         return ValueTask.CompletedTask;
     }
 }

@@ -10,9 +10,7 @@ namespace DeliveryDispatch.Server.CourierActorNode;
 /// from the session, and the only thing the actor has to remember in between is which attempt
 /// the offer belonged to, so the decision can be paired with it.
 /// </summary>
-internal sealed class CourierActor(
-    string actorId,
-    IZLinkActorContext context) : IZLinkActor
+internal sealed class CourierActor(string actorId, IZLinkActorContext context) : IZLinkActor
 {
     private readonly Dictionary<string, int> _offeredAttempts = new(StringComparer.Ordinal);
 
@@ -25,14 +23,18 @@ internal sealed class CourierActor(
     public async ValueTask OfferAsync(OfferDeliveryMsg offer, CancellationToken cancellationToken)
     {
         _offeredAttempts[offer.DeliveryId] = offer.Attempt;
-        await Context.BoundSession
-            .Send(new OfferDeliveryNotify(
-                offer.CourierId,
-                offer.DeliveryId,
-                offer.PickupAddress,
-                offer.DropoffAddress))
+        await Context
+            .BoundSession.Send(
+                new OfferDeliveryNotify(
+                    offer.CourierId,
+                    offer.DeliveryId,
+                    offer.PickupAddress,
+                    offer.DropoffAddress
+                )
+            )
             .Async(cancellationToken);
     }
+
     // --8<-- [end:doc-dd-offer-push]
 
     /// <summary>
@@ -49,7 +51,8 @@ internal sealed class CourierActorFactory : IZLinkActorFactory<CourierActor>
 {
     public ValueTask<CourierActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         return ValueTask.FromResult(new CourierActor(context.ActorId, context));
     }

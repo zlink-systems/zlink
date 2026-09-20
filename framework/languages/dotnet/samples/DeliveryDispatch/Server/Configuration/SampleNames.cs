@@ -27,6 +27,7 @@ public static class SampleNames
 public static class SampleTimings
 {
     public static readonly TimeSpan FrameworkTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>How long an offer stands before the sweeper reassigns it. The deadline belongs
     /// to the dispatch worker, not to the courier node (common sample spec §7.4).</summary>
     public static readonly TimeSpan CourierDecisionTimeout = TimeSpan.FromMilliseconds(700);

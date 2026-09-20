@@ -18,7 +18,8 @@ internal static class ConversationContracts
             snapshot.AgentActorId,
             snapshot.LastMessageSeq,
             snapshot.LastMessageAtUnixMs,
-            snapshot.IdleDeadlineUnixMs);
+            snapshot.IdleDeadlineUnixMs
+        );
     }
 
     public static ChatMessage ToMessage(ConversationMessage message)
@@ -28,7 +29,8 @@ internal static class ConversationContracts
             message.MessageSeq,
             message.SenderActorId,
             message.Text,
-            message.SentAtUnixMs);
+            message.SentAtUnixMs
+        );
     }
 
     public static string ToStatus(ConversationStatus status)
@@ -39,7 +41,7 @@ internal static class ConversationContracts
             ConversationStatus.Active => ConversationStatuses.Active,
             ConversationStatus.WaitingForClose => ConversationStatuses.WaitingForClose,
             ConversationStatus.Closed => ConversationStatuses.Closed,
-            _ => throw new InvalidOperationException($"Unknown conversation status {status}.")
+            _ => throw new InvalidOperationException($"Unknown conversation status {status}."),
         };
     }
 
@@ -49,7 +51,7 @@ internal static class ConversationContracts
         {
             ParticipantRole.Customer => SupportChatRoles.Customer,
             ParticipantRole.Agent => SupportChatRoles.Agent,
-            _ => throw new InvalidOperationException($"Unknown participant role {role}.")
+            _ => throw new InvalidOperationException($"Unknown participant role {role}."),
         };
     }
 }

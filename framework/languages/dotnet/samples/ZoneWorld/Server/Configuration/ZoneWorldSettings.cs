@@ -1,10 +1,12 @@
 using Microsoft.Extensions.Configuration;
+
 namespace ZoneWorld.Server.Configuration;
 
 public sealed record ZoneWorldSettings(
     string RedisEndpoint,
     string RedisKeyPrefix,
-    string LogDirectory);
+    string LogDirectory
+);
 
 public sealed record ZoneNodeSettings(
     string NodeId,
@@ -13,40 +15,43 @@ public sealed record ZoneNodeSettings(
     bool DisableBots = false,
     bool SubscriberOnly = false,
     bool AllowEmptyZoneSet = false,
-    string? MeshAdvertiseHost = null);
+    string? MeshAdvertiseHost = null
+);
 
 public sealed record GatewaySettings(
     string StreamEndpoint,
     string MeshEndpoint,
-    string? MeshAdvertiseHost = null);
+    string? MeshAdvertiseHost = null
+);
 
-public sealed record OpsSettings(
-    string StreamEndpoint,
-    string MeshEndpoint);
+public sealed record OpsSettings(string StreamEndpoint, string MeshEndpoint);
 
 public sealed record ZoneWorldClientSettings(
     string GatewayEndpoint,
     string OpsEndpoint,
     string Scenarios = "all",
     bool StreamTrace = false,
-    string? FaultArmFile = null);
+    string? FaultArmFile = null
+);
 
 public sealed record ZoneWorldConfiguration(
     ZoneWorldSettings Shared,
     ZoneNodeSettings? ZoneNode = null,
     GatewaySettings? Gateway = null,
     OpsSettings? Ops = null,
-    ZoneWorldClientSettings? Client = null)
+    ZoneWorldClientSettings? Client = null
+)
 {
     public static ZoneWorldConfiguration Load(string[] args)
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
 
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-            .Build()
-            .Get<ZoneWorldConfiguration>()
+        var configuration =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .Get<ZoneWorldConfiguration>()
             ?? throw new InvalidOperationException("ZoneWorld configuration is empty.");
         configuration.Validate();
         return configuration;
@@ -58,7 +63,9 @@ public sealed record ZoneWorldConfiguration(
         Required(Shared.RedisKeyPrefix, nameof(Shared.RedisKeyPrefix));
         Required(Shared.LogDirectory, nameof(Shared.LogDirectory));
 
-        var roles = new object?[] { ZoneNode, Gateway, Ops, Client }.Count(value => value is not null);
+        var roles = new object?[] { ZoneNode, Gateway, Ops, Client }.Count(value =>
+            value is not null
+        );
         if (roles != 1)
             throw new InvalidOperationException("Exactly one ZoneWorld role must be configured.");
     }
@@ -66,6 +73,8 @@ public sealed record ZoneWorldConfiguration(
     private static void Required(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value))
-            throw new InvalidOperationException($"ZoneWorld configuration value '{name}' is required.");
+            throw new InvalidOperationException(
+                $"ZoneWorld configuration value '{name}' is required."
+            );
     }
 }

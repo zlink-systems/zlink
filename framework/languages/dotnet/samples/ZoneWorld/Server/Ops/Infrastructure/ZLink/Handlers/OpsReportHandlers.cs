@@ -12,25 +12,28 @@ namespace ZoneWorld.Server.Ops.Infrastructure.ZLink.Handlers;
 [ZLinkHandlerGroup(HandlerGroups.Ops)]
 internal sealed class ReportSpotEventHandler(
     OpsConsoleRegistry consoles,
-    ILogger<ReportSpotEventHandler> logger)
-    : IZLinkSendHandler<ReportSpotEventMsg>
+    ILogger<ReportSpotEventHandler> logger
+) : IZLinkSendHandler<ReportSpotEventMsg>
 {
     public async ValueTask HandleAsync(
         ReportSpotEventMsg message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "node alert. node={NodeId}, kind={Kind}, detail={Detail}",
             message.NodeId,
             message.Kind,
-            message.Detail);
+            message.Detail
+        );
 
         var alert = new NodeAlertNotify(
             message.NodeId,
             message.Kind,
             message.Detail,
-            message.OccurredAt);
+            message.OccurredAt
+        );
 
         consoles.RecordAlert(alert);
         await consoles.BroadcastAsync(alert, cancellationToken);
@@ -42,29 +45,35 @@ internal sealed class ReportSpotEventHandler(
 [ZLinkHandlerGroup(HandlerGroups.Ops)]
 internal sealed class ReportNodeStatusHandler(
     NodeRegistry nodes,
-    ILogger<ReportNodeStatusHandler> logger)
-    : IZLinkSendHandler<ReportNodeStatusMsg>
+    ILogger<ReportNodeStatusHandler> logger
+) : IZLinkSendHandler<ReportNodeStatusMsg>
 {
     public async ValueTask HandleAsync(
         ReportNodeStatusMsg message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var route = context as ZLinkRouteMessageContext
-                    ?? throw new InvalidOperationException(
-                        "Zone reports require RouteMesh source identity.");
+        var route =
+            context as ZLinkRouteMessageContext
+            ?? throw new InvalidOperationException(
+                "Zone reports require RouteMesh source identity."
+            );
         var connectionCorrelated = await nodes.ApplyReportAsync(
             message,
             route.SourceNodeRid,
-            cancellationToken);
+            cancellationToken
+        );
         if (connectionCorrelated)
             logger.LogInformation(
                 "node connection observed. node={NodeId}, connected={Connected}",
                 message.NodeId,
-                true);
+                true
+            );
         logger.LogInformation(
             "node status observed. node={NodeId}, rid={NodeRid}",
             message.NodeId,
-            route.SourceNodeRid);
+            route.SourceNodeRid
+        );
     }
 }

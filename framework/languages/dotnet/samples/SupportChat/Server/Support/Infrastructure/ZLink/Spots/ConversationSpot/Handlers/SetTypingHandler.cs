@@ -1,6 +1,6 @@
-using Zlink.Framework.Contracts.Handlers;
 using SupportChat.Server.Support.Infrastructure.ZLink.Actors;
 using SupportChat.Shared.Contracts;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.ConversationSpot.Handlers;
@@ -15,7 +15,8 @@ internal sealed class SetTypingHandler
         SupportUserActor actor,
         IZLinkMessageContext context,
         SetTypingMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await spot.SetTypingAsync(actor, message, cancellationToken);
     }

@@ -6,11 +6,10 @@ public sealed record StartOrderReq(
     string CartId,
     string ShippingAddressId,
     string PaymentMethodId,
-    string IdempotencyKey);
+    string IdempotencyKey
+);
 
-public sealed record StartOrderRes(
-    string OrderId,
-    OrderState State);
+public sealed record StartOrderRes(string OrderId, OrderState State);
 
 public sealed record GetOrderStateReq(string OrderId);
 
@@ -25,26 +24,25 @@ public sealed record OrderState(
     string? Reason,
     [property: JsonConverter(typeof(NullableDecimalNumberJsonConverter))] decimal? Amount,
     string? Currency,
-    long UpdatedAtUnixMs);
+    long UpdatedAtUnixMs
+);
 
-public sealed record OrderLineInput(
-    string Sku,
-    int Quantity);
+public sealed record OrderLineInput(string Sku, int Quantity);
 
 public sealed record CartSeed(
     string CartId,
     OrderLineInput[] Lines,
     [property: JsonConverter(typeof(DecimalNumberJsonConverter))] decimal Amount,
-    string Currency);
+    string Currency
+);
 
-public sealed record InventorySeed(
-    string Sku,
-    int AvailableQuantity);
+public sealed record InventorySeed(string Sku, int AvailableQuantity);
 
 public sealed record PaymentMethodSeed(
     string PaymentMethodId,
     bool ShouldAuthorize,
-    string? FailureReason);
+    string? FailureReason
+);
 
 public sealed record StartOrderWorkflowReq(
     string OrderId,
@@ -55,19 +53,16 @@ public sealed record StartOrderWorkflowReq(
     string SourceCommandId,
     OrderLineInput[] Lines,
     [property: JsonConverter(typeof(DecimalNumberJsonConverter))] decimal Amount,
-    string Currency);
+    string Currency
+);
 
 public sealed record StartOrderWorkflowRes(OrderState State);
 
-public sealed record ContinueOrderWorkflowReq(
-    string OrderId,
-    string SourceCommandId);
+public sealed record ContinueOrderWorkflowReq(string OrderId, string SourceCommandId);
 
 public sealed record ContinueOrderWorkflowRes(OrderState State);
 
-public sealed record RebuildOrderProjectionReq(
-    string OrderId,
-    string SourceCommandId);
+public sealed record RebuildOrderProjectionReq(string OrderId, string SourceCommandId);
 
 public sealed record RebuildOrderProjectionRes(OrderState State);
 
@@ -85,6 +80,4 @@ public sealed record SignalPlannedRelocationReadyReq;
 
 public sealed record SignalPlannedRelocationReadyRes(bool Deferred);
 
-public sealed record OrderProjectionUpdatedEvent(
-    string OrderId,
-    string Status);
+public sealed record OrderProjectionUpdatedEvent(string OrderId, string Status);

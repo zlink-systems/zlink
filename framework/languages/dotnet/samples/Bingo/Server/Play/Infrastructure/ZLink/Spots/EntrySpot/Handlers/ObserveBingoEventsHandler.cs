@@ -14,14 +14,16 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
         BingoEntrySpot,
         PlayerActor,
         ObserveBingoEventsReq,
-        ObserveBingoEventsRes>
+        ObserveBingoEventsRes
+    >
 {
     public async ValueTask<ObserveBingoEventsRes> HandleAsync(
         BingoEntrySpot entrySpot,
         PlayerActor actor,
         IZLinkMessageContext context,
         ObserveBingoEventsReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var observerSpotId = ObserverSpotId(message.RoomId, actor.ActorId);
         var settings = BingoRoomSettings.CreateObserver(message.RoomId, actor.ActorId);
@@ -32,15 +34,17 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
             .Async(cancellationToken);
 
         actor.TrackDeferredJoin(observerSpotId, observeOnly: true);
-        actor.Context.JoinSpot(
+        actor
+            .Context.JoinSpot(
                 observerSpotId,
                 new BingoRoomJoinReq
                 {
                     RoomId = message.RoomId,
                     ActorId = actor.ActorId,
                     DisplayName = actor.DisplayName,
-                    ObserveOnly = true
-                })
+                    ObserveOnly = true,
+                }
+            )
             .Defer();
         return new ObserveBingoEventsRes { Subscribed = true };
     }

@@ -17,39 +17,49 @@ namespace Bingo.Server.Matchmaking;
 
 public static class MatchmakingServerHostFactory
 {
-    public static IHost Build(
-        SampleRuntimeConfiguration<SampleMatchmakingNode> configuration)
+    public static IHost Build(SampleRuntimeConfiguration<SampleMatchmakingNode> configuration)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddInMemoryCollection();
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-            ConnectionMultiplexer.Connect(configuration.RedisEndpoint));
-        builder.Services.AddSingleton<IBingoMatchReservationStore,
-            RedisBingoMatchReservationStore>();
+            ConnectionMultiplexer.Connect(configuration.RedisEndpoint)
+        );
+        builder.Services.AddSingleton<
+            IBingoMatchReservationStore,
+            RedisBingoMatchReservationStore
+        >();
         SampleLogging.Configure(builder.Logging, configuration.LogDirectory, "matchmaking");
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-            {
-                redis.ConnectionString = configuration.RedisEndpoint;
-                redis.KeyPrefix = configuration.RedisKeyPrefix;
-            }));
-            options.AddRelocationStore(new ZLinkRedisRelocationStore(redis =>
-            {
-                redis.ConnectionString = configuration.RedisEndpoint;
-                redis.KeyPrefix = $"{configuration.RedisKeyPrefix}relocation:";
-            }));
+            options.AddLocationStore(
+                new ZLinkRedisLocationStore(redis =>
+                {
+                    redis.ConnectionString = configuration.RedisEndpoint;
+                    redis.KeyPrefix = configuration.RedisKeyPrefix;
+                })
+            );
+            options.AddRelocationStore(
+                new ZLinkRedisRelocationStore(redis =>
+                {
+                    redis.ConnectionString = configuration.RedisEndpoint;
+                    redis.KeyPrefix = $"{configuration.RedisKeyPrefix}relocation:";
+                })
+            );
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(MatchmakingServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
-            options.AddRouteMesh(SampleNames.MatchmakingMeshName)
+            options
+                .AddRouteMesh(SampleNames.MatchmakingMeshName)
                 .SetRoutingIdPrefix("matchmaking")
                 .Listen(configuration.Node.MeshEndpoint)
-                .Objects().Server()
+                .Objects()
+                .Server()
                 .AddInstanceSpotFactory<BingoMatchmaker>(
-                    SampleNames.MatchmakerSpotType, factory => factory.RecreateOnRelocation());
+                    SampleNames.MatchmakerSpotType,
+                    factory => factory.RecreateOnRelocation()
+                );
         });
         return builder.Build();
     }

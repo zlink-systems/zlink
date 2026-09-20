@@ -27,20 +27,19 @@ public static class ConversationStatuses
     public const string Closed = "Closed";
 }
 
-public sealed record SupportChatClientConfiguration(
-    string LogDirectory,
-    string StreamEndpoint)
+public sealed record SupportChatClientConfiguration(string LogDirectory, string StreamEndpoint)
 {
     public static SupportChatClientConfiguration Load(string[] args)
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var options = new ConfigurationBuilder()
-                          .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                          .Build()
-                          .GetRequiredSection("Client")
-                          .Get<SupportChatClientConfiguration>()
-                      ?? throw new InvalidOperationException("SupportChat client configuration is empty.");
+        var options =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Client")
+                .Get<SupportChatClientConfiguration>()
+            ?? throw new InvalidOperationException("SupportChat client configuration is empty.");
         if (string.IsNullOrWhiteSpace(options.LogDirectory))
             throw new InvalidOperationException("Client.LogDirectory is required.");
         if (string.IsNullOrWhiteSpace(options.StreamEndpoint))

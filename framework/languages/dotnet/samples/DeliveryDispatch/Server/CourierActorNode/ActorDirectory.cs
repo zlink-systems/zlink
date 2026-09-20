@@ -23,6 +23,8 @@ internal sealed class ActorDirectory
             }
         }
 
-        throw new InvalidOperationException($"Courier actor is not available on this node: {courierId}");
+        throw new InvalidOperationException(
+            $"Courier actor is not available on this node: {courierId}"
+        );
     }
 }

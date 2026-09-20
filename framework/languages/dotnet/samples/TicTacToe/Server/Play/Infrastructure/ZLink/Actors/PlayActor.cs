@@ -3,10 +3,7 @@ using Zlink.Framework.Contracts.Actors;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Actors;
 
-internal sealed class PlayActor(
-    string actorId,
-    IZLinkActorContext context)
-    : IZLinkActor
+internal sealed class PlayActor(string actorId, IZLinkActorContext context) : IZLinkActor
 {
     private const int ProcessedJoinOperationRetention = 256;
     private readonly Queue<string> _pendingJoins = new();
@@ -28,7 +25,8 @@ internal sealed class PlayActor(
     {
         if (!string.Equals(player.ActorId, ActorId, StringComparison.Ordinal))
             throw new InvalidOperationException(
-                $"Authenticated player '{player.ActorId}' does not match actor '{ActorId}'.");
+                $"Authenticated player '{player.ActorId}' does not match actor '{ActorId}'."
+            );
 
         Player = player;
     }
@@ -55,7 +53,8 @@ internal sealed class PlayActor(
         _processedJoinOperationOrder;
 
     internal void RestoreProcessedJoinOperations(
-        IEnumerable<ZLinkActorJoinOperationId> operationIds)
+        IEnumerable<ZLinkActorJoinOperationId> operationIds
+    )
     {
         foreach (var operationId in operationIds)
             RememberJoinOperation(operationId);
@@ -63,47 +62,50 @@ internal sealed class PlayActor(
 
     public async ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var operationId = GetOperationId(completion);
-        if (_processedJoinOperations.Contains(operationId)) return;
+        if (_processedJoinOperations.Contains(operationId))
+            return;
 
-        var roomId = _pendingJoins.Count > 0
-            ? _pendingJoins.Peek()
-            : ResolveRecoveredRoomId(completion);
+        var roomId =
+            _pendingJoins.Count > 0 ? _pendingJoins.Peek() : ResolveRecoveredRoomId(completion);
 
         switch (completion)
         {
             case ZLinkActorJoinCompletion.Accepted { Reply: { } reply }:
                 JoinRoom(roomId);
-                await Context.BoundSession
-                    .Send(new JoinGameNotify(reply.Decode<TicTacToeGameJoinRes>().State))
+                await Context
+                    .BoundSession.Send(
+                        new JoinGameNotify(reply.Decode<TicTacToeGameJoinRes>().State)
+                    )
                     .Async(cancellationToken);
                 break;
 
             case ZLinkActorJoinCompletion.Rejected:
-                await Context.BoundSession
-                    .Send(new JoinGameFailedNotify(roomId, "Rejected"))
+                await Context
+                    .BoundSession.Send(new JoinGameFailedNotify(roomId, "Rejected"))
                     .Async(cancellationToken);
                 break;
 
             case ZLinkActorJoinCompletion.Failed failed:
-                await Context.BoundSession
-                    .Send(new JoinGameFailedNotify(
-                        roomId,
-                        failed.Kind.ToString()))
+                await Context
+                    .BoundSession.Send(new JoinGameFailedNotify(roomId, failed.Kind.ToString()))
                     .Async(cancellationToken);
                 break;
         }
 
         RememberJoinOperation(operationId);
-        if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
+        if (_pendingJoins.Count > 0)
+            _pendingJoins.Dequeue();
     }
 
     private bool RememberJoinOperation(ZLinkActorJoinOperationId operationId)
     {
-        if (!_processedJoinOperations.Add(operationId)) return false;
+        if (!_processedJoinOperations.Add(operationId))
+            return false;
 
         _processedJoinOperationOrder.Enqueue(operationId);
         while (_processedJoinOperationOrder.Count > ProcessedJoinOperationRetention)
@@ -111,24 +113,23 @@ internal sealed class PlayActor(
         return true;
     }
 
-    private static ZLinkActorJoinOperationId GetOperationId(
-        ZLinkActorJoinCompletion completion) =>
+    private static ZLinkActorJoinOperationId GetOperationId(ZLinkActorJoinCompletion completion) =>
         completion switch
         {
             ZLinkActorJoinCompletion.Accepted accepted => accepted.OperationId,
             ZLinkActorJoinCompletion.Rejected rejected => rejected.OperationId,
             ZLinkActorJoinCompletion.Failed failed => failed.OperationId,
-            _ => throw new ArgumentOutOfRangeException(nameof(completion))
+            _ => throw new ArgumentOutOfRangeException(nameof(completion)),
         };
 
-    private static string ResolveRecoveredRoomId(
-        ZLinkActorJoinCompletion completion)
+    private static string ResolveRecoveredRoomId(ZLinkActorJoinCompletion completion)
     {
         return completion switch
         {
-            ZLinkActorJoinCompletion.Accepted { Reply: { } reply } =>
-                reply.Decode<TicTacToeGameJoinRes>().State.RoomId,
-            _ => string.Empty
+            ZLinkActorJoinCompletion.Accepted { Reply: { } reply } => reply
+                .Decode<TicTacToeGameJoinRes>()
+                .State.RoomId,
+            _ => string.Empty,
         };
     }
 

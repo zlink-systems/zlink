@@ -2,8 +2,7 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace Bingo.Server.Matchmaking.Infrastructure.ZLink;
 
-internal sealed class BingoMatchmaker(IZLinkInstanceSpotContext context)
-    : IZLinkInstanceSpot
+internal sealed class BingoMatchmaker(IZLinkInstanceSpotContext context) : IZLinkInstanceSpot
 {
     public IZLinkInstanceSpotContext Context { get; } = context;
 
@@ -19,6 +18,7 @@ internal sealed class BingoMatchmaker(IZLinkInstanceSpotContext context)
         await Context.AddTimer<BingoMatchmakerIdleTimer>(
             "bingo-matchmaker-idle",
             TimeSpan.FromSeconds(10),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
     }
 }

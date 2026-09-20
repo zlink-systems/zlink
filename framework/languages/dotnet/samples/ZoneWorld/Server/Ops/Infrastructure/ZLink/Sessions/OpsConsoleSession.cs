@@ -13,7 +13,8 @@ namespace ZoneWorld.Server.Ops.Infrastructure.ZLink.Sessions;
 public sealed class OpsConsoleSession(
     IZLinkSessionContext context,
     OpsConsoleRegistry consoles,
-    ILogger<OpsConsoleSession> logger) : IZLinkSession
+    ILogger<OpsConsoleSession> logger
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -37,7 +38,8 @@ public sealed class OpsConsoleSession(
             "ops stream error. session={SessionId}, code={Code}, diagnostic={Diagnostic}",
             Context.SessionId,
             error.Error,
-            error.Message);
+            error.Message
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -46,6 +48,6 @@ public sealed class OpsConsoleSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken) =>
-        await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken);
+        CancellationToken cancellationToken
+    ) => await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken);
 }

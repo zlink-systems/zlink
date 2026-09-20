@@ -11,15 +11,15 @@ namespace DeliveryDispatch.Server.Dispatch;
 /// sends it ends right there, and the courier's answer comes back later as its own inbound
 /// message (common sample spec §7.4).
 /// </summary>
-internal sealed class CourierOfferPort(
-    Zlink.Framework.Contracts.Actors.IZLinkActorClient actors)
+internal sealed class CourierOfferPort(Zlink.Framework.Contracts.Actors.IZLinkActorClient actors)
 {
     // --8<-- [start:doc-dd-offer-send]
     public async ValueTask OfferAsync(
         AssignDeliveryMsg delivery,
         string courierId,
         int attempt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await actors
             .SendToActor(
@@ -29,7 +29,9 @@ internal sealed class CourierOfferPort(
                     delivery.DeliveryId,
                     attempt,
                     delivery.PickupAddress,
-                    delivery.DropoffAddress))
+                    delivery.DropoffAddress
+                )
+            )
             .Async(cancellationToken);
     }
     // --8<-- [end:doc-dd-offer-send]
@@ -41,9 +43,13 @@ internal sealed class DeliveryStatusPublisher(IZLinkRouteClient channels)
         AssignDeliveryMsg delivery,
         DeliveryStatus status,
         string? courierId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        _ = await DispatchChannelClient.RequestAsync<DeliveryStatusChangedReq, DeliveryStatusChangedRes>(
+        _ = await DispatchChannelClient.RequestAsync<
+            DeliveryStatusChangedReq,
+            DeliveryStatusChangedRes
+        >(
             channels,
             SampleNames.TrackingRouteChannel,
             new DeliveryStatusChangedReq(
@@ -51,8 +57,10 @@ internal sealed class DeliveryStatusPublisher(IZLinkRouteClient channels)
                 delivery.CustomerId,
                 status,
                 courierId,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
-            cancellationToken);
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            ),
+            cancellationToken
+        );
     }
 }
 
@@ -63,7 +71,8 @@ internal static class DispatchChannelClient
         string channelName,
         TReq request,
         CancellationToken cancellationToken,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null
+    )
     {
         var call = channels.RequestToChannel(channelName, request);
         if (timeout is { } value)

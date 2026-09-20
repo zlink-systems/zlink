@@ -7,9 +7,7 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace GameQuest.GameApi.Session;
 
-internal sealed class PlayerSessionActor(
-    string actorId,
-    IZLinkActorContext context) : IZLinkActor
+internal sealed class PlayerSessionActor(string actorId, IZLinkActorContext context) : IZLinkActor
 {
     public string ActorId { get; } = actorId;
 
@@ -19,7 +17,8 @@ internal sealed class PlayerSessionActor(
     {
         if (!string.Equals(ActorId, playerId, StringComparison.Ordinal))
             throw new InvalidOperationException(
-                $"Bound player '{ActorId}' cannot act for player '{playerId}'.");
+                $"Bound player '{ActorId}' cannot act for player '{playerId}'."
+            );
     }
 }
 
@@ -27,20 +26,22 @@ internal sealed class PlayerSessionActorFactory : IZLinkActorFactory<PlayerSessi
 {
     public ValueTask<PlayerSessionActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(new PlayerSessionActor(context.ActorId, context));
+        CancellationToken cancellationToken = default
+    ) => ValueTask.FromResult(new PlayerSessionActor(context.ActorId, context));
 }
 
 internal sealed class GameQuestEntrySpot(
     IZLinkEntrySpotContext context,
-    ILogger<GameQuestEntrySpot> logger) : IZLinkEntrySpot<PlayerSessionActor>
+    ILogger<GameQuestEntrySpot> logger
+) : IZLinkEntrySpot<PlayerSessionActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         PlayerSessionActor actor,
         ZLinkMessage createRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation("gamequest session actor created player={PlayerId}", actor.ActorId);
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -49,18 +50,28 @@ internal sealed class GameQuestEntrySpot(
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken) =>
-        ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
 
-    public ValueTask OnJoinedActorAsync(PlayerSessionActor actor, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnJoinedActorAsync(
+        PlayerSessionActor actor,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
 
-    public ValueTask OnLeaveActorAsync(PlayerSessionActor actor, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnLeaveActorAsync(
+        PlayerSessionActor actor,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
 
-    public ValueTask OnDisconnectActorAsync(PlayerSessionActor actor, CancellationToken cancellationToken)
+    public ValueTask OnDisconnectActorAsync(
+        PlayerSessionActor actor,
+        CancellationToken cancellationToken
+    )
     {
-        logger.LogInformation("gamequest session actor disconnected player={PlayerId}", actor.ActorId);
+        logger.LogInformation(
+            "gamequest session actor disconnected player={PlayerId}",
+            actor.ActorId
+        );
         return ValueTask.CompletedTask;
     }
 }
@@ -68,44 +79,40 @@ internal sealed class GameQuestEntrySpot(
 // --8<-- [start:doc-gq-progress-push]
 [ZLinkSpotActorSendHandler(nameof(QuestProgressMsg))]
 internal sealed class QuestProgressMsgActorHandler
-    : IZLinkEntrySpotActorSendHandler<
-        GameQuestEntrySpot,
-        PlayerSessionActor,
-        QuestProgressMsg>
+    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, QuestProgressMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         QuestProgressMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await actor.Context.BoundSession
-            .Send(new QuestProgressNotify(message.PlayerId, message.Progress))
+        await actor
+            .Context.BoundSession.Send(new QuestProgressNotify(message.PlayerId, message.Progress))
             .Async(cancellationToken);
     }
 }
+
 // --8<-- [end:doc-gq-progress-push]
 
 [ZLinkSpotActorSendHandler(nameof(QuestCompletedMsg))]
 internal sealed class QuestCompletedMsgActorHandler
-    : IZLinkEntrySpotActorSendHandler<
-        GameQuestEntrySpot,
-        PlayerSessionActor,
-        QuestCompletedMsg>
+    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, QuestCompletedMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         QuestCompletedMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await actor.Context.BoundSession
-            .Send(new QuestCompletedNotify(
-                message.PlayerId,
-                message.Progress,
-                message.RewardGranted))
+        await actor
+            .Context.BoundSession.Send(
+                new QuestCompletedNotify(message.PlayerId, message.Progress, message.RewardGranted)
+            )
             .Async(cancellationToken);
     }
 }

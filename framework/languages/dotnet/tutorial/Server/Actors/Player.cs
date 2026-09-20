@@ -13,6 +13,7 @@ public sealed class Player(IZLinkActorContext context) : IZLinkActor
 
     public void Rename(string nickname) => Nickname = nickname;
 }
+
 // --8<-- [end:actor-class]
 
 // --8<-- [start:actor-factory]
@@ -22,12 +23,12 @@ public sealed class PlayerFactory : IZLinkActorFactory<Player>
 {
     public ValueTask<Player> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new Player(context));
+        CancellationToken cancellationToken = default
+    ) => ValueTask.FromResult(new Player(context));
 
     async ValueTask<IZLinkActor> IZLinkActorFactory.CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken)
-        => await CreateAsync(context, cancellationToken);
+        CancellationToken cancellationToken
+    ) => await CreateAsync(context, cancellationToken);
 }
 // --8<-- [end:actor-factory]

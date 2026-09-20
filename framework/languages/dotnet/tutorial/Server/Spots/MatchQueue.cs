@@ -17,6 +17,7 @@ public sealed class MatchQueue(IZLinkInstanceSpotContext context) : IZLinkInstan
 
     public void Enqueue(string playerId) => _waiting.Add(playerId);
 }
+
 // --8<-- [end:instance-spot-class]
 
 // --8<-- [start:instance-spot-handler]
@@ -27,7 +28,8 @@ public sealed class JoinMatchQueueHandler
     public ValueTask<MatchQueueStatus> HandleAsync(
         MatchQueue queue,
         JoinMatchQueue request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         queue.Enqueue(request.PlayerId);
         return ValueTask.FromResult(new MatchQueueStatus(queue.Waiting));

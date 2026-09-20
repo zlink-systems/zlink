@@ -8,8 +8,8 @@ namespace Bingo.Server.Matchmaking.Infrastructure.Redis;
 
 internal sealed class RedisBingoMatchReservationStore(
     IConnectionMultiplexer redis,
-    SampleRuntimeConfiguration<SampleMatchmakingNode> configuration)
-    : IBingoMatchReservationStore
+    SampleRuntimeConfiguration<SampleMatchmakingNode> configuration
+) : IBingoMatchReservationStore
 {
     private const string Script = """
         local key = KEYS[1]
@@ -44,13 +44,16 @@ internal sealed class RedisBingoMatchReservationStore(
 
     public async ValueTask<ReserveBingoRoomRes> ReserveAsync(
         ReserveBingoRoomReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(request.Mode, BingoSampleModes.TwoPlayer, StringComparison.Ordinal))
             throw new InvalidOperationException($"Unsupported bingo mode. mode={request.Mode}");
-        if (string.IsNullOrWhiteSpace(request.ActorId)
-            || string.IsNullOrWhiteSpace(request.LevelBucket))
+        if (
+            string.IsNullOrWhiteSpace(request.ActorId)
+            || string.IsNullOrWhiteSpace(request.LevelBucket)
+        )
             throw new InvalidOperationException("Actor id and level bucket are required.");
         var roomId = $"bingo-room-{Guid.NewGuid():N}";
         var settings = new BingoRoomSettingsPayload
@@ -59,22 +62,36 @@ internal sealed class RedisBingoMatchReservationStore(
             Mode = request.Mode,
             RequiredPlayers = 2,
             MaxDrawNumber = 15,
-            Purpose = "Game"
+            Purpose = "Game",
         };
         var encoded = JsonSerializer.Serialize(settings);
-        var result = (RedisResult[]?)await redis.GetDatabase().ScriptEvaluateAsync(
-            Script,
-            [$"{configuration.RedisKeyPrefix}match:{request.LevelBucket}:{request.Mode}"],
-            [request.ActorId, roomId, encoded, 2,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()])
+        var result =
+            (RedisResult[]?)
+                await redis
+                    .GetDatabase()
+                    .ScriptEvaluateAsync(
+                        Script,
+                        [
+                            $"{configuration.RedisKeyPrefix}match:{request.LevelBucket}:{request.Mode}",
+                        ],
+                        [
+                            request.ActorId,
+                            roomId,
+                            encoded,
+                            2,
+                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        ]
+                    )
             ?? throw new InvalidOperationException("Redis reservation result is empty.");
         return new ReserveBingoRoomRes
         {
-            RoomId = (string?)result[0]
-                     ?? throw new InvalidOperationException("Redis reservation room id is empty."),
+            RoomId =
+                (string?)result[0]
+                ?? throw new InvalidOperationException("Redis reservation room id is empty."),
             Settings = JsonSerializer.Deserialize<BingoRoomSettingsPayload>(
                 (string?)result[1]
-                ?? throw new InvalidOperationException("Redis reservation settings are empty."))
+                    ?? throw new InvalidOperationException("Redis reservation settings are empty.")
+            ),
         };
     }
 }

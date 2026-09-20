@@ -2,8 +2,9 @@ using ZoneWorld.Client;
 using ZoneWorld.Server.Configuration;
 
 var configuration = ZoneWorldConfiguration.Load(args);
-var client = configuration.Client
-             ?? throw new InvalidOperationException("Client configuration is required.");
+var client =
+    configuration.Client
+    ?? throw new InvalidOperationException("Client configuration is required.");
 var requested = client.Scenarios;
 var options = ClientOptions.From(client);
 
@@ -20,8 +21,10 @@ var failures = new List<string>();
 
 foreach (var id in selected)
 {
-    if (!Scenarios.All.TryGetValue(id, out var scenario)
-        && !Scenarios.RunnerDriven.TryGetValue(id, out scenario))
+    if (
+        !Scenarios.All.TryGetValue(id, out var scenario)
+        && !Scenarios.RunnerDriven.TryGetValue(id, out scenario)
+    )
     {
         Console.Error.WriteLine($"unknown scenario: {id}");
         return 2;

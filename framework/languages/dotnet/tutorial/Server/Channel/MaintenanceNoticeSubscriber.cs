@@ -16,10 +16,14 @@ public sealed class MaintenanceNoticeSubscriber(ILogger<MaintenanceNoticeSubscri
         // subscriber receives every topic on the channel, so this is how a
         // handler tells them apart.
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
-            "maintenance notice: {Message} (topic {Topic})", message.Message, context.Topic);
+            "maintenance notice: {Message} (topic {Topic})",
+            message.Message,
+            context.Topic
+        );
         return ValueTask.CompletedTask;
     }
 }

@@ -14,12 +14,14 @@ public sealed class MaintenanceStoreRepository(IConnectionMultiplexer redis, str
     private string Key => $"{keyPrefix}maintenance";
 
     public async ValueTask<IReadOnlyDictionary<string, bool>> ReadAllAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var entries = await redis.GetDatabase().HashGetAllAsync(Key);
         return entries.ToDictionary(
             entry => entry.Name.ToString(),
             entry => entry.Value == "1",
-            StringComparer.Ordinal);
+            StringComparer.Ordinal
+        );
     }
 }

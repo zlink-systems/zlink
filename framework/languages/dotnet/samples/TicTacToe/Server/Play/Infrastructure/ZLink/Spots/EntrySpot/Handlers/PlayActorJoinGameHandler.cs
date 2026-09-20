@@ -15,22 +15,27 @@ internal sealed class PlayActorJoinGameHandler(ILogger<PlayActorJoinGameHandler>
         PlayActor actor,
         IZLinkMessageContext context,
         JoinGameMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "actor: JoinGameMsg received. actor={ActorId}, roomId={RoomId}",
             actor.ActorId,
-            message.RoomId);
+            message.RoomId
+        );
 
         actor.TrackDeferredJoin(message.RoomId);
-        actor.Context.JoinSpot(
+        actor
+            .Context.JoinSpot(
                 message.RoomId,
-                new TicTacToeGameJoinReq(message.RoomId, actor.RequirePlayer()))
+                new TicTacToeGameJoinReq(message.RoomId, actor.RequirePlayer())
+            )
             .Defer();
         logger.LogInformation(
             "actor: room join scheduled. actor={ActorId}, roomId={RoomId}",
             actor.ActorId,
-            message.RoomId);
+            message.RoomId
+        );
         return ValueTask.CompletedTask;
     }
 }

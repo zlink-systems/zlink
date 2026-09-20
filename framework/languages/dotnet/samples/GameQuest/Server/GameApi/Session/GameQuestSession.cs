@@ -3,8 +3,7 @@ using Zlink.Framework.Contracts.Streams;
 
 namespace GameQuest.GameApi.Session;
 
-internal sealed class GameQuestSession(
-    IZLinkSessionContext context) : IZLinkSession
+internal sealed class GameQuestSession(IZLinkSessionContext context) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -27,7 +26,8 @@ internal sealed class GameQuestSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken))
         {
@@ -35,8 +35,11 @@ internal sealed class GameQuestSession(
             {
                 1 => Context.Actors.Bound.Single(),
                 0 => throw new InvalidOperationException(
-                    $"Client must join a player session before sending '{dispatch.PacketName}'."),
-                _ => throw new InvalidOperationException("A GameQuest session may bind exactly one player actor.")
+                    $"Client must join a player session before sending '{dispatch.PacketName}'."
+                ),
+                _ => throw new InvalidOperationException(
+                    "A GameQuest session may bind exactly one player actor."
+                ),
             };
             await actor.RelayAsync(payload, cancellationToken);
         }

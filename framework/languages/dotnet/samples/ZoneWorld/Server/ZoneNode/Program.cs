@@ -1,5 +1,5 @@
-using StackExchange.Redis;
 using Microsoft.Extensions.Configuration;
+using StackExchange.Redis;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Dispatch;
@@ -18,8 +18,9 @@ using ZoneWorld.Shared.Contracts;
 
 var configuration = ZoneWorldConfiguration.Load(args);
 var shared = configuration.Shared;
-var node = configuration.ZoneNode
-           ?? throw new InvalidOperationException("ZoneNode configuration is required.");
+var node =
+    configuration.ZoneNode
+    ?? throw new InvalidOperationException("ZoneNode configuration is required.");
 var nodeId = node.NodeId;
 
 // A node with no zones is the probe of §11.1: it hosts nothing, serves nothing, and is known
@@ -39,12 +40,13 @@ builder.Logging.AddSimpleConsole(console =>
 
 builder.Services.AddSingleton(shared);
 builder.Services.AddSingleton(node);
-builder.Services.AddSingleton<IConnectionMultiplexer>(
-    _ => ConnectionMultiplexer.Connect(shared.RedisEndpoint));
-builder.Services.AddSingleton<IMaintenanceStorePort>(services =>
-    new MaintenanceStoreRepository(
-        services.GetRequiredService<IConnectionMultiplexer>(),
-        shared.RedisKeyPrefix));
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(shared.RedisEndpoint)
+);
+builder.Services.AddSingleton<IMaintenanceStorePort>(services => new MaintenanceStoreRepository(
+    services.GetRequiredService<IConnectionMultiplexer>(),
+    shared.RedisKeyPrefix
+));
 builder.Services.AddSingleton(new NodeMaintenancePolicy(nodeId));
 builder.Services.AddSingleton<NodePlayerCensus>();
 builder.Services.AddSingleton<MoveUseCase>();
@@ -55,17 +57,22 @@ builder.Services.AddZLinkFramework(options =>
     var locations = options.ConfigureLocations();
     locations.RouteCacheMaxAge = TimeSpan.Zero;
     locations.MessageFollowDuration = TimeSpan.FromSeconds(5);
-    options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-    {
-        redis.ConnectionString = shared.RedisEndpoint;
-        redis.KeyPrefix = shared.RedisKeyPrefix;
-    }));
-    options.AddRelocationStore(new ZLinkRedisRelocationStore(redis =>
-    {
-        redis.ConnectionString = shared.RedisEndpoint;
-        redis.KeyPrefix = $"{shared.RedisKeyPrefix}relocation:";
-    }));
-    options.ConfigureDispatch()
+    options.AddLocationStore(
+        new ZLinkRedisLocationStore(redis =>
+        {
+            redis.ConnectionString = shared.RedisEndpoint;
+            redis.KeyPrefix = shared.RedisKeyPrefix;
+        })
+    );
+    options.AddRelocationStore(
+        new ZLinkRedisRelocationStore(redis =>
+        {
+            redis.ConnectionString = shared.RedisEndpoint;
+            redis.KeyPrefix = $"{shared.RedisKeyPrefix}relocation:";
+        })
+    );
+    options
+        .ConfigureDispatch()
         // Normal records the required key transitions. The runner redirects this process's
         // output to its per-run log file, so the flow evidence remains available without
         // relying on a console scroll.
@@ -77,7 +84,8 @@ builder.Services.AddZLinkFramework(options =>
     // could have been told about, and ZW-D2 would stop meaning anything.
     if (!hostsZones)
     {
-        options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
+        options
+            .AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
             .EnableSubscriber()
             .AddHandler<BroadcastProbeSubscriber, WorldAnnounceEvent>();
         return;
@@ -87,22 +95,28 @@ builder.Services.AddZLinkFramework(options =>
     // after it, and when that spot is on another node the join causes relocation — which is
     // why the relocation adapter is not optional (§2.6).
     // --8<-- [start:doc-zw-node-register]
-    var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
+    var mesh = options
+        .AddRouteMesh(ZoneWorldNames.MeshName)
         .SetRoutingIdPrefix("zn")
         .Listen(node.MeshEndpoint);
     if (!string.IsNullOrWhiteSpace(node.MeshAdvertiseHost))
         mesh.SetAdvertiseHost(node.MeshAdvertiseHost);
-    mesh.Objects().Server()
+    mesh.Objects()
+        .Server()
         .AddEntrySpot<ZoneEntrySpot>()
         .AddActorFactory<PlayerActor, PlayerActorFactory>(
-            ZoneWorldNames.PlayerActorType, factory => factory.PreserveStateWith<PlayerActorRelocationAdapter>())
+            ZoneWorldNames.PlayerActorType,
+            factory => factory.PreserveStateWith<PlayerActorRelocationAdapter>()
+        )
         .AddSpotFactory<ZoneSpot>(
             ZoneWorldNames.ZoneSpotType,
-            factory => factory
-                // Every eligible process requests all four global ZoneIds. Capacity is the
-                // only placement input and limits each process to two local Zone Spot owners.
-                .StableTypeLimit(2)
-                .DisableRelocation());
+            factory =>
+                factory
+                    // Every eligible process requests all four global ZoneIds. Capacity is the
+                    // only placement input and limits each process to two local Zone Spot owners.
+                    .StableTypeLimit(2)
+                    .DisableRelocation()
+        );
     // --8<-- [end:doc-zw-node-register]
     // --8<-- [start:doc-multi-channel-register]
     mesh.Channel(ZoneWorldNames.ZoneChannel).Server();
@@ -113,7 +127,8 @@ builder.Services.AddZLinkFramework(options =>
     // --8<-- [end:doc-multi-channel-register]
 
     // --8<-- [start:doc-zw-fanout-subscribe]
-    options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
+    options
+        .AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
         .EnableSubscriber()
         .AddHandler<WorldAnnounceSubscriber, WorldAnnounceEvent>()
         .AddHandler<NodeMaintenanceChangedSubscriber, NodeMaintenanceChangedEvent>();
@@ -135,8 +150,7 @@ if (!hostsZones)
     // line that says a node has finished starting. It must not appear before the subscriber is
     // running, or an announcement can be published into a node that is not yet listening.
     await host.StartAsync();
-    host.Services
-        .GetRequiredService<ILoggerFactory>()
+    host.Services.GetRequiredService<ILoggerFactory>()
         .CreateLogger("ZoneWorld.BroadcastProbe")
         .LogInformation("topology=ready node={NodeId} zones=", nodeId);
     await host.WaitForShutdownAsync();

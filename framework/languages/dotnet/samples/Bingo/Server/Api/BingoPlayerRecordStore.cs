@@ -5,7 +5,9 @@ namespace Bingo.Server.Api;
 
 internal sealed class BingoPlayerRecordStore
 {
-    private readonly ConcurrentDictionary<string, PlayerRecord> _records = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PlayerRecord> _records = new(
+        StringComparer.Ordinal
+    );
 
     public GetPlayerRecordRes Get(string actorId)
     {
@@ -14,7 +16,7 @@ internal sealed class BingoPlayerRecordStore
         {
             ActorId = record.ActorId,
             Wins = record.Wins,
-            Losses = record.Losses
+            Losses = record.Losses,
         };
     }
 
@@ -23,15 +25,23 @@ internal sealed class BingoPlayerRecordStore
         var record = _records.AddOrUpdate(
             actorId,
             static (id, didWin) => didWin ? new PlayerRecord(id, 1, 0) : new PlayerRecord(id, 0, 1),
-            static (_, current, didWin) => didWin
-                ? current with { Wins = current.Wins + 1 }
-                : current with { Losses = current.Losses + 1 },
-            won);
+            static (_, current, didWin) =>
+                didWin
+                    ? current with
+                    {
+                        Wins = current.Wins + 1,
+                    }
+                    : current with
+                    {
+                        Losses = current.Losses + 1,
+                    },
+            won
+        );
         return new ReportBingoResultRes
         {
             ActorId = record.ActorId,
             Wins = record.Wins,
-            Losses = record.Losses
+            Losses = record.Losses,
         };
     }
 

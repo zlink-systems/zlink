@@ -1,17 +1,23 @@
-using Zlink.Framework.Contracts.Handlers;
 using SupportChat.Server.Configuration;
 using SupportChat.Server.Support.Application.ConversationAssignment;
 using SupportChat.Server.Support.Infrastructure.ZLink.Actors;
 using SupportChat.Shared.Contracts;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 internal sealed class SetAgentAvailableHandler(
     AgentAssignmentService assignment,
-    SupportActorDirectory actors)
-    : IZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, SetAgentAvailableReq, SetAgentAvailableRes>
+    SupportActorDirectory actors
+)
+    : IZLinkEntrySpotActorRequestHandler<
+        SupportEntrySpot,
+        SupportUserActor,
+        SetAgentAvailableReq,
+        SetAgentAvailableRes
+    >
 {
     // --8<-- [start:doc-sc-set-available]
     public ValueTask<SetAgentAvailableRes> HandleAsync(
@@ -19,7 +25,8 @@ internal sealed class SetAgentAvailableHandler(
         SupportUserActor actor,
         IZLinkMessageContext context,
         SetAgentAvailableReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!string.Equals(actor.Role, SupportChatRoles.Agent, StringComparison.Ordinal))
             throw new InvalidOperationException("Only agent actors can set availability.");

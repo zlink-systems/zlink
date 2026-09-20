@@ -10,55 +10,69 @@ namespace Bingo.Server.Session.Sessions.Handlers;
 internal sealed class AuthenticateBingoSessionHandler(
     IZLinkActorManager actors,
     IZLinkRouteClient channels,
-    ILogger<AuthenticateBingoSessionHandler> logger)
-    : IZLinkSessionPacketHandler<IZLinkSessionContext, AuthenticateReq>
+    ILogger<AuthenticateBingoSessionHandler> logger
+) : IZLinkSessionPacketHandler<IZLinkSessionContext, AuthenticateReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         AuthenticateReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-bingo-session-auth]
-        var authenticated = await channels.RequestToChannel(SampleNames.ApiChannel,
-                new AuthenticatePlayerReq { AccessToken = request.AccessToken })
+        var authenticated = await channels
+            .RequestToChannel(
+                SampleNames.ApiChannel,
+                new AuthenticatePlayerReq { AccessToken = request.AccessToken }
+            )
             .Async<AuthenticatePlayerRes>(cancellationToken);
 
-        if (!authenticated.Accepted
+        if (
+            !authenticated.Accepted
             || string.IsNullOrWhiteSpace(authenticated.ActorId)
-            || string.IsNullOrWhiteSpace(authenticated.DisplayName))
-            throw new InvalidOperationException(authenticated.Reason ?? "Player authentication failed.");
+            || string.IsNullOrWhiteSpace(authenticated.DisplayName)
+        )
+            throw new InvalidOperationException(
+                authenticated.Reason ?? "Player authentication failed."
+            );
 
-        var actor = (await actors
+        var actor = (
+            await actors
                 .GetOrCreate(authenticated.ActorId, SampleNames.PlayerActorType)
                 .InMesh(SampleNames.PlayMeshName)
-                .Request(new PlayerActorCreateReq
-                {
-                    ActorId = authenticated.ActorId,
-                    DisplayName = authenticated.DisplayName
-                })
-                .Async(cancellationToken)) switch
+                .Request(
+                    new PlayerActorCreateReq
+                    {
+                        ActorId = authenticated.ActorId,
+                        DisplayName = authenticated.DisplayName,
+                    }
+                )
+                .Async(cancellationToken)
+        ) switch
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
-            _ => throw new InvalidOperationException("Player Actor creation was rejected.")
+            _ => throw new InvalidOperationException("Player Actor creation was rejected."),
         };
         // --8<-- [end:doc-bingo-session-auth]
 
         // --8<-- [start:doc-bingo-session-bind]
-        var boundActor = await context.Actors.BindOrGetAsync(
-            actor,
-            cancellationToken);
+        var boundActor = await context.Actors.BindOrGetAsync(actor, cancellationToken);
         logger.LogInformation(
             "bingo session: bound player={ActorId} session={SessionId}",
             boundActor.ActorId,
-            context.SessionId);
+            context.SessionId
+        );
 
-        await context.Client.Reply(new AuthenticateRes
-            {
-                ActorId = authenticated.ActorId,
-                DisplayName = authenticated.DisplayName
-            })
+        await context
+            .Client.Reply(
+                new AuthenticateRes
+                {
+                    ActorId = authenticated.ActorId,
+                    DisplayName = authenticated.DisplayName,
+                }
+            )
             .Async(cancellationToken);
         // --8<-- [end:doc-bingo-session-bind]
     }

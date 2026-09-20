@@ -6,7 +6,8 @@ internal sealed class JoinQuestSessionUseCase(IQuestSessionStore sessions)
 {
     public async ValueTask<JoinSessionRes> ExecuteAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var projection = await sessions.ReadProjectionAsync(playerId, cancellationToken);
         return new JoinSessionRes(playerId, projection);
@@ -15,14 +16,13 @@ internal sealed class JoinQuestSessionUseCase(IQuestSessionStore sessions)
 
 internal interface IQuestProgressSynchronizer
 {
-    ValueTask<SyncQuestProgressRes> SyncAsync(
-        string playerId,
-        CancellationToken cancellationToken);
+    ValueTask<SyncQuestProgressRes> SyncAsync(string playerId, CancellationToken cancellationToken);
 }
 
 internal interface IQuestSessionStore
 {
     ValueTask<QuestProgress[]> ReadProjectionAsync(
         string playerId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

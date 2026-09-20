@@ -10,24 +10,39 @@ internal sealed class AuthenticatePlayerHandler
     public ValueTask<AuthenticatePlayerRes> HandleAsync(
         AuthenticatePlayerReq request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (!request.AccessToken.StartsWith("player-", StringComparison.Ordinal)
-            && !string.Equals(request.AccessToken, BingoSamplePlayers.Observer, StringComparison.Ordinal))
-            return ValueTask.FromResult(new AuthenticatePlayerRes
-            {
-                Accepted = false,
-                Reason = "Access token must be a sample player id."
-            });
+        if (
+            !request.AccessToken.StartsWith("player-", StringComparison.Ordinal)
+            && !string.Equals(
+                request.AccessToken,
+                BingoSamplePlayers.Observer,
+                StringComparison.Ordinal
+            )
+        )
+            return ValueTask.FromResult(
+                new AuthenticatePlayerRes
+                {
+                    Accepted = false,
+                    Reason = "Access token must be a sample player id.",
+                }
+            );
 
-        var displayName = string.Equals(request.AccessToken, BingoSamplePlayers.Observer, StringComparison.Ordinal)
+        var displayName = string.Equals(
+            request.AccessToken,
+            BingoSamplePlayers.Observer,
+            StringComparison.Ordinal
+        )
             ? "Observer"
             : request.AccessToken.Replace("player-", "Player ", StringComparison.Ordinal);
-        return ValueTask.FromResult(new AuthenticatePlayerRes
-        {
-            Accepted = true,
-            ActorId = request.AccessToken,
-            DisplayName = displayName
-        });
+        return ValueTask.FromResult(
+            new AuthenticatePlayerRes
+            {
+                Accepted = true,
+                ActorId = request.AccessToken,
+                DisplayName = displayName,
+            }
+        );
     }
 }

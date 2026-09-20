@@ -9,7 +9,6 @@ public static class SampleNames
     public const string OrderProjectionChannel = "shoppingmall.order.projection.channel";
     public const string OrderWorkflowSpotType = "shoppingmall.order-workflow";
     public const string PlannedRelocationSpotType = "shoppingmall.planned-relocation";
-
 }
 
 public static class OrderStatuses
@@ -39,7 +38,8 @@ public sealed record SampleTopology(
     string ApiAMeshEndpoint,
     string ApiBMeshEndpoint,
     string WorkflowAMeshEndpoint,
-    string WorkflowBMeshEndpoint)
+    string WorkflowBMeshEndpoint
+)
 {
     public static SampleRuntimeConfiguration LoadApi(string[] args) => Load(args, "api");
 
@@ -49,12 +49,13 @@ public sealed record SampleTopology(
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var settings = new ConfigurationBuilder()
-                           .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                           .Build()
-                           .GetRequiredSection("Sample")
-                           .Get<SampleConfiguration>()
-                       ?? throw new InvalidOperationException("ShoppingMall Sample configuration is empty.");
+        var settings =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Sample")
+                .Get<SampleConfiguration>()
+            ?? throw new InvalidOperationException("ShoppingMall Sample configuration is empty.");
         settings.Validate(role);
         var topology = new SampleTopology(
             settings.RedisEndpoint,
@@ -66,7 +67,8 @@ public sealed record SampleTopology(
             settings.ApiAMeshEndpoint,
             settings.ApiBMeshEndpoint,
             settings.WorkflowAMeshEndpoint,
-            settings.WorkflowBMeshEndpoint);
+            settings.WorkflowBMeshEndpoint
+        );
         return new SampleRuntimeConfiguration(topology, settings.InstanceId, settings.LogDirectory);
     }
 
@@ -80,22 +82,16 @@ public sealed record SampleTopology(
     public WorkflowInstanceTopology ForWorkflowInstance(string instanceId)
     {
         return string.Equals(instanceId, "workflow-b", StringComparison.Ordinal)
-            ? new WorkflowInstanceTopology(
-                instanceId,
-                WorkflowBHttpUrl,
-                WorkflowBMeshEndpoint)
-            : new WorkflowInstanceTopology(
-                "workflow-a",
-                WorkflowAHttpUrl,
-                WorkflowAMeshEndpoint);
+            ? new WorkflowInstanceTopology(instanceId, WorkflowBHttpUrl, WorkflowBMeshEndpoint)
+            : new WorkflowInstanceTopology("workflow-a", WorkflowAHttpUrl, WorkflowAMeshEndpoint);
     }
-
 }
 
 public sealed record SampleRuntimeConfiguration(
     SampleTopology Topology,
     string InstanceId,
-    string LogDirectory);
+    string LogDirectory
+);
 
 public sealed class SampleConfiguration
 {
@@ -121,10 +117,14 @@ public sealed class SampleConfiguration
         var suffix = InstanceId.EndsWith("-b", StringComparison.Ordinal) ? "b" : "a";
         if (role == "api")
         {
-            Require(suffix == "b" ? ApiBHttpUrl : ApiAHttpUrl,
-                suffix == "b" ? nameof(ApiBHttpUrl) : nameof(ApiAHttpUrl));
-            Require(suffix == "b" ? ApiBMeshEndpoint : ApiAMeshEndpoint,
-                suffix == "b" ? nameof(ApiBMeshEndpoint) : nameof(ApiAMeshEndpoint));
+            Require(
+                suffix == "b" ? ApiBHttpUrl : ApiAHttpUrl,
+                suffix == "b" ? nameof(ApiBHttpUrl) : nameof(ApiAHttpUrl)
+            );
+            Require(
+                suffix == "b" ? ApiBMeshEndpoint : ApiAMeshEndpoint,
+                suffix == "b" ? nameof(ApiBMeshEndpoint) : nameof(ApiAMeshEndpoint)
+            );
             return;
         }
         if (role != "workflow")
@@ -148,12 +148,10 @@ public sealed class SampleConfiguration
     }
 }
 
-public sealed record ApiInstanceTopology(
-    string InstanceId,
-    string HttpUrl,
-    string MeshEndpoint);
+public sealed record ApiInstanceTopology(string InstanceId, string HttpUrl, string MeshEndpoint);
 
 public sealed record WorkflowInstanceTopology(
     string InstanceId,
     string HttpUrl,
-    string MeshEndpoint);
+    string MeshEndpoint
+);

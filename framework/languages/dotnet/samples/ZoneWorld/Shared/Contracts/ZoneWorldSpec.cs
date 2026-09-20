@@ -26,7 +26,7 @@ public static class ZoneWorldSpec
             (true, true) => ZoneIds.NorthWest,
             (false, true) => ZoneIds.NorthEast,
             (true, false) => ZoneIds.SouthWest,
-            (false, false) => ZoneIds.SouthEast
+            (false, false) => ZoneIds.SouthEast,
         };
     }
 
