@@ -773,6 +773,14 @@ Processing and cleanup of results from work already accepted into the local queu
 proceed within a separate deadline. But no new Store change is made with expired owner
 eligibility.
 
+The initial owner-lease claim at startup is a Store request like a renewal. If a
+transport error happens after the request started, the Framework re-reads the same key
+to confirm the result, as in §10. A host that could not confirm its lease finishes
+startup as a host without a deadline: it blocks every target above, keeps claiming at
+each renew interval, and once it holds the lease computes the deadline and publishes
+descriptors as after a first renewal. A closed failure result such as
+`GenerationExhausted` is a startup error.
+
 ## 6. Reading and Changing the Current Location Record
 
 `Reserve`, `Preserve`, `NewOwner`, `Commit`, and `Abort` are names of the operations the

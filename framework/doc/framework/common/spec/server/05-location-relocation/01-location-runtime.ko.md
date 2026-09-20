@@ -694,6 +694,12 @@ Deadline을 넘거나 현재 host 실행 조합이 Store 값과 다르면 다음
 이미 local queue가 받은 작업의 결과 처리와 정리는 별도 deadline 안에서 진행할 수 있다.
 하지만 만료된 owner 자격으로 새 Store 변경을 만들지 않는다.
 
+Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이다. 요청을 시작한 뒤 transport
+error를 받으면 §10대로 같은 key를 다시 읽어 결과를 확인한다. Lease를 확정하지 못한 host는
+deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew interval마다
+claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를 게시한다.
+`GenerationExhausted`처럼 닫힌 실패 결과는 startup error다.
+
 ## 6. 현재 위치 record를 읽고 변경한다
 
 `Reserve`, `Preserve`, `NewOwner`, `Commit`과 `Abort`는 Framework 내부에서 위치 record를
