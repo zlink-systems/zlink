@@ -38,13 +38,12 @@ class MatchQueue implements ZLinkInstanceSpot {
   spot: () => MatchQueue,
   packetName: PacketNames.joinMatchQueue
 })
-class JoinMatchQueueHandler
-  implements ZLinkSpotRequestHandler<
-    MatchQueue, JoinMatchQueue, MatchQueueStatus> {
-  async handle(
-    queue: MatchQueue,
-    request: JoinMatchQueue
-  ): Promise<MatchQueueStatus> {
+class JoinMatchQueueHandler implements ZLinkSpotRequestHandler<
+  MatchQueue,
+  JoinMatchQueue,
+  MatchQueueStatus
+> {
+  async handle(queue: MatchQueue, request: JoinMatchQueue): Promise<MatchQueueStatus> {
     queue.enqueue(request.playerId);
     return { waiting: queue.waitingCount };
   }

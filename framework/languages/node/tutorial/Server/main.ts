@@ -51,10 +51,12 @@ import { PingHandler } from './Sessions/ping-handler';
         // --8<-- [start:relocation-store]
         // Registering any Spot factory requires this store, even with relocation
         // turned off: the registration itself is the condition.
-        builder.addRelocationStore(new ZLinkRedisRelocationStore({
-          url: 'redis://127.0.0.1:6379',
-          keyPrefix: 'zlink-tutorial-node:relocation'
-        }));
+        builder.addRelocationStore(
+          new ZLinkRedisRelocationStore({
+            url: 'redis://127.0.0.1:6379',
+            keyPrefix: 'zlink-tutorial-node:relocation'
+          })
+        );
         // --8<-- [end:relocation-store]
 
         // --8<-- [start:filter-register]
@@ -72,9 +74,7 @@ import { PingHandler } from './Sessions/ping-handler';
           .addRouteMesh(TutorialNames.mesh)
           .listen('tcp://0.0.0.0:7701')
           .setAdvertiseHost('127.0.0.1')
-          .routingId(
-            TutorialNames.serverRoutingId
-          );
+          .routingId(TutorialNames.serverRoutingId);
         // --8<-- [end:mesh-register]
 
         // --8<-- [start:channel-register]
@@ -85,14 +85,8 @@ import { PingHandler } from './Sessions/ping-handler';
         mesh
           .channel(TutorialNames.profileChannel)
           .server()
-          .addRequestHandler(
-            PacketNames.getPlayerProfile,
-            GetPlayerProfileHandler
-          )
-          .addSendHandler(
-            PacketNames.recordLogin,
-            RecordLoginHandler
-          );
+          .addRequestHandler(PacketNames.getPlayerProfile, GetPlayerProfileHandler)
+          .addSendHandler(PacketNames.recordLogin, RecordLoginHandler);
         // --8<-- [end:channel-register]
 
         // --8<-- [start:node-direct-register]
@@ -104,7 +98,8 @@ import { PingHandler } from './Sessions/ping-handler';
         // --8<-- [start:clientserver-register]
         // The caller dials this endpoint directly, so it needs a port of its own and
         // an address to advertise, separate from the mesh.
-        builder.addClientServerChannel(TutorialNames.ticketingChannel)
+        builder
+          .addClientServerChannel(TutorialNames.ticketingChannel)
           .server()
           .listen(7711)
           .setBindHost('127.0.0.1')
@@ -117,14 +112,9 @@ import { PingHandler } from './Sessions/ping-handler';
         // Location Store. With one registered, enableSubscriber() takes no argument
         // and finds every publisher of this channel instead.
         builder
-          .addFanoutChannel(
-            TutorialNames.broadcastChannel
-          )
+          .addFanoutChannel(TutorialNames.broadcastChannel)
           .enableSubscriber('tcp://127.0.0.1:7712')
-          .addPublishHandler(
-            PacketNames.maintenanceNotice,
-            MaintenanceNoticeSubscriber
-          );
+          .addPublishHandler(PacketNames.maintenanceNotice, MaintenanceNoticeSubscriber);
         // --8<-- [end:fanout-subscribe]
 
         // --8<-- [start:object-server]
@@ -139,19 +129,15 @@ import { PingHandler } from './Sessions/ping-handler';
         // that registers it is a candidate to host one. Exactly one relocation
         // policy is required; moving a live room to another node is a separate
         // topic.
-        objects.addSpotFactory(
-          TutorialNames.gameRoomType,
-          GameRoom,
-          (factory) => factory.disableRelocation()
+        objects.addSpotFactory(TutorialNames.gameRoomType, GameRoom, (factory) =>
+          factory.disableRelocation()
         );
         // --8<-- [end:spot-register]
 
         // --8<-- [start:instance-spot-register]
         // Registered the same way, but callers never create one explicitly.
-        objects.addInstanceSpotFactory(
-          TutorialNames.matchQueueType,
-          MatchQueue,
-          (factory) => factory.disableRelocation()
+        objects.addInstanceSpotFactory(TutorialNames.matchQueueType, MatchQueue, (factory) =>
+          factory.disableRelocation()
         );
         // --8<-- [end:instance-spot-register]
 
@@ -160,10 +146,8 @@ import { PingHandler } from './Sessions/ping-handler';
         objects.addEntrySpot(LobbySpot);
 
         // Nodes that register the player type are candidates to host one.
-        objects.addActorFactory(
-          TutorialNames.playerActorType,
-          PlayerFactory,
-          (factory) => factory.disableRelocation()
+        objects.addActorFactory(TutorialNames.playerActorType, PlayerFactory, (factory) =>
+          factory.disableRelocation()
         );
         // --8<-- [end:actor-register]
 
@@ -239,9 +223,11 @@ function startAdminHttpServer(mesh: ZLinkRouteMeshRuntimeOptions): http.Server {
       return;
     }
     if (request.headers.authorization !== tutorialAdminAuthorization) {
-      response.writeHead(401, {
-        'www-authenticate': 'Basic realm="tutorial-admin"'
-      }).end();
+      response
+        .writeHead(401, {
+          'www-authenticate': 'Basic realm="tutorial-admin"'
+        })
+        .end();
       return;
     }
     try {
@@ -254,9 +240,11 @@ function startAdminHttpServer(mesh: ZLinkRouteMeshRuntimeOptions): http.Server {
       response.end(JSON.stringify(result));
     } catch (error: unknown) {
       response.writeHead(400, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({
-        error: error instanceof Error ? error.message : String(error)
-      }));
+      response.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : String(error)
+        })
+      );
     }
   });
   server.listen(5481, '127.0.0.1');
@@ -264,13 +252,15 @@ function startAdminHttpServer(mesh: ZLinkRouteMeshRuntimeOptions): http.Server {
 }
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(ServerModule, { logger: ['error', 'warn', 'log'] });
+  const app = await NestFactory.createApplicationContext(ServerModule, {
+    logger: ['error', 'warn', 'log']
+  });
   startAdminHttpServer(
     app.get<ZLinkRouteMeshRuntimeOptions>(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false })
   );
   console.log(
-    `server listening on tcp://0.0.0.0:7701 (mesh "${TutorialNames.mesh}",`
-    + ` routing id "${TutorialNames.serverRoutingId}")`
+    `server listening on tcp://0.0.0.0:7701 (mesh "${TutorialNames.mesh}",` +
+      ` routing id "${TutorialNames.serverRoutingId}")`
   );
   console.log('server admin listening on http://127.0.0.1:5481');
 }

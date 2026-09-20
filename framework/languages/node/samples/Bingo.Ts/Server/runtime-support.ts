@@ -17,7 +17,8 @@ const bingoMetricExporter: PushMetricExporter = {
       for (const metric of scope.metrics) {
         for (const point of metric.dataPoints) {
           const rawValue = point.value as number | { count?: number; sum?: number };
-          const value = typeof rawValue === 'number' ? rawValue : rawValue.sum ?? rawValue.count ?? 0;
+          const value =
+            typeof rawValue === 'number' ? rawValue : (rawValue.sum ?? rawValue.count ?? 0);
           console.log(
             `zlink metric name=${metric.descriptor.name} value=${value} attributes=${JSON.stringify(point.attributes)}`
           );
@@ -31,14 +32,14 @@ const bingoMetricExporter: PushMetricExporter = {
 };
 
 const bingoMeterProvider = new MeterProvider({
-  readers: [new PeriodicExportingMetricReader({ exporter: bingoMetricExporter, exportIntervalMillis: 250 })]
+  readers: [
+    new PeriodicExportingMetricReader({ exporter: bingoMetricExporter, exportIntervalMillis: 250 })
+  ]
 });
 
 function waitForShutdown(options: ShutdownOptions = {}): Promise<void> {
   return new Promise((resolve) => {
-    const keepAlive = options.keepAlive === true
-      ? setInterval(() => {}, 60000)
-      : undefined;
+    const keepAlive = options.keepAlive === true ? setInterval(() => {}, 60000) : undefined;
     const stop = (): void => {
       if (keepAlive !== undefined) {
         clearInterval(keepAlive);

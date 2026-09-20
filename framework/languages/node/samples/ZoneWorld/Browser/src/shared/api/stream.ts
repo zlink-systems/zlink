@@ -5,7 +5,7 @@ import {
   zlinkStreamConnectorFactory,
   zlinkStreamJsonCodec,
   type Disposable,
-  type ZlinkStreamConnector,
+  type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
 
 export class StreamClient {
@@ -20,7 +20,7 @@ export class StreamClient {
       codec: zlinkStreamJsonCodec,
       dispatchMode: ZlinkStreamDispatchMode.Immediate,
       heartbeat: { enabled: true },
-      reconnect: { enabled: true, initialDelayMs: 100, maxDelayMs: 2_000 },
+      reconnect: { enabled: true, initialDelayMs: 100, maxDelayMs: 2_000 }
     });
     this.registrations.push(
       this.connector.onConnectionStateChanged(({ current, error }) => {
@@ -29,12 +29,14 @@ export class StreamClient {
       }),
       this.connector.onErrorReceived((error) => {
         this.lastError.value = error.message;
-      }),
+      })
     );
   }
 
   on<T>(packetName: string, handler: (payload: T) => void): void {
-    this.registrations.push(this.connector.on<T>(packetName, ({ payload }) => handler(payload), Object));
+    this.registrations.push(
+      this.connector.on<T>(packetName, ({ payload }) => handler(payload), Object)
+    );
   }
 
   async connect(): Promise<void> {

@@ -54,7 +54,10 @@ function startDispatchApi(
           { status: 'Reassigned', courierId: 'courier-b' },
           { status: 'Failed' }
         ]);
-        sendJson(response, 200, { passed: success && reassigned && exhausted, evidence: evidence.readLines() } satisfies ServerAssertionRes);
+        sendJson(response, 200, {
+          passed: success && reassigned && exhausted,
+          evidence: evidence.readLines()
+        } satisfies ServerAssertionRes);
         return;
       }
       sendJson(response, 404, { error: 'not-found' });
@@ -73,14 +76,17 @@ function startDispatchApi(
   });
 }
 
-function submitDispatch(
-  channels: ZLinkChannelClient,
-  request: CreateDeliveryReq
-): void {
+function submitDispatch(channels: ZLinkChannelClient, request: CreateDeliveryReq): void {
   channels
     .sendToChannel(
       SampleNames.dispatchChannel,
-      assignDelivery(request.deliveryId, request.customerId, request.pickupAddress, request.dropoffAddress))
+      assignDelivery(
+        request.deliveryId,
+        request.customerId,
+        request.pickupAddress,
+        request.dropoffAddress
+      )
+    )
     .submit();
 }
 

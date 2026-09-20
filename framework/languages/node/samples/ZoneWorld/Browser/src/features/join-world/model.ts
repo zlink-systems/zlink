@@ -5,7 +5,7 @@ import type {
   MoveRejectedNotify,
   WorldAnnounceNotify,
   ZoneChangedNotify,
-  ZoneStateNotify,
+  ZoneStateNotify
 } from '../../shared/api/contracts';
 import { Packets } from '../../shared/api/contracts';
 import { StreamClient } from '../../shared/api/stream';
@@ -18,10 +18,18 @@ export class GameController {
 
   constructor(endpoint: string) {
     this.stream = new StreamClient(endpoint);
-    this.stream.on<ZoneStateNotify>(Packets.ZoneStateNotify, (message) => this.player.applyZoneState(message));
-    this.stream.on<ZoneChangedNotify>(Packets.ZoneChangedNotify, (message) => this.player.applyZoneChange(message));
-    this.stream.on<MoveRejectedNotify>(Packets.MoveRejectedNotify, (message) => this.player.applyRejection(message));
-    this.stream.on<WorldAnnounceNotify>(Packets.WorldAnnounceNotify, (message) => this.announcements.apply(message));
+    this.stream.on<ZoneStateNotify>(Packets.ZoneStateNotify, (message) =>
+      this.player.applyZoneState(message)
+    );
+    this.stream.on<ZoneChangedNotify>(Packets.ZoneChangedNotify, (message) =>
+      this.player.applyZoneChange(message)
+    );
+    this.stream.on<MoveRejectedNotify>(Packets.MoveRejectedNotify, (message) =>
+      this.player.applyRejection(message)
+    );
+    this.stream.on<WorldAnnounceNotify>(Packets.WorldAnnounceNotify, (message) =>
+      this.announcements.apply(message)
+    );
   }
 
   async join(playerId: string): Promise<void> {
@@ -39,7 +47,7 @@ export class GameController {
     // replies by push, so rejected or delayed movement is never rendered optimistically.
     this.stream.send(Packets.MoveMsg, {
       x: this.player.x.value + Math.max(-MAX_STEP_PER_AXIS, Math.min(MAX_STEP_PER_AXIS, dx)),
-      y: this.player.y.value + Math.max(-MAX_STEP_PER_AXIS, Math.min(MAX_STEP_PER_AXIS, dy)),
+      y: this.player.y.value + Math.max(-MAX_STEP_PER_AXIS, Math.min(MAX_STEP_PER_AXIS, dy))
     });
   }
 

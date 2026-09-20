@@ -27,10 +27,7 @@ async function main(): Promise<void> {
   });
   const config = apiApp.get<TicTacToeSampleConfig>(TICTACTOE_SAMPLE_CONFIG);
   const routeMeshRuntime = apiApp.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
-  await waitForRouteMeshReady(
-    routeMeshRuntime,
-    SampleNames.playSpotNode
-  );
+  await waitForRouteMeshReady(routeMeshRuntime, SampleNames.playSpotNode);
   process.stdout.write(
     `tictactoe-ready kind=spot-route node=${config.instanceName} mesh=${SampleNames.playSpotNode}\n`
   );
@@ -48,19 +45,25 @@ async function main(): Promise<void> {
       response.end(JSON.stringify(result));
     } catch (error) {
       response.writeHead(500, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      response.end(
+        JSON.stringify({ error: error instanceof Error ? error.message : String(error) })
+      );
     }
   });
   await listen(server, config.apiHttpEndpoint);
   process.stdout.write(`tictactoe-ready kind=http node=${config.instanceName}\n`);
-  process.stdout.write(`${JSON.stringify({
-    event: 'ready',
-    endpoint: config.apiEndpoints[config.apiIndex],
-    spotEndpoint: config.apiSpotEndpoint,
-    httpEndpoint: config.apiHttpEndpoint
-  })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      event: 'ready',
+      endpoint: config.apiEndpoints[config.apiIndex],
+      spotEndpoint: config.apiSpotEndpoint,
+      httpEndpoint: config.apiHttpEndpoint
+    })}\n`
+  );
   await waitForShutdown();
-  await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error === undefined ? resolve() : reject(error)))
+  );
   await closeNestRuntime(apiApp);
 }
 

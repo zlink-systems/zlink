@@ -2,7 +2,10 @@ import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { createClient, type RedisClientType } from 'redis';
 import { BINGO_SAMPLE_CONFIG } from '../Configuration/sample-config';
-import { BingoRoomSettingsPayload, ReserveBingoRoomRes } from '../../Shared/Contracts/bingo-messages.generated';
+import {
+  BingoRoomSettingsPayload,
+  ReserveBingoRoomRes
+} from '../../Shared/Contracts/bingo-messages.generated';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
 import type { ReserveBingoRoomReq } from '../../Shared/Contracts/bingo-messages.generated';
 import { Inject } from '@nestjs/common';
@@ -19,11 +22,11 @@ class BingoMatchReservationStore implements OnModuleDestroy {
   async reserve(request: ReserveBingoRoomReq): Promise<ReserveBingoRoomRes> {
     await this.ensureConnected();
     const key = `${this.config.redisKeyPrefix}match:${request.levelBucket}:${request.mode}`;
-    let roomId = await this.client.get(key) as string | null;
+    let roomId = (await this.client.get(key)) as string | null;
     if (roomId === null) {
       const candidate = `room-${randomUUID()}`;
       const stored = await this.client.set(key, candidate, { NX: true, EX: 60 });
-      roomId = stored === 'OK' ? candidate : await this.client.get(key) as string | null;
+      roomId = stored === 'OK' ? candidate : ((await this.client.get(key)) as string | null);
     }
     if (roomId === null) throw new Error('Match reservation could not select a room.');
     await this.client.hSet(`${key}:actors`, request.actorId, Date.now().toString());

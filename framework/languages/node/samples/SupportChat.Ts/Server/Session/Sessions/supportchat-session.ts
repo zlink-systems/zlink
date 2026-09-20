@@ -10,10 +10,7 @@ import {
   authenticateUser,
   SupportUserActorCreateReq
 } from '../../../Shared/Contracts/messages';
-import type {
-  AuthenticateUserRes,
-  SupportRole
-} from '../../../Shared/Contracts/messages';
+import type { AuthenticateUserRes, SupportRole } from '../../../Shared/Contracts/messages';
 import type {
   ZLinkActorManager,
   ZLinkChannelClient,
@@ -48,7 +45,12 @@ class SupportChatSessionRouter {
       .requestToChannel(SampleNames.apiChannel, authenticateUser(request.accessToken))
       .timeout(SampleTimings.requestTimeout)
       .submit<AuthenticateUserRes>();
-    if (!authenticated.accepted || authenticated.actorId === undefined || authenticated.displayName === undefined || authenticated.role === undefined) {
+    if (
+      !authenticated.accepted ||
+      authenticated.actorId === undefined ||
+      authenticated.displayName === undefined ||
+      authenticated.role === undefined
+    ) {
       throw new Error(authenticated.reason ?? 'SupportChat authentication failed.');
     }
     // --8<-- [start:doc-sc-session-auth]
@@ -69,11 +71,11 @@ class SupportChatSessionRouter {
       conversationActors: new Map()
     });
     // --8<-- [end:doc-sc-session-auth]
-    context.client.reply(new AuthenticateRes(
-      authenticated.actorId,
-      authenticated.displayName,
-      authenticated.role
-    )).submit();
+    context.client
+      .reply(
+        new AuthenticateRes(authenticated.actorId, authenticated.displayName, authenticated.role)
+      )
+      .submit();
   }
 
   async relayIdentity(context: ZLinkSessionContext, payload: ZLinkMessage): Promise<void> {
@@ -93,9 +95,11 @@ class SupportChatSessionRouter {
       throw new Error(`Conversation metadata is required for '${dispatch.packetName}'.`);
     }
     // --8<-- [start:doc-sc-agent-join]
-    if (identity.role === SupportChatRoles.Agent
-        && dispatch.packetName === PacketNames.joinConversationReq
-        && !identity.conversationActors.has(conversationId)) {
+    if (
+      identity.role === SupportChatRoles.Agent &&
+      dispatch.packetName === PacketNames.joinConversationReq &&
+      !identity.conversationActors.has(conversationId)
+    ) {
       const actorId = `${identity.actorId}@${conversationId}`;
       const actorRef = await this.getOrCreateActor(
         actorId,
@@ -109,26 +113,34 @@ class SupportChatSessionRouter {
       await context.actors.bindOrGet(actorRef);
       identity.conversationActors.set(conversationId, actorRef.actorId);
       const actor = context.actors.find(actorRef.actorId);
-      if (actor === undefined) throw new Error(`Bound conversation actor '${actorRef.actorId}' was not found.`);
+      if (actor === undefined)
+        throw new Error(`Bound conversation actor '${actorRef.actorId}' was not found.`);
       await actor.relay(payload);
       return;
     }
     // --8<-- [end:doc-sc-agent-join]
-    const actor = await this.conversationActor(context, identity, conversationId, dispatch.packetName);
+    const actor = await this.conversationActor(
+      context,
+      identity,
+      conversationId,
+      dispatch.packetName
+    );
     if (actor !== undefined) await actor.relay(payload);
   }
   // --8<-- [end:doc-sc-metadata-relay]
 
   private requireIdentity(context: ZLinkSessionContext): SessionIdentity {
     const identity = this.identities.get(context);
-    if (identity === undefined) throw new Error('AuthenticateReq is required before support packets.');
+    if (identity === undefined)
+      throw new Error('AuthenticateReq is required before support packets.');
     return identity;
   }
 
   private requireIdentityActor(context: ZLinkSessionContext): ZLinkSessionActor {
     const identity = this.requireIdentity(context);
     const actor = context.actors.find(identity.actorId);
-    if (actor === undefined) throw new Error(`Bound identity actor '${identity.actorId}' was not found.`);
+    if (actor === undefined)
+      throw new Error(`Bound identity actor '${identity.actorId}' was not found.`);
     return actor;
   }
 
@@ -147,14 +159,18 @@ class SupportChatSessionRouter {
     return context.actors.find(actorId);
   }
 
-  private async getOrCreateActor(actorId: string, request: SupportUserActorCreateReq): Promise<ActorRef> {
+  private async getOrCreateActor(
+    actorId: string,
+    request: SupportUserActorCreateReq
+  ): Promise<ActorRef> {
     const result = await this.actors
       .getOrCreate(actorId, SampleNames.supportActorType)
       .inMesh(SampleNames.meshName)
       .request(request)
       .timeout(SampleTimings.requestTimeout)
       .submit();
-    if (result.status === 'rejected') throw new Error(`Support actor '${actorId}' creation was rejected.`);
+    if (result.status === 'rejected')
+      throw new Error(`Support actor '${actorId}' creation was rejected.`);
     return result.actor;
   }
 }
@@ -163,7 +179,11 @@ class SupportChatSessionRouter {
 @ZLinkPacket(PacketNames.authenticateReq)
 class AuthenticateSupportChatSessionHandler {
   constructor(private readonly router: SupportChatSessionRouter) {}
-  async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
     await this.router.authenticate(context, payload);
   }
 }
@@ -173,7 +193,11 @@ function identityHandler(packetName: string) {
   @ZLinkPacket(packetName)
   class IdentityHandler {
     constructor(readonly router: SupportChatSessionRouter) {}
-    async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    async handle(
+      context: ZLinkSessionContext,
+      _dispatch: ZLinkSessionDispatchContext,
+      payload: ZLinkMessage
+    ): Promise<void> {
       await this.router.relayIdentity(context, payload);
     }
   }
@@ -185,7 +209,11 @@ function conversationHandler(packetName: string) {
   @ZLinkPacket(packetName)
   class ConversationHandler {
     constructor(readonly router: SupportChatSessionRouter) {}
-    async handle(context: ZLinkSessionContext, dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    async handle(
+      context: ZLinkSessionContext,
+      dispatch: ZLinkSessionDispatchContext,
+      payload: ZLinkMessage
+    ): Promise<void> {
       await this.router.relayConversation(context, dispatch, payload);
     }
   }
@@ -203,7 +231,7 @@ class SupportChatSession implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
-    if (!await this.context.handlers.tryHandle(dispatch, payload)) {
+    if (!(await this.context.handlers.tryHandle(dispatch, payload))) {
       throw new Error(`Unsupported SupportChat packet '${dispatch.packetName}'.`);
     }
   }

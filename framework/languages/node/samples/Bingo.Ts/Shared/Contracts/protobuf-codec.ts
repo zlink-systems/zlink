@@ -40,13 +40,19 @@ const responseTypesByRequestPacketName: Readonly<Record<string, string>> = {
 };
 
 const bingoProtobufOptions: ProtobufEnvelopeCodecOptions = {
-  encode(payload: unknown, rawContext?: ProtobufEncodeContext | Function): ZlinkStreamEncodedPayload {
+  encode(
+    payload: unknown,
+    rawContext?: ProtobufEncodeContext | Function
+  ): ZlinkStreamEncodedPayload {
     const context = normalizeContext(rawContext);
     const type = resolveType(payload, context);
     const message = BingoGeneratedProtobufCodec.encode(type, payload);
     return {
       codec: ZlinkStreamCodec.Protobuf,
-      payload: BingoGeneratedProtobufCodec.encode('BingoPayloadEnvelope', { type, payload: message }),
+      payload: BingoGeneratedProtobufCodec.encode('BingoPayloadEnvelope', {
+        type,
+        payload: message
+      }),
       messageType: context.messageType ?? inferMessageType(payload)
     };
   },
@@ -62,25 +68,29 @@ const bingoProtobufOptions: ProtobufEnvelopeCodecOptions = {
   }
 };
 
-function normalizeContext(value: ProtobufEncodeContext | Function | undefined): ProtobufEncodeContext {
+function normalizeContext(
+  value: ProtobufEncodeContext | Function | undefined
+): ProtobufEncodeContext {
   return typeof value === 'function'
     ? { direction: 'Send', messageType: value }
-    : value ?? { direction: 'Send' };
+    : (value ?? { direction: 'Send' });
 }
 
 function resolveType(payload: unknown, context: ProtobufEncodeContext): string {
-  const responseType = context.packetName === undefined
-    ? undefined
-    : responseTypesByRequestPacketName[context.packetName];
+  const responseType =
+    context.packetName === undefined
+      ? undefined
+      : responseTypesByRequestPacketName[context.packetName];
   if (context.direction === 'Response' && responseType !== undefined) return responseType;
-  const packetType = context.packetName === undefined
-    ? undefined
-    : messageTypesByPacketName[context.packetName];
+  const packetType =
+    context.packetName === undefined ? undefined : messageTypesByPacketName[context.packetName];
   if (packetType !== undefined) return packetType;
   const constructor = context.messageType ?? inferMessageType(payload);
   if (
-    constructor?.name !== undefined
-    && BingoGeneratedMessageConstructors[constructor.name as keyof typeof BingoGeneratedMessageConstructors] === constructor
+    constructor?.name !== undefined &&
+    BingoGeneratedMessageConstructors[
+      constructor.name as keyof typeof BingoGeneratedMessageConstructors
+    ] === constructor
   ) {
     return constructor.name;
   }

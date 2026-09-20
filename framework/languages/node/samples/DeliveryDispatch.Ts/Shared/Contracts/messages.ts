@@ -1,4 +1,5 @@
-type DeliveryStatus = 'Created' | 'Assigned' | 'Accepted' | 'Reassigned' | 'PickedUp' | 'Delivered' | 'Failed';
+type DeliveryStatus =
+  'Created' | 'Assigned' | 'Accepted' | 'Reassigned' | 'PickedUp' | 'Delivered' | 'Failed';
 
 type CreateDeliveryReq = {
   deliveryId: string;
@@ -11,18 +12,27 @@ type CreateDeliveryRes = {
   deliveryId: string;
 };
 
-class SubscribeDeliveryReq { constructor(readonly deliveryId: string) {} }
+class SubscribeDeliveryReq {
+  constructor(readonly deliveryId: string) {}
+}
 
-class SubscribeDeliveryRes { constructor(readonly deliveryId: string) {} }
+class SubscribeDeliveryRes {
+  constructor(readonly deliveryId: string) {}
+}
 
-class BindCourierSessionReq { constructor(readonly courierId: string) {} }
+class BindCourierSessionReq {
+  constructor(readonly courierId: string) {}
+}
 
 type BindCourierSessionRes = { courierId: string };
 
-class EnsureCourierActorReq { constructor(readonly courierId: string) {} }
+class EnsureCourierActorReq {
+  constructor(readonly courierId: string) {}
+}
 
-class CustomerActorCreateReq { constructor(readonly customerId: string) {} }
-
+class CustomerActorCreateReq {
+  constructor(readonly customerId: string) {}
+}
 
 class AssignDeliveryMsg {
   constructor(

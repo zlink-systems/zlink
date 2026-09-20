@@ -67,7 +67,11 @@ class BingoRoomGame {
     this.game = new BingoGame(this.settings.drawDeck);
   }
 
-  static restore(roomId: string, settings: BingoRoomSettings, snapshot: BingoRoomSnapshot): BingoRoomGame {
+  static restore(
+    roomId: string,
+    settings: BingoRoomSettings,
+    snapshot: BingoRoomSnapshot
+  ): BingoRoomGame {
     const room = new BingoRoomGame(roomId, settings);
     room.status = snapshot.status;
     room.game = BingoGame.restore(settings.drawDeck, snapshot.drawnNumbers, snapshot.winners);
@@ -93,7 +97,10 @@ class BingoRoomGame {
     if (existing !== undefined) {
       return { joined: false, player: existing, started: false };
     }
-    if (this.status !== BingoRoomStatus.WaitingForPlayers || this.players.length >= this.settings.requiredPlayers) {
+    if (
+      this.status !== BingoRoomStatus.WaitingForPlayers ||
+      this.players.length >= this.settings.requiredPlayers
+    ) {
       throw new Error(`Room ${this.roomId} cannot accept more players.`);
     }
     const player = {
@@ -122,8 +129,13 @@ class BingoRoomGame {
   }
 
   canDraw(): boolean {
-    return this.status === BingoRoomStatus.Running
-      && this.game.canDraw(this.players.map((player) => ({ actorId: player.actor.actorId, card: player.card })), this.settings.requiredPlayers);
+    return (
+      this.status === BingoRoomStatus.Running &&
+      this.game.canDraw(
+        this.players.map((player) => ({ actorId: player.actor.actorId, card: player.card })),
+        this.settings.requiredPlayers
+      )
+    );
   }
 
   setPlayerRecord(actorId: string, wins: number, losses: number): void {
@@ -136,7 +148,9 @@ class BingoRoomGame {
     if (!this.canDraw()) {
       return null;
     }
-    const drawn = this.game.drawNext(this.players.map((player) => ({ actorId: player.actor.actorId, card: player.card })));
+    const drawn = this.game.drawNext(
+      this.players.map((player) => ({ actorId: player.actor.actorId, card: player.card }))
+    );
     if (drawn !== null && drawn.finished) {
       this.status = BingoRoomStatus.Finished;
     }

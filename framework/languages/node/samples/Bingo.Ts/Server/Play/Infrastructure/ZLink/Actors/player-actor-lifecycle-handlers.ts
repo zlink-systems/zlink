@@ -23,7 +23,4 @@ class LeaveFinishedBingoRoomMsgHandler {
   }
 }
 
-export {
-  LeaveFinishedBingoRoomMsg,
-  LeaveFinishedBingoRoomMsgHandler
-};
+export { LeaveFinishedBingoRoomMsg, LeaveFinishedBingoRoomMsgHandler };

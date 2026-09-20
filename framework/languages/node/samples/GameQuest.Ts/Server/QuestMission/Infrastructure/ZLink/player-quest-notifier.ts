@@ -5,10 +5,7 @@ import {
   QuestCompletedNotify,
   QuestProgressNotify
 } from '../../../../Shared/Contracts/messages';
-import type {
-  ZLinkActorClient,
-  ZLinkActorManager
-} from '@zlink-systems/framework';
+import type { ZLinkActorClient, ZLinkActorManager } from '@zlink-systems/framework';
 import type { QuestProgress } from '../../../../Shared/Contracts/messages';
 
 class PlayerQuestNotifier {
@@ -17,7 +14,11 @@ class PlayerQuestNotifier {
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
   ) {}
 
-  async notify(playerId: string, progress: QuestProgress[], completedQuestIds: string[]): Promise<void> {
+  async notify(
+    playerId: string,
+    progress: QuestProgress[],
+    completedQuestIds: string[]
+  ): Promise<void> {
     if (progress.length === 0) return;
     // --8<-- [start:doc-gq-notify-actor]
     const actor = await this.actorManager.find(playerId);
@@ -26,15 +27,19 @@ class PlayerQuestNotifier {
       return;
     }
     for (const changed of progress) {
-      await this.actors.sendToActor(
-        actor.actorId,
-        new DeliverQuestNotificationMsg(new QuestProgressNotify(playerId, changed))
-      ).submit();
-      if (completedQuestIds.includes(changed.questId)) {
-        await this.actors.sendToActor(
+      await this.actors
+        .sendToActor(
           actor.actorId,
-          new DeliverQuestNotificationMsg(new QuestCompletedNotify(playerId, changed, true))
-        ).submit();
+          new DeliverQuestNotificationMsg(new QuestProgressNotify(playerId, changed))
+        )
+        .submit();
+      if (completedQuestIds.includes(changed.questId)) {
+        await this.actors
+          .sendToActor(
+            actor.actorId,
+            new DeliverQuestNotificationMsg(new QuestCompletedNotify(playerId, changed, true))
+          )
+          .submit();
       }
     }
     // --8<-- [end:doc-gq-notify-actor]

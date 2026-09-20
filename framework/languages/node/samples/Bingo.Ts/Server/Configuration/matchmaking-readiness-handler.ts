@@ -1,4 +1,9 @@
-import { Inject, Injectable, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnApplicationBootstrap,
+  type OnApplicationShutdown
+} from '@nestjs/common';
 import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
 import { SampleNames } from './sample-names';
@@ -30,8 +35,8 @@ class MatchmakingReadinessHandler implements OnApplicationBootstrap, OnApplicati
 
   private logStatus(status: ReturnType<ZLinkRouteMeshRuntime['snapshot']>): void {
     console.log(
-      `bingo-matchmaking-status state=${status.state} readyPeers=${status.readyPeerCount}`
-      + ` placement=${status.placement.isAvailable}`
+      `bingo-matchmaking-status state=${status.state} readyPeers=${status.readyPeerCount}` +
+        ` placement=${status.placement.isAvailable}`
     );
   }
 }

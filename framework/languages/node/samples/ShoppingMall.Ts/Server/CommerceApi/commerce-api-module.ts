@@ -1,6 +1,12 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { createShoppingMallLocationStore, shoppingMallLocationOptions } from '../Configuration/location-store';
-import { SHOPPINGMALL_SAMPLE_CONFIG, createShoppingMallConfigurationModule } from '../Configuration/sample-config';
+import {
+  createShoppingMallLocationStore,
+  shoppingMallLocationOptions
+} from '../Configuration/location-store';
+import {
+  SHOPPINGMALL_SAMPLE_CONFIG,
+  createShoppingMallConfigurationModule
+} from '../Configuration/sample-config';
 import type { ShoppingMallServerConfig } from '../Configuration/sample-config';
 import { OrderStore } from '../Shared/Store/order-store';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
@@ -26,14 +32,15 @@ function createShoppingMallCommerceApiModule(role: string): Function {
         inject: [SHOPPINGMALL_SAMPLE_CONFIG],
         useFactory: (config: ShoppingMallServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createShoppingMallLocationStore(config));
           shoppingMallLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-sm-api-register]
-          builder.addRouteMesh(SampleNames.orderWorkflowSpotMesh)
+          builder
+            .addRouteMesh(SampleNames.orderWorkflowSpotMesh)
             .listen('tcp://127.0.0.1:0')
-            .objects().client();
+            .objects()
+            .client();
           // --8<-- [end:doc-sm-api-register]
           return builder.build();
         }

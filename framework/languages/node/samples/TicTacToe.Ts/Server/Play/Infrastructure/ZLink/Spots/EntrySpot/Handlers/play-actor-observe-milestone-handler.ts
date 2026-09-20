@@ -7,20 +7,19 @@ import type {
 } from '@zlink-systems/framework';
 import type {
   ObserveMilestoneReq,
-  ObserveMilestoneRes,
+  ObserveMilestoneRes
 } from '../../../../../../../Shared/Contracts/messages';
 import { PlayActor } from '../../../Actors/play-actor';
 import { MilestoneObserverRegistry } from '../entry-spot-registries';
 import { PlayEntrySpot } from '../play-entry-spot';
 
 @Injectable()
-class PlayActorObserveMilestoneHandler
-  implements ZLinkEntrySpotActorRequestHandler<
-    PlayEntrySpot,
-    PlayActor,
-    ObserveMilestoneReq,
-    ObserveMilestoneRes
-  > {
+class PlayActorObserveMilestoneHandler implements ZLinkEntrySpotActorRequestHandler<
+  PlayEntrySpot,
+  PlayActor,
+  ObserveMilestoneReq,
+  ObserveMilestoneRes
+> {
   constructor(private readonly observers: MilestoneObserverRegistry) {}
 
   @ZLinkSpotActorRequest(PacketNames.observeMilestoneReq)

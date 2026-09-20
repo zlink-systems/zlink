@@ -2,7 +2,10 @@ import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs'
 import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { DispatchWorker } from './dispatch-worker';
 import { DeliveryOfferStore } from './delivery-offer-store';
-import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
+import {
+  createDeliveryDispatchLocationStore,
+  deliveryDispatchLocationOptions
+} from '../Configuration/location-store';
 import {
   DELIVERYDISPATCH_SAMPLE_CONFIG,
   createDeliveryDispatchConfigurationModule
@@ -28,20 +31,18 @@ function createDispatchCenterModule() {
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
         useFactory: (config: DeliveryDispatchServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-dd-dispatch-register]
-          const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
-            .listen(config.dispatchSpotEndpoint).routingId(DeliveryDispatchNodeIds.dispatch);
+          const mesh = builder
+            .addRouteMesh(SampleNames.courierMeshName)
+            .listen(config.dispatchSpotEndpoint)
+            .routingId(DeliveryDispatchNodeIds.dispatch);
           mesh.objects().client();
           const dispatchChannel = builder.addClientServerChannel(SampleNames.dispatchChannel);
           dispatchChannel.client();
-          dispatchChannel
-            .server()
-            .listen()
-            .addHandlerGroup('dispatch');
+          dispatchChannel.server().listen().addHandlerGroup('dispatch');
           builder.addClientServerChannel(SampleNames.trackingChannel).client();
           // --8<-- [end:doc-dd-dispatch-register]
           return builder.build();
@@ -52,7 +53,8 @@ function createDispatchCenterModule() {
       {
         provide: 'DELIVERYDISPATCH_LOCATION_STORE',
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
-        useFactory: (config: DeliveryDispatchServerConfig) => createDeliveryDispatchLocationStore(config)
+        useFactory: (config: DeliveryDispatchServerConfig) =>
+          createDeliveryDispatchLocationStore(config)
       },
       {
         provide: DeliveryOfferStore,

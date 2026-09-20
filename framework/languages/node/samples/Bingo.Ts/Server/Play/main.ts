@@ -23,29 +23,33 @@ async function bootstrap(): Promise<void> {
   const shutdown = new AbortController();
   const beginDrain = () => {
     console.log('bingo-drain requested');
-    void frameworkRuntime.relocate({ mode: ZLinkFrameworkRelocationMode.PlannedMaintenance }).then((result) => {
-      console.log(
-        `bingo-drain result=${result.outcome === ZLinkFrameworkRelocationOutcome.Relocated
-          ? 'drained'
-          : 'blocked'} `
-        + `outcome=${result.outcome} reason=${result.reason}`
-      );
-      process.removeListener('SIGUSR2', beginDrain);
-      process.removeListener('SIGBREAK', beginDrain);
-      shutdown.abort();
-    }).catch((error) => {
-      console.error('bingo-drain failed', error);
-      process.exitCode = 1;
-    });
+    void frameworkRuntime
+      .relocate({ mode: ZLinkFrameworkRelocationMode.PlannedMaintenance })
+      .then((result) => {
+        console.log(
+          `bingo-drain result=${
+            result.outcome === ZLinkFrameworkRelocationOutcome.Relocated ? 'drained' : 'blocked'
+          } ` + `outcome=${result.outcome} reason=${result.reason}`
+        );
+        process.removeListener('SIGUSR2', beginDrain);
+        process.removeListener('SIGBREAK', beginDrain);
+        shutdown.abort();
+      })
+      .catch((error) => {
+        console.error('bingo-drain failed', error);
+        process.exitCode = 1;
+      });
   };
   process.once('SIGUSR2', beginDrain);
   process.once('SIGBREAK', beginDrain);
 
-  process.stdout.write(`${JSON.stringify({
-    event: 'ready',
-    endpoint: config.playSpotEndpoint,
-    meshName: SampleNames.playMeshName
-  })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      event: 'ready',
+      endpoint: config.playSpotEndpoint,
+      meshName: SampleNames.playMeshName
+    })}\n`
+  );
 
   try {
     await waitForShutdown({ keepAlive: true, signal: shutdown.signal });
@@ -61,6 +65,5 @@ bootstrap().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-export {};enableFlowFileLogging('play');
-
-
+export {};
+enableFlowFileLogging('play');

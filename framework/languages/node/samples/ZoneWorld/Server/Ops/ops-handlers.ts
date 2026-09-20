@@ -26,7 +26,7 @@ import type {
   ApplyNodeMaintenanceRes,
   GetNodeDiagnosticsRes,
   ReportNodeStatusMsg,
-  ReportSpotEventMsg,
+  ReportSpotEventMsg
 } from '../../Shared/contracts';
 import type {
   ZLinkFanoutClient,
@@ -43,7 +43,10 @@ import type {
 @Injectable()
 @zlinkSendHandler('ops', PacketNames.reportNodeStatusMsg)
 class ReportNodeStatusHandler implements ZLinkRouteSendHandler<ReportNodeStatusMsg> {
-  constructor(private readonly nodes: NodeRegistry, private readonly consoles: OpsConsoleRegistry) {}
+  constructor(
+    private readonly nodes: NodeRegistry,
+    private readonly consoles: OpsConsoleRegistry
+  ) {}
 
   async handle(message: ReportNodeStatusMsg, context: ZLinkRouteMessageContext): Promise<void> {
     console.log(`node status received node=${message.nodeId}`);
@@ -57,19 +60,19 @@ class ReportSpotEventHandler implements ZLinkSendHandler<ReportSpotEventMsg> {
   constructor(private readonly consoles: OpsConsoleRegistry) {}
 
   async handle(message: ReportSpotEventMsg, _context: ZLinkMessageContext): Promise<void> {
-    this.consoles.publishAlert(new NodeAlertNotify(
-      message.nodeId,
-      message.kind as never,
-      message.detail,
-      message.occurredAt
-    ));
+    this.consoles.publishAlert(
+      new NodeAlertNotify(message.nodeId, message.kind as never, message.detail, message.occurredAt)
+    );
   }
 }
 
 @Injectable()
 @ZLinkPacket(PacketNames.watchNodesReq)
 class WatchNodesHandler {
-  constructor(private readonly nodes: NodeRegistry, private readonly consoles: OpsConsoleRegistry) {}
+  constructor(
+    private readonly nodes: NodeRegistry,
+    private readonly consoles: OpsConsoleRegistry
+  ) {}
 
   async handle(context: ZLinkSessionContext): Promise<void> {
     context.client.reply(new WatchNodesRes(this.nodes.snapshot())).submit();
@@ -83,14 +86,18 @@ class RelocationPairHandler {
 
   async handle(context: ZLinkSessionContext): Promise<void> {
     const pair = this.nodes.relocationPair();
-    context.client.reply(pair === undefined
-      ? new RelocationPairRes('', '', '', '', ZoneWorldErrors.nodeUnavailable)
-      : new RelocationPairRes(
-        pair.sourceZoneId,
-        pair.targetZoneId,
-        pair.sourceOwnerNodeRid,
-        pair.targetOwnerNodeRid
-      )).submit();
+    context.client
+      .reply(
+        pair === undefined
+          ? new RelocationPairRes('', '', '', '', ZoneWorldErrors.nodeUnavailable)
+          : new RelocationPairRes(
+              pair.sourceZoneId,
+              pair.targetZoneId,
+              pair.sourceOwnerNodeRid,
+              pair.targetOwnerNodeRid
+            )
+      )
+      .submit();
   }
 }
 
@@ -138,18 +145,31 @@ class SetMaintenanceHandler {
         .timeout(10_000)
         .submit<ApplyNodeMaintenanceRes>();
       // --8<-- [start:doc-zw-ops-publish]
-      await this.fanout.publish(
-        ZoneWorldNames.broadcastChannel,
-        new NodeMaintenanceChangedEvent(request.nodeId, request.enabled)
-      ).submit();
+      await this.fanout
+        .publish(
+          ZoneWorldNames.broadcastChannel,
+          new NodeMaintenanceChangedEvent(request.nodeId, request.enabled)
+        )
+        .submit();
       // --8<-- [end:doc-zw-ops-publish]
-      context.client.reply(new SetMaintenanceRes(applied.nodeId, applied.enabled, applied.zones)).submit();
+      context.client
+        .reply(new SetMaintenanceRes(applied.nodeId, applied.enabled, applied.zones))
+        .submit();
     } catch (error) {
       console.error(
         `maintenance apply failed node=${request.nodeId} enabled=${request.enabled}`,
         error instanceof Error ? error.message : String(error)
       );
-      context.client.reply(new SetMaintenanceRes(request.nodeId, request.enabled, [], ZoneWorldErrors.nodeUnavailable)).submit();
+      context.client
+        .reply(
+          new SetMaintenanceRes(
+            request.nodeId,
+            request.enabled,
+            [],
+            ZoneWorldErrors.nodeUnavailable
+          )
+        )
+        .submit();
     }
   }
 }
@@ -173,14 +193,22 @@ class NodeDiagnosticsHandler {
         )
         .timeout(10_000)
         .submit<GetNodeDiagnosticsRes>();
-      context.client.reply(new NodeDiagnosticsRes(
-        result.nodeId,
-        result.zones,
-        result.playerCount,
-        result.maintenance
-      )).submit();
+      context.client
+        .reply(
+          new NodeDiagnosticsRes(
+            result.nodeId,
+            result.zones,
+            result.playerCount,
+            result.maintenance
+          )
+        )
+        .submit();
     } catch {
-      context.client.reply(new NodeDiagnosticsRes(request.nodeId, [], 0, false, ZoneWorldErrors.nodeUnavailable)).submit();
+      context.client
+        .reply(
+          new NodeDiagnosticsRes(request.nodeId, [], 0, false, ZoneWorldErrors.nodeUnavailable)
+        )
+        .submit();
     }
   }
 }

@@ -25,12 +25,14 @@ async function main(): Promise<void> {
     config.instanceName,
     config.instanceName === 'play-a' ? 'play-b' : 'play-a'
   );
-  process.stdout.write(`${JSON.stringify({
-    event: 'ready',
-    endpoint: config.playSpotEndpoint,
-    spotEndpoint: config.playSpotEndpoint,
-    streamEndpoint: config.playStreamEndpoint
-  })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      event: 'ready',
+      endpoint: config.playSpotEndpoint,
+      spotEndpoint: config.playSpotEndpoint,
+      streamEndpoint: config.playStreamEndpoint
+    })}\n`
+  );
   await waitForShutdown();
   await closeNestRuntime(channelApp);
 }
@@ -42,10 +44,14 @@ async function logSpotPeerReady(
   peerNodeId: string
 ): Promise<void> {
   const peerRoutingIdPrefix = `tictactoe-play-${peerNodeId}-`;
-  const hasExpectedReadyPeer = (): boolean => runtime.snapshot(meshName).peers.some(
-    (peer) => peer.state === ZLinkPeerState.Ready
-      && String(peer.nodeRid).startsWith(peerRoutingIdPrefix)
-  );
+  const hasExpectedReadyPeer = (): boolean =>
+    runtime
+      .snapshot(meshName)
+      .peers.some(
+        (peer) =>
+          peer.state === ZLinkPeerState.Ready &&
+          String(peer.nodeRid).startsWith(peerRoutingIdPrefix)
+      );
   if (hasExpectedReadyPeer()) {
     process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
     return;

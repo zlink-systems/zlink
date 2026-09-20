@@ -1,7 +1,13 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { createShoppingMallLocationStore, shoppingMallLocationOptions } from '../Configuration/location-store';
+import {
+  createShoppingMallLocationStore,
+  shoppingMallLocationOptions
+} from '../Configuration/location-store';
 import { createShoppingMallRelocationStore } from '../Configuration/relocation-store';
-import { SHOPPINGMALL_SAMPLE_CONFIG, createShoppingMallConfigurationModule } from '../Configuration/sample-config';
+import {
+  SHOPPINGMALL_SAMPLE_CONFIG,
+  createShoppingMallConfigurationModule
+} from '../Configuration/sample-config';
 import type { ShoppingMallServerConfig } from '../Configuration/sample-config';
 import { OrderStore } from '../Shared/Store/order-store';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
@@ -29,19 +35,22 @@ function createShoppingMallWorkflowModule(role: string): Function {
         inject: [SHOPPINGMALL_SAMPLE_CONFIG],
         useFactory: (config: ShoppingMallServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createShoppingMallLocationStore(config));
           builder.addRelocationStore(createShoppingMallRelocationStore(config));
           shoppingMallLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-sm-workflow-register]
-          const mesh = builder.addRouteMesh(SampleNames.orderWorkflowSpotMesh)
+          const mesh = builder
+            .addRouteMesh(SampleNames.orderWorkflowSpotMesh)
             .listen(workflowSpotEndpointForRole(role, config));
-          mesh.objects().server().addInstanceSpotFactory(
-            SampleNames.orderWorkflowSpotType,
-            OrderWorkflowSpot,
-            (factory) => factory.recreateOnRelocation()
-          );
+          mesh
+            .objects()
+            .server()
+            .addInstanceSpotFactory(
+              SampleNames.orderWorkflowSpotType,
+              OrderWorkflowSpot,
+              (factory) => factory.recreateOnRelocation()
+            );
           // --8<-- [end:doc-sm-workflow-register]
           return builder.build();
         }

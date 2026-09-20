@@ -6,7 +6,7 @@ import {
   ZONE_SE,
   ZONE_SPLIT,
   ZONE_SW,
-  type zoneId,
+  type zoneId
 } from '../../shared/config/world';
 
 export function zoneOf(x: number, y: number): zoneId {
@@ -28,9 +28,10 @@ export function isWorldCoordinate(value: number): boolean {
 
 export function isAdjacentZone(origin: string, candidate: string): boolean {
   if (origin === candidate) return false;
-  const diagonal = (origin === ZONE_NW && candidate === ZONE_SE)
-    || (origin === ZONE_SE && candidate === ZONE_NW)
-    || (origin === ZONE_NE && candidate === ZONE_SW)
-    || (origin === ZONE_SW && candidate === ZONE_NE);
+  const diagonal =
+    (origin === ZONE_NW && candidate === ZONE_SE) ||
+    (origin === ZONE_SE && candidate === ZONE_NW) ||
+    (origin === ZONE_NE && candidate === ZONE_SW) ||
+    (origin === ZONE_SW && candidate === ZONE_NE);
   return !diagonal;
 }

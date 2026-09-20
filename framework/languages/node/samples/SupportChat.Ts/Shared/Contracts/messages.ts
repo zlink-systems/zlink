@@ -1,11 +1,19 @@
 type SupportRole = 'Agent' | 'Customer';
 type ConversationStatus = 'WaitingForAgent' | 'Active' | 'WaitingForClose' | 'Closed';
 
-class AuthenticateReq { constructor(readonly accessToken: string) {} }
-class AuthenticateRes {
-  constructor(readonly actorId: string, readonly displayName: string, readonly role: SupportRole) {}
+class AuthenticateReq {
+  constructor(readonly accessToken: string) {}
 }
-class AuthenticateUserReq { constructor(readonly accessToken: string) {} }
+class AuthenticateRes {
+  constructor(
+    readonly actorId: string,
+    readonly displayName: string,
+    readonly role: SupportRole
+  ) {}
+}
+class AuthenticateUserReq {
+  constructor(readonly accessToken: string) {}
+}
 type AuthenticateUserRes = {
   accepted: boolean;
   actorId?: string;
@@ -22,7 +30,11 @@ class SupportUserActorCreateReq {
   ) {}
 }
 class OpenConversationApiReq {
-  constructor(readonly customerActorId: string, readonly customerDisplayName: string, readonly subject: string) {}
+  constructor(
+    readonly customerActorId: string,
+    readonly customerDisplayName: string,
+    readonly subject: string
+  ) {}
 }
 type OpenConversationApiRes = { conversationId: string; status: ConversationStatus };
 class ConversationCreateReq {
@@ -32,9 +44,13 @@ class ConversationCreateReq {
     readonly subject: string
   ) {}
 }
-class OpenConversationReq { constructor(readonly subject: string) {} }
+class OpenConversationReq {
+  constructor(readonly subject: string) {}
+}
 type OpenConversationRes = { conversationId: string; state: ConversationState };
-class SetAgentAvailableReq { constructor(readonly isAvailable: boolean) {} }
+class SetAgentAvailableReq {
+  constructor(readonly isAvailable: boolean) {}
+}
 type SetAgentAvailableRes = { isAvailable: boolean };
 class JoinConversationReq {
   constructor(
@@ -56,17 +72,58 @@ class JoinConversationFailedNotify {
     readonly isRetriable: boolean
   ) {}
 }
-class SendChatMessageReq { constructor(readonly text: string) {} }
+class SendChatMessageReq {
+  constructor(readonly text: string) {}
+}
 type SendChatMessageRes = { message: ChatMessage; state: ConversationState };
-class SetTypingMsg { constructor(readonly isTyping: boolean) {} }
-class CloseConversationReq { constructor(readonly reason?: string) {} }
+class SetTypingMsg {
+  constructor(readonly isTyping: boolean) {}
+}
+class CloseConversationReq {
+  constructor(readonly reason?: string) {}
+}
 type CloseConversationRes = { state: ConversationState };
-class ParticipantJoinedNotify { constructor(readonly conversationId: string, readonly actorId: string, readonly role: SupportRole, readonly state: ConversationState) {} }
-class ConversationAssignedNotify { constructor(readonly conversationId: string, readonly state: ConversationState) {} }
-class ChatMessageNotify { constructor(readonly conversationId: string, readonly message: ChatMessage, readonly state: ConversationState) {} }
-class TypingChangedNotify { constructor(readonly conversationId: string, readonly actorId: string, readonly isTyping: boolean, readonly state: ConversationState) {} }
-class ConversationIdleNotify { constructor(readonly conversationId: string, readonly state: ConversationState) {} }
-class ConversationClosedNotify { constructor(readonly conversationId: string, readonly state: ConversationState) {} }
+class ParticipantJoinedNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly actorId: string,
+    readonly role: SupportRole,
+    readonly state: ConversationState
+  ) {}
+}
+class ConversationAssignedNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly state: ConversationState
+  ) {}
+}
+class ChatMessageNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly message: ChatMessage,
+    readonly state: ConversationState
+  ) {}
+}
+class TypingChangedNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly actorId: string,
+    readonly isTyping: boolean,
+    readonly state: ConversationState
+  ) {}
+}
+class ConversationIdleNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly state: ConversationState
+  ) {}
+}
+class ConversationClosedNotify {
+  constructor(
+    readonly conversationId: string,
+    readonly state: ConversationState
+  ) {}
+}
 type ConversationState = {
   conversationId: string;
   subject: string;
@@ -114,12 +171,18 @@ const PacketNames = {
 
 const authenticate = (accessToken: string) => new AuthenticateReq(accessToken);
 const authenticateUser = (accessToken: string) => new AuthenticateUserReq(accessToken);
-const openConversationApi = (customerActorId: string, customerDisplayName: string, subject: string) =>
-  new OpenConversationApiReq(customerActorId, customerDisplayName, subject);
+const openConversationApi = (
+  customerActorId: string,
+  customerDisplayName: string,
+  subject: string
+) => new OpenConversationApiReq(customerActorId, customerDisplayName, subject);
 const openConversation = (subject: string) => new OpenConversationReq(subject);
 const setAgentAvailable = (isAvailable: boolean) => new SetAgentAvailableReq(isAvailable);
-const joinConversation = (participantId = '', role: SupportRole = SupportChatRoles.Customer, displayName = '') =>
-  new JoinConversationReq(participantId, role, displayName);
+const joinConversation = (
+  participantId = '',
+  role: SupportRole = SupportChatRoles.Customer,
+  displayName = ''
+) => new JoinConversationReq(participantId, role, displayName);
 const sendChatMessage = (text: string) => new SendChatMessageReq(text);
 const setTyping = (isTyping: boolean) => new SetTypingMsg(isTyping);
 const closeConversation = (reason?: string) => new CloseConversationReq(reason);

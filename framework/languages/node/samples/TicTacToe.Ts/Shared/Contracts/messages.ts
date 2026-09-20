@@ -109,7 +109,10 @@ export class JoinGameNotify {
 }
 
 export class JoinGameFailedNotify {
-  constructor(readonly roomId: string, readonly error: string) {}
+  constructor(
+    readonly roomId: string,
+    readonly error: string
+  ) {}
 }
 
 export interface TicTacToeGameJoinReq {
@@ -121,8 +124,7 @@ export interface TicTacToeGameJoinRes {
   state: GameState;
 }
 
-export class ObserveMilestoneReq {
-}
+export class ObserveMilestoneReq {}
 
 export interface ObserveMilestoneRes {
   subscribed: boolean;
@@ -296,12 +298,7 @@ function playerWinMilestoneEvent(
 }
 
 function winMilestoneNotify(event: PlayerWinMilestoneEvent): WinMilestoneNotify {
-  return new WinMilestoneNotify(
-    event.roomId,
-    event.actorId,
-    event.displayName,
-    event.wins
-  );
+  return new WinMilestoneNotify(event.roomId, event.actorId, event.displayName, event.wins);
 }
 
 export {

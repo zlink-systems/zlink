@@ -29,19 +29,24 @@ function createShoppingMallConfigurationModule(
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: ShoppingMallConfigurationModule,
-    imports: [ConfigModule.forRoot({
-      cache: true,
-      ignoreEnvFile: true,
-      isGlobal: false,
-      load: [() => ({ sample: readSampleConfig(configPath) })],
-      skipProcessEnv: true,
-      validatePredefined: false
-    })],
-    providers: [{
-      provide: SHOPPINGMALL_SAMPLE_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    imports: [
+      ConfigModule.forRoot({
+        cache: true,
+        ignoreEnvFile: true,
+        isGlobal: false,
+        load: [() => ({ sample: readSampleConfig(configPath) })],
+        skipProcessEnv: true,
+        validatePredefined: false
+      })
+    ],
+    providers: [
+      {
+        provide: SHOPPINGMALL_SAMPLE_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [SHOPPINGMALL_SAMPLE_CONFIG]
   };
 }

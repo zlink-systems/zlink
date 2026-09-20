@@ -8,14 +8,24 @@ import { OrderWorkflowSpot } from '../order-workflow-spot';
 import { SHOPPINGMALL_ROLE } from '../../../../../order-workflow-tokens';
 
 @Injectable()
-@zlinkSpotPacketHandler({ spot: () => OrderWorkflowSpot, packetName: 'PrepareInventoryReservedReq' })
-class PrepareInventoryReservedHandler implements ZLinkSpotRequestHandler<OrderWorkflowSpot, PrepareInventoryReservedReq, StartOrderWorkflowRes> {
+@zlinkSpotPacketHandler({
+  spot: () => OrderWorkflowSpot,
+  packetName: 'PrepareInventoryReservedReq'
+})
+class PrepareInventoryReservedHandler implements ZLinkSpotRequestHandler<
+  OrderWorkflowSpot,
+  PrepareInventoryReservedReq,
+  StartOrderWorkflowRes
+> {
   constructor(
     private readonly workflow: OrderWorkflowService,
     @Inject(SHOPPINGMALL_ROLE) private readonly role: string
   ) {}
 
-  handle(spot: OrderWorkflowSpot, request: PrepareInventoryReservedReq): Promise<StartOrderWorkflowRes> {
+  handle(
+    spot: OrderWorkflowSpot,
+    request: PrepareInventoryReservedReq
+  ): Promise<StartOrderWorkflowRes> {
     void spot;
     return Promise.resolve(this.workflow.prepareInventoryReserved(request, this.role));
   }

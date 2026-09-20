@@ -2,7 +2,10 @@ import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs'
 import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { CourierActorDirectory, CourierActorFactory } from './courier-actor';
 import { CourierEntrySpot } from './courier-entry-spot';
-import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
+import {
+  createDeliveryDispatchLocationStore,
+  deliveryDispatchLocationOptions
+} from '../Configuration/location-store';
 import {
   DELIVERYDISPATCH_SAMPLE_CONFIG,
   createDeliveryDispatchConfigurationModule
@@ -16,9 +19,10 @@ type CourierOptions = {
 function createCourierActorNodeModule(options: CourierOptions) {
   class CourierActorNodeModule {}
   const directory = new CourierActorDirectory();
-  const spotEndpointKey = options.courierId === 'courier-a'
-    ? 'courierActorNode1SpotEndpoint'
-    : 'courierActorNode2SpotEndpoint';
+  const spotEndpointKey =
+    options.courierId === 'courier-a'
+      ? 'courierActorNode1SpotEndpoint'
+      : 'courierActorNode2SpotEndpoint';
   const configuration = createDeliveryDispatchConfigurationModule([
     spotEndpointKey,
     'redisEndpoint',
@@ -35,16 +39,18 @@ function createCourierActorNodeModule(options: CourierOptions) {
         useFactory: (config: DeliveryDispatchServerConfig) => {
           const spotEndpoint = config[spotEndpointKey];
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
-          const nodeId = options.courierId === 'courier-a'
-            ? DeliveryDispatchNodeIds.courierNode1
-            : DeliveryDispatchNodeIds.courierNode2;
+          const nodeId =
+            options.courierId === 'courier-a'
+              ? DeliveryDispatchNodeIds.courierNode1
+              : DeliveryDispatchNodeIds.courierNode2;
           // --8<-- [start:doc-dd-node-register]
-          const mesh = builder.addRouteMesh(SampleNames.courierMeshName)
-              .listen(spotEndpoint).routingId(nodeId);
+          const mesh = builder
+            .addRouteMesh(SampleNames.courierMeshName)
+            .listen(spotEndpoint)
+            .routingId(nodeId);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(CourierEntrySpot);
           objectServer.addActorFactory(
@@ -68,10 +74,6 @@ function createCourierActorNodeModule(options: CourierOptions) {
   return CourierActorNodeModule;
 }
 
-export {
-  createCourierActorNodeModule
-};
+export { createCourierActorNodeModule };
 
-export type {
-  CourierOptions
-};
+export type { CourierOptions };

@@ -3,7 +3,10 @@ import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framewor
 import { SessionAuthenticator } from './Sessions/Handlers/authenticate-session-handler';
 import { BingoSessionFactory } from './Sessions/bingo-session';
 import { SampleNames } from '../Configuration/sample-names';
-import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
+import {
+  BINGO_SAMPLE_CONFIG,
+  createBingoConfigurationModule
+} from '../Configuration/sample-config';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
 import { bingoLocationOptions, createBingoLocationStore } from '../Configuration/location-store';
 import { createBingoRelocationStore } from '../Configuration/relocation-store';
@@ -30,40 +33,42 @@ function createBingoSessionModule() {
         useFactory: (endpoints: BingoSampleConfig) => {
           const builder = zlinkFramework();
           builder.options({
-            metrics: { meterProvider: bingoMeterProvider },
+            metrics: { meterProvider: bingoMeterProvider }
           });
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(endpoints));
           builder.addRelocationStore(createBingoRelocationStore(endpoints));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);
           // --8<-- [start:doc-bingo-session-register]
-          const mesh = builder.addRouteMesh(SampleNames.roomSpotNode)
+          const mesh = builder
+            .addRouteMesh(SampleNames.roomSpotNode)
             .setRoutingIdPrefix('session')
             .listen(endpoints.sessionSpotEndpoint);
           mesh.objects().client();
           builder.addClientServerChannel(SampleNames.apiChannel).client();
-          return builder.addStreamNode(SampleNames.sessionStream)
+          return builder
+            .addStreamNode(SampleNames.sessionStream)
             .enableActorDispatch()
             .bind(endpoints.sessionEndpoint)
             .registerSession(BingoSessionFactory)
-          .build();
+            .build();
           // --8<-- [end:doc-bingo-session-register]
         }
       })
     ],
-    providers: [
-      BingoSessionFactory,
-      RoomRouterReadinessHandler
-    ]
+    providers: [BingoSessionFactory, RoomRouterReadinessHandler]
   })(BingoSessionModule);
 
   return BingoSessionModule;
 }
 
-function getSessionAuthenticator(app: { get(token: unknown, options?: { strict?: boolean }): unknown }): InstanceType<typeof SessionAuthenticator> {
-  return app.get(SessionAuthenticator, { strict: false }) as InstanceType<typeof SessionAuthenticator>;
+function getSessionAuthenticator(app: {
+  get(token: unknown, options?: { strict?: boolean }): unknown;
+}): InstanceType<typeof SessionAuthenticator> {
+  return app.get(SessionAuthenticator, { strict: false }) as InstanceType<
+    typeof SessionAuthenticator
+  >;
 }
 
 export { createBingoSessionModule, getSessionAuthenticator };

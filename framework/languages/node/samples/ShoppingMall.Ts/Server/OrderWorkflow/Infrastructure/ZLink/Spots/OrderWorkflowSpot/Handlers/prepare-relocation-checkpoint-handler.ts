@@ -8,7 +8,10 @@ import { OrderWorkflowSpot } from '../order-workflow-spot';
 import { SHOPPINGMALL_ROLE } from '../../../../../order-workflow-tokens';
 
 @Injectable()
-@zlinkSpotPacketHandler({ spot: () => OrderWorkflowSpot, packetName: 'PrepareRelocationCheckpointReq' })
+@zlinkSpotPacketHandler({
+  spot: () => OrderWorkflowSpot,
+  packetName: 'PrepareRelocationCheckpointReq'
+})
 class PrepareRelocationCheckpointHandler implements ZLinkSpotRequestHandler<
   OrderWorkflowSpot,
   PrepareRelocationCheckpointReq,
@@ -28,7 +31,10 @@ class PrepareRelocationCheckpointHandler implements ZLinkSpotRequestHandler<
       this.role,
       BigInt(spot.context.objectGeneration)
     );
-    return Promise.resolve({ ...response, objectGeneration: spot.context.objectGeneration.toString() });
+    return Promise.resolve({
+      ...response,
+      objectGeneration: spot.context.objectGeneration.toString()
+    });
   }
 }
 

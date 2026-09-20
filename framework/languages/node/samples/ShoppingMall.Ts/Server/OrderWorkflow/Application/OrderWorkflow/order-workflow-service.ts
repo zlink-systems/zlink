@@ -36,7 +36,11 @@ class OrderWorkflowService {
     return response;
   }
 
-  continue(request: { orderId: string }, role: string, objectGeneration?: bigint): ContinueOrderWorkflowRes {
+  continue(
+    request: { orderId: string },
+    role: string,
+    objectGeneration?: bigint
+  ): ContinueOrderWorkflowRes {
     const response = this.store.continueOrder(request.orderId, role, objectGeneration);
     return response;
   }
@@ -45,7 +49,10 @@ class OrderWorkflowService {
     return this.store.rebuildProjection(request.orderId);
   }
 
-  verifyExpectedVersionFence(request: { orderId: string }, role: string): VerifyExpectedVersionFenceRes {
+  verifyExpectedVersionFence(
+    request: { orderId: string },
+    role: string
+  ): VerifyExpectedVersionFenceRes {
     return this.store.verifyExpectedVersionFence(request.orderId, role);
   }
 }

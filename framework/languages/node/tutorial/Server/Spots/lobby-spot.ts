@@ -1,9 +1,5 @@
 import { Injectable, Scope } from '@nestjs/common';
-import type {
-  ZLinkActor,
-  ZLinkEntrySpot,
-  ZLinkEntrySpotContext
-} from '@zlink-systems/framework';
+import type { ZLinkActor, ZLinkEntrySpot, ZLinkEntrySpotContext } from '@zlink-systems/framework';
 
 // --8<-- [start:entry-spot]
 // Every new player lands here before joining a room, and returns here after

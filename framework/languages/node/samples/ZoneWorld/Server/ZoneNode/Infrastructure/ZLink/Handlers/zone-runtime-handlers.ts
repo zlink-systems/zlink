@@ -54,8 +54,8 @@ class ZoneTickHandler implements ZLinkSpotTimerHandler<ZoneSpot> {
         // failure must not replace the original handler exception or change
         // the timer policy.
         console.error(
-          `zone spot event report failed. zone=${zoneId}`
-          + ` error=${reportError instanceof Error ? reportError.message : String(reportError)}`
+          `zone spot event report failed. zone=${zoneId}` +
+            ` error=${reportError instanceof Error ? reportError.message : String(reportError)}`
         );
       }
       throw error;
@@ -72,8 +72,15 @@ class BotTickHandler implements ZLinkSpotTimerHandler<ZoneSpot> {
 
 @Injectable()
 @zoneBorderSubscriptionHandler()
-class FirstBorderSubscriptionHandler implements ZLinkSpotSubscriptionHandler<ZoneSpot, ZoneBorderEvent> {
-  async handle(spot: ZoneSpot, event: ZoneBorderEvent, _context: ZLinkPublishMessageContext): Promise<void> {
+class FirstBorderSubscriptionHandler implements ZLinkSpotSubscriptionHandler<
+  ZoneSpot,
+  ZoneBorderEvent
+> {
+  async handle(
+    spot: ZoneSpot,
+    event: ZoneBorderEvent,
+    _context: ZLinkPublishMessageContext
+  ): Promise<void> {
     if (event.toZoneId !== String(spot.context.spotId)) return;
     spot.applyBorder(event);
   }
@@ -82,20 +89,34 @@ class FirstBorderSubscriptionHandler implements ZLinkSpotSubscriptionHandler<Zon
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => ZoneSpot, packetName: PacketNames.deliverAnnounceMsg })
 class DeliverAnnounceHandler implements ZLinkSpotPacketHandler<ZoneSpot, DeliverAnnounceMsg> {
-  async handle(spot: ZoneSpot, message: DeliverAnnounceMsg, _context: ZLinkMessageContext): Promise<void> {
+  async handle(
+    spot: ZoneSpot,
+    message: DeliverAnnounceMsg,
+    _context: ZLinkMessageContext
+  ): Promise<void> {
     await spot.pushHumans(new WorldAnnounceNotify(message.announcementId, message.text));
-    console.log(`zone spot announcement delivered zone=${String(spot.context.spotId)} id=${message.announcementId}`);
+    console.log(
+      `zone spot announcement delivered zone=${String(spot.context.spotId)} id=${message.announcementId}`
+    );
   }
 }
 
 class UpdateZonePositionMsg {
-  constructor(readonly actorId: string, readonly x: number, readonly y: number) {}
+  constructor(
+    readonly actorId: string,
+    readonly x: number,
+    readonly y: number
+  ) {}
 }
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => ZoneSpot, packetName: 'UpdateZonePositionMsg' })
 class UpdateZonePositionHandler implements ZLinkSpotPacketHandler<ZoneSpot, UpdateZonePositionMsg> {
-  async handle(spot: ZoneSpot, message: UpdateZonePositionMsg, _context: ZLinkMessageContext): Promise<void> {
+  async handle(
+    spot: ZoneSpot,
+    message: UpdateZonePositionMsg,
+    _context: ZLinkMessageContext
+  ): Promise<void> {
     spot.updatePosition(message.actorId, message.x, message.y);
   }
 }

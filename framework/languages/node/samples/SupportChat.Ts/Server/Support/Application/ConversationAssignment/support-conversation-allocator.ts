@@ -5,7 +5,12 @@ import { Conversation } from '../../Domain/SupportChat/conversation';
 class SupportConversationAllocator {
   private nextId = 1;
   allocate(customerActorId: string, customerDisplayName: string, subject: string): Conversation {
-    return new Conversation(`support-${this.nextId++}`, customerActorId, customerDisplayName, subject);
+    return new Conversation(
+      `support-${this.nextId++}`,
+      customerActorId,
+      customerDisplayName,
+      subject
+    );
   }
 }
 

@@ -44,7 +44,9 @@ class NodeRuntimeState {
   }
 
   zones(): readonly string[] {
-    return [...this.hostedZones].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
+    return [...this.hostedZones].sort((left, right) =>
+      Buffer.from(left).compare(Buffer.from(right))
+    );
   }
 
   joined(playerId: string, zoneId: string): void {

@@ -14,14 +14,16 @@ interface PlayActorTransferState {
 class PlayActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayActor> {
   // --8<-- [start:doc-ttt-actor-capture]
   async capture(actor: PlayActor): Promise<Uint8Array> {
-    return new TextEncoder().encode(JSON.stringify({
-      displayName: actor.displayName,
-      level: actor.level,
-      wins: actor.wins,
-      roomId: actor.roomId,
-      pendingJoinRoomId: actor.pendingJoinRoomId,
-      destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin
-    } satisfies PlayActorTransferState));
+    return new TextEncoder().encode(
+      JSON.stringify({
+        displayName: actor.displayName,
+        level: actor.level,
+        wins: actor.wins,
+        roomId: actor.roomId,
+        pendingJoinRoomId: actor.pendingJoinRoomId,
+        destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin
+      } satisfies PlayActorTransferState)
+    );
   }
   // --8<-- [end:doc-ttt-actor-capture]
 

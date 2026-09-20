@@ -27,13 +27,14 @@ class AuthenticatePlaySessionHandler {
     @Inject(ZLINK_CHANNEL_CLIENT) private readonly api: ZLinkChannelClient
   ) {}
 
-  async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
     const request = payload.decode(AuthenticateReq);
     const authenticated = await this.api
-      .requestToChannel(
-        SampleNames.apiChannel,
-        authenticatePlayerReq(request.accessToken)
-      )
+      .requestToChannel(SampleNames.apiChannel, authenticatePlayerReq(request.accessToken))
       .submit<AuthenticatePlayerRes>();
     // --8<-- [start:doc-ttt-session-bind]
     const created = await this.actors

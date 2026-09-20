@@ -1,7 +1,4 @@
-import {
-  zlinkSpotActorRequestHandler,
-  zlinkSpotActorSendHandler
-} from '@zlink-systems/nestjs';
+import { zlinkSpotActorRequestHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../../../../../Configuration/sample-names';
 import { AgentAvailabilityDirectory } from '../../../../../Application/ConversationAssignment/agent-availability-directory';
 import { PacketNames } from '../../../../../../../Shared/Contracts/messages';
@@ -36,8 +33,16 @@ abstract class ConversationActorRoute {
   spot: () => ConversationSpot,
   packetName: PacketNames.joinConversationReq
 })
-class JoinConversationHandler extends ConversationActorRoute
-  implements ZLinkSpotActorRequestHandler<ConversationSpot, SupportUserActor, JoinConversationReq, JoinConversationRes> {
+class JoinConversationHandler
+  extends ConversationActorRoute
+  implements
+    ZLinkSpotActorRequestHandler<
+      ConversationSpot,
+      SupportUserActor,
+      JoinConversationReq,
+      JoinConversationRes
+    >
+{
   async handle(
     spot: ConversationSpot,
     actor: SupportUserActor,
@@ -53,8 +58,16 @@ class JoinConversationHandler extends ConversationActorRoute
   spot: () => ConversationSpot,
   packetName: PacketNames.sendChatMessageReq
 })
-class SendChatMessageHandler extends ConversationActorRoute
-  implements ZLinkSpotActorRequestHandler<ConversationSpot, SupportUserActor, SendChatMessageReq, SendChatMessageRes> {
+class SendChatMessageHandler
+  extends ConversationActorRoute
+  implements
+    ZLinkSpotActorRequestHandler<
+      ConversationSpot,
+      SupportUserActor,
+      SendChatMessageReq,
+      SendChatMessageRes
+    >
+{
   async handle(
     spot: ConversationSpot,
     actor: SupportUserActor,
@@ -71,8 +84,10 @@ class SendChatMessageHandler extends ConversationActorRoute
   spot: () => ConversationSpot,
   packetName: PacketNames.setTypingMsg
 })
-class SetTypingHandler extends ConversationActorRoute
-  implements ZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, SetTypingMsg> {
+class SetTypingHandler
+  extends ConversationActorRoute
+  implements ZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, SetTypingMsg>
+{
   async handle(
     spot: ConversationSpot,
     actor: SupportUserActor,
@@ -89,8 +104,16 @@ class SetTypingHandler extends ConversationActorRoute
   spot: () => ConversationSpot,
   packetName: PacketNames.closeConversationReq
 })
-class CloseConversationHandler extends ConversationActorRoute
-  implements ZLinkSpotActorRequestHandler<ConversationSpot, SupportUserActor, CloseConversationReq, CloseConversationRes> {
+class CloseConversationHandler
+  extends ConversationActorRoute
+  implements
+    ZLinkSpotActorRequestHandler<
+      ConversationSpot,
+      SupportUserActor,
+      CloseConversationReq,
+      CloseConversationRes
+    >
+{
   constructor(private readonly availability: AgentAvailabilityDirectory) {
     super();
   }

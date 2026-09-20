@@ -1,8 +1,6 @@
 import http from 'node:http';
 import { URL } from 'node:url';
-import type {
-  StartOrderReq
-} from '../../Shared/Contracts/messages';
+import type { StartOrderReq } from '../../Shared/Contracts/messages';
 import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import { OrderStore } from '../Shared/Store/order-store';
@@ -34,7 +32,7 @@ function createCommerceApiServer(
         return;
       }
       if (request.method === 'POST' && url.pathname === '/orders/start') {
-        const body = await readJson(request) as StartOrderReq;
+        const body = (await readJson(request)) as StartOrderReq;
         sendJson(response, 200, await startOrder.start(body));
         return;
       }
@@ -43,11 +41,15 @@ function createCommerceApiServer(
         return;
       }
       if (request.method === 'GET' && url.pathname.startsWith('/orders/')) {
-        sendJson(response, 200, store.getOrder(decodeURIComponent(url.pathname.substring('/orders/'.length))));
+        sendJson(
+          response,
+          200,
+          store.getOrder(decodeURIComponent(url.pathname.substring('/orders/'.length)))
+        );
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/idempotency/pending') {
-        const body = await readJson(request) as StartOrderReq;
+        const body = (await readJson(request)) as StartOrderReq;
         const workflowRequest = store.reserveOrder(body);
         sendJson(response, 200, {
           orderId: workflowRequest.orderId,
@@ -56,19 +58,22 @@ function createCommerceApiServer(
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/workflow/inventory-reserved') {
-        const body = await readJson(request) as StartOrderReq;
+        const body = (await readJson(request)) as StartOrderReq;
         const result = await workflowRouter.prepareInventory(store.reserveOrder(body));
         sendJson(response, 200, { state: result.state });
         return;
       }
-      if (request.method === 'POST' && url.pathname === '/self-check/workflow/relocation-checkpoint') {
-        const body = await readJson(request) as StartOrderReq;
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/self-check/workflow/relocation-checkpoint'
+      ) {
+        const body = (await readJson(request)) as StartOrderReq;
         const result = await workflowRouter.prepareRelocationCheckpoint(store.reserveOrder(body));
         sendJson(response, 200, result);
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/workflow/inventory-effect') {
-        const body = await readJson(request) as StartOrderReq;
+        const body = (await readJson(request)) as StartOrderReq;
         const result = await workflowRouter.prepareInventoryEffect(store.reserveOrder(body));
         sendJson(response, 200, { state: result.state });
         return;
@@ -77,9 +82,13 @@ function createCommerceApiServer(
       if (request.method === 'POST' && orderActionMatch !== null) {
         const orderId = decodeURIComponent(orderActionMatch[1]);
         const action = orderActionMatch[2];
-        sendJson(response, 200, action === 'continue'
-          ? await workflowRouter.continue(orderId)
-          : await workflowRouter.rebuild(orderId));
+        sendJson(
+          response,
+          200,
+          action === 'continue'
+            ? await workflowRouter.continue(orderId)
+            : await workflowRouter.rebuild(orderId)
+        );
         return;
       }
       const continueMatch = url.pathname.match(/^\/self-check\/workflow\/([^/]+)\/continue$/);
@@ -101,7 +110,11 @@ function createCommerceApiServer(
       }
       const fenceMatch = url.pathname.match(/^\/self-check\/workflow\/([^/]+)\/verify-fence$/);
       if (request.method === 'POST' && fenceMatch !== null) {
-        sendJson(response, 200, await workflowRouter.verifyExpectedVersionFence(decodeURIComponent(fenceMatch[1])));
+        sendJson(
+          response,
+          200,
+          await workflowRouter.verifyExpectedVersionFence(decodeURIComponent(fenceMatch[1]))
+        );
         return;
       }
       if (request.method === 'POST' && url.pathname === '/self-check/assert') {

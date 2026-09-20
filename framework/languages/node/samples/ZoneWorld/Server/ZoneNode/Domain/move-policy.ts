@@ -15,9 +15,10 @@ function validateMove(
 ): MoveDecision {
   if (!inRange(toX, toY)) return { kind: 'rejected', reason: MoveRejectReasons.outOfRange };
   if (
-    Math.abs(toX - from.x) > ZoneWorldSpec.maxStepPerAxis
-    || Math.abs(toY - from.y) > ZoneWorldSpec.maxStepPerAxis
-  ) return { kind: 'rejected', reason: MoveRejectReasons.tooFar };
+    Math.abs(toX - from.x) > ZoneWorldSpec.maxStepPerAxis ||
+    Math.abs(toY - from.y) > ZoneWorldSpec.maxStepPerAxis
+  )
+    return { kind: 'rejected', reason: MoveRejectReasons.tooFar };
 
   const fromZone = zoneOf(from.x, from.y);
   const toZone = zoneOf(toX, toY);

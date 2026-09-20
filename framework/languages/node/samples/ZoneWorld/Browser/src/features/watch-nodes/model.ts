@@ -6,7 +6,7 @@ import type {
   NodeDiagnosticsRes,
   NodeStatusNotify,
   SetMaintenanceRes,
-  WatchNodesRes,
+  WatchNodesRes
 } from '../../shared/api/contracts';
 import { Packets } from '../../shared/api/contracts';
 import { StreamClient } from '../../shared/api/stream';
@@ -19,8 +19,12 @@ export class OpsController {
 
   constructor(endpoint: string) {
     this.stream = new StreamClient(endpoint);
-    this.stream.on<NodeStatusNotify>(Packets.NodeStatusNotify, (message) => this.topology.applyStatus(message));
-    this.stream.on<NodeAlertNotify>(Packets.NodeAlertNotify, (message) => this.topology.applyAlert(message));
+    this.stream.on<NodeStatusNotify>(Packets.NodeStatusNotify, (message) =>
+      this.topology.applyStatus(message)
+    );
+    this.stream.on<NodeAlertNotify>(Packets.NodeAlertNotify, (message) =>
+      this.topology.applyAlert(message)
+    );
   }
 
   async connect(): Promise<void> {
@@ -31,22 +35,27 @@ export class OpsController {
 
   async announce(text: string): Promise<void> {
     if (text.trim().length === 0) return;
-    const reply = await this.stream.request<AnnounceWorldRes>(Packets.AnnounceWorldReq, { text: text.trim() });
+    const reply = await this.stream.request<AnnounceWorldRes>(Packets.AnnounceWorldReq, {
+      text: text.trim()
+    });
     this.lastAnnouncementId.value = reply.announcementId;
   }
 
   async setMaintenance(nodeId: string, enabled: boolean): Promise<void> {
     const reply = await this.stream.request<SetMaintenanceRes>(Packets.SetMaintenanceReq, {
       nodeId: nodeId,
-      enabled: enabled,
+      enabled: enabled
     });
     if (reply.error !== undefined && reply.error !== null) throw new Error(reply.error);
   }
 
   async diagnose(nodeId: string): Promise<void> {
-    this.diagnostics.value = await this.stream.request<NodeDiagnosticsRes>(Packets.NodeDiagnosticsReq, {
-      nodeId: nodeId,
-    });
+    this.diagnostics.value = await this.stream.request<NodeDiagnosticsRes>(
+      Packets.NodeDiagnosticsReq,
+      {
+        nodeId: nodeId
+      }
+    );
   }
 
   close(): Promise<void> {

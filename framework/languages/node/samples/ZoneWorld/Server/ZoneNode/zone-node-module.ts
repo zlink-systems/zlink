@@ -14,9 +14,7 @@ import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-f
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
 import { ZoneEntrySpot } from './Infrastructure/ZLink/Spots/zone-entry-spot';
 import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
-import {
-  PlayerMovement
-} from './Infrastructure/ZLink/Handlers/player-handlers';
+import { PlayerMovement } from './Infrastructure/ZLink/Handlers/player-handlers';
 import {
   MaintenanceChangedSubscriber,
   WorldAnnounceSubscriber
@@ -25,7 +23,6 @@ import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { SpotRuntimeStatusObserver } from './Infrastructure/ZLink/Handlers/spot-runtime-event-handler';
 import { OpsReportAdapter } from './Infrastructure/ZLink/Monitoring/ops-report-adapter';
-
 
 function createZoneNodeModule(includeZoneRuntime = true) {
   class ZoneNodeModule {}
@@ -47,29 +44,26 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           builder.addLocationStore(createZoneWorldLocationStore(config.shared));
           builder.addRelocationStore(createZoneWorldRelocationStore(config.shared));
           zoneWorldLocationOptions(builder.configureLocations(), config.shared);
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
 
           if (node.zoneCapacity === 0) {
-            builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)
+            builder
+              .addFanoutChannel(ZoneWorldNames.broadcastChannel)
               .enableSubscriber()
               .addHandlerGroup('zone-broadcast');
             return builder.build();
           }
 
           // --8<-- [start:doc-zw-node-register]
-          const zoneMesh = builder.addRouteMesh(ZoneWorldNames.zoneMesh)
-            .setRoutingIdPrefix('zn');
+          const zoneMesh = builder.addRouteMesh(ZoneWorldNames.zoneMesh).setRoutingIdPrefix('zn');
           if (node.spotRouterAdvertiseHost !== undefined) {
             zoneMesh.setAdvertiseHost(node.spotRouterAdvertiseHost);
           }
           zoneMesh.listen(node.spotRouterEndpoint);
           const objectServer = zoneMesh.objects().server();
           objectServer.addEntrySpot(ZoneEntrySpot);
-          objectServer.addSpotFactory(
-            ZoneSpot.name,
-            ZoneSpot,
-            (factory) => factory.stableTypeLimit(node.zoneCapacity).disableRelocation()
+          objectServer.addSpotFactory(ZoneSpot.name, ZoneSpot, (factory) =>
+            factory.stableTypeLimit(node.zoneCapacity).disableRelocation()
           );
           objectServer.addActorFactory(
             ZoneWorldNames.playerActorType,
@@ -90,7 +84,8 @@ function createZoneNodeModule(includeZoneRuntime = true) {
             else membership.setWeight(0);
           }
           // --8<-- [start:doc-zw-fanout-subscribe]
-          builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)
+          builder
+            .addFanoutChannel(ZoneWorldNames.broadcastChannel)
             .enableSubscriber()
             .addHandlerGroup('zone-broadcast');
           // --8<-- [end:doc-zw-fanout-subscribe]
@@ -104,18 +99,17 @@ function createZoneNodeModule(includeZoneRuntime = true) {
     providers: [
       MaintenanceStore,
       NodeRuntimeState,
-      ...(includeZoneRuntime ? [
-        PlayerActorFactory,
-        PlayerActorRelocationAdapter,
-        ZoneEntrySpot,
-        ZoneSpot,
-        PlayerMovement,
-        SpotRuntimeStatusObserver,
-        OpsReportAdapter
-      ] : [
-        WorldAnnounceSubscriber,
-        MaintenanceChangedSubscriber
-      ])
+      ...(includeZoneRuntime
+        ? [
+            PlayerActorFactory,
+            PlayerActorRelocationAdapter,
+            ZoneEntrySpot,
+            ZoneSpot,
+            PlayerMovement,
+            SpotRuntimeStatusObserver,
+            OpsReportAdapter
+          ]
+        : [WorldAnnounceSubscriber, MaintenanceChangedSubscriber])
     ]
   })(ZoneNodeModule);
   return ZoneNodeModule;

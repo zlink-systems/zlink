@@ -6,9 +6,7 @@ import {
   DeliverPlayNotificationEntryHandler,
   DeliverPlayNotificationHandler
 } from './Infrastructure/ZLink/Actors/play-actor';
-import {
-  PlayEntrySpot
-} from './Infrastructure/ZLink/Spots/EntrySpot/play-entry-spot';
+import { PlayEntrySpot } from './Infrastructure/ZLink/Spots/EntrySpot/play-entry-spot';
 import { MilestoneObserverRegistry } from './Infrastructure/ZLink/Spots/EntrySpot/entry-spot-registries';
 import { PlayActorJoinGameHandler } from './Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-join-game-handler';
 import { PlayActorObserveMilestoneHandler } from './Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-observe-milestone-handler';
@@ -25,7 +23,10 @@ import { AuthenticatePlaySessionHandler } from './Infrastructure/ZLink/Sessions/
 import { PLAY_STREAM_ENDPOINT } from './play-tokens';
 import { createTicTacToeLocationStore } from '../Configuration/location-store';
 import { createTicTacToeRelocationStore } from '../Configuration/relocation-store';
-import { TICTACTOE_SAMPLE_CONFIG, createTicTacToeConfigurationModule } from '../Configuration/sample-config';
+import {
+  TICTACTOE_SAMPLE_CONFIG,
+  createTicTacToeConfigurationModule
+} from '../Configuration/sample-config';
 import type { TicTacToeSampleConfig } from '../Configuration/sample-config';
 function createTicTacToePlayModule() {
   class TicTacToePlayModule {}
@@ -51,12 +52,12 @@ function createTicTacToePlayModule() {
         useFactory: (config: TicTacToeSampleConfig) => {
           const builder = zlinkFramework();
           builder.disableImplicitHandlerAutoRegistration();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
           builder.addRelocationStore(createTicTacToeRelocationStore(config));
           // --8<-- [start:doc-ttt-play-register]
-          builder.addStreamNode(SampleNames.playStream)
+          builder
+            .addStreamNode(SampleNames.playStream)
             .enableActorDispatch()
             .bind(config.playStreamEndpoint)
             .registerSession(PlaySessionFactory);
@@ -65,20 +66,17 @@ function createTicTacToePlayModule() {
             // request: AuthenticatePlayerReq is sent to one explicitly connected Api server.
             apiChannel.connect(endpoint);
           }
-          const mesh = builder.addRouteMesh(SampleNames.playSpotNode)
+          const mesh = builder
+            .addRouteMesh(SampleNames.playSpotNode)
             .listen(config.playSpotEndpoint)
             .setRoutingIdPrefix(`tictactoe-play-${config.instanceName}`);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(PlayEntrySpot);
-          objectServer.addSpotFactory(
-            SampleNames.gameSpotType,
-            TicTacToeGameSpot,
-            (factory) => factory.disableRelocation()
+          objectServer.addSpotFactory(SampleNames.gameSpotType, TicTacToeGameSpot, (factory) =>
+            factory.disableRelocation()
           );
-          objectServer.addActorFactory(
-            SampleNames.playerActorType,
-            PlayActorFactory,
-            (factory) => factory.preserveStateWith(PlayActorRelocationAdapter)
+          objectServer.addActorFactory(SampleNames.playerActorType, PlayActorFactory, (factory) =>
+            factory.preserveStateWith(PlayActorRelocationAdapter)
           );
           // --8<-- [end:doc-ttt-play-register]
           mesh.channel(SampleNames.playerMilestoneChannel).server();
@@ -110,7 +108,7 @@ function createTicTacToePlayModule() {
       PlayEntrySpot,
       PlaySessionFactory,
       PlayerWinMilestoneEventHandler,
-      TicTacToeGameTimerHandler,
+      TicTacToeGameTimerHandler
     ]
   })(TicTacToePlayModule);
 

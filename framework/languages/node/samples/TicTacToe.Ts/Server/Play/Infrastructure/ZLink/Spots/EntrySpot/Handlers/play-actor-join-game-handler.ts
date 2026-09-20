@@ -1,9 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ZLinkSpotActorSend } from '@zlink-systems/framework';
-import type {
-  ZLinkEntrySpotActorSendHandler,
-  ZLinkMessageContext
-} from '@zlink-systems/framework';
+import type { ZLinkEntrySpotActorSendHandler, ZLinkMessageContext } from '@zlink-systems/framework';
 import { PlayActor } from '../../../Actors/play-actor';
 import { PlayEntrySpot } from '../play-entry-spot';
 import type {
@@ -14,8 +11,11 @@ import { JoinGameFailedNotify, PacketNames } from '../../../../../../../Shared/C
 
 @Injectable()
 // --8<-- [start:doc-join-defer]
-class PlayActorJoinGameHandler
-  implements ZLinkEntrySpotActorSendHandler<PlayEntrySpot, PlayActor, JoinGameMsg> {
+class PlayActorJoinGameHandler implements ZLinkEntrySpotActorSendHandler<
+  PlayEntrySpot,
+  PlayActor,
+  JoinGameMsg
+> {
   @ZLinkSpotActorSend(PacketNames.joinGameMsg)
   async handle(
     _spot: PlayEntrySpot,
@@ -35,15 +35,15 @@ class PlayActorJoinGameHandler
     };
     actor.pendingJoinRoomId = message.roomId;
     try {
-      actor.context
-        .joinSpot(message.roomId, joinRequest)
-        .defer();
+      actor.context.joinSpot(message.roomId, joinRequest).defer();
     } catch (error) {
       actor.pendingJoinRoomId = undefined;
-      await actor.push(new JoinGameFailedNotify(
-        message.roomId,
-        error instanceof Error ? error.message : String(error)
-      ));
+      await actor.push(
+        new JoinGameFailedNotify(
+          message.roomId,
+          error instanceof Error ? error.message : String(error)
+        )
+      );
     }
   }
 }

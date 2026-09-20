@@ -5,11 +5,15 @@ import { PlayerActorTransferState } from '../../../../../Shared/Contracts/bingo-
 class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
   // --8<-- [start:doc-bingo-relocation-adapter]
   async capture(actor: PlayerActor): Promise<Uint8Array> {
-    return new TextEncoder().encode(JSON.stringify(new PlayerActorTransferState({
-      displayName: actor.displayName,
-      destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin,
-      disconnected: false
-    })));
+    return new TextEncoder().encode(
+      JSON.stringify(
+        new PlayerActorTransferState({
+          displayName: actor.displayName,
+          destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin,
+          disconnected: false
+        })
+      )
+    );
   }
   // --8<-- [end:doc-bingo-relocation-adapter]
 

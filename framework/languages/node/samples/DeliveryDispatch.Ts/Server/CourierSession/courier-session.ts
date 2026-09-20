@@ -23,7 +23,8 @@ class CourierSession implements ZLinkSession {
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) return;
     const actor = this.context.actors.bound.length === 1 ? this.context.actors.bound[0] : undefined;
-    if (actor === undefined) throw new Error(`BindCourierSessionReq is required before '${dispatch.packetName}'.`);
+    if (actor === undefined)
+      throw new Error(`BindCourierSessionReq is required before '${dispatch.packetName}'.`);
     await actor.relay(payload);
   }
 }
@@ -31,12 +32,14 @@ class CourierSession implements ZLinkSession {
 @Injectable()
 @ZLinkPacket(PacketNames.bindCourierSession)
 class BindCourierSessionHandler {
-  constructor(
-    @Inject(ZLINK_ACTOR_MANAGER) private readonly actorManager: ZLinkActorManager
-  ) {}
+  constructor(@Inject(ZLINK_ACTOR_MANAGER) private readonly actorManager: ZLinkActorManager) {}
 
   // --8<-- [start:doc-dd-session-bind]
-  async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
     const request = payload.decode(BindCourierSessionReq);
     const actorRef = await this.findOrEnsureActor(request.courierId);
     const actor = await context.actors.bindOrGet(actorRef);

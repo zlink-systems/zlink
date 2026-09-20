@@ -3,7 +3,11 @@ import { NestFactory } from '@nestjs/core';
 import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
 import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { createCourierSessionModule } from './courier-session-module';
-import { closeNestRuntime, observeDeliveryRouteReadiness, waitForShutdown } from '../runtime-support';
+import {
+  closeNestRuntime,
+  observeDeliveryRouteReadiness,
+  waitForShutdown
+} from '../runtime-support';
 import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 
 async function bootstrap(): Promise<void> {
@@ -11,7 +15,11 @@ async function bootstrap(): Promise<void> {
     logger: false,
     abortOnError: false
   });
-  observeDeliveryRouteReadiness(app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME), SampleNames.courierMeshName, DeliveryDispatchNodeIds.courierSession);
+  observeDeliveryRouteReadiness(
+    app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
+    SampleNames.courierMeshName,
+    DeliveryDispatchNodeIds.courierSession
+  );
   try {
     await waitForShutdown();
   } finally {

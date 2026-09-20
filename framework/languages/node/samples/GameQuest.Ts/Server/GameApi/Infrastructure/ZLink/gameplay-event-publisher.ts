@@ -6,9 +6,7 @@ import type { ZLinkSpotOutbound } from '@zlink-systems/framework';
 import type { GameplayEventEnvelope } from '../../../../Shared/Contracts/messages';
 
 class GameplayEventPublisher {
-  constructor(
-    @Inject(ZLINK_SPOT_OUTBOUND) private readonly spots: ZLinkSpotOutbound
-  ) {}
+  constructor(@Inject(ZLINK_SPOT_OUTBOUND) private readonly spots: ZLinkSpotOutbound) {}
 
   async send(event: GameplayEventEnvelope): Promise<void> {
     // --8<-- [start:doc-gq-owner-send]

@@ -56,23 +56,30 @@ const ZONEWORLD_CONFIG = Symbol.for('ZONEWORLD_CONFIG');
 class ZoneWorldConfigurationModule {}
 Module({})(ZoneWorldConfigurationModule);
 
-function createZoneWorldConfigurationModule(role: keyof Omit<ZoneWorldConfiguration, 'shared'>): DynamicModule {
+function createZoneWorldConfigurationModule(
+  role: keyof Omit<ZoneWorldConfiguration, 'shared'>
+): DynamicModule {
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: ZoneWorldConfigurationModule,
-    imports: [ConfigModule.forRoot({
-      cache: true,
-      ignoreEnvFile: true,
-      isGlobal: false,
-      load: [() => ({ zoneworld: readConfiguration(configPath) })],
-      skipProcessEnv: true,
-      validatePredefined: false
-    })],
-    providers: [{
-      provide: ZONEWORLD_CONFIG,
-      inject: [ConfigService],
-      useFactory: (service: ConfigService) => validateConfiguration(service.get('zoneworld'), role)
-    }],
+    imports: [
+      ConfigModule.forRoot({
+        cache: true,
+        ignoreEnvFile: true,
+        isGlobal: false,
+        load: [() => ({ zoneworld: readConfiguration(configPath) })],
+        skipProcessEnv: true,
+        validatePredefined: false
+      })
+    ],
+    providers: [
+      {
+        provide: ZONEWORLD_CONFIG,
+        inject: [ConfigService],
+        useFactory: (service: ConfigService) =>
+          validateConfiguration(service.get('zoneworld'), role)
+      }
+    ],
     exports: [ZONEWORLD_CONFIG]
   };
 }
@@ -95,11 +102,14 @@ function validateConfiguration(
   const root = requireRecord(value, 'ZoneWorld configuration');
   const document = requireRecord(root.sample, 'sample');
   const shared = requireRecord(document.shared, 'shared');
-  for (const key of ['redisEndpoint', 'redisKeyPrefix', 'logDirectory']) requireString(shared, key, 'shared');
+  for (const key of ['redisEndpoint', 'redisKeyPrefix', 'logDirectory'])
+    requireString(shared, key, 'shared');
   if (shared.sessionRelocationSealTimeoutMs !== undefined) {
     const timeout = shared.sessionRelocationSealTimeoutMs;
     if (typeof timeout !== 'number' || !Number.isSafeInteger(timeout) || timeout <= 0) {
-      throw new Error("Configuration value 'shared.sessionRelocationSealTimeoutMs' must be a positive integer.");
+      throw new Error(
+        "Configuration value 'shared.sessionRelocationSealTimeoutMs' must be a positive integer."
+      );
     }
   }
 
@@ -117,14 +127,21 @@ function validateConfiguration(
     requireString(role, 'faultTickSignalPath', expectedRole);
   }
   if (expectedRole === 'zoneNode' && role.bootstrapZones !== undefined) {
-    if (!Array.isArray(role.bootstrapZones)
-      || role.bootstrapZones.some((zoneId) => typeof zoneId !== 'string' || zoneId.length === 0)
-      || new Set(role.bootstrapZones).size !== role.bootstrapZones.length) {
-      throw new Error(`Configuration value '${expectedRole}.bootstrapZones' must contain distinct zone ids.`);
+    if (
+      !Array.isArray(role.bootstrapZones) ||
+      role.bootstrapZones.some((zoneId) => typeof zoneId !== 'string' || zoneId.length === 0) ||
+      new Set(role.bootstrapZones).size !== role.bootstrapZones.length
+    ) {
+      throw new Error(
+        `Configuration value '${expectedRole}.bootstrapZones' must contain distinct zone ids.`
+      );
     }
   }
-  if (expectedRole === 'zoneNode' && role.allowEmptyZoneSet !== undefined
-    && typeof role.allowEmptyZoneSet !== 'boolean') {
+  if (
+    expectedRole === 'zoneNode' &&
+    role.allowEmptyZoneSet !== undefined &&
+    typeof role.allowEmptyZoneSet !== 'boolean'
+  ) {
     throw new Error(`Configuration value '${expectedRole}.allowEmptyZoneSet' must be a boolean.`);
   }
   if (expectedRole === 'client' && role.targetNodeId !== undefined) {
@@ -133,13 +150,20 @@ function validateConfiguration(
   if (expectedRole === 'client' && role.faultArmFile !== undefined) {
     requireString(role, 'faultArmFile', expectedRole);
   }
-  if ((expectedRole === 'zoneNode' || expectedRole === 'gateway')
-    && role.spotRouterAdvertiseHost !== undefined) {
+  if (
+    (expectedRole === 'zoneNode' || expectedRole === 'gateway') &&
+    role.spotRouterAdvertiseHost !== undefined
+  ) {
     requireString(role, 'spotRouterAdvertiseHost', expectedRole);
   }
   if (expectedRole === 'zoneNode' && role.placementWeightAfterZoneCreation !== undefined) {
     const weight = role.placementWeightAfterZoneCreation;
-    if (typeof weight !== 'number' || !Number.isSafeInteger(weight) || weight < 0 || weight > 10_000) {
+    if (
+      typeof weight !== 'number' ||
+      !Number.isSafeInteger(weight) ||
+      weight < 0 ||
+      weight > 10_000
+    ) {
       throw new Error(
         `Configuration value '${expectedRole}.placementWeightAfterZoneCreation' must be an integer from 0 through 10000.`
       );
@@ -147,8 +171,15 @@ function validateConfiguration(
   }
   if (expectedRole === 'zoneNode') {
     const capacity = role.zoneCapacity;
-    if (typeof capacity !== 'number' || !Number.isSafeInteger(capacity) || capacity < 0 || capacity > 10_000) {
-      throw new Error(`Configuration value '${expectedRole}.zoneCapacity' must be an integer from 0 through 10000.`);
+    if (
+      typeof capacity !== 'number' ||
+      !Number.isSafeInteger(capacity) ||
+      capacity < 0 ||
+      capacity > 10_000
+    ) {
+      throw new Error(
+        `Configuration value '${expectedRole}.zoneCapacity' must be an integer from 0 through 10000.`
+      );
     }
   }
   return document as ZoneWorldConfiguration;
@@ -156,12 +187,14 @@ function validateConfiguration(
 
 function roleKeys(role: keyof Omit<ZoneWorldConfiguration, 'shared'>): readonly string[] {
   switch (role) {
-    case 'zoneNode': return [
-      'nodeId', 'spotRouterEndpoint'
-    ];
-    case 'gateway': return ['streamEndpoint', 'spotRouterEndpoint'];
-    case 'ops': return ['streamEndpoint', 'broadcastEndpoint', 'reportEndpoint'];
-    case 'client': return ['gatewayEndpoint', 'opsEndpoint'];
+    case 'zoneNode':
+      return ['nodeId', 'spotRouterEndpoint'];
+    case 'gateway':
+      return ['streamEndpoint', 'spotRouterEndpoint'];
+    case 'ops':
+      return ['streamEndpoint', 'broadcastEndpoint', 'reportEndpoint'];
+    case 'client':
+      return ['gatewayEndpoint', 'opsEndpoint'];
   }
 }
 
@@ -178,7 +211,12 @@ function requireString(record: Record<string, unknown>, key: string, section: st
   }
 }
 
-export { ZONEWORLD_CONFIG, createZoneWorldConfigurationModule, readConfigPath, validateConfiguration };
+export {
+  ZONEWORLD_CONFIG,
+  createZoneWorldConfigurationModule,
+  readConfigPath,
+  validateConfiguration
+};
 export type {
   ClientSettings,
   GatewaySettings,

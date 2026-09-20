@@ -3,7 +3,10 @@ import type { ZLinkActor, ZLinkActorContext, ZLinkActorFactory } from '@zlink-sy
 class CustomerActor implements ZLinkActor {
   private readonly deliveries = new Set<string>();
 
-  constructor(readonly actorId: string, readonly context: ZLinkActorContext) {}
+  constructor(
+    readonly actorId: string,
+    readonly context: ZLinkActorContext
+  ) {}
 
   subscribe(deliveryId: string): void {
     this.deliveries.add(deliveryId);
@@ -12,7 +15,6 @@ class CustomerActor implements ZLinkActor {
   accepts(deliveryId: string): boolean {
     return this.deliveries.has(deliveryId);
   }
-
 }
 
 class CustomerActorFactory implements ZLinkActorFactory {

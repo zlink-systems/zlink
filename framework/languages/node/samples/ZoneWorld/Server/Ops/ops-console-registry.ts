@@ -42,9 +42,12 @@ class OpsConsoleRegistry {
 
   private send(context: ZLinkSessionContext, message: NodeAlertNotify | NodeStatusNotify): void {
     try {
-      void context.client.send(message).submit().catch(() => {
-        this.remove(context);
-      });
+      void context.client
+        .send(message)
+        .submit()
+        .catch(() => {
+          this.remove(context);
+        });
     } catch {
       // Session disconnect cleanup owns removal; a concurrent close does not invalidate the alert.
       this.remove(context);

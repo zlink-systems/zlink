@@ -8,7 +8,10 @@ import type {
   ZLinkSpotTimerHandler,
   ZLinkTimerTick
 } from '@zlink-systems/framework';
-import type { ReserveBingoRoomReq, ReserveBingoRoomRes } from '../../Shared/Contracts/bingo-messages.generated';
+import type {
+  ReserveBingoRoomReq,
+  ReserveBingoRoomRes
+} from '../../Shared/Contracts/bingo-messages.generated';
 
 @Injectable({ scope: Scope.TRANSIENT })
 class BingoMatchmaker implements ZLinkInstanceSpot {
@@ -22,8 +25,11 @@ class BingoMatchmaker implements ZLinkInstanceSpot {
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => BingoMatchmaker, packetName: 'ReserveBingoRoomReq' })
-class ReserveBingoRoomHandler
-  implements ZLinkSpotRequestHandler<BingoMatchmaker, ReserveBingoRoomReq, ReserveBingoRoomRes> {
+class ReserveBingoRoomHandler implements ZLinkSpotRequestHandler<
+  BingoMatchmaker,
+  ReserveBingoRoomReq,
+  ReserveBingoRoomRes
+> {
   constructor(private readonly reservations: BingoMatchReservationStore) {}
 
   async handle(spot: BingoMatchmaker, request: ReserveBingoRoomReq): Promise<ReserveBingoRoomRes> {

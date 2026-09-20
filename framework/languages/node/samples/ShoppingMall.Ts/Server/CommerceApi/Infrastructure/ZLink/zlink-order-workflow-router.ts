@@ -7,7 +7,7 @@ import { OrderWorkflowRouterPort } from '../../Application/order-workflow-router
 import {
   ContinueOrderWorkflowReq,
   RebuildOrderProjectionReq,
-  StartOrderWorkflowReq,
+  StartOrderWorkflowReq
 } from '../../../../Shared/Contracts/messages';
 import {
   PrepareInventoryEffectReq,
@@ -31,38 +31,53 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
   }
 
   prepareInventory(request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-    return this.request(new PrepareInventoryReservedReq(
-      request.orderId,
-      request.cartId,
-      request.shippingAddressId,
-      request.paymentMethodId,
-      request.idempotencyKey,
-      request.sourceCommandId,
-      request.lines,
-      request.amount,
-      request.currency
-    ));
+    return this.request(
+      new PrepareInventoryReservedReq(
+        request.orderId,
+        request.cartId,
+        request.shippingAddressId,
+        request.paymentMethodId,
+        request.idempotencyKey,
+        request.sourceCommandId,
+        request.lines,
+        request.amount,
+        request.currency
+      )
+    );
   }
 
   prepareInventoryEffect(request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-    return this.request(new PrepareInventoryEffectReq(
-      request.orderId, request.cartId, request.shippingAddressId, request.paymentMethodId,
-      request.idempotencyKey, request.sourceCommandId, request.lines, request.amount, request.currency
-    ));
+    return this.request(
+      new PrepareInventoryEffectReq(
+        request.orderId,
+        request.cartId,
+        request.shippingAddressId,
+        request.paymentMethodId,
+        request.idempotencyKey,
+        request.sourceCommandId,
+        request.lines,
+        request.amount,
+        request.currency
+      )
+    );
   }
 
-  prepareRelocationCheckpoint(request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes & { objectGeneration: string }> {
-    return this.request(new PrepareRelocationCheckpointReq(
-      request.orderId,
-      request.cartId,
-      request.shippingAddressId,
-      request.paymentMethodId,
-      request.idempotencyKey,
-      request.sourceCommandId,
-      request.lines,
-      request.amount,
-      request.currency
-    ));
+  prepareRelocationCheckpoint(
+    request: StartOrderWorkflowReq
+  ): Promise<StartOrderWorkflowRes & { objectGeneration: string }> {
+    return this.request(
+      new PrepareRelocationCheckpointReq(
+        request.orderId,
+        request.cartId,
+        request.shippingAddressId,
+        request.paymentMethodId,
+        request.idempotencyKey,
+        request.sourceCommandId,
+        request.lines,
+        request.amount,
+        request.currency
+      )
+    );
   }
 
   continue(orderId: string): Promise<ContinueOrderWorkflowRes> {
@@ -75,10 +90,14 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
 
   async verifyExpectedVersionFence(orderId: string): Promise<VerifyExpectedVersionFenceRes> {
     for (let attempt = 0; attempt < 16; attempt++) {
-      const result = await this.request<VerifyExpectedVersionFenceRes>(new VerifyExpectedVersionFenceReq(orderId));
+      const result = await this.request<VerifyExpectedVersionFenceRes>(
+        new VerifyExpectedVersionFenceReq(orderId)
+      );
       if (result.rejected) return result;
     }
-    throw new Error(`Expected-version fence was not exercised by a second workflow instance for '${orderId}'.`);
+    throw new Error(
+      `Expected-version fence was not exercised by a second workflow instance for '${orderId}'.`
+    );
   }
 
   // --8<-- [start:doc-sm-api-request]
@@ -92,7 +111,6 @@ class ZLinkOrderWorkflowRouter implements OrderWorkflowRouterPort {
       .submit<TResponse>();
   }
   // --8<-- [end:doc-sm-api-request]
-
 }
 
 function requireOrderId(payload: object): string {

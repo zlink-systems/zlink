@@ -15,7 +15,10 @@ class AgentAvailabilityDirectory {
   firstAvailable(): string | undefined {
     return [...this.available]
       .filter((actorId) => (this.assignmentCounts.get(actorId) ?? 0) < this.capacity)
-      .sort((left, right) => (this.assignmentCounts.get(left) ?? 0) - (this.assignmentCounts.get(right) ?? 0))[0];
+      .sort(
+        (left, right) =>
+          (this.assignmentCounts.get(left) ?? 0) - (this.assignmentCounts.get(right) ?? 0)
+      )[0];
   }
 
   assigned(actorId: string): void {

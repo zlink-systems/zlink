@@ -72,16 +72,19 @@ class PlayerActor implements ZLinkActor {
 
   push(payload: unknown): void {
     if (this.isBot) return;
-    const packetName = typeof payload === 'object' && payload !== null
-      ? payload.constructor.name
-      : typeof payload;
-    void this.context.boundSession.send(payload).submit().then(
-      () => undefined,
-      (error: unknown) => console.error(
-        `actor push failed actor=${this.actorId} packet=${packetName}`,
-        error instanceof Error ? error.message : String(error)
-      )
-    );
+    const packetName =
+      typeof payload === 'object' && payload !== null ? payload.constructor.name : typeof payload;
+    void this.context.boundSession
+      .send(payload)
+      .submit()
+      .then(
+        () => undefined,
+        (error: unknown) =>
+          console.error(
+            `actor push failed actor=${this.actorId} packet=${packetName}`,
+            error instanceof Error ? error.message : String(error)
+          )
+      );
   }
 
   // --8<-- [start:doc-zw-join-completed]
@@ -90,8 +93,7 @@ class PlayerActor implements ZLinkActor {
     if (this.processedJoinOperations.has(operationId)) return;
     const kind = 'kind' in completion ? completion.kind : 'none';
     console.log(
-      `actor join completed actor=${this.actorId} status=${completion.status}`
-        + ` kind=${kind}`
+      `actor join completed actor=${this.actorId} status=${completion.status}` + ` kind=${kind}`
     );
     const pending = this.pendingJoinKind;
     this.completePendingJoin();
@@ -143,9 +145,8 @@ class DeliverZoneNotificationMsg {
   readonly packetName: string;
 
   constructor(readonly payload: unknown) {
-    this.packetName = typeof payload === 'object' && payload !== null
-      ? payload.constructor.name
-      : '';
+    this.packetName =
+      typeof payload === 'object' && payload !== null ? payload.constructor.name : '';
   }
 }
 
@@ -155,23 +156,27 @@ class DeliverZoneNotificationMsg {
   packetName: 'DeliverZoneNotificationMsg'
 })
 class DeliverZoneNotificationMsgHandler {
-  async handle(_spot: ZoneSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverZoneNotificationMsg): Promise<void> {
+  async handle(
+    _spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    message: DeliverZoneNotificationMsg
+  ): Promise<void> {
     const value = message.payload as Record<string, unknown>;
     switch (message.packetName) {
       // --8<-- [start:doc-zw-state-push]
       case 'ZoneStateNotify':
-        actor.push(new ZoneStateNotify(
-          value.zoneId as string,
-          value.tick as number,
-          value.players as ConstructorParameters<typeof ZoneStateNotify>[2]
-        ));
+        actor.push(
+          new ZoneStateNotify(
+            value.zoneId as string,
+            value.tick as number,
+            value.players as ConstructorParameters<typeof ZoneStateNotify>[2]
+          )
+        );
         return;
       // --8<-- [end:doc-zw-state-push]
       case 'ZoneChangedNotify':
-        actor.push(new ZoneChangedNotify(
-          value.playerId as string,
-          value.zoneId as string
-        ));
+        actor.push(new ZoneChangedNotify(value.playerId as string, value.zoneId as string));
         return;
       case 'WorldAnnounceNotify':
         actor.push(new WorldAnnounceNotify(value.announcementId as string, value.text as string));

@@ -4,7 +4,7 @@ import type {
   MoveRejectedNotify,
   PlayerView,
   ZoneChangedNotify,
-  ZoneStateNotify,
+  ZoneStateNotify
 } from '../../shared/api/contracts';
 
 export class PlayerModel {
