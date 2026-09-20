@@ -19,11 +19,12 @@ public sealed class SharedAsyncDisposalTests
     [Fact]
     public async Task AutoConnectHost_Repeated_Dispose_Callers_Share_Finalization()
     {
+        var store = new ZLinkInMemoryLocationStore();
         var host = new ZLinkLocationAutoConnectHost(
-            null!,
+            new ZLinkLocationRuntime(new ZLinkLocationOptions(), store),
             null!,
             new ZLinkLocationOptions(),
-            store: new ZLinkInMemoryLocationStore());
+            store: store);
         var first = host.DisposeAsync().AsTask();
         var second = host.DisposeAsync().AsTask();
         Assert.Same(first, second);
