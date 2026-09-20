@@ -854,6 +854,7 @@ function validateConditionalUnion(type, location, types, bounds, contexts, fail)
         }
       }
       validateFields(entry.fields, `${caseLocation}.fields`, contexts, null, types, bounds, fail);
+      validateStructConstraints(entry, caseLocation, fail);
     });
 
     if (type.otherwise === "protocol-error") {
@@ -2454,6 +2455,7 @@ function decodeGoldenBody(formatName, bytes) {
         sha256Hex: activationBody.bytesOf(32).toString("hex"),
         encodedSize: activationBody.u32(),
         inboxSequence: activationBody.u64(),
+        replayCursor: activationBody.u64(),
       };
     } else if (hasActivationRecovery !== 0) {
       throw new Error("authority activation recovery state has invalid presence flag");
@@ -2807,7 +2809,8 @@ function encodeGoldenBody(formatName, decoded) {
       activation.text8(decoded.activationRecoveryState.referenceUtf8Fixture)
         .raw(Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex"))
         .u32(decoded.activationRecoveryState.encodedSize)
-        .u64(decoded.activationRecoveryState.inboxSequence);
+        .u64(decoded.activationRecoveryState.inboxSequence)
+        .u64(decoded.activationRecoveryState.replayCursor);
     }
     const activationBytes = activation.finish();
     writer.u8(decoded.activationRecoveryState === null ? 0 : 1)
@@ -2976,7 +2979,8 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
         || decoded.activationRecoveryState === null
         || !/^[0-9a-f]{64}$/.test(decoded.activationRecoveryState.sha256Hex)
         || decoded.activationRecoveryState.encodedSize <= 0
-        || BigInt(decoded.activationRecoveryState.inboxSequence) === 0n) {
+        || BigInt(decoded.activationRecoveryState.inboxSequence) === 0n
+        || BigInt(decoded.activationRecoveryState.replayCursor) > BigInt(decoded.activationRecoveryState.inboxSequence)) {
       fail(location, "authority golden must exercise Ready Instance cold activation recovery state");
       return;
     }
@@ -5669,13 +5673,20 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "sha256", $ref: "sha256-bytes" },
     { name: "encodedSize", $ref: "creation-request-size" },
     { name: "inboxSequence", $ref: "nonzero-u64" },
+    { name: "replayCursor", $ref: "u64" },
   ], "$.types", "Ready Instance activation recovery must preserve its exact root");
   if (activationRecovery?.presence
         !== "ready-instance-spot-cold-activation-only-and-forbidden-for-actor-entry-user-closing-relocating-or-coldActivating-authority"
       || activationRecovery?.release
         !== "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-before-relocation-store-delete"
-      || (activationRecovery?.constraints ?? []).length !== 0) {
-    fail("$.types", "activation recovery pointer must be Ready Instance-only without a replay cursor");
+      || JSON.stringify(activationRecovery?.cases?.find(
+        (entry) => entry.when?.hasActivationRecovery === "true",
+      )?.constraints) !== JSON.stringify([{
+        kind: "field-less-than-or-equal",
+        left: "replayCursor",
+        right: "inboxSequence",
+      }])) {
+    fail("$.types", "activation recovery pointer must be Ready Instance-only with a bounded replay cursor");
   }
 
   const authorityOperation = types.get("authority-operation-kind");
@@ -7701,6 +7712,22 @@ function runGoldenFixtureSelfTests(schema, schemaPath) {
         ["activation pointer missing from Ready golden", (candidate) => {
           candidate.decoded.activationRecoveryState = null;
           reencode(format, candidate);
+        }],
+        ["replay cursor exceeds inbox sequence", (candidate) => {
+          candidate.decoded.activationRecoveryState.replayCursor = String(
+            BigInt(candidate.decoded.activationRecoveryState.inboxSequence) + 1n,
+          );
+          reencode(format, candidate);
+        }],
+        ["legacy four-field activation pointer", (candidate) => {
+          const bytes = Buffer.from(candidate.encodedHex, "hex");
+          const body = bytes.subarray(11, bytes.length - 4 - 8);
+          const header = Buffer.from(bytes.subarray(0, 11));
+          header.writeUInt32BE(body.length, 7);
+          const withoutChecksum = Buffer.concat([header, body]);
+          const checksum = Buffer.alloc(4);
+          checksum.writeUInt32BE(crc32c(withoutChecksum));
+          candidate.encodedHex = Buffer.concat([withoutChecksum, checksum]).toString("hex");
         }],
       );
     } else if (format.name === "instance-activation-recovery-v1") {

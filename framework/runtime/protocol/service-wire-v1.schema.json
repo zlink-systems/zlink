@@ -6246,6 +6246,17 @@
             {
               "name": "inboxSequence",
               "$ref": "nonzero-u64"
+            },
+            {
+              "name": "replayCursor",
+              "$ref": "u64"
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "field-less-than-or-equal",
+              "left": "replayCursor",
+              "right": "inboxSequence"
             }
           ]
         }
