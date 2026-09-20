@@ -2,7 +2,10 @@ import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } fr
 export class ZLinkRuntimeAdmissionGate {
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
+  constructor(private readonly ownerAdmissionOpen: () => boolean = () => true) {}
+
   get acceptsNewWork(): boolean {
+    if (!this.ownerAdmissionOpen()) return false;
     for (const state of this.meshes.values()) {
       if (state.sealed) return false;
     }
@@ -23,7 +26,7 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   accepts(meshName: string): boolean {
-    return !this.requireState(meshName).sealed;
+    return this.ownerAdmissionOpen() && !this.requireState(meshName).sealed;
   }
 
   pending(meshName: string): number {
@@ -48,7 +51,7 @@ export class ZLinkRuntimeAdmissionGate {
 
   claim(meshName: string, operation: string): ZLinkApplicationWorkClaim {
     const state = this.requireState(meshName);
-    if (!state.sealed) {
+    if (this.ownerAdmissionOpen() && !state.sealed) {
       state.active += 1;
       let closed = false;
       return {
@@ -65,7 +68,7 @@ export class ZLinkRuntimeAdmissionGate {
     }
     throw createInternalFrameworkException(
       state.sealedReason,
-      `${operation} was rejected because the framework is draining.`
+      `${operation} was rejected because framework admission is closed.`
     );
   }
 
@@ -113,7 +116,7 @@ export class ZLinkRuntimeAdmissionGate {
       meshName === undefined
         ? this.firstSealedReason()
         : this.requireState(meshName).sealedReason,
-      `${operation} was rejected because the framework is draining.`
+      `${operation} was rejected because framework admission is closed.`
     );
   }
 
@@ -130,7 +133,7 @@ export class ZLinkRuntimeAdmissionGate {
       reason === ZLinkFrameworkInternalErrorKind.RuntimeShutdown
         ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown
         : ZLinkFrameworkInternalErrorKind.ActorCreateRejected,
-      `Actor '${actorId}' create request was rejected because the framework is draining.`
+      `Actor '${actorId}' create request was rejected because framework admission is closed.`
     );
   }
 

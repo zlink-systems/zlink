@@ -192,11 +192,16 @@ test('framework host republishes the current lifecycle state after owner lease r
   const spotNodeRuntime = {
     async publishMeshNodeState(state) {
       publishedStates.push(state);
-    }
+    },
+    async startLocationAutoConnect() {}
+  };
+  const channelRuntime = {
+    async startLocationAutoConnect() {},
+    async reclaimLocationOwnerRows() {}
   };
 
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Draining;
-  host.installOwnerLeaseRecoveryPublication(runtime, spotNodeRuntime);
+  host.installOwnerLeaseRecoveryPublication(runtime, spotNodeRuntime, channelRuntime);
   currentToken = secondToken;
   recoveryHandler();
   await new Promise((resolve) => setImmediate(resolve));
@@ -263,6 +268,267 @@ test('framework runtime host starts location runtime and injects lifecycle into 
     'spot:dispose',
     'context:dispose'
   ]);
+});
+
+test('framework host publishes every local descriptor after degraded startup recovers its owner lease', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
+  const store = new framework.ZLinkLocationStoreRepository(inner, now);
+  let unavailable = true;
+  const provider = {
+    read(key, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.read(key, signal);
+    },
+    write(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.write(request, signal);
+    },
+    scan(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.scan(request, signal);
+    }
+  };
+  const calls = [];
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: {
+        storeInstance: provider,
+        options: {
+          ownerLeaseRenewIntervalMs: 20,
+          ownerLeaseRenewTimeoutMs: 5,
+          pollingIntervalMs: 20
+        }
+      },
+      channels: {
+        api: {
+          routingId: 'api-node',
+          server: { bind: 'tcp://local-api' },
+          sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+        },
+        events: {
+          routingId: 'events-node',
+          publisher: { bind: 'tcp://local-events' }
+        }
+      },
+      spotNodes: {
+        play: {
+          router: { bind: 'tcp://local-play', routingId: 'play-node' }
+        }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
+  });
+
+  try {
+    await runtime.start();
+    assert.equal((await store.listMeshNodes('play')).items.length, 0);
+    assert.equal((await store.listClientServers('api')).items.length, 0);
+    assert.equal((await store.listFanoutPublishers('events')).items.length, 0);
+
+    unavailable = false;
+    await waitForCondition(async () => {
+      const [meshNodes, servers, publishers] = await Promise.all([
+        store.listMeshNodes('play'),
+        store.listClientServers('api'),
+        store.listFanoutPublishers('events')
+      ]);
+      return meshNodes.items.length === 1
+        && servers.items.length === 1
+        && publishers.items.length === 1;
+    });
+  } finally {
+    unavailable = false;
+    await runtime.stop();
+  }
+});
+
+test('framework host retries recovery publication after the first owner lease publication fails', async () => {
+  const scenario = recoverableHostScenario();
+  let publicationAttempts = 0;
+  try {
+    await scenario.runtime.start();
+    const publish = scenario.runtime.spotNodeRuntime.publishMeshNodeState
+      .bind(scenario.runtime.spotNodeRuntime);
+    scenario.runtime.spotNodeRuntime.publishMeshNodeState = async (...args) => {
+      publicationAttempts += 1;
+      if (publicationAttempts === 1) {
+        throw new Error('first recovery publication failed');
+      }
+      return await publish(...args);
+    };
+
+    scenario.recover();
+    await waitForCondition(() => publicationAttempts >= 1
+      && !scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await waitForCondition(async () =>
+      (await scenario.store.listMeshNodes('play')).items.length === 1
+    );
+
+    assert.ok(publicationAttempts >= 3);
+    assert.equal(scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable, true);
+  } finally {
+    scenario.recover();
+    await scenario.runtime.stop();
+  }
+});
+
+test('degraded host rejects object messages and timers until owner lease recovery', async () => {
+  const scenario = recoverableHostScenario();
+  let actorMessages = 0;
+  let timerTicks = 0;
+  let registry;
+  try {
+    await scenario.runtime.start();
+    scenario.runtime.spotManager.dispatchMeshActor = async () => { actorMessages += 1; };
+    registry = new framework.ZLinkSpotTimerRegistry(
+      undefined,
+      undefined,
+      undefined,
+      scenario.runtime.createSpotManagerOptions().statefulExecutionAllowed
+    );
+    class LeaseTimerHandler {
+      async handle() { timerTicks += 1; }
+    }
+    await registry.add(
+      'owner-lease',
+      2,
+      undefined,
+      LeaseTimerHandler,
+      new framework.ZLinkSpotSerialTurnExecutor(true, 'owner-lease-timer'),
+      {}
+    );
+
+    await assert.rejects(
+      scenario.runtime.dispatchMeshRecord(
+        'play',
+        { ownerKind: framework.ReadyOwnerKind.Node },
+        { kind: framework.ReceiveKind.ActorSend, parts: [] }
+      ),
+      /admission is closed/u
+    );
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(actorMessages, 0);
+    assert.equal(timerTicks, 0);
+
+    scenario.recover();
+    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await scenario.runtime.dispatchMeshRecord(
+      'play',
+      { ownerKind: framework.ReadyOwnerKind.Node },
+      { kind: framework.ReceiveKind.ActorSend, parts: [] }
+    );
+    await waitForCondition(() => timerTicks > 0);
+    assert.equal(actorMessages, 1);
+  } finally {
+    await registry?.dispose();
+    scenario.recover();
+    await scenario.runtime.stop();
+  }
+});
+
+test('degraded host rejects factory and restore confirmation until owner lease recovery', async () => {
+  class LeaseOwnedSpot {
+    async onCreate() { return { accepted: true }; }
+  }
+  const scenario = recoverableHostScenario();
+  scenario.runtime.setSpotManager(new framework.DefaultZLinkSpotManager({
+    ...scenario.runtime.createSpotManagerOptions(),
+    spotFactories: [LeaseOwnedSpot]
+  }));
+  try {
+    await scenario.runtime.start();
+    installFakeNativeSpotFactory(scenario.runtime);
+    await assert.rejects(
+      scenario.runtime.spotManager.create('play', LeaseOwnedSpot),
+      /admission is closed/u
+    );
+    await assert.rejects(
+      scenario.runtime.spotManager.getOrCreateWithAuthority(
+        'play',
+        LeaseOwnedSpot,
+        rid('restore-before-lease'),
+        undefined,
+        {
+          objectKind: 'user_spot',
+          stableType: 'lease-owned',
+          objectGeneration: 1n,
+          authorityOwnerGeneration: 1n
+        }
+      ),
+      /admission is closed/u
+    );
+
+    scenario.recover();
+    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    const created = await scenario.runtime.spotManager.create('play', LeaseOwnedSpot);
+    const restored = await scenario.runtime.spotManager.getOrCreateWithAuthority(
+      'play',
+      LeaseOwnedSpot,
+      rid('restore-after-lease'),
+      undefined,
+      {
+        objectKind: 'user_spot',
+        stableType: 'lease-owned',
+        objectGeneration: 1n,
+        authorityOwnerGeneration: 1n
+      }
+    );
+    assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
+    assert.equal(restored.state, framework.ZLinkSpotCreateState.Created);
+  } finally {
+    scenario.recover();
+    await scenario.runtime.stop();
+  }
+});
+
+test('degraded host rejects relocation and peer capacity admission until owner lease recovery', async () => {
+  const scenario = recoverableHostScenario();
+  let targetControls = 0;
+  try {
+    await scenario.runtime.start();
+    scenario.runtime.serviceRelocation.tryHandleControl = async () => {
+      targetControls += 1;
+      return true;
+    };
+    assert.equal(scenario.runtime.status.acceptingWork, false);
+    assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), true);
+    await assert.rejects(
+      scenario.runtime.dispatchMeshRecord(
+        'play',
+        { ownerKind: framework.ReadyOwnerKind.Node },
+        { kind: framework.ReceiveKind.NodeSend, parts: [] }
+      ),
+      /admission is closed/u
+    );
+    assert.equal(targetControls, 0);
+    const blocked = await scenario.runtime.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 50
+    });
+    assert.equal(blocked.outcome, framework.ZLinkFrameworkRelocationOutcome.Blocked);
+    assert.equal(blocked.reason, framework.ZLinkFrameworkRelocationReason.StoreUnavailable);
+
+    scenario.recover();
+    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    assert.equal(scenario.runtime.status.acceptingWork, true);
+    assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), false);
+    await scenario.runtime.dispatchMeshRecord(
+      'play',
+      { ownerKind: framework.ReadyOwnerKind.Node },
+      { kind: framework.ReceiveKind.NodeSend, parts: [] }
+    );
+    assert.equal(targetControls, 1);
+    const admitted = await scenario.runtime.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 50
+    });
+    assert.notEqual(admitted.reason, framework.ZLinkFrameworkRelocationReason.StoreUnavailable);
+  } finally {
+    scenario.recover();
+    await scenario.runtime.stop();
+  }
 });
 
 test('framework host startup begins a lifecycle flow', async () => {
@@ -520,8 +786,77 @@ test('concurrent relocation with a different deadline joins the running operatio
   }
 });
 
+function recoverableHostScenario() {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
+  let unavailable = true;
+  const provider = {
+    read(key, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.read(key, signal);
+    },
+    write(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.write(request, signal);
+    },
+    scan(request, signal) {
+      if (unavailable) throw new Error('location store unavailable');
+      return inner.scan(request, signal);
+    }
+  };
+  const calls = [];
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: {
+        storeInstance: provider,
+        options: {
+          ownerLeaseRenewIntervalMs: 20,
+          ownerLeaseRenewTimeoutMs: 5,
+          pollingIntervalMs: 20
+        }
+      },
+      spotNodes: {
+        play: { router: { bind: 'tcp://local-play', routingId: 'play-node' } }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
+  });
+  runtime.setSpotManager(new framework.DefaultZLinkSpotManager(
+    runtime.createSpotManagerOptions()
+  ));
+  return {
+    runtime,
+    store: new framework.ZLinkLocationStoreRepository(inner, now),
+    recover() { unavailable = false; }
+  };
+}
+
+function installFakeNativeSpotFactory(runtime) {
+  const node = runtime.spotNodeRuntime.meshNode('play');
+  let generation = 0n;
+  const nativeSpot = () => {
+    const lifecycleGeneration = ++generation;
+    return {
+      status: () => ({ lifecycleGeneration }),
+      setSubscription() {},
+      close() {}
+    };
+  };
+  node.getOrCreateSpot = () => ({ spot: nativeSpot(), created: true });
+  node.restoreSpotAuthority = () => nativeSpot();
+}
+
 function rid(value) {
   return zlink.RoutingId.from(value);
+}
+
+async function waitForCondition(predicate) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for the expected host state.');
 }
 
 function fakeBackendAdapterFactory(calls, nodeRid) {
