@@ -791,16 +791,6 @@ final class ZLinkProviderAuthorityRepository {
             throw new IllegalArgumentException(
                 "terminal state must be " + expectedState);
         }
-        if (!terminalChecksumMatches(terminal)) {
-            throw new IllegalArgumentException(
-                "terminalSha256 does not match terminalEnvelope");
-        }
-    }
-
-    private static boolean terminalChecksumMatches(
-        ZLinkCreationOperationTerminal terminal) {
-        return Arrays.equals(terminal.terminalSha256(),
-            ZLinkAggregateInventoryStore.sha256(terminal.terminalEnvelope()));
     }
 
     private static ZLinkStoreKey creationTerminalKey(

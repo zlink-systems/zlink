@@ -30,6 +30,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
@@ -50,6 +51,7 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
@@ -107,10 +109,11 @@ final class ZLinkProviderCreationTerminalTest {
     }
 
     @Test
-    void readsNodeHandCodecTerminalBytesFromTheCanonicalKey() {
+    void readsNodeProductionSchemaTerminalBytesFromTheCanonicalKey() {
         var fixture = new Fixture();
         byte[] nodeTerminal = java.util.HexFormat.of().parseHex(
-            "010000000a00000069000000020000");
+            "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+                + "000000000000000100");
         var key = new ZLinkStoreKey(
             "creation-terminal\0" + "00ff10\0" + "7\0"
                 + "00000000000000010000000000abcdef");
@@ -119,12 +122,30 @@ final class ZLinkProviderCreationTerminalTest {
                 List.of(), List.of(new ZLinkStorePut(key, nodeTerminal, null))),
             () -> false));
 
+        byte[] stored = assertInstanceOf(ZLinkCreationTerminalFound.class,
+            await(fixture.repository.readCreationTerminal(
+                OPERATION, () -> false))).terminalEnvelope();
+        assertArrayEquals(nodeTerminal, stored);
+        var codec = new ZLinkServiceM6BWireCodec();
         assertArrayEquals(
             nodeTerminal,
-            assertInstanceOf(ZLinkCreationTerminalFound.class,
-                await(fixture.repository.readCreationTerminal(
-                    OPERATION, () -> false)))
-                .terminalEnvelope());
+            codec.encodeCreationOperationTerminal(
+                new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                    0,
+                    0,
+                    new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
+                        ZLinkServiceM6BWireCodec.ActorCreateResult.CREATED,
+                        new ActorRef(
+                            "actor-canonical",
+                            1L,
+                            "canonical-mesh",
+                            RoutingId.from("canonical-node"))),
+                    null)));
+        var decoded = codec
+            .decodeCreationOperationTerminal(
+                stored, "canonical-mesh", RoutingId.from("canonical-node"));
+        assertEquals("actor-canonical", decoded.creation().actor().actorId());
+        assertEquals(1L, decoded.creation().actor().objectGeneration());
     }
 
     @ParameterizedTest
@@ -197,7 +218,7 @@ final class ZLinkProviderCreationTerminalTest {
         fixture.provider.writes.clear();
         var otherTerminal = new ZLinkCreationOperationTerminal(
             other, fixture.reservation, terminal.state(), terminal.terminalEnvelope(),
-            terminal.terminalSha256(), terminal.expiresAt());
+            terminal.expiresAt());
         assertEquals(ZLinkObjectAbortResult.ABORTED, fixture.complete(otherTerminal));
         var otherKey = fixture.provider.terminalPuts().getFirst().key();
         await(fixture.provider.delegate.write(new ZLinkStoreWriteRequest(
@@ -302,7 +323,6 @@ final class ZLinkProviderCreationTerminalTest {
             original.reservation(),
             original.state(),
             original.terminalEnvelope(),
-            original.terminalSha256(),
             original.expiresAt());
 
         assertEquals(ZLinkObjectCommitResult.COMMITTED,
@@ -333,27 +353,6 @@ final class ZLinkProviderCreationTerminalTest {
             java.util.HexFormat.of().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(
                     preimage.getBytes(StandardCharsets.UTF_8))));
-    }
-
-    @ParameterizedTest
-    @EnumSource(ZLinkCreationTerminalState.class)
-    void invalidChecksumCannotPublishTerminalOrChangeAuthority(
-        ZLinkCreationTerminalState state) {
-        var fixture = new Fixture();
-        var valid = fixture.terminal(state);
-        var invalid = new ZLinkCreationOperationTerminal(
-            valid.operation(), valid.reservation(), state,
-            valid.terminalEnvelope(), new byte[32], valid.expiresAt());
-
-        var failure = assertThrows(IllegalArgumentException.class,
-            () -> fixture.complete(invalid));
-        assertEquals("terminalSha256 does not match terminalEnvelope",
-            failure.getMessage());
-        assertTrue(fixture.provider.writes.isEmpty());
-        var authority = assertInstanceOf(ZLinkAuthoritySnapshot.class,
-            await(fixture.repository.read(
-                fixture.reservation.authorityKey(), () -> false)));
-        assertEquals(fixture.reservation.storeVersion(), authority.storeVersion());
     }
 
     @ParameterizedTest
@@ -410,7 +409,7 @@ final class ZLinkProviderCreationTerminalTest {
         Arrays.fill(envelope, (byte) 0x5a);
         var terminal = new ZLinkCreationOperationTerminal(
             OPERATION, fixture.reservation, state, envelope,
-            ZLinkAggregateInventoryStore.sha256(envelope), original.expiresAt());
+            original.expiresAt());
 
         assertEquals(applied(state), fixture.complete(terminal));
         assertEquals(1, fixture.provider.writes.size());
@@ -419,7 +418,7 @@ final class ZLinkProviderCreationTerminalTest {
     }
 
     @Test
-    void corruptEnvelopeFailsIntegrityValidationAndMissingEnvelopeIsMissing() {
+    void readsStoredEnvelopeBytesAndMissingEnvelopeIsMissing() {
         var fixture = new Fixture();
         var terminal = fixture.terminal(ZLinkCreationTerminalState.CREATED);
         assertEquals(ZLinkObjectCommitResult.COMMITTED, fixture.complete(terminal));
@@ -530,7 +529,6 @@ final class ZLinkProviderCreationTerminalTest {
             byte[] envelope = new byte[] {0, 1, (byte) 0xff, (byte) state.ordinal()};
             return new ZLinkCreationOperationTerminal(
                 OPERATION, reservation, state, envelope,
-                ZLinkAggregateInventoryStore.sha256(envelope),
                 clock.instant().plus(ORIGINAL_DEADLINE).plus(RETENTION));
         }
 

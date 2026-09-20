@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -64,6 +63,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /**
@@ -790,7 +790,8 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
         String preimage = keyVector.path("preimagePrintable").asText()
             .replace("\\u0000", "\0");
         byte[] envelope = HexFormat.of().parseHex(
-            "010000000a00000069000000020000");
+            "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+                + "000000000000000100");
         String storePrefix =
             "goldenconf-creation-terminal:" + UUID.randomUUID();
 
@@ -842,7 +843,6 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
                 reserved.reservation(),
                 ZLinkCreationTerminalState.CREATED,
                 envelope,
-                MessageDigest.getInstance("SHA-256").digest(envelope),
                 Instant.now().plus(Duration.ofMinutes(5)));
 
             assertEquals(
@@ -858,6 +858,17 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
                 store.read(new ZLinkStoreKey(preimage), () -> false)
                     .toCompletableFuture().get());
             assertArrayEquals(envelope, raw.value().bytes());
+            var decoded = new ZLinkServiceM6BWireCodec()
+                .decodeCreationOperationTerminal(
+                    raw.value().bytes(),
+                    "canonical-mesh",
+                    RoutingId.from("canonical-node"));
+            assertEquals(
+                "actor-canonical",
+                decoded.creation().actor().actorId());
+            assertEquals(
+                1L,
+                decoded.creation().actor().objectGeneration());
             assertInstanceOf(
                 ZLinkStoreReadMissing.class,
                 store.read(

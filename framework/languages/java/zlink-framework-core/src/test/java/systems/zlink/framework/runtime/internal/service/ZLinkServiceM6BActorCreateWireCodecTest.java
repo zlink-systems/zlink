@@ -73,7 +73,8 @@ final class ZLinkServiceM6BActorCreateWireCodecTest {
             codec.encodeCreationOperationTerminal(terminal);
 
         var restored =
-            codec.decodeCreationOperationTerminal(durable);
+            codec.decodeCreationOperationTerminal(
+                durable, "game", RoutingId.from("target"));
         byte[] first = codec.encodeActorCreateReply(101, restored);
         byte[] retry = codec.encodeActorCreateReply(202, restored);
 

@@ -129,7 +129,8 @@ public final class ZLinkActorCreationCoordinator
         return locations.readCreationTerminal(operation, OPEN)
             .thenCompose(read -> {
                 if (read instanceof ZLinkCreationTerminalFound found) {
-                    return completedResult(found.terminalEnvelope());
+                    return completedResult(
+                        found.terminalEnvelope(), actorId);
                 }
                 if (System.currentTimeMillis() >= deadline) {
                     return admissionUnavailable("Actor create deadline expired");
@@ -258,13 +259,19 @@ public final class ZLinkActorCreationCoordinator
                 return node.requestActorCreate(
                         target.rid(), intent, remainingTimeout(deadline))
                     .thenCompose(response ->
-                        completedResult(response.terminalEnvelope()))
+                        completedResult(
+                            response.terminalEnvelope(),
+                            target.meshName(),
+                            target.rid()))
                     .exceptionallyCompose(failure -> {
                         return locations.readCreationTerminal(operation, OPEN)
                             .thenCompose(read ->
                                 read instanceof
                                     ZLinkCreationTerminalFound found
-                                    ? completedResult(found.terminalEnvelope())
+                                    ? completedResult(
+                                        found.terminalEnvelope(),
+                                        target.meshName(),
+                                        target.rid())
                                     : CompletableFuture.failedFuture(
                                         unwrap(failure)));
                     });
@@ -621,27 +628,34 @@ public final class ZLinkActorCreationCoordinator
             reservation,
             state,
             envelope,
-            sha256(envelope),
             Instant.ofEpochMilli(Math.addExact(
                 deadlineUnixMs,
                 TERMINAL_RETENTION.toMillis())));
     }
 
     private CompletionStage<ZLinkActorCreateResult> completedResult(
-        ZLinkCreationOperationTerminal terminal) {
-        if (!MessageDigest.isEqual(
-            sha256(terminal.terminalEnvelope()),
-            terminal.terminalSha256())) {
-            return failed(
-                "Actor creation terminal failed integrity validation");
-        }
-        return completedResult(terminal.terminalEnvelope());
+        byte[] envelope,
+        String actorId) {
+        return locations.read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
+            .thenCompose(read -> {
+                if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                    var descriptor = snapshot.allocation().descriptor();
+                    return completedResult(
+                        envelope,
+                        descriptor.meshName(),
+                        descriptor.rid());
+                }
+                return completedResult(envelope, null, null);
+            });
     }
 
     private CompletionStage<ZLinkActorCreateResult> completedResult(
-        byte[] envelope) {
+        byte[] envelope,
+        String targetMeshName,
+        RoutingId targetNodeRid) {
         try {
-            var terminal = wire.decodeCreationOperationTerminal(envelope);
+            var terminal = wire.decodeCreationOperationTerminal(
+                envelope, targetMeshName, targetNodeRid);
             if (terminal.terminalResult() != 0
                 || terminal.creation() == null) {
                 //  Classify the create terminal + fine failure code via the
@@ -909,7 +923,8 @@ public final class ZLinkActorCreationCoordinator
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
         verifiedResponse(byte[] envelope) {
         try {
-            wire.decodeCreationOperationTerminal(envelope);
+            wire.decodeCreationOperationTerminal(
+                envelope, meshName, node.status().routingId());
             return response(envelope);
         } catch (RuntimeException invalid) {
             return CompletableFuture.failedFuture(stale(
