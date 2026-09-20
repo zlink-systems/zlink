@@ -19,7 +19,8 @@ import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 final class GeneratedServiceWireCommandCodecConformanceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ServiceWireCodec.DecoderContext CONTEXT =
-        new ServiceWireCodec.DecoderContext(null, null, null);
+        new ServiceWireCodec.DecoderContext(
+            null, null, null, 0xffff_ffffL, 4_294_966_774L);
 
     @Test
     void batch3RuntimeAndGeneratedCodecsMatchCanonicalGoldens()
@@ -115,12 +116,15 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         throws Exception {
         JsonNode fixtures = fixtureIndex().path("fixtures");
         assertEquals(9, fixtures.size());
+        int canonicalCount = 0;
+        int malformedCount = 0;
         for (JsonNode indexed : fixtures) {
             String file = indexed.path("goldenFixture").asText()
                 .substring("golden/".length());
             JsonNode golden = fixture(file);
             String kind = indexed.path("kind").asText();
             for (JsonNode canonical : indexed.path("canonical")) {
+                canonicalCount++;
                 JsonNode pointers = canonical.path("pointers");
                 switch (kind) {
                     case "durable" -> {
@@ -152,6 +156,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             }
             if (kind.equals("command")) {
                 for (JsonNode malformed : indexed.path("malformed")) {
+                    malformedCount++;
                     List<byte[]> frames = pointedFrames(golden, malformed.path("pointers"));
                     assertThrows(Exception.class,
                         () -> ServiceWireCodec.decodeCommand(frames, CONTEXT),
@@ -159,7 +164,11 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 }
             }
         }
-        for (JsonNode operationCase : fixtureIndex().path("operationCases")) {
+        assertEquals(11, canonicalCount);
+        assertEquals(12, malformedCount);
+        JsonNode operationCases = fixtureIndex().path("operationCases");
+        assertEquals(16, operationCases.size());
+        for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
             String message = operation + ":" + operationCase.path("name").asText();
             if (operationCase.path("expect").asText().equals("accept")) {
@@ -183,18 +192,25 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     private static void decodeOperationCase(JsonNode operationCase)
         throws Exception {
         JsonNode surface = operationCase.path("surface");
+        ServiceWireCodec.DecoderContext context = context(operationCase);
         switch (surface.path("format").asText()) {
             case "type" -> {
                 byte[] bytes = HexFormat.of().parseHex(operationCase.path("hex").asText());
                 switch (surface.path("type").asText()) {
                     case "descriptor-extension" ->
-                        ServiceWireCodec.decodeDescriptorExtension(bytes, CONTEXT);
-                    case "text8" -> ServiceWireCodec.decodeText8(bytes, CONTEXT);
+                        ServiceWireCodec.decodeDescriptorExtension(bytes, context);
+                    case "text8" -> ServiceWireCodec.decodeText8(bytes, context);
+                    case "metadata-frame" ->
+                        ServiceWireCodec.decodeMetadataFrame(bytes, context);
+                    case "application-payload-bytes" ->
+                        ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
+                    case "application-payload-envelope-v1" ->
+                        ServiceWireCodec.decodeApplicationPayloadEnvelopeV1(bytes, context);
                     default -> throw new IllegalStateException("unknown type operation case");
                 }
             }
             case "command" -> ServiceWireCodec.decodeCommand(
-                hexFrames(operationCase.path("framesHex")), CONTEXT);
+                hexFrames(operationCase.path("framesHex")), context);
             case "semantic" -> ServiceWireCodec.validateReplyPredicate(
                 ServiceWireCodec.RequestTerminalResult.valueOf(
                     enumName(operationCase.path("input").path("terminalResult").asText())),
@@ -205,9 +221,23 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     HexFormat.of().parseHex(operationCase.path("hex").asText()), CONTEXT);
             case "authority-payload-v1" -> ServiceWireCodec.decodeDurable(
                 "authority-payload-v1",
-                HexFormat.of().parseHex(operationCase.path("hex").asText()), CONTEXT);
+                HexFormat.of().parseHex(operationCase.path("hex").asText()), context);
             default -> throw new IllegalStateException("unknown operation case surface");
         }
+    }
+
+    private static ServiceWireCodec.DecoderContext context(JsonNode operationCase) {
+        JsonNode values = operationCase.path("decodeContext");
+        long messageBytes = values.has("effectiveCompleteMessageBytes")
+            ? values.path("effectiveCompleteMessageBytes").asLong()
+            : 0xffff_ffffL;
+        long payloadBytes = values.has(
+            "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")
+            ? values.path(
+                "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead").asLong()
+            : 4_294_966_774L;
+        return new ServiceWireCodec.DecoderContext(
+            null, null, null, messageBytes, payloadBytes);
     }
 
     private static List<byte[]> hexFrames(JsonNode frames) {
