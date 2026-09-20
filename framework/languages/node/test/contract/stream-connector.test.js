@@ -1204,6 +1204,106 @@ test('stream connector close publishes closed state before one disconnected call
   assert.equal(events.filter((event) => event === 'disconnected').length, 1);
 });
 
+test('stream connector close does not wait for a connection state handler', async () => {
+  const events = [];
+  let stateHandlerEntered = false;
+  let releaseStateHandler;
+  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { enabled: false }
+  });
+  instance.onConnectionStateChanged(async (change) => {
+    if (change.current === connector.ZlinkStreamConnectionState.Closed) {
+      stateHandlerEntered = true;
+      events.push('state:Closed');
+      await stateHandler;
+    }
+  });
+  instance.onDisconnected(() => events.push('disconnected'));
+
+  await instance.connect();
+  const closing = instance.close();
+  try {
+    await withTimeout(closing, 2000, 'close with a pending connection state handler');
+  } finally {
+    releaseStateHandler();
+    await closing;
+  }
+
+  assert.equal(stateHandlerEntered, true);
+  assert.deepEqual(events, ['state:Closed', 'disconnected']);
+});
+
+test('stream connector exhausted reconnect does not wait for a connection state handler', async () => {
+  const events = [];
+  let stateHandlerEntered = false;
+  let releaseStateHandler;
+  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const transportFactory = new FlakyTransportFactory(5);
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+  instance.onConnectionStateChanged(async (change) => {
+    if (change.current === connector.ZlinkStreamConnectionState.Disconnected) {
+      stateHandlerEntered = true;
+      events.push('state:Disconnected');
+      await stateHandler;
+    }
+  });
+  instance.onDisconnected(() => events.push('disconnected'));
+
+  const connecting = instance.connect();
+  try {
+    await withTimeout(assert.rejects(connecting, /Connect failed/), 2000, 'exhausted reconnect');
+  } finally {
+    releaseStateHandler();
+    await connecting.catch(() => undefined);
+  }
+
+  assert.equal(stateHandlerEntered, true);
+  assert.equal(transportFactory.attempts, 2);
+  assert.deepEqual(events, ['state:Disconnected', 'disconnected']);
+});
+
+test('stream connector transport failure does not wait for a connection state handler', async () => {
+  const events = [];
+  let stateHandlerEntered = false;
+  let releaseStateHandler;
+  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const connection = new MemoryConnection();
+  let rejectRead;
+  connection.read = () => new Promise((_resolve, reject) => { rejectRead = reject; });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: { async connect() { return connection; } },
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  instance.onConnectionStateChanged(async (change) => {
+    if (change.current === connector.ZlinkStreamConnectionState.Disconnected) {
+      stateHandlerEntered = true;
+      events.push('state:Disconnected');
+      await stateHandler;
+    }
+  });
+  instance.onDisconnected(() => events.push('disconnected'));
+
+  await instance.connect();
+  rejectRead(new Error('transport failed'));
+  try {
+    await withTimeout(waitFor(() => stateHandlerEntered && events.includes('disconnected'), 2000), 2500, 'transport failure');
+  } finally {
+    releaseStateHandler();
+  }
+
+  assert.deepEqual(events, ['state:Disconnected', 'disconnected']);
+});
+
 test('stream connector shares concurrent connect and closes a connection that completes after close starts', async () => {
   let connectCalls = 0;
   let resolveConnection;
