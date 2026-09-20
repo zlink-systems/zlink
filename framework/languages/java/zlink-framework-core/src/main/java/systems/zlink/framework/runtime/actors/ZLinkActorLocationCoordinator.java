@@ -41,6 +41,16 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle != null && intent != null;
     }
 
+    void ensureOwnerAdmissionOpen() {
+        if (lifecycle != null) {
+            lifecycle.ensureOwnerAdmissionOpen();
+        }
+    }
+
+    boolean isOwnerAdmissionOpen() {
+        return lifecycle == null || lifecycle.isOwnerAdmissionOpen();
+    }
+
     CompletionStage<Void> claimActor(
         String actorType,
         String actorId,

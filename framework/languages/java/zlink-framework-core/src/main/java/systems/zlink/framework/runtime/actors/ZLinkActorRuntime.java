@@ -936,6 +936,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String selectedMesh,
         Duration timeout) {
         requireActorId(actorId);
+        locations.ensureOwnerAdmissionOpen();
         if (draining || relocating) {
             return CompletableFuture.failedFuture(new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.REJECTED,
@@ -1050,6 +1051,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkLocationWriteIntent intent,
         Consumer<ZLinkActorCreateResponse> responseSink) {
         requireActorId(actorId);
+        locations.ensureOwnerAdmissionOpen();
         if ((draining || relocating)
             && intent != ZLinkLocationWriteIntent.TAKEOVER) {
             return CompletableFuture.failedFuture(new ZLinkFrameworkException(
@@ -1162,10 +1164,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return ZLinkHandlerStages
             .fromSupplier(() -> createFactory(factoryType).create(context))
             .thenCompose(stage -> stage)
-            .thenApply(actor -> {
+            .thenCompose(actor -> {
+                if (!locations.isOwnerAdmissionOpen()) {
+                    return spotNode.destroyActor(actorRef, defaultRequestTimeout)
+                        .thenCompose(ignored -> CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "The owner lease admission deadline has expired.")));
+                }
                 context.setActor(actor);
                 actorRegistry.register(actorId, actorType, actor, context);
-                return actor;
+                return CompletableFuture.completedFuture(actor);
             })
             .thenCompose(actor -> {
                 if (!notifyCreated) {
@@ -1418,6 +1426,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkRelocationCancellation cancellation,
         ZLinkBackendActorRef preparedActorRef) {
         requireActorId(actorId);
+        locations.ensureOwnerAdmissionOpen();
         Objects.requireNonNull(applicationState, "applicationState");
         if (restoreSnapshot) {
             Objects.requireNonNull(adapters, "adapters");
@@ -1479,13 +1488,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         applicationState.clone(),
                         cancellation)
                     : CompletableFuture.completedFuture(null);
-                return restore.thenApply(ignored ->
-                    new PreparedTransferredActor(
+                return restore.thenApply(ignored -> {
+                    locations.ensureOwnerAdmissionOpen();
+                    return new PreparedTransferredActor(
                         actorId,
                         actorType,
                         actor,
                         context,
-                        actorRef));
+                        actorRef);
+                });
             });
         return activation.exceptionallyCompose(failure -> {
             Throwable cause = unwrap(failure);
@@ -1696,6 +1707,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     throw new ZLinkConfigurationException(
                         "actor transfer did not materialize an actor: " + actorId);
                 }
+                locations.ensureOwnerAdmissionOpen();
                 context.setActor(actor);
                 return new PreparedTransferredActor(
                     actorId,
