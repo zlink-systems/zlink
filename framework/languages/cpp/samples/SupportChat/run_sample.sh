@@ -17,22 +17,13 @@ REDIS_CONTAINER_NAME=""
 mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 
 cleanup() {
-  local code=$? cleanup_failed=0 status
-  for pid in "${PIDS[@]}"; do
-    if kill -0 "$pid" >/dev/null 2>&1; then
-      kill "$pid" >/dev/null 2>&1 || true
-      for _ in $(seq 1 "$WAIT_ATTEMPTS"); do kill -0 "$pid" >/dev/null 2>&1 || break; sleep "$WAIT_SECONDS"; done
-      if kill -0 "$pid" >/dev/null 2>&1; then kill -9 "$pid" >/dev/null 2>&1 || true; cleanup_failed=1; fi
-    fi
-    set +e; wait "$pid" 2>/dev/null; status=$?; set -e
-    if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then cleanup_failed=1; fi
-  done
+  local code=$?
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true; fi
-  [[ "$cleanup_failed" -eq 0 || "$code" -ne 0 ]] || code=1
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "SupportChat"
   return "$code"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 read -r -a PORTS <<<"$(zlink_sample_allocate_ports 12)"
 API_ROUTE="tcp://127.0.0.1:${PORTS[1]}"
@@ -123,4 +114,5 @@ if [[ "$CLIENT_STATUS" -ne 0 ]]; then echo "SupportChat client exited with statu
 
 cleanup
 trap - EXIT
+zlink_cpp_sample_assert_graceful_teardown
 echo "supportchat-placement=completed"

@@ -28,27 +28,12 @@ dump_logs() {
 
 cleanup() {
   local status=$?
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    kill -0 "$pid" >/dev/null 2>&1 && kill "$pid" >/dev/null 2>&1 || true
-  done
-  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
-    local alive=0
-    for pid in "${PIDS[@]}"; do
-      kill -0 "$pid" >/dev/null 2>&1 && { alive=1; break; }
-    done
-    [[ "$alive" == 0 ]] && break
-    sleep "$WAIT_SECONDS"
-  done
-  for pid in "${PIDS[@]}"; do
-    kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
-    wait "$pid" >/dev/null 2>&1 || true
-  done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   zlink_sample_close_run_dir "$RUN_DIR" "$status" "ShoppingMall"
   return "$status"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 count_exact_line() {
   local path="$1" line="$2"
@@ -294,4 +279,5 @@ wait_prefix_exact_across "repeated external effect" "shoppingmall-order external
 # Cleanup precedes the placement marker, which is the runner's final line.
 trap - EXIT
 cleanup
+zlink_cpp_sample_assert_graceful_teardown
 echo "shoppingmall-placement=completed"

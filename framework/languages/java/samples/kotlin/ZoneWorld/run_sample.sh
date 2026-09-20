@@ -41,14 +41,14 @@ fi
 
 RUN_DIR="$(mktemp -d)"; chmod 0700 "$RUN_DIR"
 LOG_DIR="$RUN_DIR/logs"; CONFIG_DIR="$RUN_DIR/config"; mkdir -p "$LOG_DIR" "$CONFIG_DIR"
-ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="zone-node-1.log zone-node-2.log gateway.log ops.log"
+zlink_sample_init_framework_roles
 pids=(); redis_container_id=""; declare -A node_pid
 
 cleanup_sample() {
   local status=$?; trap - EXIT; set +e
-  for pid in "${pids[@]:-}"; do kill -KILL "$pid" 2>/dev/null || true; done
-  for pid in "${pids[@]:-}"; do wait "$pid" 2>/dev/null || true; done
-  [[ -z "$redis_container_id" ]] || zlink_redis_remove_by_id "$redis_container_id" || true
+  set_cleanup_status() { return "$1"; }
+  set_cleanup_status "$status"
+  cleanup
   if [[ "${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" == 1 ]]; then echo "runDir=$RUN_DIR"; else rm -rf "$RUN_DIR"; fi
   exit "$status"
 }
@@ -100,11 +100,25 @@ SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 
 start() {
   local name=$1; shift
+  if [[ "$1" == "$SERVER_BIN" ]]; then
+    zlink_sample_register_framework_role "$LOG_DIR" "$name.log"
+  fi
   "$@" >>"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!"); node_pid[$name]=$!; echo "    started $name pid=$!"
 }
 forget_pid() { local target=$1 kept=() pid; for pid in "${pids[@]:-}"; do [[ "$pid" == "$target" ]] || kept+=("$pid"); done; pids=("${kept[@]:-}"); }
-kill_node() { local name=$1 sig=${2:-KILL} pid; pid=${node_pid[$name]:-}; [[ -n "$pid" ]] || return 0; kill -"$sig" "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; forget_pid "$pid"; unset "node_pid[$name]"; }
+kill_node() {
+  local name=$1 sig=${2:-KILL} pid
+  pid=${node_pid[$name]:-}; [[ -n "$pid" ]] || return 0
+  kill -"$sig" "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  forget_pid "$pid"; unset "node_pid[$name]"
+  if [[ "$sig" != KILL ]]; then
+    ( ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="$name.log"
+      zlink_sample_verify_framework_termination "$LOG_DIR" ) || exit 1
+  fi
+  zlink_sample_unregister_framework_role "$name.log"
+}
 next_line() { [[ -f "$1" ]] && echo $(( $(wc -l <"$1") + 1 )) || echo 1; }
 wait_log() {
   local name=$1 pattern=$2 first=${3:-1} limit=${4:-600}

@@ -42,6 +42,7 @@ RUN_ID="$(basename "$RUN_DIR")-$$-${RANDOM}"
 LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$LOG_DIR"
 PIDS=()
+ZLINK_CPP_SAMPLE_CLEANUP_WAIT_ATTEMPTS=30
 declare -A ROLE_PID
 REDIS_CONTAINER_NAME=""
 cleanup() {
@@ -53,20 +54,12 @@ cleanup() {
       tail -n 400 "$log" >&2
     done
   fi
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do kill "${PIDS[$i]}" >/dev/null 2>&1 || true; done
-  for _ in $(seq 1 30); do
-    local any_running=false
-    for pid in "${PIDS[@]}"; do kill -0 "$pid" >/dev/null 2>&1 && any_running=true; done
-    [[ "$any_running" == true ]] || break
-    sleep 0.1
-  done
-  for pid in "${PIDS[@]}"; do kill -9 "$pid" >/dev/null 2>&1 || true; done
-  for pid in "${PIDS[@]}"; do wait "$pid" >/dev/null 2>&1 || true; done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "ZoneWorld"
-  exit "$code"
+  return "$code"
 }
-trap cleanup EXIT INT TERM
+trap zlink_cpp_sample_exit_trap EXIT
 
 read -r -a ZONEWORLD_PORTS <<<"$(zlink_sample_allocate_ports 16)"
 NODE1_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[0]}"

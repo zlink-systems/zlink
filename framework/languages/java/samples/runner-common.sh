@@ -95,6 +95,36 @@ zlink_sample_preserve_logs() {
   echo "Sample failure logs: ${preserved_dir}" >&2
 }
 
+zlink_sample_init_framework_roles() {
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS=""
+  declare -gA ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS=()
+}
+
+zlink_sample_register_framework_role() {
+  local log_dir="$1"
+  local role_log="$2"
+  local first_line=1
+  if [[ -f "${log_dir}/${role_log}" ]]; then
+    first_line=$(( $(wc -l <"${log_dir}/${role_log}") + 1 ))
+  fi
+  zlink_sample_unregister_framework_role "${role_log}"
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS["${role_log}"]="${first_line}"
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS:+${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS} }${role_log}"
+}
+
+zlink_sample_unregister_framework_role() {
+  local role_log="$1"
+  local candidate
+  local -a active_logs=()
+  local -a retained_logs=()
+  read -r -a active_logs <<< "${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS:-}"
+  for candidate in "${active_logs[@]}"; do
+    [[ "${candidate}" == "${role_log}" ]] || retained_logs+=("${candidate}")
+  done
+  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="${retained_logs[*]:-}"
+  unset "ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[${role_log}]"
+}
+
 zlink_sample_verify_framework_termination() {
   local log_dir="$1"
   [[ -n "${log_dir}" ]] || return 0

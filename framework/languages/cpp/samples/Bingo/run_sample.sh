@@ -179,7 +179,6 @@ LOG_DIR="$RUN_DIR/logs"
 FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 PIDS=()
-PID_ROLES=()
 REDIS_CONTAINER=""
 cleanup_done=false
 BINGO_REDIS_KEY_PREFIX="bingo:cpp:${RANDOM}:$$:"
@@ -187,50 +186,11 @@ BINGO_REDIS_KEY_PREFIX="bingo:cpp:${RANDOM}:$$:"
 cleanup() {
   local code=$?
   set +e
-  local cleanup_failed=0
-  local status
   if [[ "$cleanup_done" == true ]]; then
     return
   fi
   cleanup_done=true
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    kill "$pid" 2>/dev/null || true
-  done
-  # The Framework host shutdown deadline is bounded to 30 seconds. Allow the
-  # role to finish its location operation and host teardown within that bound.
-  for _ in $(seq 1 300); do
-    local any_alive=0
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        any_alive=1
-        break
-      fi
-    done
-    if [[ "$any_alive" == "0" ]]; then
-      break
-    fi
-    sleep 0.1
-  done
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "forced cleanup process $pid" >&2
-      kill -9 "$pid" 2>/dev/null || true
-      cleanup_failed=1
-    fi
-  done
-  for i in "${!PIDS[@]}"; do
-    pid="${PIDS[$i]}"
-    set +e
-    wait "$pid" >/dev/null 2>&1
-    status=$?
-    set -e
-    if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then
-      echo "cleanup process ${PID_ROLES[$i]} ($pid) exited unexpectedly with status $status" >&2
-      cleanup_failed=1
-    fi
-  done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
@@ -242,13 +202,10 @@ cleanup() {
       sed -n '1,240p' "$log" >&2
     done
   fi
-  if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
-    code=1
-  fi
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "Bingo"
   return "$code"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run the Bingo sample." >&2
@@ -325,7 +282,6 @@ start_server() {
   stdbuf -oL -eL "$binary" "$@" >"$LOG_DIR/${name}.stdout.log" \
     2>"$LOG_DIR/${name}.trace.log" &
   PIDS+=("$!")
-  PID_ROLES+=("$name")
 }
 
 start_server matchmaking "$MATCHMAKING_BIN" --config="$CONFIG_DIR/matchmaking.json"
@@ -419,6 +375,7 @@ grep -Rq "message flow" "$FLOW_LOG_DIR"
 
 cleanup
 trap - EXIT
+zlink_cpp_sample_assert_graceful_teardown
 
 echo "bingo full client/server self-check completed"
 echo "bingo-placement=completed"
