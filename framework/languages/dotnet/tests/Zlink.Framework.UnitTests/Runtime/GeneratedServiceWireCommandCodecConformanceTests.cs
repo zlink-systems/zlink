@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
@@ -52,7 +51,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(34, cases.Count);
+        Assert.Equal(35, cases.Count);
         foreach (var testCase in cases)
         {
             Assert.True(testCase.Expect is "accept" or "reject", testCase.Label);
@@ -124,10 +123,8 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1(bytes, Context);
                 break;
             case "tlv-unknown-non-empty-skip":
-                ServiceWireCodec.DecodeDescriptorExtension(
-                    AppendUnknownDescriptorField(bytes), Context);
-                break;
             case "tlv-required-field-presence":
+            case "tlv-unknown-with-missing-required":
                 ServiceWireCodec.DecodeDescriptorExtension(bytes, Context);
                 break;
             case "invalid-utf8":
@@ -150,31 +147,6 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             default:
                 throw new ConformanceHarnessException($"unhandled operation case {name}");
         }
-    }
-
-    private static byte[] AppendUnknownDescriptorField(byte[] unknown)
-    {
-        var value = new ServiceWireCodec.DescriptorExtension(
-            ServiceWireCodec.RuntimeState.Serving,
-            new ServiceWireCodec.ApplicationVersion(0),
-            null,
-            null,
-            null,
-            new ServiceWireCodec.SortedText8Vector([
-                new ServiceWireCodec.Text8("framework-service-v13")]),
-            ServiceWireCodec.ObjectRole.None,
-            new ServiceWireCodec.U32(0),
-            new ServiceWireCodec.ObjectCapacityLimit(1),
-            new ServiceWireCodec.ObjectPendingCapacityLimit(1),
-            new ServiceWireCodec.U32(0),
-            new ServiceWireCodec.U32(0));
-        var canonical = ServiceWireCodec.EncodeDescriptorExtension(value, Context);
-        var result = new byte[canonical.Length + unknown.Length - 4];
-        BinaryPrimitives.WriteUInt32BigEndian(result,
-            checked((uint)(canonical.Length - 4 + unknown.Length - 4)));
-        canonical.AsSpan(4).CopyTo(result.AsSpan(4));
-        unknown.AsSpan(4).CopyTo(result.AsSpan(canonical.Length));
-        return result;
     }
 
     private static byte[][] GeneratedCommandRoundTrip(int commandId, byte[][] frames) =>
