@@ -5,21 +5,25 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  buildNamedMap,
+  conditionSignature,
+  FIELD_CONSTRAINT_KINDS,
+  FLAG_CONDITION_KINDS,
+  FLAG_CONSTRAINT_KINDS,
+  hasOwn,
+  isObject,
+  resolveInteger,
+  resolveReference,
+  resolveReferencedMaximum,
+  STRUCT_CONSTRAINT_KINDS,
+  TYPE_KINDS,
+  toBigInt,
+  VECTOR_CONSTRAINT_KINDS,
+} from "./service-wire-schema-model.mjs";
 
 const PAYLOAD_POLICIES = new Set(["forbidden", "optional", "required"]);
 const COMMAND_DOMAINS = new Set(["application", "infrastructure"]);
-const TYPE_KINDS = new Set([
-  "integer",
-  "enum",
-  "length-prefixed-bytes",
-  "length-prefixed-text",
-  "struct",
-  "versioned-vector",
-  "conditional-union",
-  "vector",
-  "tlv32",
-  "versioned-length-delimited",
-]);
 const INTEGER_ENCODINGS = new Map([
   ["u8", [0n, 255n]],
   ["u16", [0n, 65535n]],
@@ -43,26 +47,8 @@ class SchemaValidationError extends Error {
   }
 }
 
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(value, key) {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
 function clone(value) {
   return structuredClone(value);
-}
-
-function toBigInt(value) {
-  if (typeof value === "number" && Number.isSafeInteger(value)) {
-    return BigInt(value);
-  }
-  if (typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)) {
-    return BigInt(value);
-  }
-  return null;
 }
 
 function validateSchema(schema) {
@@ -156,7 +142,7 @@ function validateSchema(schema) {
       return;
     }
     if (hasOwn(value, "$ref")) {
-      if (typeof value.$ref !== "string" || !types.has(value.$ref)) {
+      if (resolveReference(value, types) === null) {
         fail(`${location}.$ref`, `undefined type ${JSON.stringify(value.$ref)}`);
       }
     }
@@ -231,35 +217,6 @@ function validateProtocol(protocol, fail) {
   if (typeof protocol.requiredCapability !== "string" || protocol.requiredCapability.length === 0) {
     fail("$.protocol.requiredCapability", "must be a non-empty string");
   }
-}
-
-function buildNamedMap(entries, label, location, fail) {
-  const result = new Map();
-  if (!Array.isArray(entries)) {
-    fail(location, `${label} must be an array so duplicate names remain detectable`);
-    return result;
-  }
-  entries.forEach((entry, index) => {
-    if (!isObject(entry)) {
-      fail(`${location}[${index}]`, "must be an object");
-      return;
-    }
-    if (typeof entry.name !== "string" || entry.name.length === 0) {
-      fail(`${location}[${index}].name`, "must be a non-empty string");
-      return;
-    }
-    if (result.has(entry.name)) {
-      fail(`${location}[${index}].name`, `duplicates ${entry.name}`);
-      return;
-    }
-    Object.defineProperty(entry, "__index", {
-      configurable: true,
-      enumerable: false,
-      value: index,
-    });
-    result.set(entry.name, entry);
-  });
-  return result;
 }
 
 function validateType(name, type, types, bounds, contexts, fail) {
@@ -372,21 +329,6 @@ function validateType(name, type, types, bounds, contexts, fail) {
   validateContainerCapacity(type, location, types, bounds, fail);
 
   validateConditions(type, location, contexts, null, fail);
-}
-
-function resolveInteger(value, bounds) {
-  if (isObject(value) && typeof value.$bound === "string" && bounds.has(value.$bound)) {
-    return toBigInt(bounds.get(value.$bound).value);
-  }
-  return toBigInt(value);
-}
-
-function resolveReferencedMaximum(typeName, types, bounds) {
-  const type = types.get(typeName);
-  if (!type || type.kind !== "integer") {
-    return null;
-  }
-  return resolveInteger(type.maximum, bounds);
 }
 
 function validateLengthCapacity(typeName, requestedMaximum, types, bounds, location, fail) {
@@ -605,7 +547,7 @@ function validateVectorConstraints(type, location, types, fail, repeatedFieldNam
   const signatures = new Set();
   type.constraints.forEach((constraint, index) => {
     const constraintLocation = `${location}.constraints[${index}]`;
-    if (!isObject(constraint) || !["sorted", "unique"].includes(constraint.kind)) {
+    if (!isObject(constraint) || !VECTOR_CONSTRAINT_KINDS.has(constraint.kind)) {
       fail(constraintLocation, "vector constraint must be sorted or unique");
       return;
     }
@@ -641,13 +583,16 @@ function validateStructConstraints(type, location, fail) {
   const fields = new Set((type.fields ?? []).map((field) => field.name));
   type.constraints.forEach((constraint, index) => {
     const constraintLocation = `${location}.constraints[${index}]`;
+    if (!STRUCT_CONSTRAINT_KINDS.has(constraint.kind)) {
+      fail(constraintLocation, `unknown struct constraint ${JSON.stringify(constraint.kind)}`);
+      return;
+    }
     if (constraint.kind === "not-both-zero") {
       if ((type.fields ?? []).length < 2) {
         fail(constraintLocation, "not-both-zero requires at least two fields");
       }
-      if (hasOwn(constraint, "unless")
-          && constraint.unless !== "one-way-record-without-terminal-completion") {
-        fail(`${constraintLocation}.unless`, "unknown not-both-zero exception");
+      if (hasOwn(constraint, "unless")) {
+        fail(`${constraintLocation}.unless`, "not-both-zero does not allow exceptions");
       }
       return;
     }
@@ -657,7 +602,6 @@ function validateStructConstraints(type, location, fail) {
       }
       return;
     }
-    fail(constraintLocation, `unknown struct constraint ${JSON.stringify(constraint.kind)}`);
   });
 }
 
@@ -770,7 +714,7 @@ function validateFieldConstraints(field, location, types, fail) {
   const signatures = new Set();
   for (const [index, constraint] of field.constraints.entries()) {
     const constraintLocation = `${location}.constraints[${index}]`;
-    if (!isObject(constraint) || constraint.kind !== "contains-protocol-required-capability") {
+    if (!isObject(constraint) || !FIELD_CONSTRAINT_KINDS.has(constraint.kind)) {
       fail(constraintLocation, `unknown field constraint ${JSON.stringify(constraint?.kind)}`);
       continue;
     }
@@ -898,12 +842,6 @@ function validateConditionalUnion(type, location, types, bounds, contexts, fail)
           || type.bodyLengthCovers !== "selected-case")) {
     fail(location, "closed wire union must length-delimit the selected case body");
   }
-}
-
-function conditionSignature(value) {
-  return JSON.stringify(
-    Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))),
-  );
 }
 
 function discriminatorCombinations(domains, index = 0, current = {}) {
@@ -3702,6 +3640,37 @@ function validateCommandByteOracleFixtures(schema, schemaPath) {
   return count;
 }
 
+function validateServiceWireFixtureOracles(schema, schemaPath) {
+  validateRelocationLogicalFixture(schema, schemaPath);
+  validateActorJoinRequestFixture(schema, schemaPath);
+  validateCommandByteOracleFixtures(schema, schemaPath);
+
+  const actorJoin = schema.commands.find((entry) => entry.id === 28 && entry.name === "actorJoin");
+  return {
+    logical: {
+      format: schema.relocationLogicalStreamFormat.name,
+      type: schema.relocationLogicalStreamFormat.body.$ref,
+      goldenFixture: schema.relocationLogicalStreamFormat.goldenFixture,
+    },
+    commands: [
+      {
+        format: "actor-join-request-v1",
+        command: actorJoin.name,
+        commandId: actorJoin.id,
+        goldenFixture: "golden/actor-join-request-v1.json",
+        framing: "frames",
+      },
+      ...COMMAND_BYTE_ORACLES.map(([format, commandName, commandId]) => ({
+        format,
+        command: commandName,
+        commandId,
+        goldenFixture: `golden/${format}.json`,
+        framing: "single-frame",
+      })),
+    ],
+  };
+}
+
 function validateZljrSchemaShape(schema) {
   const types = new Map(schema.types.map((type) => [type.name, type]));
   const frozenFields = types.get("frozen-record")?.fields?.map((field) => [field.name, field.$ref]);
@@ -3716,7 +3685,7 @@ function validateZljrSchemaShape(schema) {
   if (JSON.stringify(frozenFields) !== JSON.stringify([
     ["recordKind", "mesh-record-kind"], ["source", "frozen-source-identity"],
     ["hasMetadata", "bool8"], ["metadata", "metadata-frame"],
-    ["operationId", "operation-id"], ["operationKind", "mesh-operation-kind"],
+    ["operationId", "operation-id-or-zero"], ["operationKind", "mesh-operation-kind"],
     ["replyRoute", "frozen-reply-route"], ["body", "frozen-record-body"],
   ]) || JSON.stringify(nodeSource) !== JSON.stringify([
     ["sourceNodeRid", "rid"], ["sourceNodeGeneration", "nonzero-u64"],
@@ -3727,6 +3696,14 @@ function validateZljrSchemaShape(schema) {
         ["packetName", "packet-name"], ["contentType", "content-type"],
         ["payload", "application-payload-bytes"],
       ])) byteOracleError("schema-zljr-envelope-shape");
+}
+
+function zljrOperationIdOracle(schema) {
+  const types = new Map(schema.types.map((type) => [type.name, type]));
+  const bounds = new Map(schema.bounds.map((bound) => [bound.name, bound]));
+  const typeName = types.get("frozen-record")?.fields
+    ?.find((field) => field.name === "operationId")?.$ref;
+  return { typeName, types, bounds };
 }
 
 function oracleText8(reader) {
@@ -3742,6 +3719,7 @@ function oracleText8(reader) {
 
 function decodeZljrByteOracle(schema, hex) {
   validateZljrSchemaShape(schema);
+  const operationIdOracle = zljrOperationIdOracle(schema);
   if (typeof hex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(hex)) byteOracleError("invalid-hex");
   const reader = new FixtureReader(Buffer.from(hex, "hex"));
   if (oracleInteger(reader, "u8") !== 1n || oracleInteger(reader, "u8") !== 1n) {
@@ -3758,8 +3736,14 @@ function decodeZljrByteOracle(schema, hex) {
   };
   if (BigInt(source.nodeGeneration) === 0n || BigInt(source.ownerLeaseGeneration) === 0n
       || sourceReader.offset !== sourceReader.bytes.length) byteOracleError("invalid-body-length");
+  const operationId = decodeOracleType(
+    operationIdOracle.typeName,
+    reader,
+    operationIdOracle.types,
+    operationIdOracle.bounds,
+  );
   if (oracleInteger(reader, "u8") !== 0n
-      || oracleInteger(reader, "u64") !== 0n || oracleInteger(reader, "u64") !== 0n
+      || BigInt(operationId.high) !== 0n || BigInt(operationId.low) !== 0n
       || oracleInteger(reader, "u32") !== 0n || oracleInteger(reader, "u16") !== 0n) {
     byteOracleError("invalid-field");
   }
@@ -3804,6 +3788,7 @@ function decodeZljrByteOracle(schema, hex) {
 
 function encodeZljrByteOracle(schema, decoded) {
   validateZljrSchemaShape(schema);
+  const operationIdOracle = zljrOperationIdOracle(schema);
   const metadata = Buffer.from(JSON.stringify(decoded.metadata), "utf8");
   const request = Buffer.from(decoded.requestHex, "hex");
   const reply = Buffer.from(decoded.replyHex, "hex");
@@ -3818,8 +3803,15 @@ function encodeZljrByteOracle(schema, decoded) {
   const writer = new FixtureWriter();
   const sourceBytes = sourceBody.finish();
   const payloadBytes = payloadBody.finish();
-  writer.u8(1).u8(1).u16(sourceBytes.length).raw(sourceBytes).u8(0)
-    .u64(0).u64(0).u32(0).u16(0).u8(1).u32(payloadBytes.length).raw(payloadBytes);
+  writer.u8(1).u8(1).u16(sourceBytes.length).raw(sourceBytes).u8(0);
+  encodeOracleType(
+    operationIdOracle.typeName,
+    { high: "0", low: "0" },
+    writer,
+    operationIdOracle.types,
+    operationIdOracle.bounds,
+  );
+  writer.u32(0).u16(0).u8(1).u32(payloadBytes.length).raw(payloadBytes);
   return writer.finish();
 }
 
@@ -3894,6 +3886,12 @@ function runByteOracleFixtureSelfTests(schema, schemaPath) {
   const zljr = JSON.parse(fs.readFileSync(
     path.resolve(path.dirname(schemaPath), "golden/zljr-v1.json"), "utf8",
   ));
+  const zeroNodeSendBytes = encodeZljrByteOracle(schema, zljr.canonical.decoded);
+  const zeroNodeSendDecoded = decodeZljrByteOracle(schema, zeroNodeSendBytes.toString("hex"));
+  if (!zeroNodeSendBytes.equals(Buffer.from(zljr.canonical.hex, "hex"))
+      || JSON.stringify(zeroNodeSendDecoded) !== JSON.stringify(zljr.canonical.decoded)) {
+    throw new Error("schema oracle did not round-trip the zero-operation nodeSend frozen record");
+  }
   tests.push(["zljr-v1 canonical semantic drift", () => {
     const candidate = clone(zljr);
     candidate.canonical.decoded.requestHex = "00";
@@ -4938,7 +4936,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceSpotId", $ref: "optional-text8" },
     { name: "operationKind", $ref: "instance-operation-kind" },
-    { name: "operation", $ref: "operation-id" },
+    { name: "operation", $ref: "operation-id-or-zero" },
     { name: "replyRoute", $ref: "instance-reply-route" },
   ], "$.commands", "Instance operation must use the closed Ready-or-cold-activation route union");
 
@@ -5198,7 +5196,8 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetDescriptorVersion", $ref: "text8" },
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceNodeGeneration", $ref: "nonzero-u64" },
-    { name: "sourceSpotId", $ref: "optional-text8" },
+    { name: "hasSourceSpotId", $ref: "bool8" },
+    { name: "sourceSpotId", $ref: "text8" },
     { name: "operationKind", $ref: "instance-operation-kind" },
     { name: "operation", $ref: "operation-id" },
     { name: "replyRoute", $ref: "instance-reply-route" },
@@ -5211,6 +5210,10 @@ function validateServiceInvariants(schema, types, fail) {
   if (activationRecoveryEnvelope?.scope !== "target-owned-instance-spot-cold-activation-only"
       || activationRecoveryEnvelope?.metadataMeaning
         !== "exact-command-39-metadata-flag-presence-and-immutable-frame-bytes"
+      || activationRecoveryEnvelope?.fields?.find((field) => field.name === "sourceSpotId")?.when
+        ?.fieldEquals?.name !== "hasSourceSpotId"
+      || activationRecoveryEnvelope?.fields?.find((field) => field.name === "sourceSpotId")
+        ?.otherwise !== "forbidden"
       || activationRecoveryEnvelope?.fields?.find((field) => field.name === "metadata")?.when
         ?.fieldEquals?.name !== "hasMetadata"
       || activationRecoveryEnvelope?.fields?.find((field) => field.name === "metadata")
@@ -5945,7 +5948,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "source", $ref: "frozen-source-identity" },
     { name: "hasMetadata", $ref: "bool8" },
     { name: "metadata", $ref: "metadata-frame" },
-    { name: "operationId", $ref: "operation-id" },
+    { name: "operationId", $ref: "operation-id-or-zero" },
     { name: "operationKind", $ref: "mesh-operation-kind" },
     { name: "replyRoute", $ref: "frozen-reply-route" },
     { name: "body", $ref: "frozen-record-body" },
@@ -6139,7 +6142,7 @@ function validateCommands(commands, ranges, flags, contexts, types, bounds, fail
       } else {
         command.flagConstraints.forEach((constraint, constraintIndex) => {
           const constraintLocation = `${location}.flagConstraints[${constraintIndex}]`;
-          if (!isObject(constraint) || !["all-or-none", "implies"].includes(constraint.kind)) {
+          if (!isObject(constraint) || !FLAG_CONSTRAINT_KINDS.has(constraint.kind)) {
             fail(constraintLocation, "unknown flag constraint");
             return;
           }
@@ -6743,7 +6746,7 @@ function validateConditions(value, location, contexts, allowedFlags, fail) {
     if (!isObject(candidate)) {
       return;
     }
-    for (const key of ["allFlagsSet", "anyFlagsSet"]) {
+    for (const key of FLAG_CONDITION_KINDS) {
       if (!hasOwn(candidate, key)) {
         continue;
       }
@@ -7112,6 +7115,10 @@ function runSelfTests(schema) {
       const operation = candidate.types.find((type) => type.name === "operation-id");
       operation.constraints.push({ kind: "accept-anything" });
     }],
+    ["not-both-zero exception", (candidate) => {
+      const operation = candidate.types.find((type) => type.name === "operation-id");
+      operation.constraints[0].unless = "one-way-record-without-terminal-completion";
+    }],
     ["relocation state graph skip", (candidate) => {
       candidate.relocationStateMachine.transitions.push({ from: "preparing", to: "completed" });
     }],
@@ -7219,6 +7226,12 @@ function runSelfTests(schema) {
         (type) => type.name === "instance-activation-recovery-v1",
       );
       recovery.fields = recovery.fields.filter((field) => field.name !== "metadata");
+    }],
+    ["ZLIA source Spot presence omitted", (candidate) => {
+      const recovery = candidate.types.find(
+        (type) => type.name === "instance-activation-recovery-v1",
+      );
+      recovery.fields = recovery.fields.filter((field) => field.name !== "hasSourceSpotId");
     }],
     ["Cold Instance route and ZLIA placement intent diverge", (candidate) => {
       const recovery = candidate.types.find(
@@ -7723,6 +7736,26 @@ function runGoldenFixtureSelfTests(schema, schemaPath) {
           candidate.decoded.activationRecoveryState = null;
           reencode(format, candidate);
         }],
+        ["activation reference uses u8 length prefix", (candidate) => {
+          const encoded = Buffer.from(candidate.encodedHex, "hex");
+          const reference = Buffer.from(
+            candidate.decoded.activationRecoveryState.referenceUtf8Fixture,
+            "utf8",
+          );
+          const marker = Buffer.concat([Buffer.from([0, reference.length]), reference]);
+          const referenceOffset = encoded.indexOf(marker);
+          if (referenceOffset < 4) {
+            throw new Error("authority golden reference marker is missing");
+          }
+          const legacy = Buffer.concat([
+            encoded.subarray(0, referenceOffset),
+            encoded.subarray(referenceOffset + 1),
+          ]);
+          legacy.writeUInt32BE(legacy.readUInt32BE(referenceOffset - 4) - 1, referenceOffset - 4);
+          legacy.writeUInt32BE(legacy.readUInt32BE(7) - 1, 7);
+          legacy.writeUInt32BE(crc32c(legacy.subarray(0, -4)), legacy.length - 4);
+          candidate.encodedHex = legacy.toString("hex");
+        }],
         ["replay cursor exceeds inbox sequence", (candidate) => {
           candidate.decoded.activationRecoveryState.replayCursor = String(
             BigInt(candidate.decoded.activationRecoveryState.inboxSequence) + 1n,
@@ -8164,6 +8197,8 @@ export {
   SchemaValidationError,
   crc32c,
   encodeGoldenBody,
+  encodeGoldenEnvelope,
+  validateServiceWireFixtureOracles,
   validateGoldenFixtures,
   validateSchema,
 };

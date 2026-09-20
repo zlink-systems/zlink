@@ -44,7 +44,7 @@ schema를 읽는 소비자는 셋이다.
 | 소비자 | 무엇을 읽는가 | 어디에 있는가 |
 |---|---|---|
 | Validator | schema 전체. 참조 무결성, 길이 용량, closed union, TLV 순서, durable checksum, semantic 선언의 literal 일치를 검사한다 | `validate-service-wire-schema.mjs` |
-| Generator | `commands`·`flags`·일부 `types`(enum)·`bounds`·`frameworkMultipartV1Profile`·`terminal-failure-integrity`. 네 언어의 상수 표와 공통 decoder fixture를 낸다 | `generate-service-wire-assets.mjs`, `generate-service-wire-pilot-codecs.mjs` |
+| Generator | Validator가 통과시킨 schema 전체. lowering이 이 장의 읽기 규칙을 언어 중립 operation IR로 한 번 내리고, 언어별 renderer는 그 operation의 문법만 낸다. 상수 표·codec·fixture index를 한 manifest로 생성하고 drift를 검사한다 | `service-wire-lowering.mjs`, `render-service-wire-*.mjs`, `generate-service-wire-{assets,fixtures,codecs}.mjs`, `service-wire-output-manifest.mjs` |
 | Runtime codec | `types`·`commands`·`durableFormats`·`relocationLogicalStreamFormat`의 layout. 생성되었든 손으로 썼든 이 장의 규칙으로 bytes를 만들고 읽는다 | 각 언어 runtime |
 
 Validator가 통과시킨 schema만 기준이다. 통과하지 못한 schema로 만든 codec·fixture는 계약이
@@ -175,7 +175,7 @@ byte 수다.
 | 키 | 뜻 |
 |---|---|
 | `fields` | field 목록. 선언 순서가 byte 순서다([§5](#5-field-keyword)) |
-| `constraints` | 여러 field에 걸친 제약. `not-both-zero`(`fields`, 선택적 `unless`), `field-less-than-or-equal`(같은 struct의 두 field) |
+| `constraints` | 여러 field에 걸친 제약. `not-both-zero`(`fields`), `field-less-than-or-equal`(같은 struct의 두 field) |
 | `maximumEncodedBytes` | encoded 상한 |
 | `trailingBytes` | `forbidden`. 길이가 밖에서 정해지는 struct에서 남는 byte를 거부한다 |
 | `presence`, `scope`, `storage`, `metadataMeaning`, `queueMeaning` | 이 layout이 어디에 나타나고 무엇을 뜻하는지 적은 literal. 바이트 배치에 영향이 없고 [§8](#8-semantic-선언)·[§9](#9-profile과-소유-조항)의 규칙이 참조한다 |
@@ -232,7 +232,7 @@ field로 정해지므로 typed payload envelope처럼 다른 frame에 실리는 
 | `bodyLengthType`, `bodyLengthCovers` | 선택한 case 앞에 오는 길이 prefix와 그 범위(`selected-case`). 없는 union은 길이 prefix 없이 case가 바로 온다 |
 | `cases` | `{ "when": { discriminator: value, … }, "fields": [...], "constraints": [...] }` 목록. 모든 discriminator를 정확히 한 번씩 배정한다. `constraints`는 선택이며 struct의 `constraints`(§4.5)와 같은 종류를 그 case의 field에 적용한다 |
 | `otherwise` | 어느 case에도 맞지 않을 때 — `protocol-error`(거부) 또는 명시적 field 목록 `{ "fields": [...] }`(현재 schema는 빈 목록만 쓴다) |
-| `trailingBytes` | `forbidden` |
+| `maximumEncodedBytes`, `trailingBytes` | `struct`와 같다(§4.5) |
 | `presence`, `release` | 나타나는 조건과 해제 조건을 적은 literal. 배치에 영향이 없다 |
 
 배치는 `source: wire`인 discriminator, (선언했으면) body length, 선택한 case의 fields 순서다.

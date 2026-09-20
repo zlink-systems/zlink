@@ -1292,6 +1292,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_service_wire_codec_generated
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec_generated.cpp)
+  target_compile_features(test_cpp_framework_service_wire_codec_generated PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_service_wire_codec_generated PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_service_wire_codec_generated PRIVATE
+    ZLINK_SERVICE_WIRE_FIXTURE_INDEX_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/fixtures/index.json")
+  target_link_libraries(test_cpp_framework_service_wire_codec_generated PRIVATE
+    nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec_generated)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_service_wire_codec_generated
+    COMMAND test_cpp_framework_service_wire_codec_generated
+    LABELS "framework-unit;framework-contract;protocol"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_endpoint_notation
     tests/Zlink.Framework.UnitTests/test_cpp_framework_endpoint_notation.cpp)
   target_compile_features(test_cpp_framework_endpoint_notation PRIVATE cxx_std_20)

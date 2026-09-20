@@ -8,6 +8,20 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `validate-service-wire-schema.mjs`: integer encoding, 재귀 aggregate length capacity, field reference,
   정렬·중복, closed union, TLV 순서, durable checksum·semantic relation과 exact relocation state rule을 확인하는 생성
   전 gate
+- `service-wire-schema-model.mjs`: validator와 lowering이 함께 쓰는 named-map 조회, type·bound 해소와
+  condition signature 모델
+- `service-wire-lowering.mjs`: 검증된 schema의 type·command·flag·semantic 선언을 언어 중립 JSON IR로
+  변환하고 coverage를 확인하는 도구
+- `service-wire-output-manifest.mjs`: 최종 renderer, runtime 사본, fixture·상수 asset과 4단계까지 유지하는
+  legacy pilot 산출물의 단일 output manifest
+- `generate-service-wire-codecs.mjs`: lowering부터 네 renderer, fixture index, 상수 asset과 legacy pilot을
+  순서대로 생성하고 전체 drift·orphan을 확인하는 통합 진입점
+- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: operation IR을 각 언어의 정적 codec 문법으로
+  내는 emitter. 지원하지 않는 operation 키가 있으면 생성을 중단한다.
+- `generate-service-wire-pilot-codecs.mjs`: 기존 runtime adapter가 소비하며 4단계 adapter 교체 뒤 제거하는
+  legacy codec generator
+- `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden과 operation별
+  정상·거부 벡터 catalog를 생성하고 drift를 확인하는 도구
 - `golden/durable-authority-v1.json`: 네 runtime이 Ready Instance cold activation recovery pointer를
   읽고 쓰는 golden fixture
 - `golden/instance-activation-recovery-v1.json`: target-owned cold activation의 source·target lifecycle,
@@ -40,12 +54,46 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `golden/`: service frame의 정상·경계·오류 fixture를 추가하는 위치
 - `generate-service-wire-assets.mjs`: 검증한 schema에서 네 언어 command·flag·Framework wire error·multipart
   profile 상수와 공통 decoder fixture를 생성하고 `--check`로 drift를 차단하는 도구
-- `generated/`: C++·.NET·JVM·Node.js runtime이 복사하지 않고 사용하는 생성 상수
+- `generated/`: C++·.NET·JVM·Node.js runtime이 사용하는 정규 codec·상수, fixture index와 legacy pilot 산출물
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
 
-Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 155개 type,
+## Operation IR 어휘
+
+Operation IR은 검증·직렬화 의미의 단일 소유자다. Renderer는 다음 닫힌 어휘를 언어별 문법으로만
+변환하며 새로운 wire 규칙을 추가하지 않는다.
+
+- scalar와 text: `integer`, `enum`, `length-prefixed`, `text-validation`
+- aggregate와 field: `field`, `struct`, `vector`, `versioned-vector`, `bounded-reader`,
+  `versioned-length-delimited`
+- 선택 layout과 TLV: `discriminator`, `conditional-union`, `tlv32`, `constraint`
+- command frame: `command-header`, `flags`, `flag-constraint`, `metadata-flag-frame`, `payload`
+- durable·logical: `durable-header`, `checksum`, `encoded-limit`, `logical-stream`
+- runtime 연계: `negotiated-bound`, `runtime-predicate`
+
+각 type·command·durable format·logical stream은 비어 있지 않은 `operations` 배열을 가진다. Lowering
+self-test는 위 25개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
+검사한다. Field condition은 `when`과 encoder·decoder의 `whenFalse` 동작을 함께 보존한다.
+Conditional-union case는 field operation 뒤에 owner path가 있는 `constraint`를 실행한다.
+`fieldPresent`는 wire의 zero-length absence sentinel과 내부 null 부재 기준을 함께 가진다. Vector의
+`sorted`·`unique` 제약은 comparison별 key를 명시하며 UTF-8 key에서는 length prefix를 제외하고,
+authority key에서는 generation과 객체 wire prefix를 제외한 canonical authority key를 사용한다.
+`encoded-limit`는 전체 encoded value를 측정하며 TLV에서는 `totalLength` 자체를 포함한다.
+`encodeCapacity`는 선언 상한과 단일 배열 표현 상한 `2^31-1` 중 작은 값까지 encode·decode하도록
+요구한다. 선언 상한 초과는 protocol error이고 표현 상한 초과는 capacity error이다.
+Conditional-union encoder는 선택한 variant와 wire·enclosing·context discriminator의 일치를 검사한다.
+Text validation은 BOM을 보존하고 overlong UTF-8·surrogate code point와 encode 입력의 lone surrogate를
+거부한다. Durable operation 순서는 checksum 검증 뒤에만 body를 해석하도록 고정한다.
+`negotiated-bound`는 encoder·decoder application이 같은 비교 규칙과 context policy를 사용하도록
+명시한다. Context 값이 없거나 음수이거나 선언된 absolute maximum을 초과하면 protocol error이며,
+유효한 협상값과 실제 content 또는 encoded byte 수를 비교한다.
+Fixture catalog v3는 닫힌 25개 operation마다 정상 경계 accept와 단일 규칙 위반 reject를 한 쌍 이상
+포함하며, encode 전용 invalid DTO와 큰 입력은 `directions`와 compact byte recipe로 표현한다.
+현재 생성되는 logical-stream API는 완성된 단일 배열을 받는다. Chunk 단위 incremental decode는
+#778에서 구현하며 W-3 adapter 교체의 선행 조건이다.
+
+Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
-contract amendment fixture 1개와 252가지 invalid mutation이 실제로
+contract amendment fixture 1개와 257가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline
@@ -66,8 +114,8 @@ wire `33`에서 public `32`로, `SpotMoving`은 wire `34`에서 public `33`으�
 ```bash
 node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
-node framework/runtime/protocol/generate-service-wire-assets.mjs
-node framework/runtime/protocol/generate-service-wire-assets.mjs --check
+node framework/runtime/protocol/generate-service-wire-codecs.mjs --write
+node framework/runtime/protocol/generate-service-wire-codecs.mjs --check
 node framework/runtime/protocol/verify-service-wire-decoder-fixtures.mjs
 ```
 

@@ -3602,8 +3602,19 @@
           "$ref": "nonzero-u64"
         },
         {
+          "name": "hasSourceSpotId",
+          "$ref": "bool8"
+        },
+        {
           "name": "sourceSpotId",
-          "$ref": "optional-text8"
+          "$ref": "text8",
+          "when": {
+            "fieldEquals": {
+              "name": "hasSourceSpotId",
+              "value": "true"
+            }
+          },
+          "otherwise": "forbidden"
         },
         {
           "name": "operationKind",
@@ -4380,8 +4391,21 @@
       ],
       "constraints": [
         {
-          "kind": "not-both-zero",
-          "unless": "one-way-record-without-terminal-completion"
+          "kind": "not-both-zero"
+        }
+      ]
+    },
+    {
+      "name": "operation-id-or-zero",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "high",
+          "$ref": "u64"
+        },
+        {
+          "name": "low",
+          "$ref": "u64"
         }
       ]
     },
@@ -5851,7 +5875,7 @@
         {
           "name": "originalOperationKind",
           "source": {
-            "context": "originalOperationKind"
+            "enclosingField": "operationKind"
           },
           "$ref": "mesh-operation-kind"
         }
@@ -5951,7 +5975,7 @@
         },
         {
           "name": "operationId",
-          "$ref": "operation-id"
+          "$ref": "operation-id-or-zero"
         },
         {
           "name": "operationKind",
@@ -7640,7 +7664,7 @@
         },
         {
           "name": "operation",
-          "$ref": "operation-id"
+          "$ref": "operation-id-or-zero"
         },
         {
           "name": "replyRoute",

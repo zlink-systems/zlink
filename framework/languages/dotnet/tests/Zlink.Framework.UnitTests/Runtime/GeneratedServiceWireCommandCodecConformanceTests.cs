@@ -1,248 +1,451 @@
-using System.Text;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class GeneratedServiceWireCommandCodecConformanceTests
 {
+    private static readonly ServiceWireCodec.DecodeContext Context =
+        new(null, null, null, 4294966774L, uint.MaxValue);
+
     [Fact]
-    public void Batch3_runtime_and_generated_codecs_match_canonical_goldens()
+    public void Generated_codec_conforms_to_every_indexed_vector()
     {
-        foreach (var bytes in ReadArray("reply-relay-v1.json", "canonical")
-                     .Concat(ReadArray("relocation-control-v1.json", "canonical"))
-                     .Concat(ReadArray("session-relocation-barrier-v1.json", "canonical")))
+        using var index = ReadJson("generated/fixtures/index.json");
+        Assert.Equal(3, index.RootElement.GetProperty("version").GetInt32());
+        Assert.Equal(9, index.RootElement.GetProperty("fixtures").GetArrayLength());
+
+        var cases = new List<ConformanceCase>();
+        foreach (var indexed in index.RootElement.GetProperty("fixtures").EnumerateArray())
         {
-            Assert.Equal(bytes, RuntimeCommandRoundTrip(bytes));
-            Assert.Equal(bytes, GeneratedCommandRoundTrip(bytes));
+            using var fixture = ReadJson(indexed.GetProperty("goldenFixture").GetString()!);
+            var fixtureRoot = fixture.RootElement.Clone();
+            var surface = indexed.GetProperty("surface").Clone();
+            var kind = indexed.GetProperty("kind").GetString()!;
+
+            foreach (var canonical in indexed.GetProperty("canonical").EnumerateArray())
+            {
+                var vector = canonical.Clone();
+                var label = $"canonical:{surface.GetProperty("format").GetString()}:"
+                    + vector.GetProperty("name").GetString();
+                cases.Add(new(label, "accept", () => AssertCanonical(
+                    kind, surface, fixtureRoot, vector, label)));
+            }
+
+            foreach (var malformed in indexed.GetProperty("malformed").EnumerateArray())
+            {
+                var vector = malformed.Clone();
+                var label = $"malformed:{surface.GetProperty("format").GetString()}:"
+                    + vector.GetProperty("name").GetString();
+                cases.Add(new(label, "reject", () => DecodeMalformed(
+                    surface, fixtureRoot, vector)));
+            }
+        }
+
+        foreach (var operationCase in index.RootElement.GetProperty("operationCases").EnumerateArray())
+        {
+            var vector = operationCase.Clone();
+            var label = $"operation:{vector.GetProperty("operation").GetString()}:"
+                + vector.GetProperty("name").GetString();
+            cases.Add(new(label, vector.GetProperty("expect").GetString()!,
+                () => ExerciseOperation(vector)));
+        }
+
+        Assert.Equal(101, cases.Count);
+        var operationCases = index.RootElement.GetProperty("operationCases").EnumerateArray().ToArray();
+        Assert.Equal(29, operationCases.Count(item => item.GetProperty("expect").GetString() == "accept"));
+        Assert.Equal(49, operationCases.Count(item => item.GetProperty("expect").GetString() == "reject"));
+        Assert.Equal(25, operationCases.Select(item => item.GetProperty("operation").GetString()).Distinct().Count());
+        foreach (var operation in operationCases.GroupBy(item => item.GetProperty("operation").GetString()!))
+        {
+            var boundary = operation.Where(item => item.TryGetProperty("boundaryPair", out _)).ToArray();
+            Assert.Contains(boundary, item => item.GetProperty("expect").GetString() == "accept");
+            Assert.Contains(boundary, item => item.GetProperty("expect").GetString() == "reject");
+        }
+        foreach (var testCase in cases)
+        {
+            Assert.True(testCase.Expect is "accept" or "reject", testCase.Label);
+            var exception = Record.Exception(testCase.Exercise);
+            Assert.False(exception is ConformanceHarnessException,
+                $"{testCase.Label}: {exception}");
+            Assert.True(testCase.Expect == "reject" ? exception is not null : exception is null,
+                $"{testCase.Label}: {exception}");
         }
     }
 
-    [Fact]
-    public void Batch3_runtime_and_generated_codecs_reject_the_same_malformed_bytes()
+    private static void AssertCanonical(string kind, JsonElement surface,
+        JsonElement fixture, JsonElement vector, string label)
     {
-        var malformed = ReadArray("relocation-control-v1.json", "malformed")
-            .Concat(ReadArray("reply-relay-v1.json", "canonical")
-                .SelectMany(Mutations))
-            .Concat(ReadArray("session-relocation-barrier-v1.json", "canonical")
-                .SelectMany(Mutations));
-
-        foreach (var bytes in malformed)
+        if (kind == "command")
         {
-            Assert.True(RuntimeCommandRejects(bytes));
-            Assert.ThrowsAny<Exception>(() => GeneratedCommandRoundTrip(bytes));
+            var frames = Frames(fixture, vector);
+            Assert.Equal(frames, GeneratedCommandRoundTrip(
+                surface.GetProperty("commandId").GetInt32(), frames));
+            Assert.Equal(frames, PilotCommandRoundTrip(
+                surface.GetProperty("commandId").GetInt32(), frames));
+            return;
         }
+
+        var property = kind == "logical" ? "logicalHex" : "encodedHex";
+        var bytes = Convert.FromHexString(Pointer(fixture,
+            vector.GetProperty("pointers").GetProperty(property)).GetString()!);
+        Assert.Equal(bytes, GeneratedFormatRoundTrip(
+            surface.GetProperty("format").GetString()!, bytes));
+
+        var oracle = PilotFormatRoundTrip(surface.GetProperty("format").GetString()!, bytes);
+        if (oracle is not null)
+            Assert.True(bytes.SequenceEqual(oracle), $"{label}:oracle");
     }
 
-    [Fact]
-    public void Batch4_runtime_and_generated_codecs_match_canonical_goldens()
+    private static void DecodeMalformed(JsonElement surface, JsonElement fixture,
+        JsonElement vector)
     {
-        foreach (var file in new[]
-                 {
-                     "user-spot-create-v1.json",
-                     "user-spot-close-v1.json",
-                     "actor-create-v1.json"
-                 })
+        var commandId = surface.GetProperty("commandId").GetInt32();
+        var frames = Frames(fixture, vector);
+        var generatedRejected = Record.Exception(
+            () => GeneratedCommandRoundTrip(commandId, frames)) is not null;
+        var pilotRejected = Record.Exception(
+            () => PilotCommandRoundTrip(commandId, frames)) is not null;
+        if (generatedRejected && pilotRejected)
+            throw new InvalidDataException("generated and pilot codecs rejected the vector");
+    }
+
+    private static void ExerciseOperation(JsonElement vector)
+    {
+        var expect = vector.GetProperty("expect").GetString()!;
+        var directions = vector.TryGetProperty("directions", out var declared)
+            ? declared.EnumerateArray().Select(item => item.GetString()!).ToArray()
+            : ["decode"];
+        var wire = OperationWire(vector);
+        foreach (var direction in directions)
         {
-            var bytes = ReadCanonicalObject(file);
-            Assert.Equal(bytes, RuntimeCommandRoundTrip(bytes));
-            Assert.Equal(bytes, GeneratedCommandRoundTrip(bytes));
+            var exception = Record.Exception(() => ExerciseDirection(vector, direction, wire));
+            if (expect == "accept" && exception is not null)
+                throw new ConformanceHarnessException($"{direction} rejected: {exception}");
+            if (expect == "reject" && exception is null)
+                throw new ConformanceHarnessException($"{direction} accepted");
+            if (exception is ConformanceHarnessException)
+                throw exception;
         }
+
+        if (expect == "reject")
+            throw new InvalidDataException("all declared directions rejected");
     }
 
-    [Fact]
-    public void Batch4_runtime_and_generated_codecs_reject_the_same_malformed_goldens()
+    private static void ExerciseDirection(JsonElement vector, string direction, object wire)
     {
-        foreach (var file in new[]
-                 {
-                     "user-spot-create-v1.json",
-                     "user-spot-close-v1.json",
-                     "actor-create-v1.json"
-                 })
-        foreach (var bytes in ReadArray(file, "malformed"))
+        var name = vector.GetProperty("name").GetString()!;
+        if (vector.GetProperty("surface").GetProperty("format").GetString() == "semantic")
         {
-            Assert.True(RuntimeCommandRejects(bytes));
-            Assert.ThrowsAny<Exception>(() => GeneratedCommandRoundTrip(bytes));
+            var input = vector.GetProperty("input");
+            ServiceWireCodec.ValidateTerminalFailure(
+                Enum.Parse<ServiceWireCodec.RequestTerminalResult>(Pascal(input.GetProperty("terminalResult").GetString()!)),
+                Enum.Parse<ServiceWireCodec.FrameworkErrorCode>(Pascal(input.GetProperty("failureCode").GetString()!)));
+            return;
         }
-    }
 
-    [Fact]
-    public void Zljr_runtime_and_generated_codecs_match_the_canonical_golden()
-    {
-        var bytes = ReadCanonicalObject("zljr-v1.json");
-
-        Assert.True(ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
-            bytes, out var source, out var recovery));
-        var runtime = ZLinkActorRemoteJoinRecoverySavedWork.Create(
-            1,
-            source,
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery));
-        var generated = ServiceWirePilotCodec.DecodeZljrRecordV1(bytes);
-        var runtimeBytes = runtime.Payload.ToArray();
-        var runtimeGenerated = ServiceWirePilotCodec.DecodeZljrRecordV1(
-            runtimeBytes);
-
-        Assert.Equal(
-            Encoding.UTF8.GetString(generated.Metadata),
-            Encoding.UTF8.GetString(runtimeGenerated.Metadata));
-        Assert.Equal(bytes, runtimeBytes);
-        Assert.Equal(bytes, ServiceWirePilotCodec.EncodeZljrRecordV1(generated));
-    }
-
-    [Fact]
-    public void Zljr_runtime_and_generated_codecs_reject_the_same_malformed_goldens()
-    {
-        foreach (var bytes in ReadArray("zljr-v1.json", "malformed"))
+        var context = ContextFor(vector);
+        if (direction == "decode")
         {
-            Assert.False(ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
-                bytes, out _, out _));
-            Assert.ThrowsAny<Exception>(() =>
-                ServiceWirePilotCodec.DecodeZljrRecordV1(bytes));
+            DecodeSurface(vector, wire, context);
+            return;
         }
+        if (direction != "encode")
+            throw new ConformanceHarnessException($"unknown direction {name}:{direction}");
+
+        var value = vector.TryGetProperty("input", out _)
+            ? InputValue(vector)
+            : DecodeSurface(vector, wire, Context);
+        var encoded = EncodeSurface(vector, value, context);
+        if (vector.GetProperty("expect").GetString() == "accept")
+            AssertWireEqual(wire, encoded, name);
     }
 
-    private static byte[] RuntimeCommandRoundTrip(byte[] bytes) => bytes[3] switch
+    private static object DecodeSurface(JsonElement vector, object wire,
+        ServiceWireCodec.DecodeContext context)
     {
-        30 => RoundTrip<ZLinkServiceWireCodec.RelocationReadyRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationReady,
-            ZLinkServiceWireCodec.EncodeRelocationReady),
-        31 => RoundTrip<ZLinkServiceWireCodec.RelocationDataRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationData,
-            ZLinkServiceWireCodec.EncodeRelocationData),
-        33 => RoundTrip<ZLinkServiceWireCodec.ReplyRelayRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeReplyRelay,
-            ZLinkServiceWireCodec.EncodeReplyRelay),
-        34 => RoundTrip<ZLinkServiceWireCodec.RelocationCutoverRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationCutover,
-            ZLinkServiceWireCodec.EncodeRelocationCutover),
-        40 => RoundTrip<ZLinkServiceWireCodec.RelocationPrepareRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationPrepare,
-            ZLinkServiceWireCodec.EncodeRelocationPrepare),
-        42 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationSealRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal,
-            ZLinkServiceWireCodec.EncodeSessionRelocationSeal),
-        43 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationSealedRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed,
-            ZLinkServiceWireCodec.EncodeSessionRelocationSealed),
-        44 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationRouteRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute,
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute),
-        46 => RoundTrip<ZLinkServiceWireCodec.ReplyRelayAckRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeReplyRelayAck,
-            ZLinkServiceWireCodec.EncodeReplyRelayAck),
-        47 or 48 => RoundTripUserSpot(bytes),
-        49 => RoundTripActorCreate(bytes),
-        52 => RoundTrip<ZLinkServiceWireCodec.RelocationStateRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationState,
-            ZLinkServiceWireCodec.EncodeRelocationState),
-        53 => RoundTrip<ZLinkServiceWireCodec.RelocationFailedRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationFailed,
-            ZLinkServiceWireCodec.EncodeRelocationFailed),
-        _ => throw new InvalidOperationException()
+        var surface = vector.GetProperty("surface");
+        if (surface.GetProperty("format").GetString() == "command")
+            return surface.GetProperty("commandId").GetInt32() switch
+            {
+                16 => ServiceWireCodec.DecodeNodeSend16((byte[][])wire, context),
+                24 => ServiceWireCodec.DecodeActorSend24((byte[][])wire, context),
+                _ => throw new ConformanceHarnessException("operation command surface")
+            };
+        return surface.GetProperty("format").GetString() switch
+        {
+            "authority-payload-v1" => ServiceWireCodec.DecodeDurableAuthorityPayloadV1((byte[])wire, context),
+            "relocation-envelope-v1" => ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1((byte[])wire, context),
+            "type" => DecodeType(surface.GetProperty("type").GetString()!, (byte[])wire, context),
+            _ => throw new ConformanceHarnessException("operation decode surface")
+        };
+    }
+
+    private static object EncodeSurface(JsonElement vector, object value,
+        ServiceWireCodec.DecodeContext context)
+    {
+        var surface = vector.GetProperty("surface");
+        if (surface.GetProperty("format").GetString() == "command")
+            return surface.GetProperty("commandId").GetInt32() switch
+            {
+                16 => ServiceWireCodec.EncodeNodeSend16((ServiceWireCodec.NodeSend16)value, context),
+                24 => ServiceWireCodec.EncodeActorSend24((ServiceWireCodec.ActorSend24)value, context),
+                _ => throw new ConformanceHarnessException("operation command surface")
+            };
+        return surface.GetProperty("format").GetString() switch
+        {
+            "authority-payload-v1" => ServiceWireCodec.EncodeDurableAuthorityPayloadV1(
+                (ServiceWireCodec.AuthorityPayloadV1)value, context),
+            "relocation-envelope-v1" => ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(
+                (ServiceWireCodec.RelocationEnvelopeV1)value, context),
+            "type" => EncodeType(surface.GetProperty("type").GetString()!, value, context),
+            _ => throw new ConformanceHarnessException("operation encode surface")
+        };
+    }
+
+    private static object DecodeType(string type, byte[] bytes,
+        ServiceWireCodec.DecodeContext context) => type switch
+    {
+        "application-version" => ServiceWireCodec.DecodeApplicationVersion(bytes, context),
+        "bool8" => ServiceWireCodec.DecodeBool8(bytes, context),
+        "rid" => ServiceWireCodec.DecodeRid(bytes, context),
+        "text8" => ServiceWireCodec.DecodeText8(bytes, context),
+        "optional-actor-ref" => ServiceWireCodec.DecodeOptionalActorRef(bytes, context),
+        "actor-ref" => ServiceWireCodec.DecodeActorRef(bytes, context),
+        "sorted-text8-vector" => ServiceWireCodec.DecodeSortedText8Vector(bytes, context),
+        "metadata-frame" => ServiceWireCodec.DecodeMetadataFrame(bytes, context),
+        "application-payload-envelope-v1" => ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(bytes, context),
+        "relocation-object-identity" => ServiceWireCodec.DecodeRelocationObjectIdentity(bytes, context),
+        "descriptor-extension" => ServiceWireCodec.DecodeDescriptorExtension(bytes, context),
+        "aggregate-participant-vector" => ServiceWireCodec.DecodeAggregateParticipantVector(bytes, context),
+        "application-payload-bytes" => ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context),
+        _ => throw new ConformanceHarnessException($"operation type decode {type}")
     };
 
-    private static byte[] GeneratedCommandRoundTrip(byte[] bytes) => bytes[3] switch
+    private static byte[] EncodeType(string type, object value,
+        ServiceWireCodec.DecodeContext context) => type switch
     {
-        30 => ServiceWirePilotCodec.EncodeRelocationReady30(
-            ServiceWirePilotCodec.DecodeRelocationReady30(bytes)),
-        31 => ServiceWirePilotCodec.EncodeRelocationData31(
-            ServiceWirePilotCodec.DecodeRelocationData31(bytes)),
-        33 => ServiceWirePilotCodec.EncodeReplyRelay33(
-            ServiceWirePilotCodec.DecodeReplyRelay33([bytes])).Single(),
-        34 => ServiceWirePilotCodec.EncodeRelocationCutover34(
-            ServiceWirePilotCodec.DecodeRelocationCutover34(bytes)),
-        40 => ServiceWirePilotCodec.EncodeRelocationPrepare40(
-            ServiceWirePilotCodec.DecodeRelocationPrepare40(bytes)),
-        42 => ServiceWirePilotCodec.EncodeSessionRelocationSeal42(
-            ServiceWirePilotCodec.DecodeSessionRelocationSeal42(bytes)),
-        43 => ServiceWirePilotCodec.EncodeSessionRelocationSealed43(
-            ServiceWirePilotCodec.DecodeSessionRelocationSealed43(bytes)),
-        44 => ServiceWirePilotCodec.EncodeSessionRelocationRoute44(
-            ServiceWirePilotCodec.DecodeSessionRelocationRoute44(bytes)),
-        46 => ServiceWirePilotCodec.EncodeReplyRelayAck46(
-            ServiceWirePilotCodec.DecodeReplyRelayAck46(bytes)),
-        47 => ServiceWirePilotCodec.EncodeUserSpotCreate47(
-            ServiceWirePilotCodec.DecodeUserSpotCreate47(bytes)),
-        48 => ServiceWirePilotCodec.EncodeUserSpotClose48(
-            ServiceWirePilotCodec.DecodeUserSpotClose48(bytes)),
-        49 => ServiceWirePilotCodec.EncodeActorCreate49(
-            ServiceWirePilotCodec.DecodeActorCreate49(bytes)),
-        52 => ServiceWirePilotCodec.EncodeRelocationState52(
-            ServiceWirePilotCodec.DecodeRelocationState52(bytes)),
-        53 => ServiceWirePilotCodec.EncodeRelocationFailed53(
-            ServiceWirePilotCodec.DecodeRelocationFailed53(bytes)),
-        _ => throw new InvalidOperationException()
+        "application-version" => ServiceWireCodec.EncodeApplicationVersion((ServiceWireCodec.ApplicationVersion)value, context),
+        "bool8" => ServiceWireCodec.EncodeBool8((ServiceWireCodec.Bool8)value, context),
+        "rid" => ServiceWireCodec.EncodeRid((ServiceWireCodec.Rid)value, context),
+        "text8" => ServiceWireCodec.EncodeText8((ServiceWireCodec.Text8)value, context),
+        "optional-actor-ref" => ServiceWireCodec.EncodeOptionalActorRef((ServiceWireCodec.OptionalActorRef)value, context),
+        "actor-ref" => ServiceWireCodec.EncodeActorRef((ServiceWireCodec.ActorRef)value, context),
+        "sorted-text8-vector" => ServiceWireCodec.EncodeSortedText8Vector((ServiceWireCodec.SortedText8Vector)value, context),
+        "metadata-frame" => ServiceWireCodec.EncodeMetadataFrame((ServiceWireCodec.MetadataFrame)value, context),
+        "application-payload-envelope-v1" => ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1((ServiceWireCodec.ApplicationPayloadEnvelopeV1)value, context),
+        "relocation-object-identity" => ServiceWireCodec.EncodeRelocationObjectIdentity((ServiceWireCodec.RelocationObjectIdentity)value, context),
+        "descriptor-extension" => ServiceWireCodec.EncodeDescriptorExtension((ServiceWireCodec.DescriptorExtension)value, context),
+        "aggregate-participant-vector" => ServiceWireCodec.EncodeAggregateParticipantVector((ServiceWireCodec.AggregateParticipantVector)value, context),
+        "application-payload-bytes" => ServiceWireCodec.EncodeApplicationPayloadBytes((ServiceWireCodec.ApplicationPayloadBytes)value, context),
+        _ => throw new ConformanceHarnessException($"operation type encode {type}")
     };
 
-    private static bool RuntimeCommandRejects(byte[] bytes) => bytes[3] switch
+    private static object InputValue(JsonElement vector)
     {
-        30 => !ZLinkServiceWireCodec.TryDecodeRelocationReady(bytes, out _, out _),
-        31 => !ZLinkServiceWireCodec.TryDecodeRelocationData(bytes, out _, out _),
-        33 => !ZLinkServiceWireCodec.TryDecodeReplyRelay(bytes, out _, out _),
-        34 => !ZLinkServiceWireCodec.TryDecodeRelocationCutover(bytes, out _, out _),
-        40 => !ZLinkServiceWireCodec.TryDecodeRelocationPrepare(bytes, out _, out _),
-        42 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(bytes, out _, out _),
-        43 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(bytes, out _, out _),
-        44 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute(bytes, out _, out _),
-        46 => !ZLinkServiceWireCodec.TryDecodeReplyRelayAck(bytes, out _, out _),
-        47 or 48 => !ZLinkServiceWireCodec.TryDecodeUserSpotOperation(bytes, out _, out _),
-        49 => !ZLinkServiceWireCodec.TryDecodeActorCreateOperation(bytes, out _, out _),
-        52 => !ZLinkServiceWireCodec.TryDecodeRelocationState(bytes, out _, out _),
-        53 => !ZLinkServiceWireCodec.TryDecodeRelocationFailed(bytes, out _, out _),
-        _ => throw new InvalidOperationException()
+        var name = vector.GetProperty("name").GetString()!;
+        var input = vector.GetProperty("input");
+        var type = vector.GetProperty("surface").GetProperty("type").GetString();
+        if (name == "text-lone-surrogate") return new ServiceWireCodec.Text8("\ud800");
+        if (type == "optional-actor-ref") return new ServiceWireCodec.OptionalActorRef(
+            new ServiceWireCodec.OptionalText8(input.GetProperty("actorId").ValueKind == JsonValueKind.Null ? null : input.GetProperty("actorId").GetString()),
+            input.GetProperty("generation").ValueKind == JsonValueKind.Null ? null : new ServiceWireCodec.NonzeroU64(input.GetProperty("generation").GetUInt64()));
+        if (type == "relocation-object-identity") return new ServiceWireCodec.RelocationObjectIdentityCase0(
+            Enum.Parse<ServiceWireCodec.StatefulObjectKind>(Pascal(input.GetProperty("objectKind").GetString()!)),
+            new ServiceWireCodec.ActorRef(new ServiceWireCodec.Text8(input.GetProperty("actor").GetProperty("actorId").GetString()!), new ServiceWireCodec.NonzeroU64(input.GetProperty("actor").GetProperty("objectGeneration").GetUInt64())),
+            new ServiceWireCodec.NonzeroU64(input.GetProperty("expectedAuthorityOwnerGeneration").GetUInt64()));
+        if (type == "descriptor-extension") return Descriptor(input);
+        if (type == "aggregate-participant-vector") return AggregateParticipants(input);
+        if (type == "sorted-text8-vector") return new ServiceWireCodec.SortedText8Vector(
+            input.EnumerateArray().Select(item => new ServiceWireCodec.Text8(item.GetString()!)).ToArray());
+        if (type == "application-payload-bytes")
+        {
+            var bytes = GC.AllocateUninitializedArray<byte>(input.GetProperty("count").GetInt32());
+            bytes.AsSpan().Fill((byte)input.GetProperty("repeatByte").GetInt32());
+            return new ServiceWireCodec.ApplicationPayloadBytes(bytes);
+        }
+        throw new ConformanceHarnessException($"operation input {name}");
+    }
+
+    private static ServiceWireCodec.DescriptorExtension Descriptor(JsonElement input)
+    {
+        T? Optional<T>(string name, Func<JsonElement, T> create) where T : class =>
+            input.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null ? create(value) : null;
+        ServiceWireCodec.RuntimeState? runtimeState = input.TryGetProperty("runtimeState", out var runtime) && runtime.ValueKind != JsonValueKind.Null
+            ? Enum.Parse<ServiceWireCodec.RuntimeState>(Pascal(runtime.GetString()!)) : null;
+        ServiceWireCodec.ObjectRole? objectRole = input.TryGetProperty("objectRole", out var role) && role.ValueKind != JsonValueKind.Null
+            ? Enum.Parse<ServiceWireCodec.ObjectRole>(Pascal(role.GetString()!)) : null;
+        return new(
+            runtimeState,
+            Optional("applicationVersion", value => new ServiceWireCodec.ApplicationVersion(value.GetInt64())),
+            null, null, null,
+            Optional("protocolCapabilities", value => new ServiceWireCodec.SortedText8Vector(value.EnumerateArray().Select(item => new ServiceWireCodec.Text8(item.GetString()!)).ToArray())),
+            objectRole,
+            Optional("placementWeight", value => new ServiceWireCodec.U32(value.GetUInt32())),
+            Optional("activeCapacityLimit", value => new ServiceWireCodec.ObjectCapacityLimit(value.GetUInt32())),
+            Optional("pendingCapacityLimit", value => new ServiceWireCodec.ObjectPendingCapacityLimit(value.GetUInt32())),
+            Optional("activeCapacityUsed", value => new ServiceWireCodec.U32(value.GetUInt32())),
+            Optional("pendingCapacityUsed", value => new ServiceWireCodec.U32(value.GetUInt32())));
+    }
+
+    private static ServiceWireCodec.AggregateParticipantVector AggregateParticipants(JsonElement input) => new(
+        input.EnumerateArray().Select(item =>
+        {
+            var actor = item.GetProperty("object").GetProperty("actor");
+            var identity = new ServiceWireCodec.RelocationObjectIdentityCase0(
+                ServiceWireCodec.StatefulObjectKind.Actor,
+                new ServiceWireCodec.ActorRef(new ServiceWireCodec.Text8(actor.GetProperty("actorId").GetString()!), new ServiceWireCodec.NonzeroU64(actor.GetProperty("objectGeneration").GetUInt64())),
+                new ServiceWireCodec.NonzeroU64(item.GetProperty("object").GetProperty("expectedAuthorityOwnerGeneration").GetUInt64()));
+            return new ServiceWireCodec.MaintenanceAggregateParticipantV1(identity,
+                new ServiceWireCodec.AuthorityStoreVersion(item.GetProperty("expectedStoreVersion").GetString()!),
+                new ServiceWireCodec.AggregateParticipantMutationBytes(Convert.FromHexString(item.GetProperty("mutationHex").GetString()!)));
+        }).ToArray());
+
+    private static ServiceWireCodec.DecodeContext ContextFor(JsonElement vector)
+    {
+        if (!vector.TryGetProperty("context", out var values))
+            return vector.GetProperty("operation").GetString() == "negotiated-bound"
+                ? ServiceWireCodec.DecodeContext.Empty : Context;
+
+        var payloadMaximum = values.TryGetProperty(
+            "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead", out var payload)
+            ? payload.GetInt64()
+            : (long?)null;
+        long? envelopeMaximum = values.TryGetProperty(
+            "effectiveCompleteMessageBytes", out var envelope)
+            ? envelope.GetInt64()
+            : null;
+        return new(null, null, null, payloadMaximum, envelopeMaximum);
+    }
+
+    private static object OperationWire(JsonElement vector)
+    {
+        if (vector.TryGetProperty("framesHex", out var frames))
+            return frames.EnumerateArray().Select(item => Convert.FromHexString(item.GetString()!)).ToArray();
+        if (vector.TryGetProperty("chunksHex", out var chunks))
+            return chunks.EnumerateArray().SelectMany(item => Convert.FromHexString(item.GetString()!)).ToArray();
+        if (vector.TryGetProperty("byteRecipe", out var recipe))
+        {
+            var result = GC.AllocateUninitializedArray<byte>(recipe.GetProperty("encodedBytes").GetInt32());
+            var offset = 0;
+            foreach (var segment in recipe.GetProperty("segments").EnumerateArray())
+                if (segment.TryGetProperty("hex", out var hex))
+                {
+                    var bytes = Convert.FromHexString(hex.GetString()!);
+                    bytes.CopyTo(result, offset);
+                    offset += bytes.Length;
+                }
+                else
+                {
+                    var count = segment.GetProperty("count").GetInt32();
+                    result.AsSpan(offset, count).Fill((byte)segment.GetProperty("repeatByte").GetInt32());
+                    offset += count;
+                }
+            Assert.Equal(result.Length, offset);
+            return result;
+        }
+        return Convert.FromHexString(vector.GetProperty("hex").GetString()!);
+    }
+
+    private static void AssertWireEqual(object expected, object actual, string name)
+    {
+        if (expected is byte[] bytes && actual is byte[] encoded)
+            Assert.True(bytes.SequenceEqual(encoded), name);
+        else if (expected is byte[][] frames && actual is byte[][] encodedFrames)
+            Assert.Equal(frames, encodedFrames);
+        else throw new ConformanceHarnessException($"wire shape {name}");
+    }
+
+    private static byte[][] GeneratedCommandRoundTrip(int commandId, byte[][] frames) =>
+        commandId switch
+        {
+            28 => ServiceWireCodec.EncodeActorJoin28(
+                ServiceWireCodec.DecodeActorJoin28(frames, Context), Context),
+            47 => ServiceWireCodec.EncodeUserSpotCreate47(
+                ServiceWireCodec.DecodeUserSpotCreate47(frames, Context), Context),
+            48 => ServiceWireCodec.EncodeUserSpotClose48(
+                ServiceWireCodec.DecodeUserSpotClose48(frames, Context), Context),
+            49 => ServiceWireCodec.EncodeActorCreate49(
+                ServiceWireCodec.DecodeActorCreate49(frames, Context), Context),
+            _ => throw new InvalidDataException($"unhandled command {commandId}")
+        };
+
+    private static byte[][] PilotCommandRoundTrip(int commandId, byte[][] frames) =>
+        commandId switch
+        {
+            28 => ServiceWirePilotCodec.EncodeActorJoin28(
+                ServiceWirePilotCodec.DecodeActorJoin28(frames)),
+            47 => [ServiceWirePilotCodec.EncodeUserSpotCreate47(
+                ServiceWirePilotCodec.DecodeUserSpotCreate47(frames.Single()))],
+            48 => [ServiceWirePilotCodec.EncodeUserSpotClose48(
+                ServiceWirePilotCodec.DecodeUserSpotClose48(frames.Single()))],
+            49 => [ServiceWirePilotCodec.EncodeActorCreate49(
+                ServiceWirePilotCodec.DecodeActorCreate49(frames.Single()))],
+            _ => throw new InvalidDataException($"unhandled command oracle {commandId}")
+        };
+
+    private static byte[] GeneratedFormatRoundTrip(string format, byte[] bytes) => format switch
+    {
+        "authority-payload-v1" => ServiceWireCodec.EncodeDurableAuthorityPayloadV1(
+            ServiceWireCodec.DecodeDurableAuthorityPayloadV1(bytes, Context), Context),
+        "instance-activation-recovery-v1" =>
+            ServiceWireCodec.EncodeDurableInstanceActivationRecoveryV1(
+                ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(bytes, Context), Context),
+        "relocation-data-chunk-v1" => ServiceWireCodec.EncodeDurableRelocationDataChunkV1(
+            ServiceWireCodec.DecodeDurableRelocationDataChunkV1(bytes, Context), Context),
+        "relocation-manifest-v1" => ServiceWireCodec.EncodeDurableRelocationManifestV1(
+            ServiceWireCodec.DecodeDurableRelocationManifestV1(bytes, Context), Context),
+        "relocation-envelope-v1" => ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(
+            ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1(bytes, Context), Context),
+        _ => throw new InvalidDataException($"unhandled format {format}")
     };
 
-    private static byte[] RoundTripUserSpot(byte[] bytes)
+    private static byte[]? PilotFormatRoundTrip(string format, byte[] bytes) => format switch
     {
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            bytes, out var record, out _));
-        return record.Command == ServiceWireConstants.Command.UserSpotCreate
-            ? ZLinkServiceWireCodec.EncodeUserSpotCreate(record.Create)
-            : ZLinkServiceWireCodec.EncodeUserSpotClose(record.Close);
+        "relocation-data-chunk-v1" => ServiceWirePilotCodec.EncodeRelocationDataChunkV1(
+            ServiceWirePilotCodec.DecodeRelocationDataChunkV1(bytes)),
+        "relocation-manifest-v1" => ServiceWirePilotCodec.EncodeRelocationManifestV1(
+            ServiceWirePilotCodec.DecodeRelocationManifestV1(bytes)),
+        "relocation-envelope-v1" => ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(
+            ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(bytes)),
+        _ => null
+    };
+
+    private static byte[][] Frames(JsonElement fixture, JsonElement vector)
+    {
+        var pointers = vector.GetProperty("pointers");
+        var pointer = pointers.TryGetProperty("framesHex", out var framesHex)
+            ? framesHex
+            : pointers.GetProperty("hex");
+        var value = Pointer(fixture, pointer);
+        return value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Select(item => Convert.FromHexString(item.GetString()!)).ToArray()
+            : [Convert.FromHexString(value.GetString()!)];
     }
 
-    private static byte[] RoundTripActorCreate(byte[] bytes)
+    private static JsonElement Pointer(JsonElement root, JsonElement pointer)
     {
-        Assert.True(ZLinkServiceWireCodec.TryDecodeActorCreateOperation(
-            bytes, out var record, out _));
-        return ZLinkServiceWireCodec.EncodeActorCreate(record.Operation);
+        var current = root;
+        foreach (var segment in pointer.GetString()!.Split('/').Skip(1))
+        {
+            var decoded = segment.Replace("~1", "/").Replace("~0", "~");
+            current = current.ValueKind == JsonValueKind.Array
+                ? current[int.Parse(decoded)]
+                : current.GetProperty(decoded);
+        }
+        return current;
     }
 
-    private delegate bool TryDecode<T>(ReadOnlySpan<byte> bytes, out T value,
-        out ZLinkServiceWireCodec.DecodeError error);
+    private static string Pascal(string value) => char.ToUpperInvariant(value[0]) + value[1..];
 
-    private static byte[] RoundTrip<T>(byte[] bytes, TryDecode<T> decode,
-        Func<T, byte[]> encode)
-    {
-        Assert.True(decode(bytes, out var value, out _));
-        return encode(value);
-    }
-
-    private static IEnumerable<byte[]> Mutations(byte[] bytes)
-    {
-        yield return bytes[..^1];
-        yield return [.. bytes, 0];
-    }
-
-    private static byte[] ReadCanonicalObject(string file) =>
-        ReadFixture(file).GetProperty("canonical").GetProperty("hex")
-            .GetString() is { } hex
-            ? Convert.FromHexString(hex)
-            : throw new InvalidDataException();
-
-    private static IReadOnlyList<byte[]> ReadArray(string file, string section) =>
-        ReadFixture(file).GetProperty(section).EnumerateArray()
-            .Select(static item => Convert.FromHexString(
-                item.GetProperty("hex").GetString()!))
-            .ToArray();
-
-    private static JsonElement ReadFixture(string file)
+    private static JsonDocument ReadJson(string relativePath)
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
-        var path = Path.GetFullPath(
-            $"../../runtime/protocol/golden/{file}", frameworkRoot);
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        return document.RootElement.Clone();
+        var path = Path.GetFullPath($"../../runtime/protocol/{relativePath}", frameworkRoot);
+        return JsonDocument.Parse(File.ReadAllText(path));
     }
+
+    private sealed record ConformanceCase(string Label, string Expect, Action Exercise);
+
+    private sealed class ConformanceHarnessException(string message) : Exception(message);
 }

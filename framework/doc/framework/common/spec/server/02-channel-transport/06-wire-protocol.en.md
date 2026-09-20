@@ -85,7 +85,9 @@ evaluation rules of keywords such as `$ref`, `$bound`, `when`, and
 not restate them.
 
 The generator produces, from the schema, the encoder and decoder of every layout kind, the
-conditional and semantic constraint checks, and the generated assets and fixtures. Where a layout is
+conditional and constraint checks inside each layout, and the generated assets and fixtures. Which
+top-level semantic constraints are generated as runtime checks is settled by
+[07 §8.2](07-schema-dialect.en.md#82-semanticconstraints). Where a layout is
 not yet generated, no private syntax or handwritten codec exception is introduced — the schema is
 extended and the generator is brought up to it.
 

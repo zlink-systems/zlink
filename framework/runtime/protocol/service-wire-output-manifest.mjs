@@ -1,0 +1,77 @@
+export const serviceWireOutputManifest = Object.freeze({
+  schema: "service-wire-v1.schema.json",
+  languages: Object.freeze([
+    Object.freeze({
+      id: "typescript",
+      tool: "render-service-wire-typescript.mjs",
+      output: "generated/node/service_wire_codec.generated.ts",
+      runtimeOutputs: Object.freeze([
+        "../../languages/node/packages/framework/src/runtime/protocol/service_wire_codec.generated.ts",
+      ]),
+    }),
+    Object.freeze({
+      id: "dotnet",
+      tool: "render-service-wire-dotnet.mjs",
+      output: "generated/dotnet/ServiceWireCodec.g.cs",
+      runtimeOutputs: Object.freeze([]),
+    }),
+    Object.freeze({
+      id: "java",
+      tool: "render-service-wire-java.mjs",
+      output: "generated/jvm/ServiceWireCodec.java",
+      runtimeOutputs: Object.freeze([]),
+    }),
+    Object.freeze({
+      id: "cpp",
+      tool: "render-service-wire-cpp.mjs",
+      output: "generated/cpp/service_wire_codec.hpp",
+      runtimeOutputs: Object.freeze([]),
+    }),
+  ]),
+  generators: Object.freeze([
+    Object.freeze({
+      id: "fixtures",
+      tool: "generate-service-wire-fixtures.mjs",
+      outputs: Object.freeze(["generated/fixtures/index.json"]),
+    }),
+    Object.freeze({
+      id: "assets",
+      tool: "generate-service-wire-assets.mjs",
+      outputs: Object.freeze([
+        "generated/cpp/service_wire_constants.hpp",
+        "generated/dotnet/ServiceWireConstants.g.cs",
+        "generated/jvm/ServiceWireConstants.java",
+        "generated/node/service_wire_constants.ts",
+        "generated/node/service_wire_constants.js",
+        "generated/node/service_wire_constants.d.ts",
+        "../../languages/node/packages/framework/src/runtime/foundation/service-wire-constants.generated.ts",
+        "golden/service-decoder-fixtures-v1.json",
+        "golden/bound-session-replaced-v1.json",
+        "golden/user-spot-create-v1.json",
+        "golden/user-spot-close-v1.json",
+        "golden/actor-create-v1.json",
+        "golden/zljr-v1.json",
+      ]),
+    }),
+    Object.freeze({
+      id: "pilot",
+      tool: "generate-service-wire-pilot-codecs.mjs",
+      legacy: Object.freeze({ removalStage: 4, reason: "runtime adapters consume this API" }),
+      outputs: Object.freeze([
+        "generated/node/service_wire_pilot_codec.generated.ts",
+        "../../languages/node/packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated.ts",
+        "generated/jvm/ServiceWirePilotCodec.java",
+        "generated/dotnet/ServiceWirePilotCodec.g.cs",
+        "generated/cpp/service_wire_pilot_codec.hpp",
+        "generated/fixtures/relocation-envelope-v1-pilot.json",
+        "generated/fixtures/relocation-data-chunk-v1-pilot.json",
+        "generated/fixtures/relocation-manifest-v1-pilot.json",
+        "generated/fixtures/actor-join-28-pilot.json",
+        "generated/fixtures/user-spot-create-v1-pilot.json",
+        "generated/fixtures/user-spot-close-v1-pilot.json",
+        "generated/fixtures/actor-create-v1-pilot.json",
+        "generated/fixtures/zljr-v1-pilot.json",
+      ]),
+    }),
+  ]),
+});

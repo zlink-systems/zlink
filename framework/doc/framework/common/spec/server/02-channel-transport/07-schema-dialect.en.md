@@ -48,7 +48,7 @@ Three consumers read the schema.
 | Consumer | What it reads | Where |
 |---|---|---|
 | Validator | The whole schema. Checks reference integrity, length capacity, closed unions, TLV order, durable checksums, and literal equality of semantic declarations | `validate-service-wire-schema.mjs` |
-| Generator | `commands`, `flags`, some `types` (enums), `bounds`, `frameworkMultipartV1Profile`, `terminal-failure-integrity`. Emits constant tables for the four languages and the shared decoder fixtures | `generate-service-wire-assets.mjs`, `generate-service-wire-pilot-codecs.mjs` |
+| Generator | The whole schema the validator accepted. Lowering turns this chapter's reading rules into a language-neutral operation IR once; each language renderer emits only that operation's syntax. Constant tables, codecs and the fixture index are produced from one manifest, with drift checks | `service-wire-lowering.mjs`, `render-service-wire-*.mjs`, `generate-service-wire-{assets,fixtures,codecs}.mjs`, `service-wire-output-manifest.mjs` |
 | Runtime codec | The layouts in `types`, `commands`, `durableFormats`, and `relocationLogicalStreamFormat`. Generated or handwritten, it produces and reads bytes by the rules in this chapter | each language runtime |
 
 Only a schema that the validator accepts is the reference. Codecs and fixtures built from a
@@ -188,7 +188,7 @@ bytes, not code points.
 | Key | Meaning |
 |---|---|
 | `fields` | the field list. Declaration order is byte order ([§5](#5-field-keywords)) |
-| `constraints` | constraints across fields: `not-both-zero` (`fields`, optional `unless`), `field-less-than-or-equal` (two fields of the same struct) |
+| `constraints` | constraints across fields: `not-both-zero` (`fields`), `field-less-than-or-equal` (two fields of the same struct) |
 | `maximumEncodedBytes` | the encoded bound |
 | `trailingBytes` | `forbidden`. Rejects leftover bytes in a struct whose length is fixed from outside |
 | `presence`, `scope`, `storage`, `metadataMeaning`, `queueMeaning` | literals stating where this layout appears and what it means. No effect on byte layout; referenced by the rules in [§8](#8-semantic-declarations) and [§9](#9-profiles-and-owning-clauses) |
@@ -248,7 +248,7 @@ frame — such as the typed payload envelope — use it.
 | `bodyLengthType`, `bodyLengthCovers` | a length prefix before the selected case and its coverage (`selected-case`). A union without them places the case directly, with no length prefix |
 | `cases` | a list of `{ "when": { discriminator: value, … }, "fields": [...], "constraints": [...] }`. Every discriminator is assigned exactly once. `constraints` is optional and applies the same kinds as a struct's `constraints` (§4.5) to that case's fields |
 | `otherwise` | when no case matches — `protocol-error` (reject) or an explicit field list `{ "fields": [...] }` (the current schema uses only the empty list) |
-| `trailingBytes` | `forbidden` |
+| `maximumEncodedBytes`, `trailingBytes` | as for `struct` (§4.5) |
 | `presence`, `release` | literals stating when the union appears and when it is released. No effect on layout |
 
 The layout is the `source: wire` discriminators, the body length (if declared), then the fields of
