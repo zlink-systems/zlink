@@ -1,6 +1,5 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot.notifications
 
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationEvent
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationEventKind
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationSnapshot
@@ -15,46 +14,47 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.ParticipantJoin
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.TypingChangedNotify
 
 class ConversationNotificationPublisher {
-    suspend fun publish(
-        events: List<ConversationEvent>,
-        actors: Map<String, SupportUserActor>,
-    ) {
+    suspend fun publish(events: List<ConversationEvent>, actors: Map<String, SupportUserActor>) {
         for (event in events) {
             publish(event, actors)
         }
     }
 
     // --8<-- [start:doc-sc-roster-push]
-    suspend fun publishAssignedToRoster(
-        roster: SupportUserActor,
-        snapshot: ConversationSnapshot,
-    ) {
+    suspend fun publishAssignedToRoster(roster: SupportUserActor, snapshot: ConversationSnapshot) {
         val state = ConversationContracts.toState(snapshot)
-        roster.context().boundSession()
+        roster
+            .context()
+            .boundSession()
             .send(ConversationAssignedNotify(state.conversationId, state))
             .submit()
     }
+
     // --8<-- [end:doc-sc-roster-push]
 
-    private suspend fun publish(
-        event: ConversationEvent,
-        actors: Map<String, SupportUserActor>,
-    ) {
+    private suspend fun publish(event: ConversationEvent, actors: Map<String, SupportUserActor>) {
         val state = ConversationContracts.toState(event.state)
         when (event.kind) {
-            ConversationEventKind.ParticipantJoined -> publishParticipantJoined(event, state, actors)
+            ConversationEventKind.ParticipantJoined ->
+                publishParticipantJoined(event, state, actors)
             ConversationEventKind.MessageAppended -> publishMessage(event, state, actors)
             ConversationEventKind.TypingChanged -> publishTyping(event, state, actors)
-            ConversationEventKind.Idle -> publishAll(actors.values) { actor ->
-                actor.context().boundSession()
-                    .send(ConversationIdleNotify(state.conversationId, state))
-                    .submit()
-            }
-            ConversationEventKind.Closed -> publishAll(excludeActor(actors, event.actorId).values) { actor ->
-                actor.context().boundSession()
-                    .send(ConversationClosedNotify(state.conversationId, state))
-                    .submit()
-            }
+            ConversationEventKind.Idle ->
+                publishAll(actors.values) { actor ->
+                    actor
+                        .context()
+                        .boundSession()
+                        .send(ConversationIdleNotify(state.conversationId, state))
+                        .submit()
+                }
+            ConversationEventKind.Closed ->
+                publishAll(excludeActor(actors, event.actorId).values) { actor ->
+                    actor
+                        .context()
+                        .boundSession()
+                        .send(ConversationClosedNotify(state.conversationId, state))
+                        .submit()
+                }
         }
     }
 
@@ -69,14 +69,16 @@ class ConversationNotificationPublisher {
         if (customer.participantId == actorId) {
             return
         }
-        customer.context().boundSession()
+        customer
+            .context()
+            .boundSession()
             .send(
                 ParticipantJoinedNotify(
                     state.conversationId,
                     actorId,
                     ConversationContracts.toRole(role),
                     state,
-                ),
+                )
             )
             .submit()
     }
@@ -90,11 +92,14 @@ class ConversationNotificationPublisher {
         val message = event.message ?: error("Message event requires a chat message.")
         val chatMessage = ConversationContracts.toMessage(message)
         publishAll(excludeActor(actors, message.senderActorId).values) { actor ->
-            actor.context().boundSession()
+            actor
+                .context()
+                .boundSession()
                 .send(ChatMessageNotify(state.conversationId, chatMessage, state))
                 .submit()
         }
     }
+
     // --8<-- [end:doc-sc-message-push]
 
     private suspend fun publishTyping(
@@ -105,7 +110,9 @@ class ConversationNotificationPublisher {
         val actorId = event.actorId ?: error("Typing event requires actor id.")
         val isTyping = event.isTyping ?: error("Typing event requires typing state.")
         publishAll(excludeActor(actors, actorId).values) { actor ->
-            actor.context().boundSession()
+            actor
+                .context()
+                .boundSession()
                 .send(TypingChangedNotify(state.conversationId, actorId, isTyping, state))
                 .submit()
         }

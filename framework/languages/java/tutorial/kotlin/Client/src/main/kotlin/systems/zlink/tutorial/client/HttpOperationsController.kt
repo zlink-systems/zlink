@@ -1,8 +1,8 @@
 package systems.zlink.tutorial.client
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import java.io.OutputStream
 import jakarta.servlet.http.HttpServletRequest
+import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.withContext
@@ -19,34 +19,23 @@ import systems.zlink.tutorial.shared.PostChat
 import systems.zlink.tutorial.shared.RoomState
 
 @RestController
-class HttpOperationsController(
-    route: ZLinkRouteClient,
-    private val mapper: ObjectMapper,
-) {
+class HttpOperationsController(route: ZLinkRouteClient, private val mapper: ObjectMapper) {
 
     private val route = route
 
     @GetMapping("/rooms/{roomId}/export")
     suspend fun exportRoom(@PathVariable roomId: String): ResponseEntity<StreamingResponseBody> {
-        val state = route.requestToSpot(roomId, GetRoomState())
-            .submit(RoomState::class.java)
-            .await()
+        val state =
+            route.requestToSpot(roomId, GetRoomState()).submit(RoomState::class.java).await()
         val body = StreamingResponseBody { output ->
             writeLine(output, RoomLine(roomId, state.title, null))
-            state.chat.forEach { message ->
-                writeLine(output, RoomLine(null, null, message))
-            }
+            state.chat.forEach { message -> writeLine(output, RoomLine(null, null, message)) }
         }
-        return ResponseEntity.ok()
-            .contentType(MediaType.valueOf("application/x-ndjson"))
-            .body(body)
+        return ResponseEntity.ok().contentType(MediaType.valueOf("application/x-ndjson")).body(body)
     }
 
     @PostMapping("/rooms/{roomId}/import")
-    suspend fun importRoom(
-        @PathVariable roomId: String,
-        request: HttpServletRequest,
-    ): Imported {
+    suspend fun importRoom(@PathVariable roomId: String, request: HttpServletRequest): Imported {
         val reader = request.inputStream.bufferedReader()
         var count = 0
         try {
@@ -69,5 +58,6 @@ class HttpOperationsController(
     }
 
     private data class RoomLine(val roomId: String?, val title: String?, val message: String?)
+
     data class Imported(val imported: Int)
 }

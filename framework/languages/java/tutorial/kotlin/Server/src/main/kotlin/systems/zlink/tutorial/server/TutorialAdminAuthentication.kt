@@ -1,10 +1,10 @@
 package systems.zlink.tutorial.server
 
-import java.nio.charset.StandardCharsets
-import java.util.Base64
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 
@@ -33,11 +33,13 @@ class TutorialAdminAuthentication : OncePerRequestFilter() {
             return false
         }
         return try {
-            val credentials = String(
-                Base64.getDecoder().decode(authorization.substring(6)),
-                StandardCharsets.UTF_8,
-            )
-            // Credentials are hard-coded because this is a self-contained tutorial, not a deployed service.
+            val credentials =
+                String(
+                    Base64.getDecoder().decode(authorization.substring(6)),
+                    StandardCharsets.UTF_8,
+                )
+            // Credentials are hard-coded because this is a self-contained tutorial, not a deployed
+            // service.
             credentials == "ops:tutorial-admin"
         } catch (_: IllegalArgumentException) {
             false

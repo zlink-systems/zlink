@@ -1,7 +1,5 @@
 package systems.zlink.tutorial.server.sessions;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionActor;
@@ -9,6 +7,9 @@ import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher;
 import systems.zlink.framework.streams.ZLinkStreamError;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:session-class]
 // One connected game client. Callbacks for the same connection run in order.
@@ -20,8 +21,8 @@ public final class GameSession implements ZLinkSession {
     private final ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers;
 
     public GameSession(
-        ZLinkSessionContext context,
-        ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers) {
+            ZLinkSessionContext context,
+            ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers) {
         this.context = context;
         this.handlers = handlers;
     }
@@ -53,24 +54,26 @@ public final class GameSession implements ZLinkSession {
     // enough on its own; this method is what routes the packet to it.
     @Override
     public CompletionStage<Void> onDispatch(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
-        return handlers.tryHandle(context, dispatch, payload).thenCompose(handled -> {
-            if (handled) {
-                return CompletableFuture.completedFuture(null);
-            }
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        return handlers.tryHandle(context, dispatch, payload)
+                .thenCompose(
+                        handled -> {
+                            if (handled) {
+                                return CompletableFuture.completedFuture(null);
+                            }
 
-            // --8<-- [start:session-actor-relay]
-            // Anything without a session handler is forwarded to the player bound
-            // to this connection, which is why authentication has to come first.
-            if (context.actors().bound().size() != 1) {
-                throw new IllegalStateException("Authenticate before sending player packets.");
-            }
+                            // --8<-- [start:session-actor-relay]
+                            // Anything without a session handler is forwarded to the player bound
+                            // to this connection, which is why authentication has to come first.
+                            if (context.actors().bound().size() != 1) {
+                                throw new IllegalStateException(
+                                        "Authenticate before sending player packets.");
+                            }
 
-            ZLinkSessionActor player = context.actors().bound().get(0);
-            return player.relay(dispatch, payload);
-            // --8<-- [end:session-actor-relay]
-        });
+                            ZLinkSessionActor player = context.actors().bound().get(0);
+                            return player.relay(dispatch, payload);
+                            // --8<-- [end:session-actor-relay]
+                        });
     }
 }
 // --8<-- [end:session-class]

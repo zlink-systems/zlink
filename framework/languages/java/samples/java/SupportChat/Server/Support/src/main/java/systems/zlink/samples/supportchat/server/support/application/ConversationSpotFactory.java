@@ -4,11 +4,10 @@ import java.util.concurrent.CompletionStage;
 
 public interface ConversationSpotFactory {
     record StartRequest(
-        String customerActorId,
-        String customerDisplayName,
-        String subject,
-        long createdAtUnixMs) {
-    }
+            String customerActorId,
+            String customerDisplayName,
+            String subject,
+            long createdAtUnixMs) {}
 
     CompletionStage<Void> start(String conversationId, StartRequest request);
 }

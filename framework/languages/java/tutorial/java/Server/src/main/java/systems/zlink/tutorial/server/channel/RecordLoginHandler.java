@@ -1,12 +1,14 @@
 package systems.zlink.tutorial.server.channel;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.tutorial.shared.Contracts;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:channel-send-handler]
 // Handles a one-way message. There is no return value, so the caller is already
@@ -20,8 +22,7 @@ public final class RecordLoginHandler implements ZLinkSendHandler<Contracts.Reco
 
     @Override
     public CompletionStage<Void> handle(
-        Contracts.RecordLogin message,
-        ZLinkMessageContext context) {
+            Contracts.RecordLogin message, ZLinkMessageContext context) {
         LOG.info("login recorded: {}", message.playerId());
         return CompletableFuture.completedFuture(null);
     }

@@ -6,51 +6,57 @@ import java.util.List;
 import java.util.Map;
 
 public final class Conversation {
-    public enum Status { WaitingForAgent, Active, WaitingForClose, Closed }
-    public enum Role { Customer, Agent }
-    public enum EventKind { ParticipantJoined, MessageAppended, TypingChanged, Idle, Closed }
-
-    public record Policy(Duration idleTimeout, Duration closeGraceTimeout, int maxMessageLength) {
+    public enum Status {
+        WaitingForAgent,
+        Active,
+        WaitingForClose,
+        Closed
     }
+
+    public enum Role {
+        Customer,
+        Agent
+    }
+
+    public enum EventKind {
+        ParticipantJoined,
+        MessageAppended,
+        TypingChanged,
+        Idle,
+        Closed
+    }
+
+    public record Policy(Duration idleTimeout, Duration closeGraceTimeout, int maxMessageLength) {}
 
     public record Participant(
-        String actorId,
-        Role role,
-        String displayName,
-        long joinedAtUnixMs,
-        boolean typing) {
-    }
+            String actorId, Role role, String displayName, long joinedAtUnixMs, boolean typing) {}
 
     public record Message(
-        String conversationId,
-        long messageSeq,
-        String senderActorId,
-        String text,
-        long sentAtUnixMs) {
-    }
+            String conversationId,
+            long messageSeq,
+            String senderActorId,
+            String text,
+            long sentAtUnixMs) {}
 
     public record Snapshot(
-        String conversationId,
-        String subject,
-        Status status,
-        String customerActorId,
-        String agentActorId,
-        long lastMessageSeq,
-        Long lastMessageAtUnixMs,
-        Long idleDeadlineUnixMs) {
-    }
+            String conversationId,
+            String subject,
+            Status status,
+            String customerActorId,
+            String agentActorId,
+            long lastMessageSeq,
+            Long lastMessageAtUnixMs,
+            Long idleDeadlineUnixMs) {}
 
     public record Event(
-        EventKind kind,
-        Snapshot state,
-        String actorId,
-        Role role,
-        Message message,
-        Boolean typing) {
-    }
+            EventKind kind,
+            Snapshot state,
+            String actorId,
+            Role role,
+            Message message,
+            Boolean typing) {}
 
-    public record Change(Snapshot state, List<Event> events) {
-    }
+    public record Change(Snapshot state, List<Event> events) {}
 
     private final String conversationId;
     private final String subject;
@@ -65,12 +71,12 @@ public final class Conversation {
     private Long closeDeadlineUnixMs;
 
     public Conversation(
-        String conversationId,
-        String subject,
-        String customerActorId,
-        String customerDisplayName,
-        long createdAtUnixMs,
-        Policy policy) {
+            String conversationId,
+            String subject,
+            String customerActorId,
+            String customerDisplayName,
+            long createdAtUnixMs,
+            Policy policy) {
         if (subject == null || subject.isBlank()) {
             throw new IllegalArgumentException("Conversation subject is required");
         }
@@ -78,14 +84,26 @@ public final class Conversation {
         this.subject = subject;
         this.customerActorId = customerActorId;
         this.policy = policy;
-        participants.put(customerActorId, new Participant(
-            customerActorId, Role.Customer, customerDisplayName, createdAtUnixMs, false));
+        participants.put(
+                customerActorId,
+                new Participant(
+                        customerActorId,
+                        Role.Customer,
+                        customerDisplayName,
+                        createdAtUnixMs,
+                        false));
     }
 
     public synchronized Snapshot snapshot() {
         return new Snapshot(
-            conversationId, subject, status, customerActorId, agentActorId,
-            lastMessageSeq, lastMessageAtUnixMs, idleDeadlineUnixMs);
+                conversationId,
+                subject,
+                status,
+                customerActorId,
+                agentActorId,
+                lastMessageSeq,
+                lastMessageAtUnixMs,
+                idleDeadlineUnixMs);
     }
 
     public synchronized Change joinAgent(String actorId, String displayName, long now) {
@@ -97,7 +115,8 @@ public final class Conversation {
         status = Status.Active;
         participants.put(actorId, new Participant(actorId, Role.Agent, displayName, now, false));
         Snapshot state = snapshot();
-        return change(new Event(EventKind.ParticipantJoined, state, actorId, Role.Agent, null, null));
+        return change(
+                new Event(EventKind.ParticipantJoined, state, actorId, Role.Agent, null, null));
     }
 
     public synchronized Change sendMessage(String senderActorId, String text, long now) {
@@ -121,7 +140,8 @@ public final class Conversation {
         closeDeadlineUnixMs = null;
         Message message = new Message(conversationId, lastMessageSeq, senderActorId, text, now);
         Snapshot state = snapshot();
-        return change(new Event(EventKind.MessageAppended, state, senderActorId, null, message, null));
+        return change(
+                new Event(EventKind.MessageAppended, state, senderActorId, null, message, null));
     }
 
     public synchronized Change setTyping(String actorId, boolean typing) {
@@ -129,12 +149,18 @@ public final class Conversation {
         if (status == Status.Closed || participant == null) {
             return new Change(snapshot(), List.of());
         }
-        participants.put(actorId, new Participant(
-            participant.actorId(), participant.role(), participant.displayName(),
-            participant.joinedAtUnixMs(), typing));
+        participants.put(
+                actorId,
+                new Participant(
+                        participant.actorId(),
+                        participant.role(),
+                        participant.displayName(),
+                        participant.joinedAtUnixMs(),
+                        typing));
         Snapshot state = snapshot();
-        return change(new Event(
-            EventKind.TypingChanged, state, actorId, participant.role(), null, typing));
+        return change(
+                new Event(
+                        EventKind.TypingChanged, state, actorId, participant.role(), null, typing));
     }
 
     public synchronized Change markIdle(long now) {
@@ -145,8 +171,8 @@ public final class Conversation {
             return change(new Event(EventKind.Idle, state, null, null, null, null));
         }
         if (status == Status.WaitingForClose
-            && closeDeadlineUnixMs != null
-            && now >= closeDeadlineUnixMs) {
+                && closeDeadlineUnixMs != null
+                && now >= closeDeadlineUnixMs) {
             status = Status.Closed;
             Snapshot state = snapshot();
             return change(new Event(EventKind.Closed, state, null, null, null, null));

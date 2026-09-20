@@ -1,17 +1,19 @@
 package systems.zlink.samples.supportchat.server.api.handlers;
-import java.util.concurrent.CompletionStage;
 
-import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 @ZLinkHandlerGroup(SampleNames.ApiChannel)
 public final class OpenConversationHandler
-    implements ZLinkRequestHandler<Messages.OpenConversationApiReq, Messages.OpenConversationApiRes> {
+        implements ZLinkRequestHandler<
+                Messages.OpenConversationApiReq, Messages.OpenConversationApiRes> {
     private final ZLinkClient channels;
 
     public OpenConversationHandler(ZLinkClient channels) {
@@ -20,17 +22,18 @@ public final class OpenConversationHandler
 
     @Override
     public CompletionStage<Messages.OpenConversationApiRes> handle(
-        Messages.OpenConversationApiReq request,
-        ZLinkMessageContext context) {
+            Messages.OpenConversationApiReq request, ZLinkMessageContext context) {
         return channels.requestToChannel(
-                SampleNames.SupportChannel,
-                new Messages.AllocateConversationReq(
-                    request.customerActorId(),
-                    request.customerDisplayName(),
-                    request.subject()))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.AllocateConversationRes.class)
-            .thenApply(allocated -> new Messages.OpenConversationApiRes(
-                allocated.conversationId(), allocated.status()));
+                        SampleNames.SupportChannel,
+                        new Messages.AllocateConversationReq(
+                                request.customerActorId(),
+                                request.customerDisplayName(),
+                                request.subject()))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(Messages.AllocateConversationRes.class)
+                .thenApply(
+                        allocated ->
+                                new Messages.OpenConversationApiRes(
+                                        allocated.conversationId(), allocated.status()));
     }
 }

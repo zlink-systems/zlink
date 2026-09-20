@@ -1,14 +1,15 @@
 package systems.zlink.samples.deliverydispatch.server.dispatch;
 
-import java.time.Instant;
-import java.util.List;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleNames;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleTimings;
 import systems.zlink.samples.deliverydispatch.server.dispatch.DeliveryOfferStore.DeliveryOffer;
 import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
 
 /**
  * The dispatch flow. No step of it waits for a courier: the offer goes out one-way, the turn ends,
@@ -24,9 +25,7 @@ public final class DispatchWorker {
     private final DeliveryOfferStore offers;
 
     public DispatchWorker(
-        ZLinkClient channels,
-        ZLinkActorClient actors,
-        DeliveryOfferStore offers) {
+            ZLinkClient channels, ZLinkActorClient actors, DeliveryOfferStore offers) {
         this.channels = channels;
         this.actors = actors;
         this.offers = offers;
@@ -37,26 +36,40 @@ public final class DispatchWorker {
     public CompletionStage<Void> dispatch(Messages.AssignDeliveryMsg request) {
         String courierId = Candidates.get(0);
         return publishStatus(request, Messages.DeliveryStatus.Assigned, courierId)
-            .thenCompose(ignored -> startOffer(request, courierId, 0));
+                .thenCompose(ignored -> startOffer(request, courierId, 0));
     }
+
     // --8<-- [end:doc-dd-offer-start]
 
     /** A decision arrived. Accepted carries the delivery through; refused reassigns. */
     public CompletionStage<Void> settle(DeliveryOffer offer, boolean accepted, String reason) {
         String courierId = Candidates.get(offer.candidateIndex());
         if (!accepted) {
-            System.out.println("deliverydispatch dispatch: courier=" + courierId
-                + " did not take delivery=" + offer.request().deliveryId()
-                + " (" + (reason == null ? "refused" : reason) + ")");
+            System.out.println(
+                    "deliverydispatch dispatch: courier="
+                            + courierId
+                            + " did not take delivery="
+                            + offer.request().deliveryId()
+                            + " ("
+                            + (reason == null ? "refused" : reason)
+                            + ")");
             return reassign(offer);
         }
 
         return publishStatus(offer.request(), Messages.DeliveryStatus.Accepted, courierId)
-            .thenCompose(ignored -> publishStatus(
-                offer.request(), Messages.DeliveryStatus.PickedUp, courierId))
-            .thenCompose(ignored -> publishStatus(
-                offer.request(), Messages.DeliveryStatus.Delivered, courierId))
-            .thenAccept(ignored -> offers.close(offer.request().deliveryId()));
+                .thenCompose(
+                        ignored ->
+                                publishStatus(
+                                        offer.request(),
+                                        Messages.DeliveryStatus.PickedUp,
+                                        courierId))
+                .thenCompose(
+                        ignored ->
+                                publishStatus(
+                                        offer.request(),
+                                        Messages.DeliveryStatus.Delivered,
+                                        courierId))
+                .thenAccept(ignored -> offers.close(offer.request().deliveryId()));
     }
 
     /**
@@ -69,33 +82,34 @@ public final class DispatchWorker {
         int nextIndex = offer.candidateIndex() + 1;
         if (nextIndex >= Candidates.size()) {
             return publishStatus(
-                    offer.request(),
-                    Messages.DeliveryStatus.Failed,
-                    Candidates.get(Candidates.size() - 1))
-                .thenRun(() -> {
-                    offers.close(offer.request().deliveryId());
-                    System.out.println("deliverydispatch-dispatch failed delivery="
-                        + offer.request().deliveryId() + " reason=candidates-exhausted");
-                });
+                            offer.request(),
+                            Messages.DeliveryStatus.Failed,
+                            Candidates.get(Candidates.size() - 1))
+                    .thenRun(
+                            () -> {
+                                offers.close(offer.request().deliveryId());
+                                System.out.println(
+                                        "deliverydispatch-dispatch failed delivery="
+                                                + offer.request().deliveryId()
+                                                + " reason=candidates-exhausted");
+                            });
         }
 
         String courierId = Candidates.get(nextIndex);
         return publishStatus(offer.request(), Messages.DeliveryStatus.Reassigned, courierId)
-            .thenCompose(ignored -> startOffer(offer.request(), courierId, nextIndex));
+                .thenCompose(ignored -> startOffer(offer.request(), courierId, nextIndex));
     }
+
     // --8<-- [end:doc-dd-reassign]
 
     public CompletionStage<Messages.ServerAssertionRes> assertServerEvidence(
-        Messages.ServerAssertionReq request) {
-        return channels
-            .requestToChannel(SampleNames.TrackingChannel, request)
-            .submit(Messages.ServerAssertionRes.class);
+            Messages.ServerAssertionReq request) {
+        return channels.requestToChannel(SampleNames.TrackingChannel, request)
+                .submit(Messages.ServerAssertionRes.class);
     }
 
     private CompletionStage<Void> startOffer(
-        Messages.AssignDeliveryMsg request,
-        String courierId,
-        int candidateIndex) {
+            Messages.AssignDeliveryMsg request, String courierId, int candidateIndex) {
         int attempt = offers.offer(request, candidateIndex, SampleTimings.CourierDecisionTimeout);
         return offer(request, courierId, attempt);
     }
@@ -103,35 +117,27 @@ public final class DispatchWorker {
     // --8<-- [start:doc-dd-offer-send]
     /** The offer is a one-way send: the turn that sends it ends right there. */
     private CompletionStage<Void> offer(
-        Messages.AssignDeliveryMsg request,
-        String courierId,
-        int attempt) {
-        return actors
-            .sendToActor(
-                courierId,
-                new Messages.OfferDeliveryMsg(
-                    courierId,
-                    request.deliveryId(),
-                    attempt,
-                    request.pickupAddress(),
-                    request.dropoffAddress()))
-            .submit();
+            Messages.AssignDeliveryMsg request, String courierId, int attempt) {
+        return actors.sendToActor(
+                        courierId,
+                        new Messages.OfferDeliveryMsg(
+                                courierId,
+                                request.deliveryId(),
+                                attempt,
+                                request.pickupAddress(),
+                                request.dropoffAddress()))
+                .submit();
     }
+
     // --8<-- [end:doc-dd-offer-send]
 
     private CompletionStage<Void> publishStatus(
-        Messages.AssignDeliveryMsg request,
-        Messages.DeliveryStatus status,
-        String courierId) {
+            Messages.AssignDeliveryMsg request, Messages.DeliveryStatus status, String courierId) {
         return channels.requestToChannel(
-                SampleNames.TrackingChannel,
-                new Messages.DeliveryStatusChangedReq(
-                    request.deliveryId(),
-                    status,
-                    courierId,
-                    Instant.now().toString()))
-            .submit(Messages.DeliveryStatusChangedRes.class)
-            .thenAccept(ignored -> {
-            });
+                        SampleNames.TrackingChannel,
+                        new Messages.DeliveryStatusChangedReq(
+                                request.deliveryId(), status, courierId, Instant.now().toString()))
+                .submit(Messages.DeliveryStatusChangedRes.class)
+                .thenAccept(ignored -> {});
     }
 }

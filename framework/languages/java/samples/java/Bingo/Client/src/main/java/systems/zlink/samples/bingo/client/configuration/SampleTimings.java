@@ -6,6 +6,5 @@ public final class SampleTimings {
     public static final Duration ConnectTimeout = Duration.ofSeconds(5);
     public static final Duration RequestTimeout = Duration.ofSeconds(30);
 
-    private SampleTimings() {
-    }
+    private SampleTimings() {}
 }

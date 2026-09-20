@@ -5,10 +5,7 @@ import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.s
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameCreateReq
 
 class TicTacToeGameCreatedHandler {
-    fun handle(
-        game: TicTacToeGame,
-        request: ZLinkMessage,
-    ) {
+    fun handle(game: TicTacToeGame, request: ZLinkMessage) {
         game.markCreated(request.decode(TicTacToeGameCreateReq::class.java))
     }
 }

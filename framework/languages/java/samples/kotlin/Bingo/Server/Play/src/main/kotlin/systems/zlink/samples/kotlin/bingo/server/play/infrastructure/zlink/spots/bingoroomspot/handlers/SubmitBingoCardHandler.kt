@@ -7,17 +7,17 @@ import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots
 import systems.zlink.samples.kotlin.bingo.shared.contracts.SubmitBingoCardReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.SubmitBingoCardRes
 
-class SubmitBingoCardHandler() : ZLinkSuspendingSpotActorRequestHandler<
-    BingoRoomSpot,
-    PlayerActor,
-    SubmitBingoCardReq,
-    SubmitBingoCardRes,
+class SubmitBingoCardHandler() :
+    ZLinkSuspendingSpotActorRequestHandler<
+        BingoRoomSpot,
+        PlayerActor,
+        SubmitBingoCardReq,
+        SubmitBingoCardRes,
     > {
     override suspend fun handle(
         spot: BingoRoomSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         request: SubmitBingoCardReq,
-    ): SubmitBingoCardRes =
-        spot.submitCard(actor, request)
+    ): SubmitBingoCardRes = spot.submitCard(actor, request)
 }

@@ -12,9 +12,10 @@ class SupportChatReadinessReporter(
     private val nodeId: String,
     private val meshes: ZLinkRouteMeshRuntime,
 ) : ApplicationRunner, AutoCloseable {
-    private val reporter = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "supportchat-readiness").apply { isDaemon = true }
-    }
+    private val reporter =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "supportchat-readiness").apply { isDaemon = true }
+        }
 
     override fun run(args: ApplicationArguments) {
         reporter.scheduleWithFixedDelay(::report, 0, 100, TimeUnit.MILLISECONDS)

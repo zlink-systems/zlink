@@ -1,11 +1,12 @@
 package systems.zlink.samples.bingo.server.play.domain.bingo;
 
+import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
+import systems.zlink.samples.bingo.shared.contracts.Messages;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
-import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
-import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class BingoRoomGame {
     private static final String WaitingForPlayers = "WaitingForPlayers";
@@ -29,25 +30,27 @@ public final class BingoRoomGame {
     }
 
     public static BingoRoomGame restore(
-        String roomId,
-        BingoRoomModels.BingoRoomSettings settings,
-        Messages.BingoRoomState state) {
+            String roomId,
+            BingoRoomModels.BingoRoomSettings settings,
+            Messages.BingoRoomState state) {
         BingoRoomGame game = new BingoRoomGame(roomId, settings);
         game.status = state.getStatus();
         game.drawnNumbers.addAll(state.getDrawnNumbersList());
         game.drawDeck.removeAll(state.getDrawnNumbersList());
         game.winners.addAll(state.getWinnersList());
         for (Messages.BingoPlayerState player : state.getPlayersList()) {
-            BingoCard card = player.getCardCount() == 0
-                ? null
-                : BingoCard.restore(player.getCardList(), player.getMarksList());
-            game.players.add(new BingoRoomModels.RoomPlayer(
-                player.getActorId(),
-                player.getDisplayName(),
-                player.getSeat(),
-                card,
-                player.getWins(),
-                player.getLosses()));
+            BingoCard card =
+                    player.getCardCount() == 0
+                            ? null
+                            : BingoCard.restore(player.getCardList(), player.getMarksList());
+            game.players.add(
+                    new BingoRoomModels.RoomPlayer(
+                            player.getActorId(),
+                            player.getDisplayName(),
+                            player.getSeat(),
+                            card,
+                            player.getWins(),
+                            player.getLosses()));
         }
         return game;
     }
@@ -61,10 +64,12 @@ public final class BingoRoomGame {
             throw new IllegalStateException("Room " + roomId + " cannot accept more players.");
         }
         BingoRoomModels.RoomPlayer joined =
-            new BingoRoomModels.RoomPlayer(actorId, displayName, players.size(), null, wins, losses);
+                new BingoRoomModels.RoomPlayer(
+                        actorId, displayName, players.size(), null, wins, losses);
         players.add(joined);
         Messages.BingoRoomState joinedState = snapshot();
-        ArrayList<BingoRoomModels.RoomEvent> events = new ArrayList<>(playerJoinedEvents(joined, joinedState));
+        ArrayList<BingoRoomModels.RoomEvent> events =
+                new ArrayList<>(playerJoinedEvents(joined, joinedState));
         boolean started = false;
         if (players.size() == settings.requiredPlayers()) {
             status = Running;
@@ -89,35 +94,33 @@ public final class BingoRoomGame {
             throw new IllegalStateException("Room " + roomId + " cannot accept more players.");
         }
         ArrayList<BingoRoomModels.RoomPlayer> previewPlayers = new ArrayList<>(players);
-        previewPlayers.add(new BingoRoomModels.RoomPlayer(
-            actorId,
-            displayName,
-            previewPlayers.size(),
-            null,
-            0,
-            0));
-        String previewStatus = previewPlayers.size() == settings.requiredPlayers()
-            ? Running
-            : status;
+        previewPlayers.add(
+                new BingoRoomModels.RoomPlayer(
+                        actorId, displayName, previewPlayers.size(), null, 0, 0));
+        String previewStatus =
+                previewPlayers.size() == settings.requiredPlayers() ? Running : status;
         return snapshot(previewPlayers, previewStatus);
     }
 
     public Change submitCard(String actorId, List<Integer> submittedCard) {
         int index = playerIndex(actorId);
         if (!status.equals(Running)) {
-            throw new IllegalStateException("bingo card can be submitted only after the room starts");
+            throw new IllegalStateException(
+                    "bingo card can be submitted only after the room starts");
         }
         BingoRoomModels.RoomPlayer current = players.get(index);
         if (current.card() != null) {
             throw new IllegalStateException("bingo card was already submitted");
         }
-        players.set(index, new BingoRoomModels.RoomPlayer(
-            current.actorId(),
-            current.displayName(),
-            current.seat(),
-            BingoCard.from(submittedCard),
-            current.wins(),
-            current.losses()));
+        players.set(
+                index,
+                new BingoRoomModels.RoomPlayer(
+                        current.actorId(),
+                        current.displayName(),
+                        current.seat(),
+                        BingoCard.from(submittedCard),
+                        current.wins(),
+                        current.losses()));
         return new Change(snapshot(), List.of(), allCardsSubmitted());
     }
 
@@ -143,12 +146,14 @@ public final class BingoRoomGame {
         }
 
         Messages.BingoRoomState state = snapshot();
-        ArrayList<BingoRoomModels.RoomEvent> events = new ArrayList<>(numberDrawnEvents(state, number));
-        events.addAll(eventsForAll(
-            status.equals(Finished)
-                ? BingoRoomModels.EventKind.GAME_ENDED
-                : BingoRoomModels.EventKind.STATE,
-            state));
+        ArrayList<BingoRoomModels.RoomEvent> events =
+                new ArrayList<>(numberDrawnEvents(state, number));
+        events.addAll(
+                eventsForAll(
+                        status.equals(Finished)
+                                ? BingoRoomModels.EventKind.GAME_ENDED
+                                : BingoRoomModels.EventKind.STATE,
+                        state));
         return new Change(state, events, false);
     }
 
@@ -157,32 +162,31 @@ public final class BingoRoomGame {
     }
 
     private Messages.BingoRoomState snapshot(
-        List<BingoRoomModels.RoomPlayer> snapshotPlayers,
-        String snapshotStatus) {
+            List<BingoRoomModels.RoomPlayer> snapshotPlayers, String snapshotStatus) {
         String hostActorId = snapshotPlayers.isEmpty() ? "" : snapshotPlayers.getFirst().actorId();
         Integer lastDrawn = drawnNumbers.isEmpty() ? null : drawnNumbers.getLast();
         return BingoMessages.bingoRoomState(
-            roomId,
-            snapshotStatus,
-            hostActorId,
-            false,
-            drawnNumbers.size(),
-            lastDrawn,
-            List.copyOf(drawnNumbers),
-            snapshotPlayers.stream().map(player -> player.toState(hostActorId)).toList(),
-            List.copyOf(winners));
+                roomId,
+                snapshotStatus,
+                hostActorId,
+                false,
+                drawnNumbers.size(),
+                lastDrawn,
+                List.copyOf(drawnNumbers),
+                snapshotPlayers.stream().map(player -> player.toState(hostActorId)).toList(),
+                List.copyOf(winners));
     }
 
     private boolean allCardsSubmitted() {
         return players.size() == settings.requiredPlayers()
-            && players.stream().allMatch(player -> player.card() != null);
+                && players.stream().allMatch(player -> player.card() != null);
     }
 
     private BingoRoomModels.RoomPlayer player(String actorId) {
         return players.stream()
-            .filter(player -> player.actorId().equals(actorId))
-            .findFirst()
-            .orElse(null);
+                .filter(player -> player.actorId().equals(actorId))
+                .findFirst()
+                .orElse(null);
     }
 
     private int playerIndex(String actorId) {
@@ -195,57 +199,52 @@ public final class BingoRoomGame {
     }
 
     private List<BingoRoomModels.RoomEvent> playerJoinedEvents(
-        BingoRoomModels.RoomPlayer joined,
-        Messages.BingoRoomState state) {
+            BingoRoomModels.RoomPlayer joined, Messages.BingoRoomState state) {
         return players.stream()
-            .filter(player -> !player.actorId().equals(joined.actorId()))
-            .map(player -> new BingoRoomModels.RoomEvent(
-                BingoRoomModels.EventKind.PLAYER_JOINED,
-                player.actorId(),
-                state,
-                joined.actorId(),
-                joined.displayName(),
-                joined.seat(),
-                joined.seat() == 0,
-                0))
-            .toList();
+                .filter(player -> !player.actorId().equals(joined.actorId()))
+                .map(
+                        player ->
+                                new BingoRoomModels.RoomEvent(
+                                        BingoRoomModels.EventKind.PLAYER_JOINED,
+                                        player.actorId(),
+                                        state,
+                                        joined.actorId(),
+                                        joined.displayName(),
+                                        joined.seat(),
+                                        joined.seat() == 0,
+                                        0))
+                .toList();
     }
 
     private List<BingoRoomModels.RoomEvent> numberDrawnEvents(
-        Messages.BingoRoomState state,
-        int number) {
+            Messages.BingoRoomState state, int number) {
         return players.stream()
-            .map(player -> new BingoRoomModels.RoomEvent(
-                BingoRoomModels.EventKind.NUMBER_DRAWN,
-                player.actorId(),
-                state,
-                null,
-                null,
-                -1,
-                false,
-                number))
-            .toList();
+                .map(
+                        player ->
+                                new BingoRoomModels.RoomEvent(
+                                        BingoRoomModels.EventKind.NUMBER_DRAWN,
+                                        player.actorId(),
+                                        state,
+                                        null,
+                                        null,
+                                        -1,
+                                        false,
+                                        number))
+                .toList();
     }
 
     private List<BingoRoomModels.RoomEvent> eventsForAll(
-        BingoRoomModels.EventKind kind,
-        Messages.BingoRoomState state) {
+            BingoRoomModels.EventKind kind, Messages.BingoRoomState state) {
         return players.stream()
-            .map(player -> new BingoRoomModels.RoomEvent(
-                kind,
-                player.actorId(),
-                state,
-                null,
-                null,
-                -1,
-                false,
-                0))
-            .toList();
+                .map(
+                        player ->
+                                new BingoRoomModels.RoomEvent(
+                                        kind, player.actorId(), state, null, null, -1, false, 0))
+                .toList();
     }
 
     public record Change(
-        Messages.BingoRoomState state,
-        List<BingoRoomModels.RoomEvent> events,
-        boolean drawReady) {
-    }
+            Messages.BingoRoomState state,
+            List<BingoRoomModels.RoomEvent> events,
+            boolean drawReady) {}
 }

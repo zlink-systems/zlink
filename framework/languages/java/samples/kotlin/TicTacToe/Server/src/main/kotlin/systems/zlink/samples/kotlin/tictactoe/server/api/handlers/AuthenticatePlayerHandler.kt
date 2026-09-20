@@ -26,8 +26,8 @@ class AuthenticatePlayerHandler :
                     displayName = displayName(actorId),
                     level = 3,
                     wins = if (actorId == "player-x") 99 else 0,
-                ),
-            ),
+                )
+            )
         )
     }
 

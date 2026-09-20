@@ -1,16 +1,18 @@
 package systems.zlink.samples.bingo.server.configuration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 public final class BingoReadinessReporter implements ApplicationRunner, AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(BingoReadinessReporter.class);
@@ -20,45 +22,50 @@ public final class BingoReadinessReporter implements ApplicationRunner, AutoClos
 
     private BingoReadinessReporter(List<ReadinessCheck> checks) {
         this.checks = checks;
-        this.reporter = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "bingo-readiness");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.reporter =
+                Executors.newSingleThreadScheduledExecutor(
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "bingo-readiness");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
     }
 
     public static BingoReadinessReporter api(
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime meshes) {
+            SampleTopology topology, ZLinkRouteMeshRuntime meshes) {
         String node = "api-" + topology.apiNode();
-        return new BingoReadinessReporter(List.of(
-            new ReadinessCheck(
-                "bingo-ready kind=mesh-route node=" + node + " mesh=matchmaking",
-                () -> meshes.snapshot(SampleNames.MatchmakingMesh).readyPeerCount() > 0),
-            new ReadinessCheck(
-                "bingo-ready kind=mesh-route node=" + node + " mesh=room",
-                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() > 0)));
+        return new BingoReadinessReporter(
+                List.of(
+                        new ReadinessCheck(
+                                "bingo-ready kind=mesh-route node=" + node + " mesh=matchmaking",
+                                () ->
+                                        meshes.snapshot(SampleNames.MatchmakingMesh)
+                                                        .readyPeerCount()
+                                                > 0),
+                        new ReadinessCheck(
+                                "bingo-ready kind=mesh-route node=" + node + " mesh=room",
+                                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() > 0)));
     }
 
     public static BingoReadinessReporter play(
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime meshes) {
+            SampleTopology topology, ZLinkRouteMeshRuntime meshes) {
         String node = "play-" + topology.playNode();
         String peer = "play-" + ("a".equals(topology.playNode()) ? "b" : "a");
-        return new BingoReadinessReporter(List.of(
-            new ReadinessCheck(
-                "bingo-ready kind=peer-route node=" + node + " peer=" + peer,
-                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() >= 5)));
+        return new BingoReadinessReporter(
+                List.of(
+                        new ReadinessCheck(
+                                "bingo-ready kind=peer-route node=" + node + " peer=" + peer,
+                                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() >= 5)));
     }
 
     public static BingoReadinessReporter session(
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime meshes) {
+            SampleTopology topology, ZLinkRouteMeshRuntime meshes) {
         String node = "session-" + topology.sessionNode();
-        return new BingoReadinessReporter(List.of(
-            new ReadinessCheck(
-                "bingo-ready kind=mesh-route node=" + node + " mesh=room",
-                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() > 0)));
+        return new BingoReadinessReporter(
+                List.of(
+                        new ReadinessCheck(
+                                "bingo-ready kind=mesh-route node=" + node + " mesh=room",
+                                () -> meshes.snapshot(SampleNames.Mesh).readyPeerCount() > 0)));
     }
 
     @Override

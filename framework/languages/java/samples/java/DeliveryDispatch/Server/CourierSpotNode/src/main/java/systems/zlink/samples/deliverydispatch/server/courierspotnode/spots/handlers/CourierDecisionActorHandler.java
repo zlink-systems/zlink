@@ -1,15 +1,16 @@
 package systems.zlink.samples.deliverydispatch.server.courierspotnode.spots.handlers;
 
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
-import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleNames;
 import systems.zlink.samples.deliverydispatch.server.courierspotnode.CourierActor;
 import systems.zlink.samples.deliverydispatch.server.courierspotnode.spots.CourierEntrySpot;
 import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /**
  * The courier's decision, sent back to dispatch one-way. The node neither judges it nor times it —
@@ -17,10 +18,8 @@ import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
  * still the current one (common sample spec section 7.4).
  */
 public final class CourierDecisionActorHandler
-    implements ZLinkEntrySpotActorSendHandler<
-        CourierEntrySpot,
-        CourierActor,
-        Messages.CourierDecisionMsg> {
+        implements ZLinkEntrySpotActorSendHandler<
+                CourierEntrySpot, CourierActor, Messages.CourierDecisionMsg> {
     private final ZLinkClient channels;
 
     public CourierDecisionActorHandler(ZLinkClient channels) {
@@ -29,31 +28,42 @@ public final class CourierDecisionActorHandler
 
     @Override
     public CompletionStage<Void> handle(
-        CourierEntrySpot entrySpot,
-        CourierActor actor,
-        ZLinkMessageContext context,
-        Messages.CourierDecisionMsg message) {
+            CourierEntrySpot entrySpot,
+            CourierActor actor,
+            ZLinkMessageContext context,
+            Messages.CourierDecisionMsg message) {
         // --8<-- [start:doc-dd-decision-send]
         Optional<Integer> attempt = actor.takeOfferedAttempt(message.deliveryId());
         if (attempt.isEmpty()) {
-            System.err.println("deliverydispatch courier-actor: decision for an unknown offer"
-                + " delivery=" + message.deliveryId() + " courier=" + actor.actorId());
+            System.err.println(
+                    "deliverydispatch courier-actor: decision for an unknown offer"
+                            + " delivery="
+                            + message.deliveryId()
+                            + " courier="
+                            + actor.actorId());
             return CompletableFuture.completedFuture(null);
         }
 
         return channels.sendToChannel(
-                SampleNames.DispatchChannel,
-                new Messages.OfferDeliveryResultMsg(
-                    message.deliveryId(),
-                    message.courierId(),
-                    attempt.get(),
-                    message.accepted(),
-                    message.reason()))
-            .submit()
-            .thenRun(() -> System.out.println(
-                "deliverydispatch courier-actor: decision delivery="
-                    + message.deliveryId() + " courier=" + actor.actorId()
-                    + " attempt=" + attempt.get() + " accepted=" + message.accepted()));
+                        SampleNames.DispatchChannel,
+                        new Messages.OfferDeliveryResultMsg(
+                                message.deliveryId(),
+                                message.courierId(),
+                                attempt.get(),
+                                message.accepted(),
+                                message.reason()))
+                .submit()
+                .thenRun(
+                        () ->
+                                System.out.println(
+                                        "deliverydispatch courier-actor: decision delivery="
+                                                + message.deliveryId()
+                                                + " courier="
+                                                + actor.actorId()
+                                                + " attempt="
+                                                + attempt.get()
+                                                + " accepted="
+                                                + message.accepted()));
         // --8<-- [end:doc-dd-decision-send]
     }
 }

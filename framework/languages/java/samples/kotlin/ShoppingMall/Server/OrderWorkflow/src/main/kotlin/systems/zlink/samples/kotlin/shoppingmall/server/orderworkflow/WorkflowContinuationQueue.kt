@@ -4,8 +4,8 @@ import java.util.concurrent.LinkedBlockingQueue
 import org.springframework.stereotype.Component
 
 /**
- * Bounded hand-off queue from workflow handlers to the saga worker. A poison
- * sentinel unblocks [take] during shutdown without a busy loop.
+ * Bounded hand-off queue from workflow handlers to the saga worker. A poison sentinel unblocks
+ * [take] during shutdown without a busy loop.
  */
 @Component
 class WorkflowContinuationQueue {

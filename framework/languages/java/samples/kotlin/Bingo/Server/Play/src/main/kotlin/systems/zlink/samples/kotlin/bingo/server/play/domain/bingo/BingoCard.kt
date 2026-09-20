@@ -1,6 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.play.domain.bingo
 
-class BingoCard private constructor(
+class BingoCard
+private constructor(
     private val numbers: MutableList<Int>,
     private val marks: MutableList<Boolean>,
 ) {
@@ -61,7 +62,9 @@ class BingoCard private constructor(
                 if (index == FreeCellIndex) {
                     return@forEachIndexed
                 }
-                require(value in 1..15) { "Bingo card value is outside the sample draw range: $value" }
+                require(value in 1..15) {
+                    "Bingo card value is outside the sample draw range: $value"
+                }
                 require(seen.add(value)) { "Bingo card contains duplicate value: $value" }
             }
             val numbers = values.toMutableList()

@@ -19,21 +19,21 @@ class LocationEndpoints(
     // and only while it is ready to receive. Nothing is sent to the object.
     @GetMapping("/locations/rooms/{roomId}")
     suspend fun findRoom(@PathVariable roomId: String): ResponseEntity<Map<String, String>> {
-        val room = rooms.find(roomId).await().orElse(null)
-            ?: return ResponseEntity.notFound().build()
+        val room =
+            rooms.find(roomId).await().orElse(null) ?: return ResponseEntity.notFound().build()
 
         return ResponseEntity.ok(
-            mapOf("spotId" to room.spotId(), "node" to room.nodeRid().toString()),
+            mapOf("spotId" to room.spotId(), "node" to room.nodeRid().toString())
         )
     }
 
     @GetMapping("/locations/players/{playerId}")
     suspend fun findPlayer(@PathVariable playerId: String): ResponseEntity<Map<String, String>> {
-        val player = players.find(playerId).await().orElse(null)
-            ?: return ResponseEntity.notFound().build()
+        val player =
+            players.find(playerId).await().orElse(null) ?: return ResponseEntity.notFound().build()
 
         return ResponseEntity.ok(
-            mapOf("actorId" to player.actorId(), "node" to player.nodeRid().toString()),
+            mapOf("actorId" to player.actorId(), "node" to player.nodeRid().toString())
         )
     }
     // --8<-- [end:location-find]

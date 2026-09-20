@@ -6,12 +6,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Properties;
+
 public record ClientOptions(
-    String gatewayEndpoint,
-    String opsEndpoint,
-    String scenarios,
-    boolean streamTrace,
-    String faultArmFile) {
+        String gatewayEndpoint,
+        String opsEndpoint,
+        String scenarios,
+        boolean streamTrace,
+        String faultArmFile) {
     public static ClientOptions load(String[] args) throws IOException {
         if (args.length != 2 || !"--config".equals(args[0]) || args[1].isBlank()) {
             throw new IllegalArgumentException("Usage: ZoneWorldClient --config <path>");
@@ -21,11 +22,11 @@ public record ClientOptions(
             properties.load(reader);
         }
         return new ClientOptions(
-            require(properties, "sample.gateway-endpoint"),
-            require(properties, "sample.ops-endpoint"),
-            properties.getProperty("sample.scenarios", "all"),
-            Boolean.parseBoolean(properties.getProperty("sample.stream-trace", "false")),
-            properties.getProperty("sample.fault-arm-file", ""));
+                require(properties, "sample.gateway-endpoint"),
+                require(properties, "sample.ops-endpoint"),
+                properties.getProperty("sample.scenarios", "all"),
+                Boolean.parseBoolean(properties.getProperty("sample.stream-trace", "false")),
+                properties.getProperty("sample.fault-arm-file", ""));
     }
 
     private static String require(Properties properties, String key) {

@@ -19,8 +19,7 @@ public final class ZoneWorldSpec {
     public static final int NODE_STATUS_REPORT_TTL_MS = NODE_STATUS_REPORT_PERIOD_MS * 3;
     public static final Comparator<String> UTF8_ORDER = ZoneWorldSpec::compareUtf8;
 
-    private ZoneWorldSpec() {
-    }
+    private ZoneWorldSpec() {}
 
     public static String zoneOf(int x, int y) {
         if (x < ZONE_SPLIT && y < ZONE_SPLIT) return "zone-nw";
@@ -72,7 +71,7 @@ public final class ZoneWorldSpec {
     public static MoveDecision validateMove(int fromX, int fromY, int toX, int toY) {
         if (!inRange(toX, toY)) return new MoveDecision(false, false, "OutOfRange");
         if (Math.abs(toX - fromX) > MAX_STEP_PER_AXIS
-            || Math.abs(toY - fromY) > MAX_STEP_PER_AXIS) {
+                || Math.abs(toY - fromY) > MAX_STEP_PER_AXIS) {
             return new MoveDecision(false, false, "TooFar");
         }
         String from = zoneOf(fromX, fromY);
@@ -94,21 +93,19 @@ public final class ZoneWorldSpec {
         return Integer.compare(a.length, b.length);
     }
 
-    public record MoveDecision(boolean accepted, boolean zoneChanged, String reason) {
-    }
+    public record MoveDecision(boolean accepted, boolean zoneChanged, String reason) {}
 
-    public record BotFixture(String id, int x, int y, int dirX, int dirY) {
-    }
+    public record BotFixture(String id, int x, int y, int dirX, int dirY) {}
 
     public static List<BotFixture> bots() {
         return List.of(
-            new BotFixture("bot-nw-x", 10, 15, 1, 0),
-            new BotFixture("bot-nw-y", 15, 10, 0, 1),
-            new BotFixture("bot-ne-x", 90, 15, -1, 0),
-            new BotFixture("bot-ne-y", 85, 10, 0, 1),
-            new BotFixture("bot-sw-x", 10, 85, 1, 0),
-            new BotFixture("bot-sw-y", 15, 90, 0, -1),
-            new BotFixture("bot-se-x", 90, 85, -1, 0),
-            new BotFixture("bot-se-y", 85, 90, 0, -1));
+                new BotFixture("bot-nw-x", 10, 15, 1, 0),
+                new BotFixture("bot-nw-y", 15, 10, 0, 1),
+                new BotFixture("bot-ne-x", 90, 15, -1, 0),
+                new BotFixture("bot-ne-y", 85, 10, 0, 1),
+                new BotFixture("bot-sw-x", 10, 85, 1, 0),
+                new BotFixture("bot-sw-y", 15, 90, 0, -1),
+                new BotFixture("bot-se-x", 90, 85, -1, 0),
+                new BotFixture("bot-se-y", 85, 90, 0, -1));
     }
 }

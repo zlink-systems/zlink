@@ -4,9 +4,7 @@ class ActorDirectory {
     private val actors = mutableMapOf<String, CourierActor>()
 
     fun register(actor: CourierActor) {
-        synchronized(actors) {
-            actors[actor.actorId()] = actor
-        }
+        synchronized(actors) { actors[actor.actorId()] = actor }
     }
 
     fun require(actorId: String): CourierActor =
@@ -14,8 +12,6 @@ class ActorDirectory {
             ?: throw IllegalStateException("Courier actor is not registered: $actorId")
 
     fun remove(actorId: String) {
-        synchronized(actors) {
-            actors.remove(actorId)
-        }
+        synchronized(actors) { actors.remove(actorId) }
     }
 }

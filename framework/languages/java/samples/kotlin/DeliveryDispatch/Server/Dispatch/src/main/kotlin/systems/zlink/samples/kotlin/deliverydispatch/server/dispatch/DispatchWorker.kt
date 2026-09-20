@@ -35,6 +35,7 @@ class DispatchWorker(
         publishStatus(request, DeliveryStatus.Assigned, courierId)
         offer(request, courierId, attempt)
     }
+
     // --8<-- [end:doc-dd-offer-start]
 
     /** A decision arrived. Accepted carries the delivery through; refused reassigns. */
@@ -43,7 +44,7 @@ class DispatchWorker(
         if (!accepted) {
             println(
                 "deliverydispatch dispatch: courier=$courierId did not take " +
-                    "delivery=${offer.request.deliveryId} (${reason ?: "refused"})",
+                    "delivery=${offer.request.deliveryId} (${reason ?: "refused"})"
             )
             reassign(offer)
             return
@@ -66,7 +67,7 @@ class DispatchWorker(
         if (nextIndex >= candidates.size) {
             println(
                 "deliverydispatch-dispatch failed delivery=${offer.request.deliveryId} " +
-                    "reason=candidates-exhausted",
+                    "reason=candidates-exhausted"
             )
             publishStatus(offer.request, DeliveryStatus.Failed, candidates.last())
             offers.close(offer.request.deliveryId)
@@ -78,12 +79,14 @@ class DispatchWorker(
         publishStatus(offer.request, DeliveryStatus.Reassigned, courierId)
         offer(offer.request, courierId, attempt)
     }
+
     // --8<-- [end:doc-dd-reassign]
 
     suspend fun assertServerEvidence(request: ServerAssertionReq): ServerAssertionRes =
         channels
             .requestToChannel(SampleNames.TrackingChannel, request)
-            .submit(ServerAssertionRes::class.java).await()
+            .submit(ServerAssertionRes::class.java)
+            .await()
 
     // --8<-- [start:doc-dd-offer-send]
     /** The offer is a one-way send: the turn that sends it ends right there. */
@@ -102,6 +105,7 @@ class DispatchWorker(
             .submit()
             .await()
     }
+
     // --8<-- [end:doc-dd-offer-send]
 
     private suspend fun publishStatus(
@@ -120,6 +124,7 @@ class DispatchWorker(
                     occurredAt = Instant.now(),
                 ),
             )
-            .submit(DeliveryStatusChangedRes::class.java).await()
+            .submit(DeliveryStatusChangedRes::class.java)
+            .await()
     }
 }

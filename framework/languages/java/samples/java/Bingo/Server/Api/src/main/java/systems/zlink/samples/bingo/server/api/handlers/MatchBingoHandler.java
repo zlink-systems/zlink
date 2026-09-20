@@ -1,21 +1,20 @@
 package systems.zlink.samples.bingo.server.api.handlers;
-import java.util.concurrent.CompletionStage;
 
-import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTimings;
 import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 @ZLinkHandlerGroup(SampleNames.ApiChannel)
 public final class MatchBingoHandler
-    implements ZLinkRequestHandler<
-        Messages.MatchBingoApiReq,
-        Messages.MatchBingoApiRes> {
+        implements ZLinkRequestHandler<Messages.MatchBingoApiReq, Messages.MatchBingoApiRes> {
     private final ZLinkRouteClient routes;
     private final ZLinkSpotManager spots;
 
@@ -26,26 +25,30 @@ public final class MatchBingoHandler
 
     @Override
     public CompletionStage<Messages.MatchBingoApiRes> handle(
-        Messages.MatchBingoApiReq request,
-        ZLinkMessageContext context) {
+            Messages.MatchBingoApiReq request, ZLinkMessageContext context) {
         // --8<-- [start:doc-bingo-api-match]
         String levelBucket = "1-10";
         return routes.requestToSpot(
-                "match:" + levelBucket,
-                BingoMessages.reserveBingoRoomReq(
-                    request.getMode(), request.getActorId(), levelBucket))
-            .instanceSpot(SampleNames.MatchmakerSpotType)
-            .inMesh(SampleNames.MatchmakingMesh)
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.ReserveBingoRoomRes.class)
-            .thenCompose(allocated -> spots
-                .getOrCreate(allocated.getRoomId(), SampleNames.RoomSpotType)
-                .inMesh(SampleNames.Mesh)
-                .request(BingoMessages.bingoRoomCreateReq(allocated.getSettings()))
+                        "match:" + levelBucket,
+                        BingoMessages.reserveBingoRoomReq(
+                                request.getMode(), request.getActorId(), levelBucket))
+                .instanceSpot(SampleNames.MatchmakerSpotType)
+                .inMesh(SampleNames.MatchmakingMesh)
                 .timeout(SampleTimings.RequestTimeout)
-                .submit()
-                .thenApply(ignored ->
-                    BingoMessages.matchBingoApiRes(allocated.getRoomId())));
+                .submit(Messages.ReserveBingoRoomRes.class)
+                .thenCompose(
+                        allocated ->
+                                spots.getOrCreate(allocated.getRoomId(), SampleNames.RoomSpotType)
+                                        .inMesh(SampleNames.Mesh)
+                                        .request(
+                                                BingoMessages.bingoRoomCreateReq(
+                                                        allocated.getSettings()))
+                                        .timeout(SampleTimings.RequestTimeout)
+                                        .submit()
+                                        .thenApply(
+                                                ignored ->
+                                                        BingoMessages.matchBingoApiRes(
+                                                                allocated.getRoomId())));
         // --8<-- [end:doc-bingo-api-match]
     }
 }

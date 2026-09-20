@@ -13,16 +13,18 @@ class PlayActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayActor> {
     override fun capture(
         actor: PlayActor,
         cancellation: ZLinkRelocationCancellation,
-    ): CompletionStage<ByteArray> = CompletableFuture.completedFuture(
-        json.writeValueAsBytes(
-            TransferState(
-                actor.joinedRoomIdOrNull(),
-                actor.playerOrNull(),
-                actor.destroyAfterEntrySpotJoin,
-                actor.disconnected,
-            ),
-        ),
-    )
+    ): CompletionStage<ByteArray> =
+        CompletableFuture.completedFuture(
+            json.writeValueAsBytes(
+                TransferState(
+                    actor.joinedRoomIdOrNull(),
+                    actor.playerOrNull(),
+                    actor.destroyAfterEntrySpotJoin,
+                    actor.disconnected,
+                )
+            )
+        )
+
     // --8<-- [end:doc-ttt-actor-capture]
 
     override fun restore(

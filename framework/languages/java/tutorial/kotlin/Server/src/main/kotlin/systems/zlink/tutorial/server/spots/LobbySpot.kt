@@ -10,9 +10,7 @@ import systems.zlink.tutorial.server.actors.Player
 // --8<-- [start:entry-spot]
 // Every new player lands here before joining a room, and returns here after
 // leaving one. A node that hosts players registers exactly one of these.
-class LobbySpot(
-    override val context: ZLinkEntrySpotContext,
-) : ZLinkSuspendingEntrySpot<Player>() {
+class LobbySpot(override val context: ZLinkEntrySpotContext) : ZLinkSuspendingEntrySpot<Player>() {
 
     init {
         // --8<-- [start:actor-handler-register]
@@ -23,10 +21,8 @@ class LobbySpot(
         // --8<-- [end:actor-handler-register]
     }
 
-    override suspend fun onJoinedActorSuspending(actor: Player) {
-    }
+    override suspend fun onJoinedActorSuspending(actor: Player) {}
 
-    override suspend fun onLeaveActorSuspending(actor: Player) {
-    }
+    override suspend fun onLeaveActorSuspending(actor: Player) {}
 }
 // --8<-- [end:entry-spot]

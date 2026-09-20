@@ -2,8 +2,8 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.spo
 
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.CustomerActor
 import systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.CustomerActorDirectory
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.SubscribeDeliveryReq
@@ -29,10 +29,7 @@ class CustomerEntrySpot(
         customers.remove(actor.actorId())
     }
 
-    fun subscribe(
-        actor: CustomerActor,
-        request: SubscribeDeliveryReq,
-    ): SubscribeDeliveryRes {
+    fun subscribe(actor: CustomerActor, request: SubscribeDeliveryReq): SubscribeDeliveryRes {
         customers.subscribe(actor.actorId(), request.deliveryId)
         return SubscribeDeliveryRes(request.deliveryId)
     }

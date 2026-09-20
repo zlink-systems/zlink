@@ -15,15 +15,13 @@ public final class SampleNames {
     public static final String ServerEvidenceMarker = "supportchat-server-evidence=completed";
     public static final String ClientMarker = "supportchat=completed";
 
-    private SampleNames() {
-    }
+    private SampleNames() {}
 
     public static final class Roles {
         public static final String Customer = "Customer";
         public static final String Agent = "Agent";
 
-        private Roles() {
-        }
+        private Roles() {}
     }
 
     public static final class Statuses {
@@ -32,7 +30,6 @@ public final class SampleNames {
         public static final String WaitingForClose = "WaitingForClose";
         public static final String Closed = "Closed";
 
-        private Statuses() {
-        }
+        private Statuses() {}
     }
 }

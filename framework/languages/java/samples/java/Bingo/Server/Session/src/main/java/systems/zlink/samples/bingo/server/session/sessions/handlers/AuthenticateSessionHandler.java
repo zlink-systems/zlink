@@ -1,6 +1,4 @@
 package systems.zlink.samples.bingo.server.session.sessions.handlers;
-import java.util.concurrent.CompletionStage;
-
 
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
@@ -14,14 +12,14 @@ import systems.zlink.samples.bingo.server.configuration.SampleTimings;
 import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 public final class AuthenticateSessionHandler
-    implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, Messages.AuthenticateReq> {
+        implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, Messages.AuthenticateReq> {
     private final ZLinkRouteClient routes;
     private final ZLinkActorManager actors;
 
-    public AuthenticateSessionHandler(
-        ZLinkRouteClient routes,
-        ZLinkActorManager actors) {
+    public AuthenticateSessionHandler(ZLinkRouteClient routes, ZLinkActorManager actors) {
         this.routes = routes;
         this.actors = actors;
     }
@@ -33,45 +31,57 @@ public final class AuthenticateSessionHandler
 
     @Override
     public CompletionStage<Void> handle(
-        ZLinkSessionContext context,
-        ZLinkSessionDispatchContext dispatch,
-        Messages.AuthenticateReq request) {
+            ZLinkSessionContext context,
+            ZLinkSessionDispatchContext dispatch,
+            Messages.AuthenticateReq request) {
         if (request.getAccessToken().isBlank()) {
             throw new IllegalArgumentException("access token is required");
         }
         // --8<-- [start:doc-bingo-session-auth]
-        return routes
-            .requestToChannel(
-                SampleNames.ApiChannel,
-                BingoMessages.authenticatePlayerReq(request.getAccessToken()))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.AuthenticatePlayerRes.class)
-            .thenCompose(authenticated -> {
-                requireAuthenticated(authenticated);
-                return actors.getOrCreate(
-                        authenticated.getActorId(),
-                        SampleNames.PlayerActorType)
-                    .request(BingoMessages.ensurePlayerActorReq(
-                            authenticated.getActorId(),
-                            authenticated.getDisplayName()))
-                    .submit()
-                    // --8<-- [start:doc-bingo-session-bind]
-                    .thenCompose(result -> context.actors().bind(requireActor(result))
-                        .thenRun(() -> context.client().reply(BingoMessages.authenticateRes(
-                            authenticated.getActorId(),
-                            authenticated.getDisplayName())).submit()));
-                    // --8<-- [end:doc-bingo-session-bind]
-            });
+        return routes.requestToChannel(
+                        SampleNames.ApiChannel,
+                        BingoMessages.authenticatePlayerReq(request.getAccessToken()))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(Messages.AuthenticatePlayerRes.class)
+                .thenCompose(
+                        authenticated -> {
+                            requireAuthenticated(authenticated);
+                            return actors.getOrCreate(
+                                            authenticated.getActorId(), SampleNames.PlayerActorType)
+                                    .request(
+                                            BingoMessages.ensurePlayerActorReq(
+                                                    authenticated.getActorId(),
+                                                    authenticated.getDisplayName()))
+                                    .submit()
+                                    // --8<-- [start:doc-bingo-session-bind]
+                                    .thenCompose(
+                                            result ->
+                                                    context.actors()
+                                                            .bind(requireActor(result))
+                                                            .thenRun(
+                                                                    () ->
+                                                                            context.client()
+                                                                                    .reply(
+                                                                                            BingoMessages
+                                                                                                    .authenticateRes(
+                                                                                                            authenticated
+                                                                                                                    .getActorId(),
+                                                                                                            authenticated
+                                                                                                                    .getDisplayName()))
+                                                                                    .submit()));
+                            // --8<-- [end:doc-bingo-session-bind]
+                        });
         // --8<-- [end:doc-bingo-session-auth]
     }
 
     private static void requireAuthenticated(Messages.AuthenticatePlayerRes authenticated) {
         if (!authenticated.getAccepted()
-            || authenticated.getActorId().isBlank()
-            || authenticated.getDisplayName().isBlank()) {
-            throw new IllegalStateException(authenticated.getReason().isBlank()
-                ? "Player authentication failed."
-                : authenticated.getReason());
+                || authenticated.getActorId().isBlank()
+                || authenticated.getDisplayName().isBlank()) {
+            throw new IllegalStateException(
+                    authenticated.getReason().isBlank()
+                            ? "Player authentication failed."
+                            : authenticated.getReason());
         }
     }
 

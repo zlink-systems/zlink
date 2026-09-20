@@ -8,6 +8,5 @@ public final class SampleTimings {
     public static final Duration IdleTimeout = Duration.ofSeconds(3);
     public static final Duration CloseGraceTimeout = Duration.ofSeconds(2);
 
-    private SampleTimings() {
-    }
+    private SampleTimings() {}
 }

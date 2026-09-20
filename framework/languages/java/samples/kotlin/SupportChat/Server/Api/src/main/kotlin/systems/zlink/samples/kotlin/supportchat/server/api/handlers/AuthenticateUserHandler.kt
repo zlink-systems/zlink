@@ -9,7 +9,8 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.AuthenticateUse
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.AuthenticateUserRes
 
 @ZLinkHandlerGroup(SampleNames.ApiChannel)
-class AuthenticateUserHandler : ZLinkSuspendingRequestHandler<AuthenticateUserReq, AuthenticateUserRes> {
+class AuthenticateUserHandler :
+    ZLinkSuspendingRequestHandler<AuthenticateUserReq, AuthenticateUserRes> {
     override suspend fun handle(
         request: AuthenticateUserReq,
         context: ZLinkMessageContext,
@@ -23,9 +24,6 @@ class AuthenticateUserHandler : ZLinkSuspendingRequestHandler<AuthenticateUserRe
             else -> AuthenticateUserRes(false, null, null, null, "Unknown support chat token.")
         }
 
-    private fun accepted(
-        actorId: String,
-        displayName: String,
-        role: String,
-    ): AuthenticateUserRes = AuthenticateUserRes(true, actorId, displayName, role, null)
+    private fun accepted(actorId: String, displayName: String, role: String): AuthenticateUserRes =
+        AuthenticateUserRes(true, actorId, displayName, role, null)
 }

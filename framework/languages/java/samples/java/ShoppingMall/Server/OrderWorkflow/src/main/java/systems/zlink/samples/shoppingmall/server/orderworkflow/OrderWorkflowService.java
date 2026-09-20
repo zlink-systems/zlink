@@ -1,16 +1,14 @@
 package systems.zlink.samples.shoppingmall.server.orderworkflow;
-import java.util.concurrent.CompletableFuture;
 
-import java.util.List;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.OrderWorkflowSpot;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleTimings;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
 import systems.zlink.samples.shoppingmall.server.shared.domain.OrderDomain;
 import systems.zlink.samples.shoppingmall.server.shared.domain.OrderProjection;
 import systems.zlink.samples.shoppingmall.server.shared.store.RedisCommerceStore;
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class OrderWorkflowService {
     private final RedisCommerceStore store;
@@ -20,8 +18,7 @@ public final class OrderWorkflowService {
     }
 
     public CompletionStage<Messages.OrderState> startInSpot(
-        OrderWorkflowSpot spot,
-        Messages.StartOrderWorkflowReq request) {
+            OrderWorkflowSpot spot, Messages.StartOrderWorkflowReq request) {
         List<OrderDomain.StoredOrderEvent> existing = store.readEvents(request.orderId());
         Messages.OrderState current = store.findProjection(request.orderId());
         if (current != null) {
@@ -29,27 +26,31 @@ public final class OrderWorkflowService {
         }
         if (existing.isEmpty()) {
             append(
-                request.orderId(),
-                0,
-                List.of(new OrderDomain.OrderStartedEvent(
-                    RedisCommerceStore.eventId("order-started", request.orderId()),
-                    request.idempotencyKey(),
                     request.orderId(),
-                    request.cartId(),
-                    request.shippingAddressId(),
-                    request.lines(),
-                    request.amount(),
-                    request.currency(),
-                    RedisCommerceStore.nowMs())));
+                    0,
+                    List.of(
+                            new OrderDomain.OrderStartedEvent(
+                                    RedisCommerceStore.eventId("order-started", request.orderId()),
+                                    request.idempotencyKey(),
+                                    request.orderId(),
+                                    request.cartId(),
+                                    request.shippingAddressId(),
+                                    request.lines(),
+                                    request.amount(),
+                                    request.currency(),
+                                    RedisCommerceStore.nowMs())));
         } else {
             saveProjection(request.orderId());
         }
         // --8<-- [start:doc-sm-background-continue]
         Messages.OrderState state = store.findProjection(request.orderId());
         if (!spot.isTerminal(state)) {
-            spot.context().outbound().sendToSpot(
-                spot.context().spotId(),
-                new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
+            spot.context()
+                    .outbound()
+                    .sendToSpot(
+                            spot.context().spotId(),
+                            new Messages.RunOrderWorkflowMsg(request.orderId()))
+                    .submit();
         }
         return CompletableFuture.completedFuture(state);
         // --8<-- [end:doc-sm-background-continue]
@@ -59,8 +60,11 @@ public final class OrderWorkflowService {
         // --8<-- [start:doc-sm-replay]
         Messages.OrderState state = saveProjection(orderId);
         if (Messages.OrderStatuses.InventoryReserved.equals(state.status())) {
-            System.out.println("shoppingmall-order replayed order=" + orderId
-                + " generation=" + spot.context().objectGeneration());
+            System.out.println(
+                    "shoppingmall-order replayed order="
+                            + orderId
+                            + " generation="
+                            + spot.context().objectGeneration());
         }
         // --8<-- [end:doc-sm-replay]
         // --8<-- [start:doc-sm-next-step]
@@ -77,28 +81,30 @@ public final class OrderWorkflowService {
         // --8<-- [end:doc-sm-next-step]
     }
 
-    public Messages.OrderState prepareInventoryReservedInSpot(Messages.StartOrderWorkflowReq request) {
+    public Messages.OrderState prepareInventoryReservedInSpot(
+            Messages.StartOrderWorkflowReq request) {
         List<OrderDomain.StoredOrderEvent> existing = store.readEvents(request.orderId());
         if (existing.isEmpty()) {
             append(
-                request.orderId(),
-                0,
-                List.of(
-                    new OrderDomain.OrderStartedEvent(
-                        RedisCommerceStore.eventId("order-started", request.orderId()),
-                        request.idempotencyKey(),
-                        request.orderId(),
-                        request.cartId(),
-                        request.shippingAddressId(),
-                        request.lines(),
-                        request.amount(),
-                        request.currency(),
-                        RedisCommerceStore.nowMs()),
-                    new OrderDomain.InventoryReservedEvent(
-                        RedisCommerceStore.eventId("inventory-reserved", request.orderId()),
-                        request.orderId(),
-                        "reservation-" + request.orderId(),
-                        RedisCommerceStore.nowMs())));
+                    request.orderId(),
+                    0,
+                    List.of(
+                            new OrderDomain.OrderStartedEvent(
+                                    RedisCommerceStore.eventId("order-started", request.orderId()),
+                                    request.idempotencyKey(),
+                                    request.orderId(),
+                                    request.cartId(),
+                                    request.shippingAddressId(),
+                                    request.lines(),
+                                    request.amount(),
+                                    request.currency(),
+                                    RedisCommerceStore.nowMs()),
+                            new OrderDomain.InventoryReservedEvent(
+                                    RedisCommerceStore.eventId(
+                                            "inventory-reserved", request.orderId()),
+                                    request.orderId(),
+                                    "reservation-" + request.orderId(),
+                                    RedisCommerceStore.nowMs())));
         }
         return saveProjection(request.orderId());
     }
@@ -107,109 +113,105 @@ public final class OrderWorkflowService {
         return store.rebuildProjection(orderId);
     }
 
-    private Messages.OrderState reserveInventory(
-        String orderId,
-        Messages.OrderState state) {
+    private Messages.OrderState reserveInventory(String orderId, Messages.OrderState state) {
         List<OrderDomain.StoredOrderEvent> events = store.readEvents(orderId);
         OrderDomain.OrderStartedEvent started = started(events);
-        OrderDomain.ReserveInventoryResult reserved = store.reserveInventory(
-            orderId,
-            "reservation-" + orderId,
-            started.lines());
+        OrderDomain.ReserveInventoryResult reserved =
+                store.reserveInventory(orderId, "reservation-" + orderId, started.lines());
         if (!reserved.accepted()) {
             append(
-                orderId,
-                version(events),
-                List.of(
-                    new OrderDomain.InventoryReservationFailedEvent(
-                        RedisCommerceStore.eventId("inventory-failed", orderId),
-                        orderId,
-                        reserved.reason(),
-                        RedisCommerceStore.nowMs()),
-                    new OrderDomain.OrderFailedEvent(
-                        RedisCommerceStore.eventId("order-failed", orderId),
-                        orderId,
-                        reserved.reason(),
-                        RedisCommerceStore.nowMs())));
+                    orderId,
+                    version(events),
+                    List.of(
+                            new OrderDomain.InventoryReservationFailedEvent(
+                                    RedisCommerceStore.eventId("inventory-failed", orderId),
+                                    orderId,
+                                    reserved.reason(),
+                                    RedisCommerceStore.nowMs()),
+                            new OrderDomain.OrderFailedEvent(
+                                    RedisCommerceStore.eventId("order-failed", orderId),
+                                    orderId,
+                                    reserved.reason(),
+                                    RedisCommerceStore.nowMs())));
             return store.findProjection(orderId);
         }
         append(
-            orderId,
-            version(events),
-            List.of(new OrderDomain.InventoryReservedEvent(
-                RedisCommerceStore.eventId("inventory-reserved", orderId),
-                orderId,
-                reserved.reservationId(),
-                RedisCommerceStore.nowMs())));
-        return store.findProjection(orderId);
-    }
-
-    private Messages.OrderState authorizePayment(
-        String orderId,
-        Messages.OrderState state) {
-        List<OrderDomain.StoredOrderEvent> events = store.readEvents(orderId);
-        String paymentMethodId = store.getOrderPaymentMethod(orderId);
-        OrderDomain.AuthorizePaymentResult paid = store.authorizePayment(
-            orderId,
-            "payment-" + orderId,
-            paymentMethodId,
-            state.amount(),
-            state.currency());
-        if (!paid.accepted()) {
-            append(
                 orderId,
                 version(events),
                 List.of(
-                    new OrderDomain.PaymentFailedEvent(
-                        RedisCommerceStore.eventId("payment-failed", orderId),
+                        new OrderDomain.InventoryReservedEvent(
+                                RedisCommerceStore.eventId("inventory-reserved", orderId),
+                                orderId,
+                                reserved.reservationId(),
+                                RedisCommerceStore.nowMs())));
+        return store.findProjection(orderId);
+    }
+
+    private Messages.OrderState authorizePayment(String orderId, Messages.OrderState state) {
+        List<OrderDomain.StoredOrderEvent> events = store.readEvents(orderId);
+        String paymentMethodId = store.getOrderPaymentMethod(orderId);
+        OrderDomain.AuthorizePaymentResult paid =
+                store.authorizePayment(
                         orderId,
-                        paid.reason(),
-                        RedisCommerceStore.nowMs()),
-                    new OrderDomain.InventoryReleasedEvent(
-                        RedisCommerceStore.eventId("inventory-released", orderId),
-                        orderId,
-                        state.reservationId(),
-                        paid.reason(),
-                        RedisCommerceStore.nowMs()),
-                    new OrderDomain.OrderFailedEvent(
-                        RedisCommerceStore.eventId("order-failed", orderId),
-                        orderId,
-                        paid.reason(),
-                        RedisCommerceStore.nowMs())));
+                        "payment-" + orderId,
+                        paymentMethodId,
+                        state.amount(),
+                        state.currency());
+        if (!paid.accepted()) {
+            append(
+                    orderId,
+                    version(events),
+                    List.of(
+                            new OrderDomain.PaymentFailedEvent(
+                                    RedisCommerceStore.eventId("payment-failed", orderId),
+                                    orderId,
+                                    paid.reason(),
+                                    RedisCommerceStore.nowMs()),
+                            new OrderDomain.InventoryReleasedEvent(
+                                    RedisCommerceStore.eventId("inventory-released", orderId),
+                                    orderId,
+                                    state.reservationId(),
+                                    paid.reason(),
+                                    RedisCommerceStore.nowMs()),
+                            new OrderDomain.OrderFailedEvent(
+                                    RedisCommerceStore.eventId("order-failed", orderId),
+                                    orderId,
+                                    paid.reason(),
+                                    RedisCommerceStore.nowMs())));
             store.releaseInventory(orderId, state.reservationId(), paid.reason());
             return store.findProjection(orderId);
         }
         append(
-            orderId,
-            version(events),
-            List.of(new OrderDomain.PaymentAuthorizedEvent(
-                RedisCommerceStore.eventId("payment-authorized", orderId),
                 orderId,
-                paid.paymentId(),
-                RedisCommerceStore.nowMs())));
+                version(events),
+                List.of(
+                        new OrderDomain.PaymentAuthorizedEvent(
+                                RedisCommerceStore.eventId("payment-authorized", orderId),
+                                orderId,
+                                paid.paymentId(),
+                                RedisCommerceStore.nowMs())));
         return store.findProjection(orderId);
     }
 
     private Messages.OrderState confirm(String orderId) {
         List<OrderDomain.StoredOrderEvent> events = store.readEvents(orderId);
         append(
-            orderId,
-            version(events),
-            List.of(new OrderDomain.OrderConfirmedEvent(
-                RedisCommerceStore.eventId("order-confirmed", orderId),
                 orderId,
-                RedisCommerceStore.nowMs())));
+                version(events),
+                List.of(
+                        new OrderDomain.OrderConfirmedEvent(
+                                RedisCommerceStore.eventId("order-confirmed", orderId),
+                                orderId,
+                                RedisCommerceStore.nowMs())));
         return store.findProjection(orderId);
     }
 
     // --8<-- [start:doc-sm-append]
-    private void append(
-        String orderId,
-        long expectedVersion,
-        List<OrderDomain.OrderEvent> events) {
+    private void append(String orderId, long expectedVersion, List<OrderDomain.OrderEvent> events) {
         store.appendEvents(orderId, expectedVersion, events);
         saveProjection(orderId);
     }
+
     // --8<-- [end:doc-sm-append]
 
     private Messages.OrderState saveProjection(String orderId) {
@@ -221,7 +223,8 @@ public final class OrderWorkflowService {
         return state;
     }
 
-    private static OrderDomain.OrderStartedEvent started(List<OrderDomain.StoredOrderEvent> events) {
+    private static OrderDomain.OrderStartedEvent started(
+            List<OrderDomain.StoredOrderEvent> events) {
         for (OrderDomain.StoredOrderEvent event : events) {
             if (event.event() instanceof OrderDomain.OrderStartedEvent started) {
                 return started;

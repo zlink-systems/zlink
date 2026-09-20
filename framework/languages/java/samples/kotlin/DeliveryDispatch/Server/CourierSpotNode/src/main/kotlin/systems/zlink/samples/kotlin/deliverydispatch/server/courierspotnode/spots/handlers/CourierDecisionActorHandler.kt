@@ -1,8 +1,8 @@
 package systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spots.handlers
 
+import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
-import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.CourierActor
 import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spots.CourierEntrySpot
@@ -14,13 +14,8 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliv
  * it carries the attempt the offer was made under, and dispatch decides whether that attempt is
  * still the current one (common sample spec section 7.4).
  */
-class CourierDecisionActorHandler(
-    private val channels: ZLinkClient,
-) : ZLinkSuspendingEntrySpotActorSendHandler<
-    CourierEntrySpot,
-    CourierActor,
-    CourierDecisionMsg,
-    > {
+class CourierDecisionActorHandler(private val channels: ZLinkClient) :
+    ZLinkSuspendingEntrySpotActorSendHandler<CourierEntrySpot, CourierActor, CourierDecisionMsg> {
     override suspend fun handle(
         entrySpot: CourierEntrySpot,
         actor: CourierActor,
@@ -32,7 +27,7 @@ class CourierDecisionActorHandler(
         if (attempt == null) {
             System.err.println(
                 "deliverydispatch courier-actor: decision for an unknown offer " +
-                    "delivery=${message.deliveryId} courier=${actor.actorId()}",
+                    "delivery=${message.deliveryId} courier=${actor.actorId()}"
             )
             return
         }
@@ -52,7 +47,7 @@ class CourierDecisionActorHandler(
         // --8<-- [end:doc-dd-decision-send]
         println(
             "deliverydispatch courier-actor: decision delivery=${message.deliveryId} " +
-                "courier=${actor.actorId()} attempt=$attempt accepted=${message.accepted}",
+                "courier=${actor.actorId()} attempt=$attempt accepted=${message.accepted}"
         )
     }
 }

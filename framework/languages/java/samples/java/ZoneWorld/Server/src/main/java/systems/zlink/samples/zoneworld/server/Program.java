@@ -1,24 +1,21 @@
 package systems.zlink.samples.zoneworld.server;
 
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.concurrent.Flow;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
-import systems.zlink.framework.channels.ZLinkFanoutClient;
-import systems.zlink.framework.channels.ZLinkRouteClient;
+
 import systems.zlink.framework.actors.ZLinkActorManager;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
@@ -26,9 +23,9 @@ import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.samples.zoneworld.server.configuration.MaintenanceStore;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
@@ -37,8 +34,8 @@ import systems.zlink.samples.zoneworld.server.configuration.SampleLocationStore;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
 import systems.zlink.samples.zoneworld.server.gateway.GameSession;
 import systems.zlink.samples.zoneworld.server.ops.NodeLivenessObserver;
-import systems.zlink.samples.zoneworld.server.ops.OpsSession;
 import systems.zlink.samples.zoneworld.server.ops.OpsConsoleRegistry;
+import systems.zlink.samples.zoneworld.server.ops.OpsSession;
 import systems.zlink.samples.zoneworld.server.zone.ZoneBootstrap;
 import systems.zlink.samples.zoneworld.server.zone.ZoneStatusReporter;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
@@ -47,12 +44,18 @@ import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActorRelocationA
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneEntrySpot;
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneSpot;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.concurrent.Flow;
+
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology.class)
-@SpringBootApplication(proxyBeanMethods = false, scanBasePackages = "systems.zlink.samples.zoneworld.server")
+@SpringBootApplication(
+        proxyBeanMethods = false,
+        scanBasePackages = "systems.zlink.samples.zoneworld.server")
 public final class Program {
-    private Program() {
-    }
+    private Program() {}
 
     public static void main(String[] args) throws Exception {
         ConfigurableApplicationContext app = run(SampleTopology.configPath(args));
@@ -62,12 +65,19 @@ public final class Program {
 
     private static ConfigurableApplicationContext run(String configPath) {
         StandardEnvironment environment = new StandardEnvironment();
-        environment.getPropertySources().remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
-        environment.getPropertySources().remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
-        SpringApplicationBuilder builder = new SpringApplicationBuilder(Program.class)
-            .environment(environment)
-            .properties("spring.config.location=" + Path.of(configPath).toAbsolutePath().toUri())
-            .web(WebApplicationType.NONE);
+        environment
+                .getPropertySources()
+                .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        environment
+                .getPropertySources()
+                .remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        SpringApplicationBuilder builder =
+                new SpringApplicationBuilder(Program.class)
+                        .environment(environment)
+                        .properties(
+                                "spring.config.location="
+                                        + Path.of(configPath).toAbsolutePath().toUri())
+                        .web(WebApplicationType.NONE);
         builder.application().setKeepAlive(true);
         return builder.run();
     }
@@ -80,10 +90,10 @@ public final class Program {
     @Bean(destroyMethod = "close")
     ZLinkRedisRelocationStore relocationStore(SampleTopology topology) {
         return new ZLinkRedisRelocationStore(
-            new ZLinkRedisRelocationOptions()
-                .setConnectionString(topology.redisEndpoint())
-                .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")
-                .setCommandTimeout(Duration.ofMillis(500)));
+                new ZLinkRedisRelocationOptions()
+                        .setConnectionString(topology.redisEndpoint())
+                        .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")
+                        .setCommandTimeout(Duration.ofMillis(500)));
     }
 
     @Bean(destroyMethod = "close")
@@ -109,18 +119,30 @@ public final class Program {
     @Bean
     OpsConsoleRegistry opsConsoleRegistry(NodeRegistry registry) {
         OpsConsoleRegistry consoles = new OpsConsoleRegistry();
-        registry.onChanged(node -> consoles.broadcast(new systems.zlink.samples.zoneworld.shared.Messages.NodeStatusNotify(
-            node.nodeId(), node.registered(), node.connected(), node.maintenance(),
-            node.zones(), node.playerCount())));
-        registry.onAlert(alert -> { consoles.record(alert); consoles.broadcast(alert); });
+        registry.onChanged(
+                node ->
+                        consoles.broadcast(
+                                new systems.zlink.samples.zoneworld.shared.Messages
+                                        .NodeStatusNotify(
+                                        node.nodeId(),
+                                        node.registered(),
+                                        node.connected(),
+                                        node.maintenance(),
+                                        node.zones(),
+                                        node.playerCount())));
+        registry.onAlert(
+                alert -> {
+                    consoles.record(alert);
+                    consoles.broadcast(alert);
+                });
         return consoles;
     }
 
     @Bean
     ZLinkFrameworkConfigurer zoneWorldFramework(
-        SampleTopology topology,
-        ZLinkRedisLocationStore locations,
-        ZLinkRedisRelocationStore relocationStore) {
+            SampleTopology topology,
+            ZLinkRedisLocationStore locations,
+            ZLinkRedisRelocationStore relocationStore) {
         topology.validateServer();
         return options -> {
             options.configureLocations();
@@ -134,16 +156,18 @@ public final class Program {
             // node id still publishes a routing id no earlier process ever held.
             if (topology.is("zone") && topology.isSubscriberOnly()) {
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
-                    .enableSubscriber()
-                    .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
+                        .enableSubscriber()
+                        .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
                 return;
             }
 
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh(ZoneWorldNames.MESH)
-                .listen(topology.meshEndpoint())
-                .setRoutingIdPrefix(topology.is("zone")
-                    ? ZoneWorldNames.ZONE_ROUTING_ID_PREFIX
-                    : "zoneworld-" + topology.role());
+            ZLinkMeshNodeBuilder mesh =
+                    options.addRouteMesh(ZoneWorldNames.MESH)
+                            .listen(topology.meshEndpoint())
+                            .setRoutingIdPrefix(
+                                    topology.is("zone")
+                                            ? ZoneWorldNames.ZONE_ROUTING_ID_PREFIX
+                                            : "zoneworld-" + topology.role());
             if (topology.meshAdvertiseHost() != null && !topology.meshAdvertiseHost().isBlank()) {
                 mesh.setAdvertiseHost(topology.meshAdvertiseHost());
             }
@@ -151,66 +175,72 @@ public final class Program {
             if (topology.is("gateway")) {
                 mesh.objects().client();
                 options.addStreamNode(ZoneWorldNames.GATEWAY_STREAM)
-                    .bind(topology.streamEndpoint())
-                    .enableActorDispatch()
-                    .registerSession(GameSession.class);
+                        .bind(topology.streamEndpoint())
+                        .enableActorDispatch()
+                        .registerSession(GameSession.class);
                 return;
             }
 
             if (topology.is("zone")) {
                 // --8<-- [start:doc-multi-channel-register]
                 mesh.channelName(ZoneWorldNames.ZONE_CHANNEL)
-                    .server()
-                    .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL);
+                        .server()
+                        .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL);
                 mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).client();
                 // --8<-- [end:doc-multi-channel-register]
                 // --8<-- [start:doc-zw-node-register]
-                mesh.objects().server()
-                    .addEntrySpot(ZoneEntrySpot.class)
-                    .addSpotFactory(
-                        ZoneWorldNames.ZONE_SPOT_TYPE,
-                        ZoneSpot.class,
-                        factory -> factory.stableTypeLimit(2).disableRelocation())
-                    .addActorFactory(
-                        ZoneWorldNames.PLAYER_ACTOR_TYPE,
-                        PlayerActor.class,
-                        PlayerActorFactory.class,
-                        factory -> factory.preserveStateWith(PlayerActorRelocationAdapter.class));
+                mesh.objects()
+                        .server()
+                        .addEntrySpot(ZoneEntrySpot.class)
+                        .addSpotFactory(
+                                ZoneWorldNames.ZONE_SPOT_TYPE,
+                                ZoneSpot.class,
+                                factory -> factory.stableTypeLimit(2).disableRelocation())
+                        .addActorFactory(
+                                ZoneWorldNames.PLAYER_ACTOR_TYPE,
+                                PlayerActor.class,
+                                PlayerActorFactory.class,
+                                factory ->
+                                        factory.preserveStateWith(
+                                                PlayerActorRelocationAdapter.class));
                 // --8<-- [end:doc-zw-node-register]
                 // --8<-- [start:doc-zw-fanout-subscribe]
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
-                    .enableSubscriber()
-                    .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
+                        .enableSubscriber()
+                        .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
                 // --8<-- [end:doc-zw-fanout-subscribe]
                 return;
             }
 
             mesh.channelName(ZoneWorldNames.REPORT_CHANNEL)
-                .server()
-                .addHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP);
+                    .server()
+                    .addHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP);
             mesh.objects().client();
             // --8<-- [start:doc-zw-fanout-publisher]
             options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
-                .setRoutingIdPrefix("zoneworld-ops-broadcast")
-                .enablePublisher();
+                    .setRoutingIdPrefix("zoneworld-ops-broadcast")
+                    .enablePublisher();
             // --8<-- [end:doc-zw-fanout-publisher]
             options.addStreamNode(ZoneWorldNames.OPS_STREAM)
-                .bind(topology.streamEndpoint())
-                .enableActorDispatch()
-                .registerSession(OpsSession.class);
+                    .bind(topology.streamEndpoint())
+                    .enableActorDispatch()
+                    .registerSession(OpsSession.class);
         };
     }
 
     @Bean
     ApplicationRunner runtimeEvidence(
-        ObjectProvider<ZLinkRouteMeshRuntime> runtimeProvider,
-        ObjectProvider<ZLinkFrameworkRuntime> frameworkProvider,
-        SampleTopology topology) {
+            ObjectProvider<ZLinkRouteMeshRuntime> runtimeProvider,
+            ObjectProvider<ZLinkFrameworkRuntime> frameworkProvider,
+            SampleTopology topology) {
         return ignored -> {
             ZLinkFrameworkRuntime framework = frameworkProvider.getIfAvailable();
             if (framework != null) {
-                System.out.println("framework lifecycle role=" + topology.role()
-                    + " state=" + framework.status().state());
+                System.out.println(
+                        "framework lifecycle role="
+                                + topology.role()
+                                + " state="
+                                + framework.status().state());
             }
             if (topology.isSubscriberOnly()) {
                 System.out.println("topology=ready node=" + topology.nodeId() + " zones=");
@@ -218,64 +248,71 @@ public final class Program {
             }
             ZLinkRouteMeshRuntime runtime = runtimeProvider.getIfAvailable();
             if (runtime == null) return;
-            runtime.observe(ZoneWorldNames.MESH, 32).subscribe(
-                new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
-                    @Override
-                    public void onSubscribe(Flow.Subscription subscription) {
-                        subscription.request(Long.MAX_VALUE);
-                    }
+            runtime.observe(ZoneWorldNames.MESH, 32)
+                    .subscribe(
+                            new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
+                                @Override
+                                public void onSubscribe(Flow.Subscription subscription) {
+                                    subscription.request(Long.MAX_VALUE);
+                                }
 
-                    @Override
-                    public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
-                        ZLinkMeshNodeSnapshot status = observed.status();
-                        System.out.println("runtime event mesh=" + status.meshName()
-                            + " state=" + status.state()
-                            + " readyPeers=" + status.readyPeerCount());
-                    }
+                                @Override
+                                public void onNext(
+                                        ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
+                                    ZLinkMeshNodeSnapshot status = observed.status();
+                                    System.out.println(
+                                            "runtime event mesh="
+                                                    + status.meshName()
+                                                    + " state="
+                                                    + status.state()
+                                                    + " readyPeers="
+                                                    + status.readyPeerCount());
+                                }
 
-                    @Override
-                    public void onError(Throwable error) {
-                        System.out.println("runtime event error mesh=" + ZoneWorldNames.MESH
-                            + " detail=" + error.getMessage());
-                    }
+                                @Override
+                                public void onError(Throwable error) {
+                                    System.out.println(
+                                            "runtime event error mesh="
+                                                    + ZoneWorldNames.MESH
+                                                    + " detail="
+                                                    + error.getMessage());
+                                }
 
-                    @Override
-                    public void onComplete() {
-                    }
-                });
+                                @Override
+                                public void onComplete() {}
+                            });
         };
     }
 
     @Bean
     @ConditionalOnProperty(prefix = "sample", name = "role", havingValue = "ops")
     NodeLivenessObserver nodeLivenessObserver(
-        ZLinkRouteMeshRuntime runtime,
-        NodeRegistry registry) {
+            ZLinkRouteMeshRuntime runtime, NodeRegistry registry) {
         return new NodeLivenessObserver(runtime, registry);
     }
 
     @Bean
     @ConditionalOnExpression("'${sample.role:}' == 'zone' && !${sample.subscriber-only:false}")
     ZoneBootstrap zoneBootstrap(
-        SampleTopology topology,
-        ZLinkSpotManager spots,
-        ZLinkActorManager actors,
-        systems.zlink.framework.actors.ZLinkActorClient actorClient,
-        NodeMaintenanceState maintenance,
-        MaintenanceStore store,
-        NodeCensus census,
-        ZoneStatusReporter reporter) {
+            SampleTopology topology,
+            ZLinkSpotManager spots,
+            ZLinkActorManager actors,
+            systems.zlink.framework.actors.ZLinkActorClient actorClient,
+            NodeMaintenanceState maintenance,
+            MaintenanceStore store,
+            NodeCensus census,
+            ZoneStatusReporter reporter) {
         return new ZoneBootstrap(
-            topology, spots, actors, actorClient, maintenance, store, census, reporter);
+                topology, spots, actors, actorClient, maintenance, store, census, reporter);
     }
 
     @Bean
     @ConditionalOnExpression("'${sample.role:}' == 'zone' && !${sample.subscriber-only:false}")
     ZoneStatusReporter zoneStatusReporter(
-        SampleTopology topology,
-        ZLinkRouteClient routes,
-        NodeCensus census,
-        NodeMaintenanceState maintenance) {
+            SampleTopology topology,
+            ZLinkRouteClient routes,
+            NodeCensus census,
+            NodeMaintenanceState maintenance) {
         return new ZoneStatusReporter(topology, routes, census, maintenance);
     }
 }

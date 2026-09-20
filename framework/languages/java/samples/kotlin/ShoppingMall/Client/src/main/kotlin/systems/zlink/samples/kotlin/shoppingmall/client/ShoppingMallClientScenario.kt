@@ -6,8 +6,8 @@ import kotlinx.coroutines.delay
 import systems.zlink.httpclient.ZLinkHttpClient
 import systems.zlink.httpclient.kotlin.fetch
 import systems.zlink.samples.kotlin.shoppingmall.client.configuration.SampleTimings
-import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ContinueOrderWorkflowRes
+import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderState
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderStatuses
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.RebuildProjectionApiRes
@@ -24,7 +24,8 @@ class ShoppingMallClientScenario(
     private val rebuildOrderId: String,
 ) {
     suspend fun run() {
-        val success = start(apiA, StartOrderReq("cart-success", "addr-home", "pm-ok", "order-success-001"))
+        val success =
+            start(apiA, StartOrderReq("cart-success", "addr-home", "pm-ok", "order-success-001"))
         ensure(success.status == OrderStatuses.Created)
         val confirmed = waitForStatus(apiA, success.orderId, OrderStatuses.Confirmed)
         ensure(confirmed.reservationId != null && confirmed.paymentId != null)
@@ -33,15 +34,23 @@ class ShoppingMallClientScenario(
         ensure(confirmed.currency == "USD")
         emitOrder("success", success)
 
-        val duplicate = start(apiB, StartOrderReq("cart-success", "addr-home", "pm-ok", "order-success-001"))
+        val duplicate =
+            start(apiB, StartOrderReq("cart-success", "addr-home", "pm-ok", "order-success-001"))
         ensure(duplicate.orderId == success.orderId)
 
         val concurrent = runConcurrentIdempotency()
         emitOrder("concurrent", concurrent)
 
-        val pending = start(apiB, StartOrderReq("cart-success", "addr-office", "pm-ok", pendingIdempotencyKey))
+        val pending =
+            start(
+                apiB,
+                StartOrderReq("cart-success", "addr-office", "pm-ok", pendingIdempotencyKey),
+            )
         ensure(pending.orderId == pendingOrderId)
-        ensure(waitForStatus(apiA, pending.orderId, OrderStatuses.Confirmed).status == OrderStatuses.Confirmed)
+        ensure(
+            waitForStatus(apiA, pending.orderId, OrderStatuses.Confirmed).status ==
+                OrderStatuses.Confirmed
+        )
         emitOrder("pending", pending)
 
         val resumed = post<ContinueOrderWorkflowRes>(apiB, "/orders/$resumeOrderId/continue", "")
@@ -53,22 +62,38 @@ class ShoppingMallClientScenario(
         ensure(getState(apiB, rebuildOrderId).status == OrderStatuses.Confirmed)
         emitOrder("rebuild", StartOrderRes(rebuildOrderId, rebuilt.state.status))
 
-        val inventoryFailure = start(
-            apiA,
-            StartOrderReq("cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"),
+        val inventoryFailure =
+            start(
+                apiA,
+                StartOrderReq("cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"),
+            )
+        ensure(
+            waitForStatus(apiA, inventoryFailure.orderId, OrderStatuses.Failed)
+                .reason
+                ?.lowercase()
+                ?.contains("inventory") == true
         )
-        ensure(waitForStatus(apiA, inventoryFailure.orderId, OrderStatuses.Failed).reason?.lowercase()?.contains("inventory") == true)
         emitOrder("inventory-failure", inventoryFailure)
 
-        val paymentFailure = start(
-            apiB,
-            StartOrderReq("cart-payment-fail", "addr-home", "pm-decline", "order-payment-001"),
+        val paymentFailure =
+            start(
+                apiB,
+                StartOrderReq("cart-payment-fail", "addr-home", "pm-decline", "order-payment-001"),
+            )
+        ensure(
+            waitForStatus(apiB, paymentFailure.orderId, OrderStatuses.Failed)
+                .reason
+                ?.lowercase()
+                ?.contains("payment") == true
         )
-        ensure(waitForStatus(apiB, paymentFailure.orderId, OrderStatuses.Failed).reason?.lowercase()?.contains("payment") == true)
         emitOrder("payment-failure", paymentFailure)
 
-        val scaleOut = start(apiB, StartOrderReq("cart-success", "addr-office", "pm-ok", "order-scale-001"))
-        ensure(waitForStatus(apiA, scaleOut.orderId, OrderStatuses.Confirmed).status == OrderStatuses.Confirmed)
+        val scaleOut =
+            start(apiB, StartOrderReq("cart-success", "addr-office", "pm-ok", "order-scale-001"))
+        ensure(
+            waitForStatus(apiA, scaleOut.orderId, OrderStatuses.Confirmed).status ==
+                OrderStatuses.Confirmed
+        )
         emitOrder("scale-out", scaleOut)
     }
 
@@ -79,7 +104,10 @@ class ShoppingMallClientScenario(
         val resultA = first.await()
         val resultB = second.await()
         ensure(resultA.orderId == resultB.orderId)
-        ensure(waitForStatus(apiA, resultA.orderId, OrderStatuses.Confirmed).status == OrderStatuses.Confirmed)
+        ensure(
+            waitForStatus(apiA, resultA.orderId, OrderStatuses.Confirmed).status ==
+                OrderStatuses.Confirmed
+        )
         resultA
     }
 
@@ -90,7 +118,9 @@ class ShoppingMallClientScenario(
         ZLinkHttpClient.create(base).get("/orders/$orderId").fetch<GetOrderStateRes>().state
 
     private suspend fun waitForStatus(base: String, orderId: String, expected: String): OrderState {
-        repeat((SampleTimings.WorkflowTimeout.toMillis() / SampleTimings.PollDelay.toMillis()).toInt()) {
+        repeat(
+            (SampleTimings.WorkflowTimeout.toMillis() / SampleTimings.PollDelay.toMillis()).toInt()
+        ) {
             val state = getState(base, orderId)
             if (state.status == expected) return state
             delay(SampleTimings.PollDelay.toMillis())

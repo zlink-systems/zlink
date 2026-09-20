@@ -30,13 +30,14 @@ class PlayerActorEndpoints(
     ): String {
         // getOrCreate returns the existing player if there is one. The caller
         // does not choose which node hosts it.
-        val result = playerManager
-            .getOrCreate(playerId, "player")
-            .inMesh("game")
-            .request(request)
-            .timeout(Duration.ofSeconds(10))
-            .submit()
-            .await()
+        val result =
+            playerManager
+                .getOrCreate(playerId, "player")
+                .inMesh("game")
+                .request(request)
+                .timeout(Duration.ofSeconds(10))
+                .submit()
+                .await()
 
         return when (result) {
             is ZLinkActorCreateResult.Existing -> "existing"
@@ -44,6 +45,7 @@ class PlayerActorEndpoints(
             is ZLinkActorCreateResult.Rejected -> "rejected"
         }
     }
+
     // --8<-- [end:actor-create-call]
 
     // --8<-- [start:actor-send-call]
@@ -57,12 +59,14 @@ class PlayerActorEndpoints(
 
         return ResponseEntity.accepted().build()
     }
+
     // --8<-- [end:actor-send-call]
 
     // --8<-- [start:actor-request-call]
     @GetMapping("/players/{playerId}")
     suspend fun getPlayer(@PathVariable playerId: String): PlayerInfo =
-        players.requestToActor(playerId, GetPlayer())
+        players
+            .requestToActor(playerId, GetPlayer())
             .timeout(Duration.ofSeconds(3))
             .submit(PlayerInfo::class.java)
             .await()

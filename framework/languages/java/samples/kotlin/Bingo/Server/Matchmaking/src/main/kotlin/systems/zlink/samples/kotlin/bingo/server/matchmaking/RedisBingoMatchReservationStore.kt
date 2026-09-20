@@ -12,13 +12,14 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.ReserveBingoRoomRes
 
 class RedisBingoMatchReservationStore(topology: SampleTopology) : AutoCloseable {
     private val keyPrefix = topology.redisKeyPrefix
-    private val client = RedisClient.create(
-        if ("://" in topology.redisEndpoint) {
-            topology.redisEndpoint
-        } else {
-            "redis://${topology.redisEndpoint}"
-        },
-    )
+    private val client =
+        RedisClient.create(
+            if ("://" in topology.redisEndpoint) {
+                topology.redisEndpoint
+            } else {
+                "redis://${topology.redisEndpoint}"
+            }
+        )
     private val connection = client.connect()
 
     fun reserve(request: ReserveBingoRoomReq): CompletionStage<ReserveBingoRoomRes> {
@@ -27,31 +28,36 @@ class RedisBingoMatchReservationStore(topology: SampleTopology) : AutoCloseable 
             "actor id and level bucket are required"
         }
         val roomId = "bingo-room-${UUID.randomUUID().toString().replace("-", "")}"
-        val settings = BingoRoomSettingsPayload.newBuilder()
-            .setRoomName("Bingo Room ${roomId.takeLast(6)}")
-            .setMode(request.mode)
-            .setRequiredPlayers(2)
-            .setMaxDrawNumber(15)
-            .setPurpose("Game")
-            .build()
-        val encoded = Base64.getEncoder().encodeToString(settings.toByteArray())
-        return connection.async().eval<List<Any>>(
-            SCRIPT,
-            ScriptOutputType.MULTI,
-            arrayOf("${keyPrefix}match:${request.levelBucket}:${request.mode}"),
-            request.actorId,
-            roomId,
-            encoded,
-            "2",
-        ).thenApply { result ->
-            val selected = BingoRoomSettingsPayload.parseFrom(
-                Base64.getDecoder().decode(result[1].toString()),
-            )
-            ReserveBingoRoomRes.newBuilder()
-                .setRoomId(result[0].toString())
-                .setSettings(selected)
+        val settings =
+            BingoRoomSettingsPayload.newBuilder()
+                .setRoomName("Bingo Room ${roomId.takeLast(6)}")
+                .setMode(request.mode)
+                .setRequiredPlayers(2)
+                .setMaxDrawNumber(15)
+                .setPurpose("Game")
                 .build()
-        }
+        val encoded = Base64.getEncoder().encodeToString(settings.toByteArray())
+        return connection
+            .async()
+            .eval<List<Any>>(
+                SCRIPT,
+                ScriptOutputType.MULTI,
+                arrayOf("${keyPrefix}match:${request.levelBucket}:${request.mode}"),
+                request.actorId,
+                roomId,
+                encoded,
+                "2",
+            )
+            .thenApply { result ->
+                val selected =
+                    BingoRoomSettingsPayload.parseFrom(
+                        Base64.getDecoder().decode(result[1].toString())
+                    )
+                ReserveBingoRoomRes.newBuilder()
+                    .setRoomId(result[0].toString())
+                    .setSettings(selected)
+                    .build()
+            }
     }
 
     override fun close() {
@@ -60,7 +66,8 @@ class RedisBingoMatchReservationStore(topology: SampleTopology) : AutoCloseable 
     }
 
     companion object {
-        private const val SCRIPT = """
+        private const val SCRIPT =
+            """
             local key = KEYS[1]
             local actor = ARGV[1]
             local room = ARGV[2]

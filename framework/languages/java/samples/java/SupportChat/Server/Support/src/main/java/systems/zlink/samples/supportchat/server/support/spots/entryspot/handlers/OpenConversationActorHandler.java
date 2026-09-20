@@ -1,49 +1,57 @@
 package systems.zlink.samples.supportchat.server.support.spots.entryspot.handlers;
-import java.util.concurrent.CompletionStage;
 
-import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.server.support.actors.SupportUserActor;
 import systems.zlink.samples.supportchat.server.support.spots.entryspot.SupportEntrySpot;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 public final class OpenConversationActorHandler
-    implements ZLinkEntrySpotActorRequestHandler<
-        SupportEntrySpot,
-        SupportUserActor,
-        Messages.OpenConversationReq,
-        Messages.OpenConversationRes> {
+        implements ZLinkEntrySpotActorRequestHandler<
+                SupportEntrySpot,
+                SupportUserActor,
+                Messages.OpenConversationReq,
+                Messages.OpenConversationRes> {
     @Override
     public CompletionStage<Messages.OpenConversationRes> handle(
-        SupportEntrySpot spot,
-        SupportUserActor actor,
-        ZLinkMessageContext context,
-        Messages.OpenConversationReq request) {
+            SupportEntrySpot spot,
+            SupportUserActor actor,
+            ZLinkMessageContext context,
+            Messages.OpenConversationReq request) {
         requireRole(actor, SampleNames.Roles.Customer);
         // --8<-- [start:doc-sc-open-actor]
-        return spot.context().outbound()
-            .requestToChannel(
-                SampleNames.ApiChannel,
-                new Messages.OpenConversationApiReq(actor.actorId(), actor.displayName(), request.subject()))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.OpenConversationApiRes.class)
-            .thenApply(opened -> {
-                Messages.JoinConversationRes scheduled = actor
-                .scheduleConversationJoin(
-                    opened.conversationId(),
-                    request.subject(),
-                    new Messages.JoinConversationReq(
-                        actor.participantId(), actor.role(), actor.displayName()));
-                return new Messages.OpenConversationRes(opened.conversationId(), scheduled.state());
-            });
+        return spot.context()
+                .outbound()
+                .requestToChannel(
+                        SampleNames.ApiChannel,
+                        new Messages.OpenConversationApiReq(
+                                actor.actorId(), actor.displayName(), request.subject()))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(Messages.OpenConversationApiRes.class)
+                .thenApply(
+                        opened -> {
+                            Messages.JoinConversationRes scheduled =
+                                    actor.scheduleConversationJoin(
+                                            opened.conversationId(),
+                                            request.subject(),
+                                            new Messages.JoinConversationReq(
+                                                    actor.participantId(),
+                                                    actor.role(),
+                                                    actor.displayName()));
+                            return new Messages.OpenConversationRes(
+                                    opened.conversationId(), scheduled.state());
+                        });
         // --8<-- [end:doc-sc-open-actor]
     }
 
     private static void requireRole(SupportUserActor actor, String expectedRole) {
         if (!expectedRole.equals(actor.role())) {
-            throw new IllegalStateException("Expected role " + expectedRole + " but got " + actor.role());
+            throw new IllegalStateException(
+                    "Expected role " + expectedRole + " but got " + actor.role());
         }
     }
 }

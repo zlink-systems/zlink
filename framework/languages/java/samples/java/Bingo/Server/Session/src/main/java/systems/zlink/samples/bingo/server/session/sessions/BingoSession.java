@@ -1,17 +1,18 @@
 package systems.zlink.samples.bingo.server.session.sessions;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher;
 import systems.zlink.framework.streams.ZLinkStreamError;
-import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class BingoSession implements ZLinkSession {
     private static final Logger logger = LoggerFactory.getLogger(BingoSession.class);
@@ -21,8 +22,8 @@ public final class BingoSession implements ZLinkSession {
     private String boundActorId;
 
     public BingoSession(
-        ZLinkSessionContext context,
-        ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers) {
+            ZLinkSessionContext context,
+            ZLinkSessionPacketDispatcher<ZLinkSessionContext> handlers) {
         this.context = context;
         this.handlers = handlers;
     }
@@ -43,12 +44,11 @@ public final class BingoSession implements ZLinkSession {
         // Framework cleanup owns disconnect notification; this callback only records
         // the sample lifecycle evidence without submitting another notification.
         if (boundActorId != null) {
-            logger.info(
-                "bingo-lifecycle session-disconnect actor={} destroy=false",
-                boundActorId);
+            logger.info("bingo-lifecycle session-disconnect actor={} destroy=false", boundActorId);
         }
         return CompletableFuture.completedFuture(null);
     }
+
     // --8<-- [end:doc-bingo-session-disconnect]
 
     @Override
@@ -59,13 +59,17 @@ public final class BingoSession implements ZLinkSession {
     // --8<-- [start:doc-bingo-session-relay]
     @Override
     public CompletionStage<Void> onDispatch(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
-        return handlers.tryHandle(context, dispatch, payload).thenCompose(handled ->
-            handled ? rememberBoundActor() : requireSingleBoundActor(dispatch.packetName())
-                .relay(payload)
-                .thenApply(ignored -> null));
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        return handlers.tryHandle(context, dispatch, payload)
+                .thenCompose(
+                        handled ->
+                                handled
+                                        ? rememberBoundActor()
+                                        : requireSingleBoundActor(dispatch.packetName())
+                                                .relay(payload)
+                                                .thenApply(ignored -> null));
     }
+
     // --8<-- [end:doc-bingo-session-relay]
 
     private CompletionStage<Void> rememberBoundActor() {
@@ -78,10 +82,14 @@ public final class BingoSession implements ZLinkSession {
     private ZLinkSessionActor requireSingleBoundActor(String packetName) {
         return switch (context.actors().bound().size()) {
             case 1 -> context.actors().bound().get(0);
-            case 0 -> throw new IllegalStateException(
-                "Client must authenticate before relaying packet '" + packetName + "'");
-            default -> throw new IllegalStateException(
-                "Exactly one actor must be bound before relaying packet '" + packetName + "'");
+            case 0 ->
+                    throw new IllegalStateException(
+                            "Client must authenticate before relaying packet '" + packetName + "'");
+            default ->
+                    throw new IllegalStateException(
+                            "Exactly one actor must be bound before relaying packet '"
+                                    + packetName
+                                    + "'");
         };
     }
 }

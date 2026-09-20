@@ -1,17 +1,12 @@
 package systems.zlink.samples.gamequest.server.questmission.spots;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.ApplyGameplaySpotHandler;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.DeleteQuestProjectionSpotHandler;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.ClosePlayerQuestSpotHandler;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.GetQuestProgressSpotHandler;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.RebuildQuestProjectionSpotHandler;
-import systems.zlink.samples.gamequest.server.questmission.spots.handlers.SyncQuestProgressSpotHandler;
 import systems.zlink.samples.gamequest.server.questmission.store.QuestStore;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class PlayerQuestSpot implements ZLinkInstanceSpot {
     private final ZLinkInstanceSpotContext context;
@@ -34,20 +29,23 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
     public CompletionStage<Void> onInitialize() {
         store.activate(playerId);
         if (store.hasEvents(playerId)) {
-            System.out.printf("gamequest-mission replayed player=%s generation=%d%n",
-                playerId, context.objectGeneration());
+            System.out.printf(
+                    "gamequest-mission replayed player=%s generation=%d%n",
+                    playerId, context.objectGeneration());
         }
         if ("player-owner-unavailable".equals(playerId)) {
-            System.out.printf("gamequest-owner-ready player=%s node=%s%n", playerId, store.nodeId());
+            System.out.printf(
+                    "gamequest-owner-ready player=%s node=%s%n", playerId, store.nodeId());
         }
         return CompletableFuture.completedFuture(null);
     }
+
     // --8<-- [end:doc-gq-spot-init]
 
     private void requirePlayer(String requestedPlayerId) {
         if (!playerId.equals(requestedPlayerId)) {
             throw new IllegalArgumentException(
-                "request player does not match owner Spot: " + requestedPlayerId);
+                    "request player does not match owner Spot: " + requestedPlayerId);
         }
     }
 
@@ -75,5 +73,4 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
         requirePlayer(request.playerId());
         return store.rebuildProjection(playerId, request.questId(), request.count());
     }
-
 }

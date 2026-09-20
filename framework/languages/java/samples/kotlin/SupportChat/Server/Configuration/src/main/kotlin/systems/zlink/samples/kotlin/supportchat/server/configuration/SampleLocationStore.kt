@@ -8,6 +8,6 @@ object SampleLocationStore {
         ZLinkRedisLocationStore(
             ZLinkRedisLocationOptions()
                 .setConnectionString(topology.location().redisEndpoint)
-                .setKeyPrefix(topology.location().redisKeyPrefix),
+                .setKeyPrefix(topology.location().redisKeyPrefix)
         )
 }

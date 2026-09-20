@@ -8,14 +8,14 @@ import java.util.List;
 /**
  * Prints {@code count} free TCP ports in {@code [minimum, maximum]}, one bind-check at a time.
  *
- * <p>Single-file source ({@code java ReservePorts.java <count> <minimum> <maximum>}) so the
- * sample runners need no interpreter beyond the JDK they already require. Replaces the Python
- * heredoc this file's logic was ported from 1:1; keep the two in step if either changes.
+ * <p>Single-file source ({@code java ReservePorts.java <count> <minimum> <maximum>}) so the sample
+ * runners need no interpreter beyond the JDK they already require. Replaces the Python heredoc this
+ * file's logic was ported from 1:1; keep the two in step if either changes.
  *
- * <p>This is a best-effort reservation, exactly like the original: each candidate port is bound
- * and held only long enough to prove it is free, then released when the JVM exits so the caller
- * can bind it for real. A port can still be taken between that release and the caller's own bind;
- * the shuffled scan order only makes that race unlikely, it does not remove it.
+ * <p>This is a best-effort reservation, exactly like the original: each candidate port is bound and
+ * held only long enough to prove it is free, then released when the JVM exits so the caller can
+ * bind it for real. A port can still be taken between that release and the caller's own bind; the
+ * shuffled scan order only makes that race unlikely, it does not remove it.
  */
 public final class ReservePorts {
     public static void main(String[] args) {
@@ -60,7 +60,7 @@ public final class ReservePorts {
             }
             if (bound.size() != count) {
                 System.err.println(
-                    "unable to bind-check " + count + " ports in " + minimum + "-" + maximum);
+                        "unable to bind-check " + count + " ports in " + minimum + "-" + maximum);
                 System.exit(1);
                 return;
             }
@@ -83,6 +83,5 @@ public final class ReservePorts {
         }
     }
 
-    private ReservePorts() {
-    }
+    private ReservePorts() {}
 }

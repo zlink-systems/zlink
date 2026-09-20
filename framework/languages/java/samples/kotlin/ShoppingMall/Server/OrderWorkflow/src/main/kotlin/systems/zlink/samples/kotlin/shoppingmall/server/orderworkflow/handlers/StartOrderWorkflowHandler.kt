@@ -2,8 +2,8 @@ package systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.handlers
 
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
-import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.OrderWorkflowSpot
 import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.OrderWorkflowService
+import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.OrderWorkflowSpot
 import systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.WorkflowContinuationQueue
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderWorkflowReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderWorkflowRes
@@ -20,12 +20,13 @@ class StartOrderWorkflowHandler(
         // --8<-- [start:doc-sm-spot-start]
         spot.requireOrder(request.orderId)
         val state = workflow.start(request)
-        println("shoppingmall-order started order=${request.orderId} spot=${spot.context().spotId()}")
+        println(
+            "shoppingmall-order started order=${request.orderId} spot=${spot.context().spotId()}"
+        )
         if (!spot.isTerminal(state)) {
             continuations.enqueue(request.orderId)
         }
-        return spot.closeIfTerminal(state)
-            .thenApply { StartOrderWorkflowRes(state) }
+        return spot.closeIfTerminal(state).thenApply { StartOrderWorkflowRes(state) }
         // --8<-- [end:doc-sm-spot-start]
     }
 }

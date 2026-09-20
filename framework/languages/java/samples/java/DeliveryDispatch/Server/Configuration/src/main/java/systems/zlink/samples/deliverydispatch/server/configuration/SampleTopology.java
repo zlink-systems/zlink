@@ -4,23 +4,23 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record SampleTopology(
-    String trackingChannelEndpoint,
-    String trackingSpotEndpoint,
-    String trackingSpotPubEndpoint,
-    String customerStreamEndpoint,
-    String courierStreamEndpoint,
-    String dispatchHttpEndpoint,
-    String dispatchSpotEndpoint,
-    String dispatchChannelEndpoint,
-    String customerSpotEndpoint,
-    String customerSpotRouterEndpoint,
-    String courierActorNode1SpotEndpoint,
-    String courierActorNode2SpotEndpoint,
-    String courierSessionSpotEndpoint,
-    String redisEndpoint,
-    String redisKeyPrefix,
-    String courierNode,
-    String logDirectory) {
+        String trackingChannelEndpoint,
+        String trackingSpotEndpoint,
+        String trackingSpotPubEndpoint,
+        String customerStreamEndpoint,
+        String courierStreamEndpoint,
+        String dispatchHttpEndpoint,
+        String dispatchSpotEndpoint,
+        String dispatchChannelEndpoint,
+        String customerSpotEndpoint,
+        String customerSpotRouterEndpoint,
+        String courierActorNode1SpotEndpoint,
+        String courierActorNode2SpotEndpoint,
+        String courierSessionSpotEndpoint,
+        String redisEndpoint,
+        String redisKeyPrefix,
+        String courierNode,
+        String logDirectory) {
 
     public SampleTopology {
         trackingChannelEndpoint = value(trackingChannelEndpoint, "tcp://127.0.0.1:48103");
@@ -33,8 +33,10 @@ public record SampleTopology(
         dispatchChannelEndpoint = value(dispatchChannelEndpoint, "tcp://127.0.0.1:48121");
         customerSpotEndpoint = value(customerSpotEndpoint, "tcp://127.0.0.1:48109");
         customerSpotRouterEndpoint = value(customerSpotRouterEndpoint, "tcp://127.0.0.1:48110");
-        courierActorNode1SpotEndpoint = value(courierActorNode1SpotEndpoint, "tcp://127.0.0.1:48113");
-        courierActorNode2SpotEndpoint = value(courierActorNode2SpotEndpoint, "tcp://127.0.0.1:48114");
+        courierActorNode1SpotEndpoint =
+                value(courierActorNode1SpotEndpoint, "tcp://127.0.0.1:48113");
+        courierActorNode2SpotEndpoint =
+                value(courierActorNode2SpotEndpoint, "tcp://127.0.0.1:48114");
         courierSessionSpotEndpoint = value(courierSessionSpotEndpoint, "tcp://127.0.0.1:48119");
         redisEndpoint = required(redisEndpoint, "redisEndpoint");
         redisKeyPrefix = value(redisKeyPrefix, "deliverydispatch:java:");

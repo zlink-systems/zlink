@@ -5,13 +5,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Connects the framework instruments to the application's Micrometer registry. */
-class BingoMetricsReporter(
-    private val registry: MeterRegistry,
-    role: String,
-) : AutoCloseable {
-    private val reporter = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "bingo-$role-metrics").apply { isDaemon = true }
-    }
+class BingoMetricsReporter(private val registry: MeterRegistry, role: String) : AutoCloseable {
+    private val reporter =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "bingo-$role-metrics").apply { isDaemon = true }
+        }
 
     init {
         reporter.scheduleAtFixedRate(::report, 0, 500, TimeUnit.MILLISECONDS)
@@ -26,7 +24,7 @@ class BingoMetricsReporter(
                         "zlink metric role=${Thread.currentThread().name}" +
                             " name=${meter.id.name}" +
                             " statistic=${measurement.statistic}" +
-                            " value=${measurement.value}",
+                            " value=${measurement.value}"
                     )
                 }
             }

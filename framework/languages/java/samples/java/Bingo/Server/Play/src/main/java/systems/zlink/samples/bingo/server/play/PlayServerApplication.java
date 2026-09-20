@@ -3,45 +3,45 @@ package systems.zlink.samples.bingo.server.play;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+
+import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.spring.EnableZLinkFramework;
-import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActorFactory;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActorRelocationAdapter;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActor;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomRelocationAdapter;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomSettingsInitializer;
-import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.BingoEntrySpot;
-import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
-import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.spring.EnableZLinkFramework;
+import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
 import systems.zlink.samples.bingo.server.configuration.BingoReadinessReporter;
+import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTopology;
-import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
-import io.micrometer.core.instrument.MeterRegistry;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-
-
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActor;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActorFactory;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActorRelocationAdapter;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomRelocationAdapter;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomSettingsInitializer;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.BingoEntrySpot;
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology.class)
 @SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = PlayServerApplication.class)
+        proxyBeanMethods = false,
+        scanBasePackageClasses = PlayServerApplication.class)
 public final class PlayServerApplication {
-    private PlayServerApplication() {
-    }
+    private PlayServerApplication() {}
 
     public static AutoCloseable run(String configPath) {
         return SampleApplication.start(PlayServerApplication.class, configPath)::close;
@@ -50,43 +50,42 @@ public final class PlayServerApplication {
     @Bean
     ZLinkFrameworkConfigurer playFramework(SampleTopology topology) {
         return options -> {
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
-            options.addRelocationStore(new ZLinkRedisRelocationStore(
-                new ZLinkRedisRelocationOptions()
-                    .setConnectionString(topology.redisEndpoint())
-                    .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")));
+            options.addRelocationStore(
+                    new ZLinkRedisRelocationStore(
+                            new ZLinkRedisRelocationOptions()
+                                    .setConnectionString(topology.redisEndpoint())
+                                    .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(PlayServerApplication.class);
             // --8<-- [start:doc-bingo-play-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);
-            node.listen(topology.selectedPlaySpotRouterEndpoint())
-                .setRoutingIdPrefix("play");
+            node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play");
             options.addClientServerChannel(SampleNames.ApiChannel).client();
             node.channelName(SampleNames.RoomRewardChannel).server();
             node.objects()
-                .server()
-                .addEntrySpot(BingoEntrySpot.class)
-                // --8<-- [start:doc-execution-mode]
-                // SPOT_WIDE is the default. Naming it here keeps the choice visible:
-                // every callback of this room runs through one gate.
-                .addSpotFactory(
-                    SampleNames.RoomSpotType,
-                    BingoRoomSpot.class,
-                    factory -> {
-                        factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE);
-                        factory.relocationCoordinationMode(
-                            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
-                        factory.preserveStateWith(BingoRoomRelocationAdapter.class);
-                    })
-                // --8<-- [end:doc-execution-mode]
-                .addActorFactory(
-                    SampleNames.PlayerActorType,
-                    PlayerActor.class,
-                    PlayerActorFactory.class,
-                    factory -> factory.preserveStateWith(
-                        PlayerActorRelocationAdapter.class));
+                    .server()
+                    .addEntrySpot(BingoEntrySpot.class)
+                    // --8<-- [start:doc-execution-mode]
+                    // SPOT_WIDE is the default. Naming it here keeps the choice visible:
+                    // every callback of this room runs through one gate.
+                    .addSpotFactory(
+                            SampleNames.RoomSpotType,
+                            BingoRoomSpot.class,
+                            factory -> {
+                                factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE);
+                                factory.relocationCoordinationMode(
+                                        ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
+                                factory.preserveStateWith(BingoRoomRelocationAdapter.class);
+                            })
+                    // --8<-- [end:doc-execution-mode]
+                    .addActorFactory(
+                            SampleNames.PlayerActorType,
+                            PlayerActor.class,
+                            PlayerActorFactory.class,
+                            factory ->
+                                    factory.preserveStateWith(PlayerActorRelocationAdapter.class));
             // --8<-- [end:doc-bingo-play-register]
         };
     }
@@ -104,10 +103,10 @@ public final class PlayServerApplication {
     @Bean
     ObjectMapper bingoJsonMapper() {
         return JsonMapper.builder()
-            .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
-            .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
-            .findAndAddModules()
-            .build();
+                .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
+                .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
+                .findAndAddModules()
+                .build();
     }
 
     @Bean(destroyMethod = "close")
@@ -117,8 +116,7 @@ public final class PlayServerApplication {
 
     @Bean(destroyMethod = "close")
     BingoReadinessReporter bingoReadinessReporter(
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime meshes) {
+            SampleTopology topology, ZLinkRouteMeshRuntime meshes) {
         return BingoReadinessReporter.play(topology, meshes);
     }
 }

@@ -1,8 +1,6 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.application
 
-class AgentAvailabilityDirectory(
-    private val capacity: Int,
-) {
+class AgentAvailabilityDirectory(private val capacity: Int) {
     private val agents = linkedMapOf<String, AgentSlot>()
 
     fun setAvailable(
@@ -43,7 +41,4 @@ class AgentAvailabilityDirectory(
     )
 }
 
-data class AvailableAgent(
-    val rosterActorId: String,
-    val displayName: String,
-)
+data class AvailableAgent(val rosterActorId: String, val displayName: String)

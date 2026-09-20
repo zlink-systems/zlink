@@ -23,13 +23,14 @@ class Conversation(
 
     init {
         require(subject.isNotBlank()) { "Conversation subject is required." }
-        participants[customerActorId] = ConversationParticipant(
-            actorId = customerActorId,
-            role = ParticipantRole.Customer,
-            displayName = customerDisplayName,
-            joinedAtUnixMs = createdAtUnixMs,
-            isTyping = false,
-        )
+        participants[customerActorId] =
+            ConversationParticipant(
+                actorId = customerActorId,
+                role = ParticipantRole.Customer,
+                displayName = customerDisplayName,
+                joinedAtUnixMs = createdAtUnixMs,
+                isTyping = false,
+            )
     }
 
     fun snapshot(): ConversationSnapshot =
@@ -57,36 +58,36 @@ class Conversation(
 
         this.agentActorId = agentActorId
         status = ConversationStatus.Active
-        participants[agentActorId] = ConversationParticipant(
-            actorId = agentActorId,
-            role = ParticipantRole.Agent,
-            displayName = agentDisplayName,
-            joinedAtUnixMs = joinedAtUnixMs,
-            isTyping = false,
-        )
+        participants[agentActorId] =
+            ConversationParticipant(
+                actorId = agentActorId,
+                role = ParticipantRole.Agent,
+                displayName = agentDisplayName,
+                joinedAtUnixMs = joinedAtUnixMs,
+                isTyping = false,
+            )
 
         val state = snapshot()
         return ConversationChange(
             state = state,
-            events = listOf(
-                ConversationEvent(
-                    kind = ConversationEventKind.ParticipantJoined,
-                    state = state,
-                    actorId = agentActorId,
-                    role = ParticipantRole.Agent,
+            events =
+                listOf(
+                    ConversationEvent(
+                        kind = ConversationEventKind.ParticipantJoined,
+                        state = state,
+                        actorId = agentActorId,
+                        role = ParticipantRole.Agent,
+                    )
                 ),
-            ),
         )
     }
 
-    fun sendMessage(
-        senderActorId: String,
-        text: String,
-        sentAtUnixMs: Long,
-    ): ConversationChange {
+    fun sendMessage(senderActorId: String, text: String, sentAtUnixMs: Long): ConversationChange {
         ensureParticipant(senderActorId)
         check(status != ConversationStatus.Closed) { "Closed conversation cannot accept messages." }
-        check(status != ConversationStatus.WaitingForAgent) { "Conversation is waiting for an agent." }
+        check(status != ConversationStatus.WaitingForAgent) {
+            "Conversation is waiting for an agent."
+        }
         require(text.isNotBlank()) { "Message text is required." }
         require(text.length <= policy.maxMessageLength) { "Message text is too long." }
 
@@ -95,26 +96,28 @@ class Conversation(
         lastMessageAtUnixMs = sentAtUnixMs
         idleDeadlineUnixMs = sentAtUnixMs + policy.idleTimeout.toMillis()
         closeDeadlineUnixMs = null
-        val message = ConversationMessage(
-            conversationId = conversationId,
-            messageSeq = lastMessageSeq,
-            senderActorId = senderActorId,
-            text = text,
-            sentAtUnixMs = sentAtUnixMs,
-        )
+        val message =
+            ConversationMessage(
+                conversationId = conversationId,
+                messageSeq = lastMessageSeq,
+                senderActorId = senderActorId,
+                text = text,
+                sentAtUnixMs = sentAtUnixMs,
+            )
         messages += message
 
         val state = snapshot()
         return ConversationChange(
             state = state,
-            events = listOf(
-                ConversationEvent(
-                    kind = ConversationEventKind.MessageAppended,
-                    state = state,
-                    actorId = senderActorId,
-                    message = message,
+            events =
+                listOf(
+                    ConversationEvent(
+                        kind = ConversationEventKind.MessageAppended,
+                        state = state,
+                        actorId = senderActorId,
+                        message = message,
+                    )
                 ),
-            ),
         )
     }
 
@@ -128,21 +131,24 @@ class Conversation(
         val state = snapshot()
         return ConversationChange(
             state = state,
-            events = listOf(
-                ConversationEvent(
-                    kind = ConversationEventKind.TypingChanged,
-                    state = state,
-                    actorId = actorId,
-                    role = participant.role,
-                    isTyping = isTyping,
+            events =
+                listOf(
+                    ConversationEvent(
+                        kind = ConversationEventKind.TypingChanged,
+                        state = state,
+                        actorId = actorId,
+                        role = participant.role,
+                        isTyping = isTyping,
+                    )
                 ),
-            ),
         )
     }
 
     fun markIdle(nowUnixMs: Long): ConversationChange {
         val idleDeadline = idleDeadlineUnixMs
-        if (status == ConversationStatus.Active && idleDeadline != null && nowUnixMs >= idleDeadline) {
+        if (
+            status == ConversationStatus.Active && idleDeadline != null && nowUnixMs >= idleDeadline
+        ) {
             status = ConversationStatus.WaitingForClose
             closeDeadlineUnixMs = nowUnixMs + policy.closeGraceTimeout.toMillis()
             val state = snapshot()
@@ -153,7 +159,11 @@ class Conversation(
         }
 
         val closeDeadline = closeDeadlineUnixMs
-        if (status == ConversationStatus.WaitingForClose && closeDeadline != null && nowUnixMs >= closeDeadline) {
+        if (
+            status == ConversationStatus.WaitingForClose &&
+                closeDeadline != null &&
+                nowUnixMs >= closeDeadline
+        ) {
             status = ConversationStatus.Closed
             val state = snapshot()
             return ConversationChange(
@@ -174,13 +184,14 @@ class Conversation(
         val state = snapshot()
         return ConversationChange(
             state = state,
-            events = listOf(
-                ConversationEvent(
-                    kind = ConversationEventKind.Closed,
-                    state = state,
-                    actorId = actorId,
+            events =
+                listOf(
+                    ConversationEvent(
+                        kind = ConversationEventKind.Closed,
+                        state = state,
+                        actorId = actorId,
+                    )
                 ),
-            ),
         )
     }
 

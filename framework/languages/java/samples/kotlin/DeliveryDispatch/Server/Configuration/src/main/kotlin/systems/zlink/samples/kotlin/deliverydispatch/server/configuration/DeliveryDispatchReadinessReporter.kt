@@ -5,13 +5,12 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.errors.ZLinkConfigurationException
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.monitoring.ZLinkPeerState
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
 /** Emits the sample-owned readiness evidence from the public, passive mesh view. */
-class DeliveryDispatchReadinessReporter private constructor(
-    private val checks: List<ReadinessCheck>,
-) : AutoCloseable {
+class DeliveryDispatchReadinessReporter
+private constructor(private val checks: List<ReadinessCheck>) : AutoCloseable {
     private val reporter: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "deliverydispatch-readiness").apply { isDaemon = true }
@@ -33,10 +32,7 @@ class DeliveryDispatchReadinessReporter private constructor(
         reporter.shutdownNow()
     }
 
-    private class ReadinessCheck(
-        private val evidence: String,
-        private val ready: () -> Boolean,
-    ) {
+    private class ReadinessCheck(private val evidence: String, private val ready: () -> Boolean) {
         var reported: Boolean = false
             private set
 
@@ -64,33 +60,37 @@ class DeliveryDispatchReadinessReporter private constructor(
             meshes: ZLinkRouteMeshRuntime,
         ): DeliveryDispatchReadinessReporter =
             DeliveryDispatchReadinessReporter(
-                listOf(
-                    ReadinessCheck("deliverydispatch-ready kind=route node=$node") {
-                        meshes.isReady(mesh)
-                    },
-                ),
-            ).start()
+                    listOf(
+                        ReadinessCheck("deliverydispatch-ready kind=route node=$node") {
+                            meshes.isReady(mesh)
+                        }
+                    )
+                )
+                .start()
 
         fun dispatch(meshes: ZLinkRouteMeshRuntime): DeliveryDispatchReadinessReporter =
             DeliveryDispatchReadinessReporter(
-                listOf(
-                    ReadinessCheck("deliverydispatch-ready kind=route node=${SampleNames.DispatchNode}") {
-                        meshes.isReady(SampleNames.CourierSpotMesh)
-                    },
-                    ReadinessCheck(
-                        "deliverydispatch-ready kind=actor-route node=${SampleNames.DispatchNode} " +
-                            "target=${SampleNames.CourierNode1}",
-                    ) {
-                        hasReadyPeer(meshes, SampleNames.CourierNode1)
-                    },
-                    ReadinessCheck(
-                        "deliverydispatch-ready kind=actor-route node=${SampleNames.DispatchNode} " +
-                            "target=${SampleNames.CourierNode2}",
-                    ) {
-                        hasReadyPeer(meshes, SampleNames.CourierNode2)
-                    },
-                ),
-            ).start()
+                    listOf(
+                        ReadinessCheck(
+                            "deliverydispatch-ready kind=route node=${SampleNames.DispatchNode}"
+                        ) {
+                            meshes.isReady(SampleNames.CourierSpotMesh)
+                        },
+                        ReadinessCheck(
+                            "deliverydispatch-ready kind=actor-route node=${SampleNames.DispatchNode} " +
+                                "target=${SampleNames.CourierNode1}"
+                        ) {
+                            hasReadyPeer(meshes, SampleNames.CourierNode1)
+                        },
+                        ReadinessCheck(
+                            "deliverydispatch-ready kind=actor-route node=${SampleNames.DispatchNode} " +
+                                "target=${SampleNames.CourierNode2}"
+                        ) {
+                            hasReadyPeer(meshes, SampleNames.CourierNode2)
+                        },
+                    )
+                )
+                .start()
 
         //  Confirm the named courier node, not a peer count. A count cannot tell which node is
         //  ready, so it passes on the wrong peer and fails when the count assumption drifts.

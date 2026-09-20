@@ -23,18 +23,13 @@ class PlayerEndpoints(route: ZLinkRouteClient) {
 
     // --8<-- [start:channel-request-call]
     @GetMapping("/players/{playerId}/profile")
-    suspend fun profile(
-        @PathVariable playerId: String,
-    ): PlayerProfile {
+    suspend fun profile(@PathVariable playerId: String): PlayerProfile {
         // The target is a channel name. Which node answers is decided at call time.
         // The reply type is a reified type argument, not a Class passed at the end.
         val request = GetPlayerProfile(playerId)
-        return route
-            .requestToChannel<PlayerProfile>(
-                "profile", request,
-            )
-            .await()
+        return route.requestToChannel<PlayerProfile>("profile", request).await()
     }
+
     // --8<-- [end:channel-request-call]
 
     // --8<-- [start:channel-send-call]
@@ -46,13 +41,15 @@ class PlayerEndpoints(route: ZLinkRouteClient) {
 
         return ResponseEntity.accepted().build()
     }
+
     // --8<-- [end:channel-send-call]
 
     // --8<-- [start:clientserver-call]
     @PostMapping("/players/{playerId}/tickets")
     suspend fun issueTicket(@PathVariable playerId: String): String =
         // Same call shape as a mesh channel; only the routing differs.
-        route.requestToChannel<SessionTicket>("ticketing", IssueSessionTicket(playerId))
+        route
+            .requestToChannel<SessionTicket>("ticketing", IssueSessionTicket(playerId))
             .await()
             .value
     // --8<-- [end:clientserver-call]

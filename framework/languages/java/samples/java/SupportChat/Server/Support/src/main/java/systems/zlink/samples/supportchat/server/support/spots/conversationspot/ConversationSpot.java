@@ -1,15 +1,8 @@
 package systems.zlink.samples.supportchat.server.support.spots.conversationspot;
-import java.util.HashSet;
-import java.util.Objects;
-import java.util.Set;
 
-import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -26,6 +19,15 @@ import systems.zlink.samples.supportchat.server.support.infrastructure.Conversat
 import systems.zlink.samples.supportchat.server.support.infrastructure.ConversationNotificationPublisher;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
+import java.time.Duration;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     private static final Logger logger = LoggerFactory.getLogger(ConversationSpot.class);
     private final ZLinkSpotContext context;
@@ -38,10 +40,10 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     private ZLinkTimer idleTimer;
 
     public ConversationSpot(
-        ZLinkSpotContext context,
-        AgentAssignmentService assignment,
-        SupportActorDirectory directory,
-        ConversationNotificationPublisher notifications) {
+            ZLinkSpotContext context,
+            AgentAssignmentService assignment,
+            SupportActorDirectory directory,
+            ConversationNotificationPublisher notifications) {
         this.context = context;
         this.assignment = assignment;
         this.directory = directory;
@@ -56,65 +58,68 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     @Override
     public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
         ConversationCreateReq create = request.decode(ConversationCreateReq.class);
-        conversation = new Conversation(
-            context.spotId(),
-            create.subject(),
-            create.customerActorId(),
-            create.customerDisplayName(),
-            create.createdAtUnixMs(),
-            new Conversation.Policy(
-                SampleTimings.IdleTimeout,
-                SampleTimings.CloseGraceTimeout,
-                500));
+        conversation =
+                new Conversation(
+                        context.spotId(),
+                        create.subject(),
+                        create.customerActorId(),
+                        create.customerDisplayName(),
+                        create.createdAtUnixMs(),
+                        new Conversation.Policy(
+                                SampleTimings.IdleTimeout, SampleTimings.CloseGraceTimeout, 500));
         logger.info("supportchat-conversation created conversation={}", context.spotId());
         logger.info(
-            "supportchat-conversation status={} conversation={}",
-            SampleNames.Statuses.WaitingForAgent, context.spotId());
+                "supportchat-conversation status={} conversation={}",
+                SampleNames.Statuses.WaitingForAgent,
+                context.spotId());
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
     }
 
     @Override
     public CompletionStage<Void> onInitialize() {
         return context.addTimer(
-                "conversation-idle",
-                Duration.ofMillis(200),
-                ConversationIdleTimerHandler.class,
-                null)
-            .thenAccept(timer -> idleTimer = timer);
+                        "conversation-idle",
+                        Duration.ofMillis(200),
+                        ConversationIdleTimerHandler.class,
+                        null)
+                .thenAccept(timer -> idleTimer = timer);
     }
 
     @Override
     public CompletionStage<Void> onClosing() {
-        return idleTimer == null
-            ? CompletableFuture.completedFuture(null)
-            : idleTimer.cancel();
+        return idleTimer == null ? CompletableFuture.completedFuture(null) : idleTimer.cancel();
     }
 
     @Override
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-        String actorId,
-        ZLinkMessage request) {
+            String actorId, ZLinkMessage request) {
         request.decode(Messages.JoinConversationReq.class);
         pendingJoins.add(actorId);
-        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept(
-            new Messages.JoinConversationRes(
-                false,
-                ConversationContracts.state(requireConversation().snapshot()))));
+        return CompletableFuture.completedFuture(
+                ZLinkSpotActorJoinResult.accept(
+                        new Messages.JoinConversationRes(
+                                false,
+                                ConversationContracts.state(requireConversation().snapshot()))));
     }
 
     @Override
     public CompletionStage<Void> onJoinedActor(SupportUserActor actor) {
         if (!pendingJoins.remove(actor.actorId())) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("joined actor does not have pending admission"));
+                    new IllegalStateException("joined actor does not have pending admission"));
         }
         directory.remember(actor);
         if (SampleNames.Roles.Agent.equals(actor.role())) {
-            publish(requireConversation().joinAgent(
-                actor.participantId(), actor.displayName(), System.currentTimeMillis()));
+            publish(
+                    requireConversation()
+                            .joinAgent(
+                                    actor.participantId(),
+                                    actor.displayName(),
+                                    System.currentTimeMillis()));
             logger.info(
-                "supportchat-conversation agent-joined conversation={} agent={}",
-                context.spotId(), actor.participantId());
+                    "supportchat-conversation agent-joined conversation={} agent={}",
+                    context.spotId(),
+                    actor.participantId());
         } else {
             actor.joinConversation(requireConversation().snapshot().conversationId());
             actors.put(actor.participantId(), actor);
@@ -131,27 +136,31 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     }
 
     public Messages.JoinConversationRes refreshMembership(SupportUserActor actor) {
-        SupportUserActor participant = SampleNames.Roles.Agent.equals(actor.role())
-            ? directory.require(actor.participantId()) : actor;
+        SupportUserActor participant =
+                SampleNames.Roles.Agent.equals(actor.role())
+                        ? directory.require(actor.participantId())
+                        : actor;
         actors.put(actor.participantId(), participant);
         return new Messages.JoinConversationRes(
-            false,
-            ConversationContracts.state(requireConversation().snapshot()));
+                false, ConversationContracts.state(requireConversation().snapshot()));
     }
 
     public Messages.SendChatMessageRes sendMessage(
-        SupportUserActor actor,
-        Messages.SendChatMessageReq request) {
-        Conversation.Change change = requireConversation().sendMessage(
-            actor.participantId(), request.text(), System.currentTimeMillis());
+            SupportUserActor actor, Messages.SendChatMessageReq request) {
+        Conversation.Change change =
+                requireConversation()
+                        .sendMessage(
+                                actor.participantId(), request.text(), System.currentTimeMillis());
         publish(change);
-        Conversation.Message message = change.events().stream()
-            .map(Conversation.Event::message)
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElseThrow();
+        Conversation.Message message =
+                change.events().stream()
+                        .map(Conversation.Event::message)
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElseThrow();
         return new Messages.SendChatMessageRes(
-            ConversationContracts.message(message), ConversationContracts.state(change.state()));
+                ConversationContracts.message(message),
+                ConversationContracts.state(change.state()));
     }
 
     public void setTyping(SupportUserActor actor, Messages.SetTypingMsg message) {
@@ -159,9 +168,9 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     }
 
     public Messages.CloseConversationRes close(
-        SupportUserActor actor,
-        Messages.CloseConversationReq request) {
-        Conversation.Change change = requireConversation().close(actor.participantId(), request.reason());
+            SupportUserActor actor, Messages.CloseConversationReq request) {
+        Conversation.Change change =
+                requireConversation().close(actor.participantId(), request.reason());
         publish(change);
         return new Messages.CloseConversationRes(ConversationContracts.state(change.state()));
     }
@@ -172,16 +181,18 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
 
     // --8<-- [start:doc-sc-assign]
     private void assignAgent() {
-        AgentAssignmentService.AvailableAgent assigned = assignment.assignForConversation(
-            requireConversation().snapshot().conversationId());
+        AgentAssignmentService.AvailableAgent assigned =
+                assignment.assignForConversation(requireConversation().snapshot().conversationId());
         if (assigned == null) {
             return;
         }
         notifications.assigned(assigned, requireConversation().snapshot(), directory);
         logger.info(
-            "support conversation: assigned. conversation={}, roster={}",
-            context.spotId(), assigned.rosterActorId());
+                "support conversation: assigned. conversation={}, roster={}",
+                context.spotId(),
+                assigned.rosterActorId());
     }
+
     // --8<-- [end:doc-sc-assign]
 
     private void publish(Conversation.Change change) {
@@ -189,8 +200,9 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         for (Conversation.Event event : change.events()) {
             Messages.ConversationState state = ConversationContracts.state(event.state());
             logger.info(
-                "supportchat-conversation status={} conversation={}",
-                state.status(), state.conversationId());
+                    "supportchat-conversation status={} conversation={}",
+                    state.status(),
+                    state.conversationId());
         }
     }
 

@@ -17,10 +17,7 @@ import systems.zlink.tutorial.shared.PostChat
 import systems.zlink.tutorial.shared.RoomState
 
 @RestController
-class RoomEndpoints(
-    private val route: ZLinkRouteClient,
-    rooms: ZLinkSpotManager,
-) {
+class RoomEndpoints(private val route: ZLinkRouteClient, rooms: ZLinkSpotManager) {
 
     // The Java ZLinkSpotManager is what Spring injects. kotlin() wraps it in the
     // Kotlin manager, whose calls end in await() instead of submit().
@@ -30,13 +27,14 @@ class RoomEndpoints(
     @PostMapping("/rooms")
     suspend fun openRoom(@RequestBody request: OpenRoom): String =
         rooms
-            .create("game-room")   // Picks the factory and the candidate nodes.
+            .create("game-room") // Picks the factory and the candidate nodes.
             .inMesh("game")
-            .request(request)      // Reaches the room's create callback.
+            .request(request) // Reaches the room's create callback.
             .await()
             // From here on the room is addressed by this id alone.
             .spot()
             .spotId()
+
     // --8<-- [end:spot-create-call]
 
     // --8<-- [start:spot-message-call]
@@ -53,12 +51,14 @@ class RoomEndpoints(
 
         return ResponseEntity.accepted().build()
     }
+
     // --8<-- [end:spot-send-call]
 
     // --8<-- [start:spot-request-call]
     @GetMapping("/rooms/{roomId}")
     suspend fun roomState(@PathVariable roomId: String): RoomState =
-        route.requestToSpot(roomId, GetRoomState())
+        route
+            .requestToSpot(roomId, GetRoomState())
             .timeout(Duration.ofSeconds(3))
             .submit(RoomState::class.java)
             .await()

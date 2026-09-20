@@ -1,20 +1,22 @@
 package systems.zlink.samples.tictactoe.server.configuration;
-import java.net.URI;
 
-import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.net.URI;
+import java.util.List;
 
 @ConfigurationProperties("sample")
 public record ApiSettings(
-    String nodeId,
-    String apiBindUrl,
-    String apiChannelEndpoint,
-    List<String> playEndpoints,
-    String routeEndpoint,
-    List<String> spotEndpoints,
-    String redisEndpoint,
-    String redisKeyPrefix,
-    String logDirectory) implements SampleLogSettings {
+        String nodeId,
+        String apiBindUrl,
+        String apiChannelEndpoint,
+        List<String> playEndpoints,
+        String routeEndpoint,
+        List<String> spotEndpoints,
+        String redisEndpoint,
+        String redisKeyPrefix,
+        String logDirectory)
+        implements SampleLogSettings {
 
     public ApiSettings {
         require(nodeId, "nodeId");

@@ -34,14 +34,14 @@ class PingHandler : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext
         context.client().reply(Pong(message.sentAtUnixMs)).submit().await()
     }
 }
+
 // --8<-- [end:session-handler]
 
 // --8<-- [start:session-actor-bind]
 // Ties this connection to one player. After this, packets without a session
 // handler reach that player, and the player can push to this connection.
-class AuthenticateHandler(
-    private val players: ZLinkActorManager,
-) : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, Authenticate> {
+class AuthenticateHandler(private val players: ZLinkActorManager) :
+    ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, Authenticate> {
 
     override fun packetName(): String = "Authenticate"
 
@@ -53,23 +53,25 @@ class AuthenticateHandler(
         message: Authenticate,
     ) {
         // A returning client finds its existing player rather than a new one.
-        val result = players
-            .getOrCreate(message.playerId, "player")
-            .inMesh("game")
-            .request(CreatePlayer(message.playerId))
-            .timeout(Duration.ofSeconds(10))
-            .submit()
-            .await()
+        val result =
+            players
+                .getOrCreate(message.playerId, "player")
+                .inMesh("game")
+                .request(CreatePlayer(message.playerId))
+                .timeout(Duration.ofSeconds(10))
+                .submit()
+                .await()
 
         val bound = context.actors().bindOrGet(resolve(result)).await()
 
         context.client().reply(Authenticated(bound.actorId())).submit().await()
     }
 
-    private fun resolve(result: ZLinkActorCreateResult): ActorRef = when (result) {
-        is ZLinkActorCreateResult.Existing -> result.actor()
-        is ZLinkActorCreateResult.Created -> result.actor()
-        else -> throw IllegalStateException("Player creation was rejected.")
-    }
+    private fun resolve(result: ZLinkActorCreateResult): ActorRef =
+        when (result) {
+            is ZLinkActorCreateResult.Existing -> result.actor()
+            is ZLinkActorCreateResult.Created -> result.actor()
+            else -> throw IllegalStateException("Player creation was rejected.")
+        }
 }
 // --8<-- [end:session-actor-bind]

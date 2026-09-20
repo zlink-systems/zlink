@@ -8,16 +8,14 @@ import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceSt
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTopology
-import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderState
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.PrepareInventoryReservedApiRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderWorkflowReq
 
 /**
- * Order-start use case: idempotency lookup, cross-instance forwarding for
- * pending mappings owned elsewhere, input validation, and workflow relay.
- * Never appends domain events itself.
+ * Order-start use case: idempotency lookup, cross-instance forwarding for pending mappings owned
+ * elsewhere, input validation, and workflow relay. Never appends domain events itself.
  */
 @Component
 class StartOrderUseCase(
@@ -48,7 +46,9 @@ class StartOrderUseCase(
     suspend fun prepareInventoryReserved(request: StartOrderReq): PrepareInventoryReservedApiRes =
         prepareInventoryReservedState(request)
 
-    private suspend fun prepareInventoryReservedState(request: StartOrderReq): PrepareInventoryReservedApiRes {
+    private suspend fun prepareInventoryReservedState(
+        request: StartOrderReq
+    ): PrepareInventoryReservedApiRes {
         val existing = store.findIdempotency(request.idempotencyKey)
         if (existing != null && existing.started) {
             return PrepareInventoryReservedApiRes(
@@ -57,7 +57,9 @@ class StartOrderUseCase(
             )
         }
         if (existing != null && existing.ownerInstanceId != instanceId) {
-            throw IllegalStateException("Inventory-reserved checkpoint must run on owning CommerceApi.")
+            throw IllegalStateException(
+                "Inventory-reserved checkpoint must run on owning CommerceApi."
+            )
         }
 
         val command = buildCommand(request, existing)
@@ -70,17 +72,19 @@ class StartOrderUseCase(
         request: StartOrderReq,
         existing: CommerceStore.IdempotencyMapping?,
     ): StartOrderWorkflowReq {
-        val cart = store.findCart(request.cartId)
-            ?: throw IllegalArgumentException("Unknown cart '${request.cartId}'.")
+        val cart =
+            store.findCart(request.cartId)
+                ?: throw IllegalArgumentException("Unknown cart '${request.cartId}'.")
         if (!store.shippingAddressExists(request.shippingAddressId)) {
-            throw IllegalArgumentException("Unknown shipping address '${request.shippingAddressId}'.")
+            throw IllegalArgumentException(
+                "Unknown shipping address '${request.shippingAddressId}'."
+            )
         }
         if (!store.paymentMethodExists(request.paymentMethodId)) {
             throw IllegalArgumentException("Unknown payment method '${request.paymentMethodId}'.")
         }
 
-        val mapping = existing
-            ?: store.reserveIdempotency(request.idempotencyKey, instanceId)
+        val mapping = existing ?: store.reserveIdempotency(request.idempotencyKey, instanceId)
         store.saveOrderPaymentMethod(mapping.orderId, request.paymentMethodId)
 
         return StartOrderWorkflowReq(
@@ -95,12 +99,16 @@ class StartOrderUseCase(
         )
     }
 
-    private suspend fun forwardToOwner(ownerInstanceId: String, request: StartOrderReq): StartOrderRes {
+    private suspend fun forwardToOwner(
+        ownerInstanceId: String,
+        request: StartOrderReq,
+    ): StartOrderRes {
         val channel = SampleNames.commerceApiChannel(ownerInstanceId)
         var lastError: RuntimeException? = null
         for (attempt in 1..SampleTimings.MaxChannelAttempts) {
             try {
-                return channels.requestToChannel(channel, request)
+                return channels
+                    .requestToChannel(channel, request)
                     .timeout(SampleTimings.RequestTimeout)
                     .submit(StartOrderRes::class.java)
                     .await()
@@ -110,7 +118,8 @@ class StartOrderUseCase(
             }
         }
         throw IllegalStateException(
-            "Peer CommerceApi '$ownerInstanceId' was not ready for forwarded start.", lastError,
+            "Peer CommerceApi '$ownerInstanceId' was not ready for forwarded start.",
+            lastError,
         )
     }
 }

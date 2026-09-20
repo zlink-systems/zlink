@@ -1,29 +1,32 @@
 package systems.zlink.samples.tictactoe.server.configuration;
 
-import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.List;
 
 @ConfigurationProperties("sample")
 public record PlaySettings(
-    String nodeId,
-    List<String> apiChannelEndpoints,
-    String playEndpoint,
-    List<String> playEndpoints,
-    String spotEndpoint,
-    String spotPubSubEndpoint,
-    String redisEndpoint,
-    String redisKeyPrefix,
-    String peerSpotEndpoint,
-    String peerSpotPubSubEndpoint,
-    String logDirectory) implements SampleLogSettings {
+        String nodeId,
+        List<String> apiChannelEndpoints,
+        String playEndpoint,
+        List<String> playEndpoints,
+        String spotEndpoint,
+        String spotPubSubEndpoint,
+        String redisEndpoint,
+        String redisKeyPrefix,
+        String peerSpotEndpoint,
+        String peerSpotPubSubEndpoint,
+        String logDirectory)
+        implements SampleLogSettings {
 
     public PlaySettings {
         require(nodeId, "nodeId");
-        if (apiChannelEndpoints == null || apiChannelEndpoints.size() != 2
-            || apiChannelEndpoints.stream().anyMatch(
-                endpoint -> endpoint == null || endpoint.isBlank())) {
+        if (apiChannelEndpoints == null
+                || apiChannelEndpoints.size() != 2
+                || apiChannelEndpoints.stream()
+                        .anyMatch(endpoint -> endpoint == null || endpoint.isBlank())) {
             throw new IllegalArgumentException(
-                "sample.apiChannelEndpoints must contain Api A and Api B endpoints");
+                    "sample.apiChannelEndpoints must contain Api A and Api B endpoints");
         }
         require(playEndpoint, "playEndpoint");
         if (playEndpoints == null || playEndpoints.isEmpty()) {

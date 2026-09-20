@@ -1,44 +1,71 @@
 package systems.zlink.samples.zoneworld.server.zone.actors;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 
-public final class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
+public final class PlayerActorRelocationAdapter
+        implements ZLinkActorRelocationAdapter<PlayerActor> {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     // --8<-- [start:doc-zw-actor-capture]
     @Override
-    public CompletionStage<byte[]> capture(PlayerActor actor, ZLinkRelocationCancellation cancellation) {
+    public CompletionStage<byte[]> capture(
+            PlayerActor actor, ZLinkRelocationCancellation cancellation) {
         try {
-            return CompletableFuture.completedFuture(JSON.writeValueAsBytes(new State(
-                actor.x(), actor.y(), actor.zoneId(), actor.isBot(), actor.dirX(), actor.dirY(),
-                actor.pendingX(), actor.pendingY(), actor.pendingZone(), actor.pendingJoin(),
-                actor.pendingPurpose(), actor.completedJoins().stream()
-                    .map(value -> new OperationId(value.high(), value.low())).toList())));
+            return CompletableFuture.completedFuture(
+                    JSON.writeValueAsBytes(
+                            new State(
+                                    actor.x(),
+                                    actor.y(),
+                                    actor.zoneId(),
+                                    actor.isBot(),
+                                    actor.dirX(),
+                                    actor.dirY(),
+                                    actor.pendingX(),
+                                    actor.pendingY(),
+                                    actor.pendingZone(),
+                                    actor.pendingJoin(),
+                                    actor.pendingPurpose(),
+                                    actor.completedJoins().stream()
+                                            .map(
+                                                    value ->
+                                                            new OperationId(
+                                                                    value.high(), value.low()))
+                                            .toList())));
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);
         }
     }
+
     // --8<-- [end:doc-zw-actor-capture]
 
     @Override
     public CompletionStage<Void> restore(
-        PlayerActor actor,
-        byte[] state,
-        ZLinkRelocationCancellation cancellation) {
+            PlayerActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
         try {
             State restored = JSON.readValue(state, State.class);
             actor.restoreState(
-                restored.x(), restored.y(), restored.zoneId(), restored.isBot(),
-                restored.dirX(), restored.dirY(), restored.pendingX(), restored.pendingY(),
-                restored.pendingZone(), restored.pendingJoin(), restored.pendingPurpose(),
-                restored.completedJoins().stream()
-                    .map(value -> new ZLinkActorJoinOperationId(value.high(), value.low())).toList());
+                    restored.x(),
+                    restored.y(),
+                    restored.zoneId(),
+                    restored.isBot(),
+                    restored.dirX(),
+                    restored.dirY(),
+                    restored.pendingX(),
+                    restored.pendingY(),
+                    restored.pendingZone(),
+                    restored.pendingJoin(),
+                    restored.pendingPurpose(),
+                    restored.completedJoins().stream()
+                            .map(value -> new ZLinkActorJoinOperationId(value.high(), value.low()))
+                            .toList());
             return CompletableFuture.completedFuture(null);
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);
@@ -46,19 +73,18 @@ public final class PlayerActorRelocationAdapter implements ZLinkActorRelocationA
     }
 
     private record State(
-        int x,
-        int y,
-        String zoneId,
-        boolean isBot,
-        int dirX,
-        int dirY,
-        int pendingX,
-        int pendingY,
-        String pendingZone,
-        boolean pendingJoin,
-        String pendingPurpose,
-        List<OperationId> completedJoins) {
-    }
+            int x,
+            int y,
+            String zoneId,
+            boolean isBot,
+            int dirX,
+            int dirY,
+            int pendingX,
+            int pendingY,
+            String pendingZone,
+            boolean pendingJoin,
+            String pendingPurpose,
+            List<OperationId> completedJoins) {}
 
     private record OperationId(long high, long low) {}
 }

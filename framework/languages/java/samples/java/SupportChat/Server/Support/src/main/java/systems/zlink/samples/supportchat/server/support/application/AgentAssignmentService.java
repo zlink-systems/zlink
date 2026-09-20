@@ -4,8 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class AgentAssignmentService {
-    public record AvailableAgent(String rosterActorId, String displayName) {
-    }
+    public record AvailableAgent(String rosterActorId, String displayName) {}
 
     private static final class AgentSlot {
         private final String actorId;
@@ -28,19 +27,16 @@ public final class AgentAssignmentService {
     }
 
     public synchronized void setAvailable(
-        String rosterActorId,
-        String displayName,
-        boolean available) {
+            String rosterActorId, String displayName, boolean available) {
         if (!available) {
             agents.remove(rosterActorId);
             return;
         }
-        int active = (int) reservations.values().stream()
-            .filter(rosterActorId::equals)
-            .count();
-        AgentSlot slot = agents.computeIfAbsent(
-            rosterActorId,
-            ignored -> new AgentSlot(rosterActorId, displayName, active));
+        int active = (int) reservations.values().stream().filter(rosterActorId::equals).count();
+        AgentSlot slot =
+                agents.computeIfAbsent(
+                        rosterActorId,
+                        ignored -> new AgentSlot(rosterActorId, displayName, active));
         slot.displayName = displayName;
         slot.active = active;
     }
@@ -49,10 +45,11 @@ public final class AgentAssignmentService {
         if (reservations.containsKey(conversationId)) {
             return null;
         }
-        AgentSlot slot = agents.values().stream()
-            .filter(candidate -> candidate.active < capacity)
-            .findFirst()
-            .orElse(null);
+        AgentSlot slot =
+                agents.values().stream()
+                        .filter(candidate -> candidate.active < capacity)
+                        .findFirst()
+                        .orElse(null);
         if (slot == null) {
             return null;
         }

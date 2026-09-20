@@ -1,7 +1,8 @@
 package systems.zlink.samples.bingo.server.api;
 
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public final class BingoPlayerRecordStore {
@@ -12,14 +13,16 @@ public final class BingoPlayerRecordStore {
     }
 
     public PlayerRecord report(String actorId, boolean won) {
-        return records.compute(actorId, (ignored, current) -> {
-            PlayerRecord record = current == null ? new PlayerRecord(actorId, 0, 0) : current;
-            return won
-                ? new PlayerRecord(actorId, record.wins() + 1, record.losses())
-                : new PlayerRecord(actorId, record.wins(), record.losses() + 1);
-        });
+        return records.compute(
+                actorId,
+                (ignored, current) -> {
+                    PlayerRecord record =
+                            current == null ? new PlayerRecord(actorId, 0, 0) : current;
+                    return won
+                            ? new PlayerRecord(actorId, record.wins() + 1, record.losses())
+                            : new PlayerRecord(actorId, record.wins(), record.losses() + 1);
+                });
     }
 
-    public record PlayerRecord(String actorId, int wins, int losses) {
-    }
+    public record PlayerRecord(String actorId, int wins, int losses) {}
 }

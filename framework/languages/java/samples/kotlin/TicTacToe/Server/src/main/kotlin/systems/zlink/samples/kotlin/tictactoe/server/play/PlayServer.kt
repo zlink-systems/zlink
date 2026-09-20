@@ -9,22 +9,20 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleLogging
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSettings
+import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActorFactory
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActorRelocationAdapter
-import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
+import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.PlaySession
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.handlers.AuthenticatePlaySessionHandler
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.entryspot.PlayEntrySpot
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.TicTacToeGame
-import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.PlaySession
 
 object PlayServer {
     fun configure(settings: SampleSettings): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             SampleLogging.configure(settings, "play")
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            }
+            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             // --8<-- [start:doc-ttt-play-register]
             val apiClient = options.addClientServerChannel(SampleNames.ApiChannel).client()
             settings.apiChannelEndpoints.forEach { endpoint ->
@@ -35,19 +33,20 @@ object PlayServer {
             val routeEndpoint = settings.routeEndpoint.ifBlank { settings.spotEndpoint }
             val peerNodeId = if (settings.nodeId == "play-a") "play-b" else "play-a"
 
-            node.setRoutingId(RoutingId.from("tictactoe-play-${settings.nodeId}"))
+            node
+                .setRoutingId(RoutingId.from("tictactoe-play-${settings.nodeId}"))
                 .listen(routeEndpoint)
             node.channelName(SampleNames.PlayNode).server()
-            node.peerConnections().connect(
-                RoutingId.from("tictactoe-play-$peerNodeId"),
-                settings.peerSpotEndpoint,
-            )
-            node.objects().server()
+            node
+                .peerConnections()
+                .connect(RoutingId.from("tictactoe-play-$peerNodeId"), settings.peerSpotEndpoint)
+            node
+                .objects()
+                .server()
                 .addEntrySpot(PlayEntrySpot::class.java)
-                .addSpotFactory(
-                    "tictactoe.game",
-                    TicTacToeGame::class.java,
-                ) { factory -> factory.disableRelocation() }
+                .addSpotFactory("tictactoe.game", TicTacToeGame::class.java) { factory ->
+                    factory.disableRelocation()
+                }
                 .addActorFactory(
                     SampleNames.PlayActor,
                     PlayActor::class.java,
@@ -55,7 +54,8 @@ object PlayServer {
                 ) { factory ->
                     factory.preserveStateWith(PlayActorRelocationAdapter::class.java)
                 }
-            options.addStreamNode(SampleNames.PlayStream)
+            options
+                .addStreamNode(SampleNames.PlayStream)
                 .bind(settings.playEndpoint)
                 .enableActorDispatch()
                 .registerSession(PlaySession::class.java)

@@ -6,12 +6,13 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
-import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
+import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher
 
 class BingoSession(
     private val context: ZLinkSessionContext,
-    private val handlers: ZLinkSessionPacketDispatcher<ZLinkSessionContext>,) : ZLinkSuspendingSession() {
+    private val handlers: ZLinkSessionPacketDispatcher<ZLinkSessionContext>,
+) : ZLinkSuspendingSession() {
     private val logger = LoggerFactory.getLogger(BingoSession::class.java)
     private var boundActorId: String? = null
 
@@ -22,12 +23,10 @@ class BingoSession(
         // Framework cleanup owns disconnect notification; this callback only records
         // the sample lifecycle evidence without submitting another notification.
         boundActorId?.let { actorId ->
-            logger.info(
-                "bingo-lifecycle session-disconnect actor={} destroy=false",
-                actorId,
-            )
+            logger.info("bingo-lifecycle session-disconnect actor={} destroy=false", actorId)
         }
     }
+
     // --8<-- [end:doc-bingo-session-disconnect]
 
     // --8<-- [start:doc-bingo-session-relay]
@@ -45,16 +44,19 @@ class BingoSession(
         val actor = requireSingleBoundActor(dispatch.packetName())
         actor.relay(dispatch, payload).await()
     }
+
     // --8<-- [end:doc-bingo-session-relay]
 
     private fun requireSingleBoundActor(packetName: String): ZLinkSessionActor =
         when (context.actors().bound().size) {
             1 -> context.actors().bound()[0]
-            0 -> throw IllegalStateException(
-                "Client must authenticate before relaying packet '$packetName'",
-            )
-            else -> throw IllegalStateException(
-                "Exactly one actor must be bound before relaying packet '$packetName'",
-            )
+            0 ->
+                throw IllegalStateException(
+                    "Client must authenticate before relaying packet '$packetName'"
+                )
+            else ->
+                throw IllegalStateException(
+                    "Exactly one actor must be bound before relaying packet '$packetName'"
+                )
         }
 }

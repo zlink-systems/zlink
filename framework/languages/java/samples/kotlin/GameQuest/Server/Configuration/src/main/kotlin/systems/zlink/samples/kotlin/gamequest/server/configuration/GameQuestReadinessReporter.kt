@@ -8,16 +8,15 @@ import org.springframework.boot.ApplicationRunner
 import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
-class GameQuestReadinessReporter private constructor(
-    private val evidence: String,
-    private val ready: () -> Boolean,
-) : ApplicationRunner, AutoCloseable {
-    private val reporter = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "gamequest-readiness").apply { isDaemon = true }
-    }
+class GameQuestReadinessReporter
+private constructor(private val evidence: String, private val ready: () -> Boolean) :
+    ApplicationRunner, AutoCloseable {
+    private val reporter =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "gamequest-readiness").apply { isDaemon = true }
+        }
 
-    @Volatile
-    private var reported = false
+    @Volatile private var reported = false
 
     override fun run(args: ApplicationArguments) {
         reporter.scheduleWithFixedDelay(::reportIfReady, 0, 100, TimeUnit.MILLISECONDS)
@@ -45,11 +44,11 @@ class GameQuestReadinessReporter private constructor(
     companion object {
         private val logger = LoggerFactory.getLogger(GameQuestReadinessReporter::class.java)
 
-        fun api(
-            nodeId: String,
-            meshes: ZLinkRouteMeshRuntime,
-        ): GameQuestReadinessReporter = GameQuestReadinessReporter(
-            "gamequest-ready kind=spot-route node=$nodeId mesh=${SampleNames.PlayerQuestMesh}",
-        ) { meshes.snapshot(SampleNames.PlayerQuestMesh).isReady }
+        fun api(nodeId: String, meshes: ZLinkRouteMeshRuntime): GameQuestReadinessReporter =
+            GameQuestReadinessReporter(
+                "gamequest-ready kind=spot-route node=$nodeId mesh=${SampleNames.PlayerQuestMesh}"
+            ) {
+                meshes.snapshot(SampleNames.PlayerQuestMesh).isReady
+            }
     }
 }

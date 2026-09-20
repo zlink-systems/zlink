@@ -21,8 +21,9 @@ class RegistryApplication {
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {
-            val builder = SpringApplicationBuilder(RegistryApplication::class.java)
-                .web(WebApplicationType.NONE)
+            val builder =
+                SpringApplicationBuilder(RegistryApplication::class.java)
+                    .web(WebApplicationType.NONE)
             builder.application().setKeepAlive(true)
             val context = builder.run(*args)
             return AutoCloseable { context.close() }

@@ -1,12 +1,7 @@
 package systems.zlink.samples.zoneworld.server.zone;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import org.springframework.context.SmartLifecycle;
+
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
@@ -14,6 +9,13 @@ import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldSpec;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
     private final SampleTopology topology;
@@ -25,10 +27,10 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
     private boolean running;
 
     public ZoneStatusReporter(
-        SampleTopology topology,
-        ZLinkRouteClient routes,
-        NodeCensus census,
-        NodeMaintenanceState maintenance) {
+            SampleTopology topology,
+            ZLinkRouteClient routes,
+            NodeCensus census,
+            NodeMaintenanceState maintenance) {
         this.topology = topology;
         this.routes = routes;
         this.census = census;
@@ -42,14 +44,21 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
             if (running) {
                 return;
             }
-            scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "zoneworld-status-" + topology.nodeId());
-                thread.setDaemon(true);
-                return thread;
-            });
+            scheduler =
+                    Executors.newSingleThreadScheduledExecutor(
+                            runnable -> {
+                                Thread thread =
+                                        new Thread(
+                                                runnable, "zoneworld-status-" + topology.nodeId());
+                                thread.setDaemon(true);
+                                return thread;
+                            });
             running = true;
-            scheduler.scheduleAtFixedRate(this::report, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
-                ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS);
+            scheduler.scheduleAtFixedRate(
+                    this::report,
+                    ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
+                    ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
+                    TimeUnit.MILLISECONDS);
         }
     }
 
@@ -65,28 +74,36 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
             List<String> zones = census.zoneIds();
             try {
                 return routes.sendToChannel(
-                        ZoneWorldNames.REPORT_CHANNEL,
-                        new Messages.ReportNodeStatusMsg(
-                            topology.nodeId(),
-                            zones,
-                            census.total(),
-                            maintenance.isUnderMaintenance(topology.nodeId())))
-                    .submit()
-                    .whenComplete((ignored, error) -> {
-                        if (error != null) {
-                            System.out.println("report failed node=" + topology.nodeId()
-                                + " detail=" + error.getMessage());
-                        } else {
-                            System.out.println("node status report submitted. node="
-                                + topology.nodeId());
-                        }
-                    });
+                                ZoneWorldNames.REPORT_CHANNEL,
+                                new Messages.ReportNodeStatusMsg(
+                                        topology.nodeId(),
+                                        zones,
+                                        census.total(),
+                                        maintenance.isUnderMaintenance(topology.nodeId())))
+                        .submit()
+                        .whenComplete(
+                                (ignored, error) -> {
+                                    if (error != null) {
+                                        System.out.println(
+                                                "report failed node="
+                                                        + topology.nodeId()
+                                                        + " detail="
+                                                        + error.getMessage());
+                                    } else {
+                                        System.out.println(
+                                                "node status report submitted. node="
+                                                        + topology.nodeId());
+                                    }
+                                });
             } catch (RuntimeException error) {
                 // A fixed-rate task is cancelled when an invocation escapes with an
                 // exception. Ops can start after a Zone node, so keep the periodic
                 // public-channel retry alive across that expected readiness window.
-                System.out.println("report failed node=" + topology.nodeId()
-                    + " detail=" + error.getMessage());
+                System.out.println(
+                        "report failed node="
+                                + topology.nodeId()
+                                + " detail="
+                                + error.getMessage());
                 return CompletableFuture.completedFuture(null);
             }
         }
