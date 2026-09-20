@@ -309,9 +309,42 @@ bool wait_until (const std::function<bool ()> &condition, std::chrono::milliseco
     return condition ();
 }
 
+class observing_actor_creation_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    explicit observing_actor_creation_store_t (
+      std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner) :
+        inner (std::move (inner))
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        if (key.value.starts_with ("zlink:v11:creation-terminal:"))
+            terminal_reads.fetch_add (1, std::memory_order_acq_rel);
+        return inner->read (std::move (key));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        return inner->write (std::move (request));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        return inner->scan (std::move (request));
+    }
+
+    std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner;
+    std::atomic_size_t terminal_reads{0};
+};
+
 void configure_remote_actor_create_app (
   zlink::framework::app_t &app,
-  const std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> &location_store,
+  const std::shared_ptr<observing_actor_creation_store_t> &location_store,
   std::string routing_id,
   bool actor_target)
 {
@@ -336,15 +369,20 @@ void configure_remote_actor_create_app (
     });
 }
 
-bool verify_remote_actor_create_completion_reaches_source ()
+bool verify_remote_actor_create_target_owns_completion ()
 {
     remote_create_entry_spot_t::created_count.store (0, std::memory_order_release);
     remote_create_entry_spot_t::joined_count.store (0, std::memory_order_release);
     auto location_store =
       std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+    auto target_location_store =
+      std::make_shared<observing_actor_creation_store_t> (location_store);
+    auto source_location_store =
+      std::make_shared<observing_actor_creation_store_t> (location_store);
 
     auto target = zlink::framework::app_t::create ();
-    configure_remote_actor_create_app (target, location_store, "host-remote-create-target", true);
+    configure_remote_actor_create_app (
+      target, target_location_store, "host-remote-create-target", true);
     char target_program[] = "host-remote-create-target";
     char *target_arguments[] = {target_program, nullptr};
     int target_exit_code = -1;
@@ -357,7 +395,8 @@ bool verify_remote_actor_create_completion_reaches_source ()
     }
 
     auto source = zlink::framework::app_t::create ();
-    configure_remote_actor_create_app (source, location_store, "host-remote-create-source", false);
+    configure_remote_actor_create_app (
+      source, source_location_store, "host-remote-create-source", false);
     char source_program[] = "host-remote-create-source";
     char *source_arguments[] = {source_program, nullptr};
     int source_exit_code = -1;
@@ -400,6 +439,10 @@ bool verify_remote_actor_create_completion_reaches_source ()
            == zlink::framework::placement_allocation_state_t::active
       && authority_snapshot->allocation.target.node_rid.value () == "host-remote-create-target"
       && !authority_snapshot->pending_creation;
+    // The requester probes once before reserving; another terminal read would
+    // mean it tried to complete the target-owned reservation after the reply.
+    const auto source_terminal_reads =
+      source_location_store->terminal_reads.load (std::memory_order_acquire);
 
     const auto source_stopped = source.shutdown (std::chrono::seconds (2)).result ().value ();
     const auto target_stopped = target.shutdown (std::chrono::seconds (2)).result ().value ();
@@ -408,6 +451,7 @@ bool verify_remote_actor_create_completion_reaches_source ()
 
     const bool passed =
       route_ready && created && authority_active
+      && source_terminal_reads == 1
       && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ())
       && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 1
       && remote_create_entry_spot_t::joined_count.load (std::memory_order_acquire) == 0
@@ -415,13 +459,14 @@ bool verify_remote_actor_create_completion_reaches_source ()
       && target_stopped.outcome == zlink::framework::termination_outcome_t::stopped
       && source_exit_code == 0 && target_exit_code == 0;
     if (!passed) {
-        std::cerr << "remote Actor create completion must reach the source after "
-                     "target creation: route-ready="
+        std::cerr << "remote Actor create target must publish the terminal before replying: "
+                     "route-ready="
                   << route_ready
                   << " created-callback=" << remote_create_entry_spot_t::created_count.load ()
                   << " joined-callback=" << remote_create_entry_spot_t::joined_count.load ()
                   << " created=" << static_cast<bool> (created)
                   << " authority-active=" << authority_active
+                  << " source-terminal-reads=" << source_terminal_reads
                   << " error=" << (created.error () ? created.error ()->what () : "-") << '\n';
     }
     return passed;
@@ -1379,7 +1424,7 @@ int main ()
     if (!verify_relocation_target_eligibility_applies_full_narrowing ())
         return EXIT_FAILURE;
 
-    if (!verify_remote_actor_create_completion_reaches_source ())
+    if (!verify_remote_actor_create_target_owns_completion ())
         return EXIT_FAILURE;
 
     if (!verify_relocation_retry_after_target_unavailable ())
