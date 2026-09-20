@@ -91,7 +91,7 @@ function declaration(type) {
     case "integer": return `  record ${name}(${integerPrimitive(op.encoding)} value) {}`;
     case "enum": return `  enum ${name} { ${op.values.map((v) => `${enumName(v.name)}(${longLiteral(v.value)})`).join(", ")}; final long wire; ${name}(long wire){this.wire=wire;} }`;
     case "length-prefixed": return op.content === "bytes"
-      ? `  record ${name}(byte[] value) { ${name}{value=value==null?null:value.clone();} public byte[] value(){return value==null?null:value.clone();} }`
+      ? `  record ${name}(byte[] value) {}`
       : `  record ${name}(String value) {}`;
     case "struct": return `  record ${name}(${recordComponents(op.fields)}) {}`;
     case "vector": return `  record ${name}(List<${refType(op.item)}> items) { ${name}{items=List.copyOf(items);} }`;
@@ -351,6 +351,28 @@ function encodedLimit(type, expression, application) {
   }).join("");
 }
 
+function encodeCapacity(type, policy, measurements) {
+  if (!Number.isSafeInteger(policy?.declaredMaximumBytes)
+      || !Number.isSafeInteger(policy.representationCeiling)
+      || !Number.isSafeInteger(policy.requiredThroughBytes)
+      || !Array.isArray(policy.applications)) {
+    throw new Error(`${type.name}: invalid encode capacity`);
+  }
+  if (policy.declaredMaximumBytes !== type.maximumBytes) {
+    throw new Error(`${type.name}: encode capacity does not match maximum`);
+  }
+  const rejection = (kind, message) => {
+    if (kind === "protocol-error") return `throw error(${javaString(message)});`;
+    if (kind === "capacity-error") return `throw capacityError(${javaString(message)});`;
+    throw new Error(`${type.name}: unsupported encode capacity rejection ${kind}`);
+  };
+  return Object.fromEntries(policy.applications.map((application) => {
+    const measured = measurements[application];
+    if (!measured) throw new Error(`${type.name}: missing encode capacity ${application} measurement`);
+    return [application, `if(Long.compareUnsigned(${measured},${longLiteral(policy.requiredThroughBytes)})>0){if(Long.compareUnsigned(${measured},${longLiteral(policy.declaredMaximumBytes)})>0)${rejection(policy.aboveDeclaredMaximum, type.name + " length")}if(Long.compareUnsigned(${measured},${longLiteral(policy.representationCeiling)})>0)${rejection(policy.aboveRepresentationCeiling, type.name + " capacity")}}`];
+  }));
+}
+
 let globalTypeByName;
 
 function codecMethods(type, typeByName, flagBits) {
@@ -364,11 +386,10 @@ function codecMethods(type, typeByName, flagBits) {
     const absent = op.zeroLengthMeaning === "absent";
     const readValue = isText ? `strictText(r.bytes(length), ${javaString(type.name)})` : "r.bytes(length)";
     const bytes = isText ? "strictBytes(value.value())" : "value.value()";
-    if (op.encodeCapacity?.throughMaximumBytes !== op.maximumBytes
-        || op.encodeCapacity?.implementationLimitBelowMaximum !== "forbidden") {
-      throw new Error(`${type.name}: unsupported encode capacity`);
-    }
-    const maximum = longLiteral(op.maximumBytes);
+    const capacity = encodeCapacity(type, op.encodeCapacity, {
+      encode: "(long)bytes.length",
+      decode: "encodedLength",
+    });
     const textValidation = type.operations.find((entry) => entry.op === "text-validation");
     if (isText && !textValidation) throw new Error(`${type.name}: missing text-validation operation`);
     if (isText && (textValidation.encoding !== "utf-8" || textValidation.malformed !== "protocol-error"
@@ -377,8 +398,8 @@ function codecMethods(type, typeByName, flagBits) {
         || textValidation.encode.loneSurrogate !== "protocol-error")) throw new Error(`${type.name}: unsupported text validation`);
     const decodeBound = negotiatedBound(type, "content-bytes", "decode", "length");
     const encodeBound = negotiatedBound(type, "content-bytes", "encode", "bytes.length");
-    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${decodeBound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
-      + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${isText ? "byte[] bytes=" + bytes + ";" : `byte[] bytes=${bytes};`} ${absent ? "if(bytes==null)bytes=new byte[0];" : `require(bytes!=null,${javaString(type.name)});`} require(bytes.length>=${op.minimumBytes ?? 0}&&bytes.length<=${maximum},${javaString(type.name + " length")}); ${encodeBound} encode${lengthType}(new ${lengthType}(bytes.length),w,c,flags); w.bytes(bytes); }`;
+    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { long encodedLength=unsignedLength(decode${lengthType}(r,c,flags)); ${capacity.decode} int length=(int)encodedLength; require(length>=${op.minimumBytes ?? 0},${javaString(type.name + " length")}); ${decodeBound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
+      + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${isText ? "byte[] bytes=" + bytes + ";" : `byte[] bytes=${bytes};`} ${absent ? "if(bytes==null)bytes=new byte[0];" : `require(bytes!=null,${javaString(type.name)});`} ${capacity.encode} require(bytes.length>=${op.minimumBytes ?? 0},${javaString(type.name + " length")}); ${encodeBound} encode${lengthType}(new ${lengthType}(bytes.length),w,c,flags); w.bytes(bytes); }`;
   }
   if (op.op === "struct" || op.op === "versioned-length-delimited") {
     const fields = op.fields;
@@ -683,12 +704,12 @@ function assertOperationVocabulary(ir) {
 
 function runtimeHelpers() {
   return String.raw`  private static final class Reader { final byte[] bytes; int at; Reader(byte[] bytes){this.bytes=bytes;} int u8()throws IOException{return(int)uint(1);} long uint(int n)throws IOException{need(n);long v=0;for(int i=0;i<n;i++)v=(v<<8)|Byte.toUnsignedLong(bytes[at++]);return v;} long i64()throws IOException{return uint(8);} byte[] bytes(int n)throws IOException{need(n);return Arrays.copyOfRange(bytes,at,at+=n);} Reader slice(int n)throws IOException{return new Reader(bytes(n));} void skipRemaining(){at=bytes.length;} boolean done(){return at==bytes.length;} void end(String name)throws IOException{require(done(),name+" trailing");} void need(int n)throws IOException{if(n<0||at+n>bytes.length)throw new EOFException("truncated field");} }
-  private static final class Writer { final ByteArrayOutputStream out=new ByteArrayOutputStream(); void u8(int v){out.write(v);} void uint(int n,long v){for(int i=n-1;i>=0;i--)out.write((int)(v>>>(i*8))&255);} void bytes(byte[] v){out.writeBytes(v);} int size(){return out.size();} byte[] result(){return out.toByteArray();} }
+  private static final class Writer { final List<byte[]> chunks=new ArrayList<>(); int length; void u8(int v){bytes(new byte[]{(byte)v});} void uint(int n,long v){byte[] bytes=new byte[n];for(int i=n-1;i>=0;i--)bytes[n-1-i]=(byte)(v>>>(8*i));bytes(bytes);} void bytes(byte[] v){if(v.length==0)return;chunks.add(v);length=Math.addExact(length,v.length);} int size(){return length;} byte[] result(){if(chunks.isEmpty())return new byte[0];if(chunks.size()==1)return chunks.get(0);byte[] result=new byte[length];int at=0;for(byte[] chunk:chunks){System.arraycopy(chunk,0,result,at,chunk.length);at+=chunk.length;}return result;} }
   private record ByteKey(byte[] value) { ByteKey{value=value.clone();} public boolean equals(Object other){return other instanceof ByteKey key&&Arrays.equals(value,key.value);} public int hashCode(){return Arrays.hashCode(value);} }
-  private static IOException error(String value){return new IOException(value);} private static void require(boolean ok,String message)throws IOException{if(!ok)throw error(message);}
+  private static final class CapacityException extends IOException { CapacityException(String value){super(value);} } private static IOException error(String value){return new IOException(value);} private static IOException capacityError(String value){return new CapacityException(value);} private static void require(boolean ok,String message)throws IOException{if(!ok)throw error(message);}
   private static void requireUnsigned(long value,int width,String minimum,String maximum,String name)throws IOException{BigInteger actual=new BigInteger(width==8?Long.toUnsignedString(value):Long.toString(Integer.toUnsignedLong((int)value)));if(minimum!=null&&actual.compareTo(new BigInteger(minimum))<0||maximum!=null&&actual.compareTo(new BigInteger(maximum))>0)throw error(name+" range");}
   private static void requireSigned(long value,String minimum,String maximum,String name)throws IOException{if(minimum!=null&&value<Long.parseLong(minimum)||maximum!=null&&value>Long.parseLong(maximum))throw error(name+" range");}
-  private static int length(Object value)throws IOException{try{return switch(value){case U8 x->x.value();case U16 x->x.value();case U32 x->x.value();case U64 x->Math.toIntExact(x.value());default->throw error("length type");};}catch(ArithmeticException e){throw error("length range");}}
+  private static long unsignedLength(Object value)throws IOException{return switch(value){case U8 x->x.value();case U16 x->x.value();case U32 x->Integer.toUnsignedLong(x.value());case U64 x->x.value();default->throw error("length type");};} private static int length(Object value)throws IOException{try{long length=unsignedLength(value);if(length<0)throw error("length range");return Math.toIntExact(length);}catch(ArithmeticException e){throw error("length range");}}
   private static byte[] strictBytes(String value)throws IOException{if(value==null)return null;try{ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);for(byte b:bytes)if(b==0)throw error("NUL text");return bytes;}catch(CharacterCodingException e){throw error("invalid UTF-16 text");}}
   private static String strictText(byte[] value,String name)throws IOException{for(byte b:value)if(b==0)throw error(name+" NUL");try{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(value)).toString();}catch(CharacterCodingException e){throw error(name+" UTF-8");}}
   private static int compareUnsigned(byte[] left,byte[] right){int count=Math.min(left.length,right.length);for(int i=0;i<count;i++){int compared=Integer.compare(Byte.toUnsignedInt(left[i]),Byte.toUnsignedInt(right[i]));if(compared!=0)return compared;}return Integer.compare(left.length,right.length);}
