@@ -1733,15 +1733,11 @@ stage_cpp_source_java_target_user_spot_join() {
 # authority slot and every decoding target refused with
 # `protocol_error|Remote Actor creation target rejected the operation`.
 #
-# STATUS: three C++ requester cells remain quarantined, so the default `all`
-# run keeps them out while the guard executes them explicitly. All four
-# implementations currently use the same creation-intent form,
-# `inline-v1:<base64url>`; none appends a CRC32C segment. The
-# `remote-actor-create-dotnet-java` control cell passes, while the three C++
-# requester cells still fail after peer discovery: C++ reports
-# `Actor creation completion was fenced` for the .NET, Node, and Java targets
-# at mesh_node_host_service.cpp:552. Keep the three cells quarantined until
-# #763 resolves the C++ requester path.
+# STATUS: all four remote Actor-create cells are part of the default `all`
+# run. All four implementations currently use the same creation-intent form,
+# `inline-v1:<base64url>`; none appends a CRC32C segment. The three C++
+# requester cells now pass after #763 removed requester-side duplicate
+# completion, and the .NET requester -> Java target control cell also passes.
 assert_remote_actor_create() {
   local source_events="$1"
   local requester_rid="$2"
@@ -1859,19 +1855,11 @@ stage_cpp_source_java_target_remote_actor_create() {
 }
 
 # --- quarantine guard for the remote-actor-create cells ----------------------
-# The cells above are excluded from the default run because they do not pass
-# yet. An exclusion with no expiry quietly becomes permanent, so the default
-# run asserts the exclusion instead of just honouring it: every quarantined
-# cell is executed, and the smoke FAILS when one of them passes. A cell that
-# starts passing has to be moved into the default run in the same change that
-# deletes it from this list.
+# Keep this guard even with an empty list: a later quarantine entry must be
+# exercised and must fail the smoke if its cell starts passing.
 #
 # Each entry names the issue that owns the remaining cause.
-QUARANTINED_CELLS=(
-  "remote-actor-create-cpp-dotnet|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
-  "remote-actor-create-cpp-java|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
-  "remote-actor-create-cpp-node|#763 -- the C++ requester reports Actor creation completion was fenced after peer-ready (mesh_node_host_service.cpp:552)"
-)
+QUARANTINED_CELLS=()
 
 run_quarantine_guard() {
   local entry stage issue rc unexpected=0
@@ -2290,14 +2278,12 @@ stage_dotnet_source_cpp_target_user_spot_join
 stage_cpp_source_node_target_user_spot_join
 stage_java_source_cpp_target_user_spot_join
 stage_cpp_source_java_target_user_spot_join
-# #559 closed the requestContentReference grammar, so this cell -- a .NET
-# requester placing an Actor on a Java target through the Location Store
-# reservation -- passes and joins the default run. The remaining
-# remote-actor-create cells are still NOT part of it: they fail on divergences
-# owned by the peer runtimes (see the block comment above
-# stage_cpp_source_dotnet_target_remote_actor_create). Run them with
-# ZLINK_CPP_CROSS_LANGUAGE_STAGE=remote-actor-create. The guard below keeps
-# that exclusion honest.
+# All four remote Actor-create cells are now part of the default run. The
+# three C++ requester cells passed after #763 removed requester-side duplicate
+# completion; the .NET requester -> Java target control cell also passes.
+stage_cpp_source_dotnet_target_remote_actor_create
+stage_cpp_source_node_target_remote_actor_create
+stage_cpp_source_java_target_remote_actor_create
 stage_dotnet_source_java_target_remote_actor_create
 
 for result in "${RESULTS[@]}"; do
