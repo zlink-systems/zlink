@@ -236,11 +236,6 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             started = true;
             this.nodeRid = nodeRid;
             startupCompletion = new CompletableFuture<>();
-            startupCompletion.whenComplete((ignored, failure) -> {
-                if (failure instanceof CancellationException) {
-                    cancelStartupClaim();
-                }
-            });
             return new StartState(startupCompletion, true);
         });
         if (state.claim()) {
@@ -358,11 +353,20 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private CompletionStage<Void> claimOwnerLease() {
         long operationStartedNanos = System.nanoTime();
-        long deadlineNanos = operationStartedNanos
-            + ownerLeaseRenewTimeout.toNanos();
+        long deadlineNanos = saturatingAdd(
+            operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
+        return claimOwnerLease(
+            operationStartedNanos,
+            deadlineNanos,
+            stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl));
+    }
+
+    private CompletionStage<Void> claimOwnerLease(
+        long operationStartedNanos,
+        long deadlineNanos,
+        CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation) {
         return withinRenewDeadline(
-                stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl),
-                deadlineNanos)
+                claimOperation, deadlineNanos)
             .<CompletionStage<ZLinkOwnerLeaseClaimResult>>handle((result, failure) -> {
                 if (failure == null) {
                     return CompletableFuture.completedFuture(result);
@@ -370,6 +374,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 return confirmClaimAfterFailure(failure, deadlineNanos);
             })
             .thenCompose(result -> result)
+            .thenCompose(result -> result instanceof systems.zlink.framework.runtime
+                .internal.locations.ZLinkOwnerLeaseClaimConflict
+                    ? confirmClaimAfterConflict(result, deadlineNanos)
+                    : CompletableFuture.completedFuture(result))
             .thenCompose(result -> {
                 if (result instanceof ZLinkOwnerLeaseClaimed claimed) {
                     inStateLane(() -> {
@@ -391,6 +399,20 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             });
     }
 
+    private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterConflict(
+        ZLinkOwnerLeaseClaimResult conflict,
+        long deadlineNanos) {
+        return withinRenewDeadline(
+                stores.ownerLeaseStore().readOwnerLease(ownerId), deadlineNanos)
+            .handle((result, failure) -> failure == null
+                    && result instanceof systems.zlink.framework.runtime
+                        .internal.locations.ZLinkOwnerLeaseFound found
+                    && ownerId.equals(found.token().ownerId())
+                ? new ZLinkOwnerLeaseClaimed(
+                    found.token(), found.leaseExpiresAt(), found.storeNow())
+                : conflict);
+    }
+
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterFailure(
         Throwable failure,
         long deadlineNanos) {
@@ -398,6 +420,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 stores.ownerLeaseStore().readOwnerLease(ownerId), deadlineNanos)
             .thenCompose(result -> result instanceof systems.zlink.framework.runtime
                 .internal.locations.ZLinkOwnerLeaseFound found
+                    && ownerId.equals(found.token().ownerId())
                 ? CompletableFuture.completedFuture(
                     new ZLinkOwnerLeaseClaimed(
                         found.token(), found.leaseExpiresAt(), found.storeNow()))
@@ -451,7 +474,18 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (!shouldClaim) {
             return;
         }
-        claimOwnerLease().whenComplete((ignored, failure) -> {
+        long operationStartedNanos = System.nanoTime();
+        long deadlineNanos = saturatingAdd(
+            operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
+        CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation =
+            stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl);
+        completion.whenComplete((ignored, failure) -> {
+            if (failure instanceof CancellationException) {
+                cancelStartupClaim(claimOperation, deadlineNanos);
+            }
+        });
+        claimOwnerLease(operationStartedNanos, deadlineNanos, claimOperation)
+            .whenComplete((ignored, failure) -> {
             if (failure == null) {
                 completeInitialClaim(completion);
                 return;
@@ -472,7 +506,6 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private void completeInitialClaim(CompletableFuture<Void> completion) {
         boolean running = inStateLane(() -> started && !completion.isCancelled());
         if (!running) {
-            releaseClaimedLeaseAfterStartupCancellation();
             return;
         }
         startHeartbeat();
@@ -506,7 +539,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
     }
 
-    private void cancelStartupClaim() {
+    private void cancelStartupClaim(
+        CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation,
+        long deadlineNanos) {
         ScheduledTask heartbeat = inStateLane(() -> {
             started = false;
             ScheduledTask current = heartbeatTask;
@@ -514,16 +549,26 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             return current;
         });
         cancel(heartbeat);
-        releaseClaimedLeaseAfterStartupCancellation();
+        withinRenewDeadline(claimOperation, deadlineNanos)
+            .whenComplete((ignored, failure) ->
+                releaseClaimedLeaseAfterStartupCancellation(deadlineNanos));
     }
 
-    private void releaseClaimedLeaseAfterStartupCancellation() {
-        stores.ownerLeaseStore().readOwnerLease(ownerId).thenCompose(result ->
-            result instanceof systems.zlink.framework.runtime.internal.locations
-                .ZLinkOwnerLeaseFound found
-                ? stores.ownerLeaseStore().releaseOwnerLease(found.token())
-                    .thenApply(ignored -> null)
-                : CompletableFuture.completedFuture(null));
+    private void releaseClaimedLeaseAfterStartupCancellation(long deadlineNanos) {
+        withinRenewDeadline(
+                stores.ownerLeaseStore().readOwnerLease(ownerId), deadlineNanos)
+            .thenCompose(result -> result instanceof systems.zlink.framework.runtime
+                    .internal.locations.ZLinkOwnerLeaseFound found
+                    && ownerId.equals(found.token().ownerId())
+                ? withinRenewDeadline(
+                    stores.ownerLeaseStore().releaseOwnerLease(found.token()),
+                    deadlineNanos).thenApply(ignored -> null)
+                : CompletableFuture.completedFuture(null))
+            .whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    recordFailure(failureMessage(failure));
+                }
+            });
     }
 
     @Override

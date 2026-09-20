@@ -110,6 +110,8 @@ final class ZLinkLocationRuntimeHostStartupTest {
             await(runtime::isReady, Duration.ofSeconds(2));
             runtime.spotManager().getOrCreate("probe", "probe")
                 .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            long descriptorRevision = store.descriptors().getFirst()
+                .descriptorRevision();
             assertEquals("pong:open", request("open"));
             await(() -> ProbeSpot.timerTicks.get() > 0, Duration.ofSeconds(1));
             ProbeActorFactory.block();
@@ -141,7 +143,9 @@ final class ZLinkLocationRuntimeHostStartupTest {
                 relocate(runtime).reason());
 
             store.available.set(true);
-            await(() -> ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime),
+            await(() -> ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime)
+                    && store.descriptors().getFirst().descriptorRevision()
+                        > descriptorRevision,
                 Duration.ofSeconds(1));
             runtime.routeMeshRuntimeOptionsInternal()
                 .mesh("game").setPlacementWeight(80);

@@ -61,6 +61,33 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
+    void heartbeatAdoptsLateCommittedClaimAfterConflict() throws Exception {
+        LateConflictStore store = new LateConflictStore();
+        CountDownLatch republished = new CountDownLatch(1);
+        try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
+            ZLinkRegisteredLocationStores.fromUnified(store),
+            "owner-a",
+            Duration.ofSeconds(1),
+            Duration.ofMillis(20),
+            Duration.ofMillis(10),
+            Duration.ofMillis(100))) {
+            runtime.setOwnerLeaseRecoveryListener(() -> {
+                republished.countDown();
+                return CompletableFuture.completedFuture(null);
+            });
+
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            assertFalse(runtime.ownerLeaseHealthy());
+
+            store.commitLateClaim();
+
+            assertTrue(republished.await(1, TimeUnit.SECONDS));
+            assertEquals(7L, runtime.currentOwnerToken().leaseGeneration());
+            assertEquals(0, store.releaseCount.get());
+        }
+    }
+
+    @Test
     void initialClaimConflictAndGenerationExhaustionFailStartup() {
         assertInitialClaimRejected(new ZLinkOwnerLeaseClaimConflict(),
             "owner lease is already claimed");
@@ -86,6 +113,36 @@ final class ZLinkLocationRuntimeRecoveryTest {
             store.completeClaim();
 
             assertTrue(store.released.await(1, TimeUnit.SECONDS));
+            assertEquals(0, store.heartbeatRenewals.get());
+        }
+    }
+
+    @Test
+    void cancellationPreservesCancellationWhenBoundedReleaseTimesOut()
+        throws Exception {
+        HangingReleaseStore store = new HangingReleaseStore();
+        try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
+            ZLinkRegisteredLocationStores.fromUnified(store),
+            "owner-a",
+            Duration.ofSeconds(1),
+            Duration.ofMillis(20),
+            Duration.ofMillis(50),
+            Duration.ofMillis(100))) {
+            CompletableFuture<Void> startup = runtime.start(RoutingId.from("node-a"))
+                .toCompletableFuture();
+
+            assertTrue(startup.cancel(true));
+            store.completeClaim();
+
+            assertThrows(java.util.concurrent.CancellationException.class,
+                startup::join);
+            assertTrue(store.releaseStarted.await(1, TimeUnit.SECONDS));
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (!"owner lease operation timed out".equals(runtime.lastError())
+                && System.nanoTime() < until) {
+                Thread.onSpinWait();
+            }
+            assertEquals("owner lease operation timed out", runtime.lastError());
             assertEquals(0, store.heartbeatRenewals.get());
         }
     }
@@ -198,6 +255,54 @@ final class ZLinkLocationRuntimeRecoveryTest {
         }
     }
 
+    private static final class LateConflictStore
+        extends ZLinkLocationStoreTestAdapter {
+        private final CompletableFuture<ZLinkOwnerLeaseClaimResult> firstClaim =
+            new CompletableFuture<>();
+        private final AtomicInteger claimCount = new AtomicInteger();
+        private final AtomicInteger releaseCount = new AtomicInteger();
+        private final ZLinkLocationOwnerToken token =
+            new ZLinkLocationOwnerToken("owner-a", 7);
+        private final AtomicBoolean committed = new AtomicBoolean();
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+            String ownerId,
+            Duration ttl) {
+            if (claimCount.getAndIncrement() == 0) {
+                return firstClaim;
+            }
+            return CompletableFuture.completedFuture(
+                new ZLinkOwnerLeaseClaimConflict());
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(
+            String ownerId) {
+            if (!committed.get()) {
+                return CompletableFuture.completedFuture(new ZLinkOwnerLeaseMissing());
+            }
+            Instant now = Instant.now();
+            return CompletableFuture.completedFuture(new ZLinkOwnerLeaseFound(
+                token, now.plusSeconds(1), now));
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken value) {
+            releaseCount.incrementAndGet();
+            return CompletableFuture.completedFuture(
+                ZLinkOwnerLeaseReleaseResult.RELEASED);
+        }
+
+        void commitLateClaim() {
+            Instant now = Instant.now();
+            committed.set(true);
+            firstClaim.complete(new ZLinkOwnerLeaseClaimed(
+                token, now.plusSeconds(1), now));
+        }
+    }
+
     private static final class DelayedClaimStore
         extends ZLinkLocationStoreTestAdapter {
         private final CompletableFuture<ZLinkOwnerLeaseClaimResult> claim =
@@ -245,6 +350,52 @@ final class ZLinkLocationRuntimeRecoveryTest {
         void completeClaim() {
             Instant now = Instant.now();
             claimed.set(true);
+            claim.complete(new ZLinkOwnerLeaseClaimed(
+                token, now.plusSeconds(1), now));
+        }
+    }
+
+    private static final class HangingReleaseStore
+        extends ZLinkLocationStoreTestAdapter {
+        private final CompletableFuture<ZLinkOwnerLeaseClaimResult> claim =
+            new CompletableFuture<>();
+        private final CountDownLatch releaseStarted = new CountDownLatch(1);
+        private final AtomicInteger heartbeatRenewals = new AtomicInteger();
+        private final ZLinkLocationOwnerToken token =
+            new ZLinkLocationOwnerToken("owner-a", 1);
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+            String ownerId,
+            Duration ttl) {
+            return claim;
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(
+            String ownerId) {
+            Instant now = Instant.now();
+            return CompletableFuture.completedFuture(new ZLinkOwnerLeaseFound(
+                token, now.plusSeconds(1), now));
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken value) {
+            releaseStarted.countDown();
+            return new CompletableFuture<>();
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+            ZLinkLocationOwnerToken value,
+            Duration ttl) {
+            heartbeatRenewals.incrementAndGet();
+            return CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+        }
+
+        void completeClaim() {
+            Instant now = Instant.now();
             claim.complete(new ZLinkOwnerLeaseClaimed(
                 token, now.plusSeconds(1), now));
         }
