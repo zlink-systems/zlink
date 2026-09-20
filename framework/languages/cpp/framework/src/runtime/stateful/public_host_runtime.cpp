@@ -398,142 +398,6 @@ std::vector<std::byte> ready_user_spot_authority_payload (const stateful::object
        .node_generation = target.node_lifecycle_generation});
 }
 
-struct instance_ready_state_t
-{
-    std::string stable_type;
-    std::string spot_id;
-    std::uint64_t object_generation = 0;
-    std::uint64_t authority_owner_generation = 0;
-    std::string recovery_reference;
-    std::uint32_t recovery_checksum = 0;
-    protocol::wire_operation_id_t operation;
-    std::array<std::byte, 32> request_sha256{};
-    bool completed = false;
-    std::uint32_t terminal_result = 0;
-    std::uint32_t failure_code = 0;
-    std::optional<protocol::application_payload_t> reply;
-};
-
-void append_u64_value (std::vector<std::uint8_t> &out, std::uint64_t value)
-{
-    for (int shift = 56; shift >= 0; shift -= 8)
-        out.push_back (static_cast<std::uint8_t> (value >> shift));
-}
-
-std::uint64_t read_u64_value (std::span<const std::uint8_t> bytes, std::size_t &offset)
-{
-    if (bytes.size () - offset < 8)
-        throw protocol::service_wire_error_t ("Instance authority payload is truncated");
-    std::uint64_t value = 0;
-    for (int index = 0; index < 8; ++index)
-        value = (value << 8) | bytes[offset++];
-    return value;
-}
-
-void append_text32_value (std::vector<std::uint8_t> &out, const std::string &value)
-{
-    if (value.size () > std::numeric_limits<std::uint32_t>::max ())
-        throw protocol::service_wire_error_t ("Instance authority text exceeds u32");
-    append_u32 (out, static_cast<std::uint32_t> (value.size ()));
-    out.insert (out.end (), value.begin (), value.end ());
-}
-
-std::string read_text32_value (const std::vector<std::uint8_t> &bytes, std::size_t &offset)
-{
-    const auto size = read_u32 (bytes, offset);
-    if (bytes.size () - offset < size)
-        throw protocol::service_wire_error_t ("Instance authority text is truncated");
-    std::string value (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-                       bytes.begin () + static_cast<std::ptrdiff_t> (offset + size));
-    offset += size;
-    return value;
-}
-
-std::vector<std::byte> encode_instance_ready_state (const instance_ready_state_t &state)
-{
-    std::vector<std::uint8_t> bytes{'Z', 'L', 'I', 'R', 1};
-    append_text32_value (bytes, state.stable_type);
-    append_text32_value (bytes, state.spot_id);
-    append_u64_value (bytes, state.object_generation);
-    append_u64_value (bytes, state.authority_owner_generation);
-    append_text32_value (bytes, state.recovery_reference);
-    append_u32 (bytes, state.recovery_checksum);
-    append_u64_value (bytes, state.operation.high);
-    append_u64_value (bytes, state.operation.low);
-    for (const auto value : state.request_sha256)
-        bytes.push_back (std::to_integer<std::uint8_t> (value));
-    bytes.push_back (state.completed ? 1 : 0);
-    append_u32 (bytes, state.terminal_result);
-    append_u32 (bytes, state.failure_code);
-    if (state.reply) {
-        bytes.push_back (1);
-        const auto reply = protocol::encode_application_payload (*state.reply);
-        append_u32 (bytes, static_cast<std::uint32_t> (reply.size ()));
-        bytes.insert (bytes.end (), reply.begin (), reply.end ());
-    } else {
-        bytes.push_back (0);
-    }
-    std::vector<std::byte> result;
-    result.reserve (bytes.size ());
-    for (const auto value : bytes)
-        result.push_back (static_cast<std::byte> (value));
-    return result;
-}
-
-std::optional<instance_ready_state_t>
-decode_instance_ready_state (const std::vector<std::byte> &payload, bool capture_flow)
-{
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve (payload.size ());
-    for (const auto value : payload)
-        bytes.push_back (std::to_integer<std::uint8_t> (value));
-    if (bytes.size () < 5 || bytes[0] != 'Z' || bytes[1] != 'L' || bytes[2] != 'I'
-        || bytes[3] != 'R' || bytes[4] != 1)
-        return std::nullopt;
-    try {
-        std::size_t offset = 5;
-        instance_ready_state_t state;
-        state.stable_type = read_text32_value (bytes, offset);
-        state.spot_id = read_text32_value (bytes, offset);
-        state.object_generation = read_u64_value (bytes, offset);
-        state.authority_owner_generation = read_u64_value (bytes, offset);
-        state.recovery_reference = read_text32_value (bytes, offset);
-        state.recovery_checksum = read_u32 (bytes, offset);
-        state.operation.high = read_u64_value (bytes, offset);
-        state.operation.low = read_u64_value (bytes, offset);
-        if (bytes.size () - offset < state.request_sha256.size ())
-            return std::nullopt;
-        for (auto &value : state.request_sha256)
-            value = static_cast<std::byte> (bytes[offset++]);
-        if (offset >= bytes.size () || bytes[offset] > 1)
-            return std::nullopt;
-        state.completed = bytes[offset++] == 1;
-        state.terminal_result = read_u32 (bytes, offset);
-        state.failure_code = read_u32 (bytes, offset);
-        if (offset >= bytes.size () || bytes[offset] > 1)
-            return std::nullopt;
-        const auto has_reply = bytes[offset++] == 1;
-        if (has_reply) {
-            const auto size = read_u32 (bytes, offset);
-            if (bytes.size () - offset < size)
-                return std::nullopt;
-            /* flow-correlation §4: at Off the persisted reply's flow pair is
-             * neither validated nor materialized (structural skip only). */
-            state.reply = protocol::decode_application_payload (
-              std::span<const std::uint8_t> (bytes).subspan (offset, size), capture_flow);
-            offset += size;
-        }
-        if (offset != bytes.size () || state.stable_type.empty () || state.spot_id.empty ()
-            || state.object_generation == 0 || state.authority_owner_generation == 0
-            || (state.operation.high == 0 && state.operation.low == 0))
-            return std::nullopt;
-        return state;
-    }
-    catch (const protocol::service_wire_error_t &) {
-        return std::nullopt;
-    }
-}
-
 std::vector<std::byte> closing_user_spot_authority_payload (const stateful::object_ref_t &object,
                                                             const std::string &stable_type,
                                                             const object_creation_target_t &target)
@@ -603,24 +467,6 @@ decode_instance_closing_state (const std::vector<std::byte> &payload)
     catch (...) {
         return std::nullopt;
     }
-}
-
-bool instance_close_owns_pending_terminal (const authority_read_result_t &current,
-                                           const std::string &stable_type,
-                                           const std::string &spot_id,
-                                           std::uint64_t object_generation,
-                                           std::uint64_t authority_owner_generation)
-{
-    const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-    if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-        || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
-        || snapshot->object_generation != object_generation
-        || snapshot->authority_owner_generation != authority_owner_generation)
-        return false;
-    const auto closing = decode_instance_closing_state (snapshot->payload);
-    return closing && closing->stable_type == stable_type && closing->spot_id == spot_id
-           && closing->object_generation == object_generation
-           && closing->authority_owner_generation == authority_owner_generation;
 }
 
 std::uint64_t unix_milliseconds_now ()
@@ -1494,11 +1340,17 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
         || snapshot->allocation.target.node_lifecycle_generation != local.lifecycle_generation ())
         return std::nullopt;
 
-    const auto ready = decode_instance_ready_state (snapshot->payload, capture_flow ());
-    if (!ready || ready->stable_type != stable_type || ready->spot_id != spot_id
-        || ready->object_generation != object_generation
-        || ready->authority_owner_generation != authority_owner_generation || !ready->completed
-        || !ready->recovery_reference.empty ())
+    const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+    if (!ready || ready->state != instance_spot_authority_state_t::ready
+        || ready->stable_type != stable_type || ready->spot_id != spot_id
+        || ready->owner_id != instance_owner.owner_id
+        || ready->owner_lease_generation
+             != static_cast<std::uint64_t> (instance_owner.lease_generation)
+        || ready->mesh_name != snapshot->allocation.target.mesh_name
+        || ready->node_rid.value () != snapshot->allocation.target.node_rid.value ()
+        || ready->node_generation
+             != snapshot->allocation.target.node_lifecycle_generation
+        || ready->activation_recovery)
         return std::nullopt;
 
     const auto sealed =
@@ -2043,19 +1895,38 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                 continue;
             }
             const auto state =
-              decode_instance_ready_state (entry.snapshot.payload, capture_flow ());
-            if (!state || state->recovery_reference.empty ()
+              decode_instance_spot_authority_payload (entry.snapshot.payload);
+            if (!state || state->state != instance_spot_authority_state_t::ready
+                || !state->activation_recovery
                 || entry.snapshot.allocation.object_kind != placement_object_kind_t::instance_spot
+                || entry.snapshot.allocation.state != placement_allocation_state_t::active
+                || entry.snapshot.allocation.stable_type != state->stable_type
                 || entry.snapshot.allocation.target.node_rid.value ()
                      != node_rid_t::from_string (
                           zlink::routing_id_t::from (local.node_routing_id).to_string ())
                           .value ()
                 || entry.snapshot.allocation.target.node_lifecycle_generation
-                     != local.lifecycle_generation)
+                     != local.lifecycle_generation
+                || entry.snapshot.allocation.target.mesh_name != state->mesh_name
+                || entry.snapshot.allocation.target.owner.owner_id != state->owner_id
+                || entry.snapshot.allocation.target.owner.lease_generation <= 0
+                || static_cast<std::uint64_t> (
+                     entry.snapshot.allocation.target.owner.lease_generation)
+                     != state->owner_lease_generation
+                || entry.snapshot.allocation.target.node_rid.value ()
+                     != state->node_rid.value ()
+                || entry.snapshot.allocation.target.node_lifecycle_generation
+                     != state->node_generation)
                 continue;
-            const auto payload = relocations->get (state->recovery_reference);
-            if (!payload
-                || stateful::maintenance_runtime_t::crc32c (*payload) != state->recovery_checksum)
+            const auto recovery_pointer = *state->activation_recovery;
+            const auto payload = relocations->get (recovery_pointer.reference);
+            if (!payload || payload->size () != recovery_pointer.encoded_size)
+                continue;
+            std::vector<std::byte> public_payload;
+            public_payload.reserve (payload->size ());
+            for (const auto value : *payload)
+                public_payload.push_back (static_cast<std::byte> (value));
+            if (runtime::sha256 (public_payload) != recovery_pointer.sha256)
                 continue;
             protocol::instance_activation_recovery_t recovery;
             try {
@@ -2065,8 +1936,8 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             catch (const protocol::service_wire_error_t &) {
                 continue;
             }
-            auto updated = *state;
-            if (!updated.completed) {
+            auto completed = entry.snapshot;
+            if (recovery_pointer.replay_cursor < recovery_pointer.inbox_sequence) {
                 bool prepared = false;
                 try {
                     prepared = materializer.prepare (recovery.activation);
@@ -2076,47 +1947,43 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                 }
                 if (!prepared)
                     continue;
-                auto result = materializer.dispatch (recovery.activation, recovery.metadata,
-                                                     recovery.application_payload);
-                updated.completed = true;
-                updated.terminal_result = result.terminal_result;
-                updated.failure_code = result.failure_code;
-                updated.reply = std::move (result.application_reply);
+                (void) materializer.dispatch (recovery.activation, recovery.metadata,
+                                              recovery.application_payload);
+                auto updated = *state;
+                updated.activation_recovery->replay_cursor =
+                  updated.activation_recovery->inbox_sequence;
                 const auto terminal = store
                                         ->compare_exchange_authority (
                                           entry.key, entry.snapshot.store_version,
-                                          authority_restore_t{encode_instance_ready_state (updated),
-                                                              entry.snapshot.owner})
+                                          authority_restore_t{
+                                            encode_instance_spot_authority_payload (updated),
+                                            entry.snapshot.owner})
                                         .result ()
                                         .value ();
                 const auto *stored = std::get_if<authority_stored_t> (&terminal);
                 if (!stored)
                     continue;
-                updated.recovery_reference.clear ();
-                updated.recovery_checksum = 0;
-                const auto cleared = store
-                                       ->compare_exchange_authority (
-                                         entry.key, stored->snapshot.store_version,
-                                         authority_restore_t{encode_instance_ready_state (updated),
-                                                             stored->snapshot.owner})
-                                       .result ()
-                                       .value ();
-                if (!std::holds_alternative<authority_stored_t> (cleared))
-                    continue;
-            } else {
-                updated.recovery_reference.clear ();
-                updated.recovery_checksum = 0;
-                const auto cleared = store
-                                       ->compare_exchange_authority (
-                                         entry.key, entry.snapshot.store_version,
-                                         authority_restore_t{encode_instance_ready_state (updated),
-                                                             entry.snapshot.owner})
-                                       .result ()
-                                       .value ();
-                if (!std::holds_alternative<authority_stored_t> (cleared))
-                    continue;
+                completed = stored->snapshot;
             }
-            relocations->remove (state->recovery_reference);
+            const auto completed_state =
+              decode_instance_spot_authority_payload (completed.payload);
+            if (!completed_state || !completed_state->activation_recovery
+                || completed_state->activation_recovery->replay_cursor
+                     != completed_state->activation_recovery->inbox_sequence)
+                continue;
+            auto released = *completed_state;
+            released.activation_recovery.reset ();
+            const auto cleared = store
+                                   ->compare_exchange_authority (
+                                     entry.key, completed.store_version,
+                                     authority_restore_t{
+                                       encode_instance_spot_authority_payload (released),
+                                       completed.owner})
+                                   .result ()
+                                   .value ();
+            if (!std::holds_alternative<authority_stored_t> (cleared))
+                continue;
+            relocations->remove (recovery_pointer.reference);
             ++recovered;
         }
         cursor = page->next_cursor;
@@ -4706,14 +4573,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                                             application};
                     const auto recovery_bytes =
                       protocol::encode_instance_activation_recovery (recovery);
-                    auto fingerprint_request = request;
-                    fingerprint_request.reply_route_id = request.request ? 1 : 0;
-                    const auto fingerprint_bytes = protocol::encode_instance_activation_recovery (
-                      {fingerprint_request, metadata, application});
                     std::vector<std::byte> recovery_public;
-                    recovery_public.reserve (fingerprint_bytes.size ());
-                    for (const auto value : fingerprint_bytes)
+                    recovery_public.reserve (recovery_bytes.size ());
+                    for (const auto value : recovery_bytes)
                         recovery_public.push_back (static_cast<std::byte> (value));
+                    if (recovery_public.size ()
+                        > actor_authority_detail::actor_authority_maximum_bytes) {
+                        reply_terminal ({105,
+                                         static_cast<std::uint32_t> (
+                                           protocol::framework_error_code::requestFailed),
+                                         std::nullopt});
+                        continue;
+                    }
                     const auto request_sha256 = runtime::sha256 (recovery_public);
                     const auto authority_key = spot_authority_key (request.target.spot_id);
                     const auto join_existing = [&] (authority_read_result_t current) {
@@ -4732,7 +4603,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             if (snapshot->allocation.state
                                 == placement_allocation_state_t::active) {
                                 auto ready_state =
-                                  decode_instance_ready_state (snapshot->payload, capture_flow ());
+                                  decode_instance_spot_authority_payload (snapshot->payload);
                                 if (!ready_state) {
                                     if (const auto closing =
                                           decode_instance_closing_state (snapshot->payload);
@@ -4756,25 +4627,19 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                        std::nullopt});
                                     return true;
                                 }
-                                if (ready_state->operation == request.operation) {
-                                    if (!ready_state->completed) {
-                                        /* The reservation winner published
-                                         * Ready before its durable terminal.
-                                         * Join that pending operation. */
-                                    } else if (ready_state->request_sha256 != request_sha256) {
-                                        reply_terminal (
-                                          {104,
-                                           static_cast<std::uint32_t> (
-                                             protocol::framework_error_code::requestProtocolError),
-                                           std::nullopt});
-                                        return true;
-                                    } else {
-                                        reply_terminal ({ready_state->terminal_result,
-                                                         ready_state->failure_code,
-                                                         ready_state->reply});
-                                        return true;
-                                    }
-                                } else {
+                                if (ready_state->state
+                                      != instance_spot_authority_state_t::ready
+                                    || ready_state->stable_type
+                                         != snapshot->allocation.stable_type
+                                    || ready_state->spot_id != request.target.spot_id) {
+                                    reply_terminal (
+                                      {105,
+                                       static_cast<std::uint32_t> (
+                                         protocol::framework_error_code::requestFailed),
+                                       std::nullopt});
+                                    return true;
+                                }
+                                if (!ready_state->activation_recovery) {
                                     const auto local = status ();
                                     const auto current_rid = zlink::routing_id_t::from (
                                       std::string (snapshot->allocation.target.node_rid.value ()));
@@ -4848,34 +4713,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                     }
                                     auto result = instance_materializer.dispatch (request, metadata,
                                                                                   application);
-                                    ready_state->operation = request.operation;
-                                    ready_state->request_sha256 = request_sha256;
-                                    ready_state->completed = true;
-                                    ready_state->terminal_result = result.terminal_result;
-                                    ready_state->failure_code = result.failure_code;
-                                    ready_state->reply = result.application_reply;
-                                    const auto stored =
-                                      store
-                                        ->compare_exchange_authority (
-                                          authority_key, snapshot->store_version,
-                                          authority_put_t{
-                                            encode_instance_ready_state (*ready_state)})
-                                        .result ()
-                                        .value ();
-                                    if (!std::holds_alternative<authority_stored_t> (stored)) {
-                                        const auto current_authority =
-                                          store->read_authority (authority_key).result ().value ();
-                                        if (!instance_close_owns_pending_terminal (
-                                              current_authority, ready_state->stable_type,
-                                              ready_state->spot_id,
-                                              ready_state->object_generation,
-                                              ready_state->authority_owner_generation)) {
-                                            result.terminal_result = 105;
-                                            result.failure_code = static_cast<std::uint32_t> (
-                                              protocol::framework_error_code::requestFailed);
-                                            result.application_reply.reset ();
-                                        }
-                                    }
                                     reply_terminal (std::move (result));
                                     return true;
                                 }
@@ -4961,68 +4798,87 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                          std::nullopt});
                         continue;
                     }
-                    instance_ready_state_t ready_state{
-                      request.target.stable_type,
-                      request.target.spot_id,
-                      reservation->fence.object_generation,
-                      reservation->fence.authority_owner_generation,
-                      recovery_root.reference,
-                      recovery_root.checksum_crc32c,
-                      request.operation};
-                    ready_state.request_sha256 = request_sha256;
+                    instance_spot_authority_payload_t ready_state{
+                      .state = instance_spot_authority_state_t::ready,
+                      .stable_type = request.target.stable_type,
+                      .spot_id = request.target.spot_id,
+                      .owner_id = instance_owner.owner_id,
+                      .owner_lease_generation = static_cast<std::uint64_t> (
+                        instance_owner.lease_generation),
+                      .mesh_name = request.target.mesh_name,
+                      .node_rid = node_rid_t::from_string (
+                        zlink::routing_id_t::from (
+                          request.target.target_node_routing_id)
+                          .to_string ()),
+                      .node_generation = request.target.target_node_generation,
+                      .activation_recovery = activation_recovery_pointer_t{
+                        .reference = recovery_root.reference,
+                        .sha256 = request_sha256,
+                        .encoded_size = static_cast<std::uint32_t> (recovery_public.size ()),
+                        .inbox_sequence = 1,
+                        .replay_cursor = 0}};
                     const auto committed = store
                                              ->commit ({reserve.key, reservation->fence,
-                                                        encode_instance_ready_state (ready_state)})
+                                                        encode_instance_spot_authority_payload (
+                                                          ready_state)})
                                              .result ()
                                              .value ();
                     const auto *created = std::get_if<object_committed_t> (&committed);
                     const auto *already = std::get_if<object_already_committed_t> (&committed);
-                    if (!created && !already) {
+                    if (already) {
+                        if (!join_existing (authority_read_result_t{already->ready}))
+                            reply_terminal (
+                              {105,
+                               static_cast<std::uint32_t> (
+                                 protocol::framework_error_code::requestFailed),
+                               std::nullopt});
+                        continue;
+                    }
+                    if (!created) {
                         reply_terminal (
                           {107,
                            static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
                            std::nullopt});
                         continue;
                     }
-                    const auto &ready_snapshot = created ? created->ready : already->ready;
+                    const auto &ready_snapshot = created->ready;
                     auto result = instance_materializer.dispatch (request, metadata, application);
-                    ready_state.completed = true;
-                    ready_state.terminal_result = result.terminal_result;
-                    ready_state.failure_code = result.failure_code;
-                    ready_state.reply = result.application_reply;
+                    ready_state.activation_recovery->replay_cursor =
+                      ready_state.activation_recovery->inbox_sequence;
                     const auto stored_terminal =
                       store
                         ->compare_exchange_authority (
                           authority_key, ready_snapshot.store_version,
-                          authority_put_t{encode_instance_ready_state (ready_state)})
+                          authority_put_t{
+                            encode_instance_spot_authority_payload (ready_state)})
                         .result ()
                         .value ();
                     const auto *terminal_snapshot =
                       std::get_if<authority_stored_t> (&stored_terminal);
                     if (!terminal_snapshot) {
-                        const auto current_authority =
-                          store->read_authority (authority_key).result ().value ();
-                        if (!instance_close_owns_pending_terminal (
-                              current_authority, ready_state.stable_type, ready_state.spot_id,
-                              ready_state.object_generation,
-                              ready_state.authority_owner_generation)) {
+                        result.terminal_result = 105;
+                        result.failure_code = static_cast<std::uint32_t> (
+                          protocol::framework_error_code::requestFailed);
+                        result.application_reply.reset ();
+                    } else {
+                        ready_state.activation_recovery.reset ();
+                        const auto cleared =
+                          store
+                            ->compare_exchange_authority (
+                              authority_key, terminal_snapshot->snapshot.store_version,
+                              authority_put_t{
+                                encode_instance_spot_authority_payload (ready_state)})
+                            .result ()
+                            .value ();
+                        if (std::holds_alternative<authority_stored_t> (cleared)) {
+                            instance_relocations->remove (recovery_root.reference);
+                        }
+                        else {
                             result.terminal_result = 105;
                             result.failure_code = static_cast<std::uint32_t> (
                               protocol::framework_error_code::requestFailed);
                             result.application_reply.reset ();
                         }
-                    } else {
-                        ready_state.recovery_reference.clear ();
-                        ready_state.recovery_checksum = 0;
-                        const auto cleared =
-                          store
-                            ->compare_exchange_authority (
-                              authority_key, terminal_snapshot->snapshot.store_version,
-                              authority_put_t{encode_instance_ready_state (ready_state)})
-                            .result ()
-                            .value ();
-                        if (std::holds_alternative<authority_stored_t> (cleared))
-                            instance_relocations->remove (recovery_root.reference);
                     }
                     reply_terminal (std::move (result));
                     continue;

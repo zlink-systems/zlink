@@ -80,6 +80,37 @@ struct user_spot_authority_payload_t
     std::uint64_t node_generation = 0;
 };
 
+enum class instance_spot_authority_state_t : std::uint8_t
+{
+    cold_activating = 0,
+    ready = 1,
+    closing = 2
+};
+
+struct activation_recovery_pointer_t
+{
+    std::string reference;
+    std::array<std::byte, 32> sha256{};
+    std::uint32_t encoded_size = 0;
+    std::uint64_t inbox_sequence = 0;
+    std::uint64_t replay_cursor = 0;
+
+    bool operator== (const activation_recovery_pointer_t &) const = default;
+};
+
+struct instance_spot_authority_payload_t
+{
+    instance_spot_authority_state_t state = instance_spot_authority_state_t::ready;
+    std::string stable_type;
+    std::string spot_id;
+    std::string owner_id;
+    std::uint64_t owner_lease_generation = 0;
+    std::string mesh_name;
+    node_rid_t node_rid;
+    std::uint64_t node_generation = 0;
+    std::optional<activation_recovery_pointer_t> activation_recovery;
+};
+
 namespace actor_authority_detail
 {
 
@@ -178,6 +209,16 @@ inline void append_text8 (std::vector<std::byte> &bytes, std::string_view value)
     if (!valid_text8 (value))
         throw std::invalid_argument ("actor authority text8 is invalid");
     append_u8 (bytes, static_cast<std::uint8_t> (value.size ()));
+    for (const auto character : value)
+        append_u8 (bytes, static_cast<std::uint8_t> (static_cast<unsigned char> (character)));
+}
+
+inline void append_text16be (std::vector<std::byte> &bytes, std::string_view value)
+{
+    if (value.empty () || value.size () > std::numeric_limits<std::uint16_t>::max ()
+        || value.find ('\0') != std::string_view::npos || !valid_utf8 (value))
+        throw std::invalid_argument ("actor authority text16 is invalid");
+    append_u16be (bytes, static_cast<std::uint16_t> (value.size ()));
     for (const auto character : value)
         append_u8 (bytes, static_cast<std::uint8_t> (static_cast<unsigned char> (character)));
 }
@@ -528,6 +569,182 @@ decode_ready_user_spot_authority_payload (std::span<const std::byte> encoded)
     if (!value || value->state != user_spot_authority_state_t::ready)
         return std::nullopt;
     return value;
+}
+
+inline std::vector<std::byte> encode_instance_spot_authority_payload (
+  const instance_spot_authority_payload_t &value)
+{
+    if (value.state != instance_spot_authority_state_t::cold_activating
+        && value.state != instance_spot_authority_state_t::ready
+        && value.state != instance_spot_authority_state_t::closing)
+        throw std::invalid_argument ("Instance Spot authority state is invalid");
+    if (value.owner_lease_generation == 0 || value.node_generation == 0)
+        throw std::invalid_argument ("Instance Spot authority generation is zero");
+    if (value.activation_recovery
+        && value.state != instance_spot_authority_state_t::ready)
+        throw std::invalid_argument (
+          "activation recovery requires a Ready Instance Spot authority");
+    const auto node_rid = zlink::routing_id_t::from (
+      std::string (value.node_rid.value ())).to_bytes ();
+    if (node_rid.empty () || node_rid.size () > std::numeric_limits<std::uint8_t>::max ())
+        throw std::invalid_argument ("Instance Spot authority node RID is invalid");
+
+    std::vector<std::byte> instance;
+    actor_authority_detail::append_text8 (instance, value.stable_type);
+    actor_authority_detail::append_text8 (instance, value.spot_id);
+    if (instance.size () > std::numeric_limits<std::uint16_t>::max ())
+        throw std::invalid_argument ("Instance Spot authority instance slice is too large");
+
+    std::vector<std::byte> spot;
+    actor_authority_detail::append_u8 (
+      spot, value.state == instance_spot_authority_state_t::cold_activating ? 1
+              : value.state == instance_spot_authority_state_t::closing   ? 3
+                                                                           : 2);
+    actor_authority_detail::append_u16be (
+      spot, static_cast<std::uint16_t> (instance.size ()));
+    actor_authority_detail::append_bytes (spot, instance);
+
+    std::vector<std::byte> object;
+    actor_authority_detail::append_u8 (object, 3); // Instance Spot
+    actor_authority_detail::append_u16be (
+      object, static_cast<std::uint16_t> (spot.size ()));
+    actor_authority_detail::append_bytes (object, spot);
+
+    std::vector<std::byte> body;
+    actor_authority_detail::append_u8 (
+      body, value.state == instance_spot_authority_state_t::cold_activating ? 1
+              : value.state == instance_spot_authority_state_t::closing   ? 3
+                                                                           : 0);
+    actor_authority_detail::append_u8 (body, 2); // Spot
+    actor_authority_detail::append_u16be (
+      body, static_cast<std::uint16_t> (object.size ()));
+    actor_authority_detail::append_bytes (body, object);
+    actor_authority_detail::append_text8 (body, value.owner_id);
+    actor_authority_detail::append_u64be (body, value.owner_lease_generation);
+    actor_authority_detail::append_text8 (body, value.mesh_name);
+    actor_authority_detail::append_u8 (body, static_cast<std::uint8_t> (node_rid.size ()));
+    for (const auto byte : node_rid)
+        actor_authority_detail::append_u8 (body, byte);
+    actor_authority_detail::append_u64be (body, value.node_generation);
+    actor_authority_detail::append_u8 (body, 0); // relocation absent
+    actor_authority_detail::append_u32be (body, 0);
+
+    if (!value.activation_recovery) {
+        actor_authority_detail::append_u8 (body, 0);
+        actor_authority_detail::append_u32be (body, 0);
+    }
+    else {
+        const auto &recovery = *value.activation_recovery;
+        if (recovery.encoded_size > actor_authority_detail::actor_authority_maximum_bytes
+            || recovery.inbox_sequence == 0
+            || recovery.replay_cursor > recovery.inbox_sequence)
+            throw std::invalid_argument ("activation recovery pointer is invalid");
+        std::vector<std::byte> recovery_body;
+        actor_authority_detail::append_text16be (recovery_body, recovery.reference);
+        actor_authority_detail::append_u8 (recovery_body, 32);
+        actor_authority_detail::append_bytes (recovery_body, recovery.sha256);
+        actor_authority_detail::append_u32be (recovery_body, recovery.encoded_size);
+        actor_authority_detail::append_u64be (recovery_body, recovery.inbox_sequence);
+        actor_authority_detail::append_u64be (recovery_body, recovery.replay_cursor);
+        actor_authority_detail::append_u8 (body, 1);
+        actor_authority_detail::append_u32be (
+          body, static_cast<std::uint32_t> (recovery_body.size ()));
+        actor_authority_detail::append_bytes (body, recovery_body);
+    }
+
+    return encode_canonical_authority_payload ({std::move (body)});
+}
+
+inline std::optional<instance_spot_authority_payload_t>
+decode_instance_spot_authority_payload (std::span<const std::byte> encoded)
+{
+    try {
+        const auto canonical = decode_canonical_authority_payload (encoded);
+        if (!canonical)
+            return std::nullopt;
+        actor_authority_detail::reader_t body_reader (canonical->body);
+        const auto operation = body_reader.u8 ();
+        if (body_reader.u8 () != 2)
+            return std::nullopt;
+        actor_authority_detail::reader_t object_reader (
+          body_reader.take (body_reader.u16be ()));
+        if (object_reader.u8 () != 3)
+            return std::nullopt;
+        actor_authority_detail::reader_t spot_reader (
+          object_reader.take (object_reader.u16be ()));
+        if (!object_reader.done ())
+            return std::nullopt;
+        const auto state_value = spot_reader.u8 ();
+        actor_authority_detail::reader_t instance_reader (
+          spot_reader.take (spot_reader.u16be ()));
+        if (!spot_reader.done ())
+            return std::nullopt;
+        const auto stable_type = instance_reader.text8 ();
+        const auto spot_id = instance_reader.text8 ();
+        if (!instance_reader.done ())
+            return std::nullopt;
+        if (state_value < 1 || state_value > 3)
+            return std::nullopt;
+        const auto state = state_value == 1 ? instance_spot_authority_state_t::cold_activating
+                         : state_value == 2 ? instance_spot_authority_state_t::ready
+                                            : instance_spot_authority_state_t::closing;
+        if ((state == instance_spot_authority_state_t::cold_activating && operation != 1)
+            || (state == instance_spot_authority_state_t::ready && operation != 0)
+            || (state == instance_spot_authority_state_t::closing && operation != 3))
+            return std::nullopt;
+
+        const auto owner_id = body_reader.text8 ();
+        const auto owner_lease_generation = body_reader.u64be ();
+        const auto mesh_name = body_reader.text8 ();
+        const auto node_rid_size = body_reader.u8 ();
+        if (node_rid_size == 0)
+            return std::nullopt;
+        const auto node_rid_bytes = body_reader.take (node_rid_size);
+        const auto node_generation = body_reader.u64be ();
+        if (owner_lease_generation == 0 || node_generation == 0
+            || body_reader.u8 () != 0 || body_reader.u32be () != 0)
+            return std::nullopt;
+
+        const auto has_recovery = body_reader.u8 ();
+        if (has_recovery > 1)
+            return std::nullopt;
+        actor_authority_detail::reader_t recovery_reader (
+          body_reader.take (body_reader.u32be ()));
+        std::optional<activation_recovery_pointer_t> activation_recovery;
+        if (has_recovery != 0) {
+            if (state != instance_spot_authority_state_t::ready)
+                return std::nullopt;
+            activation_recovery_pointer_t recovery;
+            recovery.reference = recovery_reader.text16be ();
+            if (recovery_reader.u8 () != recovery.sha256.size ())
+                return std::nullopt;
+            const auto digest = recovery_reader.take (recovery.sha256.size ());
+            std::copy (digest.begin (), digest.end (), recovery.sha256.begin ());
+            recovery.encoded_size = recovery_reader.u32be ();
+            recovery.inbox_sequence = recovery_reader.u64be ();
+            recovery.replay_cursor = recovery_reader.u64be ();
+            if (recovery.encoded_size > actor_authority_detail::actor_authority_maximum_bytes
+                || recovery.inbox_sequence == 0
+                || recovery.replay_cursor > recovery.inbox_sequence)
+                return std::nullopt;
+            activation_recovery = std::move (recovery);
+        }
+        if (!recovery_reader.done () || !body_reader.done ())
+            return std::nullopt;
+
+        std::string node_rid;
+        node_rid.reserve (node_rid_bytes.size ());
+        for (const auto byte : node_rid_bytes)
+            node_rid.push_back (
+              static_cast<char> (std::to_integer<std::uint8_t> (byte)));
+        return instance_spot_authority_payload_t{
+          state, stable_type, spot_id, owner_id, owner_lease_generation, mesh_name,
+          node_rid_t::from_string (std::move (node_rid)), node_generation,
+          std::move (activation_recovery)};
+    }
+    catch (const std::invalid_argument &) {
+        return std::nullopt;
+    }
 }
 
 inline std::vector<std::byte> encode_actor_authority_payload (

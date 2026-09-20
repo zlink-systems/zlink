@@ -232,6 +232,59 @@ int main ()
     assert (golden_decoded);
     assert (encode_canonical_authority_payload (*golden_decoded) == golden_bytes);
 
+    instance_spot_authority_payload_t instance{
+      .state = instance_spot_authority_state_t::ready,
+      .stable_type = "Quest",
+      .spot_id = "instance-1",
+      .owner_id = "owner-1",
+      .owner_lease_generation = 7,
+      .mesh_name = "mesh-1",
+      .node_rid = node_rid_t::from_string ("node-1"),
+      .node_generation = 9,
+      .activation_recovery = activation_recovery_pointer_t{
+        .reference = "recovery/1",
+        .sha256 = {std::byte{0x00}, std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
+                   std::byte{0x04}, std::byte{0x05}, std::byte{0x06}, std::byte{0x07},
+                   std::byte{0x08}, std::byte{0x09}, std::byte{0x0a}, std::byte{0x0b},
+                   std::byte{0x0c}, std::byte{0x0d}, std::byte{0x0e}, std::byte{0x0f},
+                   std::byte{0x10}, std::byte{0x11}, std::byte{0x12}, std::byte{0x13},
+                   std::byte{0x14}, std::byte{0x15}, std::byte{0x16}, std::byte{0x17},
+                   std::byte{0x18}, std::byte{0x19}, std::byte{0x1a}, std::byte{0x1b},
+                   std::byte{0x1c}, std::byte{0x1d}, std::byte{0x1e}, std::byte{0x1f}},
+        .encoded_size = 1234,
+        .inbox_sequence = 1,
+        .replay_cursor = 0}};
+    const auto instance_bytes = encode_instance_spot_authority_payload (instance);
+    constexpr std::string_view node_instance_hex =
+      "5a4c41550100000000008c000200170300140200110551756573740a696e7374616e63652d31"
+      "076f776e65722d310000000000000007066d6573682d31066e6f64652d310000000000000009"
+      "00000000000100000041000a7265636f766572792f3120000102030405060708090a0b0c0d0e"
+      "0f101112131415161718191a1b1c1d1e1f000004d200000000000000010000000000000000f9"
+      "558cce";
+    assert (hex (instance_bytes) == node_instance_hex);
+    assert (encode_instance_spot_authority_payload (instance)
+            == from_hex (node_instance_hex));
+    const auto decoded_instance = decode_instance_spot_authority_payload (instance_bytes);
+    assert (decoded_instance && decoded_instance->state == instance.state
+            && decoded_instance->stable_type == instance.stable_type
+            && decoded_instance->spot_id == instance.spot_id
+            && decoded_instance->owner_id == instance.owner_id
+            && decoded_instance->owner_lease_generation == instance.owner_lease_generation
+            && decoded_instance->mesh_name == instance.mesh_name
+            && decoded_instance->node_rid.value () == instance.node_rid.value ()
+            && decoded_instance->node_generation == instance.node_generation
+            && decoded_instance->activation_recovery == instance.activation_recovery);
+    auto invalid_instance = instance;
+    invalid_instance.activation_recovery->replay_cursor = 2;
+    bool invalid_cursor_rejected = false;
+    try {
+        (void) encode_instance_spot_authority_payload (invalid_instance);
+    }
+    catch (const std::invalid_argument &) {
+        invalid_cursor_rejected = true;
+    }
+    assert (invalid_cursor_rejected);
+
     constexpr std::string_view actor_hex =
       "5a4c4155010000000000340001001001410142010143"
       "0000000000000002010144000000000000000301450146"
